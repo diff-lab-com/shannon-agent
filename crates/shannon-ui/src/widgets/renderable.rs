@@ -353,8 +353,14 @@ impl MessageCell {
                         let left_dash = total_dash / 2;
                         let right_dash = total_dash.saturating_sub(left_dash);
                         let sep = Line::from(vec![
-                            Span::styled("\u{2500}".repeat(left_dash), Style::default().fg(sep_color)),
-                            Span::styled(format!(" {time_str} "), Style::default().fg(theme.text_dim)),
+                            Span::styled(
+                                "\u{2500}".repeat(left_dash),
+                                Style::default().fg(sep_color),
+                            ),
+                            Span::styled(
+                                format!(" {time_str} "),
+                                Style::default().fg(theme.text_dim),
+                            ),
                             Span::styled(
                                 "\u{2500}".repeat(right_dash),
                                 Style::default().fg(sep_color),

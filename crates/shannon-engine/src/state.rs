@@ -435,8 +435,9 @@ impl StateManager {
             let em = existing.metadata;
             metadata.title = metadata.title.or(em.title);
             metadata.parent_session_id = metadata.parent_session_id.or(em.parent_session_id);
-            metadata.branch_point_message_index =
-                metadata.branch_point_message_index.or(em.branch_point_message_index);
+            metadata.branch_point_message_index = metadata
+                .branch_point_message_index
+                .or(em.branch_point_message_index);
             // `created_at` is the session's origin and must not drift on each
             // save (the auto-save seeds it from `session_started_at`, which is
             // only correct for a fresh session).
@@ -820,12 +821,16 @@ mod tests {
         // First save carries an explicit title.
         let mut titled = make_metadata("m");
         titled.title = Some("Renamed by user".into());
-        manager.save_session(&session_id, &messages, &titled).unwrap();
+        manager
+            .save_session(&session_id, &messages, &titled)
+            .unwrap();
 
         // Second save passes title: None (as the auto-save path does).
         let mut untitled = make_metadata("m");
         untitled.title = None;
-        manager.save_session(&session_id, &messages, &untitled).unwrap();
+        manager
+            .save_session(&session_id, &messages, &untitled)
+            .unwrap();
 
         let loaded = manager.load_session(&session_id).unwrap().unwrap();
         assert_eq!(
@@ -845,7 +850,9 @@ mod tests {
         let mut first = make_metadata("m");
         first.parent_session_id = Some(parent);
         first.branch_point_message_index = Some(2);
-        manager.save_session(&session_id, &messages, &first).unwrap();
+        manager
+            .save_session(&session_id, &messages, &first)
+            .unwrap();
         let created_first = manager
             .load_session(&session_id)
             .unwrap()
@@ -855,7 +862,9 @@ mod tests {
 
         // Auto-save-style follow-up with all lineage fields None.
         let second = make_metadata("m");
-        manager.save_session(&session_id, &messages, &second).unwrap();
+        manager
+            .save_session(&session_id, &messages, &second)
+            .unwrap();
 
         let loaded = manager.load_session(&session_id).unwrap().unwrap();
         assert_eq!(loaded.metadata.parent_session_id, Some(parent));
@@ -874,11 +883,15 @@ mod tests {
 
         let mut first = make_metadata("m");
         first.title = Some("Old".into());
-        manager.save_session(&session_id, &messages, &first).unwrap();
+        manager
+            .save_session(&session_id, &messages, &first)
+            .unwrap();
 
         let mut second = make_metadata("m");
         second.title = Some("New".into());
-        manager.save_session(&session_id, &messages, &second).unwrap();
+        manager
+            .save_session(&session_id, &messages, &second)
+            .unwrap();
 
         let loaded = manager.load_session(&session_id).unwrap().unwrap();
         assert_eq!(loaded.metadata.title.as_deref(), Some("New"));
@@ -912,10 +925,12 @@ mod tests {
         assert_eq!(other[0].session_id, id_b);
 
         // Unknown project → empty.
-        assert!(manager
-            .list_sessions_for_project("/nowhere")
-            .unwrap()
-            .is_empty());
+        assert!(
+            manager
+                .list_sessions_for_project("/nowhere")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -935,7 +950,6 @@ mod tests {
         assert_eq!(loaded.metadata.project_path, None);
         assert_eq!(loaded.metadata.model, "m");
     }
-
 
     #[test]
     fn test_load_nonexistent_session_returns_none() {
@@ -1175,7 +1189,6 @@ mod tests {
         assert!(truncated.ends_with("..."));
         assert!(truncated.len() <= 20);
     }
-
 
     #[test]
     fn test_with_sessions_dir_creates_directory() {

@@ -28,7 +28,9 @@ fn provider_short_name(provider: Option<&str>) -> &'static str {
         "gemini" => "gemini",
         "deepseek" => "deepseek",
         "zhipu" => "zhipu",
-        "zhipu_international" | "zhipu-international" | "zhipuintl" | "zhipuinternational" => "zhipu-intl",
+        "zhipu_international" | "zhipu-international" | "zhipuintl" | "zhipuinternational" => {
+            "zhipu-intl"
+        }
         "mistral" => "mistral",
         "groq" => "groq",
         "together" => "together",

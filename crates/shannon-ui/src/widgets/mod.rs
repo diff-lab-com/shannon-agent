@@ -38,7 +38,7 @@ pub use session_tab::{SessionInfo, SessionTabWidget};
 pub use sidebar::{SidebarInfo, SidebarSection, SidebarWidget};
 pub use status_bar::StatusBarWidget;
 #[allow(unused_imports)]
-pub use status_card::{render_status_card, CardStatus};
+pub use status_card::{CardStatus, render_status_card};
 #[allow(unused_imports)]
 pub use tool_approval::{ApprovalDecision, RiskLevel, ToolApprovalRequest, ToolApprovalWidget};
 

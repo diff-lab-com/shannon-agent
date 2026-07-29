@@ -343,9 +343,8 @@ impl TierName {
     /// Order: canonical first, then Anthropic aliases, then other aliases.
     pub fn suggestions() -> &'static [&'static str] {
         &[
-            "fast", "standard", "pro", "auto",
-            "haiku", "sonnet", "opus",
-            "flash", "mini", "plus", "ultra", "max",
+            "fast", "standard", "pro", "auto", "haiku", "sonnet", "opus", "flash", "mini", "plus",
+            "ultra", "max",
         ]
     }
 }
@@ -365,7 +364,10 @@ mod tier_name_tests {
     #[test]
     fn from_user_input_accepts_canonical() {
         assert_eq!(TierName::from_user_input("fast"), Some(TierName::Fast));
-        assert_eq!(TierName::from_user_input("standard"), Some(TierName::Standard));
+        assert_eq!(
+            TierName::from_user_input("standard"),
+            Some(TierName::Standard)
+        );
         assert_eq!(TierName::from_user_input("pro"), Some(TierName::Pro));
         assert_eq!(TierName::from_user_input("auto"), Some(TierName::Auto));
     }
@@ -373,7 +375,10 @@ mod tier_name_tests {
     #[test]
     fn from_user_input_accepts_anthropic_aliases() {
         assert_eq!(TierName::from_user_input("haiku"), Some(TierName::Fast));
-        assert_eq!(TierName::from_user_input("sonnet"), Some(TierName::Standard));
+        assert_eq!(
+            TierName::from_user_input("sonnet"),
+            Some(TierName::Standard)
+        );
         assert_eq!(TierName::from_user_input("opus"), Some(TierName::Pro));
     }
 
@@ -402,7 +407,12 @@ mod tier_name_tests {
 
     #[test]
     fn canonical_round_trips_through_from_user_input() {
-        for tier in [TierName::Fast, TierName::Standard, TierName::Pro, TierName::Auto] {
+        for tier in [
+            TierName::Fast,
+            TierName::Standard,
+            TierName::Pro,
+            TierName::Auto,
+        ] {
             assert_eq!(TierName::from_user_input(tier.canonical()), Some(tier));
         }
     }
@@ -428,7 +438,9 @@ mod tier_name_tests {
             display_name: "Anthropic".to_string(),
             base_url: "https://api.anthropic.com".to_string(),
             models_url: None,
-            credential: CredentialRef::Env { var: "ANTHROPIC_API_KEY".to_string() },
+            credential: CredentialRef::Env {
+                var: "ANTHROPIC_API_KEY".to_string(),
+            },
             extra_headers: Default::default(),
             default_max_tokens: None,
             fallback_models: vec![],

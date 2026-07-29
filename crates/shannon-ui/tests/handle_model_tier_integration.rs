@@ -12,7 +12,10 @@ use shannon_types::provider_config::TierName;
 #[test]
 fn tier_name_from_user_input_resolves_anthropic_aliases() {
     assert_eq!(TierName::from_user_input("haiku"), Some(TierName::Fast));
-    assert_eq!(TierName::from_user_input("sonnet"), Some(TierName::Standard));
+    assert_eq!(
+        TierName::from_user_input("sonnet"),
+        Some(TierName::Standard)
+    );
     assert_eq!(TierName::from_user_input("opus"), Some(TierName::Pro));
 
     // Provider-native aliases from non-Anthropic providers also collapse to
@@ -22,7 +25,10 @@ fn tier_name_from_user_input_resolves_anthropic_aliases() {
     assert_eq!(TierName::from_user_input("mini"), Some(TierName::Fast));
     assert_eq!(TierName::from_user_input("nano"), Some(TierName::Fast));
     assert_eq!(TierName::from_user_input("plus"), Some(TierName::Standard));
-    assert_eq!(TierName::from_user_input("medium"), Some(TierName::Standard));
+    assert_eq!(
+        TierName::from_user_input("medium"),
+        Some(TierName::Standard)
+    );
     assert_eq!(TierName::from_user_input("turbo"), Some(TierName::Standard));
     assert_eq!(TierName::from_user_input("ultra"), Some(TierName::Pro));
     assert_eq!(TierName::from_user_input("max"), Some(TierName::Pro));

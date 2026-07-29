@@ -845,21 +845,12 @@ mod tests {
         assert_eq!(cp.provider, LlmProvider::Anthropic);
         assert_eq!(cp.service, "anthropic");
         // No model requested → the provider's first catalog model.
-        assert!(
-            cp.model_id.starts_with("claude-"),
-            "got {}",
-            cp.model_id
-        );
+        assert!(cp.model_id.starts_with("claude-"), "got {}", cp.model_id);
         // Credential is a Store reference (A1: no plaintext in the profile),
         // keyed at the provider id slug — and it matches `service`.
         assert_eq!(store_service_of(&cp), Some("anthropic"));
         // Active target points at the anthropic provider + chosen model.
-        let active = &cp
-            .config
-            .profiles
-            .get("default")
-            .unwrap()
-            .active_target;
+        let active = &cp.config.profiles.get("default").unwrap().active_target;
         assert_eq!(active.provider_id, "anthropic");
         assert_eq!(active.model_id, cp.model_id);
     }
@@ -903,10 +894,9 @@ mod tests {
         let cp = build_connect_profile(LlmProvider::Anthropic, None, None);
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("providers.toml");
-        crate::provider_config_store::save(&cp.config, Some(&path))
-            .expect("save should succeed");
-        let loaded = crate::provider_config_store::load(Some(&path))
-            .expect("saved config should load back");
+        crate::provider_config_store::save(&cp.config, Some(&path)).expect("save should succeed");
+        let loaded =
+            crate::provider_config_store::load(Some(&path)).expect("saved config should load back");
         assert_eq!(loaded.version, cp.config.version);
         let loaded_profile = loaded.profiles.get("default").expect("default profile");
         // Decision A1: still a Store *reference* after a disk round trip — no

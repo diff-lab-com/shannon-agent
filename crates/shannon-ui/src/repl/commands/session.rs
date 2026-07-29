@@ -35,7 +35,9 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
     } else {
         repl.chat.add_message(
             ChatRole::System,
-            format!("Invalid session identifier: {arg}. Open /resume to pick, or use /resume <uuid>."),
+            format!(
+                "Invalid session identifier: {arg}. Open /resume to pick, or use /resume <uuid>."
+            ),
         );
         return Ok(());
     };

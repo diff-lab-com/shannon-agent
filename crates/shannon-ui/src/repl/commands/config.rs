@@ -375,9 +375,9 @@ pub(crate) fn apply_connect(
     // 1. API key → credential Store (idempotent; plaintext lands only on disk
     //    at ~/.shannon/credentials/<service>.json, 0600 — never in a config).
     if let Some(new_key) = key.filter(|k| !k.is_empty()) {
-        match CredentialManager::new().and_then(|mut m| {
-            m.store_or_update(Credential::new(&cp.service, &cp.service, new_key))
-        }) {
+        match CredentialManager::new()
+            .and_then(|mut m| m.store_or_update(Credential::new(&cp.service, &cp.service, new_key)))
+        {
             Ok(_) => lines.push(format!(
                 "✓ API key stored for '{display}' (service: {})",
                 cp.service
@@ -1321,29 +1321,23 @@ fn handle_model_tier(repl: &mut Repl, args: &str) -> Result<()> {
 
     // Optional provider argument: the next non-`--save` token after `--tier <name>`.
     let explicit_provider_str = parts.get(tier_idx + 2).copied();
-    let save = parts.iter().any(|p| *p == "--save");
+    let save = parts.contains(&"--save");
     let provider = match explicit_provider_str {
         Some(p) => parse_provider_name(p)?,
-        None => repl
-            .state
-            .selected_provider
-            .clone()
-            .ok_or_else(|| {
-                "No provider selected; specify one: /model --tier <tier> <provider>".to_string()
-            })?,
+        None => repl.state.selected_provider.clone().ok_or_else(|| {
+            "No provider selected; specify one: /model --tier <tier> <provider>".to_string()
+        })?,
     };
 
     let profile_tiers = load_provider_tiers(&provider);
-    let model_id = shannon_core::model_registry::resolve_tier(
-        tier_str, &provider, &profile_tiers,
-    )
-    .ok_or_else(|| {
-        format!(
-            "No model found for tier={} provider={}",
-            tier.canonical(),
-            provider
-        )
-    })?;
+    let model_id = shannon_core::model_registry::resolve_tier(tier_str, &provider, &profile_tiers)
+        .ok_or_else(|| {
+            format!(
+                "No model found for tier={} provider={}",
+                tier.canonical(),
+                provider
+            )
+        })?;
 
     let prev_model = repl.state.model.clone();
     let prev_provider = repl.state.selected_provider.clone();
@@ -1358,8 +1352,7 @@ fn handle_model_tier(repl: &mut Repl, args: &str) -> Result<()> {
         }));
         repl.state.context_window = engine.resolved_context_window();
     } else {
-        repl.state.context_window =
-            shannon_core::model_registry::context_window_for(&model_id);
+        repl.state.context_window = shannon_core::model_registry::context_window_for(&model_id);
     }
 
     crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {

@@ -1288,8 +1288,14 @@ mod tests {
             .iter()
             .flat_map(|(_, cmds)| cmds.iter().map(|(c, _)| c.as_str()))
             .collect();
-        assert!(all_cmds.contains(&"commit"), "commit must appear, got: {all_cmds:?}");
-        assert!(all_cmds.contains(&"model"), "model must appear, got: {all_cmds:?}");
+        assert!(
+            all_cmds.contains(&"commit"),
+            "commit must appear, got: {all_cmds:?}"
+        );
+        assert!(
+            all_cmds.contains(&"model"),
+            "model must appear, got: {all_cmds:?}"
+        );
         assert!(
             all_cmds.len() > 10,
             "expected many commands, got {}",
@@ -1303,8 +1309,14 @@ mod tests {
         // {("NAVIGATION", [/help]), ("EDITING", [/edit])} placeholder.
         let categories = categorize_commands();
         let names: Vec<&str> = categories.iter().map(|(n, _)| *n).collect();
-        assert!(!names.contains(&"NAVIGATION"), "NAVIGATION was a placeholder category");
-        assert!(!names.contains(&"EDITING"), "EDITING was a placeholder category");
+        assert!(
+            !names.contains(&"NAVIGATION"),
+            "NAVIGATION was a placeholder category"
+        );
+        assert!(
+            !names.contains(&"EDITING"),
+            "EDITING was a placeholder category"
+        );
     }
 
     #[test]
