@@ -196,10 +196,11 @@ impl ProviderConfigStore {
                 profile.tiers.pro = Some(model_id.to_string());
             }
             shannon_types::provider_config::TierName::Auto => {
-                // Auto is reserved for future routing logic; the REPL rejects
-                // `--tier auto` at the command layer, so reaching here means
-                // a caller violated the contract. Silently ignore — `save`
-                // still persists the other tiers.
+                // `Auto` is input-only: the command layer resolves it to a
+                // concrete tier before persisting, so `Auto` never has a
+                // persisted key. Silently ignoring it here is defense-in-depth
+                // against a caller that violates that contract — `save` still
+                // persists the other tiers.
             }
         }
         self

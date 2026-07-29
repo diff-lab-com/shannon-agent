@@ -1417,11 +1417,7 @@ fn handle_model_tier(repl: &mut Repl, args: &str) -> Result<()> {
             TierName::suggestions().join(", ")
         )
     })?;
-    if matches!(tier, TierName::Auto) {
-        return Err(
-            "--tier auto is reserved for a future spec; explicit tiers only for now".into(),
-        );
-    }
+    let is_auto = matches!(tier, TierName::Auto);
 
     // Optional provider argument: the next non-`--save` token after `--tier <name>`.
     let explicit_provider_str = parts.get(tier_idx + 2).copied();
@@ -1434,14 +1430,25 @@ fn handle_model_tier(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     let profile_tiers = load_provider_tiers(&provider);
-    let model_id = shannon_core::model_registry::resolve_tier(tier_str, &provider, &profile_tiers)
-        .ok_or_else(|| {
-            format!(
-                "No model found for tier={} provider={}",
-                tier.canonical(),
-                provider
-            )
-        })?;
+    // `auto` resolves via the lightweight best-default heuristic (standard →
+    // pro → fast; ADR-0005 decision ②) — not the full task-type ModelRouter
+    // (spec §11 stays unwired). The concrete tier it resolves to is what gets
+    // switched and persisted; `auto` itself is never stored.
+    let (tier, model_id) = if is_auto {
+        let (concrete, id) =
+            shannon_core::model_registry::resolve_auto_tier(&provider, &profile_tiers)
+                .ok_or_else(|| format!("No model found for tier=auto provider={provider}"))?;
+        (concrete, id)
+    } else {
+        let id = shannon_core::model_registry::resolve_tier(tier_str, &provider, &profile_tiers)
+            .ok_or_else(|| {
+                format!(
+                    "No model found for tier={} provider={provider}",
+                    tier.canonical()
+                )
+            })?;
+        (tier, id)
+    };
 
     let prev_model = repl.state.model.clone();
     let prev_provider = repl.state.selected_provider.clone();
@@ -1478,10 +1485,16 @@ fn handle_model_tier(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     let ctx_label = format_context_label(ctx_opt);
+    // For `auto`, surface which concrete tier the heuristic picked.
+    let tier_field = if is_auto {
+        format!("auto → {}", tier.canonical())
+    } else {
+        tier.canonical().to_string()
+    };
     let msg = format!(
         "{} tier={} (context: {ctx_label})",
         t!("commands.model.set", name = &model_id),
-        tier.canonical()
+        tier_field
     );
     repl.chat.add_message(ChatRole::System, msg);
     Ok(())
@@ -1524,11 +1537,12 @@ fn load_provider_tiers(provider: &LlmProvider) -> ProviderTiers {
 ///    picks it up on the next launch.
 /// 5. Atomically persist via `store.save()`.
 ///
-/// `TierName::Auto` is rejected here as a defense-in-depth: the REPL's
-/// `handle_model_tier` already blocks `--tier auto`, so this branch
-/// shouldn't fire in practice, but `set_tier` silently ignores `Auto` rather
-/// than corrupting state — a corrupt tier would be harder to detect than an
-/// explicit error.
+/// `TierName::Auto` is rejected here as a defense-in-depth: `handle_model_tier`
+/// resolves `--tier auto` to a concrete tier (via `resolve_auto_tier`) *before*
+/// calling this, so `Auto` never reaches persistence in practice — only
+/// canonical `fast`/`standard`/`pro` are ever stored. The guard remains because
+/// `set_tier` would otherwise silently ignore `Auto`, and a corrupt tier would
+/// be harder to detect than an explicit error.
 fn persist_model_to_providers_toml(
     provider: &LlmProvider,
     model_id: &str,
@@ -1537,7 +1551,7 @@ fn persist_model_to_providers_toml(
     use shannon_core::provider_config_store::ProviderConfigStore;
 
     if matches!(tier, TierName::Auto) {
-        return Err("--tier auto is reserved; explicit fast/standard/pro only".into());
+        return Err("auto must be resolved to a concrete tier before persisting".into());
     }
 
     let mut store = ProviderConfigStore::load_or_default();
