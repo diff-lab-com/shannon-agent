@@ -251,6 +251,22 @@ paths unchanged.
 > **Status: ⏳ Pending.** Largest remaining piece — Tauri (Rust) + React/TS
 > refactor of the Desktop shell onto the engine `ProviderProfile`/`Store`
 > backend. Not started.
+>
+> **Parity assessment (P2-9, 2026-07-30).** Audited the Desktop provider/model
+> surface against the CLI's P0–P2 work. Desktop **already covers** connection
+> probing / health via `test_provider_connection` + `ping_provider`
+> (`commands_config.rs`) — equivalent to CLI P0-3 (`/connect` probe) and P2-8
+> (`/provider health`), and in fact per-provider rather than active-only.
+> Desktop **does not yet** cover: per-model pricing (P0-1/P0-2), the
+> `SHANNON_*_PROVIDERS` allowlist (P1-5), models.dev dynamic refresh + LiteLLM
+> pricing (P1-6), or tiers + `/model --tier auto` (P2-7). **Root cause** is the
+> same for all four: Desktop `list_models` is a hardcoded `match` over the
+> provider string returning hand-written `ModelInfo` literals, and providers
+> live in a parallel `ProviderConnection` / `providers.json` store — neither is
+> wired to `model_registry`, the pricing SSOT, or the dynamic overlay. Closing
+> these gaps **is** Phase 2 (adopt `ProviderProfile` + route `list_models`
+> through `model_registry`); P2-9 therefore records the gap here rather than
+> bolting the features onto the hardcoded surface, which Phase 2 would discard.
 
 **Why**: P1-1 / P1-2 / P1-4 / P1-5 / P3-1 / P4-1 / P4-2 / P4-3.
 
