@@ -70,6 +70,17 @@ pub fn handle_input(
     key: KeyEvent,
     terminal: Option<&mut super::query::Term>,
 ) -> Result<()> {
+    // If the /help overlay is active, Esc closes it; all other keys are
+    // consumed while the overlay is open (precedes any other Esc handling).
+    if repl.state.help_overlay.is_some() {
+        if let KeyEvent { code: KeyCode::Esc, .. } = key {
+            repl.state.help_overlay = None;
+            return Ok(());
+        }
+        // Consume all other keys while overlay is open
+        return Ok(());
+    }
+
     // Dismiss onboarding overlay on user interaction
     if repl.state.onboarding_active {
         match key.code {
