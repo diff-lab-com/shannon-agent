@@ -633,6 +633,166 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_output: 0.24,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
     },
+    // ── Anthropic (2026 frontier, 1M context GA — no beta header needed) ──
+    ModelInfo {
+        id: "claude-sonnet-4-6",
+        display_name: "Claude Sonnet 4.6",
+        aliases: &["sonnet46", "sonnet-4-6"],
+        provider: LlmProvider::Anthropic,
+        context_window: 1_000_000,
+        max_output: 64_000,
+        cost_per_m_input: 3.0,
+        cost_per_m_output: 15.0,
+        capabilities: ModelCapabilities::coding()
+            .or(ModelCapabilities::reasoning())
+            .or(ModelCapabilities::vision()),
+    },
+    ModelInfo {
+        id: "claude-opus-4-6",
+        display_name: "Claude Opus 4.6",
+        aliases: &["opus46", "opus-4-6"],
+        provider: LlmProvider::Anthropic,
+        context_window: 1_000_000,
+        max_output: 64_000,
+        cost_per_m_input: 15.0,
+        cost_per_m_output: 75.0,
+        capabilities: ModelCapabilities::reasoning()
+            .or(ModelCapabilities::coding())
+            .or(ModelCapabilities::vision()),
+    },
+    // ── OpenAI (2026 frontier) ───────────────────────────────
+    ModelInfo {
+        id: "gpt-5",
+        display_name: "GPT-5",
+        aliases: &["gpt5"],
+        provider: LlmProvider::OpenAI,
+        context_window: 400_000,
+        max_output: 128_000,
+        cost_per_m_input: 1.25,
+        cost_per_m_output: 10.0,
+        capabilities: ModelCapabilities::coding()
+            .or(ModelCapabilities::reasoning())
+            .or(ModelCapabilities::vision()),
+    },
+    ModelInfo {
+        id: "gpt-5-mini",
+        display_name: "GPT-5 Mini",
+        aliases: &["gpt5-mini"],
+        provider: LlmProvider::OpenAI,
+        context_window: 400_000,
+        max_output: 128_000,
+        cost_per_m_input: 0.25,
+        cost_per_m_output: 2.0,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+    },
+    // ── xAI / Grok (grok-4 retired → 4.5 is current frontier) ──
+    ModelInfo {
+        id: "grok-4.5",
+        display_name: "Grok 4.5",
+        aliases: &["grok", "grok4", "grok-4.5"],
+        provider: LlmProvider::Xai,
+        context_window: 256_000,
+        max_output: 100_000,
+        cost_per_m_input: 3.0,
+        cost_per_m_output: 15.0,
+        capabilities: ModelCapabilities::coding()
+            .or(ModelCapabilities::reasoning())
+            .or(ModelCapabilities::vision()),
+    },
+    ModelInfo {
+        id: "grok-4.1-fast",
+        display_name: "Grok 4.1 Fast",
+        aliases: &["grok-fast"],
+        provider: LlmProvider::Xai,
+        context_window: 256_000,
+        max_output: 100_000,
+        cost_per_m_input: 0.20,
+        cost_per_m_output: 1.50,
+        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+    },
+    // ── Perplexity ───────────────────────────────────────────
+    ModelInfo {
+        id: "sonar-pro",
+        display_name: "Sonar Pro",
+        aliases: &["sonar"],
+        provider: LlmProvider::Perplexity,
+        context_window: 200_000,
+        max_output: 8_192,
+        cost_per_m_input: 3.0,
+        cost_per_m_output: 15.0,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "sonar-reasoning-pro",
+        display_name: "Sonar Reasoning Pro",
+        aliases: &[],
+        provider: LlmProvider::Perplexity,
+        context_window: 200_000,
+        max_output: 8_192,
+        cost_per_m_input: 2.0,
+        cost_per_m_output: 8.0,
+        capabilities: ModelCapabilities::reasoning().or(ModelCapabilities::coding()),
+    },
+    // ── Cohere ───────────────────────────────────────────────
+    ModelInfo {
+        id: "command-r-plus",
+        display_name: "Command R+",
+        aliases: &["command-r"],
+        provider: LlmProvider::Cohere,
+        context_window: 128_000,
+        max_output: 4_096,
+        cost_per_m_input: 2.50,
+        cost_per_m_output: 10.0,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    // ── SiliconFlow ──────────────────────────────────────────
+    ModelInfo {
+        id: "deepseek-ai/DeepSeek-V3",
+        display_name: "DeepSeek V3 (SiliconFlow)",
+        aliases: &["sf-dsv3"],
+        provider: LlmProvider::SiliconFlow,
+        context_window: 128_000,
+        max_output: 8_192,
+        cost_per_m_input: 0.27,
+        cost_per_m_output: 1.10,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+    },
+    // ── Together AI ──────────────────────────────────────────
+    ModelInfo {
+        id: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        display_name: "Llama 3.3 70B Turbo (Together)",
+        aliases: &[],
+        provider: LlmProvider::Together,
+        context_window: 128_000,
+        max_output: 8_192,
+        cost_per_m_input: 0.88,
+        cost_per_m_output: 0.88,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+    },
+    // ── Fireworks AI ─────────────────────────────────────────
+    ModelInfo {
+        id: "accounts/fireworks/models/llama-v3p1-70b-instruct",
+        display_name: "Llama 3.1 70B (Fireworks)",
+        aliases: &[],
+        provider: LlmProvider::Fireworks,
+        context_window: 128_000,
+        max_output: 8_192,
+        cost_per_m_input: 0.90,
+        cost_per_m_output: 0.90,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+    },
+    // ── AI21 Labs ────────────────────────────────────────────
+    ModelInfo {
+        id: "jamba-1.5-large",
+        display_name: "Jamba 1.5 Large",
+        aliases: &["jamba"],
+        provider: LlmProvider::Ai21,
+        context_window: 256_000,
+        max_output: 4_096,
+        cost_per_m_input: 2.0,
+        cost_per_m_output: 8.0,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
 ];
 
 // ── Query helpers ──────────────────────────────────────────────────
@@ -670,7 +830,19 @@ fn provider_order(p: &LlmProvider) -> u8 {
         LlmProvider::Minimax => 9,
         LlmProvider::DashScope => 10,
         LlmProvider::Ollama => 11,
-        _ => 99,
+        LlmProvider::Xai => 12,
+        LlmProvider::Perplexity => 13,
+        LlmProvider::Cohere => 14,
+        LlmProvider::Together => 15,
+        LlmProvider::Fireworks => 16,
+        LlmProvider::SiliconFlow => 17,
+        LlmProvider::Ai21 => 18,
+        LlmProvider::Azure => 19,
+        LlmProvider::Bedrock => 20,
+        LlmProvider::OpenRouter => 21,
+        LlmProvider::Cloudflare => 22,
+        LlmProvider::Replicate => 23,
+        LlmProvider::Custom => 99,
     }
 }
 
@@ -2079,5 +2251,48 @@ mod tests {
 
         let o1 = find_model("o1-preview").unwrap();
         assert_eq!(o1.tier_label(), TierLabel::Pro);
+    }
+
+    #[test]
+    fn catalog_previously_empty_providers_now_have_models() {
+        // Phase A: providers that previously had zero catalog entries.
+        let xai = models_for_provider(LlmProvider::Xai);
+        assert!(!xai.is_empty(), "xAI should have models");
+        assert!(xai.iter().any(|m| m.id == "grok-4.5"));
+        for provider in [
+            LlmProvider::Perplexity,
+            LlmProvider::Cohere,
+            LlmProvider::SiliconFlow,
+            LlmProvider::Together,
+            LlmProvider::Fireworks,
+            LlmProvider::Ai21,
+        ] {
+            assert!(
+                !models_for_provider(provider.clone()).is_empty(),
+                "{provider:?} should have at least one model"
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_2026_frontier_models_resolve() {
+        // Anthropic 4.6 — 1M context GA (no beta header needed).
+        let sonnet46 = model_info_for("claude-sonnet-4-6").unwrap();
+        assert_eq!(sonnet46.context_window, 1_000_000);
+        assert_eq!(
+            model_info_for("claude-opus-4-6").unwrap().context_window,
+            1_000_000
+        );
+        // OpenAI GPT-5 alias resolves.
+        assert!(model_info_for_alias("gpt5").is_some());
+        // grok alias → grok-4.5 (grok-4 retired).
+        let grok = model_info_for_alias("grok").unwrap();
+        assert_eq!(grok.id, "grok-4.5");
+        // grok-4.5 (coding+reasoning) → Standard; grok-4.1-fast (speed+cheap) → Fast.
+        assert_eq!(grok.tier_label(), TierLabel::Standard);
+        assert_eq!(
+            model_info_for("grok-4.1-fast").unwrap().tier_label(),
+            TierLabel::Fast
+        );
     }
 }
