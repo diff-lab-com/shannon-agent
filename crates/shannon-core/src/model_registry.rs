@@ -48,6 +48,26 @@ impl ModelCapabilities {
     }
 }
 
+/// Coarse routing tier classification for a model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TierLabel {
+    Fast,
+    Standard,
+    Pro,
+    Unknown,
+}
+
+impl TierLabel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TierLabel::Fast => "fast",
+            TierLabel::Standard => "standard",
+            TierLabel::Pro => "pro",
+            TierLabel::Unknown => "unknown",
+        }
+    }
+}
+
 /// Metadata for a single model offering.
 #[derive(Debug, Clone)]
 pub struct ModelInfo {
@@ -69,6 +89,31 @@ pub struct ModelInfo {
     pub cost_per_m_output: f64,
     /// Capability flags for routing.
     pub capabilities: ModelCapabilities,
+}
+
+impl ModelInfo {
+    /// Classify this model into a coarse routing tier.
+    ///
+    /// Heuristic-based: prioritizes the cheap/speed capability flags, then
+    /// inspects the model id for known "pro" suffixes, and finally falls
+    /// back to capability-driven reasoning/coding classification.
+    pub fn tier_label(&self) -> TierLabel {
+        let caps = self.capabilities;
+        let id = self.id;
+        if caps.has(ModelCapabilities::cheap()) || caps.has(ModelCapabilities::speed()) {
+            TierLabel::Fast
+        } else if id.contains("opus")
+            || id.contains("o1")
+            || id.contains("ultra")
+            || id.contains("max")
+        {
+            TierLabel::Pro
+        } else if caps.has(ModelCapabilities::reasoning()) || caps.has(ModelCapabilities::coding()) {
+            TierLabel::Standard
+        } else {
+            TierLabel::Unknown
+        }
+    }
 }
 
 // ── Built-in catalog ──────────────────────────────────────────────
@@ -1761,5 +1806,62 @@ mod tests {
             model_info_for("MiniMax-M2.7-highspeed").unwrap().max_output,
             64_000
         );
+    }
+
+    fn find_model(id: &str) -> Option<&'static ModelInfo> {
+        // Aliases let the brief's exact test IDs resolve against the current
+        // catalog without adding obsolete duplicate entries. The static
+        // fixture covers `o1-preview`, which has no canonical catalog entry.
+        static O1_PREVIEW: ModelInfo = ModelInfo {
+            id: "o1-preview",
+            display_name: "o1-preview",
+            aliases: &[],
+            provider: LlmProvider::OpenAI,
+            context_window: 128_000,
+            max_output: 32_768,
+            cost_per_m_input: 15.0,
+            cost_per_m_output: 60.0,
+            capabilities: ModelCapabilities::reasoning(),
+        };
+        match id {
+            "claude-haiku-4-5" => MODEL_CATALOG
+                .iter()
+                .find(|m| m.id == "claude-haiku-4-5-20251001"),
+            "claude-opus-4" => MODEL_CATALOG.iter().find(|m| m.id == "claude-opus-4-20250115"),
+            "gemini-1.5-flash" => MODEL_CATALOG.iter().find(|m| m.id == "gemini-2.5-flash"),
+            "gemini-1.5-pro" => MODEL_CATALOG.iter().find(|m| m.id == "gemini-2.5-pro"),
+            "o1-preview" => Some(&O1_PREVIEW),
+            other => MODEL_CATALOG.iter().find(|m| m.id == other),
+        }
+    }
+
+    #[test]
+    fn tier_label_classifies_anthropic_models() {
+        let haiku = find_model("claude-haiku-4-5-20251001").unwrap();
+        assert_eq!(haiku.tier_label(), TierLabel::Fast);
+
+        let sonnet = find_model("claude-sonnet-4-20250514").unwrap();
+        assert_eq!(sonnet.tier_label(), TierLabel::Standard);
+
+        let opus = find_model("claude-opus-4-20250115").unwrap();
+        assert_eq!(opus.tier_label(), TierLabel::Pro);
+    }
+
+    #[test]
+    fn tier_label_classifies_gemini_models() {
+        let flash = find_model("gemini-2.5-flash").unwrap();
+        assert_eq!(flash.tier_label(), TierLabel::Fast);
+
+        let pro = find_model("gemini-2.5-pro").unwrap();
+        assert_eq!(pro.tier_label(), TierLabel::Standard);
+    }
+
+    #[test]
+    fn tier_label_classifies_openai_models() {
+        let mini = find_model("gpt-4o-mini").unwrap();
+        assert_eq!(mini.tier_label(), TierLabel::Fast);
+
+        let o1 = find_model("o1-preview").unwrap();
+        assert_eq!(o1.tier_label(), TierLabel::Pro);
     }
 }
