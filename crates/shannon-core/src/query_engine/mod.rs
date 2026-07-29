@@ -17,6 +17,7 @@ pub use team_prompt::teammate_instructions;
 pub use types::{
     CompressionStrategy, ConversationStats, CostEstimate, CostTracker, PermissionRequest,
     QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryMetadata, QueryStream,
+    pricing_for_model_opt,
 };
 
 #[cfg(test)]
