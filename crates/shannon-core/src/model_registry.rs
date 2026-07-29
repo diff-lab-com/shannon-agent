@@ -548,7 +548,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "qwen3.7-max",
         display_name: "Qwen 3.7 Max",
-        aliases: &["qwen", "qwen-max"],
+        aliases: &["qwen-max"],
         provider: LlmProvider::DashScope,
         context_window: 1_000_000,
         max_output: 64_000,
