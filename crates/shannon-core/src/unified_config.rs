@@ -531,7 +531,7 @@ mod tests {
     use shannon_engine::api::{LlmClientConfig, LlmProvider};
     use shannon_types::provider_config::{
         ActiveTarget, CredentialRef, CredentialScope, ModelProfile, ProviderKind,
-        ProviderModelConfig, ProviderProfile, Scope,
+        ProviderModelConfig, ProviderProfile, ProviderTiers, Scope,
     };
     use std::collections::HashMap;
 
@@ -574,6 +574,7 @@ mod tests {
             default_max_tokens: None,
             fallback_models: Vec::new(),
             quirks: Default::default(),
+            tiers: ProviderTiers::default(),
         }
     }
 
@@ -765,6 +766,7 @@ mod tests {
             default_max_tokens: None,
             fallback_models: Vec::new(),
             quirks: Default::default(),
+            tiers: ProviderTiers::default(),
         };
         let cfg = ShannonConfig {
             provider_model: v2_default_profile(provider, "glm-4"),
