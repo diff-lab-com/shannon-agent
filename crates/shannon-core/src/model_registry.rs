@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use shannon_engine::api::LlmProvider;
+use shannon_types::provider_config::{ProviderTiers, TierName};
 
 /// Model capability flags for routing decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -108,7 +109,8 @@ impl ModelInfo {
             || id.contains("max")
         {
             TierLabel::Pro
-        } else if caps.has(ModelCapabilities::reasoning()) || caps.has(ModelCapabilities::coding()) {
+        } else if caps.has(ModelCapabilities::reasoning()) || caps.has(ModelCapabilities::coding())
+        {
             TierLabel::Standard
         } else {
             TierLabel::Unknown
@@ -910,6 +912,96 @@ pub fn is_model_alias(s: &str) -> bool {
     resolve_model_alias(s, None).is_some()
 }
 
+fn resolve_model_id_alias(model_id: &'static str) -> &'static str {
+    match model_id {
+        "claude-haiku-4-5-20251001" => "claude-haiku-4-5",
+        "claude-opus-4-20250115" => "claude-opus-4",
+        _ => model_id,
+    }
+}
+
+/// Resolve a tier (canonical or alias) to a concrete model id for a provider.
+///
+/// Resolution order:
+///   1. User-configured `profile_tiers.<canonical>` override (from providers.toml)
+///   2. Catalog match using `ModelCapabilities` (Fast ⇒ SPEED|CHEAP, etc.)
+///   3. Internal `ModelTier` enum fallback (Opus/Sonnet/Haiku)
+///   4. None (caller should display "tier not available for this provider")
+///
+/// `tier_input` accepts both canonical names ("fast") and aliases ("haiku", "flash", etc.).
+/// Returns None for unrecognized input or for the reserved `Auto` tier.
+pub fn resolve_tier(
+    tier_input: &str,
+    provider: &LlmProvider,
+    profile_tiers: &ProviderTiers,
+) -> Option<String> {
+    let tier = TierName::from_user_input(tier_input)?;
+    if matches!(tier, TierName::Auto) {
+        return None;
+    }
+
+    // 1. Explicit user override
+    let explicit = match tier {
+        TierName::Fast => &profile_tiers.fast,
+        TierName::Standard => &profile_tiers.standard,
+        TierName::Pro => &profile_tiers.pro,
+        TierName::Auto => return None,
+    };
+    if let Some(id) = explicit {
+        return Some(id.clone());
+    }
+
+    // 2. Catalog-based inference using ModelCapabilities
+    let wanted = match tier {
+        TierName::Fast => ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+        TierName::Standard => ModelCapabilities::coding(),
+        TierName::Pro => ModelCapabilities::reasoning(),
+        TierName::Auto => return None,
+    };
+    if let Some(model) = MODEL_CATALOG
+        .iter()
+        .filter(|model| &model.provider == provider)
+        .filter(|model| model.capabilities.has(wanted))
+        .reduce(|selected, candidate| match tier {
+            TierName::Pro => {
+                let selected_cost = selected.cost_per_m_input + selected.cost_per_m_output;
+                let candidate_cost = candidate.cost_per_m_input + candidate.cost_per_m_output;
+                if candidate_cost > selected_cost {
+                    candidate
+                } else {
+                    selected
+                }
+            }
+            TierName::Fast | TierName::Standard => {
+                let selected_cost = selected.cost_per_m_input + selected.cost_per_m_output;
+                let candidate_cost = candidate.cost_per_m_input + candidate.cost_per_m_output;
+                if candidate_cost < selected_cost {
+                    candidate
+                } else {
+                    selected
+                }
+            }
+            TierName::Auto => selected,
+        })
+    {
+        return Some(resolve_model_id_alias(model.id).to_string());
+    }
+
+    // 3. Internal ModelTier enum fallback
+    let model_tier = match tier {
+        TierName::Fast => ModelTier::Haiku,
+        TierName::Standard => ModelTier::Sonnet,
+        TierName::Pro => ModelTier::Opus,
+        TierName::Auto => return None,
+    };
+    let alias = match model_tier {
+        ModelTier::Haiku => "haiku",
+        ModelTier::Sonnet => "sonnet",
+        ModelTier::Opus => "opus",
+    };
+    resolve_model_alias(alias, Some(provider)).map(str::to_string)
+}
+
 // ============================================================================
 // Model Router
 // ============================================================================
@@ -1047,6 +1139,82 @@ impl ModelRouter {
 mod tests {
     use super::*;
     use shannon_engine::api::types::WireFormat;
+
+    #[test]
+    fn resolve_tier_anthropic_fast_uses_haiku() {
+        let tiers = ProviderTiers::default();
+        let resolved = resolve_tier("fast", &LlmProvider::Anthropic, &tiers);
+        assert_eq!(resolved, Some("claude-haiku-4-5".to_string()));
+    }
+
+    #[test]
+    fn resolve_tier_anthropic_standard_uses_sonnet() {
+        let tiers = ProviderTiers::default();
+        let resolved = resolve_tier("standard", &LlmProvider::Anthropic, &tiers);
+        assert_eq!(resolved, Some("claude-sonnet-4-20250514".to_string()));
+    }
+
+    #[test]
+    fn resolve_tier_anthropic_pro_uses_opus() {
+        let tiers = ProviderTiers::default();
+        let resolved = resolve_tier("pro", &LlmProvider::Anthropic, &tiers);
+        assert_eq!(resolved, Some("claude-opus-4".to_string()));
+    }
+
+    #[test]
+    fn resolve_tier_accepts_anthropic_aliases() {
+        let tiers = ProviderTiers::default();
+        assert_eq!(
+            resolve_tier("haiku", &LlmProvider::Anthropic, &tiers),
+            Some("claude-haiku-4-5".to_string())
+        );
+        assert_eq!(
+            resolve_tier("sonnet", &LlmProvider::Anthropic, &tiers),
+            Some("claude-sonnet-4-20250514".to_string())
+        );
+        assert_eq!(
+            resolve_tier("opus", &LlmProvider::Anthropic, &tiers),
+            Some("claude-opus-4".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_tier_accepts_other_provider_aliases() {
+        let tiers = ProviderTiers::default();
+        assert!(resolve_tier("flash", &LlmProvider::Gemini, &tiers).is_some());
+        assert!(resolve_tier("mini", &LlmProvider::OpenAI, &tiers).is_some());
+        assert!(resolve_tier("ultra", &LlmProvider::Gemini, &tiers).is_some());
+    }
+
+    #[test]
+    fn resolve_tier_profile_override_wins() {
+        let tiers = ProviderTiers {
+            fast: Some("claude-haiku-3-5".to_string()),
+            ..Default::default()
+        };
+        let resolved = resolve_tier("fast", &LlmProvider::Anthropic, &tiers);
+        assert_eq!(
+            resolved,
+            Some("claude-haiku-3-5".to_string()),
+            "explicit profile_tiers.fast should win over catalog default"
+        );
+    }
+
+    #[test]
+    fn resolve_tier_unknown_input_returns_none() {
+        let tiers = ProviderTiers::default();
+        assert_eq!(
+            resolve_tier("garbage", &LlmProvider::Anthropic, &tiers),
+            None
+        );
+        assert_eq!(resolve_tier("", &LlmProvider::Anthropic, &tiers), None);
+    }
+
+    #[test]
+    fn resolve_tier_auto_returns_none() {
+        let tiers = ProviderTiers::default();
+        assert_eq!(resolve_tier("auto", &LlmProvider::Anthropic, &tiers), None);
+    }
 
     #[test]
     fn test_models_for_provider_anthropic() {
@@ -1827,7 +1995,9 @@ mod tests {
             "claude-haiku-4-5" => MODEL_CATALOG
                 .iter()
                 .find(|m| m.id == "claude-haiku-4-5-20251001"),
-            "claude-opus-4" => MODEL_CATALOG.iter().find(|m| m.id == "claude-opus-4-20250115"),
+            "claude-opus-4" => MODEL_CATALOG
+                .iter()
+                .find(|m| m.id == "claude-opus-4-20250115"),
             "gemini-1.5-flash" => MODEL_CATALOG.iter().find(|m| m.id == "gemini-2.5-flash"),
             "gemini-1.5-pro" => MODEL_CATALOG.iter().find(|m| m.id == "gemini-2.5-pro"),
             "o1-preview" => Some(&O1_PREVIEW),
