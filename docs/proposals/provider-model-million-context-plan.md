@@ -177,7 +177,7 @@ catalog 中 `context_window: 1_000_000` 的模型共 **11 个**:Gemini ×2、Dee
 - 启动时(或 `/model refresh`)从 models.dev 拉取,缓存到 `~/.shannon/cache/models-dev.json`(带 TTL,如 24h)。
 - **离线 fallback**:`MODEL_CATALOG` 静态表作为缓存未命中时的兜底(headless/CI 不断网不崩,呼应 CLAUDE.md "must not break headless/CI")。
 - 动态结果与静态表 merge:静态表的 `beta_headers`(Phase B)等 Shannon 专属元数据保留,models.dev 补 pricing/context/provider。
-- 配置项 `enabled_providers` / `disabled_providers` allowlist(ADR Phase 5 scope)。
+- 配置项 `enabled_providers` / `disabled_providers` allowlist(ADR Phase 5 scope)。**状态**:Phase D 已交付核心动态 catalog;allowlist 开关尚未接到 config(机制未接线),作为 Phase D 的 deferred 子项,后续单独补。
 
 **验收**:`/model refresh` 后新模型出现;断网仍可用静态表;`just ci` 不需要网络。
 
@@ -228,7 +228,7 @@ catalog 中 `context_window: 1_000_000` 的模型共 **11 个**:Gemini ×2、Dee
 - [ ] DeepSeek/Qwen/Minimax 的 1M 是否需额外请求参数(还是纯模型能力)
 - [ ] Anthropic 1M 的 Tier 4 门槛当前是否仍有效(Sonnet 4.6/Opus 4.6 已 GA,可能放宽)
 - [ ] Desktop 前端是否有独立硬编码 model 列表需同步清理
-- [ ] models.dev API schema 与速率限制
+- [x] models.dev API schema 与速率限制 — **已核实(Phase D)**:schema 为 `{provider/model-id: {id, name, family, tool_call, reasoning, modalities{input,output}, limit{context,output}}}`,**无 pricing**;单次 GET 整库 JSON,客户端侧 24h TTL 缓存,无速率限制相关要求。详见 `crates/shannon-core/src/model_registry/dynamic.rs`。
 
 ---
 
