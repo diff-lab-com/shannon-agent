@@ -790,6 +790,36 @@ pub fn model_info_for_alias(alias: &str) -> Option<&'static ModelInfo> {
         .or_else(|| model_info_for(alias))
 }
 
+/// Classify a model id into a routing tier via the catalog — the single
+/// source of truth for tier classification. Matches exact id first, then
+/// prefix (so short names like `"claude-sonnet-4"` resolve to
+/// `"claude-sonnet-4-20250514"`), mirroring [`context_window_for`]'s lookup
+/// strategy. Returns [`TierLabel::Unknown`] for anything not in the catalog.
+///
+/// UI layers (status bar, status card) call this instead of maintaining their
+/// own string-heuristic copies.
+pub fn tier_label_for_id(model_id: &str) -> TierLabel {
+    // Empty id would otherwise prefix-match the first catalog entry
+    // (`m.id.starts_with("")` is always true) — guard it explicitly.
+    if model_id.is_empty() {
+        return TierLabel::Unknown;
+    }
+    if let Some(info) = model_info_for(model_id) {
+        return info.tier_label();
+    }
+    if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id.starts_with(model_id)) {
+        return info.tier_label();
+    }
+    if let Some(info) = MODEL_CATALOG
+        .iter()
+        .filter(|m| model_id.starts_with(m.id))
+        .max_by_key(|m| m.id.len())
+    {
+        return info.tier_label();
+    }
+    TierLabel::Unknown
+}
+
 // ============================================================================
 // Model Aliases
 // ============================================================================
@@ -2015,6 +2045,22 @@ mod tests {
 
         let opus = find_model("claude-opus-4-20250115").unwrap();
         assert_eq!(opus.tier_label(), TierLabel::Pro);
+    }
+
+    #[test]
+    fn tier_label_for_id_resolves_exact_short_and_unknown() {
+        // Exact catalog id.
+        assert_eq!(
+            tier_label_for_id("claude-haiku-4-5-20251001"),
+            TierLabel::Fast
+        );
+        // Short name resolves via prefix match (no exact catalog entry).
+        assert_eq!(tier_label_for_id("claude-haiku-4-5"), TierLabel::Fast);
+        assert_eq!(tier_label_for_id("claude-opus-4"), TierLabel::Pro);
+        assert_eq!(tier_label_for_id("claude-sonnet-4"), TierLabel::Standard);
+        // Non-catalog / empty.
+        assert_eq!(tier_label_for_id("made-up-model"), TierLabel::Unknown);
+        assert_eq!(tier_label_for_id(""), TierLabel::Unknown);
     }
 
     #[test]

@@ -1388,23 +1388,31 @@ fn handle_model_tier(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 /// Load the persisted per-tier model overrides for a provider from
-/// `~/.shannon/providers.toml`.
+/// `~/.shannon/providers.toml` (ADR-0005 Phase 4 read-back).
 ///
-/// **Not yet implemented (ADR-0005 Phase 4).** The write path
-/// (`persist_model_to_providers_toml`, Task 17 / Phase 3) is complete, but the
-/// read-back is outstanding. Until Phase 4 wires the engine startup path to
-/// `ProviderConfigStore::load_or_default()`, this returns the default (empty)
-/// `ProviderTiers` so `resolve_tier` falls back to the catalog. Consequence:
-/// `/model --tier <t> --save` persists, but the override does not yet survive
-/// a restart.
-fn load_provider_tiers(_provider: &LlmProvider) -> ProviderTiers {
-    ProviderTiers::default()
+/// Returns the provider's `ProviderTiers` when a `"default"` profile with that
+/// provider slot exists, else an empty `ProviderTiers` so `resolve_tier`
+/// falls back to the static catalog. A corrupt/missing file degrades to empty
+/// — same graceful contract as [`ProviderConfigStore::load_or_default`].
+fn load_provider_tiers(provider: &LlmProvider) -> ProviderTiers {
+    use shannon_core::provider_config_store::ProviderConfigStore;
+
+    let id = shannon_core::provider_resolver::llm_provider_id(provider);
+    ProviderConfigStore::load_or_default()
+        .config()
+        .profiles
+        .get("default")
+        .and_then(|p| p.providers.iter().find(|pr| pr.id == id))
+        .map(|pr| pr.tiers.clone())
+        .unwrap_or_default()
 }
 
 /// Persist the resolved (provider, tier) → model-id mapping back into
-/// `~/.shannon/providers.toml`. Implementation lives in Task 17; the engine
-/// layer (ADR-0005 Phase 4) reads these overrides at startup so a
-/// `/model --tier fast gpt-4o --save` survives restart.
+/// `~/.shannon/providers.toml` (ADR-0005 Phase 4). Writes both the per-tier
+/// override (`set_tier`) **and** the active target (`set_active`) so the
+/// choice survives a restart: the engine read-back (`resolve_active_target`)
+/// reads `active_target` on launch, while `load_provider_tiers` feeds the tier
+/// overrides back to `resolve_tier` for future `/model --tier` switches.
 ///
 /// Steps:
 /// 1. Load (or default-construct) a [`ProviderConfigStore`] for the v2 file.
@@ -1412,13 +1420,15 @@ fn load_provider_tiers(_provider: &LlmProvider) -> ProviderTiers {
 /// 3. Write the canonical tier field (`fast` / `standard` / `pro`) using
 ///    `TierName::canonical()` so the persisted key is **always** the
 ///    canonical name — never the user-facing alias (`haiku`/`sonnet`/`opus`).
-/// 4. Atomically persist via `store.save()`.
+/// 4. Set `active_target` to the same provider + model so `resolve_active_target`
+///    picks it up on the next launch.
+/// 5. Atomically persist via `store.save()`.
 ///
 /// `TierName::Auto` is rejected here as a defense-in-depth: the REPL's
 /// `handle_model_tier` already blocks `--tier auto`, so this branch
-/// shouldn't fire in practice, but `set_tier` (Task 17) silently ignores
-/// `Auto` rather than corrupting state — a corrupt tier would be harder
-/// to detect than an explicit error.
+/// shouldn't fire in practice, but `set_tier` silently ignores `Auto` rather
+/// than corrupting state — a corrupt tier would be harder to detect than an
+/// explicit error.
 fn persist_model_to_providers_toml(
     provider: &LlmProvider,
     model_id: &str,
@@ -1433,6 +1443,7 @@ fn persist_model_to_providers_toml(
     let mut store = ProviderConfigStore::load_or_default();
     store
         .set_tier(provider, tier, model_id)
+        .set_active(provider, model_id)
         .save()
         .map_err(|e| {
             format!(

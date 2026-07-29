@@ -301,11 +301,14 @@ unified underneath.
 
 ### Phase 4 — Config persistence + variable substitution  *(~1-2 days)*
 
-> **Status: 🟡 In Progress (2026-07-29).** Tier persistence to
-> `~/.shannon/providers.toml` ✅ via `/model --tier --save` (Phase 3 work).
-> Remaining: TOML write-back for `ProviderModelConfig` (A1-respecting) wired
-> into `/config`; `{env:VAR}` and `{file:path}` substitution in the
-> `unified_config` loader (parity with OpenCode).
+> **Status: 🟡 In Progress (2026-07-30).** Tier persistence now survives
+> restart ✅ — `/model --tier --save` writes `active_target` (provider + model
+> id) to `~/.shannon/providers.toml` via `ProviderConfigStore::set_active`, and
+> `resolve_active_target` reads it back on next launch (verified by
+> `store_set_active_survives_save_load_cycle`). Remaining: TOML write-back for
+> `ProviderModelConfig` (A1-respecting) wired into `/config`; `{env:VAR}` and
+> `{file:path}` substitution in the `unified_config` loader (parity with
+> OpenCode).
 
 **Why**: P2-3 / P2-4 (partial).
 
