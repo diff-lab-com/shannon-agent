@@ -17,7 +17,7 @@ use shannon_engine::api::LlmProvider;
 use shannon_types::model_ref::ModelRef;
 use shannon_types::provider_config::{
     ActiveTarget, CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderModelConfig,
-    ProviderProfile, Scope,
+    ProviderProfile, ProviderTiers, Scope,
 };
 
 /// A resolved active target: the concrete engine provider, its source profile,
@@ -343,6 +343,7 @@ pub fn synthesize_default_profile(
         default_max_tokens: None,
         fallback_models: Vec::new(),
         quirks: Default::default(),
+        tiers: ProviderTiers::default(),
     };
 
     Some(ProviderModelConfig {
@@ -417,6 +418,7 @@ pub fn build_connect_profile(
         default_max_tokens: None,
         fallback_models: Vec::new(),
         quirks: Default::default(),
+        tiers: ProviderTiers::default(),
     };
     ConnectProfile {
         config: ProviderModelConfig {
@@ -448,6 +450,7 @@ fn ollama_default_profile(model_id: &str) -> ProviderModelConfig {
         default_max_tokens: None,
         fallback_models: Vec::new(),
         quirks: Default::default(),
+        tiers: ProviderTiers::default(),
     };
     ProviderModelConfig {
         version: ProviderModelConfig::VERSION,
@@ -547,7 +550,7 @@ mod tests {
     use super::*;
     use shannon_types::provider_config::{
         ActiveTarget, CredentialRef, CredentialScope, ModelProfile, ProviderKind,
-        ProviderModelConfig, ProviderProfile, Scope,
+        ProviderModelConfig, ProviderProfile, ProviderTiers, Scope,
     };
     use std::collections::HashMap;
 
@@ -565,6 +568,7 @@ mod tests {
             default_max_tokens: None,
             fallback_models: Vec::new(),
             quirks: Default::default(),
+            tiers: ProviderTiers::default(),
         }
     }
 

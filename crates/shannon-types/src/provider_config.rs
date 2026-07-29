@@ -120,6 +120,16 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, JsonSchema)]
+pub struct ProviderTiers {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pro: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderProfile {
@@ -138,6 +148,8 @@ pub struct ProviderProfile {
     pub fallback_models: Vec<String>,
     #[serde(default)]
     pub quirks: ProviderQuirks,
+    #[serde(default)]
+    pub tiers: ProviderTiers,
 }
 
 /// Provider 注册的模型目录条目（context 限制、工具支持、来源标签）。
@@ -406,5 +418,50 @@ mod tier_name_tests {
         assert!(s.contains(&"haiku"));
         assert!(s.contains(&"sonnet"));
         assert!(s.contains(&"opus"));
+    }
+
+    #[test]
+    fn provider_profile_round_trip_with_tiers() {
+        let profile = ProviderProfile {
+            id: "anthropic".to_string(),
+            kind: ProviderKind::Anthropic,
+            display_name: "Anthropic".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            models_url: None,
+            credential: CredentialRef::Env { var: "ANTHROPIC_API_KEY".to_string() },
+            extra_headers: Default::default(),
+            default_max_tokens: None,
+            fallback_models: vec![],
+            quirks: ProviderQuirks::default(),
+            tiers: ProviderTiers {
+                fast: Some("claude-haiku-4-5".to_string()),
+                standard: Some("claude-sonnet-4-20250514".to_string()),
+                pro: Some("claude-opus-4".to_string()),
+            },
+        };
+
+        let toml_str = toml::to_string(&profile).expect("serialize");
+        assert!(toml_str.contains("fast = \"claude-haiku-4-5\""));
+        assert!(toml_str.contains("standard = \"claude-sonnet-4-20250514\""));
+        assert!(toml_str.contains("pro = \"claude-opus-4\""));
+
+        let parsed: ProviderProfile = toml::from_str(&toml_str).expect("deserialize");
+        assert_eq!(parsed.tiers.fast, profile.tiers.fast);
+        assert_eq!(parsed.tiers.standard, profile.tiers.standard);
+        assert_eq!(parsed.tiers.pro, profile.tiers.pro);
+    }
+
+    #[test]
+    fn provider_profile_round_trip_without_tiers_uses_default() {
+        // Existing toml files without `tiers` should still parse
+        let minimal_toml = r#"
+            id = "anthropic"
+            kind = "anthropic"
+            display_name = "Anthropic"
+            base_url = "https://api.anthropic.com"
+            credential = { backend = "env", var = "ANTHROPIC_API_KEY" }
+        "#;
+        let parsed: ProviderProfile = toml::from_str(minimal_toml).expect("deserialize");
+        assert_eq!(parsed.tiers, ProviderTiers::default());
     }
 }

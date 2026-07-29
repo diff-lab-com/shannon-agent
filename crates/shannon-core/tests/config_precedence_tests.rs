@@ -13,7 +13,7 @@ mod config_precedence_tests {
     use shannon_core::unified_config::{ConfigBuilder, ShannonConfig};
     use shannon_types::provider_config::{
         CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderModelConfig,
-        ProviderProfile,
+        ProviderProfile, ProviderTiers,
     };
     use std::collections::HashMap;
 
@@ -42,6 +42,7 @@ mod config_precedence_tests {
             default_max_tokens: None,
             fallback_models: Vec::new(),
             quirks: Default::default(),
+            tiers: ProviderTiers::default(),
         };
         let mut profiles = HashMap::new();
         profiles.insert(

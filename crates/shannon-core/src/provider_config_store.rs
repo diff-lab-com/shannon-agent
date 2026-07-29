@@ -100,7 +100,7 @@ mod tests {
     use super::*;
     use shannon_types::provider_config::{
         ActiveTarget, CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderProfile,
-        Scope,
+        ProviderTiers, Scope,
     };
     use std::collections::HashMap;
 
@@ -131,6 +131,7 @@ mod tests {
             default_max_tokens: None,
             fallback_models: Vec::new(),
             quirks: Default::default(),
+            tiers: ProviderTiers::default(),
         };
         let mut profiles = HashMap::new();
         profiles.insert(
