@@ -270,3 +270,141 @@ pub fn specificity_weight(r: &ProfileRoute) -> u32 {
     }
     w
 }
+
+/// Model tier. Canonical names are `fast`/`standard`/`pro`/`auto`.
+/// Aliases (input-only) include Anthropic's `haiku`/`sonnet`/`opus`
+/// and provider-native names (`flash`/`mini`/`plus`/`ultra`/`max`).
+///
+/// `Auto` is reserved for future use (model auto-routing by task type)
+/// and is not yet wired to any production code path.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TierName {
+    Fast,
+    Standard,
+    Pro,
+    Auto,
+}
+
+impl TierName {
+    /// Canonical lowercase name (used in toml, logs, status pills).
+    pub fn canonical(self) -> &'static str {
+        match self {
+            TierName::Fast => "fast",
+            TierName::Standard => "standard",
+            TierName::Pro => "pro",
+            TierName::Auto => "auto",
+        }
+    }
+
+    /// Human-readable display label (capitalized, used in UI).
+    pub fn display(self) -> &'static str {
+        match self {
+            TierName::Fast => "Fast",
+            TierName::Standard => "Standard",
+            TierName::Pro => "Pro",
+            TierName::Auto => "Auto",
+        }
+    }
+
+    /// Normalize any accepted user input to canonical TierName.
+    /// Accepts canonical names + Anthropic aliases + other provider-native
+    /// aliases. Case-insensitive. Returns None for unrecognized input.
+    pub fn from_user_input(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            // Canonical
+            "fast" => Some(TierName::Fast),
+            "standard" => Some(TierName::Standard),
+            "pro" => Some(TierName::Pro),
+            "auto" => Some(TierName::Auto),
+            // Aliases → Fast
+            "flash" | "mini" | "nano" | "haiku" => Some(TierName::Fast),
+            // Aliases → Standard
+            "plus" | "sonnet" | "medium" | "turbo" => Some(TierName::Standard),
+            // Aliases → Pro
+            "opus" | "ultra" | "max" | "large" => Some(TierName::Pro),
+            _ => None,
+        }
+    }
+
+    /// Tab-completion suggestions shown to the user.
+    /// Order: canonical first, then Anthropic aliases, then other aliases.
+    pub fn suggestions() -> &'static [&'static str] {
+        &[
+            "fast", "standard", "pro", "auto",
+            "haiku", "sonnet", "opus",
+            "flash", "mini", "plus", "ultra", "max",
+        ]
+    }
+}
+
+#[cfg(test)]
+mod tier_name_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_is_lowercase() {
+        assert_eq!(TierName::Fast.canonical(), "fast");
+        assert_eq!(TierName::Standard.canonical(), "standard");
+        assert_eq!(TierName::Pro.canonical(), "pro");
+        assert_eq!(TierName::Auto.canonical(), "auto");
+    }
+
+    #[test]
+    fn from_user_input_accepts_canonical() {
+        assert_eq!(TierName::from_user_input("fast"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("standard"), Some(TierName::Standard));
+        assert_eq!(TierName::from_user_input("pro"), Some(TierName::Pro));
+        assert_eq!(TierName::from_user_input("auto"), Some(TierName::Auto));
+    }
+
+    #[test]
+    fn from_user_input_accepts_anthropic_aliases() {
+        assert_eq!(TierName::from_user_input("haiku"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("sonnet"), Some(TierName::Standard));
+        assert_eq!(TierName::from_user_input("opus"), Some(TierName::Pro));
+    }
+
+    #[test]
+    fn from_user_input_accepts_other_provider_aliases() {
+        assert_eq!(TierName::from_user_input("flash"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("mini"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("plus"), Some(TierName::Standard));
+        assert_eq!(TierName::from_user_input("ultra"), Some(TierName::Pro));
+        assert_eq!(TierName::from_user_input("max"), Some(TierName::Pro));
+    }
+
+    #[test]
+    fn from_user_input_is_case_insensitive() {
+        assert_eq!(TierName::from_user_input("FAST"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("Haiku"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("oPuS"), Some(TierName::Pro));
+    }
+
+    #[test]
+    fn from_user_input_rejects_unknown() {
+        assert_eq!(TierName::from_user_input(""), None);
+        assert_eq!(TierName::from_user_input("xyz"), None);
+        assert_eq!(TierName::from_user_input("turbo-xl"), None);
+    }
+
+    #[test]
+    fn canonical_round_trips_through_from_user_input() {
+        for tier in [TierName::Fast, TierName::Standard, TierName::Pro, TierName::Auto] {
+            assert_eq!(TierName::from_user_input(tier.canonical()), Some(tier));
+        }
+    }
+
+    #[test]
+    fn suggestions_starts_with_canonical() {
+        let s = TierName::suggestions();
+        assert_eq!(s[0], "fast");
+        assert_eq!(s[1], "standard");
+        assert_eq!(s[2], "pro");
+        assert_eq!(s[3], "auto");
+        // Anthropic aliases present
+        assert!(s.contains(&"haiku"));
+        assert!(s.contains(&"sonnet"));
+        assert!(s.contains(&"opus"));
+    }
+}
