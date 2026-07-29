@@ -11,6 +11,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 - `/model --save` flag persists tier choice to `~/.shannon/providers.toml`
 - Three-level picker navigation (provider → tier → model)
 - `TierName` enum (`fast`/`standard`/`pro`/`auto`) with alias normalization
+- `/provider health` — live-probes the active provider (1-token round-trip, 15s timeout, reuses the running key) and inventories every allowed provider's credential status. Informational only; no automatic failover (Shannon ships no model router by design).
 
 ### Changed
 
