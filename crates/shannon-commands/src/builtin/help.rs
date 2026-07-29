@@ -301,7 +301,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Show git diff of changes, with interactive review mode".to_string(),
                 HelpCategory::Git,
             )
-            .with_arg_hint("[options | review [n] | accept <file> | reject <file> | accept-all | reject-all]")
+            .with_arg_hint("[options | review [n] | accept <FILE_PATH> | reject <FILE_PATH> | accept-all | reject-all]")
             .with_examples(vec!["/diff", "/diff HEAD~1", "/diff review", "/diff review 2", "/diff accept src/main.rs", "/diff reject-all"])
             .with_when_to_use("To see what has changed, or interactively review/accept/reject individual file changes")
             .with_related(vec!["status", "commit", "undo"])
@@ -672,7 +672,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Search/replace with diff preview before applying".to_string(),
                 HelpCategory::Files,
             )
-            .with_arg_hint("<file> <search> --- <replace> [--apply] [--all]")
+            .with_arg_hint("<FILE_PATH> <search> --- <replace> [--apply] [--all]")
             .with_examples(vec!["/patch src/main.rs old_fn --- new_fn", "/patch --apply src/lib.rs foo --- bar", "/patch --all config.rs old_val --- new_val"])
             .with_when_to_use("Use to preview and apply targeted text replacements in files")
             .with_related(vec!["edit", "diff", "undo"])
@@ -840,7 +840,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Find where a symbol is defined using LSP".to_string(),
                 HelpCategory::Review,
             )
-            .with_arg_hint("<file> <line> <character>")
+            .with_arg_hint("<FILE_PATH> <LINE:int> <CHARACTER:int>")
             .with_examples(vec!["/go_to_definition src/main.rs 10 5"])
             .with_when_to_use("Use to navigate to the definition of a symbol at a position in a file")
             .with_related(vec!["find_references", "hover"])
@@ -851,7 +851,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Find all references to a symbol using LSP".to_string(),
                 HelpCategory::Review,
             )
-            .with_arg_hint("<file> <line> <character>")
+            .with_arg_hint("<FILE_PATH> <LINE:int> <CHARACTER:int>")
             .with_examples(vec!["/find_references src/main.rs 10 5"])
             .with_when_to_use("Use to find all usages of a symbol across the codebase")
             .with_related(vec!["go_to_definition", "rename_symbol"])
@@ -862,7 +862,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Get type info and docs for a symbol using LSP".to_string(),
                 HelpCategory::Review,
             )
-            .with_arg_hint("<file> <line> <character>")
+            .with_arg_hint("<FILE_PATH> <LINE:int> <CHARACTER:int>")
             .with_examples(vec!["/hover src/main.rs 10 5"])
             .with_when_to_use("Use to see type signatures, doc comments, and contextual info for a symbol")
             .with_related(vec!["go_to_definition", "document_symbol"])
@@ -873,7 +873,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "List all symbols in a file using LSP".to_string(),
                 HelpCategory::Review,
             )
-            .with_arg_hint("<file>")
+            .with_arg_hint("<FILE_PATH>")
             .with_examples(vec!["/document_symbol src/main.rs"])
             .with_when_to_use("Use to get a hierarchical view of functions, classes, and other symbols in a file")
             .with_related(vec!["hover", "workspace_symbol"])
@@ -895,7 +895,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Rename a symbol across the codebase using LSP".to_string(),
                 HelpCategory::Review,
             )
-            .with_arg_hint("<file> <line> <character> <new_name>")
+            .with_arg_hint("<FILE_PATH> <LINE:int> <CHARACTER:int> <NEW_NAME>")
             .with_examples(vec!["/rename_symbol src/main.rs 10 5 new_name"])
             .with_when_to_use("Use to safely rename a variable, function, class, or other symbol across the entire project")
             .with_related(vec!["find_references", "go_to_definition"])
@@ -906,7 +906,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Get available quick fixes and refactorings using LSP".to_string(),
                 HelpCategory::Review,
             )
-            .with_arg_hint("<file> <start_line> <start_char> <end_line> <end_char>")
+            .with_arg_hint("<FILE_PATH> <START_LINE:int> <START_CHAR:int> <END_LINE:int> <END_CHAR:int>")
             .with_examples(vec!["/code_actions src/main.rs 10 0 10 20"])
             .with_when_to_use("Use to get suggested fixes for diagnostics and available refactorings for a code range")
             .with_related(vec!["hover", "rename_symbol"])
@@ -1051,7 +1051,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Monitor workspace for external file changes".to_string(),
                 HelpCategory::System,
             )
-            .with_arg_hint("[status|check|list|track <file>]")
+            .with_arg_hint("[status|check|list|track <FILE_PATH>]")
             .with_examples(vec!["/watch", "/watch check", "/watch list"])
             .with_when_to_use("Use to detect external file changes made outside of Shannon")
             .with_related(vec!["diff", "status"])
@@ -1237,5 +1237,32 @@ mod tests {
         assert!(help.contains("/commit"));
         // Related commands are shown in command help, so review-pr is expected
         assert!(help.contains("/review-pr"));
+    }
+
+    #[test]
+    fn help_output_has_no_xml_like_placeholders() {
+        let text = generate_help(None);
+        assert!(
+            !text.contains("<file>"),
+            "help output must not contain lowercase <file> tag (got: {})",
+            &text[..text.len().min(200)]
+        );
+        assert!(
+            !text.contains("<line>"),
+            "help output must not contain lowercase <line> tag"
+        );
+        assert!(
+            !text.contains("<character>"),
+            "help output must not contain lowercase <character> tag"
+        );
+    }
+
+    #[test]
+    fn help_output_uses_uppercase_placeholders() {
+        let text = generate_help(Some("go_to_definition"));
+        assert!(
+            text.contains("<FILE_PATH>"),
+            "go_to_definition arg_hint should use <FILE_PATH>"
+        );
     }
 }
