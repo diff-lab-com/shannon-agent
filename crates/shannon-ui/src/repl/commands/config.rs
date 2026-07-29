@@ -92,7 +92,9 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
-/// `/model refresh` — fetch models.dev and rebuild the dynamic overlay (Phase D).
+/// `/model refresh` — fetch models.dev and rebuild the dynamic overlay (Phase D),
+/// and refresh the LiteLLM community pricing table so dynamic/custom models
+/// show real prices instead of the estimate fallback.
 ///
 /// On success the picker, `/provider` default, and tier tabs immediately
 /// reflect freshly published models. On any error (offline, timeout, non-200,
@@ -100,10 +102,17 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
 /// told so — never a crash.
 fn handle_model_refresh(repl: &mut Repl) -> Result<()> {
     let timeout = model_registry::dynamic::DEFAULT_FETCH_TIMEOUT;
-    let result = repl
+    let catalog_result = repl
         .runtime
         .block_on(model_registry::dynamic::refresh_overlay_async(timeout));
-    let msg = match result {
+    // Best-effort: LiteLLM pricing is independent of the model catalog. A
+    // failure here must not mask a successful catalog refresh, so it only adds
+    // a note rather than failing the whole command.
+    let pricing_result = repl
+        .runtime
+        .block_on(shannon_core::query_engine::litellm::refresh_async(timeout));
+
+    let mut msg = match catalog_result {
         Ok(n) => {
             format!("Refreshed models.dev catalog — {n} models available across provider tabs.")
         }
@@ -111,6 +120,10 @@ fn handle_model_refresh(repl: &mut Repl) -> Result<()> {
             "Could not refresh models.dev catalog ({e}). The built-in catalog is still in use."
         ),
     };
+    // Offline/timeout/parse — silent; pricing simply stays on the existing fallback.
+    if let Ok(n) = pricing_result {
+        msg.push_str(&format!("\nPricing: loaded {n} LiteLLM price entries."));
+    }
     repl.chat.add_message(ChatRole::System, msg);
     Ok(())
 }

@@ -342,15 +342,26 @@ fn find_pricing(model: &str) -> Option<&ModelPricing> {
 /// Like [`find_pricing`] but owned and public, for display code that must
 /// distinguish a *known* price (catalog/override) from an *estimate*
 /// (dynamic/custom models with no pricing entry).
+///
+/// Dynamic/custom models absent from the curated table fall through to the
+/// LiteLLM community pricing overlay ([`super::litellm`]) before being declared
+/// unknown, so freshly discovered models show a real price where one exists.
 pub fn pricing_for_model_opt(model: &str) -> Option<ModelPricing> {
-    find_pricing(model).cloned()
+    if let Some(pricing) = find_pricing(model) {
+        return Some(pricing.clone());
+    }
+    super::litellm::lookup_pricing(model)
 }
 
-/// Look up pricing for a model name, falling back to the default estimate and
-/// emitting a debug log for truly unknown models.
+/// Look up pricing for a model name, falling back to the LiteLLM community
+/// table and then the default estimate, emitting a debug log for truly unknown
+/// models.
 fn lookup_pricing(model: &str) -> ModelPricing {
     if let Some(pricing) = find_pricing(model) {
         return pricing.clone();
+    }
+    if let Some(pricing) = super::litellm::lookup_pricing(model) {
+        return pricing;
     }
 
     tracing::debug!(
