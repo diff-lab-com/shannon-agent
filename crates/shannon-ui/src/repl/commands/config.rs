@@ -5,6 +5,7 @@ use shannon_core::model_registry;
 use shannon_core::provider_resolver::resolve_model_ref;
 use shannon_engine::api::LlmProvider;
 use shannon_types::model_ref::ModelRef;
+use shannon_types::provider_config::{ProviderTiers, TierName};
 use shannon_types::recover_lock;
 
 /// Resolve a `/model` argument into `(model_id, optional provider)` (ADR-0005
@@ -33,6 +34,11 @@ pub(crate) fn resolve_model_arg(args: &str) -> (String, Option<LlmProvider>) {
 }
 
 pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
+    // /model --tier <name> [provider] [--save]
+    if args.starts_with("--tier") {
+        return handle_model_tier(repl, args);
+    }
+
     if args.is_empty() {
         let picker = crate::widgets::select::ModelPickerWidget::new(repl.state.model.as_deref());
         repl.state.model_picker = Some(picker);
@@ -1277,6 +1283,134 @@ pub(crate) fn handle_lang(repl: &mut Repl, args: &str) -> Result<()> {
             ),
         );
     }
+    Ok(())
+}
+
+/// Handle /model --tier <name> [provider] [--save] — resolve a tier to a
+/// concrete model id for the chosen (or current) provider, then switch the
+/// running engine + REPL state to it. Mirrors the bare-id branch above but
+/// goes through `model_registry::resolve_tier` so catalog overrides from
+/// `~/.shannon/providers.toml` (Task 17) win over the static catalog.
+fn handle_model_tier(repl: &mut Repl, args: &str) -> Result<()> {
+    // Accept "--tier X", "--tier X provider", "--tier X provider --save".
+    // First token must be either "--tier" or "--tier=<name>".
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let first = parts.first().copied().unwrap_or("");
+    let (tier_idx, tier_str) = if first == "--tier" {
+        let name = parts.get(1).copied().unwrap_or("");
+        (0usize, name)
+    } else if let Some(rest) = first.strip_prefix("--tier=") {
+        (0usize, rest)
+    } else {
+        // Args did not start with --tier; the caller already filtered these.
+        return Err("internal: handle_model_tier called without --tier prefix".into());
+    };
+
+    let tier = TierName::from_user_input(tier_str).ok_or_else(|| {
+        format!(
+            "Unknown tier '{}'. Try one of: {}",
+            tier_str,
+            TierName::suggestions().join(", ")
+        )
+    })?;
+    if matches!(tier, TierName::Auto) {
+        return Err(
+            "--tier auto is reserved for a future spec; explicit tiers only for now".into(),
+        );
+    }
+
+    // Optional provider argument: the next non-`--save` token after `--tier <name>`.
+    let explicit_provider_str = parts.get(tier_idx + 2).copied();
+    let save = parts.iter().any(|p| *p == "--save");
+    let provider = match explicit_provider_str {
+        Some(p) => parse_provider_name(p)?,
+        None => repl
+            .state
+            .selected_provider
+            .clone()
+            .ok_or_else(|| {
+                "No provider selected; specify one: /model --tier <tier> <provider>".to_string()
+            })?,
+    };
+
+    let profile_tiers = load_provider_tiers(&provider);
+    let model_id = shannon_core::model_registry::resolve_tier(
+        tier_str, &provider, &profile_tiers,
+    )
+    .ok_or_else(|| {
+        format!(
+            "No model found for tier={} provider={}",
+            tier.canonical(),
+            provider
+        )
+    })?;
+
+    let prev_model = repl.state.model.clone();
+    let prev_provider = repl.state.selected_provider.clone();
+    repl.state.model = Some(model_id.clone());
+    repl.state.selected_provider = Some(provider.clone());
+
+    // Sync to the engine (mirrors the bare-id branch above).
+    if let Some(ref mut engine) = repl.query_engine {
+        engine.set_model_for_provider(model_id.clone(), provider.clone());
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            repl.runtime.block_on(engine.pre_resolve_context());
+        }));
+        repl.state.context_window = engine.resolved_context_window();
+    } else {
+        repl.state.context_window =
+            shannon_core::model_registry::context_window_for(&model_id);
+    }
+
+    crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
+        model: repl.state.model.clone(),
+        provider: repl.state.selected_provider.clone(),
+        theme: Some(repl.state.theme.name.to_string()),
+    });
+
+    if save {
+        // Rollback state on failure so a bad write doesn't leave the REPL
+        // pointing at an unpinned tier.
+        if let Err(e) = persist_model_to_providers_toml(&provider, &model_id, tier) {
+            repl.state.model = prev_model;
+            repl.state.selected_provider = prev_provider;
+            return Err(e);
+        }
+    }
+
+    let ctx_label = if repl.state.context_window >= 1_000_000 {
+        format!("{}M", repl.state.context_window / 1_000_000)
+    } else if repl.state.context_window >= 1_000 {
+        format!("{}K", repl.state.context_window / 1_000)
+    } else {
+        repl.state.context_window.to_string()
+    };
+    let msg = format!(
+        "{} tier={} (context: {ctx_label})",
+        t!("commands.model.set", name = &model_id),
+        tier.canonical()
+    );
+    repl.chat.add_message(ChatRole::System, msg);
+    Ok(())
+}
+
+/// Load the persisted per-tier model overrides for a provider from
+/// `~/.shannon/providers.toml`. Stub for Task 17 — returns the default
+/// (empty) `ProviderTiers` so `resolve_tier` falls back to the catalog.
+fn load_provider_tiers(_provider: &LlmProvider) -> ProviderTiers {
+    // TODO: load from ~/.shannon/providers.toml (Task 17)
+    ProviderTiers::default()
+}
+
+/// Persist the resolved (provider, tier) → model-id mapping back into
+/// `~/.shannon/providers.toml`. Stub for Task 17 — currently a no-op so
+/// `--save` is accepted without crashing; the real write lands in Task 17.
+fn persist_model_to_providers_toml(
+    _provider: &LlmProvider,
+    _model_id: &str,
+    _tier: TierName,
+) -> Result<()> {
+    // Implemented in Task 17
     Ok(())
 }
 
