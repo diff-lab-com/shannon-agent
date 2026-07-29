@@ -132,7 +132,8 @@ fn test_progress_indicator_snapshot() {
                 area,
                 "Thinking...",
                 Some("claude-sonnet-4"),
-                None,
+                None, // provider
+                None, // effort_level
                 None,
                 None,
                 None,
@@ -185,7 +186,8 @@ fn test_cache_hit_rate_snapshot() {
                 area,
                 "Responding",
                 Some("claude-sonnet-4"),
-                None,
+                None,         // provider
+                None,         // effort_level
                 Some(5000),   // tokens_used
                 Some(200000), // max_tokens (200k context)
                 Some(0.0234), // cost_usd
@@ -235,7 +237,8 @@ fn test_cache_zero_tokens_snapshot() {
                 area,
                 "Responding",
                 Some("claude-sonnet-4"),
-                None,
+                None, // provider
+                None, // effort_level
                 Some(5000),
                 Some(200000),
                 Some(0.0234),

@@ -14,6 +14,58 @@ use ratatui::{
 use rust_i18n::t;
 use unicode_width::UnicodeWidthStr;
 
+/// Map a provider identifier (e.g. from `LlmProvider`'s serialized name or a
+/// raw string slug) to a short, UI-friendly label used inside the status pill.
+fn provider_short_name(provider: Option<&str>) -> &'static str {
+    let Some(p) = provider else {
+        return "unknown";
+    };
+    let p_lower = p.to_lowercase();
+    match p_lower.as_str() {
+        "anthropic" => "anthropic",
+        "openai" => "openai",
+        "ollama" => "ollama",
+        "gemini" => "gemini",
+        "deepseek" => "deepseek",
+        "zhipu" => "zhipu",
+        "zhipu_international" | "zhipu-international" | "zhipuintl" | "zhipuinternational" => "zhipu-intl",
+        "mistral" => "mistral",
+        "groq" => "groq",
+        "together" => "together",
+        "openrouter" => "openrouter",
+        "cohere" => "cohere",
+        "fireworks" => "fireworks",
+        "perplexity" => "perplexity",
+        "xai" => "xai",
+        "moonshot" => "moonshot",
+        "dashscope" => "dashscope",
+        _ => "unknown",
+    }
+}
+
+/// Classify a model identifier into a human-friendly tier label
+/// ("fast" | "standard" | "pro"). The match is case-insensitive and
+/// substring-based, so partial IDs like "claude-haiku-4-5" still work.
+fn tier_label_for(model_id: &str) -> &'static str {
+    let lower = model_id.to_lowercase();
+    if lower.contains("haiku")
+        || lower.contains("flash")
+        || lower.contains("mini")
+        || lower.contains("nano")
+        || lower.contains("turbo")
+    {
+        "fast"
+    } else if lower.contains("opus")
+        || lower.contains("ultra")
+        || lower.contains("o1")
+        || lower.contains("max")
+    {
+        "pro"
+    } else {
+        "standard"
+    }
+}
+
 /// Status bar widget
 pub struct StatusBarWidget;
 
@@ -59,6 +111,7 @@ impl StatusBarWidget {
             area,
             &status,
             ctx.model,
+            ctx.provider,
             ctx.effort_level,
             ctx.tokens_used,
             ctx.max_tokens,
@@ -93,6 +146,7 @@ impl StatusBarWidget {
         area: Rect,
         status: &str,
         model: Option<&str>,
+        provider: Option<&str>,
         effort_level: Option<&str>,
         tokens_used: Option<u64>,
         max_tokens: Option<u64>,
@@ -178,10 +232,23 @@ impl StatusBarWidget {
         // Model (pill-style) with effort level
         if let Some(m) = model {
             left.push(Span::styled(" ", Style::default().fg(theme.border_dim)));
+            let provider_short = provider_short_name(provider);
+            let tier_str = tier_label_for(m);
             let label = if let Some(effort) = effort_level {
-                format!("[{} · {}]", truncate_model(m), effort)
+                format!(
+                    "[{} · {} · {} · {}]",
+                    provider_short,
+                    truncate_model(m),
+                    tier_str,
+                    effort
+                )
             } else {
-                format!("[{}]", truncate_model(m))
+                format!(
+                    "[{} · {} · {}]",
+                    provider_short,
+                    truncate_model(m),
+                    tier_str
+                )
             };
             left.push(Span::styled(
                 label,
@@ -192,7 +259,7 @@ impl StatusBarWidget {
         } else {
             left.push(Span::styled(" ", Style::default().fg(theme.border_dim)));
             left.push(Span::styled(
-                format!("[{}]", t!("ui.no_model")),
+                "[No provider connected]".to_string(),
                 Style::default().fg(theme.warning),
             ));
         }
@@ -608,4 +675,32 @@ fn render_line(
         .alignment(Alignment::Left);
 
     frame.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tier_label_for_classifies_models() {
+        assert_eq!(tier_label_for("claude-haiku-4-5"), "fast");
+        assert_eq!(tier_label_for("claude-sonnet-4"), "standard");
+        assert_eq!(tier_label_for("claude-opus-4"), "pro");
+        assert_eq!(tier_label_for("gemini-1.5-flash"), "fast");
+        assert_eq!(tier_label_for("gpt-4o-mini"), "fast");
+        assert_eq!(tier_label_for("o1-preview"), "pro");
+    }
+
+    #[test]
+    fn provider_short_name_maps_known_slugs() {
+        assert_eq!(provider_short_name(Some("anthropic")), "anthropic");
+        assert_eq!(provider_short_name(Some("OpenAI")), "openai");
+        assert_eq!(provider_short_name(Some("gemini")), "gemini");
+        assert_eq!(
+            provider_short_name(Some("ZhipuInternational")),
+            "zhipu-intl"
+        );
+        assert_eq!(provider_short_name(None), "unknown");
+        assert_eq!(provider_short_name(Some("completely-bogus")), "unknown");
+    }
 }
