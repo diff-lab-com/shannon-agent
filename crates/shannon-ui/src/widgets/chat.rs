@@ -728,14 +728,39 @@ impl ChatWidget {
 
             if let Some(card_area) = status_card_area {
                 use crate::widgets::status_card::{CardStatus, render_status_card};
-                // Static catalog of supported providers/models for the welcome screen.
-                let available: &[(&str, &[&str])] = &[
-                    (
-                        "anthropic",
-                        &["claude-opus-4", "claude-sonnet-4", "claude-haiku-4-5"][..],
-                    ),
-                    ("openai", &["gpt-4o", "gpt-4o-mini"][..]),
-                ];
+
+                // Real catalog: group MODEL_CATALOG by provider (in catalog
+                // order) so the welcome screen reflects what Shannon actually
+                // supports — not a hardcoded two-provider stub. ratatui's List
+                // clips anything beyond the card height.
+                let available: Vec<(String, Vec<String>)> =
+                    shannon_core::model_registry::all_providers()
+                        .into_iter()
+                        .map(|p| {
+                            let slug = shannon_core::provider_resolver::llm_provider_id(&p);
+                            let models: Vec<String> = shannon_core::model_registry::MODEL_CATALOG
+                                .iter()
+                                .filter(|m| m.provider == p)
+                                .map(|m| m.id.to_string())
+                                .collect();
+                            (slug, models)
+                        })
+                        .collect();
+
+                // Real connection state: provider ids present in the persisted
+                // providers.toml profile (configured via /connect or
+                // /model --save). Mirrors `connected_provider_slugs()` in the
+                // /connect dashboard so the ●/○ markers match reality.
+                let connected: Vec<String> = shannon_core::provider_config_store::load(None)
+                    .map(|pm| {
+                        pm.profiles
+                            .values()
+                            .flat_map(|p| p.providers.iter().map(|pp| pp.id.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let connected_refs: Vec<&str> = connected.iter().map(|s| s.as_str()).collect();
+
                 let status = if self.active_provider.is_some() {
                     CardStatus::Configured
                 } else {
@@ -748,7 +773,8 @@ impl ChatWidget {
                     self.active_provider.as_deref(),
                     self.active_model.as_deref(),
                     self.active_tier.as_deref(),
-                    available,
+                    &available,
+                    &connected_refs,
                 );
             }
 

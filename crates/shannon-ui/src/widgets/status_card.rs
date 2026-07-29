@@ -16,6 +16,7 @@ pub enum CardStatus {
 
 /// Render the status card. Caller provides the full area; card adapts
 /// to width (single-line pill below 80 cols).
+#[allow(clippy::too_many_arguments)] // KEEP: widget view data, all params co-rendered (matches status_bar.rs convention)
 pub fn render_status_card(
     f: &mut Frame,
     area: Rect,
@@ -23,7 +24,8 @@ pub fn render_status_card(
     active_provider: Option<&str>,
     active_model: Option<&str>,
     active_tier: Option<&str>,
-    available: &[(&str, &[&str])], // (provider_id, [model_ids])
+    available: &[(String, Vec<String>)], // (provider_id, [model_ids])
+    connected: &[&str],                  // provider ids with a stored credential/profile
 ) {
     let is_narrow = area.width < 80;
 
@@ -38,6 +40,7 @@ pub fn render_status_card(
             active_model,
             active_tier,
             available,
+            connected,
         );
     }
 }
@@ -83,6 +86,7 @@ fn render_pill(
     f.render_widget(Paragraph::new(line).wrap(Wrap { trim: true }), area);
 }
 
+#[allow(clippy::too_many_arguments)] // KEEP: widget view data, all params co-rendered (matches status_bar.rs convention)
 fn render_full(
     f: &mut Frame,
     area: Rect,
@@ -90,8 +94,10 @@ fn render_full(
     provider: Option<&str>,
     model: Option<&str>,
     tier: Option<&str>,
-    available: &[(&str, &[&str])],
+    available: &[(String, Vec<String>)],
+    connected: &[&str],
 ) {
+    let is_connected = |id: &str| connected.contains(&id);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
@@ -145,10 +151,7 @@ fn render_full(
     f.render_widget(Paragraph::new(active_line), chunks[0]);
 
     // Row 2: available providers header
-    let connected_count = available
-        .iter()
-        .filter(|(id, _)| id_is_connected(id))
-        .count();
+    let connected_count = available.iter().filter(|(id, _)| is_connected(id)).count();
     let header = Line::from(vec![Span::styled(
         format!(
             "Available providers ({} connected / {} supported):",
@@ -163,12 +166,12 @@ fn render_full(
     let items: Vec<ListItem> = available
         .iter()
         .map(|(id, models)| {
-            let marker = if id_is_connected(id) { "●" } else { "○" };
+            let marker = if is_connected(id) { "●" } else { "○" };
             let model_list = models.join(" · ");
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("  {marker} "),
-                    Style::default().fg(if id_is_connected(id) {
+                    Style::default().fg(if is_connected(id) {
                         Color::Green
                     } else {
                         Color::DarkGray
@@ -205,11 +208,6 @@ fn render_full(
     f.render_widget(Paragraph::new(cmd_line), chunks[3]);
 }
 
-/// Stub: replace with real check against `connect_status()` once wired.
-fn id_is_connected(id: &str) -> bool {
-    matches!(id, "anthropic" | "openai" | "ollama" | "zhipu")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,7 +229,16 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
-                render_status_card(f, f.area(), CardStatus::Unconfigured, None, None, None, &[]);
+                render_status_card(
+                    f,
+                    f.area(),
+                    CardStatus::Unconfigured,
+                    None,
+                    None,
+                    None,
+                    &[],
+                    &[],
+                );
             })
             .unwrap();
         let text = buffer_text(&terminal.backend().buffer().clone());
@@ -256,9 +263,14 @@ mod tests {
                     Some("claude-sonnet-4-20250514"),
                     Some("Standard"),
                     &[(
-                        "anthropic",
-                        &["claude-opus-4", "claude-sonnet-4", "claude-haiku-4-5"],
+                        "anthropic".to_string(),
+                        vec![
+                            "claude-opus-4".to_string(),
+                            "claude-sonnet-4".to_string(),
+                            "claude-haiku-4-5".to_string(),
+                        ],
                     )],
+                    &["anthropic"],
                 );
             })
             .unwrap();
@@ -282,6 +294,7 @@ mod tests {
                     Some("claude-sonnet-4"),
                     Some("Standard"),
                     &[],
+                    &["anthropic"],
                 );
             })
             .unwrap();

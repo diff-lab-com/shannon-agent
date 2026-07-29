@@ -239,7 +239,7 @@ pub fn draw_frame(
             tier_label: state
                 .model
                 .as_deref()
-                .map(|m| tier_label_for(m).unwrap_or("unknown")),
+                .map(|m| shannon_core::model_registry::tier_label_for_id(m).as_str()),
         };
         crate::widgets::MainLayoutWidget::render_with_ctx(f, &render_ctx);
 
@@ -1543,66 +1543,9 @@ fn provider_id(p: &shannon_engine::api::LlmProvider) -> &'static str {
     }
 }
 
-/// Classify a model id into a coarse tier label.
-///
-/// - "fast"     — small/cheap variants (haiku, flash, mini, nano, turbo)
-/// - "pro"      — large/premium variants (opus, ultra, o1, max)
-/// - "standard" — everything else we recognise as a known model
-/// - "unknown"  — empty / unrecognised model id
-///
-/// `Some(_)` is returned for any non-empty input; the UI layer treats
-/// `"unknown"` as the visual fallback. This mirrors the logic Task 10 will
-/// formalize in a shared `tier_label_for` helper.
-fn tier_label_for(model: &str) -> Option<&'static str> {
-    if model.is_empty() {
-        return None;
-    }
-    let m = model.to_lowercase();
-    let fast = ["haiku", "flash", "mini", "nano", "turbo"];
-    let pro = ["opus", "ultra", "o1", "max"];
-    if fast.iter().any(|k| m.contains(k)) {
-        Some("fast")
-    } else if pro.iter().any(|k| m.contains(k)) {
-        Some("pro")
-    } else if m.is_empty() {
-        Some("unknown")
-    } else {
-        Some("standard")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn tier_label_fast_keywords() {
-        assert_eq!(tier_label_for("claude-haiku-4"), Some("fast"));
-        assert_eq!(tier_label_for("gemini-2.5-flash"), Some("fast"));
-        assert_eq!(tier_label_for("gpt-4-mini"), Some("fast"));
-        assert_eq!(tier_label_for("o3-mini"), Some("fast"));
-        assert_eq!(tier_label_for("gpt-3.5-turbo"), Some("fast"));
-        assert_eq!(tier_label_for("llama-3-nano"), Some("fast"));
-    }
-
-    #[test]
-    fn tier_label_pro_keywords() {
-        assert_eq!(tier_label_for("claude-opus-4"), Some("pro"));
-        assert_eq!(tier_label_for("gpt-4-ultra"), Some("pro"));
-        assert_eq!(tier_label_for("o1-preview"), Some("pro"));
-        assert_eq!(tier_label_for("o1-max"), Some("pro"));
-    }
-
-    #[test]
-    fn tier_label_standard_fallback() {
-        assert_eq!(tier_label_for("gpt-4"), Some("standard"));
-        assert_eq!(tier_label_for("claude-3-5-sonnet"), Some("standard"));
-    }
-
-    #[test]
-    fn tier_label_empty() {
-        assert_eq!(tier_label_for(""), None);
-    }
 
     #[test]
     fn provider_id_known() {

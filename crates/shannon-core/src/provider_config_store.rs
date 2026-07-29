@@ -205,6 +205,23 @@ impl ProviderConfigStore {
         self
     }
 
+    /// Set the active provider + model on the `"default"` profile. The engine
+    /// read-back ([`crate::provider_resolver::resolve_active_target`]) reads
+    /// `active_target` — **not** the per-tier overrides written by [`set_tier`]
+    /// — so calling this is what makes a `/model --tier ... --save` choice
+    /// actually survive a restart (ADR-0005 Phase 4). Reuses [`ensure_provider`]
+    /// so `active_target.provider_id` always points at a real entry in
+    /// `providers`.
+    pub fn set_active(&mut self, provider: &LlmProvider, model_id: &str) -> &mut Self {
+        let id = crate::provider_resolver::llm_provider_id(provider);
+        self.ensure_provider(provider);
+        if let Some(profile) = self.config.profiles.get_mut("default") {
+            profile.active_target.provider_id = id;
+            profile.active_target.model_id = model_id.to_string();
+        }
+        self
+    }
+
     /// Atomically persist to the cached path (or [`default_path`]).
     pub fn save(&self) -> io::Result<PathBuf> {
         save(&self.config, self.last_path.as_deref())
@@ -534,5 +551,34 @@ mod tests {
         assert!(profile.tiers.fast.is_none());
         assert!(profile.tiers.standard.is_none());
         assert!(profile.tiers.pro.is_none());
+    }
+
+    #[test]
+    fn store_set_active_writes_active_target() {
+        // set_active must populate `active_target` so the engine read-back
+        // (resolve_active_target) returns the chosen model — the contract
+        // that makes /model --tier ... --save survive restart.
+        use crate::provider_resolver::resolve_active_target;
+        let mut store = ProviderConfigStore::load_or_default();
+        store.set_active(&LlmProvider::Anthropic, "claude-haiku-4-5");
+        let rt = resolve_active_target(store.config()).expect("active target resolves");
+        assert_eq!(rt.model_id, "claude-haiku-4-5");
+        assert_eq!(rt.provider, LlmProvider::Anthropic);
+    }
+
+    #[test]
+    fn store_set_active_survives_save_load_cycle() {
+        // End-to-end "survives restart": persist → reload → resolve_active_target
+        // returns the set_active model.
+        use crate::provider_resolver::resolve_active_target;
+        let path = tmp_path();
+        let mut store = ProviderConfigStore::load_or_default();
+        store.set_active(&LlmProvider::OpenAI, "gpt-4o");
+        store.save_at(&path).unwrap();
+        let loaded = load(Some(&path)).expect("should parse back");
+        let rt = resolve_active_target(&loaded).expect("active resolves after reload");
+        assert_eq!(rt.model_id, "gpt-4o");
+        assert_eq!(rt.provider, LlmProvider::OpenAI);
+        let _ = fs::remove_file(&path);
     }
 }
