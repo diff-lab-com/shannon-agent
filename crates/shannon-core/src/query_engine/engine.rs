@@ -354,17 +354,27 @@ impl QueryEngine {
     /// queried from the running model), then falls back to the initial value
     /// resolved from config / model registry at construction time.
     pub fn resolved_context_window(&self) -> usize {
+        self.resolved_context_window_opt()
+            .unwrap_or(crate::model_registry::FALLBACK_CONTEXT_WINDOW)
+    }
+
+    /// Like [`resolved_context_window`] but returns `None` when the context
+    /// window is genuinely unknown (no user override, no live Ollama `num_ctx`,
+    /// and the model absent from both the static catalog and the models.dev
+    /// overlay). User-facing labels render "unknown" for `None` instead of the
+    /// fabricated 200K fallback (Phase E).
+    pub fn resolved_context_window_opt(&self) -> Option<usize> {
         if self.config.max_context_tokens.is_some() {
-            return self.effective_max_context_tokens;
+            return Some(self.effective_max_context_tokens);
         }
         if *self.client.provider() == shannon_engine::api::LlmProvider::Ollama {
             if let Some(info) = self.client.cached_ollama_info() {
                 if info.num_ctx > 0 {
-                    return info.num_ctx;
+                    return Some(info.num_ctx);
                 }
             }
         }
-        self.effective_max_context_tokens
+        crate::model_registry::context_window_for_opt(self.client.model())
     }
 
     /// Pre-query provider for real context window size.

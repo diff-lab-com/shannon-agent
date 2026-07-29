@@ -957,20 +957,31 @@ pub fn all_model_ids() -> Vec<&'static str> {
     MODEL_CATALOG.iter().map(|m| m.id).collect()
 }
 
-/// Look up a model's context window by its ID. Returns a reasonable default
-/// (200 000) if the model is not found in the catalog.
+/// Conservative context-window fallback (200K) for internal budgets
+/// (compaction thresholds, sidebar gauge denominator) when a model's real
+/// limit is unknown. This is a safety cap, **not** a claim about the model —
+/// user-facing labels use [`context_window_for_opt`] and render "unknown" when
+/// it returns `None`.
+pub const FALLBACK_CONTEXT_WINDOW: usize = 200_000;
+
+/// Look up a model's context window by its ID, returning `None` when the model
+/// is unknown to both the static catalog and the models.dev dynamic overlay.
 ///
-/// Tries exact match first, then prefix match (e.g., `"claude-sonnet-4"`
-/// matches `"claude-sonnet-4-20250514"`).
-pub fn context_window_for(model_id: &str) -> usize {
+/// This is the honest accessor: a `None` result means "we cannot state a
+/// number", so callers that surface the value to the user can render "unknown"
+/// rather than fabricating [`FALLBACK_CONTEXT_WINDOW`]. Tries exact match
+/// first, then prefix match (e.g. `"claude-sonnet-4"` matches
+/// `"claude-sonnet-4-20250514"`), then reverse prefix, then the dynamic
+/// overlay by exact id.
+pub fn context_window_for_opt(model_id: &str) -> Option<usize> {
     // Exact match
     if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id == model_id) {
-        return info.context_window;
+        return Some(info.context_window);
     }
     // Prefix match: catalog entry starts with the given model_id
     // (handles short names like "claude-sonnet-4" → "claude-sonnet-4-20250514")
     if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id.starts_with(model_id)) {
-        return info.context_window;
+        return Some(info.context_window);
     }
     // Reverse prefix: given model_id starts with a catalog entry
     // (handles "claude-sonnet-4-20250514-extra" → "claude-sonnet-4-20250514")
@@ -979,9 +990,23 @@ pub fn context_window_for(model_id: &str) -> usize {
         .filter(|m| model_id.starts_with(m.id))
         .max_by_key(|m| m.id.len())
     {
-        return info.context_window;
+        return Some(info.context_window);
     }
-    200_000
+    // Dynamic overlay (models.dev): exact id match for freshly pulled models.
+    if let Some(info) = dynamic::overlay_snapshot()
+        .iter()
+        .find(|m| m.id == model_id)
+    {
+        return Some(info.context_window);
+    }
+    None
+}
+
+/// Look up a model's context window by its ID. Returns
+/// [`FALLBACK_CONTEXT_WINDOW`] if the model is not found. Prefer
+/// [`context_window_for_opt`] for user-facing values.
+pub fn context_window_for(model_id: &str) -> usize {
+    context_window_for_opt(model_id).unwrap_or(FALLBACK_CONTEXT_WINDOW)
 }
 
 /// Look up model info by ID.
@@ -1659,6 +1684,20 @@ mod tests {
     #[test]
     fn test_context_window_unknown_fallback() {
         assert_eq!(context_window_for("totally-unknown-model"), 200_000);
+    }
+
+    #[test]
+    fn test_context_window_opt_honest_about_unknown() {
+        // Known models resolve to their cataloged window.
+        assert_eq!(context_window_for_opt("gpt-4o"), Some(128_000));
+        assert_eq!(context_window_for_opt("gemini-2.5-pro"), Some(1_000_000));
+        // Unknown models are None — not a fabricated 200K (Phase E).
+        assert_eq!(context_window_for_opt("totally-unknown-model"), None);
+        // The usize accessor still falls back to the named constant.
+        assert_eq!(
+            context_window_for("totally-unknown-model"),
+            FALLBACK_CONTEXT_WINDOW
+        );
     }
 
     #[test]

@@ -64,8 +64,10 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
             theme: Some(repl.state.theme.name.to_string()),
         });
 
-        // Sync model to query engine and resolve real context window
-        let ctx = if let Some(ref mut engine) = repl.query_engine {
+        // Sync model to query engine and resolve real context window.
+        // `ctx_opt` is None when the window is genuinely unknown — the label
+        // then renders "unknown" instead of fabricating 200K (Phase E).
+        let ctx_opt = if let Some(ref mut engine) = repl.query_engine {
             if let Some(ref provider) = repl.state.selected_provider {
                 engine.set_model_for_provider(resolved_id.clone(), provider.clone());
             } else {
@@ -74,18 +76,13 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 repl.runtime.block_on(engine.pre_resolve_context());
             }));
-            engine.resolved_context_window()
+            engine.resolved_context_window_opt()
         } else {
-            shannon_core::model_registry::context_window_for(&resolved_id)
+            shannon_core::model_registry::context_window_for_opt(&resolved_id)
         };
-        repl.state.context_window = ctx;
-        let ctx_label = if ctx >= 1_000_000 {
-            format!("{}M", ctx / 1_000_000)
-        } else if ctx >= 1_000 {
-            format!("{}K", ctx / 1_000)
-        } else {
-            ctx.to_string()
-        };
+        repl.state.context_window =
+            ctx_opt.unwrap_or(shannon_core::model_registry::FALLBACK_CONTEXT_WINDOW);
+        let ctx_label = format_context_label(ctx_opt);
         let msg = format!(
             "{} (context: {ctx_label})",
             t!("commands.model.set", name = &resolved_id)
@@ -116,6 +113,18 @@ fn handle_model_refresh(repl: &mut Repl) -> Result<()> {
     };
     repl.chat.add_message(ChatRole::System, msg);
     Ok(())
+}
+
+/// Format a resolved context window for user-facing labels. `None` (unknown)
+/// renders as the localized "unknown" string instead of fabricating a number
+/// (Phase E).
+fn format_context_label(ctx: Option<usize>) -> String {
+    match ctx {
+        Some(n) if n >= 1_000_000 => format!("{}M", n / 1_000_000),
+        Some(n) if n >= 1_000 => format!("{}K", n / 1_000),
+        Some(n) => n.to_string(),
+        None => t!("commands.model.context_unknown").to_string(),
+    }
 }
 
 /// Parse a provider name string (with aliases) into an [`LlmProvider`].
@@ -1391,15 +1400,17 @@ fn handle_model_tier(repl: &mut Repl, args: &str) -> Result<()> {
     repl.state.selected_provider = Some(provider.clone());
 
     // Sync to the engine (mirrors the bare-id branch above).
-    if let Some(ref mut engine) = repl.query_engine {
+    let ctx_opt = if let Some(ref mut engine) = repl.query_engine {
         engine.set_model_for_provider(model_id.clone(), provider.clone());
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             repl.runtime.block_on(engine.pre_resolve_context());
         }));
-        repl.state.context_window = engine.resolved_context_window();
+        engine.resolved_context_window_opt()
     } else {
-        repl.state.context_window = shannon_core::model_registry::context_window_for(&model_id);
-    }
+        shannon_core::model_registry::context_window_for_opt(&model_id)
+    };
+    repl.state.context_window =
+        ctx_opt.unwrap_or(shannon_core::model_registry::FALLBACK_CONTEXT_WINDOW);
 
     crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
         model: repl.state.model.clone(),
@@ -1417,13 +1428,7 @@ fn handle_model_tier(repl: &mut Repl, args: &str) -> Result<()> {
         }
     }
 
-    let ctx_label = if repl.state.context_window >= 1_000_000 {
-        format!("{}M", repl.state.context_window / 1_000_000)
-    } else if repl.state.context_window >= 1_000 {
-        format!("{}K", repl.state.context_window / 1_000)
-    } else {
-        repl.state.context_window.to_string()
-    };
+    let ctx_label = format_context_label(ctx_opt);
     let msg = format!(
         "{} tier={} (context: {ctx_label})",
         t!("commands.model.set", name = &model_id),
