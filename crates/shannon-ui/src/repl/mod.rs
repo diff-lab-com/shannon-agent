@@ -69,7 +69,8 @@ use shannon_tools::register_default_tools_with_project_dir_ex;
 
 // Re-export public types from state submodule
 pub use state::{
-    AgentDisplay, LoopState, PendingElicitation, PlanState, RalphState, ReplState, SidebarTab,
+    AgentDisplay, HelpOverlayState, LoopState, PendingElicitation, PlanState, RalphState,
+    ReplState, SidebarTab,
 };
 
 // Re-export custom_commands types used by other modules

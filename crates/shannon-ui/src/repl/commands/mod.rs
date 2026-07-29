@@ -552,16 +552,16 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
 }
 
 fn handle_help(repl: &mut Repl, args: &str) -> Result<()> {
-    use shannon_commands::help_utils;
-    if !args.is_empty() {
-        let help_text = help_utils::generate_help(Some(args));
-        if !help_text.contains("No help found") {
-            repl.chat.add_message(ChatRole::System, help_text);
-            return Ok(());
-        }
-    }
-    let help_text = help_utils::generate_help(None);
-    repl.chat.add_message(ChatRole::System, help_text);
+    use crate::repl::state::HelpOverlayState;
+    let filter = if args.is_empty() {
+        None
+    } else {
+        Some(args.trim().to_string())
+    };
+    repl.state.help_overlay = Some(HelpOverlayState {
+        filter,
+        ..Default::default()
+    });
     Ok(())
 }
 
