@@ -13,7 +13,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
 };
@@ -132,6 +132,12 @@ pub struct ChatWidget {
     column: super::column::ColumnRenderable,
     /// Lines buffered for scrollback insertion on next draw_frame()
     pub pending_scrollback: Vec<ratatui::text::Line<'static>>,
+    /// Active provider id for status card (e.g., "anthropic"). `None` if unconfigured.
+    pub active_provider: Option<String>,
+    /// Active model id for status card. `None` if unconfigured.
+    pub active_model: Option<String>,
+    /// Active tier label for status card (e.g., "fast"/"standard"/"pro"). `None` if unknown.
+    pub active_tier: Option<String>,
 }
 
 /// A single chat message
@@ -198,7 +204,22 @@ impl ChatWidget {
             committed_width: std::sync::atomic::AtomicU16::new(0),
             column: super::column::ColumnRenderable::new(),
             pending_scrollback: Vec::new(),
+            active_provider: None,
+            active_model: None,
+            active_tier: None,
         }
+    }
+
+    /// Set the active provider/model/tier used by the welcome-screen StatusCard.
+    pub fn set_active(
+        &mut self,
+        provider: Option<String>,
+        model: Option<String>,
+        tier: Option<String>,
+    ) {
+        self.active_provider = provider;
+        self.active_model = model;
+        self.active_tier = tier;
     }
 
     /// Add a message to the chat, returns the message index
@@ -693,6 +714,44 @@ impl ChatWidget {
             let border = b.fg(theme.border_dim);
             let sep = "\u{2500}".repeat(sep_w);
 
+            // Allocate top portion for the StatusCard when there's enough vertical space;
+            // the remaining area holds the welcome text.
+            let (status_card_area, welcome_area) = if inner.height > 10 {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(8),
+                        Constraint::Min(0),
+                    ])
+                    .split(inner);
+                (Some(chunks[0]), chunks[1])
+            } else {
+                (None, inner)
+            };
+
+            if let Some(card_area) = status_card_area {
+                use crate::widgets::status_card::{render_status_card, CardStatus};
+                // Static catalog of supported providers/models for the welcome screen.
+                let available: &[(&str, &[&str])] = &[
+                    ("anthropic", &["claude-opus-4", "claude-sonnet-4", "claude-haiku-4-5"][..]),
+                    ("openai", &["gpt-4o", "gpt-4o-mini"][..]),
+                ];
+                let status = if self.active_provider.is_some() {
+                    CardStatus::Configured
+                } else {
+                    CardStatus::Unconfigured
+                };
+                render_status_card(
+                    frame,
+                    card_area,
+                    status,
+                    self.active_provider.as_deref(),
+                    self.active_model.as_deref(),
+                    self.active_tier.as_deref(),
+                    available,
+                );
+            }
+
             let mut welcome_lines = vec![
                 ratatui::text::Line::from(""),
                 ratatui::text::Line::from(vec![
@@ -746,7 +805,7 @@ impl ChatWidget {
             ];
 
             // Keyboard shortcuts row (only if enough vertical space)
-            if inner.height >= 16 {
+            if welcome_area.height >= 16 {
                 welcome_lines.push(ratatui::text::Line::from(""));
                 welcome_lines.push(ratatui::text::Line::from(vec![
                     ratatui::text::Span::styled("  ", b),
@@ -762,7 +821,7 @@ impl ChatWidget {
             }
 
             let welcome = ratatui::widgets::Paragraph::new(welcome_lines);
-            frame.render_widget(welcome, inner);
+            frame.render_widget(welcome, welcome_area);
             return;
         }
 
