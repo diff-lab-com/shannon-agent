@@ -850,6 +850,87 @@ pub fn all_providers() -> Vec<LlmProvider> {
     providers
 }
 
+/// Apply an allowlist/denylist of canonical provider slugs to a provider list.
+///
+/// Slugs match the provider's [`Display`](LlmProvider) form, case-insensitively
+/// (e.g. `"anthropic"`, `"openai"`, `"ollama"`). If `enabled` is non-empty it
+/// acts as an allowlist (only matches pass); `disabled` always removes matches.
+/// Pure — unit-tested below.
+pub fn filter_providers(
+    providers: Vec<LlmProvider>,
+    enabled: &[String],
+    disabled: &[String],
+) -> Vec<LlmProvider> {
+    let enabled: Vec<String> = enabled.iter().map(|s| s.to_lowercase()).collect();
+    let disabled: Vec<String> = disabled.iter().map(|s| s.to_lowercase()).collect();
+    providers
+        .into_iter()
+        .filter(|p| {
+            let slug = p.to_string();
+            if disabled.iter().any(|d| d == &slug) {
+                return false;
+            }
+            if !enabled.is_empty() && !enabled.iter().any(|e| e == &slug) {
+                return false;
+            }
+            true
+        })
+        .collect()
+}
+
+/// Parse a comma- or whitespace-separated provider-slug env var into a list.
+fn parse_provider_slugs_env(var: &str) -> Vec<String> {
+    std::env::var(var)
+        .ok()
+        .map(|raw| {
+            raw.split([',', ' ', '\t', '\n'])
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Like [`all_providers`] but filtered by the `SHANNON_ENABLED_PROVIDERS` /
+/// `SHANNON_DISABLED_PROVIDERS` env vars (ADR-0005 Phase 5 allowlist), so users
+/// can restrict which providers appear in the picker / status card.
+///
+/// Fails open: if filtering would yield an empty list (e.g. a typo'd allowlist),
+/// the full unfiltered list is returned so the picker is never bricked.
+pub fn available_providers() -> Vec<LlmProvider> {
+    let enabled = parse_provider_slugs_env("SHANNON_ENABLED_PROVIDERS");
+    let disabled = parse_provider_slugs_env("SHANNON_DISABLED_PROVIDERS");
+    if enabled.is_empty() && disabled.is_empty() {
+        return all_providers();
+    }
+    let filtered = filter_providers(all_providers(), &enabled, &disabled);
+    if filtered.is_empty() {
+        all_providers()
+    } else {
+        filtered
+    }
+}
+
+/// Returns true if `provider` would pass the `SHANNON_ENABLED_PROVIDERS` /
+/// `SHANNON_DISABLED_PROVIDERS` allowlist/denylist. Callers that build their
+/// own provider list (e.g. the model picker always offering a local Ollama
+/// discovery tab) use this to still honour an explicit operator filter.
+pub fn is_provider_allowed(provider: &LlmProvider) -> bool {
+    let enabled = parse_provider_slugs_env("SHANNON_ENABLED_PROVIDERS");
+    let disabled = parse_provider_slugs_env("SHANNON_DISABLED_PROVIDERS");
+    if enabled.is_empty() && disabled.is_empty() {
+        return true;
+    }
+    let slug = provider.to_string();
+    if disabled.iter().any(|d| d == &slug) {
+        return false;
+    }
+    if !enabled.is_empty() && !enabled.iter().any(|e| e == &slug) {
+        return false;
+    }
+    true
+}
+
 /// Provider display ordering (lower = shown first).
 fn provider_order(p: &LlmProvider) -> u8 {
     match p {
@@ -1492,6 +1573,103 @@ mod tests {
         assert!(providers.contains(&LlmProvider::Anthropic));
         assert!(providers.contains(&LlmProvider::OpenAI));
         assert!(providers.contains(&LlmProvider::Gemini));
+    }
+
+    fn slugs_of(providers: &[LlmProvider]) -> Vec<String> {
+        providers.iter().map(|p| p.to_string()).collect()
+    }
+
+    #[test]
+    fn test_filter_providers_empty_lists_pass_through() {
+        let input = vec![LlmProvider::Anthropic, LlmProvider::OpenAI];
+        let out = filter_providers(input.clone(), &[], &[]);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn test_filter_providers_allowlist_only() {
+        let input = vec![
+            LlmProvider::Anthropic,
+            LlmProvider::OpenAI,
+            LlmProvider::Ollama,
+        ];
+        let enabled = vec!["anthropic".to_string(), "openai".to_string()];
+        let out = filter_providers(input, &enabled, &[]);
+        assert_eq!(slugs_of(&out), vec!["anthropic", "openai"]);
+    }
+
+    #[test]
+    fn test_filter_providers_denylist_only() {
+        let input = vec![
+            LlmProvider::Anthropic,
+            LlmProvider::OpenAI,
+            LlmProvider::Ollama,
+        ];
+        let disabled = vec!["ollama".to_string()];
+        let out = filter_providers(input, &[], &disabled);
+        assert_eq!(slugs_of(&out), vec!["anthropic", "openai"]);
+    }
+
+    #[test]
+    fn test_filter_providers_allowlist_plus_denylist() {
+        let input = vec![
+            LlmProvider::Anthropic,
+            LlmProvider::OpenAI,
+            LlmProvider::Ollama,
+        ];
+        let enabled = vec!["anthropic".to_string(), "ollama".to_string()];
+        let disabled = vec!["ollama".to_string()];
+        let out = filter_providers(input, &enabled, &disabled);
+        assert_eq!(slugs_of(&out), vec!["anthropic"]);
+    }
+
+    #[test]
+    fn test_filter_providers_case_insensitive() {
+        let input = vec![LlmProvider::Anthropic, LlmProvider::OpenAI];
+        let enabled = vec!["ANTHROPIC".to_string()];
+        let out = filter_providers(input, &enabled, &[]);
+        assert_eq!(slugs_of(&out), vec!["anthropic"]);
+    }
+
+    #[test]
+    fn test_filter_providers_allowlist_no_matches_yields_empty() {
+        // filter_providers itself is pure: a non-matching allowlist yields empty.
+        // (available_providers wraps this with a fail-open guard.)
+        let input = vec![LlmProvider::Anthropic, LlmProvider::OpenAI];
+        let enabled = vec!["nonexistent-provider".to_string()];
+        let out = filter_providers(input, &enabled, &[]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_available_providers_honours_env_and_fails_open() {
+        // An allowlist matching nothing must fall back to all providers so a
+        // typo'd SHANNON_ENABLED_PROVIDERS never bricks the picker.
+        unsafe {
+            std::env::set_var("SHANNON_ENABLED_PROVIDERS", "does-not-exist");
+        }
+        let fallback = available_providers();
+        unsafe {
+            std::env::remove_var("SHANNON_ENABLED_PROVIDERS");
+        }
+        assert!(
+            fallback.contains(&LlmProvider::Anthropic),
+            "fail-open should still include anthropic"
+        );
+
+        // A valid allowlist restricts to matching providers (comma + space
+        // separated slugs).
+        unsafe {
+            std::env::set_var("SHANNON_ENABLED_PROVIDERS", "anthropic, openai");
+        }
+        let providers = available_providers();
+        unsafe {
+            std::env::remove_var("SHANNON_ENABLED_PROVIDERS");
+        }
+        let slugs = slugs_of(&providers);
+        assert!(slugs.contains(&"anthropic".to_string()));
+        assert!(slugs.contains(&"openai".to_string()));
+        assert!(!slugs.contains(&"ollama".to_string()));
     }
 
     #[test]

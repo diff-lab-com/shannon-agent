@@ -327,9 +327,13 @@ unified underneath.
 > **Status: ✅ Complete (2026-07-30).** models.dev dynamic catalog delivered
 > (`crates/shannon-core/src/model_registry/dynamic.rs`): 24h-TTL cached fetch on
 > `/model refresh`, additive merge over `MODEL_CATALOG`, offline static-table
-> fallback (headless/CI never break). Two sub-items are **deferred**: the
-> `enabled_providers` / `disabled_providers` allowlist (config switch not yet
-> connected — see P1-5) and the `small_model` field.
+> fallback (headless/CI never break). The `enabled_providers` /
+> `disabled_providers` allowlist is now connected (P1-5, 2026-07-30) via the
+> `SHANNON_ENABLED_PROVIDERS` / `SHANNON_DISABLED_PROVIDERS` env vars — these
+> restrict the model picker, first-screen status card, and the `/provider` /
+> `/connect` listings, and **fail open** (full list) when an allowlist matches
+> nothing so a typo never bricks the picker. The `settings.toml` persistence
+> variant and the `small_model` field remain **deferred**.
 
 **Scope**: models.dev fetch (cached, static-catalog offline fallback — must not
 break headless/CI), `enabled_providers` / `disabled_providers` allowlists,

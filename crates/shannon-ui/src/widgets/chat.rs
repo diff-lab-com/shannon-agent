@@ -732,9 +732,10 @@ impl ChatWidget {
                 // Real catalog: group MODEL_CATALOG by provider (in catalog
                 // order) so the welcome screen reflects what Shannon actually
                 // supports — not a hardcoded two-provider stub. ratatui's List
-                // clips anything beyond the card height.
+                // clips anything beyond the card height. Honours the
+                // SHANNON_*_PROVIDERS allowlist/denylist (ADR-0005 Phase 5).
                 let available: Vec<(String, Vec<String>)> =
-                    shannon_core::model_registry::all_providers()
+                    shannon_core::model_registry::available_providers()
                         .into_iter()
                         .map(|p| {
                             let slug = shannon_core::provider_resolver::llm_provider_id(&p);

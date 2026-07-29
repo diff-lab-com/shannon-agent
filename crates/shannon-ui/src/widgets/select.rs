@@ -917,8 +917,8 @@ mod tests {
 // ── Model Picker Widget ────────────────────────────────────────────
 
 use shannon_core::model_registry::{
-    ModelInfo, TierLabel, all_providers, detect_local_models, merged_models_for_provider,
-    provider_display_name,
+    ModelInfo, TierLabel, available_providers, detect_local_models, is_provider_allowed,
+    merged_models_for_provider, provider_display_name,
 };
 use shannon_engine::api::LlmProvider;
 
@@ -982,10 +982,12 @@ impl ModelPickerWidget {
     /// Create a new model picker, optionally highlighting `current_model`.
     pub fn new(current_model: Option<&str>) -> Self {
         let local_models = detect_local_models();
-        let mut providers = all_providers();
+        let mut providers = available_providers();
 
-        // Always include Ollama tab (shows "No local models" if none detected)
-        if !providers.contains(&LlmProvider::Ollama) {
+        // Always offer an Ollama tab for local discovery (the static catalog
+        // omits Ollama until models are detected at runtime), unless an operator
+        // filtered it out via the SHANNON_*_PROVIDERS allowlist/denylist.
+        if !providers.contains(&LlmProvider::Ollama) && is_provider_allowed(&LlmProvider::Ollama) {
             providers.push(LlmProvider::Ollama);
         }
 
