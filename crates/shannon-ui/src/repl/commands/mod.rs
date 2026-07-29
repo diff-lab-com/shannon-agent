@@ -84,6 +84,41 @@ fn expand_pasted_texts(
     result
 }
 
+/// Redact inline secrets from a recorded command line so they are never
+/// persisted into the chat widget, command history, or session JSON.
+///
+/// Currently redacts the API key from `/connect <provider> <key>`, replacing
+/// the key with `***`. The real key still reaches the command handler — this
+/// redaction only affects what is *recorded* (chat message + up-arrow history).
+/// Returns the input unchanged for any other command, free-text input, or a
+/// `/connect` invocation without an inline key.
+///
+/// Tokenization uses `split_whitespace`, matching how `parse_connect_args`
+/// splits the real command, so runs of whitespace (`/connect  minimax  k`) are
+/// handled the same way as the single-space form.
+fn redact_secret_command(input: &str) -> String {
+    // Preserve any leading whitespace the user typed before the '/'.
+    let trimmed = input.trim_start();
+    let lead = &input[..input.len() - trimmed.len()];
+    let rest = match trimmed.strip_prefix('/') {
+        Some(r) => r,
+        None => return input.to_string(),
+    };
+    let mut tokens = rest.split_whitespace();
+    let cmd = tokens.next().unwrap_or("");
+    if !cmd.eq_ignore_ascii_case("connect") {
+        return input.to_string();
+    }
+    let provider = match tokens.next() {
+        Some(p) if !p.is_empty() => p,
+        _ => return input.to_string(),
+    };
+    match tokens.next() {
+        Some(k) if !k.is_empty() => format!("{lead}/connect {provider} ***"),
+        _ => input.to_string(),
+    }
+}
+
 /// Submit the current input
 pub fn submit_input(repl: &mut Repl, mut terminal: Option<&mut super::query::Term>) -> Result<()> {
     let raw_input = repl.prompt.input().to_string();
@@ -100,14 +135,20 @@ pub fn submit_input(repl: &mut Repl, mut terminal: Option<&mut super::query::Ter
     // Expand pasted text references: [Pasted Text #N X lines] -> actual content
     let expanded = expand_pasted_texts(&raw_input, &mut repl.state.pasted_texts);
 
-    // Add user message to chat (show raw input with paste markers)
-    repl.chat.add_message(ChatRole::User, raw_input);
+    // Add user message to chat. Redact inline secrets (e.g. an API key passed
+    // to /connect) so the plaintext never lands in the chat widget or the
+    // session JSON written by save_session. The unredacted `expanded` below is
+    // what the command handler actually receives.
+    let chat_text = redact_secret_command(&raw_input);
+    repl.chat.add_message(ChatRole::User, chat_text);
 
     // Increment turn counter for context visualization
     repl.state.turn_count += 1;
 
-    // Push expanded text to command history and clear input
-    repl.command_history.push(&expanded);
+    // Push to command history (up-arrow recall). Redact the same way so a
+    // recalled command can't leak the key either.
+    let history_entry = redact_secret_command(&expanded);
+    repl.command_history.push(&history_entry);
     repl.saved_input.clear();
     repl.prompt.clear();
 
@@ -186,9 +227,13 @@ pub fn submit_input_with_text(
     terminal: &mut Option<&mut super::query::Term>,
 ) {
     let expanded = expand_pasted_texts(text, &mut repl.state.pasted_texts);
-    repl.chat.add_message(ChatRole::User, text.to_string());
+    // Redact inline secrets (e.g. /connect <provider> <key>) before recording
+    // — same contract as submit_input. The unredacted `expanded` is executed.
+    let chat_text = redact_secret_command(text);
+    repl.chat.add_message(ChatRole::User, chat_text);
     repl.state.turn_count += 1;
-    repl.command_history.push(&expanded);
+    let history_entry = redact_secret_command(&expanded);
+    repl.command_history.push(&history_entry);
     repl.prompt.clear();
     repl.state.pasted_texts.clear();
     repl.state.paste_counter = 0;
@@ -284,6 +329,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         "prov",
         "init",
         "config",
+        "connect",
         "sessions",
         "resume",
         "history",
@@ -404,6 +450,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "provider" | "prov" => config::handle_provider(repl, args)?,
             "init" => config::handle_init(repl)?,
             "config" => config::handle_config(repl, args)?,
+            "connect" => config::handle_connect(repl, args)?,
             "sessions" => session::handle_sessions(repl, args)?,
             "resume" => session::handle_resume(repl, args)?,
             "history" => session::handle_history(repl, args)?,
@@ -505,16 +552,16 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
 }
 
 fn handle_help(repl: &mut Repl, args: &str) -> Result<()> {
-    use shannon_commands::help_utils;
-    if !args.is_empty() {
-        let help_text = help_utils::generate_help(Some(args));
-        if !help_text.contains("No help found") {
-            repl.chat.add_message(ChatRole::System, help_text);
-            return Ok(());
-        }
-    }
-    let help_text = help_utils::generate_help(None);
-    repl.chat.add_message(ChatRole::System, help_text);
+    use crate::repl::state::HelpOverlayState;
+    let filter = if args.is_empty() {
+        None
+    } else {
+        Some(args.trim().to_string())
+    };
+    repl.state.help_overlay = Some(HelpOverlayState {
+        filter,
+        ..Default::default()
+    });
     Ok(())
 }
 
@@ -683,3 +730,68 @@ impl Repl {
         self.state.pending_dialog_action = None;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::redact_secret_command;
+
+    #[test]
+    fn redact_connect_key_replaces_inline_key_with_marker() {
+        // The plaintext key must never appear in the recorded form.
+        let out = redact_secret_command("/connect minimax sk-secret-12345");
+        assert_eq!(out, "/connect minimax ***");
+        assert!(!out.contains("sk-secret-12345"));
+    }
+
+    #[test]
+    fn redact_connect_key_preserves_provider_casing_and_leading_whitespace() {
+        // Provider echoes back as-typed; leading whitespace is preserved.
+        let out = redact_secret_command("   /connect MiniMax abc-KEY-xyz");
+        assert_eq!(out, "   /connect MiniMax ***");
+    }
+
+    #[test]
+    fn redact_connect_key_is_case_insensitive_on_command_name() {
+        // Command name matching is case-insensitive; the recorded form is
+        // normalized to the canonical lowercase `/connect`.
+        let out = redact_secret_command("/CONNECT anthropic sk-ant-9");
+        assert_eq!(out, "/connect anthropic ***");
+        assert!(!out.contains("sk-ant-9"));
+    }
+
+    #[test]
+    fn redact_connect_key_handles_whitespace_runs_like_parser() {
+        // The real /connect parser (parse_connect_args) treats runs of
+        // whitespace as a single separator, so the redactor must too —
+        // otherwise a double-spaced key would leak into history verbatim.
+        let out = redact_secret_command("/connect    minimax    sk-secret");
+        assert_eq!(out, "/connect minimax ***");
+        assert!(!out.contains("sk-secret"));
+        // Tab-separated form is also covered by split_whitespace.
+        assert_eq!(
+            redact_secret_command("/connect\tminimax\tsk-secret"),
+            "/connect minimax ***"
+        );
+    }
+
+    #[test]
+    fn redact_connect_without_key_is_unchanged() {
+        // No inline key → nothing to redact. Must not fabricate a `***`.
+        assert_eq!(redact_secret_command("/connect minimax"), "/connect minimax");
+        assert_eq!(redact_secret_command("/connect"), "/connect");
+        // A blank key argument is treated as "no key".
+        assert_eq!(redact_secret_command("/connect minimax "), "/connect minimax ");
+    }
+
+    #[test]
+    fn redact_leaves_other_commands_and_free_text_untouched() {
+        assert_eq!(redact_secret_command("/model gpt-4o"), "/model gpt-4o");
+        assert_eq!(
+            redact_secret_command("how do I parse JSON?"),
+            "how do I parse JSON?"
+        );
+        // Inline shell, env-var dumps, etc. are not /connect.
+        assert_eq!(redact_secret_command("!echo $HOME"), "!echo $HOME");
+    }
+}
+

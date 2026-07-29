@@ -98,6 +98,7 @@ fn test_status_bar_shows_no_model_configured() {
             let area = Rect::new(0, 0, 80, 2);
             StatusBarWidget::render_with_spinner(
                 f, area, "Ready", None, // No model configured
+                None, // No provider
                 None, // No effort level
                 None, None, None, None, None, None, &theme, None, None, None, None, None, None,
                 None, None, None, false, 0, // thinking
@@ -109,8 +110,8 @@ fn test_status_bar_shows_no_model_configured() {
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 80, 2));
     assert!(
-        text.contains("No model configured"),
-        "should show 'No model configured' when model is None"
+        text.contains("No provider connected"),
+        "should show 'No provider connected' when model is None"
     );
 }
 
@@ -127,6 +128,7 @@ fn test_status_bar_shows_model_name() {
                 area,
                 "Ready",
                 Some("gpt-4"),
+                None, // No provider
                 None, // No effort level
                 None,
                 None,
@@ -177,6 +179,7 @@ fn test_status_bar_shows_effort_level() {
                 area,
                 "Ready",
                 Some("claude-sonnet-4"),
+                None, // No provider
                 Some("high"),
                 None,
                 None,
@@ -221,6 +224,7 @@ fn test_status_bar_shows_thinking_indicator() {
                 area,
                 "Thinking...",
                 Some("claude-sonnet-4"),
+                None, // No provider
                 None,
                 None,
                 None,

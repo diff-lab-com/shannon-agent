@@ -42,6 +42,24 @@
         },
         {
           "properties": {
+            "backend": {
+              "enum": [
+                "store"
+              ],
+              "type": "string"
+            },
+            "service": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "backend",
+            "service"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "account": {
               "type": "string"
             },
@@ -267,6 +285,14 @@
             "send_temperature": true,
             "temperature_strategy": "default"
           }
+        },
+        "tiers": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProviderTiers"
+            }
+          ],
+          "default": {}
         }
       },
       "required": [
@@ -299,6 +325,29 @@
       "required": [
         "temperature_strategy"
       ],
+      "type": "object"
+    },
+    "ProviderTiers": {
+      "properties": {
+        "fast": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pro": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "standard": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "Scope": {

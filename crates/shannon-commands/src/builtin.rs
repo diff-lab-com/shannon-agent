@@ -116,7 +116,8 @@ pub mod commands {
 /// Re-export help utilities for REPL integration
 pub mod help_utils {
     pub use super::help::{
-        CommandHelpEntry, HelpCategory, all_help_entries, generate_help, get_command_help,
+        CommandHelpEntry, HelpCategory, all_help_entries, categorize_commands, generate_help,
+        get_command_help,
     };
 }
 

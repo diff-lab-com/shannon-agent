@@ -66,6 +66,11 @@ pub enum AuxRole {
 pub enum CredentialRef {
     /// 默认后端：环境变量（CI / ~/.shannon/secrets.env chmod 0600）
     Env { var: String },
+    /// Shannon 凭据存储后端：值落在 `~/.shannon/credentials/<service>.json`
+    /// （0600）。这是 `/connect`、`/credentials` 写入、请求路径读取的统一
+    /// 后端（ADR-0005 Phase 1）。读取由 provider_resolver 完成；缺失时返回
+    /// 空，调用方自然回退到 provider 的 env 链。
+    Store { service: String },
     /// 机会性可选：仅探测到 D-Bus secret-service 可用时启用
     Keyring { service: String, account: String },
     /// 迁移过渡期：已 mask 的旧明文，迁移完成后清除
@@ -115,6 +120,16 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, JsonSchema)]
+pub struct ProviderTiers {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pro: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderProfile {
@@ -133,6 +148,8 @@ pub struct ProviderProfile {
     pub fallback_models: Vec<String>,
     #[serde(default)]
     pub quirks: ProviderQuirks,
+    #[serde(default)]
+    pub tiers: ProviderTiers,
 }
 
 /// Provider 注册的模型目录条目（context 限制、工具支持、来源标签）。
@@ -264,4 +281,187 @@ pub fn specificity_weight(r: &ProfileRoute) -> u32 {
         w += 2;
     }
     w
+}
+
+/// Model tier. Canonical names are `fast`/`standard`/`pro`/`auto`.
+/// Aliases (input-only) include Anthropic's `haiku`/`sonnet`/`opus`
+/// and provider-native names (`flash`/`mini`/`plus`/`ultra`/`max`).
+///
+/// `Auto` is reserved for future use (model auto-routing by task type)
+/// and is not yet wired to any production code path.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TierName {
+    Fast,
+    Standard,
+    Pro,
+    Auto,
+}
+
+impl TierName {
+    /// Canonical lowercase name (used in toml, logs, status pills).
+    pub fn canonical(self) -> &'static str {
+        match self {
+            TierName::Fast => "fast",
+            TierName::Standard => "standard",
+            TierName::Pro => "pro",
+            TierName::Auto => "auto",
+        }
+    }
+
+    /// Human-readable display label (capitalized, used in UI).
+    pub fn display(self) -> &'static str {
+        match self {
+            TierName::Fast => "Fast",
+            TierName::Standard => "Standard",
+            TierName::Pro => "Pro",
+            TierName::Auto => "Auto",
+        }
+    }
+
+    /// Normalize any accepted user input to canonical TierName.
+    /// Accepts canonical names + Anthropic aliases + other provider-native
+    /// aliases. Case-insensitive. Returns None for unrecognized input.
+    pub fn from_user_input(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            // Canonical
+            "fast" => Some(TierName::Fast),
+            "standard" => Some(TierName::Standard),
+            "pro" => Some(TierName::Pro),
+            "auto" => Some(TierName::Auto),
+            // Aliases → Fast
+            "flash" | "mini" | "nano" | "haiku" => Some(TierName::Fast),
+            // Aliases → Standard
+            "plus" | "sonnet" | "medium" | "turbo" => Some(TierName::Standard),
+            // Aliases → Pro
+            "opus" | "ultra" | "max" | "large" => Some(TierName::Pro),
+            _ => None,
+        }
+    }
+
+    /// Tab-completion suggestions shown to the user.
+    /// Order: canonical first, then Anthropic aliases, then other aliases.
+    pub fn suggestions() -> &'static [&'static str] {
+        &[
+            "fast", "standard", "pro", "auto",
+            "haiku", "sonnet", "opus",
+            "flash", "mini", "plus", "ultra", "max",
+        ]
+    }
+}
+
+#[cfg(test)]
+mod tier_name_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_is_lowercase() {
+        assert_eq!(TierName::Fast.canonical(), "fast");
+        assert_eq!(TierName::Standard.canonical(), "standard");
+        assert_eq!(TierName::Pro.canonical(), "pro");
+        assert_eq!(TierName::Auto.canonical(), "auto");
+    }
+
+    #[test]
+    fn from_user_input_accepts_canonical() {
+        assert_eq!(TierName::from_user_input("fast"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("standard"), Some(TierName::Standard));
+        assert_eq!(TierName::from_user_input("pro"), Some(TierName::Pro));
+        assert_eq!(TierName::from_user_input("auto"), Some(TierName::Auto));
+    }
+
+    #[test]
+    fn from_user_input_accepts_anthropic_aliases() {
+        assert_eq!(TierName::from_user_input("haiku"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("sonnet"), Some(TierName::Standard));
+        assert_eq!(TierName::from_user_input("opus"), Some(TierName::Pro));
+    }
+
+    #[test]
+    fn from_user_input_accepts_other_provider_aliases() {
+        assert_eq!(TierName::from_user_input("flash"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("mini"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("plus"), Some(TierName::Standard));
+        assert_eq!(TierName::from_user_input("ultra"), Some(TierName::Pro));
+        assert_eq!(TierName::from_user_input("max"), Some(TierName::Pro));
+    }
+
+    #[test]
+    fn from_user_input_is_case_insensitive() {
+        assert_eq!(TierName::from_user_input("FAST"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("Haiku"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("oPuS"), Some(TierName::Pro));
+    }
+
+    #[test]
+    fn from_user_input_rejects_unknown() {
+        assert_eq!(TierName::from_user_input(""), None);
+        assert_eq!(TierName::from_user_input("xyz"), None);
+        assert_eq!(TierName::from_user_input("turbo-xl"), None);
+    }
+
+    #[test]
+    fn canonical_round_trips_through_from_user_input() {
+        for tier in [TierName::Fast, TierName::Standard, TierName::Pro, TierName::Auto] {
+            assert_eq!(TierName::from_user_input(tier.canonical()), Some(tier));
+        }
+    }
+
+    #[test]
+    fn suggestions_starts_with_canonical() {
+        let s = TierName::suggestions();
+        assert_eq!(s[0], "fast");
+        assert_eq!(s[1], "standard");
+        assert_eq!(s[2], "pro");
+        assert_eq!(s[3], "auto");
+        // Anthropic aliases present
+        assert!(s.contains(&"haiku"));
+        assert!(s.contains(&"sonnet"));
+        assert!(s.contains(&"opus"));
+    }
+
+    #[test]
+    fn provider_profile_round_trip_with_tiers() {
+        let profile = ProviderProfile {
+            id: "anthropic".to_string(),
+            kind: ProviderKind::Anthropic,
+            display_name: "Anthropic".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            models_url: None,
+            credential: CredentialRef::Env { var: "ANTHROPIC_API_KEY".to_string() },
+            extra_headers: Default::default(),
+            default_max_tokens: None,
+            fallback_models: vec![],
+            quirks: ProviderQuirks::default(),
+            tiers: ProviderTiers {
+                fast: Some("claude-haiku-4-5".to_string()),
+                standard: Some("claude-sonnet-4-20250514".to_string()),
+                pro: Some("claude-opus-4".to_string()),
+            },
+        };
+
+        let toml_str = toml::to_string(&profile).expect("serialize");
+        assert!(toml_str.contains("fast = \"claude-haiku-4-5\""));
+        assert!(toml_str.contains("standard = \"claude-sonnet-4-20250514\""));
+        assert!(toml_str.contains("pro = \"claude-opus-4\""));
+
+        let parsed: ProviderProfile = toml::from_str(&toml_str).expect("deserialize");
+        assert_eq!(parsed.tiers.fast, profile.tiers.fast);
+        assert_eq!(parsed.tiers.standard, profile.tiers.standard);
+        assert_eq!(parsed.tiers.pro, profile.tiers.pro);
+    }
+
+    #[test]
+    fn provider_profile_round_trip_without_tiers_uses_default() {
+        // Existing toml files without `tiers` should still parse
+        let minimal_toml = r#"
+            id = "anthropic"
+            kind = "anthropic"
+            display_name = "Anthropic"
+            base_url = "https://api.anthropic.com"
+            credential = { backend = "env", var = "ANTHROPIC_API_KEY" }
+        "#;
+        let parsed: ProviderProfile = toml::from_str(minimal_toml).expect("deserialize");
+        assert_eq!(parsed.tiers, ProviderTiers::default());
+    }
 }

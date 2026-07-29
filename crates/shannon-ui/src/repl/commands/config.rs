@@ -2,23 +2,53 @@ use super::super::Repl;
 use crate::{Result, widgets::ChatRole};
 use rust_i18n::t;
 use shannon_core::model_registry;
+use shannon_core::provider_resolver::resolve_model_ref;
 use shannon_engine::api::LlmProvider;
+use shannon_types::model_ref::ModelRef;
+use shannon_types::provider_config::{ProviderTiers, TierName};
 use shannon_types::recover_lock;
 
+/// Resolve a `/model` argument into `(model_id, optional provider)` (ADR-0005
+/// Phase 3).
+///
+/// Accepts both spellings:
+/// - **Qualified** `provider/model` (e.g. `anthropic/claude-sonnet-4-…`,
+///   `ollama/llama3`): the provider comes from the ref, and the model is
+///   alias-expanded *within* that provider.
+/// - **Bare** (legacy): an alias (`sonnet`) or literal id; the provider is set
+///   only when the model is known to the catalog.
+pub(crate) fn resolve_model_arg(args: &str) -> (String, Option<LlmProvider>) {
+    match ModelRef::parse(args.trim()) {
+        Some(mref) => {
+            let r = resolve_model_ref(&mref);
+            (r.model_id, Some(r.provider))
+        }
+        None => {
+            let info = model_registry::model_info_for_alias(args.trim());
+            let model_id = info
+                .map(|m| m.id.to_string())
+                .unwrap_or_else(|| args.trim().to_string());
+            (model_id, info.map(|m| m.provider.clone()))
+        }
+    }
+}
+
 pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
+    // /model --tier <name> [provider] [--save]
+    if args.starts_with("--tier") {
+        return handle_model_tier(repl, args);
+    }
+
     if args.is_empty() {
         let picker = crate::widgets::select::ModelPickerWidget::new(repl.state.model.as_deref());
         repl.state.model_picker = Some(picker);
     } else {
-        // Resolve aliases (e.g. "sonnet" → "claude-sonnet-4-20250514")
-        let resolved_id = model_registry::model_info_for_alias(args)
-            .map(|m| m.id.to_string())
-            .unwrap_or_else(|| args.to_string());
+        let (resolved_id, resolved_provider) = resolve_model_arg(args);
 
-        // If alias resolved to a different provider, switch provider too
-        if let Some(info) = model_registry::model_info_for_alias(args) {
-            if repl.state.selected_provider.as_ref() != Some(&info.provider) {
-                repl.state.selected_provider = Some(info.provider.clone());
+        // If a provider was resolved and differs from the current one, switch.
+        if let Some(provider) = resolved_provider {
+            if repl.state.selected_provider.as_ref() != Some(&provider) {
+                repl.state.selected_provider = Some(provider);
             }
         }
 
@@ -157,6 +187,268 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
+/// Parsed `/connect` arguments (ADR-0005 Phase 4). Pure — no side effects, so
+/// it is unit-testable without a `Repl`.
+pub(crate) struct ConnectArgs<'a> {
+    /// First token (provider name or alias), e.g. `anthropic` / `glm`.
+    pub provider_arg: &'a str,
+    /// Remainder after the provider token, trimmed — the API key if given.
+    pub key_arg: Option<&'a str>,
+}
+
+/// Split `/connect` args into `(provider, optional key)`. Returns `None` for
+/// empty/whitespace-only input so the caller can show help. The key is the
+/// full remainder after the first whitespace run (API keys contain no
+/// spaces), with surrounding whitespace trimmed.
+pub(crate) fn parse_connect_args(args: &str) -> Option<ConnectArgs<'_>> {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let provider_arg = parts.next().unwrap_or("");
+    let key_arg = parts.next().map(str::trim).filter(|s| !s.is_empty());
+    Some(ConnectArgs {
+        provider_arg,
+        key_arg,
+    })
+}
+
+/// Connection status label for a provider in the `/connect` dashboard
+/// (ADR-0005 Phase 2). Pure — unit-tested below.
+///
+/// - `no auth`     provider needs no key (e.g. Ollama)
+/// - `✓ connected` profile persisted AND a key is stored → works on next launch
+/// - `key stored`  a key exists but `/connect` hasn't persisted a profile yet
+/// - `no key`      auth required, nothing stored
+fn connect_status(requires_auth: bool, connected: bool, has_key: bool) -> &'static str {
+    if !requires_auth {
+        "no auth"
+    } else if connected && has_key {
+        "✓ connected"
+    } else if has_key {
+        "key stored"
+    } else {
+        "no key"
+    }
+}
+
+/// Slugs of providers that have a persisted profile in
+/// `~/.shannon/providers.toml` (i.e. `/connect` was run for them).
+fn connected_provider_slugs() -> std::collections::HashSet<String> {
+    shannon_core::provider_config_store::load(None)
+        .map(|pm| {
+            pm.profiles
+                .values()
+                .flat_map(|p| p.providers.iter().map(|pp| pp.id.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// No-arg `/connect` dashboard: list every provider with its connection status
+/// plus a one-line syntax hint. Replaces the old wall-of-text help — detailed
+/// docs live at `/help connect`. Short lines so the chat panel never wraps it
+/// into the jagged layout the long help string produced.
+fn show_connect_dashboard(repl: &mut Repl) {
+    use shannon_core::credential_manager::read_credential_value_default;
+    use shannon_core::model_registry;
+    use shannon_core::provider_resolver::llm_provider_id;
+
+    let connected = connected_provider_slugs();
+    let mut lines = vec![
+        "Connect a provider — no env var needed.".to_string(),
+        String::new(),
+        "Providers:".to_string(),
+    ];
+    for p in model_registry::all_providers() {
+        let slug = llm_provider_id(&p);
+        let has_key = read_credential_value_default(&slug).is_some();
+        let status = connect_status(p.requires_auth(), connected.contains(&slug), has_key);
+        let current = if repl.state.selected_provider.as_ref() == Some(&p) {
+            " *"
+        } else {
+            ""
+        };
+        lines.push(format!("  {p}{current} — {status}"));
+    }
+    lines.push(String::new());
+    lines.push("Usage: /connect <provider> <api-key>   (detail: /help connect)".to_string());
+    repl.chat.add_message(ChatRole::System, lines.join("\n"));
+}
+
+/// `/connect <provider> [api-key]` — connect a provider with no environment
+/// variable (ADR-0005 Phase 4).
+///
+/// - `/connect` (no args)        → dashboard listing every provider + status.
+/// - `/connect <provider>`       → if the provider needs a key and none is
+///   stored, prints a guidance message pointing the user to the inline form
+///   `/connect <provider> <your-api-key>`. If a key is already stored (or the
+///   provider needs no auth), connects immediately.
+/// - `/connect <provider> <key>` → the key is taken from the argument and the
+///   connection is applied directly. This is the recommended path.
+///
+/// Security: when a key is passed inline, `redact_secret_command` (see
+/// `commands/mod.rs`) replaces it with `***` before the user's message is added
+/// to the chat widget or command history, so the plaintext key never lands in
+/// the session JSON. The real key still reaches `apply_connect` for execution.
+///
+/// The stored key lives only in `~/.shannon/credentials/<service>.json` (0600)
+/// — never in a config file (decision A1). The persisted v2 profile
+/// (`CredentialRef::Store`) activates on the next launch via the `ConfigBuilder`
+/// connected layer (which wins over ambient `SHANNON_*` env vars), so the
+/// connection is durable with zero env vars.
+pub(crate) fn handle_connect(repl: &mut Repl, args: &str) -> Result<()> {
+    let parsed = match parse_connect_args(args) {
+        Some(p) => p,
+        None => {
+            show_connect_dashboard(repl);
+            return Ok(());
+        }
+    };
+    let ConnectArgs {
+        provider_arg,
+        key_arg,
+    } = parsed;
+
+    let provider = match parse_provider_name(provider_arg) {
+        Ok(p) => p,
+        Err(e) => {
+            super::set_error(repl, &e.to_string());
+            return Ok(());
+        }
+    };
+
+    // Auth required, no inline key, nothing stored → guide the user to the
+    // inline form instead of opening a dialog. The inline path is the
+    // recommended one because `redact_secret_command` keeps the typed key out
+    // of the conversation/session JSON.
+    let has_stored_key = has_connect_key(&provider);
+    if should_prompt_for_key(provider.requires_auth(), key_arg, has_stored_key) {
+        guide_to_inline_connect(repl, provider_arg);
+        return Ok(());
+    }
+
+    apply_connect(repl, provider, key_arg)
+}
+
+/// Whether `/connect` should show the no-key guidance instead of connecting
+/// immediately. Pure — unit-tested below.
+///
+/// True only when the provider needs a key, none was passed inline, and none is
+/// already stored. In every other case (no-auth provider, inline key, or an
+/// existing stored key) we connect right away.
+fn should_prompt_for_key(requires_auth: bool, key_arg: Option<&str>, has_stored_key: bool) -> bool {
+    requires_auth && key_arg.is_none() && !has_stored_key
+}
+
+/// Whether a key is already stored for `provider`'s credential service.
+fn has_connect_key(provider: &LlmProvider) -> bool {
+    use shannon_core::provider_resolver::build_connect_profile;
+    let cp = build_connect_profile(provider.clone(), None, None);
+    shannon_core::credential_manager::read_credential_value_default(&cp.service).is_some()
+}
+
+/// Persist the key (if any) + v2 profile and switch the running engine + REPL
+/// state to the provider's default model. Shared by the inline-key path and the
+/// wizard's submit handler.
+///
+/// `key == None` means "no new key supplied" — the caller has already verified
+/// a key is stored (or the provider needs no auth), so we just reuse what's on
+/// disk. Decision A1: a plaintext key is written only to
+/// `~/.shannon/credentials/<service>.json` (0600), never to a config file.
+pub(crate) fn apply_connect(
+    repl: &mut Repl,
+    provider: LlmProvider,
+    key: Option<&str>,
+) -> Result<()> {
+    use shannon_core::credential_manager::{
+        Credential, CredentialManager, read_credential_value_default,
+    };
+    use shannon_core::provider_config_store;
+    use shannon_core::provider_resolver::build_connect_profile;
+
+    let cp = build_connect_profile(provider, None, None);
+    let display = format!("{}", cp.provider);
+    let mut lines: Vec<String> = Vec::new();
+
+    // 1. API key → credential Store (idempotent; plaintext lands only on disk
+    //    at ~/.shannon/credentials/<service>.json, 0600 — never in a config).
+    if let Some(new_key) = key.filter(|k| !k.is_empty()) {
+        match CredentialManager::new().and_then(|mut m| {
+            m.store_or_update(Credential::new(&cp.service, &cp.service, new_key))
+        }) {
+            Ok(_) => lines.push(format!(
+                "✓ API key stored for '{display}' (service: {})",
+                cp.service
+            )),
+            Err(e) => {
+                super::set_error(repl, &format!("storing credential: {e}"));
+                return Ok(());
+            }
+        }
+    } else if read_credential_value_default(&cp.service).is_some() {
+        lines.push(format!(
+            "• Reusing stored key for '{display}' (service: {})",
+            cp.service
+        ));
+    }
+    // No "no key" warning branch here: the no-key case is intercepted upstream
+    // (guide_to_inline_connect) before apply_connect runs; no-auth providers
+    // intentionally print nothing.
+
+    // 2. Persist the v2 profile (CredentialRef::Store) so the engine loads it
+    //    on next launch — the durable, env-var-free contract.
+    match provider_config_store::save(&cp.config, None) {
+        Ok(path) => lines.push(format!("✓ Profile saved: {}", path.display())),
+        Err(e) => {
+            super::set_error(repl, &format!("saving providers.toml: {e}"));
+            return Ok(());
+        }
+    }
+
+    // 3. Switch the running engine + REPL state to the provider's default
+    //    model (mirrors /provider). The stored key activates on next launch;
+    //    the current client keeps its startup credential.
+    repl.state.model = Some(cp.model_id.clone());
+    repl.state.selected_provider = Some(cp.provider.clone());
+    if let Some(ref mut engine) = repl.query_engine {
+        engine.set_model_for_provider(cp.model_id.clone(), cp.provider.clone());
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            repl.runtime.block_on(engine.pre_resolve_context());
+        }));
+        repl.state.context_window = engine.resolved_context_window();
+    }
+    crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
+        model: repl.state.model.clone(),
+        provider: repl.state.selected_provider.clone(),
+        theme: Some(repl.state.theme.name.to_string()),
+    });
+
+    lines.push(format!(
+        "✓ Switched to {} — model: {} (restart shannon to apply the new credential)",
+        cp.provider, cp.model_id
+    ));
+    repl.chat.add_message(ChatRole::System, lines.join("\n"));
+    Ok(())
+}
+
+/// Print a guidance message pointing the user to the inline connect form.
+///
+/// We deliberately do NOT open an API-key input dialog: the inline form
+/// `/connect <provider> <your-api-key>` is the recommended path, and
+/// `redact_secret_command` (in `commands/mod.rs`) ensures the typed key is
+/// never persisted into the conversation or command history. `provider_arg` is
+/// the user's own input so the example matches what they typed.
+fn guide_to_inline_connect(repl: &mut Repl, provider_arg: &str) {
+    repl.chat.add_message(
+        ChatRole::System,
+        format!(
+            "This provider needs an API key. Connect it with:\n\n    /connect {provider_arg} <your-api-key>\n\nThe key is stored on disk (0600) and is never recorded in the conversation."
+        ),
+    );
+}
+
 pub(crate) fn handle_init(repl: &mut Repl) -> Result<()> {
     let mut init_info = String::new();
     let cwd = &repl.state.working_directory;
@@ -255,10 +547,23 @@ pub(crate) fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
                     serde_json::json!(value_str)
                 };
                 manager.set(key.to_string(), value.clone());
-                match manager.save() {
+                let mut msg = match manager.save() {
                     Ok(_) => config_utils::format_config_set(key, &value.to_string()),
                     Err(e) => format!("Error: saving config: {e}"),
+                };
+                // ADR-0005 Phase 4: mirror engine-read flat keys into
+                // ~/.shannon/config.toml (the file the engine loads on next
+                // launch), so `/config set model X` actually takes effect.
+                // Secrets are refused by the allowlist — they belong in
+                // /credentials, never in a config file (decision A1).
+                if shannon_core::config_persist::is_writable_key(key) {
+                    match shannon_core::config_persist::set_global_config_key(None, key, value_str)
+                    {
+                        Ok(path) => msg.push_str(&format!("\n  engine config: {}", path.display())),
+                        Err(e) => msg.push_str(&format!("\n  warning: config.toml: {e}")),
+                    }
                 }
+                msg
             }
         }
         config_utils::ConfigAction::Reset => {
@@ -267,7 +572,7 @@ pub(crate) fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
                 "Usage: /config reset <key>".to_string()
             } else {
                 let existed = manager.reset(key);
-                if existed {
+                let mut msg = if existed {
                     let _val = manager.get(key).unwrap_or(serde_json::Value::Null);
                     match manager.save() {
                         Ok(_) => config_utils::format_config_reset(key),
@@ -275,7 +580,15 @@ pub(crate) fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
                     }
                 } else {
                     config_utils::format_config_reset(key)
+                };
+                // ADR-0005 Phase 4: also drop the key from the engine-read
+                // config.toml. Reset only deletes, so it is safe for any key.
+                match shannon_core::config_persist::reset_global_config_key(None, key) {
+                    Ok(true) => msg.push_str("\n  removed from config.toml."),
+                    Ok(false) => {}
+                    Err(e) => msg.push_str(&format!("\n  warning: config.toml: {e}")),
                 }
+                msg
             }
         }
         config_utils::ConfigAction::Help => config_utils::format_config_list(),
@@ -973,6 +1286,173 @@ pub(crate) fn handle_lang(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
+/// Handle /model --tier <name> [provider] [--save] — resolve a tier to a
+/// concrete model id for the chosen (or current) provider, then switch the
+/// running engine + REPL state to it. Mirrors the bare-id branch above but
+/// goes through `model_registry::resolve_tier` so catalog overrides from
+/// `~/.shannon/providers.toml` (Task 17) win over the static catalog.
+fn handle_model_tier(repl: &mut Repl, args: &str) -> Result<()> {
+    // Accept "--tier X", "--tier X provider", "--tier X provider --save".
+    // First token must be either "--tier" or "--tier=<name>".
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let first = parts.first().copied().unwrap_or("");
+    let (tier_idx, tier_str) = if first == "--tier" {
+        let name = parts.get(1).copied().unwrap_or("");
+        (0usize, name)
+    } else if let Some(rest) = first.strip_prefix("--tier=") {
+        (0usize, rest)
+    } else {
+        // Args did not start with --tier; the caller already filtered these.
+        return Err("internal: handle_model_tier called without --tier prefix".into());
+    };
+
+    let tier = TierName::from_user_input(tier_str).ok_or_else(|| {
+        format!(
+            "Unknown tier '{}'. Try one of: {}",
+            tier_str,
+            TierName::suggestions().join(", ")
+        )
+    })?;
+    if matches!(tier, TierName::Auto) {
+        return Err(
+            "--tier auto is reserved for a future spec; explicit tiers only for now".into(),
+        );
+    }
+
+    // Optional provider argument: the next non-`--save` token after `--tier <name>`.
+    let explicit_provider_str = parts.get(tier_idx + 2).copied();
+    let save = parts.iter().any(|p| *p == "--save");
+    let provider = match explicit_provider_str {
+        Some(p) => parse_provider_name(p)?,
+        None => repl
+            .state
+            .selected_provider
+            .clone()
+            .ok_or_else(|| {
+                "No provider selected; specify one: /model --tier <tier> <provider>".to_string()
+            })?,
+    };
+
+    let profile_tiers = load_provider_tiers(&provider);
+    let model_id = shannon_core::model_registry::resolve_tier(
+        tier_str, &provider, &profile_tiers,
+    )
+    .ok_or_else(|| {
+        format!(
+            "No model found for tier={} provider={}",
+            tier.canonical(),
+            provider
+        )
+    })?;
+
+    let prev_model = repl.state.model.clone();
+    let prev_provider = repl.state.selected_provider.clone();
+    repl.state.model = Some(model_id.clone());
+    repl.state.selected_provider = Some(provider.clone());
+
+    // Sync to the engine (mirrors the bare-id branch above).
+    if let Some(ref mut engine) = repl.query_engine {
+        engine.set_model_for_provider(model_id.clone(), provider.clone());
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            repl.runtime.block_on(engine.pre_resolve_context());
+        }));
+        repl.state.context_window = engine.resolved_context_window();
+    } else {
+        repl.state.context_window =
+            shannon_core::model_registry::context_window_for(&model_id);
+    }
+
+    crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
+        model: repl.state.model.clone(),
+        provider: repl.state.selected_provider.clone(),
+        theme: Some(repl.state.theme.name.to_string()),
+    });
+
+    if save {
+        // Rollback state on failure so a bad write doesn't leave the REPL
+        // pointing at an unpinned tier.
+        if let Err(e) = persist_model_to_providers_toml(&provider, &model_id, tier) {
+            repl.state.model = prev_model;
+            repl.state.selected_provider = prev_provider;
+            return Err(e);
+        }
+    }
+
+    let ctx_label = if repl.state.context_window >= 1_000_000 {
+        format!("{}M", repl.state.context_window / 1_000_000)
+    } else if repl.state.context_window >= 1_000 {
+        format!("{}K", repl.state.context_window / 1_000)
+    } else {
+        repl.state.context_window.to_string()
+    };
+    let msg = format!(
+        "{} tier={} (context: {ctx_label})",
+        t!("commands.model.set", name = &model_id),
+        tier.canonical()
+    );
+    repl.chat.add_message(ChatRole::System, msg);
+    Ok(())
+}
+
+/// Load the persisted per-tier model overrides for a provider from
+/// `~/.shannon/providers.toml`.
+///
+/// **Not yet implemented (ADR-0005 Phase 4).** The write path
+/// (`persist_model_to_providers_toml`, Task 17 / Phase 3) is complete, but the
+/// read-back is outstanding. Until Phase 4 wires the engine startup path to
+/// `ProviderConfigStore::load_or_default()`, this returns the default (empty)
+/// `ProviderTiers` so `resolve_tier` falls back to the catalog. Consequence:
+/// `/model --tier <t> --save` persists, but the override does not yet survive
+/// a restart.
+fn load_provider_tiers(_provider: &LlmProvider) -> ProviderTiers {
+    ProviderTiers::default()
+}
+
+/// Persist the resolved (provider, tier) → model-id mapping back into
+/// `~/.shannon/providers.toml`. Implementation lives in Task 17; the engine
+/// layer (ADR-0005 Phase 4) reads these overrides at startup so a
+/// `/model --tier fast gpt-4o --save` survives restart.
+///
+/// Steps:
+/// 1. Load (or default-construct) a [`ProviderConfigStore`] for the v2 file.
+/// 2. Get-or-create the provider profile under the `"default"` model profile.
+/// 3. Write the canonical tier field (`fast` / `standard` / `pro`) using
+///    `TierName::canonical()` so the persisted key is **always** the
+///    canonical name — never the user-facing alias (`haiku`/`sonnet`/`opus`).
+/// 4. Atomically persist via `store.save()`.
+///
+/// `TierName::Auto` is rejected here as a defense-in-depth: the REPL's
+/// `handle_model_tier` already blocks `--tier auto`, so this branch
+/// shouldn't fire in practice, but `set_tier` (Task 17) silently ignores
+/// `Auto` rather than corrupting state — a corrupt tier would be harder
+/// to detect than an explicit error.
+fn persist_model_to_providers_toml(
+    provider: &LlmProvider,
+    model_id: &str,
+    tier: TierName,
+) -> Result<()> {
+    use shannon_core::provider_config_store::ProviderConfigStore;
+
+    if matches!(tier, TierName::Auto) {
+        return Err("--tier auto is reserved; explicit fast/standard/pro only".into());
+    }
+
+    let mut store = ProviderConfigStore::load_or_default();
+    store
+        .set_tier(provider, tier, model_id)
+        .save()
+        .map_err(|e| {
+            format!(
+                "failed to persist tier override to providers.toml: {e} \
+                 (provider={}, tier={}, model_id={})",
+                format!("{provider:?}").to_lowercase(),
+                tier.canonical(),
+                model_id,
+            )
+        })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1016,6 +1496,102 @@ mod tests {
         assert!(parse_provider_name("unknown_provider").is_err());
     }
 
+    // ── parse_connect_args (ADR-0005 Phase 4, /connect) ─────────────────
+
+    #[test]
+    fn parse_connect_args_empty_is_none() {
+        assert!(parse_connect_args("").is_none());
+        assert!(parse_connect_args("   ").is_none());
+        assert!(parse_connect_args("\t\n").is_none());
+    }
+
+    #[test]
+    fn parse_connect_args_provider_only() {
+        let p = parse_connect_args("anthropic").expect("some");
+        assert_eq!(p.provider_arg, "anthropic");
+        assert!(p.key_arg.is_none());
+    }
+
+    #[test]
+    fn parse_connect_args_provider_and_key() {
+        let p = parse_connect_args("anthropic sk-ant-api03-xxx").expect("some");
+        assert_eq!(p.provider_arg, "anthropic");
+        assert_eq!(p.key_arg, Some("sk-ant-api03-xxx"));
+    }
+
+    #[test]
+    fn parse_connect_args_trims_surrounding_whitespace() {
+        let p = parse_connect_args("   openai   sk-test123   ").expect("some");
+        assert_eq!(p.provider_arg, "openai");
+        assert_eq!(p.key_arg, Some("sk-test123"));
+    }
+
+    #[test]
+    fn parse_connect_args_blank_key_is_none() {
+        // Trailing whitespace but no key → no key.
+        let p = parse_connect_args("ollama   ").expect("some");
+        assert_eq!(p.provider_arg, "ollama");
+        assert!(p.key_arg.is_none());
+    }
+
+    // ── connect_status (ADR-0005 Phase 2, /connect dashboard) ───────────
+
+    #[test]
+    fn connect_status_no_auth_provider() {
+        // Ollama-style: never needs a key, regardless of connection/key state.
+        assert_eq!(connect_status(false, false, false), "no auth");
+        assert_eq!(connect_status(false, true, true), "no auth");
+    }
+
+    #[test]
+    fn connect_status_authed_fully_connected() {
+        // Profile persisted + key stored → fully wired.
+        assert_eq!(connect_status(true, true, true), "✓ connected");
+    }
+
+    #[test]
+    fn connect_status_key_but_no_profile() {
+        // Key exists in the store but /connect hasn't persisted a profile.
+        assert_eq!(connect_status(true, false, true), "key stored");
+    }
+
+    #[test]
+    fn connect_status_profile_but_no_key() {
+        // Stale profile with no key → treat as "no key" (not functional).
+        assert_eq!(connect_status(true, true, false), "no key");
+    }
+
+    #[test]
+    fn connect_status_nothing_stored() {
+        assert_eq!(connect_status(true, false, false), "no key");
+    }
+
+    // ── should_prompt_for_key (ADR-0005 Phase 4, /connect wizard) ─────────
+
+    #[test]
+    fn should_prompt_for_key_when_auth_no_key_nothing_stored() {
+        // The one case the wizard exists for: needs a key, none given, none stored.
+        assert!(should_prompt_for_key(true, None, false));
+    }
+
+    #[test]
+    fn should_prompt_for_key_not_when_inline_key_given() {
+        assert!(!should_prompt_for_key(true, Some("sk-x"), false));
+    }
+
+    #[test]
+    fn should_prompt_for_key_not_when_key_already_stored() {
+        // Reconnect flow: key on disk → no need to ask again.
+        assert!(!should_prompt_for_key(true, None, true));
+    }
+
+    #[test]
+    fn should_prompt_for_key_not_for_no_auth_provider() {
+        // Ollama-style providers never prompt, regardless of stored state.
+        assert!(!should_prompt_for_key(false, None, false));
+        assert!(!should_prompt_for_key(false, None, true));
+    }
+
     #[test]
     fn parse_color_string_named() {
         use ratatui::style::Color;
@@ -1036,5 +1612,58 @@ mod tests {
     fn parse_color_string_invalid() {
         assert_eq!(parse_color_string("notacolor"), None);
         assert_eq!(parse_color_string("#xyz"), None);
+    }
+
+    // ── resolve_model_arg (ADR-0005 Phase 3) ───────────────────────────
+
+    #[test]
+    fn resolve_model_arg_qualified_full_id() {
+        let (id, provider) = resolve_model_arg("anthropic/claude-sonnet-4-20250514");
+        assert_eq!(id, "claude-sonnet-4-20250514");
+        assert_eq!(provider, Some(LlmProvider::Anthropic));
+    }
+
+    #[test]
+    fn resolve_model_arg_qualified_alias_expands_within_provider() {
+        let (id, provider) = resolve_model_arg("anthropic/sonnet");
+        assert_ne!(id, "sonnet");
+        assert!(id.starts_with("claude-"), "got {id}");
+        assert_eq!(provider, Some(LlmProvider::Anthropic));
+    }
+
+    #[test]
+    fn resolve_model_arg_qualified_unknown_model_kept_and_provider_set() {
+        let (id, provider) = resolve_model_arg("ollama/llama3");
+        assert_eq!(id, "llama3");
+        assert_eq!(provider, Some(LlmProvider::Ollama));
+    }
+
+    #[test]
+    fn resolve_model_arg_bare_alias_resolves() {
+        let (id, provider) = resolve_model_arg("sonnet");
+        assert!(id.starts_with("claude-sonnet"), "got {id}");
+        assert_eq!(provider, Some(LlmProvider::Anthropic));
+    }
+
+    #[test]
+    fn resolve_model_arg_bare_full_id() {
+        let (id, provider) = resolve_model_arg("claude-sonnet-4-20250514");
+        assert_eq!(id, "claude-sonnet-4-20250514");
+        assert_eq!(provider, Some(LlmProvider::Anthropic));
+    }
+
+    #[test]
+    fn resolve_model_arg_bare_unknown_no_provider() {
+        // A bare id not in the catalog: kept as-is, no provider inferred.
+        let (id, provider) = resolve_model_arg("llama3");
+        assert_eq!(id, "llama3");
+        assert!(provider.is_none());
+    }
+
+    #[test]
+    fn resolve_model_arg_trims_whitespace() {
+        let (id, provider) = resolve_model_arg("  anthropic/claude-sonnet-4-20250514  ");
+        assert_eq!(id, "claude-sonnet-4-20250514");
+        assert_eq!(provider, Some(LlmProvider::Anthropic));
     }
 }

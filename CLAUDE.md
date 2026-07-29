@@ -32,6 +32,17 @@ Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` ha
 | `shannon-core` | API client, query engine, permissions, tools, state management | ~3370 |
 | `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1089 |
 | `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~1111 |
+
+### First-Screen UX
+
+The REPL first screen (when chat is empty) renders a `StatusCardWidget` above the welcome text showing:
+- Active provider + model + tier (canonical: fast/standard/pro; aliases accepted: haiku/sonnet/opus/flash/mini/plus/ultra/max)
+- Available providers and their models (from `MODEL_CATALOG`)
+- Command hints (`/connect`, `/model`, `/provider`, `/profile`, `/help`)
+
+The StatusBar shows a compact `[provider/model · tier]` pill that updates in real time.
+
+`/help` opens a modal overlay (does not pollute chat history); `/model --tier <name>` switches between tiers with `--save` persisting to `~/.shannon/providers.toml`.
 | `shannon-commands` | Built-in commands (/help, /config, /pdf, /commit, etc.) | ~335 |
 | `shannon-agents` | Multi-agent orchestration | ~471 |
 | `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~191 |

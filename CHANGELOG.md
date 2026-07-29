@@ -2,6 +2,27 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
+## [Unreleased]
+
+### Added
+
+- First-screen status card showing active provider/model/tier plus available providers and models
+- `/model --tier <fast|standard|pro>` command surface (also accepts aliases: `haiku`/`sonnet`/`opus`/`flash`/`mini`/`plus`/`ultra`/`max`)
+- `/model --save` flag persists tier choice to `~/.shannon/providers.toml`
+- Three-level picker navigation (provider → tier → model)
+- `TierName` enum (`fast`/`standard`/`pro`/`auto`) with alias normalization
+
+### Changed
+
+- `/help` now opens a modal overlay instead of injecting a System message into chat history (prevents `<file>`/`<line>`/`<character>` placeholders from leaking into LLM context)
+- StatusBar pill format upgraded from `[model]` to `[provider/model · tier]`
+- `arg_hint` placeholders renamed from `<file>` to `<FILE_PATH>` (ALL_CAPS) to reduce LLM misidentification risk
+
+### Known limitations
+
+- The status card's **active** provider/model/tier is live, but the "available providers/models" list and the connected/disconnected markers are a static placeholder until `connect_status()` and the full `MODEL_CATALOG` are wired into the widget.
+- `/model --tier <t> --save` **persists** the canonical tier name to `~/.shannon/providers.toml`, but the override does not yet survive a restart. The engine read-back is ADR-0005 Phase 4 (in progress); see `load_provider_tiers` in `shannon-ui/src/repl/commands/config.rs`.
+
 ## v0.5.5 (2026-06-17) — notifications next phase (T-series + C9)
 
 ### Features

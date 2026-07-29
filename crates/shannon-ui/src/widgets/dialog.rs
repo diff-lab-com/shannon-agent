@@ -389,6 +389,8 @@ pub struct InputDialog {
     dialog: DialogWidget,
     value: String,
     placeholder: String,
+    /// Mask the typed value when rendering (as `•`). For secret input like API keys.
+    secret: bool,
 }
 
 impl InputDialog {
@@ -405,6 +407,7 @@ impl InputDialog {
             dialog,
             value: String::new(),
             placeholder: "Enter value...".to_string(),
+            secret: false,
         }
     }
 
@@ -440,18 +443,30 @@ impl InputDialog {
         &self.value
     }
 
+    /// Mask the typed value when rendering (for secret input like API keys).
+    /// `value()` still returns the real text; masking is display-only.
+    pub fn with_secret(mut self) -> Self {
+        self.secret = true;
+        self
+    }
+
+    /// Whether this dialog masks its value when rendering.
+    pub fn is_secret(&self) -> bool {
+        self.secret
+    }
+
     /// Build and render the dialog
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let mut dialog = self.dialog.clone();
-        dialog.content.push(format!(
-            "{}{}",
-            self.value,
-            if self.value.is_empty() {
-                &self.placeholder
-            } else {
-                ""
-            }
-        ));
+        let shown = if self.value.is_empty() {
+            self.placeholder.clone()
+        } else if self.secret {
+            // Display-only mask; self.value keeps the real text.
+            "•".repeat(self.value.chars().count())
+        } else {
+            self.value.clone()
+        };
+        dialog.content.push(shown);
         dialog.render(frame, area, theme);
     }
 
@@ -464,6 +479,19 @@ impl InputDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_dialog_secret_is_display_only() {
+        // Default: not secret.
+        assert!(!InputDialog::new("t".to_string()).is_secret());
+
+        // with_secret flips the flag; value() still holds real text.
+        let mut dlg = InputDialog::new("t".to_string()).with_secret();
+        assert!(dlg.is_secret());
+        dlg.add_char('s');
+        dlg.add_char('k');
+        assert_eq!(dlg.value(), "sk");
+    }
 
     #[test]
     fn test_dialog_button_creation() {

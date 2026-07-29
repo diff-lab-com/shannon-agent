@@ -1034,7 +1034,7 @@ mod unified_config_tests {
     use shannon_core::unified_config::{ConfigBuilder, ShannonConfig};
     use shannon_types::provider_config::{
         CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderModelConfig,
-        ProviderProfile, Scope,
+        ProviderProfile, ProviderTiers,
     };
     use std::collections::HashMap;
 
@@ -1061,6 +1061,7 @@ mod unified_config_tests {
             default_max_tokens: None,
             fallback_models: Vec::new(),
             quirks: Default::default(),
+            tiers: ProviderTiers::default(),
         };
         let mut profiles = HashMap::new();
         profiles.insert(
@@ -1091,7 +1092,7 @@ mod unified_config_tests {
             .expect("merged config should carry a default profile when any layer populated it")
     }
 
-    fn active_provider<'a>(cfg: &'a ShannonConfig) -> &'a ProviderProfile {
+    fn active_provider(cfg: &ShannonConfig) -> &ProviderProfile {
         active_profile(cfg)
             .providers
             .first()

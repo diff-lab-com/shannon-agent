@@ -254,6 +254,20 @@ ui:
     pressure_high: "HIGH"
     pressure_normal: "NORMAL"
     pressure_low: "LOW"
+  status_card:
+    title: " Status "
+    no_provider: "No provider connected. Run /connect to get started."
+    active_label: "Active:"
+    tier_label: "Tier:"
+    available_providers: "Available providers ({connected} connected / {total} supported):"
+    commands: "Commands: /connect · /model · /provider · /profile · /help"
+  help_overlay:
+    title: " Shannon Help — Esc to close "
+    categories: " Categories "
+    commands: " Commands "
+    footer: " j/k: switch category │ Enter: detail │ /: search │ Esc: close │ filter: {filter} "
+  status_bar:
+    no_provider: "[No provider connected]"
 
 # ── CLI Help ───────────────────────────────────────────────────────────────
 cli:
