@@ -1,5 +1,6 @@
 ---
 source: crates/shannon-ui/tests/ui_snapshot_tests.rs
+assertion_line: 163
 expression: text
 ---
-◐ Thinking... [claude-sonnet-4] 💭 5k
+◐ Thinking... [unknown · claude-sonnet-4 · standard] 💭 5k
