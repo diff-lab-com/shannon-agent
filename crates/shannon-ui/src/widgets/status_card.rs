@@ -1,6 +1,5 @@
 //! First-screen status snapshot card: provider/model/tier + available providers/models.
 
-use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -181,6 +180,7 @@ fn id_is_connected(id: &str) -> bool {
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
     use ratatui::Terminal;
 
     fn buffer_text(buf: &Buffer) -> String {

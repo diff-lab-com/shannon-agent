@@ -245,10 +245,7 @@ pub fn draw_frame(
 
         // Render /help overlay if active
         if let Some(ref overlay_state) = state.help_overlay {
-            let categories: Vec<(&str, Vec<(String, String)>)> = vec![
-                ("NAVIGATION", vec![("help".to_string(), "Show help".to_string())]),
-                ("EDITING", vec![("edit".to_string(), "Edit a file".to_string())]),
-            ];
+            let categories = shannon_commands::help_utils::categorize_commands();
             let _ = crate::widgets::help_overlay::render_help_overlay(
                 f,
                 f.area(),

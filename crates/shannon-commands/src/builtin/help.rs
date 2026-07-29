@@ -1149,6 +1149,32 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
     .collect()
 }
 
+/// Build the categorized command list used by the `/help` overlay.
+///
+/// Returns `(category_display_name, [(command_name, description)])` pairs in
+/// canonical [`HelpCategory`] order, skipping empty categories. This is the
+/// real data source for the REPL's `HelpOverlay` widget — it replaces the
+/// placeholder category list so the overlay surfaces every discoverable
+/// command, not a hardcoded sample.
+///
+/// This mirrors [`generate_help`] (which renders the same data as markdown);
+/// this function exposes the structured form the TUI needs.
+pub fn categorize_commands() -> Vec<(&'static str, Vec<(String, String)>)> {
+    let entries = all_help_entries();
+    HelpCategory::all()
+        .iter()
+        .map(|category| {
+            let commands: Vec<(String, String)> = entries
+                .iter()
+                .filter(|e| &e.category == category)
+                .map(|e| (e.name.clone(), e.description.clone()))
+                .collect();
+            (category.display_name(), commands)
+        })
+        .filter(|(_, commands)| !commands.is_empty())
+        .collect()
+}
+
 /// Generate help output
 pub fn generate_help(command_filter: Option<&str>) -> String {
     if let Some(cmd) = command_filter {
@@ -1237,6 +1263,48 @@ mod tests {
         assert!(help.contains("/commit"));
         // Related commands are shown in command help, so review-pr is expected
         assert!(help.contains("/review-pr"));
+    }
+
+    #[test]
+    fn test_categorize_commands_has_real_commands() {
+        let categories = categorize_commands();
+        assert!(!categories.is_empty(), "overlay must have categories");
+
+        // Category display names come from HelpCategory::display_name().
+        let names: Vec<&str> = categories.iter().map(|(n, _)| *n).collect();
+        assert!(
+            names.contains(&"Git & Version Control"),
+            "expected Git category, got: {names:?}"
+        );
+
+        // No empty categories are emitted.
+        assert!(
+            categories.iter().all(|(_, cmds)| !cmds.is_empty()),
+            "no category should be empty"
+        );
+
+        // Real commands are present — not the old placeholder {/help, /edit}.
+        let all_cmds: Vec<&str> = categories
+            .iter()
+            .flat_map(|(_, cmds)| cmds.iter().map(|(c, _)| c.as_str()))
+            .collect();
+        assert!(all_cmds.contains(&"commit"), "commit must appear, got: {all_cmds:?}");
+        assert!(all_cmds.contains(&"model"), "model must appear, got: {all_cmds:?}");
+        assert!(
+            all_cmds.len() > 10,
+            "expected many commands, got {}",
+            all_cmds.len()
+        );
+    }
+
+    #[test]
+    fn categorize_commands_not_the_placeholder_set() {
+        // Regression guard: the overlay must not fall back to the old hardcoded
+        // {("NAVIGATION", [/help]), ("EDITING", [/edit])} placeholder.
+        let categories = categorize_commands();
+        let names: Vec<&str> = categories.iter().map(|(n, _)| *n).collect();
+        assert!(!names.contains(&"NAVIGATION"), "NAVIGATION was a placeholder category");
+        assert!(!names.contains(&"EDITING"), "EDITING was a placeholder category");
     }
 
     #[test]

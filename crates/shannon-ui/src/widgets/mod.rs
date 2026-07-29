@@ -28,6 +28,7 @@ pub use chat::{ChatMessage, ChatRole, ChatWidget};
 #[allow(unused_imports)]
 pub use command_palette::{CommandCategory, CommandPaletteWidget, PaletteCommand};
 pub use header::HeaderWidget;
+#[allow(unused_imports)]
 pub use help_overlay::render_help_overlay;
 pub use key_hint::KeyHintWidget;
 pub use prompt::PromptWidget;
@@ -36,6 +37,7 @@ pub use session_tab::{SessionInfo, SessionTabWidget};
 #[allow(unused_imports)]
 pub use sidebar::{SidebarInfo, SidebarSection, SidebarWidget};
 pub use status_bar::StatusBarWidget;
+#[allow(unused_imports)]
 pub use status_card::{render_status_card, CardStatus};
 #[allow(unused_imports)]
 pub use tool_approval::{ApprovalDecision, RiskLevel, ToolApprovalRequest, ToolApprovalWidget};
