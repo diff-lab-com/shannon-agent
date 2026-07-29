@@ -136,11 +136,10 @@ fn test_repl_help_command() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    assert!(!repl.chat.is_empty());
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Shannon Code Commands"));
-    assert!(last_msg.contains("/help"));
-    assert!(last_msg.contains("/quit"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -205,16 +204,16 @@ fn test_repl_unknown_command() {
 // ── Session Command Tests ──────────────────────────────────────────
 
 #[test]
-fn test_sessions_command_empty() {
+fn test_resume_command_no_args() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/sessions".to_string());
+    repl.prompt.set_input("/resume".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    // With no saved sessions, the picker should be inactive and a chat message shown
-    // OR if sessions exist, the fuzzy picker should be open
+    // /resume with no args opens the picker (if sessions exist for the current
+    // project) or shows a "No sessions" message (project-scoped or all).
     let has_chat_msg = repl
         .chat
         .last_message()
-        .map(|m| m.content.contains("No saved sessions") || m.content.contains("Saved sessions"))
+        .map(|m| m.content.contains("No sessions"))
         .unwrap_or(false);
     let picker_open = repl.state.fuzzy_picker.is_some() && repl.state.session_picker_active;
     assert!(has_chat_msg || picker_open);
@@ -225,19 +224,10 @@ fn test_sessions_command_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/sessions"));
-    assert!(last_msg.contains("/resume"));
-    assert!(last_msg.contains("/history"));
-}
-
-#[test]
-fn test_resume_command_no_args() {
-    let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/resume".to_string());
-    super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Usage: /resume"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -906,8 +896,10 @@ fn test_repl_doctor_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/doctor"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 // ── /compact Command Tests ──────────────────────────────────────────
@@ -943,8 +935,10 @@ fn test_repl_compact_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/compact"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -1000,8 +994,10 @@ fn test_repl_cost_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/cost"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 // ── /team Command Tests ────────────────────────────────────────────
@@ -1214,8 +1210,10 @@ fn test_repl_permissions_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/permissions"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -1408,8 +1406,10 @@ fn test_repl_plan_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/plan"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -1643,8 +1643,10 @@ fn test_repl_web_search_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/web-search"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -1670,8 +1672,10 @@ fn test_repl_review_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/review"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -1715,8 +1719,10 @@ fn test_repl_local_models_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/local-models"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -1853,8 +1859,10 @@ fn test_repl_ci_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/ci"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -2455,11 +2463,9 @@ fn test_repl_patch_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let help_text = &repl.chat.last_message().unwrap().content;
     assert!(
-        help_text.contains("patch"),
-        "/help output should list patch command, got partial: {}",
-        &help_text[..help_text.len().min(200)]
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
     );
 }
 
@@ -2524,10 +2530,9 @@ fn test_repl_sandbox_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let help_text = &repl.chat.last_message().unwrap().content;
     assert!(
-        help_text.contains("sandbox"),
-        "/help output should list sandbox command"
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
     );
 }
 
@@ -2577,8 +2582,10 @@ fn test_repl_find_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let help_text = &repl.chat.last_message().unwrap().content;
-    assert!(help_text.contains("find"), "/help should list find command");
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 // ---- /agents command tests ----

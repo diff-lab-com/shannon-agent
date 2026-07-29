@@ -1,5 +1,6 @@
 ---
 source: crates/shannon-ui/tests/ui_snapshot_tests.rs
+assertion_line: 268
 expression: text
 ---
-○ Responding [claude-sonnet-4] · [░░░░░░░░] 5.0k/200k 5.0k↑ 800↓                                                 $0.0234
+○ Responding [unknown · claude-sonnet-4 · standard] · [░░░░░░░░] 5.0k/200k 5.0k↑ 800↓                            $0.0234

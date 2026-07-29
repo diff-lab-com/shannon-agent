@@ -35,6 +35,7 @@ fn provider_profile_credential_is_credential_ref() {
         default_max_tokens: None,
         fallback_models: vec!["glm-4.6".into(), "glm-4.5-air".into()],
         quirks: ProviderQuirks::default(),
+        tiers: ProviderTiers::default(),
     };
     let json = serde_json::to_string(&p).unwrap();
     assert!(json.contains(r#""backend":"env""#));

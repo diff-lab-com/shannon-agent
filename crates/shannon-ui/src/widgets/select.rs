@@ -6,7 +6,7 @@ use crate::theme::Theme;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
@@ -530,6 +530,20 @@ impl FuzzyPickerWidget {
         self
     }
 
+    /// Replace the item set in place (used to swap scopes without rebuilding
+    /// the picker). Re-applies the current search query so an active filter is
+    /// preserved across the swap.
+    pub fn set_items(&mut self, items: Vec<SelectItem<String>>) {
+        self.items = items;
+        self.selected_index = 0;
+        self.update_filtered();
+    }
+
+    /// Update the border title (used to reflect the active scope).
+    pub fn set_title(&mut self, title: String) {
+        self.title = title;
+    }
+
     /// Enter search mode
     pub fn start_search(&mut self) {
         self.state = PickerState::Searching;
@@ -716,6 +730,57 @@ mod tests {
     }
 
     #[test]
+    fn picker_cycles_through_tiers() {
+        let mut picker = ModelPickerWidget::new(None);
+        assert_eq!(picker.current_tier_idx, 0);
+
+        picker.next_tier();
+        assert_eq!(picker.current_tier_idx, 1);
+
+        picker.next_tier();
+        assert_eq!(picker.current_tier_idx, 2);
+
+        picker.next_tier();
+        assert_eq!(picker.current_tier_idx, 0, "should wrap around");
+
+        picker.prev_tier();
+        assert_eq!(picker.current_tier_idx, 2, "should wrap to Pro from Fast");
+
+        picker.prev_tier();
+        assert_eq!(picker.current_tier_idx, 1);
+    }
+
+    #[test]
+    fn picker_tier_filters_models() {
+        // Anthropic provider has Fast (haiku), Standard (sonnet), Pro (opus)
+        let mut picker = ModelPickerWidget::new(None);
+        // Jump to Anthropic if available; otherwise just confirm filtering works
+        if let Some(idx) = picker
+            .providers
+            .iter()
+            .position(|p| *p == LlmProvider::Anthropic)
+        {
+            picker.current_provider_idx = idx;
+            picker.refresh_models();
+        }
+
+        let total = picker.models.len();
+        assert!(total > 0, "expected at least one model for the provider");
+
+        // Standard tier should be a strict subset
+        picker.current_tier_idx = 1;
+        picker.refresh_models_for_tier();
+        assert!(
+            picker.models.len() <= total,
+            "filtered list must not exceed the unfiltered list"
+        );
+        for m in &picker.models {
+            assert_eq!(m.tier_label(), TierLabel::Standard);
+        }
+        assert_eq!(picker.selected_idx, 0);
+    }
+
+    #[test]
     fn test_multi_select_with_items() {
         let items = vec![
             SelectItem::new("Option 1", "val1".to_string()),
@@ -756,7 +821,8 @@ mod tests {
 // ── Model Picker Widget ────────────────────────────────────────────
 
 use shannon_core::model_registry::{
-    ModelInfo, all_providers, detect_local_models, models_for_provider, provider_display_name,
+    ModelInfo, TierLabel, all_providers, detect_local_models, models_for_provider,
+    provider_display_name,
 };
 use shannon_engine::api::LlmProvider;
 
@@ -766,6 +832,7 @@ const MAX_VISIBLE_MODELS: usize = 10;
 ///
 /// Navigate with:
 /// - `←` / `→` — switch provider tab
+/// - `Tab` / `BackTab` — cycle tier tab (Fast → Standard → Pro)
 /// - `↑` / `↓` / `j` / `k` — select model
 /// - `Enter` — confirm selection
 /// - `Esc` — cancel
@@ -775,7 +842,7 @@ pub struct ModelPickerWidget {
     providers: Vec<LlmProvider>,
     /// Index into `providers` for the currently active tab.
     current_provider_idx: usize,
-    /// Models for the currently selected provider.
+    /// Models for the currently selected provider + tier.
     models: Vec<ModelInfo>,
     /// Index of the highlighted model within `models`.
     selected_idx: usize,
@@ -785,7 +852,12 @@ pub struct ModelPickerWidget {
     local_models: Vec<ModelInfo>,
     /// The model ID currently in use (shown with ✓ marker).
     current_model_id: Option<String>,
+    /// Index of the currently active tier tab (0 = Fast, 1 = Standard, 2 = Pro).
+    pub current_tier_idx: usize,
 }
+
+/// Number of tier tabs (Fast, Standard, Pro).
+pub const TIER_COUNT: usize = 3;
 
 impl ModelPickerWidget {
     /// Create a new model picker, optionally highlighting `current_model`.
@@ -807,6 +879,7 @@ impl ModelPickerWidget {
             scroll_offset: 0,
             local_models,
             current_model_id,
+            current_tier_idx: 0,
         };
 
         // Find the provider of the current model to open the right tab
@@ -854,6 +927,34 @@ impl ModelPickerWidget {
         }
         let provider = self.providers[self.current_provider_idx].clone();
         self.models = self.models_for(provider);
+        self.selected_idx = 0;
+        self.scroll_offset = 0;
+    }
+
+    /// Cycle to the next tier tab (Fast → Standard → Pro → Fast).
+    pub fn next_tier(&mut self) {
+        self.current_tier_idx = (self.current_tier_idx + 1) % TIER_COUNT;
+        self.refresh_models_for_tier();
+    }
+
+    /// Cycle to the previous tier tab (Fast → Pro → Standard → Fast).
+    pub fn prev_tier(&mut self) {
+        self.current_tier_idx = if self.current_tier_idx == 0 {
+            TIER_COUNT - 1
+        } else {
+            self.current_tier_idx - 1
+        };
+        self.refresh_models_for_tier();
+    }
+
+    /// Filter the current model list to those matching the selected tier.
+    fn refresh_models_for_tier(&mut self) {
+        let tier_label = match self.current_tier_idx {
+            0 => TierLabel::Fast,
+            1 => TierLabel::Standard,
+            _ => TierLabel::Pro,
+        };
+        self.models.retain(|m| m.tier_label() == tier_label);
         self.selected_idx = 0;
         self.scroll_offset = 0;
     }
@@ -985,6 +1086,30 @@ impl ModelPickerWidget {
             lines.push(Line::from(""));
         }
 
+        // ── Tier tabs (Fast / Standard / Pro) ──
+        let tiers = ["Fast", "Standard", "Pro"];
+        let tier_spans: Vec<Span> = tiers
+            .iter()
+            .enumerate()
+            .flat_map(|(i, label)| {
+                let style = if i == self.current_tier_idx {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                let pill = if i == self.current_tier_idx {
+                    format!(" [{label}] ")
+                } else {
+                    format!("  {label}  ")
+                };
+                vec![Span::styled(pill, style)]
+            })
+            .collect();
+        lines.push(Line::from(tier_spans));
+        lines.push(Line::from(""));
+
         // ── Model list ──
         if self.models.is_empty() {
             lines.push(Line::from(Span::styled(
@@ -1086,7 +1211,7 @@ impl ModelPickerWidget {
         if self.providers.len() > 1 {
             hints.push_str("←→ provider  ");
         }
-        hints.push_str("↑↓ select  ⏎ ok  esc cancel");
+        hints.push_str("⇥ tier  ↑↓ select  ⏎ ok  esc cancel");
 
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(

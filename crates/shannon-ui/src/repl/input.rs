@@ -70,6 +70,17 @@ pub fn handle_input(
     key: KeyEvent,
     terminal: Option<&mut super::query::Term>,
 ) -> Result<()> {
+    // If the /help overlay is active, Esc closes it; all other keys are
+    // consumed while the overlay is open (precedes any other Esc handling).
+    if repl.state.help_overlay.is_some() {
+        if let KeyEvent { code: KeyCode::Esc, .. } = key {
+            repl.state.help_overlay = None;
+            return Ok(());
+        }
+        // Consume all other keys while overlay is open
+        return Ok(());
+    }
+
     // Dismiss onboarding overlay on user interaction
     if repl.state.onboarding_active {
         match key.code {
@@ -1153,8 +1164,8 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "terminal-setup" => &[],
         "help" => &[],
         "init" => &[],
-        "sessions" => &["list", "delete", "export"],
-        "resume" => &["--last", "--list"],
+        "sessions" => &[],
+        "resume" => &[],
         _ => &[],
     };
 
@@ -1770,9 +1781,18 @@ fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 }
             }
         }
+        KeyCode::Tab => {
+            // Session-picker only: toggle between current-project and
+            // all-projects scope and refresh the visible list.
+            if repl.state.session_picker_active {
+                repl.state.session_picker_show_all = !repl.state.session_picker_show_all;
+                repl.refresh_session_picker_scope()?;
+            }
+        }
         KeyCode::Esc => {
             repl.state.fuzzy_picker = None;
             repl.state.file_selector_for_at = false;
+            repl.state.session_picker_active = false;
         }
         _ => {}
     }
@@ -1927,6 +1947,16 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         KeyCode::Right | KeyCode::Char('l') => {
             if let Some(ref mut mp) = repl.state.model_picker {
                 mp.next_provider();
+            }
+        }
+        KeyCode::Tab => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.next_tier();
+            }
+        }
+        KeyCode::BackTab => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.prev_tier();
             }
         }
         KeyCode::Enter => {
@@ -3364,9 +3394,12 @@ mod tests {
 
     #[test]
     fn test_complete_command_args_resume_completions() {
+        // /resume takes a positional UUID or picker number — no flag completions.
+        // (No-arg opens the picker.) Confirm the stale --last/--list flags are gone.
         let resume = complete_command_args("resume", "");
-        assert!(resume.contains(&"--last".to_string()));
-        assert!(resume.contains(&"--list".to_string()));
+        assert!(!resume.contains(&"--last".to_string()));
+        assert!(!resume.contains(&"--list".to_string()));
+        assert!(resume.is_empty());
     }
 
     #[test]

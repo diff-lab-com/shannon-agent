@@ -38,6 +38,20 @@ impl ViewMode {
     }
 }
 
+/// State for the /help modal overlay. When `Some`, the overlay is rendered
+/// on top of the main canvas; when `None`, the overlay is hidden.
+#[derive(Debug, Clone, Default)]
+pub struct HelpOverlayState {
+    /// Pre-applied command filter (from `/help <command>`). `None` = full list.
+    pub filter: Option<String>,
+    /// Index of the currently highlighted category in the left pane.
+    pub selected_category_idx: usize,
+    /// Index of the currently highlighted command in the right pane.
+    pub selected_command_idx: usize,
+    /// Live search query (empty = no search active).
+    pub search_query: String,
+}
+
 /// Application state for the REPL
 #[derive(Debug)]
 pub struct ReplState {
@@ -173,6 +187,9 @@ pub struct ReplState {
     pub last_esc_time: Option<std::time::Instant>,
     /// Whether the fuzzy picker is in session-resume mode
     pub session_picker_active: bool,
+    /// Session-picker scope: false = current project only (default), true =
+    /// all projects. Toggled with Tab inside the picker.
+    pub session_picker_show_all: bool,
     /// Custom prompt bar color (set via /color, e.g. "red", "#ff0000", "default")
     pub prompt_bar_color: Option<String>,
     /// Active tab in the sidebar panel
@@ -287,6 +304,8 @@ pub struct ReplState {
     /// `Some` while the user is answering; cleared on submit/cancel when the
     /// `oneshot` responder is sent back to the provider.
     pub active_elicitation: Option<PendingElicitation>,
+    /// /help modal overlay state. When `Some`, overlay is open.
+    pub help_overlay: Option<HelpOverlayState>,
 }
 
 /// Pending MCP elicitation request forwarded from the provider to the TUI.
@@ -522,6 +541,7 @@ impl Default for ReplState {
             leader_active: false,
             last_esc_time: None,
             session_picker_active: false,
+            session_picker_show_all: false,
             prompt_bar_color: None,
             sidebar_tab: SidebarTab::default(),
             approval_mode_label: "EDIT".to_string(),
@@ -574,6 +594,7 @@ impl Default for ReplState {
             pending_elicitation_tx: None,
             pending_elicitation_rx: None,
             active_elicitation: None,
+            help_overlay: None,
         }
     }
 }
@@ -677,5 +698,14 @@ mod tests {
         assert_eq!(ls.task, "fix bugs");
         assert!(ls.active);
         assert_eq!(ls.iteration, 2);
+    }
+
+    #[test]
+    fn help_overlay_state_default_is_empty() {
+        let s = HelpOverlayState::default();
+        assert!(s.filter.is_none());
+        assert_eq!(s.selected_category_idx, 0);
+        assert_eq!(s.selected_command_idx, 0);
+        assert!(s.search_query.is_empty());
     }
 }

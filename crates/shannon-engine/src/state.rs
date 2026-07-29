@@ -102,6 +102,13 @@ pub struct SessionPersistMetadata {
     /// Index in the parent session's message list where this branch diverged.
     /// Only meaningful when `parent_session_id` is `Some`.
     pub branch_point_message_index: Option<usize>,
+    /// Absolute path of the project working directory the session was started
+    /// in. Used by the `/resume` picker to scope sessions to the current
+    /// project (and to distinguish worktrees, which have distinct paths).
+    /// `#[serde(default)]` so session files written before this field existed
+    /// still load (as `None`).
+    #[serde(default)]
+    pub project_path: Option<String>,
 }
 
 impl Default for SessionPersistMetadata {
@@ -117,6 +124,7 @@ impl Default for SessionPersistMetadata {
             title: None,
             parent_session_id: None,
             branch_point_message_index: None,
+            project_path: None,
         }
     }
 }
@@ -172,6 +180,35 @@ impl SessionData {
                 }
             })
     }
+
+    /// Convenience: return the last user message text as a "current state" preview.
+    ///
+    /// Used by the session picker to show "first prompt → last prompt" so the
+    /// user can identify a session by intent + most recent activity.
+    pub fn last_user_message_preview(&self, max_len: usize) -> Option<String> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .and_then(|m| match &m.content {
+                crate::api::MessageContent::Text(t) => Some(t.clone()),
+                crate::api::MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+                    crate::api::ContentBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                }),
+            })
+            .map(|t| {
+                if t.len() > max_len {
+                    let mut end = max_len.saturating_sub(3);
+                    while !t.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    format!("{}...", &t[..end])
+                } else {
+                    t
+                }
+            })
+    }
 }
 
 /// Lightweight summary used when listing sessions.
@@ -181,6 +218,11 @@ pub struct SessionInfo {
     pub title: Option<String>,
     /// Preview of the first user message (fallback when no title is set).
     pub preview: Option<String>,
+    /// Preview of the last user message — the session's "current state".
+    ///
+    /// Paired with `preview` (first user message) to identify a session by
+    /// "intent → most recent activity" in the picker.
+    pub last_user_preview: Option<String>,
     pub model: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -191,6 +233,9 @@ pub struct SessionInfo {
     pub parent_session_id: Option<Uuid>,
     /// Message index where this branch diverged from the parent.
     pub branch_point_message_index: Option<usize>,
+    /// Absolute path of the project working directory the session belongs to.
+    /// Used by the `/resume` picker to scope sessions to the current project.
+    pub project_path: Option<String>,
 }
 
 // ============================================================================
@@ -379,6 +424,25 @@ impl StateManager {
         let visible_count = messages.iter().filter(|m| m.role == "user").count();
         metadata.turn_count = metadata.turn_count.max(visible_count);
 
+        // Merge with existing on-disk metadata. The REPL auto-save path
+        // rebuilds metadata from live state and passes `None` for fields it
+        // doesn't track — a title set via `/rename`, branch lineage from
+        // `/branch`, or the original creation timestamp. Without this merge,
+        // every auto-save would clobber that durable metadata. Caller-provided
+        // `Some` values always win; we only backfill from disk when the caller
+        // passes `None`.
+        if let Ok(Some(existing)) = self.load_session(session_id) {
+            let em = existing.metadata;
+            metadata.title = metadata.title.or(em.title);
+            metadata.parent_session_id = metadata.parent_session_id.or(em.parent_session_id);
+            metadata.branch_point_message_index =
+                metadata.branch_point_message_index.or(em.branch_point_message_index);
+            // `created_at` is the session's origin and must not drift on each
+            // save (the auto-save seeds it from `session_started_at`, which is
+            // only correct for a fresh session).
+            metadata.created_at = em.created_at;
+        }
+
         let session_data = SessionData {
             session_id: *session_id,
             metadata,
@@ -389,10 +453,23 @@ impl StateManager {
         let json = serde_json::to_string_pretty(&session_data)
             .map_err(|e| StateError::SerializationError(e.to_string()))?;
 
-        // Atomic-ish write: write to temp file then rename.
+        // Atomic + durable write: buffer the temp file, fsync its contents,
+        // rename, then fsync the parent directory so the rename itself
+        // survives a crash (required for true atomic-rename durability on
+        // Linux/ext4). The directory fsync is best-effort.
         let tmp_path = path.with_extension("json.tmp");
-        fs::write(&tmp_path, json)?;
+        {
+            use std::io::Write;
+            let mut file = fs::File::create(&tmp_path)?;
+            file.write_all(json.as_bytes())?;
+            file.sync_all()?;
+        }
         fs::rename(&tmp_path, &path)?;
+        if let Some(parent) = path.parent() {
+            if let Ok(dir) = fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
 
         Ok(())
     }
@@ -453,6 +530,7 @@ impl StateManager {
                 session_id: data.session_id,
                 title: data.metadata.title.clone(),
                 preview: data.first_user_message_preview(80),
+                last_user_preview: data.last_user_message_preview(80),
                 model: data.metadata.model,
                 created_at: data.metadata.created_at,
                 updated_at: data.metadata.updated_at,
@@ -461,6 +539,7 @@ impl StateManager {
                 total_output_tokens: data.metadata.total_output_tokens,
                 parent_session_id: data.metadata.parent_session_id,
                 branch_point_message_index: data.metadata.branch_point_message_index,
+                project_path: data.metadata.project_path,
             });
         }
 
@@ -468,6 +547,23 @@ impl StateManager {
         infos.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
 
         Ok(infos)
+    }
+
+    /// List persisted sessions scoped to a project working directory.
+    ///
+    /// Sessions whose `project_path` equals `project_dir` (or predates the
+    /// `project_path` field and so is `None`) are included. The `/resume`
+    /// picker uses this for project-scoped listing; pass the REPL's
+    /// `working_directory`.
+    pub fn list_sessions_for_project(
+        &self,
+        project_dir: &str,
+    ) -> Result<Vec<SessionInfo>, StateError> {
+        Ok(self
+            .list_persisted_sessions()?
+            .into_iter()
+            .filter(|s| s.project_path.as_deref() == Some(project_dir))
+            .collect())
     }
 
     /// Delete a persisted session from disk.
@@ -527,6 +623,8 @@ impl StateManager {
             title,
             parent_session_id: Some(*parent_session_id),
             branch_point_message_index: Some(branch_point),
+            // A branch belongs to the same project as its parent.
+            project_path: parent.metadata.project_path.clone(),
         };
 
         let session_data = SessionData {
@@ -710,6 +808,134 @@ mod tests {
         assert_eq!(loaded.metadata.model, "claude-3-5-sonnet-20241022");
         assert_eq!(loaded.metadata.turn_count, 2); // two user messages
     }
+
+    #[test]
+    fn test_save_session_preserves_existing_title_when_caller_passes_none() {
+        // Regression: the REPL auto-save builds metadata with title: None, so
+        // without the merge a second save would wipe a title set by /rename.
+        let manager = test_manager();
+        let session_id = Uuid::new_v4();
+        let messages = make_messages();
+
+        // First save carries an explicit title.
+        let mut titled = make_metadata("m");
+        titled.title = Some("Renamed by user".into());
+        manager.save_session(&session_id, &messages, &titled).unwrap();
+
+        // Second save passes title: None (as the auto-save path does).
+        let mut untitled = make_metadata("m");
+        untitled.title = None;
+        manager.save_session(&session_id, &messages, &untitled).unwrap();
+
+        let loaded = manager.load_session(&session_id).unwrap().unwrap();
+        assert_eq!(
+            loaded.metadata.title,
+            Some("Renamed by user".to_string()),
+            "title must survive a None auto-save"
+        );
+    }
+
+    #[test]
+    fn test_save_session_preserves_branch_lineage_and_creation_time() {
+        let manager = test_manager();
+        let session_id = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        let messages = make_messages();
+
+        let mut first = make_metadata("m");
+        first.parent_session_id = Some(parent);
+        first.branch_point_message_index = Some(2);
+        manager.save_session(&session_id, &messages, &first).unwrap();
+        let created_first = manager
+            .load_session(&session_id)
+            .unwrap()
+            .unwrap()
+            .metadata
+            .created_at;
+
+        // Auto-save-style follow-up with all lineage fields None.
+        let second = make_metadata("m");
+        manager.save_session(&session_id, &messages, &second).unwrap();
+
+        let loaded = manager.load_session(&session_id).unwrap().unwrap();
+        assert_eq!(loaded.metadata.parent_session_id, Some(parent));
+        assert_eq!(loaded.metadata.branch_point_message_index, Some(2));
+        assert_eq!(
+            loaded.metadata.created_at, created_first,
+            "created_at must not drift on subsequent saves"
+        );
+    }
+
+    #[test]
+    fn test_save_session_caller_some_overrides_existing() {
+        let manager = test_manager();
+        let session_id = Uuid::new_v4();
+        let messages = make_messages();
+
+        let mut first = make_metadata("m");
+        first.title = Some("Old".into());
+        manager.save_session(&session_id, &messages, &first).unwrap();
+
+        let mut second = make_metadata("m");
+        second.title = Some("New".into());
+        manager.save_session(&session_id, &messages, &second).unwrap();
+
+        let loaded = manager.load_session(&session_id).unwrap().unwrap();
+        assert_eq!(loaded.metadata.title.as_deref(), Some("New"));
+    }
+
+    #[test]
+    fn test_save_session_persists_project_path_and_filters() {
+        let manager = test_manager();
+        let messages = make_messages();
+
+        // Session A belongs to /home/me/proj.
+        let mut a = make_metadata("m");
+        a.project_path = Some("/home/me/proj".into());
+        let id_a = Uuid::new_v4();
+        manager.save_session(&id_a, &messages, &a).unwrap();
+
+        // Session B belongs to /home/me/other.
+        let mut b = make_metadata("m");
+        b.project_path = Some("/home/me/other".into());
+        let id_b = Uuid::new_v4();
+        manager.save_session(&id_b, &messages, &b).unwrap();
+
+        // list_sessions_for_project returns only matching sessions.
+        let proj = manager.list_sessions_for_project("/home/me/proj").unwrap();
+        assert_eq!(proj.len(), 1);
+        assert_eq!(proj[0].session_id, id_a);
+        assert_eq!(proj[0].project_path.as_deref(), Some("/home/me/proj"));
+
+        let other = manager.list_sessions_for_project("/home/me/other").unwrap();
+        assert_eq!(other.len(), 1);
+        assert_eq!(other[0].session_id, id_b);
+
+        // Unknown project → empty.
+        assert!(manager
+            .list_sessions_for_project("/nowhere")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_old_session_file_without_project_path_still_loads() {
+        // Backward compat: a session JSON written before project_path existed
+        // must still deserialize (serde default → None), not error out.
+        let manager = test_manager();
+        let session_id = Uuid::new_v4();
+        // Hand-write a file with no project_path field.
+        let old_json = format!(
+            r#"{{"session_id":"{session_id}","metadata":{{"model":"m","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","total_input_tokens":0,"total_output_tokens":0,"turn_count":0,"title":null,"parent_session_id":null,"branch_point_message_index":null}},"messages":[]}}"#
+        );
+        let path = manager.session_file_path(&session_id);
+        std::fs::write(&path, old_json).unwrap();
+
+        let loaded = manager.load_session(&session_id).unwrap().unwrap();
+        assert_eq!(loaded.metadata.project_path, None);
+        assert_eq!(loaded.metadata.model, "m");
+    }
+
 
     #[test]
     fn test_load_nonexistent_session_returns_none() {
@@ -911,6 +1137,45 @@ mod tests {
         assert!(truncated.ends_with("..."));
         assert!(truncated.len() <= 20);
     }
+
+    #[test]
+    fn test_session_info_preview_from_last_user_message() {
+        // No messages → no last-user preview.
+        let session_data = SessionData::new(Uuid::new_v4(), "model".into());
+        assert!(session_data.last_user_message_preview(80).is_none());
+
+        // With messages: last user message wins (not the first).
+        let data = SessionData {
+            messages: make_messages(),
+            ..SessionData::new(Uuid::new_v4(), "model".into())
+        };
+        let preview = data.last_user_message_preview(80).unwrap();
+        assert_eq!(preview, "Tell me about Rust.");
+
+        // Only an assistant message → no user preview.
+        let data_assistant_only = SessionData {
+            messages: vec![Message {
+                role: "assistant".into(),
+                content: MessageContent::Text("hi".into()),
+            }],
+            ..SessionData::new(Uuid::new_v4(), "model".into())
+        };
+        assert!(data_assistant_only.last_user_message_preview(80).is_none());
+
+        // Truncation
+        let long = Message {
+            role: "user".into(),
+            content: MessageContent::Text("B".repeat(200)),
+        };
+        let data2 = SessionData {
+            messages: vec![long],
+            ..SessionData::new(Uuid::new_v4(), "model".into())
+        };
+        let truncated = data2.last_user_message_preview(20).unwrap();
+        assert!(truncated.ends_with("..."));
+        assert!(truncated.len() <= 20);
+    }
+
 
     #[test]
     fn test_with_sessions_dir_creates_directory() {

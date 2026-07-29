@@ -14,9 +14,10 @@
 //! an unknown OpenAI-compatible endpoint still gets the correct wire format.
 
 use shannon_engine::api::LlmProvider;
+use shannon_types::model_ref::ModelRef;
 use shannon_types::provider_config::{
     ActiveTarget, CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderModelConfig,
-    ProviderProfile, Scope,
+    ProviderProfile, ProviderTiers, Scope,
 };
 
 /// A resolved active target: the concrete engine provider, its source profile,
@@ -127,17 +128,69 @@ pub fn resolve_provider(kind: &ProviderKind, base_url: &str) -> LlmProvider {
 /// Resolve a credential value from a [`CredentialRef`] (decision A1: env is the
 /// default availability floor).
 ///
-/// N1 resolves env vars only. N2 will additionally load `~/.shannon/secrets.env`
-/// (chmod 0600) before consulting the process env.
-///
 /// - `Env { var }` → `std::env::var(var)`, empty string on unset.
+/// - `Store { service }` → reads `~/.shannon/credentials/<service>.json`
+///   (ADR-0005 Phase 1). Empty when absent — callers like
+///   [`resolve_api_key_for_provider`] then fall back to the provider's env
+///   chain, so a missing store entry degrades gracefully to env.
 /// - `InlineLegacy { masked }` → the transition-only value, as-is.
 /// - `Keyring` / `Ephemeral` → empty here (opportunistic / session-injected; #9).
 pub fn resolve_credential(cred: &CredentialRef) -> String {
     match cred {
         CredentialRef::Env { var } => std::env::var(var).unwrap_or_default(),
+        CredentialRef::Store { service } => {
+            crate::credential_manager::read_credential_value_default(service).unwrap_or_default()
+        }
         CredentialRef::InlineLegacy { masked } => masked.clone(),
         CredentialRef::Keyring { .. } | CredentialRef::Ephemeral => String::new(),
+    }
+}
+
+/// A resolved [`ModelRef`]: the concrete engine provider plus the (possibly
+/// alias-expanded) model id, with catalog metadata for display/UI.
+///
+/// Produced by [`resolve_model_ref`]. This is the Phase 0 (ADR-0005) bridge
+/// from the user-facing `provider/model` spelling to the engine's runtime
+/// types — used by `/model`, `--model`, and the desktop provider switcher.
+#[derive(Debug, Clone)]
+pub struct ResolvedModelRef {
+    /// Concrete engine provider (drives wire format + endpoint path).
+    pub provider: LlmProvider,
+    /// Model id after alias resolution (e.g. `sonnet` → `claude-sonnet-4-…`).
+    /// For custom/unknown models this is the ref's model verbatim.
+    pub model_id: String,
+    /// True when `model_id` (post-resolution) is in the built-in catalog.
+    pub known: bool,
+    /// Context window from the catalog, or the `200_000` default for unknowns.
+    pub context_window: usize,
+}
+
+/// Resolve a `provider/model` [`ModelRef`] into a concrete provider + model id,
+/// applying alias resolution against the built-in catalog.
+///
+/// **Provider slug** resolution reuses the same identity bridge as
+/// [`resolve_active_target`]: a recognised slug (`anthropic`, `ollama`,
+/// `zhipu`, `moonshot`, `dashscope`, …) maps directly to its [`LlmProvider`],
+/// preserving every known provider. An unrecognised slug is treated as an
+/// OpenAI-compatible endpoint and falls back to the OpenAI wire format —
+/// consistent with [`resolve_provider`].
+///
+/// **Model** resolution is intentionally lenient: a model absent from the
+/// catalog (an Ollama model, a proxy's custom id, a newly-released model) is
+/// returned verbatim with `known = false`. Tier aliases (`sonnet`, `opus`,
+/// `haiku`) are expanded against the resolved provider when applicable.
+pub fn resolve_model_ref(mref: &ModelRef) -> ResolvedModelRef {
+    let provider = llm_provider_from_id(&mref.provider)
+        .unwrap_or_else(|| resolve_provider(&ProviderKind::OpenAiCompatible, ""));
+    // Alias-expand against the resolved provider first; unknowns pass through.
+    let model_id = crate::model_registry::resolve_model(&mref.model, Some(&provider));
+    let known = crate::model_registry::model_info_for(&model_id).is_some();
+    let context_window = crate::model_registry::context_window_for(&model_id);
+    ResolvedModelRef {
+        provider,
+        model_id,
+        known,
+        context_window,
     }
 }
 
@@ -290,6 +343,7 @@ pub fn synthesize_default_profile(
         default_max_tokens: None,
         fallback_models: Vec::new(),
         quirks: Default::default(),
+        tiers: ProviderTiers::default(),
     };
 
     Some(ProviderModelConfig {
@@ -297,6 +351,85 @@ pub fn synthesize_default_profile(
         profiles: build_default_profiles_map(profile, &model_id),
         gateway: Default::default(),
     })
+}
+
+/// A connected provider profile ready to persist (ADR-0005 Phase 4 `/connect`).
+///
+/// [`build_connect_profile`] produces this; the REPL handler writes the API key
+/// under [`service`] via [`crate::credential_manager`], saves [`config`] via
+/// [`crate::provider_config_store`], then applies [`provider`] + [`model_id`]
+/// to the running engine.
+///
+/// [`service`]: ConnectProfile::service
+/// [`config`]: ConnectProfile::config
+/// [`provider`]: ConnectProfile::provider
+/// [`model_id`]: ConnectProfile::model_id
+#[derive(Debug, Clone)]
+pub struct ConnectProfile {
+    /// The v2 config: a single-provider `"default"` profile whose credential
+    /// is [`CredentialRef::Store`] keyed at the provider id slug.
+    pub config: ProviderModelConfig,
+    /// Credential-store service name the profile's credential references
+    /// (== provider id slug). `/connect` writes the API key under this service.
+    pub service: String,
+    /// Concrete engine provider — for the live in-session switch.
+    pub provider: LlmProvider,
+    /// Active model id (catalog default when none was requested).
+    pub model_id: String,
+}
+
+/// Build a [`ConnectProfile`] for `/connect <provider>` (ADR-0005 Phase 4).
+///
+/// `provider` is the resolved engine provider (callers should use the REPL's
+/// alias-aware parser, e.g. `parse_provider_name`, before this). `model`
+/// defaults to the provider's first catalog model; `base_url_override`
+/// defaults to the provider's canonical base URL. The credential is
+/// [`CredentialRef::Store`] keyed at the provider id slug, so the connected
+/// provider survives restart with no environment variable — plaintext lives
+/// only in the credential store (decision A1).
+pub fn build_connect_profile(
+    provider: LlmProvider,
+    model: Option<&str>,
+    base_url_override: Option<&str>,
+) -> ConnectProfile {
+    let kind = llm_provider_to_kind(&provider);
+    let provider_id = llm_provider_id(&provider);
+    let base_url = base_url_override
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| provider.default_base_url().to_string());
+    let model_id = model
+        .map(|s| s.to_string())
+        .or_else(|| {
+            crate::model_registry::models_for_provider(provider.clone())
+                .first()
+                .map(|m| m.id.to_string())
+        })
+        .unwrap_or_else(|| "default".to_string());
+    let profile = ProviderProfile {
+        id: provider_id.clone(),
+        kind,
+        display_name: provider_id.clone(),
+        base_url,
+        models_url: None,
+        credential: CredentialRef::Store {
+            service: provider_id.clone(),
+        },
+        extra_headers: std::collections::HashMap::new(),
+        default_max_tokens: None,
+        fallback_models: Vec::new(),
+        quirks: Default::default(),
+        tiers: ProviderTiers::default(),
+    };
+    ConnectProfile {
+        config: ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            profiles: build_default_profiles_map(profile, &model_id),
+            gateway: Default::default(),
+        },
+        service: provider_id,
+        provider,
+        model_id,
+    }
 }
 
 /// Construct a single-provider Ollama profile at `http://localhost:11434`.
@@ -317,6 +450,7 @@ fn ollama_default_profile(model_id: &str) -> ProviderModelConfig {
         default_max_tokens: None,
         fallback_models: Vec::new(),
         quirks: Default::default(),
+        tiers: ProviderTiers::default(),
     };
     ProviderModelConfig {
         version: ProviderModelConfig::VERSION,
@@ -388,7 +522,7 @@ fn provider_str_to_llm(p: &str, base_url: Option<&str>) -> LlmProvider {
 }
 
 /// Coarse wire-protocol discriminator for a provider profile's `kind` field.
-fn llm_provider_to_kind(p: &LlmProvider) -> ProviderKind {
+pub(crate) fn llm_provider_to_kind(p: &LlmProvider) -> ProviderKind {
     match p {
         LlmProvider::Anthropic => ProviderKind::Anthropic,
         LlmProvider::OpenAI => ProviderKind::OpenAi,
@@ -403,7 +537,10 @@ fn llm_provider_to_kind(p: &LlmProvider) -> ProviderKind {
 
 /// Profile-id slug for a provider (matches the provider's `Debug` name
 /// lower-cased so `ProviderProfile.id` and `ActiveTarget.provider_id` line up).
-fn llm_provider_id(p: &LlmProvider) -> String {
+///
+/// Public so the REPL (`/connect`, `/provider`) can compute the same service
+/// slug a connected profile / credential-store entry is keyed under.
+pub fn llm_provider_id(p: &LlmProvider) -> String {
     format!("{p:?}").to_lowercase()
 }
 
@@ -413,7 +550,7 @@ mod tests {
     use super::*;
     use shannon_types::provider_config::{
         ActiveTarget, CredentialRef, CredentialScope, ModelProfile, ProviderKind,
-        ProviderModelConfig, ProviderProfile, Scope,
+        ProviderModelConfig, ProviderProfile, ProviderTiers, Scope,
     };
     use std::collections::HashMap;
 
@@ -431,6 +568,7 @@ mod tests {
             default_max_tokens: None,
             fallback_models: Vec::new(),
             quirks: Default::default(),
+            tiers: ProviderTiers::default(),
         }
     }
 
@@ -607,5 +745,209 @@ mod tests {
             ""
         );
         assert_eq!(resolve_credential(&CredentialRef::Ephemeral), "");
+    }
+
+    #[test]
+    fn resolve_credential_store_missing_service_is_empty() {
+        // A store entry that definitely does not exist resolves to empty —
+        // this read-only check never writes to the home credentials dir. The
+        // store-read primitive itself is covered by credential_manager tests.
+        assert_eq!(
+            resolve_credential(&CredentialRef::Store {
+                service: "shannon-definitely-not-a-real-service-9f3a".to_string()
+            }),
+            ""
+        );
+    }
+
+    // ── resolve_model_ref (Phase 0, ADR-0005) ──────────────────────────
+
+    #[test]
+    fn resolve_model_ref_known_anthropic_full_id() {
+        let m = ModelRef::new("anthropic", "claude-sonnet-4-20250514");
+        let r = resolve_model_ref(&m);
+        assert_eq!(r.provider, LlmProvider::Anthropic);
+        assert_eq!(r.model_id, "claude-sonnet-4-20250514");
+        assert!(r.known);
+        assert_eq!(r.context_window, 200_000);
+    }
+
+    #[test]
+    fn resolve_model_ref_expands_sonnet_alias_against_provider() {
+        let m = ModelRef::new("anthropic", "sonnet");
+        let r = resolve_model_ref(&m);
+        assert_eq!(r.provider, LlmProvider::Anthropic);
+        // The alias must be expanded to a concrete catalog id (not left as
+        // "sonnet"); the exact pick is the registry's tier heuristic.
+        assert_ne!(r.model_id, "sonnet");
+        assert!(r.model_id.starts_with("claude-"));
+        assert!(r.known);
+    }
+
+    #[test]
+    fn resolve_model_ref_preserves_zhipu_slug() {
+        let m = ModelRef::new("zhipu", "glm-4.6");
+        let r = resolve_model_ref(&m);
+        // recognised slug → Zhipu (not the OpenAI fallback)
+        assert_eq!(r.provider, LlmProvider::Zhipu);
+        assert_eq!(r.model_id, "glm-4.6");
+        // glm-4.6 may or may not be in the catalog; both are acceptable, just
+        // assert context window is sane.
+        assert!(r.context_window > 0);
+    }
+
+    #[test]
+    fn resolve_model_ref_ollama_custom_model_is_unknown_but_kept() {
+        let m = ModelRef::new("ollama", "llama3");
+        let r = resolve_model_ref(&m);
+        assert_eq!(r.provider, LlmProvider::Ollama);
+        assert_eq!(r.model_id, "llama3");
+        // Runtime-detected models aren't in the static catalog.
+        assert!(!r.known);
+        assert_eq!(r.context_window, 200_000);
+    }
+
+    #[test]
+    fn resolve_model_ref_unknown_provider_slug_falls_back_to_openai_wire() {
+        let m = ModelRef::new("my-custom-proxy", "some-model");
+        let r = resolve_model_ref(&m);
+        // Unknown slug → OpenAI-compatible wire format.
+        assert!(r.provider.is_openai_compatible());
+        assert_eq!(r.model_id, "some-model");
+        assert!(!r.known);
+    }
+
+    #[test]
+    fn resolve_model_ref_from_input_bare_uses_fallback_provider() {
+        // Simulates `--model opus` with the active provider being Anthropic.
+        let m = ModelRef::from_input("opus", Some("anthropic")).unwrap();
+        let r = resolve_model_ref(&m);
+        assert_eq!(r.provider, LlmProvider::Anthropic);
+        // Alias expanded to a known catalog id for Anthropic.
+        assert_ne!(r.model_id, "opus");
+        assert!(r.model_id.starts_with("claude-"));
+        assert!(r.known);
+    }
+
+    // ── build_connect_profile (ADR-0005 Phase 4, /connect) ─────────────
+
+    fn store_service_of(cp: &ConnectProfile) -> Option<&str> {
+        let p = cp.config.profiles.get("default")?;
+        match &p.providers[0].credential {
+            CredentialRef::Store { service } => Some(service.as_str()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn build_connect_profile_anthropic_uses_store_and_catalog_default_model() {
+        let cp = build_connect_profile(LlmProvider::Anthropic, None, None);
+        assert_eq!(cp.provider, LlmProvider::Anthropic);
+        assert_eq!(cp.service, "anthropic");
+        // No model requested → the provider's first catalog model.
+        assert!(
+            cp.model_id.starts_with("claude-"),
+            "got {}",
+            cp.model_id
+        );
+        // Credential is a Store reference (A1: no plaintext in the profile),
+        // keyed at the provider id slug — and it matches `service`.
+        assert_eq!(store_service_of(&cp), Some("anthropic"));
+        // Active target points at the anthropic provider + chosen model.
+        let active = &cp
+            .config
+            .profiles
+            .get("default")
+            .unwrap()
+            .active_target;
+        assert_eq!(active.provider_id, "anthropic");
+        assert_eq!(active.model_id, cp.model_id);
+    }
+
+    #[test]
+    fn build_connect_profile_respects_explicit_model() {
+        let cp = build_connect_profile(LlmProvider::OpenAI, Some("gpt-4o"), None);
+        assert_eq!(cp.provider, LlmProvider::OpenAI);
+        assert_eq!(cp.service, "openai");
+        assert_eq!(cp.model_id, "gpt-4o");
+        assert_eq!(store_service_of(&cp), Some("openai"));
+    }
+
+    #[test]
+    fn build_connect_profile_base_url_override_wins_over_default() {
+        let cp = build_connect_profile(
+            LlmProvider::Anthropic,
+            None,
+            Some("https://proxy.example.com"),
+        );
+        let profile = &cp.config.profiles["default"].providers[0];
+        assert_eq!(profile.base_url, "https://proxy.example.com");
+    }
+
+    #[test]
+    fn build_connect_profile_ollama_store_credential_and_default_url() {
+        // Ollama needs no auth, but the profile still carries a Store ref so
+        // the shape is uniform (the stored value is simply empty/unused).
+        let cp = build_connect_profile(LlmProvider::Ollama, Some("llama3"), None);
+        assert_eq!(cp.service, "ollama");
+        assert_eq!(cp.model_id, "llama3");
+        let profile = &cp.config.profiles["default"].providers[0];
+        assert_eq!(profile.base_url, "http://localhost:11434");
+        assert_eq!(store_service_of(&cp), Some("ollama"));
+    }
+
+    #[test]
+    fn build_connect_profile_persists_store_credential_round_trip() {
+        // The config /connect actually writes must round-trip through
+        // provider_config_store with the Store credential intact.
+        let cp = build_connect_profile(LlmProvider::Anthropic, None, None);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("providers.toml");
+        crate::provider_config_store::save(&cp.config, Some(&path))
+            .expect("save should succeed");
+        let loaded = crate::provider_config_store::load(Some(&path))
+            .expect("saved config should load back");
+        assert_eq!(loaded.version, cp.config.version);
+        let loaded_profile = loaded.profiles.get("default").expect("default profile");
+        // Decision A1: still a Store *reference* after a disk round trip — no
+        // plaintext leaked into the config file.
+        match &loaded_profile.providers[0].credential {
+            CredentialRef::Store { service } => assert_eq!(service, "anthropic"),
+            other => panic!("expected Store credential, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn connect_profile_providers_toml_trips_no_secret_scanner_matches() {
+        // A1 regression: the on-disk providers.toml carries only
+        // CredentialRef::Store references (service slugs), never plaintext
+        // keys. Confirm the gitleaks-derived SecretScanner finds nothing in
+        // the serialized artifact for every provider with a key-shaped rule.
+        use crate::team_memory_sync::SecretScanner;
+        let scanner = SecretScanner::new();
+        assert!(
+            !scanner.rule_ids().is_empty(),
+            "scanner must have default rules"
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        for provider in [
+            LlmProvider::Anthropic,
+            LlmProvider::OpenAI,
+            LlmProvider::DeepSeek,
+            LlmProvider::Zhipu,
+        ] {
+            let cp = build_connect_profile(provider.clone(), None, None);
+            let path = dir.path().join(format!("{}.toml", cp.service));
+            crate::provider_config_store::save(&cp.config, Some(&path))
+                .expect("save should succeed");
+            let matches = scanner
+                .scan_file(&path)
+                .expect("scan should read the saved file");
+            assert!(
+                matches.is_empty(),
+                "providers.toml for {provider:?} tripped the secret scanner: {matches:?}"
+            );
+        }
     }
 }

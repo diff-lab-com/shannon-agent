@@ -408,6 +408,7 @@ pub enum AuxRole {
 #[serde(tag = "backend", rename_all = "snake_case")]
 pub enum CredentialRef {
     Env { var: String },
+    Store { service: String },
     Keyring { service: String, account: String },
     InlineLegacy { masked: String },
     Ephemeral,
@@ -451,6 +452,16 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, JsonSchema)]
+pub struct ProviderTiers {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pro: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderProfile {
@@ -469,6 +480,8 @@ pub struct ProviderProfile {
     pub fallback_models: Vec<String>,
     #[serde(default)]
     pub quirks: ProviderQuirks,
+    #[serde(default)]
+    pub tiers: ProviderTiers,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
