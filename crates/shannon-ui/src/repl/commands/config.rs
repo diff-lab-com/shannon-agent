@@ -39,6 +39,11 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
         return handle_model_tier(repl, args);
     }
 
+    // /model refresh — pull models.dev and rebuild the dynamic overlay (Phase D).
+    if args.trim() == "refresh" {
+        return handle_model_refresh(repl);
+    }
+
     if args.is_empty() {
         let picker = crate::widgets::select::ModelPickerWidget::new(repl.state.model.as_deref());
         repl.state.model_picker = Some(picker);
@@ -87,6 +92,29 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
         );
         repl.chat.add_message(ChatRole::System, msg);
     }
+    Ok(())
+}
+
+/// `/model refresh` — fetch models.dev and rebuild the dynamic overlay (Phase D).
+///
+/// On success the picker, `/provider` default, and tier tabs immediately
+/// reflect freshly published models. On any error (offline, timeout, non-200,
+/// malformed payload) the built-in catalog is left untouched and the user is
+/// told so — never a crash.
+fn handle_model_refresh(repl: &mut Repl) -> Result<()> {
+    let timeout = model_registry::dynamic::DEFAULT_FETCH_TIMEOUT;
+    let result = repl
+        .runtime
+        .block_on(model_registry::dynamic::refresh_overlay_async(timeout));
+    let msg = match result {
+        Ok(n) => {
+            format!("Refreshed models.dev catalog — {n} models available across provider tabs.")
+        }
+        Err(e) => format!(
+            "Could not refresh models.dev catalog ({e}). The built-in catalog is still in use."
+        ),
+    };
+    repl.chat.add_message(ChatRole::System, msg);
     Ok(())
 }
 
@@ -151,7 +179,7 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
     } else {
         // Switch to specified provider
         let provider = parse_provider_name(args.trim())?;
-        let models = model_registry::models_for_provider(provider.clone());
+        let models = model_registry::merged_models_for_provider(provider.clone());
         let default_model = models.first().map(|m| m.id.to_string());
 
         // Only overwrite the active model when the provider has a built-in

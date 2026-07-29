@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 use shannon_engine::api::LlmProvider;
 use shannon_types::provider_config::{ProviderTiers, TierName};
 
+/// Dynamic (models.dev) catalog layer — live models fetched on `/model
+/// refresh`, cached offline, merged additively over [`MODEL_CATALOG`].
+pub mod dynamic;
+
 /// Model capability flags for routing decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ModelCapabilities(u8);
@@ -803,6 +807,38 @@ pub fn models_for_provider(provider: LlmProvider) -> Vec<&'static ModelInfo> {
         .iter()
         .filter(|m| m.provider == provider)
         .collect()
+}
+
+/// Merge static catalog entries with a dynamic set for one provider.
+///
+/// Static entries are emitted first (preserving curated metadata, aliases, and
+/// the Phase B beta-header mapping keyed by model id). Dynamic entries are
+/// appended only when their id is not already present, deduplicating by id so a
+/// models.dev refresh never doubles a known model.
+pub fn merge_static_and_dynamic(provider: LlmProvider, dynamic: &[ModelInfo]) -> Vec<ModelInfo> {
+    let mut out: Vec<ModelInfo> = Vec::new();
+    for m in MODEL_CATALOG.iter().filter(|m| m.provider == provider) {
+        out.push(m.clone());
+    }
+    let known: std::collections::HashSet<&str> = out.iter().map(|m| m.id).collect();
+    for m in dynamic.iter().filter(|m| m.provider == provider) {
+        if !known.contains(m.id) {
+            out.push(m.clone());
+        }
+    }
+    out
+}
+
+/// Models for a provider from the **merged** catalog: the static
+/// [`MODEL_CATALOG`] augmented by the models.dev dynamic overlay (Phase D).
+///
+/// Lazily seeds the overlay from the on-disk cache on first use — never
+/// touching the network — so this is safe to call offline and in CI. Static
+/// entries take priority (see [`merge_static_and_dynamic`]).
+pub fn merged_models_for_provider(provider: LlmProvider) -> Vec<ModelInfo> {
+    dynamic::ensure_overlay_loaded();
+    let overlay = dynamic::overlay_snapshot();
+    merge_static_and_dynamic(provider, &overlay)
 }
 
 /// Return all distinct providers that have models in the catalog.

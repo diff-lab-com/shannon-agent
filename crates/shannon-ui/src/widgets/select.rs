@@ -846,7 +846,7 @@ mod tests {
 // ── Model Picker Widget ────────────────────────────────────────────
 
 use shannon_core::model_registry::{
-    ModelInfo, TierLabel, all_providers, detect_local_models, models_for_provider,
+    ModelInfo, TierLabel, all_providers, detect_local_models, merged_models_for_provider,
     provider_display_name,
 };
 use shannon_engine::api::LlmProvider;
@@ -946,7 +946,9 @@ impl ModelPickerWidget {
             // Return detected local models, or empty vec (render shows "No local models detected")
             self.local_models.clone()
         } else {
-            models_for_provider(provider).into_iter().cloned().collect()
+            // Merged catalog = static + models.dev dynamic overlay (Phase D).
+            // Lazy-seeded from the on-disk cache; never touches the network.
+            merged_models_for_provider(provider)
         }
     }
 
