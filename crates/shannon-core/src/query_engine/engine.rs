@@ -848,6 +848,26 @@ impl QueryEngine {
         &self.client
     }
 
+    /// Validate that `api_key` works for the currently-selected provider + model
+    /// by sending a 1-token probe.
+    ///
+    /// Does NOT mutate the running client — it clones the current config (which
+    /// already carries the right base_url, provider, model, api_version, and
+    /// extra_headers), swaps in the supplied key, and probes. Used by `/connect`
+    /// to fail fast on a bad key/region/model before the user relies on it.
+    pub async fn validate_credential(
+        &self,
+        api_key: &str,
+    ) -> Result<(), shannon_engine::api::ApiError> {
+        let mut cfg = self.client.config().clone();
+        cfg.api_key = api_key.to_string();
+        cfg.max_tokens = 1;
+        // Short probe timeout so /connect never hangs on an unreachable endpoint.
+        cfg.timeout_seconds = 15;
+        let probe = shannon_engine::api::LlmClient::new(cfg);
+        probe.validate_connection().await
+    }
+
     /// Update the model used for API calls.
     pub fn set_model(&mut self, model: String) {
         self.effective_max_context_tokens = crate::model_registry::context_window_for(&model);
