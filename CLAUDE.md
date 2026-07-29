@@ -53,9 +53,9 @@ The StatusBar shows a compact `[provider/model · tier]` pill that updates in re
 | `shannon-codegen` | Code generation utilities | ~102 |
 | `shannon-agent` | Single agent runtime (binary crate) | ~65 |
 
-> **Note**: `shannon-desktop` was extracted to a separate repo (`../shannon-desktop`).
-> Its Cargo.toml pulls shannon-* via git subpath dep with a `[patch]` override
-> pointing back at this checkout for dev. See `justfile` desktop recipes.
+> **Note**: `shannon-desktop` is a **workspace member** at `desktop/` (crate name `shannon-desktop`),
+> not a separate repo. Its `Cargo.toml` depends on the engine crates via `<name>.workspace = true`
+> (path + version) — no git/SSH/rev deps, no `[patch]` override. See `justfile` desktop recipes.
 
 ## Key Patterns
 
