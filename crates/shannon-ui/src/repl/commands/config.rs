@@ -1403,14 +1403,47 @@ fn load_provider_tiers(_provider: &LlmProvider) -> ProviderTiers {
 }
 
 /// Persist the resolved (provider, tier) → model-id mapping back into
-/// `~/.shannon/providers.toml`. Stub for Task 17 — currently a no-op so
-/// `--save` is accepted without crashing; the real write lands in Task 17.
+/// `~/.shannon/providers.toml`. Implementation lives in Task 17; the engine
+/// layer (ADR-0005 Phase 4) reads these overrides at startup so a
+/// `/model --tier fast gpt-4o --save` survives restart.
+///
+/// Steps:
+/// 1. Load (or default-construct) a [`ProviderConfigStore`] for the v2 file.
+/// 2. Get-or-create the provider profile under the `"default"` model profile.
+/// 3. Write the canonical tier field (`fast` / `standard` / `pro`) using
+///    `TierName::canonical()` so the persisted key is **always** the
+///    canonical name — never the user-facing alias (`haiku`/`sonnet`/`opus`).
+/// 4. Atomically persist via `store.save()`.
+///
+/// `TierName::Auto` is rejected here as a defense-in-depth: the REPL's
+/// `handle_model_tier` already blocks `--tier auto`, so this branch
+/// shouldn't fire in practice, but `set_tier` (Task 17) silently ignores
+/// `Auto` rather than corrupting state — a corrupt tier would be harder
+/// to detect than an explicit error.
 fn persist_model_to_providers_toml(
-    _provider: &LlmProvider,
-    _model_id: &str,
-    _tier: TierName,
+    provider: &LlmProvider,
+    model_id: &str,
+    tier: TierName,
 ) -> Result<()> {
-    // Implemented in Task 17
+    use shannon_core::provider_config_store::ProviderConfigStore;
+
+    if matches!(tier, TierName::Auto) {
+        return Err("--tier auto is reserved; explicit fast/standard/pro only".into());
+    }
+
+    let mut store = ProviderConfigStore::load_or_default();
+    store
+        .set_tier(provider, tier, model_id)
+        .save()
+        .map_err(|e| {
+            format!(
+                "failed to persist tier override to providers.toml: {e} \
+                 (provider={}, tier={}, model_id={})",
+                format!("{provider:?}").to_lowercase(),
+                tier.canonical(),
+                model_id,
+            )
+        })?;
     Ok(())
 }
 
