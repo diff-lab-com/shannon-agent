@@ -124,6 +124,12 @@ pub struct RenderContext<'a> {
     pub effort_level: Option<&'a str>,
     pub thinking_phase: bool,
     pub thinking_chars: usize,
+
+    // Provider / model tier (used by StatusCard + StatusBar to render labels)
+    /// Currently active provider id (e.g., "anthropic"). `None` if unconfigured.
+    pub provider: Option<&'a str>,
+    /// Tier label for the active model: "fast" / "standard" / "pro" / "unknown".
+    pub tier_label: Option<&'a str>,
 }
 
 impl<'a> RenderContext<'a> {
@@ -168,6 +174,8 @@ impl<'a> RenderContext<'a> {
             effort_level: None,
             thinking_phase: false,
             thinking_chars: 0,
+            provider: None,
+            tier_label: None,
         }
     }
 }
