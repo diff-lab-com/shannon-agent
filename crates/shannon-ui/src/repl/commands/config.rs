@@ -152,17 +152,22 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
         // Switch to specified provider
         let provider = parse_provider_name(args.trim())?;
         let models = model_registry::models_for_provider(provider.clone());
-        let default_model = models
-            .first()
-            .map(|m| m.id.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+        let default_model = models.first().map(|m| m.id.to_string());
 
-        repl.state.model = Some(default_model.clone());
+        // Only overwrite the active model when the provider has a built-in
+        // catalog entry. Providers without a static catalog (Ollama, OpenRouter,
+        // Bedrock, Custom, …) keep the current model id instead of being
+        // clobbered with a bogus "unknown"; the user picks the concrete model
+        // via `/model <provider>/<model-id>` (resolved by resolve_model_arg).
+        if let Some(ref m) = default_model {
+            repl.state.model = Some(m.clone());
+        }
         repl.state.selected_provider = Some(provider.clone());
 
         // Sync to query engine
+        let model_for_engine = repl.state.model.clone().unwrap_or_default();
         if let Some(ref mut engine) = repl.query_engine {
-            engine.set_model_for_provider(default_model.clone(), provider.clone());
+            engine.set_model_for_provider(model_for_engine.clone(), provider.clone());
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 repl.runtime.block_on(engine.pre_resolve_context());
             }));
@@ -175,14 +180,27 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
             theme: Some(repl.state.theme.name.to_string()),
         });
 
-        repl.chat.add_message(
-            ChatRole::System,
-            format!(
-                "Provider: {} | Model: {}",
-                repl.state.selected_provider.as_ref().unwrap(),
-                default_model
-            ),
-        );
+        match default_model {
+            Some(m) => {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!(
+                        "Provider: {} | Model: {}",
+                        repl.state.selected_provider.as_ref().unwrap(),
+                        m
+                    ),
+                );
+            }
+            None => {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!(
+                        "Provider set to {}. It has no built-in model list — use `/model <provider>/<model-id>` to choose a model.",
+                        repl.state.selected_provider.as_ref().unwrap(),
+                    ),
+                );
+            }
+        }
     }
     Ok(())
 }
