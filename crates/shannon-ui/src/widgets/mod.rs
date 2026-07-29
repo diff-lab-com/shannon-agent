@@ -9,6 +9,7 @@ pub mod command_palette;
 pub mod dialog;
 pub mod diff_viewer;
 pub mod header;
+pub mod help_overlay;
 pub mod key_hint;
 pub mod progress;
 pub mod prompt;
@@ -26,6 +27,7 @@ pub use chat::{ChatMessage, ChatRole, ChatWidget};
 #[allow(unused_imports)]
 pub use command_palette::{CommandCategory, CommandPaletteWidget, PaletteCommand};
 pub use header::HeaderWidget;
+pub use help_overlay::render_help_overlay;
 pub use key_hint::KeyHintWidget;
 pub use prompt::PromptWidget;
 #[allow(unused_imports)]
