@@ -1,7 +1,8 @@
 # ADR 0005 — Unified Provider/Model/Credential Management
 
-**Status**: Proposed — **partially implemented** on `feat/unified-provider-model-mgmt`
-(Phase 0 ✅, Phase 1 ✅, Phase 3 `/model` ✅; Phase 2 / Phase 4 / `/connect` pending)
+**Status**: Proposed → **largely implemented** on `feat/unified-provider-model-mgmt`
+(Phase 0 ✅, Phase 1 ✅, Phase 3 ✅ incl. `/connect` credential probe, Phase 5 ✅;
+Phase 4 🟡 in progress; Phase 2 (Desktop re-platforming) ⏳ deferred)
 **Date**: 2026-07-24
 **Theme**: 统一 Provider/Model/密钥管理 (shannon-code + shannon-desktop)
 **Supersedes**: —
@@ -278,7 +279,10 @@ paths unchanged.
 > — switches between canonical tiers (`fast`/`standard`/`pro`) with Anthropic
 > aliases (`haiku`/`sonnet`/`opus`) and other provider aliases (`flash`/`mini`/
 > `plus`/`ultra`/`max`); `--save` flag persists to `~/.shannon/providers.toml`
-> via canonical names only. Desktop re-platforming still pending (Phase 2).
+> via canonical names only. `/connect` credential probe ✅ (2026-07-30) —
+> `apply_connect` sends a 1-token probe (`QueryEngine::validate_credential`) and
+> fails fast on a rejected key, instead of surfacing the error mid-query.
+> Desktop re-platforming still pending (Phase 2).
 
 **Why**: P0-3 / P2-2.
 
@@ -319,6 +323,13 @@ unified underneath.
   (parity with OpenCode).
 
 ### Phase 5 — Dynamic catalog (optional, deferrable)
+
+> **Status: ✅ Complete (2026-07-30).** models.dev dynamic catalog delivered
+> (`crates/shannon-core/src/model_registry/dynamic.rs`): 24h-TTL cached fetch on
+> `/model refresh`, additive merge over `MODEL_CATALOG`, offline static-table
+> fallback (headless/CI never break). Two sub-items are **deferred**: the
+> `enabled_providers` / `disabled_providers` allowlist (config switch not yet
+> connected — see P1-5) and the `small_model` field.
 
 **Scope**: models.dev fetch (cached, static-catalog offline fallback — must not
 break headless/CI), `enabled_providers` / `disabled_providers` allowlists,

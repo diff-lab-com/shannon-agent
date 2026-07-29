@@ -132,7 +132,7 @@ just replay
 - **LSP integration**: 6 LSP tools + `DiagnosticRegistry` + two client implementations. `DiagnosticStore.mark_stale()` called on source file changes. Background `cargo check` diagnostics auto-run via `DiagnosticWatcher` when source files change — debounce, parse, display in UI.
 - **Plugin system**: `PluginRegistry` with manifest parsing. Tool plugins fully wired (MCP discovery). Command plugins register as `PromptCommand` in `CommandRegistry` (source: `Plugin`). Skill plugins register as `PromptCommand` with trigger as slash command name and entry file as template. Loading in both REPL (`new()`) and CLI headless mode.
 - **Notifications**: `Notifier` pipeline in `shannon-core::notifier` with `Cooldown` (DashMap-backed per-source dedup), `NotificationsConfig` (interactive/headless defaults), and pluggable `NotificationHandler` trait. Built-in handlers: `LogNotifier`, `FileNotifier`, `CallbackNotifier`, `DesktopNotifier`, `ShellNotifier` (CLI), `TauriNotificationHandler` (desktop), and `WebhookHandler` (six templates: Slack/Discord/Feishu/WeChat Work/custom/raw — optional HMAC-SHA256 signing). CLI `--notify` flag for headless mode; desktop auto-fires on query completion/error.
-- **Desktop app**: Scaffolded Tauri app with TODO stubs.
+- **Desktop app**: Substantial Tauri app (workspace member `desktop/`, crate `shannon-desktop`, ~25K Rust LOC) with command modules for chat/config/connections/billing/agents/mcp/memory. Provider/credential UX parity with the CLI (connect/model/tier/refresh) is being verified. Full engine re-platforming onto the shared `ProviderProfile`/credential store is ADR-0005 Phase 2 (deferred).
 
 ### MEDIUM — Quality-of-life gaps
 
