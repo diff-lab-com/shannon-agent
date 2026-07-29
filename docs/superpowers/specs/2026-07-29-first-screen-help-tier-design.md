@@ -115,13 +115,14 @@ The arg_hint literals live in `crates/shannon-commands/src/builtin/help.rs:843, 
 
 ## 3. Design Decisions (User-Approved)
 
-The user confirmed three architectural choices:
+The user confirmed four architectural choices:
 
 | Question | Decision |
 |---|---|
 | How should `/help` render? | **Independent overlay** (reuse onboarding overlay pattern). Do not pollute LLM context. |
 | Model-tier strategy? | **Expose explicit tier + config surface**. Do not auto-route via `ModelRouter`. |
 | Status Card position? | **Top of Chat welcome area** (above Try-asking examples). |
+| Tier naming? | **Canonical: `fast` / `standard` / `pro`**. Aliases accepted as input: Anthropic's `haiku` / `sonnet` / `opus`; others (`flash` / `mini` / `plus` / `ultra` / `max`). Persisted state and toml use canonical names only. |
 
 ---
 
@@ -224,18 +225,80 @@ The all-caps convention breaks the visual similarity with HTML/XML tags and redu
 
 ### 4.4 Model Tier Surface
 
+#### 4.4.0 Tier Naming Decision (Approved)
+
+**Canonical tier names**: `fast` / `standard` / `pro` (semantic, provider-agnostic).
+**Aliases**: `haiku` / `sonnet` / `opus` (Anthropic-style); `flash` / `mini` / `nano` / `plus` / `ultra` / `max` (other providers); `auto` (reserved).
+
+Rationale (validated against the live `MODEL_CATALOG` of ~50 models):
+- Only Google Gemini and Zhipu use "Flash" as a model name; using it as a universal tier name would falsely imply Anthropic has a "Flash" model.
+- "Pro" is the industry-standard tier suffix (GitHub Pro, JetBrains Pro, Adobe Pro, Linear Pro, Notion Pro). "Prod" is ambiguous with "production environment" and is rejected.
+- Haiku/Sonnet/Opus aliases let Anthropic-trained users express their intent in familiar terms; the resolver normalizes them to Fast/Standard/Pro internally.
+- `toml` files, status pills, logs, and metrics use **only** the canonical names; aliases are input-only.
+
 #### 4.4.1 New Type Definitions
 
 In `crates/shannon-types/src/provider_config.rs`:
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Tier name as stored in configuration and persisted state.
+/// Always serialize/deserialize as the canonical name (`fast`/`standard`/`pro`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum TierName {
     Fast,
     Standard,
     Pro,
     Auto,
+}
+
+impl TierName {
+    /// Canonical lowercase name used in toml, logs, status pills.
+    pub fn canonical(self) -> &'static str {
+        match self {
+            TierName::Fast => "fast",
+            TierName::Standard => "standard",
+            TierName::Pro => "pro",
+            TierName::Auto => "auto",
+        }
+    }
+
+    /// Human-readable label for UI display (capitalized).
+    pub fn display(self) -> &'static str {
+        match self {
+            TierName::Fast => "Fast",
+            TierName::Standard => "Standard",
+            TierName::Pro => "Pro",
+            TierName::Auto => "Auto",
+        }
+    }
+
+    /// Normalize any accepted user input to the canonical TierName.
+    /// Accepts both canonical names and provider-native aliases.
+    /// Case-insensitive.
+    pub fn from_user_input(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            // Canonical (preferred; written to toml + logs)
+            "fast"     => Some(TierName::Fast),
+            "standard" => Some(TierName::Standard),
+            "pro"      => Some(TierName::Pro),
+            "auto"     => Some(TierName::Auto),
+            // Aliases — provider-native names that imply the same tier
+            "flash" | "mini"  | "nano" | "haiku"   => Some(TierName::Fast),
+            "plus"  | "sonnet"| "medium"| "turbo"  => Some(TierName::Standard),
+            "opus"  | "ultra" | "max"   | "large"  => Some(TierName::Pro),
+            _ => None,
+        }
+    }
+
+    /// Tab-completion suggestions shown to the user (canonical first, aliases after).
+    pub fn suggestions() -> &'static [&'static str] {
+        &[
+            "fast", "standard", "pro", "auto",  // canonical
+            "haiku", "sonnet", "opus",          // Anthropic
+            "flash", "mini", "plus", "ultra",   // others
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -278,20 +341,45 @@ impl ModelInfo {
     }
 }
 
+/// Resolve a tier (canonical or alias) to a concrete model id for a provider.
+/// Order of preference:
+///   1. User-configured `profile_tiers.<canonical>` override
+///   2. Catalog match using `ModelCapabilities` (Fast ⇒ CHEAP|SPEED, Pro ⇒ REASONING)
+///   3. Internal `ModelTier` enum fallback (Opus/Sonnet/Haiku)
+///   4. None (caller should display "tier not available for this provider")
 pub fn resolve_tier(
-    tier: TierName,
+    tier_input: &str,                  // accepts "fast" / "flash" / "haiku" alike
     provider: &LlmProvider,
     profile_tiers: &ProviderTiers,
 ) -> Option<String> {
-    // 1. Try profile_tiers.<tier>
+    let tier = TierName::from_user_input(tier_input)?;
+    if matches!(tier, TierName::Auto) { return None; }   // reserved
+
+    // 1. Explicit user override in providers.toml
     let explicit = match tier {
         TierName::Fast => &profile_tiers.fast,
         TierName::Standard => &profile_tiers.standard,
         TierName::Pro => &profile_tiers.pro,
-        TierName::Auto => return None,  // auto routed later
+        TierName::Auto => return None,
     };
     if let Some(id) = explicit { return Some(id.clone()); }
-    // 2. Fallback to internal ModelTier enum
+
+    // 2. Catalog-based inference (preferred; uses ModelCapabilities)
+    let wanted = match tier {
+        TierName::Fast => ModelCapabilities::SPEED | ModelCapabilities::CHEAP,
+        TierName::Standard => ModelCapabilities::CODING,
+        TierName::Pro => ModelCapabilities::REASONING,
+        TierName::Auto => return None,
+    };
+    if let Some(m) = catalog_models_for_provider(provider)
+        .iter()
+        .filter(|m| m.capabilities.contains(wanted))
+        .min_by_key(|m| m.cost_tier)   // Fast ⇒ cheapest; Pro ⇒ strongest
+    {
+        return Some(m.id.to_string());
+    }
+
+    // 3. Internal ModelTier fallback (legacy path; still works)
     let mt = match tier {
         TierName::Fast => ModelTier::Haiku,
         TierName::Standard => ModelTier::Sonnet,
@@ -306,8 +394,10 @@ pub fn resolve_tier(
 
 Extend `handle_model` (`crates/shannon-ui/src/repl/commands/config.rs:35-85`):
 
-**Argument syntax** (fixed order):
-- `/model --tier fast` — switch current provider to its fast tier
+**Argument syntax** (fixed order, accepts canonical names OR aliases):
+- `/model --tier fast` — switch current provider to its fast tier (canonical)
+- `/model --tier flash` — same as above (alias, normalized internally)
+- `/model --tier haiku` — same as above (Anthropic alias)
 - `/model --tier fast anthropic` — switch provider `anthropic` to its fast tier
 - `/model --tier pro --save` — switch + persist to `~/.shannon/providers.toml`
 - `/model --tier auto` — reserved (returns error "auto routing not yet supported")
@@ -317,7 +407,16 @@ Extend `handle_model` (`crates/shannon-ui/src/repl/commands/config.rs:35-85`):
 if args.starts_with("--tier") {
     // tokens: ["--tier", "<tier>", "[provider]", "[--save]"]
     let parts: Vec<&str> = args.split_whitespace().collect();
-    let tier = TierName::from_str(parts.get(1).copied().unwrap_or(""))?;
+    let tier_input = parts.get(1).copied().unwrap_or("");
+    let tier = TierName::from_user_input(tier_input)
+        .ok_or_else(|| anyhow!(
+            "Unknown tier '{}'. Try: {}",
+            tier_input,
+            TierName::suggestions().join(", ")
+        ))?;
+    if matches!(tier, TierName::Auto) {
+        return Err(anyhow!("--tier auto is reserved for a future spec"));
+    }
     let explicit_provider = parts.get(2).copied();
     let save = parts.iter().any(|p| *p == "--save");
     let provider = explicit_provider
@@ -326,25 +425,25 @@ if args.starts_with("--tier") {
         .or(repl.state.selected_provider)
         .ok_or_else(|| anyhow!("No provider selected; specify one: /model --tier <tier> <provider>"))?;
     let profile_tiers = load_provider_tiers(&provider);
-    let model_id = resolve_tier(tier, &provider, &profile_tiers)
-        .ok_or_else(|| anyhow!("No model found for tier={:?} provider={}", tier, provider))?;
+    let model_id = resolve_tier(tier_input, &provider, &profile_tiers)
+        .ok_or_else(|| anyhow!("No model found for tier={} provider={}", tier.canonical(), provider))?;
     repl.state.model = Some(model_id.clone());
     repl.state.selected_provider = Some(provider.clone());
     engine.set_model_for_provider(&model_id, &provider);
     save_preferences(...);
     if save {
-        persist_model_to_providers_toml(&provider, &model_id)?;
+        persist_model_to_providers_toml(&provider, &model_id, tier)?;
     }
     return Ok(());
 }
 ```
 
-**Aliases** (Tab completion):
+**Tab completion** (canonical first, then aliases):
 ```rust
-// model_registry.rs:859 (existing)
+// model_registry.rs:859 (existing — extend)
 pub fn model_aliases() -> &'static [&'static str] {
-    // Extend from ["opus", "sonnet", "haiku"] to:
-    &["opus", "sonnet", "haiku", "fast", "standard", "pro", "auto", "mini"]
+    // From ["opus", "sonnet", "haiku"] to:
+    TierName::suggestions()  // canonical + aliases
 }
 ```
 
@@ -386,7 +485,8 @@ fn persist_model_to_providers_toml(provider: &LlmProvider, model_id: &str) -> Re
 | `HelpOverlay` (NEW) | Render /help as modal overlay | `help_utils::generate_help(filter)`, keyboard events | ratatui draw + state mutation |
 | `StatusBarWidget` (EXTEND) | Add provider + tier to model pill | `ReplState` | ratatui draw |
 | `ModelPickerWidget` (EXTEND) | Add tier tab layer between provider and model list | `MODEL_CATALOG`, `ReplState` | ratatui draw + state mutation |
-| `TierResolver` (NEW, in `model_registry.rs`) | Map `TierName × LlmProvider × ProviderTiers` → model id | `TierName`, `LlmProvider`, `ProviderTiers` | `Option<String>` |
+| `TierResolver` (NEW, in `model_registry.rs`) | Map `&str` (canonical or alias) × `LlmProvider` × `ProviderTiers` → model id | `&str`, `LlmProvider`, `ProviderTiers` | `Option<String>` |
+| `TierName::from_user_input` (NEW) | Normalize any accepted input (canonical + aliases) to canonical TierName; case-insensitive | `&str` | `Option<TierName>` |
 | `handle_help` (MODIFY) | Open/close `HelpOverlay` instead of writing chat message | `args: &str` | `ReplState.help_overlay` |
 | `handle_model` (EXTEND) | Add `--tier` and `--save` parsing | `args: &str` | `ReplState.model/selected_provider`, `providers.toml` |
 
@@ -477,13 +577,20 @@ Preferences.save()
 | `handle_help` does NOT mutate chat | integration test | `repl.chat.messages.len()` unchanged after `/help` |
 | `arg_hint` placeholder rename | snapshot test | No `<file>`, `<line>`, `<character>` substrings in help output |
 | `TierResolver::resolve_tier` | unit | anthropic + Fast → "claude-haiku-4-5"; profile override wins |
+| `TierResolver::resolve_tier` aliases | unit | "flash"/"haiku"/"mini" all resolve to claude-haiku-4-5; "opus"/"ultra" to claude-opus-4 |
+| `TierName::from_user_input` | unit | "FAST" (uppercase) → Fast; "Haiku" (mixed case) → Fast; "garbage" → None |
+| `TierName::canonical` round-trip | unit | `TierName::from_user_input(t.canonical()) == Some(t)` for all 4 variants |
+| `TierName::suggestions` first | unit | First 4 entries are exactly `["fast", "standard", "pro", "auto"]` |
 | `ModelInfo::tier_label` | unit | opus → Pro; haiku → Fast; sonnet → Standard |
 | `handle_model --tier fast` | integration | `repl.state.model = Some("claude-haiku-4-5")` |
+| `handle_model --tier haiku` | integration | alias → same result as `--tier fast` |
 | `handle_model --tier fast anthropic` | integration | switches provider + tier atomically |
-| `handle_model --tier pro --save` | integration | `providers.toml` updated; engine uses new model |
+| `handle_model --tier pro --save` | integration | `providers.toml` tier field uses canonical `"pro"` (not `"opus"`) |
 | `handle_model --tier auto` | integration | returns error "auto routing not yet supported" |
+| `handle_model --tier xyz` | integration | returns error with suggestion list |
 | `ProviderProfile.tiers` round-trip | schema test | JsonSchema validation passes |
-| `model_aliases()` Tab completion | unit | Includes `fast`, `standard`, `pro`, `auto`, `mini` |
+| `model_aliases()` Tab completion | unit | Canonical first 4 + Anthropic aliases (`haiku`/`sonnet`/`opus`) present |
+| `persist_model_to_providers_toml` writes canonical name | snapshot | toml content uses `fast`/`standard`/`pro` (not aliases) |
 
 ---
 
@@ -493,7 +600,7 @@ Preferences.save()
 |---|---|---|---|---|
 | M1 | `/help` overlay + arg_hint rename | 1-2 days | 🔴 P0 | `repl/commands/mod.rs`, `repl/render.rs`, `repl/state.rs`, `builtin/help.rs` (7 lines) |
 | M2 | First-screen Status Card + StatusBar upgrade | 2-3 days | 🟡 P1 | `widgets/status_card.rs` (new), `widgets/chat.rs`, `widgets/status_bar.rs`, `widgets/mod.rs`, `repl/render.rs` |
-| M3 | Model Tier types + `/model --tier --save` + Picker tier tabs | 3-4 days | 🟡 P1 | `provider_config.rs`, `model_registry.rs`, `commands/config.rs`, `widgets/select.rs` |
+| M3 | Model Tier types + `/model --tier --save` + Picker tier tabs + alias normalization (canonical: fast/standard/pro; aliases: haiku/sonnet/opus/flash/mini/plus/ultra/max) | 3-4 days | 🟡 P1 | `provider_config.rs`, `model_registry.rs`, `commands/config.rs`, `widgets/select.rs` |
 | M4 | Docs, CHANGELOG, ADR-0005 update, i18n | 1 day | 🟢 P2 | `docs/adr/0005-*.md`, `CLAUDE.md`, `CHANGELOG.md`, `locales/*.yaml` |
 
 **Total estimated effort**: 7-10 working days (single engineer).
@@ -533,11 +640,12 @@ After this design is fully implemented:
 1. ✅ First screen shows current provider + model + tier + available providers/models list + 5 command hints
 2. ✅ `/help` (with or without args) opens an overlay; chat history length is unchanged; LLM never sees `<file>` literals
 3. ✅ `/model --tier fast` switches to the cheapest/fastest model for the current provider
-4. ✅ `/model --tier pro --save` persists the tier choice to `~/.shannon/providers.toml`
-5. ✅ ModelPickerWidget has provider → tier → model three-level navigation
-6. ✅ Tab completion includes `fast`, `standard`, `pro`, `auto`, `mini`
-7. ✅ All existing tests pass; new tests added for each milestone
-8. ✅ ADR-0005 Phase 3 marked ✅ (instead of 🔄 Partial); Phase 4 partially ✅
+4. ✅ `/model --tier haiku` (Anthropic alias) and `/model --tier flash` (Gemini alias) both switch to the same fast-tier model
+5. ✅ `/model --tier pro --save` persists the **canonical** tier name (`pro`) — never the alias — to `~/.shannon/providers.toml`
+6. ✅ ModelPickerWidget has provider → tier → model three-level navigation
+7. ✅ Tab completion shows canonical names first (`fast`/`standard`/`pro`/`auto`) followed by Anthropic aliases (`haiku`/`sonnet`/`opus`)
+8. ✅ All existing tests pass; new tests added for each milestone
+9. ✅ ADR-0005 Phase 3 marked ✅ (instead of 🔄 Partial); Phase 4 partially ✅
 
 ---
 
