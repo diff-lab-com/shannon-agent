@@ -45,6 +45,8 @@ commands:
     prompt: "Enter model name (e.g. claude-3.5-sonnet, gpt-4o)..."
     set: "Model set to: %{name}"
     context_unknown: "unknown (per provider)"
+    cost_unknown: "estimate unavailable"
+    cost_free_local: "free (local)"
   config:
     warning_load: "Warning: could not load config: %{error}"
     key_not_found: "Config key not found: %{key}"
