@@ -287,8 +287,10 @@ pub fn specificity_weight(r: &ProfileRoute) -> u32 {
 /// Aliases (input-only) include Anthropic's `haiku`/`sonnet`/`opus`
 /// and provider-native names (`flash`/`mini`/`plus`/`ultra`/`max`).
 ///
-/// `Auto` is reserved for future use (model auto-routing by task type)
-/// and is not yet wired to any production code path.
+/// `Auto` is an input-only tier: `/model --tier auto` resolves it to a
+/// concrete tier via a lightweight best-default heuristic (standard → pro →
+/// fast; ADR-0005 decision ②) — not the full task-type router (spec §11).
+/// `Auto` is never persisted; only the resolved concrete tier is stored.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum TierName {

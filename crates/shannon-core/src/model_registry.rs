@@ -1346,6 +1346,37 @@ pub fn resolve_tier(
     resolve_model_alias(alias, Some(provider)).map(str::to_string)
 }
 
+/// Resolve the `Auto` tier to a concrete `(tier, model_id)` for a provider.
+///
+/// This is the **lightweight heuristic** agreed for `/model --tier auto`
+/// (ADR-0005 decision ②) — deliberately *not* the full task-type
+/// [`ModelRouter`] (spec §11 keeps that unwired). The rule is simple and
+/// deterministic: pick the best-cost/capability **default** the provider
+/// actually offers, trying tiers in preference order **standard → pro → fast**
+/// and returning the first that resolves:
+///
+/// - **Standard** is the workhorse default (best cost/capability for coding).
+/// - Escalate to **pro** only when the provider has no standard-tier model
+///   (a provider without a standard tier usually wants its flagship as the
+///   default).
+/// - Fall back to **fast** as the last resort.
+///
+/// Each candidate is resolved through [`resolve_tier`], so persisted
+/// `providers.toml` overrides and catalog inference both apply. `Auto` itself
+/// is never persisted (only the resolved concrete tier is), per the tier-naming
+/// rule.
+pub fn resolve_auto_tier(
+    provider: &LlmProvider,
+    profile_tiers: &ProviderTiers,
+) -> Option<(TierName, String)> {
+    for tier in [TierName::Standard, TierName::Pro, TierName::Fast] {
+        if let Some(id) = resolve_tier(tier.canonical(), provider, profile_tiers) {
+            return Some((tier, id));
+        }
+    }
+    None
+}
+
 // ============================================================================
 // Model Router
 // ============================================================================
@@ -1801,6 +1832,42 @@ mod tests {
         // Should resolve to an actual model ID, not "haiku"
         assert_ne!(resolved, "haiku");
         assert!(model_info_for(&resolved).is_some());
+    }
+
+    #[test]
+    fn resolve_auto_tier_prefers_standard_when_available() {
+        // Anthropic ships all tiers, so the lightweight heuristic should pick
+        // Standard (the workhorse default) and agree with an explicit
+        // `/model --tier standard`.
+        let tiers = ProviderTiers::default();
+        let (tier, id) =
+            resolve_auto_tier(&LlmProvider::Anthropic, &tiers).expect("anthropic has tiers");
+        assert_eq!(tier, TierName::Standard);
+        assert_eq!(
+            id,
+            resolve_tier("standard", &LlmProvider::Anthropic, &tiers).unwrap()
+        );
+    }
+
+    #[test]
+    fn resolve_auto_tier_respects_profile_override() {
+        // A pinned providers.toml override for `standard` wins for auto too,
+        // since auto delegates through resolve_tier.
+        let mut tiers = ProviderTiers::default();
+        tiers.standard = Some("claude-opus-4-20250115".to_string());
+        let (tier, id) =
+            resolve_auto_tier(&LlmProvider::Anthropic, &tiers).expect("resolves via override");
+        assert_eq!(tier, TierName::Standard);
+        assert_eq!(id, "claude-opus-4-20250115");
+    }
+
+    #[test]
+    fn resolve_auto_tier_none_for_provider_with_no_models() {
+        // Ollama has no static catalog entries and no alias-mapped models, so
+        // every candidate tier misses — auto honestly returns None rather than
+        // inventing a model.
+        let tiers = ProviderTiers::default();
+        assert!(resolve_auto_tier(&LlmProvider::Ollama, &tiers).is_none());
     }
 
     #[test]
