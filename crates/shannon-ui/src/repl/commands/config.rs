@@ -1395,10 +1395,16 @@ fn handle_model_tier(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 /// Load the persisted per-tier model overrides for a provider from
-/// `~/.shannon/providers.toml`. Stub for Task 17 — returns the default
-/// (empty) `ProviderTiers` so `resolve_tier` falls back to the catalog.
+/// `~/.shannon/providers.toml`.
+///
+/// **Not yet implemented (ADR-0005 Phase 4).** The write path
+/// (`persist_model_to_providers_toml`, Task 17 / Phase 3) is complete, but the
+/// read-back is outstanding. Until Phase 4 wires the engine startup path to
+/// `ProviderConfigStore::load_or_default()`, this returns the default (empty)
+/// `ProviderTiers` so `resolve_tier` falls back to the catalog. Consequence:
+/// `/model --tier <t> --save` persists, but the override does not yet survive
+/// a restart.
 fn load_provider_tiers(_provider: &LlmProvider) -> ProviderTiers {
-    // TODO: load from ~/.shannon/providers.toml (Task 17)
     ProviderTiers::default()
 }
 

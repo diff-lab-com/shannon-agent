@@ -2,7 +2,6 @@
 //! panel instead of injecting it into chat history.
 
 use ratatui::Frame;
-use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -171,5 +170,47 @@ mod tests {
         // Just verify it doesn't panic with non-default selection
         let buf = terminal.backend().buffer().clone();
         assert!(buf.area.width > 0);
+    }
+
+    #[test]
+    fn render_help_overlay_with_real_command_registry() {
+        // Regression guard for the placeholder overlay (review finding C1): the
+        // overlay must render real commands sourced from the command registry,
+        // not the old hardcoded {/help, /edit} sample.
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = HelpOverlayState::default();
+        // Git is the first category in HelpCategory::all(); selecting index 0
+        // renders Git commands (incl. /commit) in the right pane.
+        state.selected_category_idx = 0;
+
+        let categories = shannon_commands::help_utils::categorize_commands();
+        assert!(!categories.is_empty(), "registry must provide categories");
+
+        terminal
+            .draw(|f| {
+                render_help_overlay(f, f.area(), &state, &categories);
+            })
+            .unwrap();
+
+        let buf = terminal.backend().buffer().clone();
+        let text: String = (0..buf.area.height)
+            .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+            .map(|(x, y)| buf.cell((x, y)).unwrap().symbol().to_string())
+            .collect::<Vec<_>>()
+            .join("");
+
+        // A real category label appears (not the placeholder "NAVIGATION").
+        assert!(
+            text.contains("Git & Version Control"),
+            "expected real category label; got: {}",
+            &text[..text.len().min(300)]
+        );
+        // A real command from the Git category appears in the right pane.
+        assert!(
+            text.contains("/commit"),
+            "expected /commit in overlay; got: {}",
+            &text[..text.len().min(300)]
+        );
     }
 }

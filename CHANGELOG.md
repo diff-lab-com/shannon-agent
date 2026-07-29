@@ -18,6 +18,11 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 - StatusBar pill format upgraded from `[model]` to `[provider/model · tier]`
 - `arg_hint` placeholders renamed from `<file>` to `<FILE_PATH>` (ALL_CAPS) to reduce LLM misidentification risk
 
+### Known limitations
+
+- The status card's **active** provider/model/tier is live, but the "available providers/models" list and the connected/disconnected markers are a static placeholder until `connect_status()` and the full `MODEL_CATALOG` are wired into the widget.
+- `/model --tier <t> --save` **persists** the canonical tier name to `~/.shannon/providers.toml`, but the override does not yet survive a restart. The engine read-back is ADR-0005 Phase 4 (in progress); see `load_provider_tiers` in `shannon-ui/src/repl/commands/config.rs`.
+
 ## v0.5.5 (2026-06-17) — notifications next phase (T-series + C9)
 
 ### Features
