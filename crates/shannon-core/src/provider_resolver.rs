@@ -522,7 +522,7 @@ fn provider_str_to_llm(p: &str, base_url: Option<&str>) -> LlmProvider {
 }
 
 /// Coarse wire-protocol discriminator for a provider profile's `kind` field.
-fn llm_provider_to_kind(p: &LlmProvider) -> ProviderKind {
+pub(crate) fn llm_provider_to_kind(p: &LlmProvider) -> ProviderKind {
     match p {
         LlmProvider::Anthropic => ProviderKind::Anthropic,
         LlmProvider::OpenAI => ProviderKind::OpenAi,
