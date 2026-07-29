@@ -781,6 +781,31 @@ mod tests {
     }
 
     #[test]
+    fn picker_manual_entry_builds_and_clears() {
+        let mut picker = ModelPickerWidget::new(None);
+
+        // Outside manual mode, typed chars are ignored.
+        picker.add_manual_char('x');
+        assert!(picker.manual_input().is_empty());
+        assert!(!picker.is_manual_mode());
+
+        // Entering manual mode exposes a typed buffer for catalog-external ids.
+        picker.enter_manual_mode();
+        assert!(picker.is_manual_mode());
+        for c in "llama3.2".chars() {
+            picker.add_manual_char(c);
+        }
+        assert_eq!(picker.manual_input(), "llama3.2");
+
+        // Backspace trims the buffer; Esc-style exit clears it.
+        picker.remove_manual_char();
+        assert_eq!(picker.manual_input(), "llama3.");
+        picker.exit_manual_mode();
+        assert!(!picker.is_manual_mode());
+        assert!(picker.manual_input().is_empty());
+    }
+
+    #[test]
     fn test_multi_select_with_items() {
         let items = vec![
             SelectItem::new("Option 1", "val1".to_string()),
@@ -854,6 +879,10 @@ pub struct ModelPickerWidget {
     current_model_id: Option<String>,
     /// Index of the currently active tier tab (0 = Fast, 1 = Standard, 2 = Pro).
     pub current_tier_idx: usize,
+    /// Manual model-id entry mode (escape hatch for models outside the catalog).
+    manual_mode: bool,
+    /// Typed model id while in manual entry mode.
+    manual_input: String,
 }
 
 /// Number of tier tabs (Fast, Standard, Pro).
@@ -880,6 +909,8 @@ impl ModelPickerWidget {
             local_models,
             current_model_id,
             current_tier_idx: 0,
+            manual_mode: false,
+            manual_input: String::new(),
         };
 
         // Find the provider of the current model to open the right tab
@@ -1022,14 +1053,53 @@ impl ModelPickerWidget {
         self.models.get(self.selected_idx)
     }
 
+    /// Enter manual model-id entry mode — an escape hatch for models not in the
+    /// built-in catalog (a freshly pulled Ollama model, an OpenRouter id, a
+    /// Bedrock inference profile, …). The typed id is confirmed with Enter.
+    pub fn enter_manual_mode(&mut self) {
+        self.manual_mode = true;
+        self.manual_input.clear();
+    }
+
+    /// Leave manual entry mode without confirming.
+    pub fn exit_manual_mode(&mut self) {
+        self.manual_mode = false;
+        self.manual_input.clear();
+    }
+
+    /// Whether the picker is currently accepting a typed model id.
+    pub fn is_manual_mode(&self) -> bool {
+        self.manual_mode
+    }
+
+    /// Append a character to the manual entry buffer.
+    pub fn add_manual_char(&mut self, c: char) {
+        if self.manual_mode {
+            self.manual_input.push(c);
+        }
+    }
+
+    /// Delete the last character from the manual entry buffer.
+    pub fn remove_manual_char(&mut self) {
+        if self.manual_mode {
+            self.manual_input.pop();
+        }
+    }
+
+    /// The current manual-entry buffer (rendered inline; confirmed on Enter).
+    pub fn manual_input(&self) -> &str {
+        &self.manual_input
+    }
+
     /// Render the model picker as a centered dialog.
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         use ratatui::widgets::Clear;
 
         let dialog_width = 52u16.min(area.width.saturating_sub(4));
         let visible_count = MAX_VISIBLE_MODELS.min(self.models.len());
-        // +3 for title, +2 for tab bar, +1 for footer hint
-        let dialog_height = (visible_count as u16 + 6).min(area.height.saturating_sub(4));
+        // +3 title, +2 tab bar, +1 footer hint, +2 manual input line when active.
+        let extra = if self.manual_mode { 2 } else { 0 };
+        let dialog_height = (visible_count as u16 + 6 + extra).min(area.height.saturating_sub(4));
 
         let x = (area.width.saturating_sub(dialog_width)) / 2;
         let y = (area.height.saturating_sub(dialog_height)) / 2;
@@ -1198,20 +1268,36 @@ impl ModelPickerWidget {
             )));
         }
 
-        // ── Scroll indicators ──
+        // ── Manual entry line (escape hatch for catalog-external models) ──
+        if self.manual_mode {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!(" Model ID: {}▏", self.manual_input),
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+
+        // ── Scroll indicators + footer hint ──
         let mut hints = String::new();
-        if self.models.len() > MAX_VISIBLE_MODELS {
-            if self.scroll_offset > 0 {
-                hints.push_str("↑ ");
+        if self.manual_mode {
+            hints.push_str("⏎ confirm  esc back  ⌫ delete");
+        } else {
+            if self.models.len() > MAX_VISIBLE_MODELS {
+                if self.scroll_offset > 0 {
+                    hints.push_str("↑ ");
+                }
+                if self.scroll_offset + MAX_VISIBLE_MODELS < self.models.len() {
+                    hints.push_str("↓ ");
+                }
             }
-            if self.scroll_offset + MAX_VISIBLE_MODELS < self.models.len() {
-                hints.push_str("↓ ");
+            if self.providers.len() > 1 {
+                hints.push_str("←→ provider  ");
             }
+            hints.push_str("⇥ tier  ↑↓ select  ⏎ ok  esc cancel");
+            hints.push_str("  i manual");
         }
-        if self.providers.len() > 1 {
-            hints.push_str("←→ provider  ");
-        }
-        hints.push_str("⇥ tier  ↑↓ select  ⏎ ok  esc cancel");
 
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(

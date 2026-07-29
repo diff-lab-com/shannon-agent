@@ -1931,6 +1931,15 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 }
 
 fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    // Manual model-id entry intercepts most keys (typing, backspace, confirm).
+    if repl
+        .state
+        .model_picker
+        .as_ref()
+        .is_some_and(|mp| mp.is_manual_mode())
+    {
+        return handle_model_picker_manual_input(repl, key);
+    }
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
             if let Some(ref mut mp) = repl.state.model_picker {
@@ -1955,6 +1964,12 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         KeyCode::Tab => {
             if let Some(ref mut mp) = repl.state.model_picker {
                 mp.next_tier();
+            }
+        }
+        KeyCode::Char('i') => {
+            // Enter manual model-id entry (escape hatch for catalog-external ids).
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.enter_manual_mode();
             }
         }
         KeyCode::BackTab => {
@@ -1991,6 +2006,62 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Esc => {
             repl.state.model_picker = None;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Handle keystrokes while the model picker is in manual-id entry mode.
+///
+/// Typed characters build the model id; Backspace deletes; Enter confirms the
+/// typed id (closing the picker) only when non-empty; Esc returns to the list.
+fn handle_model_picker_manual_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Char(c) => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.add_manual_char(c);
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.remove_manual_char();
+            }
+        }
+        KeyCode::Enter => {
+            let typed = repl.state.model_picker.as_ref().and_then(|mp| {
+                let s = mp.manual_input();
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s.to_string())
+                }
+            });
+            if let Some(id) = typed {
+                repl.state.model_picker = None;
+                repl.state.model = Some(id);
+                crate::repl::preferences::save_preferences(
+                    &crate::repl::preferences::Preferences {
+                        model: repl.state.model.clone(),
+                        provider: repl.state.selected_provider.clone(),
+                        theme: Some(repl.state.theme.name.to_string()),
+                    },
+                );
+                repl.chat.add_message(
+                    ChatRole::System,
+                    t!(
+                        "commands.model.set",
+                        name = repl.state.model.as_deref().unwrap_or("")
+                    )
+                    .to_string(),
+                );
+            }
+            // Empty Enter is a no-op: stay in manual mode until something is typed.
+        }
+        KeyCode::Esc => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.exit_manual_mode();
+            }
         }
         _ => {}
     }
