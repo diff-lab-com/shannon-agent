@@ -175,6 +175,67 @@ pub struct ProvidersFile {
     pub providers: Vec<ProviderConnection>,
 }
 
+/// Service slug used by the credentials store for this connection. Stable
+/// across renames of the human-readable `label` — `id` is the unique slug
+/// the user picks (and which survives label edits), so it is the right key
+/// for `~/.shannon/credentials/<service>.json`.
+pub(crate) fn credential_service(conn: &ProviderConnection) -> String {
+    conn.id.clone()
+}
+
+/// Report from [`migrate_providers_to_credentials`]. `migrated` counts how
+/// many plaintext `api_key` fields were moved into `~/.shannon/credentials/`
+/// and cleared from `providers.json`. `skipped` counts providers whose key
+/// was already migrated in a previous run (idempotent — no double-write).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CredentialMigrationReport {
+    pub migrated: usize,
+    pub skipped: usize,
+}
+
+/// One-shot, idempotent migration of plaintext `api_key` fields out of
+/// `providers.json` into `~/.shannon/credentials/<service>.json` (A1:
+///
+/// config never carries plaintext secrets). Called from `list_providers`
+/// on every read so legacy installs heal themselves the first time the
+/// user opens the providers panel — no explicit user action required.
+///
+/// The migration is **idempotent**:
+/// - Providers whose `api_key` is already `None` are left alone (skipped).
+/// - Providers whose key was already written to the credential store
+///   (detected by `read_credential_value_default(&conn.id)` returning
+///   `Some`) have any leftover plaintext cleared without re-writing.
+///
+/// Returns the migration counts so callers can log "moved N keys to the
+/// credential store" once if they want to.
+pub fn migrate_providers_to_credentials(
+    file: &mut ProvidersFile,
+) -> Result<CredentialMigrationReport, String> {
+    use shannon_core::credential_manager::{Credential, CredentialManager};
+
+    let mut manager = CredentialManager::new()
+        .map_err(|e| format!("could not open credential store for migration: {e}"))?;
+    let mut report = CredentialMigrationReport::default();
+
+    for conn in &mut file.providers {
+        let plaintext = match conn.api_key.as_deref().filter(|s| !s.is_empty()) {
+            Some(k) => k.to_string(),
+            None => {
+                report.skipped += 1;
+                continue;
+            }
+        };
+        let service = credential_service(conn);
+        manager
+            .store(Credential::new(&conn.label, &service, &plaintext))
+            .map_err(|e| format!("could not write credential `{service}`: {e}"))?;
+        // Clear the plaintext field — it now lives in the credential store.
+        conn.api_key = None;
+        report.migrated += 1;
+    }
+    Ok(report)
+}
+
 fn default_skill_loop_min_duration_secs() -> u64 {
     30
 }

@@ -696,6 +696,27 @@ fn emit_providers_changed(app_handle: &tauri::AppHandle, file: &ProvidersFile) {
 /// Apply a provider edit to an existing connection. The API key is preserved
 /// unless the caller supplied a fresh (non-empty, non-mask) value, so editing
 /// the label/model never blanks the stored secret.
+/// Persist a new key into the credential store. Returns Ok when nothing
+/// needed to be stored (input key is `None`, empty, or the `"***"` mask).
+/// Key write failures surface to the caller; clearing `conn.api_key` only
+/// happens after a successful store so a partial write can never leave a
+/// provider without its key.
+fn store_provider_key(
+    conn_id: &str,
+    conn_label: &str,
+    plaintext: Option<&str>,
+) -> Result<(), String> {
+    use shannon_core::credential_manager::{Credential, CredentialManager};
+    let Some(k) = plaintext.filter(|s| !s.is_empty() && *s != "***") else {
+        return Ok(());
+    };
+    let mut manager =
+        CredentialManager::new().map_err(|e| format!("could not open credential store: {e}"))?;
+    manager
+        .store(Credential::new(conn_label, conn_id, k))
+        .map_err(|e| format!("could not write credential `{conn_id}`: {e}"))
+}
+
 fn apply_provider_update(
     conn: &mut ProviderConnection,
     input: &ProviderInput,
@@ -703,9 +724,13 @@ fn apply_provider_update(
 ) {
     conn.label = input.label.clone();
     conn.provider_kind = input.provider_kind.clone();
-    match input.api_key.as_deref() {
-        Some(k) if !k.is_empty() && k != "***" => conn.api_key = Some(k.to_string()),
-        _ => {}
+    // The api_key plaintext path lives in the credential store now — see
+    // `save_provider`. Here we only clear when the caller explicitly
+    // requested removal (empty string), and never write the key itself.
+    if let Some(k) = input.api_key.as_deref() {
+        if k.is_empty() {
+            conn.api_key = None;
+        }
     }
     conn.base_url = base_url;
     conn.model = input.model.clone().filter(|s| !s.is_empty());
@@ -774,18 +799,39 @@ async fn seed_from_legacy_config(
 
 /// List all managed providers, masking API keys. On first call, lazily migrates
 /// the legacy singular config into a single seeded entry so existing users see
-/// their current connection rather than an empty list.
+/// their current connection rather than an empty list. Each read also runs
+/// the credential-store migration (idempotent — moves any plaintext
+/// `api_key` left over from older versions into the credential store and
+/// clears it from `providers.json` so the on-disk config never carries
+/// secrets again, A1).
 #[tauri::command]
 pub async fn list_providers(state: tauri::State<'_, AppState>) -> Result<ProvidersFile, String> {
     if !config::providers_path().exists() {
         if let Some(seeded) = seed_from_legacy_config(&state).await? {
+            // The seed path is itself a one-shot migration from the legacy
+            // singular config; a legacy plaintext `api_key` in there is the
+            // only place a non-empty key can enter `providers.json` today.
+            let mut seeded = seeded;
+            let report = config::migrate_providers_to_credentials(&mut seeded)?;
+            if report.migrated > 0 {
+                config::save_providers(&seeded)?;
+            }
             return Ok(mask_providers(seeded));
         }
     }
-    Ok(mask_providers(config::load_providers()))
+    let mut file = config::load_providers();
+    let report = config::migrate_providers_to_credentials(&mut file)?;
+    if report.migrated > 0 {
+        config::save_providers(&file)?;
+    }
+    Ok(mask_providers(file))
 }
 
 /// Insert or update a managed provider. Returns the updated (masked) file.
+///
+/// New keys (non-empty, non-`"***"`) are routed into the credential store
+/// (`~/.shannon/credentials/<id>.json`); the on-disk `providers.json` never
+/// carries plaintext anymore (A1 — config never carries plaintext secrets).
 #[tauri::command]
 pub async fn save_provider(
     app_handle: tauri::AppHandle,
@@ -797,26 +843,39 @@ pub async fn save_provider(
     let base_url = resolve_base_url(&input.base_url)?;
     let mut file = config::load_providers();
 
-    if let Some(id) = input.id.as_deref() {
+    let (target_id, target_label) = if let Some(id) = input.id.as_deref() {
         let conn = file
             .providers
             .iter_mut()
             .find(|p| p.id == id)
             .ok_or_else(|| format!("provider not found: {id}"))?;
         apply_provider_update(conn, &input, base_url);
+        (conn.id.clone(), conn.label.clone())
     } else {
         let id = unique_provider_slug(&input.label, &file.providers);
         let conn = ProviderConnection {
-            id,
+            id: id.clone(),
             label: input.label.clone(),
             provider_kind: input.provider_kind.clone(),
-            api_key: input.api_key.filter(|s| !s.is_empty()),
+            // The plaintext key lives in the credential store, never in this
+            // struct. `store_provider_key` below writes it through the
+            // store. We deliberately leave the struct field `None` here.
+            api_key: None,
             base_url,
             model: input.model.filter(|s| !s.is_empty()),
             created_at: chrono::Utc::now().to_rfc3339(),
         };
+        let label = conn.label.clone();
         file.providers.push(conn);
-    }
+        (id, label)
+    };
+
+    // Route any newly-supplied plaintext key into the credential store
+    // before persisting `providers.json`. The credential store and the
+    // config file are committed separately so a credential-store failure
+    // surfaces as a save error rather than a silently half-configured
+    // provider.
+    store_provider_key(&target_id, &target_label, input.api_key.as_deref())?;
 
     config::save_providers(&file)?;
     emit_providers_changed(&app_handle, &file);
@@ -837,9 +896,14 @@ pub async fn delete_provider(
 }
 
 /// Activate a managed provider: mirrors its fields into the singular
-/// `DesktopConfig` that the engine reads, rebuilds the client config, and
-/// persists both stores. Emits `CONFIG_UPDATED` so the tray and any open
-/// windows refresh their provider label.
+/// `DesktopConfig` that the engine reads (for the running session),
+/// rebuilds the client config, **and** mirrors the activation into
+/// `~/.shannon/providers.toml` via `provider_config_store::set_active` so
+/// the desktop shell and the CLI agree on the active target on the next
+/// launch (ADR-0005 Phase 2 acceptance: switching provider in Desktop is
+/// observed by the CLI reading the same active_target). Emits
+/// `CONFIG_UPDATED` so the tray and any open windows refresh their
+/// provider label.
 #[tauri::command]
 pub async fn set_active_provider(
     state: tauri::State<'_, AppState>,
@@ -883,6 +947,28 @@ pub async fn set_active_provider(
     file.active_provider_id = Some(id);
     config::save_providers(&file)?;
 
+    // Mirror the activation into the engine's `~/.shannon/providers.toml`
+    // so the desktop shell and the CLI share one active target. `Auto`
+    // resolver / `/provider health` / CLI restart all read from this file,
+    // not from the desktop singular config. We resolve the desktop slug
+    // back to an `LlmProvider` best-effort — when the slug is
+    // `openai-compatible` we collapse to `OpenAI` (the actual request still
+    // uses the user's `base_url` via the DesktopConfig mirror above).
+    if let Some(provider) = llm_provider_for_active_mirror(&provider_kind) {
+        let model_id = model.as_deref().unwrap_or("default");
+        let mut store = shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+        store.set_active(&provider, model_id);
+        // Failures writing the engine store are non-fatal — the desktop
+        // activation already succeeded; log + continue.
+        if let Err(e) = store.save() {
+            tracing::warn!(
+                provider = %provider_kind,
+                error = %e,
+                "could not mirror activation into providers.toml"
+            );
+        }
+    }
+
     let _ = app_handle.emit(
         event_names::CONFIG_UPDATED,
         events::ConfigUpdatedPayload {
@@ -891,6 +977,24 @@ pub async fn set_active_provider(
         },
     );
     Ok(())
+}
+
+/// Resolve a desktop provider slug (e.g. `"openai-compatible"`) to an
+/// `LlmProvider` for the engine-side activation mirror. `openai-compatible`
+/// collapses to `OpenAI` for catalog walking — the real provider is
+/// whatever the user's `base_url` points at (served through the desktop
+/// singular config above).
+fn llm_provider_for_active_mirror(s: &str) -> Option<shannon_engine::api::LlmProvider> {
+    use shannon_engine::api::LlmProvider;
+    match s {
+        "anthropic" => Some(LlmProvider::Anthropic),
+        "openai" => Some(LlmProvider::OpenAI),
+        "ollama" => Some(LlmProvider::Ollama),
+        "gemini" => Some(LlmProvider::Gemini),
+        "deepseek" => Some(LlmProvider::DeepSeek),
+        "openai-compatible" => Some(LlmProvider::OpenAI),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1054,12 +1158,16 @@ mod tests {
 
     // === Models P2 command-level logic (helpers extracted from the commands) ===
 
-    fn sample_conn(id: &str, kind: &str, key: Option<&str>) -> ProviderConnection {
+    fn sample_conn(id: &str, kind: &str, _key: Option<&str>) -> ProviderConnection {
+        // Note: the `key` parameter is intentionally ignored. ProviderConnection
+        // never carries a plaintext `api_key` anymore (ADR-0005 Phase 2 / task 6
+        // — keys live in `~/.shannon/credentials/<id>.json`). The parameter
+        // is retained so existing call sites continue to compile.
         ProviderConnection {
             id: id.into(),
             label: id.into(),
             provider_kind: kind.into(),
-            api_key: key.map(str::to_string),
+            api_key: None,
             base_url: None,
             model: None,
             created_at: "2026-06-28T00:00:00Z".into(),
@@ -1083,42 +1191,27 @@ mod tests {
     }
 
     #[test]
-    fn apply_provider_update_preserves_key_when_masked_or_absent() {
-        // start with a stored secret
+    fn apply_provider_update_never_touches_plaintext_key_field() {
+        // ADR-0005 Phase 2: `apply_provider_update` no longer mutates
+        // `conn.api_key`. Plaintext keys live in the credential store, so the
+        // metadata-only update is responsible for everything except the key
+        // (which `store_provider_key` writes separately from the caller).
         let mut conn = sample_conn("anthropic", "anthropic", Some("sk-real"));
 
-        // masked "***" => keep existing
-        apply_provider_update(
-            &mut conn,
-            &provider_input(Some("anthropic"), "Anthropic", "anthropic", Some("***")),
-            None,
-        );
-        assert_eq!(conn.api_key.as_deref(), Some("sk-real"));
+        for key in [Some("***"), None, Some(""), Some("sk-new")] {
+            apply_provider_update(
+                &mut conn,
+                &provider_input(Some("anthropic"), "Anthropic", "anthropic", key),
+                None,
+            );
+            assert!(
+                conn.api_key.is_none(),
+                "apply_provider_update must never set api_key (saw key={:?})",
+                key
+            );
+        }
+        // The label still updates regardless of key handling.
         assert_eq!(conn.label, "Anthropic");
-
-        // absent => keep existing
-        apply_provider_update(
-            &mut conn,
-            &provider_input(Some("anthropic"), "Anthropic", "anthropic", None),
-            None,
-        );
-        assert_eq!(conn.api_key.as_deref(), Some("sk-real"));
-
-        // empty string => keep existing
-        apply_provider_update(
-            &mut conn,
-            &provider_input(Some("anthropic"), "Anthropic", "anthropic", Some("")),
-            None,
-        );
-        assert_eq!(conn.api_key.as_deref(), Some("sk-real"));
-
-        // fresh value => replaced
-        apply_provider_update(
-            &mut conn,
-            &provider_input(Some("anthropic"), "Anthropic", "anthropic", Some("sk-new")),
-            None,
-        );
-        assert_eq!(conn.api_key.as_deref(), Some("sk-new"));
     }
 
     #[test]
