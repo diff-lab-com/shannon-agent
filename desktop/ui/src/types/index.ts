@@ -259,6 +259,36 @@ export interface ProviderConnection {
   base_url?: string | null
   model?: string | null
   created_at: string
+  /// v2 ProviderProfile fields surfaced in Phase 2 task 3. The backend
+  /// deserializes them into `providers.json` + engine's `providers.toml`
+  /// (see `desktop/src/commands_config.rs::apply_provider_update`).
+  /// Optional on the wire because every field is `#[serde(default)]` on
+  /// the Rust side for backward compat with legacy entries.
+  models_url?: string | null
+  extra_headers?: Record<string, string>
+  default_max_tokens?: number | null
+  fallback_models?: string[]
+  quirks?: ProviderQuirks
+  tiers?: ProviderTiers
+}
+
+/// Mirrors `shannon_types::provider_config::ProviderTiers`. Canonical
+/// tier names are `fast` / `standard` / `pro` — aliases like `haiku` /
+/// `sonnet` / `opus` are engine-resolved and never surfaced to the UI.
+export interface ProviderTiers {
+  fast?: string | null
+  standard?: string | null
+  pro?: string | null
+}
+
+/// Mirrors `shannon_types::provider_config::ProviderQuirks`. Out of scope
+/// for the modal in Phase 2 task 3 — the Add Provider modal only edits
+/// `extra_headers`, `default_max_tokens`, and `tiers`. Kept here so the
+/// `ProviderConnection` shape round-trips when the backend serializes it.
+export interface ProviderQuirks {
+  temperature_strategy?: string | null
+  max_tokens_override?: number | null
+  send_temperature?: boolean
 }
 
 export interface ProvidersFile {
@@ -268,6 +298,13 @@ export interface ProvidersFile {
 
 /// Payload for adding or editing a managed provider. On edit, `id` identifies
 /// the entry; an `api_key` of '***' or empty means "keep the existing key".
+///
+/// Phase 2 task 3: the three v2 ProviderProfile fields the Add Provider
+/// modal authors. Empty-key header rows and empty tier strings are
+/// silently dropped on the client before submit so the backend never sees
+/// `""` overrides. `default_max_tokens` is `null` when the input is
+/// blank; the engine falls back to `cfg.max_tokens` (then 4096) when
+/// unset.
 export interface ProviderInput {
   id?: string
   label: string
@@ -275,6 +312,9 @@ export interface ProviderInput {
   api_key?: string
   base_url?: string
   model?: string
+  extra_headers?: Record<string, string>
+  default_max_tokens?: number | null
+  tiers?: ProviderTiers
 }
 
 export interface DesktopConfig {
