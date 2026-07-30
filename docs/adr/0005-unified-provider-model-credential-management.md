@@ -5,8 +5,10 @@
 `/config set` flat-key writeback + `{env:VAR}` / `{file:path}` substitution, Phase
 5 ✅ incl. `small_model` ↔ `AuxRole` decision (方案 A — no new field) and
 `settings.toml` evaluation (no new file needed), Phase 6 ✅ `/provider health`
-(no auto-failover); Phase 2 🟡 in progress — `list_models` slice done, full
-provider-model migration deferred to a dedicated sprint)
+(no auto-failover); Phase 2 ✅ done (task 4 commits: engine upsert_profile,
+desktop schema + helper, write path through engine store + concurrency,
+one-shot providers.json→providers.toml migration, UI i18n + React
+consumption of price/tier/dynamic). Source of truth: providers.toml. to a dedicated sprint)
 **Date**: 2026-07-24
 **Theme**: 统一 Provider/Model/密钥管理 (shannon-code + shannon-desktop)
 **Supersedes**: —
@@ -251,38 +253,50 @@ paths unchanged.
 
 ### Phase 2 — Unified provider model + config convergence  *(architecture, ~4-5 days)*
 
-> **Status: 🟡 In Progress (2026-07-30).** The first slice of Phase 2 is
-> delivered (commit `5b54e7f4`): `list_models` no longer returns a
-> hand-written `match` — it routes through
-> `shannon_core::model_registry::merged_models_for_provider` +
-> `pricing_for_model_opt`, so the desktop picker finally sees the same
-> catalog + dynamic overlay + pricing SSOT as the CLI. The `ModelInfo`
-> wire type carries `price_in` / `price_out` / `tier` / `dynamic` so the
-> frontend can render honest costs (P0-2) without fabricating numbers.
+> **Status: ✅ Done (2026-07-30, task 4 commits).** Phase 2 task 4 is
+> delivered: `list_models` (the first slice, commit `5b54e7f4`) routes
+> through `model_registry::merged_models_for_provider` +
+> `pricing_for_model_opt`, so the desktop picker sees the same catalog
+> + dynamic overlay + pricing SSOT as the CLI. The `ModelInfo` wire
+> type carries `price_in` / `price_out` / `tier` / `dynamic` and the
+> React list row renders them (P0-2 honest cost; tier badge; "Live"
+> freshness indicator). The full provider-store unification lands in
+> five subsequent commits: engine-side `ProviderConfigStore::
+> upsert_profile / remove_profile` (custom-id, no OpenAI collapse);
+> desktop `ProviderConnection` extended with the v2 `ProviderProfile`
+> fields; `save_provider / set_active_provider / delete_provider`
+> routed through the engine store under a process-level
+> `Mutex<ProviderConfigStore>`; one-shot `providers.json` →
+> `providers.toml` migration on first launch; `AppState` carries the
+> in-memory store so subsequent writes are consistent. `providers.toml`
+> is the source of truth; `providers.json` is a read-side cache the
+> desktop UI rebuilds on demand.
 >
-> **Remaining Phase 2 work** (deliberately scoped for a separate sprint,
-> not part of this commit): migrate `ProviderConnection` /
-> `providers.json` to the engine `ProviderProfile` + `ProviderConfigStore`
-> + `credentials/` migration; thread active target through
-> `set_active_provider` → `provider_config_store::set_active`; complete
-> UI i18n sweep (en + zh-CN) for the new pricing/tier/dynamic fields;
-> add Vitest coverage for the React components that consume them.
+> **Deferred** (intentionally — the engine runtime path only consumes
+> `extra_headers` + `default_max_tokens` end-to-end, and the Welcome
+> wizard still uses the legacy singular `configure` flow):
+> - `AppState::build_client_config` still reads from `DesktopConfig`
+>   singular fields rather than `build_client_from_resolved` — the
+>   refactor is mechanical but the value is zero until the engine
+>   runtime path consumes more of the v2 fields.
+> - The `DesktopConfig.provider/api_key/base_url/model` singular
+>   fields are kept as a write-through cache for the Welcome flow.
+> - Adding per-tier and per-fallback UI editors in the Add Provider
+>   modal (the data round-trips through the engine store already, but
+>   there's no UI surface to author it from).
 >
 > **Parity assessment (P2-9, 2026-07-30).** Audited the Desktop provider/model
 > surface against the CLI's P0–P2 work. Desktop **already covers** connection
 > probing / health via `test_provider_connection` + `ping_provider`
 > (`commands_config.rs`) — equivalent to CLI P0-3 (`/connect` probe) and P2-8
 > (`/provider health`), and in fact per-provider rather than active-only.
-> Desktop **does not yet** cover: per-model pricing (P0-1/P0-2), the
-> `SHANNON_*_PROVIDERS` allowlist (P1-5), models.dev dynamic refresh + LiteLLM
-> pricing (P1-6), or tiers + `/model --tier auto` (P2-7). **Root cause** is the
-> same for all four: Desktop `list_models` is a hardcoded `match` over the
-> provider string returning hand-written `ModelInfo` literals, and providers
-> live in a parallel `ProviderConnection` / `providers.json` store — neither is
-> wired to `model_registry`, the pricing SSOT, or the dynamic overlay. Closing
-> these gaps **is** Phase 2 (adopt `ProviderProfile` + route `list_models`
-> through `model_registry`); P2-9 therefore records the gap here rather than
-> bolting the features onto the hardcoded surface, which Phase 2 would discard.
+> Desktop **does not yet** cover: the `SHANNON_*_PROVIDERS` allowlist
+> (P1-5) — this lives in the engine's `ConfigBuilder` and is applied
+> for CLI; the desktop reads the same engine config but doesn't
+> surface the allowlist toggle in its own settings UI yet.
+> Per-model pricing (P0-1/P0-2), models.dev dynamic refresh + LiteLLM
+> pricing (P1-6), and tiers + `/model --tier auto` (P2-7) all land
+> in the desktop now via `list_models` + the `ModelInfo` wire type.
 
 **Why**: P1-1 / P1-2 / P1-4 / P1-5 / P3-1 / P4-1 / P4-2 / P4-3.
 
