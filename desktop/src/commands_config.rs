@@ -735,6 +735,194 @@ pub async fn test_provider_connection(
     }
 }
 
+/// One row in the response from [`test_all_providers`]. Carries enough
+/// identifying info that the Settings → Models "Test all providers" UI
+/// can render a per-row status without re-fetching the provider list.
+///
+/// `latency_ms` is `None` when the probe did not run (auth-missing
+/// `NotConfigured`, or a kind the engine cannot probe generically). The
+/// error variant uses the same [`TestConnectionResult`] shape the
+/// single-provider test returns so the UI can render identical rows.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct ProviderTestRow {
+    pub id: String,
+    pub label: String,
+    pub provider_kind: String,
+    pub result: TestConnectionResult,
+    pub latency_ms: Option<u32>,
+}
+
+/// Fan-out probe for every configured provider connection (ADR-0005 P4.12).
+///
+/// Iterates the engine `ProviderConfigStore` roster, looks up each
+/// connection's API key from `~/.shannon/credentials/<id>.json` (A1 — never
+/// the plaintext `api_key` column), and probes each endpoint in parallel via
+/// the same `probe_provider_endpoint` the single-provider test uses. Returns
+/// one [`ProviderTestRow`] per connection, in the same order as the store.
+///
+/// Two non-network paths surface as `TestConnectionResult::Unknown` without
+/// consuming a network round-trip:
+/// - The provider kind is not generically probeable (Gemini, Bedrock, etc.).
+/// - No API key is resolvable from the credential store (avoids a guaranteed
+///   401 and gives the user an actionable "missing key" row).
+///
+/// **Per-provider timeout:** 6s. Same default the single-provider command
+/// uses; small enough that 10 providers finish in < 10s on a healthy
+/// network, large enough that a slow link still produces a verdict.
+#[tauri::command]
+pub async fn test_all_providers(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ProviderTestRow>, String> {
+    use shannon_engine::api::probe::probe_provider_endpoint;
+
+    let connections: Vec<ProviderConnection> = {
+        let store = state.provider_store.lock().await;
+        providers_file_from_store(&store).providers
+    };
+
+    let timeout = std::time::Duration::from_secs(6);
+    let mut tasks = Vec::with_capacity(connections.len());
+    for conn in connections {
+        let id = conn.id.clone();
+        let label = conn.label.clone();
+        let provider_kind_str = conn.provider_kind.clone();
+        let base_url = conn.base_url.clone();
+        let needs_key = match conn.provider_kind.as_str() {
+            // Mirror KIND_INFO's `needsKey`: only Ollama runs without a key.
+            "ollama" => false,
+            _ => true,
+        };
+
+        let api_key = if needs_key {
+            shannon_core::credential_manager::read_credential_value_default(&id).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        if needs_key && api_key.is_empty() {
+            tasks.push(tokio::spawn(async move {
+                ProviderTestRow {
+                    id,
+                    label,
+                    provider_kind: provider_kind_str,
+                    result: TestConnectionResult::Unknown {
+                        message: "no API key configured for this provider".to_string(),
+                    },
+                    latency_ms: None,
+                }
+            }));
+            continue;
+        }
+
+        // The engine's `probe_provider_endpoint` understands a kebab-case
+        // kind string (mirrors the wire `provider_kind`). Anything outside
+        // the supported set is reported as `Unknown` so the UI can render
+        // an "unsupported" row instead of letting it masquerade as a
+        // connectivity failure.
+        let engine_kind = match provider_kind_str.as_str() {
+            "anthropic" | "openai" | "openai-compatible" | "ollama" | "deepseek" | "gemini" => {
+                provider_kind_str.clone()
+            }
+            other => {
+                let other = other.to_string();
+                tasks.push(tokio::spawn(async move {
+                    ProviderTestRow {
+                        id,
+                        label,
+                        provider_kind: provider_kind_str,
+                        result: TestConnectionResult::Unknown {
+                            message: format!("provider kind `{other}` is not supported"),
+                        },
+                        latency_ms: None,
+                    }
+                }));
+                continue;
+            }
+        };
+
+        tasks.push(tokio::spawn(async move {
+            let start = std::time::Instant::now();
+            let result = tokio::time::timeout(
+                timeout,
+                probe_provider_endpoint(
+                    &engine_kind,
+                    &api_key,
+                    base_url.as_deref().filter(|s| !s.is_empty()),
+                ),
+            )
+            .await;
+            let latency_ms = start.elapsed().as_millis() as u32;
+            let mapped = match result {
+                Ok(Ok(())) => TestConnectionResult::Success,
+                Ok(Err(shannon_engine::api::ApiError::AuthenticationFailed)) => {
+                    TestConnectionResult::InvalidKey
+                }
+                Ok(Err(shannon_engine::api::ApiError::RateLimitExceeded { .. })) => {
+                    TestConnectionResult::RateLimited
+                }
+                Ok(Err(shannon_engine::api::ApiError::ApiError { status, .. }))
+                    if (500..=599).contains(&status) =>
+                {
+                    TestConnectionResult::ProviderError { status }
+                }
+                Ok(Err(shannon_engine::api::ApiError::Timeout)) => {
+                    TestConnectionResult::NetworkUnreachable
+                }
+                Ok(Err(shannon_engine::api::ApiError::HttpError(e)))
+                    if e.is_connect() || e.is_timeout() =>
+                {
+                    TestConnectionResult::NetworkUnreachable
+                }
+                Ok(Err(other)) => TestConnectionResult::Unknown {
+                    message: other.to_string(),
+                },
+                Err(_) => TestConnectionResult::NetworkUnreachable,
+            };
+            ProviderTestRow {
+                id,
+                label,
+                provider_kind: provider_kind_str,
+                result: mapped,
+                latency_ms: Some(latency_ms),
+            }
+        }));
+    }
+
+    let mut rows = Vec::with_capacity(tasks.len());
+    for t in tasks {
+        match t.await {
+            Ok(row) => rows.push(row),
+            Err(e) => {
+                tracing::warn!("test_all_providers: task join failed: {e}");
+            }
+        }
+    }
+    Ok(rows)
+}
+
+/// Return the kebab-case string the engine's `probe_provider_endpoint`
+/// understands for the given typed `ProviderKind`. Mirrors the wire-side
+/// `provider_kind` strings the Add Provider modal already emits.
+#[allow(dead_code)] // Test-only after the inline match landed in `test_all_providers`.
+fn engine_kind_str(k: &shannon_types::provider_config::ProviderKind) -> String {
+    use shannon_types::provider_config::ProviderKind;
+    let s: &str = match k {
+        ProviderKind::Anthropic => "anthropic",
+        ProviderKind::OpenAi => "openai",
+        ProviderKind::OpenAiCompatible => "openai-compatible",
+        ProviderKind::Ollama => "ollama",
+        ProviderKind::Deepseek => "deepseek",
+        ProviderKind::Gemini => "gemini",
+        // `ProviderKind` is `#[non_exhaustive]`; future variants fall back to
+        // a literal the engine cannot dispatch on, which surfaces as
+        // `Unknown { message: "not supported" }` in the row output rather
+        // than silently routing to a wrong probe.
+        _ => "unsupported",
+    };
+    s.to_string()
+}
+
 // ===== Managed providers (Models P2) =====
 //
 // Multiple provider connections are persisted in
@@ -1889,5 +2077,25 @@ mod tests {
         assert_eq!(conn.tiers.fast.as_deref(), Some("haiku-model"));
         assert_eq!(conn.tiers.standard.as_deref(), Some("sonnet-model"));
         assert_eq!(conn.tiers.pro.as_deref(), Some("opus-model"));
+    }
+
+    // ---- engine_kind_str (ADR-0005 P4.12) ----
+
+    #[test]
+    fn engine_kind_str_maps_all_supported_variants() {
+        // The kebab-case strings here are what `probe_provider_endpoint`
+        // dispatches on; if a new variant is added to ProviderKind, this
+        // test catches a missing branch in the mapping before it reaches
+        // production.
+        use shannon_types::provider_config::ProviderKind;
+        assert_eq!(engine_kind_str(&ProviderKind::Anthropic), "anthropic");
+        assert_eq!(engine_kind_str(&ProviderKind::OpenAi), "openai");
+        assert_eq!(
+            engine_kind_str(&ProviderKind::OpenAiCompatible),
+            "openai-compatible"
+        );
+        assert_eq!(engine_kind_str(&ProviderKind::Ollama), "ollama");
+        assert_eq!(engine_kind_str(&ProviderKind::Deepseek), "deepseek");
+        assert_eq!(engine_kind_str(&ProviderKind::Gemini), "gemini");
     }
 }
