@@ -174,12 +174,43 @@ export default function ModelsSettings() {
                         <span className="material-symbols-outlined">psychology</span>
                       </div>
                       <div>
-                        <div className="flex items-center gap-xs">
-                          <span className={`font-headline-md text-lg ${m.id === currentModel ? 'text-primary' : 'text-on-surface'}`}>{m.name}</span>
-                          {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary text-on-primary rounded text-[10px] font-bold">{t('settings.models.defaultBadge')}</span> : null}
-                        </div>
-                        <p className="text-label-sm text-on-surface-variant opacity-70">{m.provider} {m.context_window > 0 ? intl.formatMessage({ id: 'settings.models.contextWindow' }, { count: (m.context_window / 1000).toFixed(0) }) : ''}</p>
-                      </div>
+                    <div className="flex items-center gap-xs">
+                      <span className={`font-headline-md text-lg ${m.id === currentModel ? 'text-primary' : 'text-on-surface'}`}>{m.name}</span>
+                      {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary text-on-primary rounded text-[10px] font-bold">{t('settings.models.defaultBadge')}</span> : null}
+                      {m.tier ? (
+                        <span
+                          className="px-xs py-[2px] bg-secondary-container text-on-secondary-container rounded text-[10px] font-bold uppercase tracking-wider"
+                          title={t('settings.models.tier')}
+                        >
+                          {t(`settings.models.tier${m.tier.charAt(0).toUpperCase()}${m.tier.slice(1)}` as 'settings.models.tierFast' | 'settings.models.tierStandard' | 'settings.models.tierPro')}
+                        </span>
+                      ) : null}
+                      {m.dynamic ? (
+                        <span
+                          className="px-xs py-[2px] bg-tertiary-container text-on-tertiary-container rounded text-[10px] font-bold uppercase tracking-wider"
+                          title="From models.dev (live)"
+                        >
+                          {t('settings.models.dynamicBadge')}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="text-label-sm text-on-surface-variant opacity-70">
+                      {m.provider}
+                      {m.context_window > 0
+                        ? ' ' + intl.formatMessage({ id: 'settings.models.contextWindow' }, { count: (m.context_window / 1000).toFixed(0) })
+                        : ''}
+                      {' · '}
+                      {intl.formatMessage(
+                        { id: 'settings.models.priceInput' },
+                        { value: formatPrice(m.price_in) },
+                      )}
+                      {' / '}
+                      {intl.formatMessage(
+                        { id: 'settings.models.priceOutput' },
+                        { value: formatPrice(m.price_out) },
+                      )}
+                    </p>
+                  </div>
                     </div>
                     {switching === m.id ? (
                       <span className="material-symbols-outlined text-primary animate-spin text-[20px]">progress_activity</span>
@@ -247,6 +278,20 @@ const QUICK_FILL: QuickFill[] = [
 
 function kindLabel(intl: ReturnType<typeof useIntl>, kind: string): string {
   return intl.formatMessage({ id: KIND_INFO[kind]?.labelKey ?? 'settings.models.providers.kinds.openaiCompatible' })
+}
+
+/**
+ * Format a per-million-token USD price for the model list. Returns the
+ * i18n "unknown" placeholder for null / non-finite values so the UI
+ * never invents a number (ADR-0005 P0-2 honest-cost). Two decimals
+ * are enough resolution for a sidebar; the engine pricing SSOT is the
+ * canonical source.
+ */
+function formatPrice(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) {
+    return '—'
+  }
+  return value.toFixed(2)
 }
 
 function toastTestResult(
