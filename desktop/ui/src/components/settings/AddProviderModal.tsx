@@ -271,6 +271,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
                 />
                 <TiersEditor
                   tiers={advanced.tiers}
+                  activeModelId={model.trim()}
                   onChange={(tiers) => setAdvanced((s) => ({ ...s, tiers }))}
                 />
               </div>
@@ -383,9 +384,14 @@ function DefaultMaxTokensField({ value, onChange }: { value: string; onChange: (
 
 function TiersEditor({
   tiers,
+  activeModelId,
   onChange,
 }: {
   tiers: { fast: string; standard: string; pro: string }
+  /// The provider's currently-active model id (from `editing.model`).
+  /// Used to badge the row whose override matches the running model so the
+  /// user can see at a glance which tier their engine is actually using.
+  activeModelId: string
   onChange: (t: { fast: string; standard: string; pro: string }) => void
 }) {
   const intl = useIntl()
@@ -398,19 +404,48 @@ function TiersEditor({
   return (
     <div>
       <p className="font-label-sm text-on-surface-variant mb-xs">{t('settings.models.providers.tiers')}</p>
+      <p className="font-label-xs text-on-surface-variant opacity-70 mb-xs">
+        {t('settings.models.addProvider.tiersHelp')}
+      </p>
       <div className="space-y-xs">
-        {rows.map(({ key, labelKey }) => (
-          <label key={key} className="flex items-center gap-sm" data-testid={`tier-${key}-row`}>
-            <span className="font-label-sm text-on-surface-variant w-20">{t(labelKey)}</span>
-            <Input
-              className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded font-body-xs font-mono"
-              value={tiers[key]}
-              placeholder="model-id"
-              onChange={(e) => onChange({ ...tiers, [key]: e.target.value })}
-              data-testid={`tier-${key}-input`}
-            />
-          </label>
-        ))}
+        {rows.map(({ key, labelKey }) => {
+          const isActive = tiers[key].trim() === activeModelId.trim() && activeModelId.trim().length > 0
+          return (
+            <label key={key} className="flex items-center gap-sm" data-testid={`tier-${key}-row`}>
+              <span className="font-label-sm text-on-surface-variant w-20 flex items-center gap-xs">
+                {t(labelKey)}
+                {isActive ? (
+                  <span
+                    className="inline-flex items-center px-xs py-0.5 rounded-full bg-primary/10 text-primary font-label-xs"
+                    data-testid={`tier-${key}-active`}
+                    title={t('settings.models.addProvider.tierActiveBadge')}
+                  >
+                    {t('settings.models.addProvider.tierActiveBadge')}
+                  </span>
+                ) : null}
+              </span>
+              <Input
+                className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded font-body-xs font-mono"
+                value={tiers[key]}
+                placeholder="model-id"
+                onChange={(e) => onChange({ ...tiers, [key]: e.target.value })}
+                data-testid={`tier-${key}-input`}
+              />
+              {tiers[key] ? (
+                <Button
+                  variant="ghost"
+                  type="button"
+                  className="px-sm py-xs text-on-surface-variant hover:text-error cursor-pointer"
+                  onClick={() => onChange({ ...tiers, [key]: '' })}
+                  aria-label={t('settings.models.addProvider.tierClear')}
+                  data-testid={`tier-${key}-clear`}
+                >
+                  <span className="material-symbols-outlined text-[16px]">close</span>
+                </Button>
+              ) : null}
+            </label>
+          )
+        })}
       </div>
     </div>
   )
