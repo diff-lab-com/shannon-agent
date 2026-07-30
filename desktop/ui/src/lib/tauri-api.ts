@@ -262,6 +262,22 @@ export async function listModels(): Promise<ModelInfo[]> {
   return invoke('list_models')
 }
 
+/**
+ * Effective provider allowlist for the desktop UI (ADR-0005 P4.9).
+ * Returns:
+ *   - `Some(slugs)` when the desktop has an explicit override, or the
+ *     engine's `SHANNON_*_PROVIDERS` env vars set one. `Some([])` means
+ *     "user toggled every provider off".
+ *   - `null` when no restriction is in effect (full catalog visible).
+ *
+ * The Settings → Provider visibility panel renders this state; a
+ * "Reset to default" button sends `null` to clear the desktop override
+ * (falls back to env vars).
+ */
+export async function getProviderAllowlist(): Promise<string[] | null> {
+  return invoke<Option<string[]>>('get_provider_allowlist')
+}
+
 export async function getStatus(): Promise<StatusResponse> {
   return invoke('get_status')
 }

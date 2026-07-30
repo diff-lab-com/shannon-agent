@@ -911,6 +911,60 @@ pub fn available_providers() -> Vec<LlmProvider> {
     }
 }
 
+/// Resolve the merged env-var allowlist (`SHANNON_ENABLED_PROVIDERS` minus
+/// `SHANNON_DISABLED_PROVIDERS`) into a canonical slug list.
+///
+/// Returns `Some(vec)` (with at least one entry) when either env var is
+/// set; returns `None` when neither env var is set (caller treats that as
+/// "no restriction"). `SHANNON_ENABLED_PROVIDERS` takes precedence — when
+/// both are set, the disable list is applied within the enable set.
+///
+/// Pure (reads env via [`parse_provider_slugs_env`] only); unit-tested
+/// below.
+pub fn env_provider_allowlist() -> Option<Vec<String>> {
+    let enabled = parse_provider_slugs_env("SHANNON_ENABLED_PROVIDERS");
+    let disabled = parse_provider_slugs_env("SHANNON_DISABLED_PROVIDERS");
+    if enabled.is_empty() && disabled.is_empty() {
+        return None;
+    }
+    let mut out: Vec<String> = if enabled.is_empty() {
+        all_providers().into_iter().map(|p| p.to_string()).collect()
+    } else {
+        enabled.clone()
+    };
+    if !disabled.is_empty() {
+        out.retain(|slug| !disabled.iter().any(|d| d.eq_ignore_ascii_case(slug)));
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(out)
+}
+
+/// Compute the effective provider allowlist for the desktop / model
+/// picker: an explicit `Some(slice)` (the desktop's persisted
+/// `enabled_providers`) overrides any env-var allowlist; otherwise the
+/// env-var allowlist is consulted.
+///
+/// Precedence (ADR-0005 Phase 5 / P4.9):
+/// - `explicit = Some(vec![])` → `Some(vec![])`. The user explicitly
+///   toggled every provider off; the env-var allowlist is ignored.
+/// - `explicit = Some(non_empty)` → `Some(explicit.to_vec())`. The user's
+///   explicit choice wins — env vars are skipped so a desktop user
+///   doesn't have to fight their shell's stale `SHANNON_*_PROVIDERS`.
+/// - `explicit = None` → fall through to [`env_provider_allowlist`].
+///   Returns `None` (no restriction) when neither env var is set.
+///
+/// Pure; unit-tested below.
+pub fn effective_provider_allowlist(explicit: Option<&[String]>) -> Option<Vec<String>> {
+    match explicit {
+        // `Some(&[])` is the user-set "hide everything" state — env vars
+        // are ignored because the explicit slice is non-`None`.
+        Some(slice) => Some(slice.to_vec()),
+        None => env_provider_allowlist(),
+    }
+}
+
 /// Returns true if `provider` would pass the `SHANNON_ENABLED_PROVIDERS` /
 /// `SHANNON_DISABLED_PROVIDERS` allowlist/denylist. Callers that build their
 /// own provider list (e.g. the model picker always offering a local Ollama
@@ -1701,6 +1755,137 @@ mod tests {
         assert!(slugs.contains(&"anthropic".to_string()));
         assert!(slugs.contains(&"openai".to_string()));
         assert!(!slugs.contains(&"ollama".to_string()));
+    }
+
+    // === effective_provider_allowlist (ADR-0005 P4.9) ===
+    //
+    // The desktop's Settings UI persists an `enabled_providers` override;
+    // the engine reads it via this helper. Precedence is documented on
+    // the function; the tests below pin each branch. They save/restore
+    // the env vars because `parse_provider_slugs_env` is process-global.
+
+    /// RAII guard that snapshots `SHANNON_ENABLED_PROVIDERS` /
+    /// `SHANNON_DISABLED_PROVIDERS` on construction and restores them on
+    /// drop — keeps the env-mutating tests from leaking state into
+    /// siblings.
+    struct EnvGuard {
+        saved_enabled: Option<String>,
+        saved_disabled: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn new() -> Self {
+            Self {
+                saved_enabled: std::env::var("SHANNON_ENABLED_PROVIDERS").ok(),
+                saved_disabled: std::env::var("SHANNON_DISABLED_PROVIDERS").ok(),
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.saved_enabled {
+                Some(v) => unsafe {
+                    std::env::set_var("SHANNON_ENABLED_PROVIDERS", v);
+                },
+                None => unsafe {
+                    std::env::remove_var("SHANNON_ENABLED_PROVIDERS");
+                },
+            }
+            match &self.saved_disabled {
+                Some(v) => unsafe {
+                    std::env::set_var("SHANNON_DISABLED_PROVIDERS", v);
+                },
+                None => unsafe {
+                    std::env::remove_var("SHANNON_DISABLED_PROVIDERS");
+                },
+            }
+        }
+    }
+
+    fn clear_allowlist_env() {
+        unsafe {
+            std::env::remove_var("SHANNON_ENABLED_PROVIDERS");
+        }
+        unsafe {
+            std::env::remove_var("SHANNON_DISABLED_PROVIDERS");
+        }
+    }
+
+    #[test]
+    fn effective_provider_allowlist_explicit_empty_returns_empty() {
+        // `Some(&[])` is the desktop's "hide every provider" state —
+        // must short-circuit to the same empty vec, ignoring env vars.
+        let _g = EnvGuard::new();
+        clear_allowlist_env();
+        unsafe {
+            std::env::set_var("SHANNON_ENABLED_PROVIDERS", "anthropic");
+        }
+        let out = effective_provider_allowlist(Some(&[]));
+        assert_eq!(out, Some(vec![]));
+    }
+
+    #[test]
+    fn effective_provider_allowlist_explicit_overrides_env() {
+        // User-set non-empty allowlist beats the env. A shell exporting
+        // a stale `SHANNON_ENABLED_PROVIDERS` must NOT clobber the
+        // desktop's persisted choice.
+        let _g = EnvGuard::new();
+        clear_allowlist_env();
+        unsafe {
+            std::env::set_var("SHANNON_ENABLED_PROVIDERS", "anthropic, openai");
+        }
+        let explicit = vec!["ollama".to_string()];
+        let out = effective_provider_allowlist(Some(&explicit));
+        assert_eq!(out, Some(vec!["ollama".to_string()]));
+    }
+
+    #[test]
+    fn effective_provider_allowlist_env_only_returns_parsed() {
+        // No explicit slice → fall through to env-var allowlist parsing.
+        let _g = EnvGuard::new();
+        clear_allowlist_env();
+        unsafe {
+            std::env::set_var("SHANNON_ENABLED_PROVIDERS", "anthropic, openai");
+        }
+        let out = effective_provider_allowlist(None);
+        let mut v = out.expect("env-only path returns Some");
+        v.sort();
+        assert_eq!(v, vec!["anthropic".to_string(), "openai".to_string()]);
+    }
+
+    #[test]
+    fn effective_provider_allowlist_neither_returns_none() {
+        // No explicit slice, no env vars → `None` (no restriction). The
+        // picker then shows every catalog provider.
+        let _g = EnvGuard::new();
+        clear_allowlist_env();
+        assert_eq!(effective_provider_allowlist(None), None);
+    }
+
+    #[test]
+    fn effective_provider_allowlist_disabled_only_returns_remaining() {
+        // `SHANNON_DISABLED_PROVIDERS` without `SHANNON_ENABLED_PROVIDERS`
+        // produces the full provider list minus the disabled slugs.
+        let _g = EnvGuard::new();
+        clear_allowlist_env();
+        unsafe {
+            std::env::set_var("SHANNON_DISABLED_PROVIDERS", "ollama");
+        }
+        let out = effective_provider_allowlist(None).expect("disabled-only path returns Some");
+        let slugs: Vec<String> = out.into_iter().map(|s| s.to_lowercase()).collect();
+        assert!(slugs.contains(&"anthropic".to_string()));
+        assert!(!slugs.contains(&"ollama".to_string()));
+    }
+
+    #[test]
+    fn env_provider_allowlist_returns_none_when_neither_set() {
+        // `env_provider_allowlist` is the same logic but with no
+        // explicit override. Sanity-check that the helper itself
+        // returns `None` when both env vars are empty.
+        let _g = EnvGuard::new();
+        clear_allowlist_env();
+        assert!(env_provider_allowlist().is_none());
     }
 
     #[test]

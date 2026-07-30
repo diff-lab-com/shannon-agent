@@ -1730,7 +1730,7 @@ mod build_client_config_tests {
     use super::*;
     use shannon_core::provider_config_store::ProviderConfigStore;
     use shannon_core::unified_config::ShannonConfig;
-    use shannon_engine::api::{LlmClientConfig, LlmProvider};
+    use shannon_engine::api::LlmProvider;
     use shannon_types::provider_config::{
         CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderProfile, ProviderTiers,
         Scope,

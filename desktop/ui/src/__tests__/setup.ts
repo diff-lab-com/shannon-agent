@@ -130,6 +130,9 @@ vi.mock('@/lib/tauri-api', () => ({
   listModels: vi.fn().mockResolvedValue([
     { id: 'claude-sonnet-4-6', name: 'Claude Sonnet', provider: 'anthropic', context_window: 200000 },
   ]),
+  // ADR-0005 P4.9 — provider allowlist. Default: no override (returns
+  // env-var state or null).
+  getProviderAllowlist: vi.fn().mockResolvedValue(null),
   getStatus: vi.fn().mockResolvedValue({
     provider: 'anthropic',
     model: 'claude-sonnet-4-6',
