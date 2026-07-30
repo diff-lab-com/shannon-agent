@@ -273,6 +273,17 @@ impl AppState {
         let desktop_config = config::load_config();
         let client_config = Self::build_client_config(&desktop_config);
 
+        // One-shot migration: if the desktop has a populated
+        // `providers.json` cache but the engine's `providers.toml` is
+        // missing or empty, lift each entry into the engine store and
+        // remove the legacy file. Idempotent — re-running on a clean
+        // store is a no-op. See [`config::migrate_providers_to_toml`].
+        let provider_store = if let Some(seed) = config::migrate_providers_to_toml() {
+            shannon_core::provider_config_store::ProviderConfigStore::from_config(seed)
+        } else {
+            shannon_core::provider_config_store::ProviderConfigStore::load_or_default()
+        };
+
         let model = desktop_config
             .model
             .clone()
@@ -293,9 +304,7 @@ impl AppState {
             model: Arc::new(Mutex::new(model)),
             provider: Arc::new(Mutex::new(provider)),
             client_config: Arc::new(RwLock::new(client_config)),
-            provider_store: Arc::new(tokio::sync::Mutex::new(
-                shannon_core::provider_config_store::ProviderConfigStore::load_or_default(),
-            )),
+            provider_store: Arc::new(tokio::sync::Mutex::new(provider_store)),
             tools: Arc::new(tool_registry),
             permissions: Arc::new(RwLock::new(PermissionManager::new())),
             state_manager: Arc::new(StateManager::new()),

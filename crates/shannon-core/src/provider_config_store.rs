@@ -139,6 +139,19 @@ impl ProviderConfigStore {
         }
     }
 
+    /// Build a store from a pre-populated `ProviderModelConfig`. The
+    /// path is cached so the next `save()` lands at the same location
+    /// `load_or_default` would have read from. Used by the desktop's
+    /// one-shot `providers.json → providers.toml` migration to
+    /// hand off a freshly-built config without going through the
+    /// disk round-trip.
+    pub fn from_config(config: ProviderModelConfig) -> Self {
+        Self {
+            config,
+            last_path: default_path(),
+        }
+    }
+
     /// Borrow the underlying [`ProviderModelConfig`] for read-only callers
     /// (e.g. the engine layer that merges `connected` over `env vars`).
     pub fn config(&self) -> &ProviderModelConfig {
