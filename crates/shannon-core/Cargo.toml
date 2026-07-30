@@ -80,6 +80,13 @@ base64 = { workspace = true }
 # Testing utilities
 tempfile = "3.16"
 
+# Cross-process advisory file lock (`flock`) on `~/.shannon/providers.toml`
+# so concurrent shannon processes (desktop + CLI) can't tear the file.
+# Mirrors the established pattern in `shannon-agents` (see
+# `crates/shannon-agents/src/persistence.rs`). Same crate (`fs2` 0.4) so
+# the locking semantics + RAII drop-unlock are identical across crates.
+fs2 = "0.4"
+
 # LSP integration
 lsp-types = "0.95"
 

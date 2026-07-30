@@ -86,6 +86,24 @@ pub struct DesktopConfig {
     /// the UI's engine endpoints point at it).
     #[serde(default)]
     pub gateway: GatewayDesktopConfig,
+    /// Provider allowlist — restricts the model catalog to the listed kinds
+    /// (`anthropic` / `openai` / `ollama` / `gemini` / `deepseek` /
+    /// `openai-compatible`). Drives the desktop Settings' "Provider
+    /// visibility" panel (ADR-0005 P4.9). Semantics:
+    ///
+    /// - `None` (default) — no desktop override; the engine's
+    ///   `SHANNON_ENABLED_PROVIDERS` / `SHANNON_DISABLED_PROVIDERS` env vars
+    ///   decide. If neither is set, every provider is visible.
+    /// - `Some(vec![])` — user toggled every provider off in the desktop UI;
+    ///   the picker shows nothing regardless of env-var state.
+    /// - `Some(non_empty)` — user-set allowlist; beats the env vars
+    ///   (`SHANNON_*_PROVIDERS`) so a stale shell export can't clobber the
+    ///   persisted choice.
+    ///
+    /// New field — defaults to `None` (legacy "use engine env vars") for
+    /// backward compatibility.
+    #[serde(default)]
+    pub enabled_providers: Option<Vec<String>>,
 }
 
 /// Gateway process supervision config (E-1, 方案 C). Stored under
@@ -292,6 +310,79 @@ impl ProviderConnection {
     }
 }
 
+/// Build a [`ProviderConnection`] from a v2 engine [`shannon_types::provider_config::ProviderProfile`]
+/// for the UI side. Reverse of [`ProviderConnection::to_provider_profile`].
+///
+/// This is the read-side companion to the engine-write path that
+/// `ProviderConfigStore::upsert_profile` populates (see also
+/// `crate::commands_config::list_providers` — ADR-0005 Phase 2 task 5):
+/// the engine store is the source of truth, and the UI list is just a
+/// fan-out of `models/profiles["default"].providers`.
+///
+/// Mapping notes:
+/// - `id` is the profile's `id` (the desktop slug), not `display_name`.
+/// - `label` falls back to `id` when the engine-side profile has an
+///   empty `display_name` (defense-in-depth — engine profiles are
+///   expected to always carry a non-empty display name).
+/// - `provider_kind` is the UI's slug string via [`kind_engine_to_slug`]
+///   (reverse of [`kind_slug_to_engine`]).
+/// - `api_key` is always `None`. The wire type's `api_key` field is
+///   `skip_serializing`, so even a `Some("***")` masking would never
+///   travel to the UI; A1 forbids plaintext over the bridge.
+/// - `created_at` is fixed to the Unix epoch for engine-sourced
+///   entries; the desktop-created_at is meaningless once the engine
+///   store owns truth. Picking a stable value avoids surprising the
+///   UI with `""` or epoch shifts when entries pass through the wire.
+pub(crate) fn from_provider_profile(
+    id: &str,
+    p: &shannon_types::provider_config::ProviderProfile,
+) -> ProviderConnection {
+    let label = if p.display_name.is_empty() {
+        id.to_string()
+    } else {
+        p.display_name.clone()
+    };
+
+    ProviderConnection {
+        id: id.to_string(),
+        label,
+        provider_kind: kind_engine_to_slug(&p.kind).to_string(),
+        api_key: None,
+        base_url: Some(p.base_url.clone()),
+        model: None,
+        created_at: "1970-01-01T00:00:00Z".to_string(),
+        models_url: p.models_url.clone(),
+        extra_headers: p.extra_headers.clone(),
+        default_max_tokens: p.default_max_tokens,
+        fallback_models: p.fallback_models.clone(),
+        quirks: p.quirks.clone(),
+        tiers: p.tiers.clone(),
+    }
+}
+
+/// Map the engine's `ProviderKind` enum back to the desktop's wire slug.
+/// Inverse of [`kind_slug_to_engine`]. Round-trips for every kind the
+/// engine knows about today; an unknown arm — `ProviderKind` is
+/// `non_exhaustive` so the enum may grow — falls back to the
+/// `openai-compatible` slug, which matches the existing collapse
+/// convention (engine resolvers recover fine-grained identity from
+/// `base_url` at resolution time).
+fn kind_engine_to_slug(kind: &shannon_types::provider_config::ProviderKind) -> &'static str {
+    use shannon_types::provider_config::ProviderKind;
+    match kind {
+        ProviderKind::Anthropic => "anthropic",
+        ProviderKind::OpenAi => "openai",
+        ProviderKind::OpenAiCompatible => "openai-compatible",
+        ProviderKind::Ollama => "ollama",
+        ProviderKind::Gemini => "gemini",
+        ProviderKind::Deepseek => "deepseek",
+        // non_exhaustive: future kinds collapse to the
+        // user-supplied-URL catch-all so the wire stays
+        // forward-compatible.
+        _ => "openai-compatible",
+    }
+}
+
 /// Service slug used by the credentials store for this connection. Stable
 /// across renames of the human-readable `label` — `id` is the unique slug
 /// the user picks (and which survives label edits), so it is the right key
@@ -412,6 +503,7 @@ impl Default for DesktopConfig {
             notifications_on_failed: default_true(),
             stt: None,
             gateway: GatewayDesktopConfig::default(),
+            enabled_providers: None,
         }
     }
 }
@@ -1278,5 +1370,53 @@ mod tests {
         }
         // The legacy file is removed in both branches.
         assert!(!providers_path().exists());
+    }
+
+    // === Provider allowlist (ADR-0005 P4.9) ===
+    //
+    // `DesktopConfig::enabled_providers` is the desktop-side authoring
+    // surface for the engine's `SHANNON_*_PROVIDERS` env allowlist. The
+    // tests below pin the three documented states (None / Some(empty) /
+    // Some(non_empty)) so the wire shape doesn't silently drift.
+
+    #[test]
+    fn enabled_providers_defaults_to_none() {
+        // New field — default `None` so legacy installs keep engine
+        // env-var behaviour.
+        let cfg = DesktopConfig::default();
+        assert!(cfg.enabled_providers.is_none());
+    }
+
+    #[test]
+    fn enabled_providers_round_trips_through_serde() {
+        let json = r#"{
+            "provider":"anthropic",
+            "model":"claude-sonnet-4-6",
+            "mcp_servers":[],
+            "enabled_providers":["anthropic","openai"]
+        }"#;
+        let cfg: DesktopConfig = serde_json::from_str(json).unwrap();
+        let slugs = cfg.enabled_providers.clone().expect("Some(non-empty) round-trips");
+        assert_eq!(slugs, vec!["anthropic", "openai"]);
+        // And back out — the wire shape is preserved.
+        let back = serde_json::to_string(&cfg).unwrap();
+        assert!(back.contains("\"enabled_providers\":[\"anthropic\",\"openai\"]"));
+    }
+
+    #[test]
+    fn enabled_providers_distinguishes_none_from_some_empty() {
+        // Critical: `None` (use engine env vars) and `Some(vec![])`
+        // (user toggled every provider off) look the same after serde
+        // deserialisation if the field defaults to `[]`. The default
+        // MUST be `None` so the two states stay distinguishable on the
+        // wire and in memory.
+        let cfg_none = DesktopConfig::default();
+        assert!(cfg_none.enabled_providers.is_none());
+
+        let cfg_empty: DesktopConfig = serde_json::from_str(
+            r#"{"provider":"anthropic","model":"claude-sonnet-4-6","mcp_servers":[],"enabled_providers":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg_empty.enabled_providers, Some(vec![]));
     }
 }

@@ -71,6 +71,7 @@ fn main() {
             commands::send_message,
             commands_chat::get_conversation,
             commands_chat::list_models,
+            commands_chat::get_provider_allowlist,
             commands_chat::get_status,
             commands_chat::cancel_query,
             commands_chat::list_tools,

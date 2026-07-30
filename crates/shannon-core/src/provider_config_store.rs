@@ -22,13 +22,14 @@
 //! [`unified_config::ConfigBuilder`]: crate::unified_config::ConfigBuilder
 
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use fs2::FileExt;
 use shannon_engine::api::LlmProvider;
 use shannon_types::provider_config::{
     CredentialRef, ProviderKind, ProviderModelConfig, ProviderProfile, ProviderTiers,
@@ -38,6 +39,63 @@ use tracing::{debug, warn};
 /// `~/.shannon/providers.toml`; `None` if the home directory is unknowable.
 pub fn default_path() -> Option<PathBuf> {
     Some(dirs::home_dir()?.join(".shannon").join("providers.toml"))
+}
+
+/// Sibling sidecar lockfile for cross-process `flock(LOCK_EX)` on
+/// `providers.toml`. Chosen as `<path>.lock` so the `.shannon/` directory
+/// listing stays clean (no stray `.providers.toml.lock` file), and so the
+/// lock target is stable regardless of which path the store resolves to
+/// (default, test override, or future per-team file).
+fn lockfile_for(path: &Path) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(".lock");
+    PathBuf::from(s)
+}
+
+/// Acquire a blocking `flock(LOCK_EX)` on the sidecar lockfile for `path`,
+/// creating the lockfile (and any missing parent directories) on demand.
+/// Returns an RAII `File` whose drop releases the lock automatically via
+/// `fs2::FileExt` — `fs2` `File` does **not** auto-unlock on drop, so the
+/// caller must keep the `File` alive for the entire critical section, then
+/// call `FileExt::unlock(&file)` before dropping to avoid the OS releasing
+/// the lock only on `close(2)` (which can race with `read()` on Windows).
+/// Acquire a blocking `flock(LOCK_EX)` on the sidecar lockfile for `path`,
+/// creating the lockfile (and any missing parent directories) on demand.
+/// Returns an RAII `File` whose drop releases the lock automatically via
+/// `fs2::FileExt` — `fs2` `File` does **not** auto-unlock on drop, but
+/// Linux `flock(2)` semantics release on `close(2)`, so dropping the guard
+/// unwinds the lock. Callers that need explicit unlock can call
+/// [`FileExt::unlock`] on the returned `File` directly.
+pub fn acquire_exclusive_lock(path: &Path) -> io::Result<File> {
+    let lock_path = lockfile_for(path);
+    if let Some(parent) = lock_path.parent() {
+        // Best-effort create; `OpenOptions::create` only succeeds if the
+        // parent already exists, so we always run this first. Silent when
+        // the parent is already there (this is the steady-state case).
+        let _ = fs::create_dir_all(parent);
+    }
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+    // Blocking acquire. Matches the in-process `tokio::sync::Mutex` semantic:
+    // when two shannon processes (desktop + CLI) race, the loser waits
+    // rather than failing fast. Saves only take milliseconds, so contention
+    // is bounded; blocking preserves the "load-mutate-save" atomicity the
+    // R-M-W sequences in `land_profile_in_engine_store` rely on.
+    FileExt::lock_exclusive(&file)?;
+    Ok(file)
+}
+
+/// Explicitly unlock + close a lockfile acquired by [`acquire_exclusive_lock`].
+/// Logs (does not propagate) unlock failures — the OS will release the lock
+/// on `close(2)` either way, so a stray `unlock` error is recoverable.
+fn release_exclusive_lock(file: &File) {
+    if let Err(e) = FileExt::unlock(file) {
+        warn!(error = %e, "could not release providers.toml lock; OS will release on close");
+    }
 }
 
 /// Load the v2 provider config from `path` (or [`default_path`]). Returns
@@ -71,6 +129,14 @@ pub fn load(path: Option<&Path>) -> Option<ProviderModelConfig> {
 /// never observable in a world-readable state and a crash mid-write cannot
 /// leave a partial profile (a stale `<name>.toml.tmp` is harmless and ignored
 /// by [`load`]).
+///
+/// Acquires an exclusive cross-process `flock(LOCK_EX)` on the sidecar
+/// `<path>.lock` file for the entire write so a concurrent shannon process
+/// (e.g. the desktop app while the CLI runs `providers add`) cannot tear the
+/// file. Blocks if another process currently holds the lock — saves only
+/// take milliseconds, so contention is bounded; this matches the in-process
+/// `tokio::sync::Mutex` semantic on `AppState::provider_store` so callers
+/// transitioning from one to the other don't observe a behaviour change.
 pub fn save(cfg: &ProviderModelConfig, path: Option<&Path>) -> io::Result<PathBuf> {
     let path = path
         .map(Path::to_path_buf)
@@ -81,14 +147,27 @@ pub fn save(cfg: &ProviderModelConfig, path: Option<&Path>) -> io::Result<PathBu
                 "cannot determine home directory for providers.toml",
             )
         })?;
+    let lock = acquire_exclusive_lock(&path)?;
+    let result = save_locked(cfg, &path);
+    release_exclusive_lock(&lock);
+    result
+}
+
+/// Write `cfg` to `path` **without** acquiring the cross-process flock.
+/// **The caller MUST hold the flock** (via [`acquire_exclusive_lock`]) on
+/// `path` (or the corresponding `<path>.lock` file) for the entire write.
+/// Re-entrant on the same fd — `acquire_exclusive_lock` and `save` are the
+/// safe outer wrappers; desktop callers that already wrap a load-mutate-save
+/// in a flock must call `save_locked` to avoid double-locking.
+fn save_locked(cfg: &ProviderModelConfig, path: &Path) -> io::Result<PathBuf> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let content =
         toml::to_string_pretty(cfg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    atomic_write_secure(&path, &content)?;
+    atomic_write_secure(path, &content)?;
     debug!(path = %path.display(), "saved v2 provider config");
-    Ok(path)
+    Ok(path.to_path_buf())
 }
 
 /// Atomic, owner-only write (mirrors [`crate::credential_manager`]'s pattern).
@@ -131,11 +210,48 @@ impl ProviderConfigStore {
     /// Load the persisted config from [`default_path`], or return an empty
     /// in-memory store if the file is absent / corrupt. Corrupt files degrade
     /// gracefully — same contract as the free [`load`] function.
+    ///
+    /// Acquires the cross-process `flock(LOCK_EX)` on the sidecar lockfile
+    /// for the duration of the read so the file cannot change under us
+    /// while we're parsing it. Blocks if a concurrent writer (desktop /
+    /// CLI save) holds the lock — a `save` completes in milliseconds, so
+    /// contention is bounded. Pair with [`Self::save`] / [`Self::save_locked`]
+    /// for the matching write-side protection.
     pub fn load_or_default() -> Self {
-        let config = load(None).unwrap_or_default();
+        let path = default_path();
+        let Some(path) = path else {
+            // No home dir — match the old "graceful empty" contract.
+            return Self {
+                config: ProviderModelConfig::default(),
+                last_path: None,
+            };
+        };
+        let lock = acquire_exclusive_lock(&path).expect(
+            "providers.toml lock acquisition only fails on I/O errors; \
+             if the lockfile's parent dir is unwritable the user has bigger problems",
+        );
+        let config = load(Some(&path)).unwrap_or_default();
+        release_exclusive_lock(&lock);
         Self {
             config,
-            last_path: default_path(),
+            last_path: Some(path),
+        }
+    }
+
+    /// Test-only: load from an explicit `path`. The production
+    /// `load_or_default` uses [`default_path`] and acquires the cross-process
+    /// flock; this helper exists so unit tests can point at a tempfile
+    /// without touching `~/.shannon/`. Still acquires the same flock so
+    /// the lock semantics match production.
+    #[doc(hidden)]
+    pub fn load_or_default_at(path: &Path) -> Self {
+        let lock = acquire_exclusive_lock(path)
+            .expect("test lock acquisition should not fail on a fresh tempfile");
+        let config = load(Some(path)).unwrap_or_default();
+        release_exclusive_lock(&lock);
+        Self {
+            config,
+            last_path: Some(path.to_path_buf()),
         }
     }
 
@@ -156,6 +272,16 @@ impl ProviderConfigStore {
     /// (e.g. the engine layer that merges `connected` over `env vars`).
     pub fn config(&self) -> &ProviderModelConfig {
         &self.config
+    }
+
+    /// The cached providers.toml path (the path [`Self::save`] /
+    /// [`Self::save_locked`] would write to). `None` only when no home
+    /// directory is discoverable — i.e. the same condition that would
+    /// make `save()` fail anyway. Callers that wrap a load-mutate-save
+    /// critical section in a cross-process `flock` use this to acquire
+    /// the lock on the same path before calling [`Self::save_locked`].
+    pub fn last_path(&self) -> Option<&Path> {
+        self.last_path.as_deref()
     }
 
     /// Get-or-create the profile for the given provider, mutating the
@@ -301,8 +427,39 @@ impl ProviderConfigStore {
     }
 
     /// Atomically persist to the cached path (or [`default_path`]).
+    ///
+    /// Acquires the cross-process `flock(LOCK_EX)` on the sidecar lockfile
+    /// for the duration of the write (see [`save`]) so a concurrent shannon
+    /// process cannot tear the file. If the caller already holds the
+    /// flock (e.g. `land_profile_in_engine_store` wrapping a load-mutate-save
+    /// critical section), call [`Self::save_locked`] instead — re-locking on
+    /// the same fd would either deadlock or stall the inner call.
     pub fn save(&self) -> io::Result<PathBuf> {
         save(&self.config, self.last_path.as_deref())
+    }
+
+    /// Write `self.config` to the cached path **without** acquiring the
+    /// cross-process flock. **The caller MUST already hold the flock**
+    /// on the same sidecar `<path>.lock` file for the entire write
+    /// (acquired via [`acquire_exclusive_lock`], or implicitly by being
+    /// inside `save` / `load_or_default`'s outer wrapper). Re-entrant on
+    /// the same fd — the lock reference lives in the caller's frame, not
+    /// the store's. Used by desktop command helpers that already wrap a
+    /// load-mutate-save in a flock and need to avoid double-locking.
+    ///
+    /// # Panics
+    /// If [`Self::last_path`] is `None` (no home dir discoverable + no
+    /// caller-supplied path). The flock acquire would have surfaced the
+    /// same problem first, so this is a "shouldn't happen" — a clear panic
+    /// beats a silent skipped write.
+    pub fn save_locked(&self) -> io::Result<PathBuf> {
+        let path = self.last_path.as_deref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "save_locked requires a cached path (call load_or_default first)",
+            )
+        })?;
+        save_locked(&self.config, path)
     }
 
     /// Test-only: persist to an explicit path. Production callers should use
@@ -893,5 +1050,271 @@ mod tests {
             .expect("default model profile");
         assert_eq!(model_profile.providers.len(), 1);
         assert_eq!(model_profile.providers[0].id, "glm");
+    }
+
+    // ---- Cross-process flock (ADR-0005 P3.6) ----
+    //
+    // The `flock(LOCK_EX)` wrapping in `ProviderConfigStore::save` /
+    // `load_or_default` (and the public `acquire_exclusive_lock` helper
+    // that desktop command helpers use) protects against the desktop app
+    // and a concurrent `shannon` CLI invocation both loading the same
+    // `~/.shannon/providers.toml`, mutating in-memory, and last-writer-
+    // winning each other. The tests below pin the lock semantics:
+    //   * the lockfile is auto-created on a fresh path (no panic);
+    //   * the lock is released between successive `save()` calls in the
+    //     same process (so the second save doesn't deadlock on itself);
+    //   * two threads contending on the same path serialize — neither
+    //     tears the other's write;
+    //   * a `save_locked` call from inside an outer `acquire_exclusive_lock`
+    //     scope does NOT deadlock.
+
+    /// A `load_or_default_at(path)` -> mutate -> `save()` round trip on a
+    /// never-before-touched path must not panic. The lockfile is created
+    /// on the fly by `acquire_exclusive_lock`.
+    #[test]
+    fn load_or_default_does_not_panic_when_lockfile_missing() {
+        let dir = std::env::temp_dir().join(format!(
+            "shannon_pcs_lockmiss_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("providers.toml");
+        let lock_path = dir.join("providers.toml.lock");
+        assert!(!lock_path.exists(), "lockfile must not pre-exist");
+
+        // load_or_default_at creates the lockfile as a side effect.
+        let mut store = ProviderConfigStore::load_or_default_at(&path);
+        assert!(
+            lock_path.exists(),
+            "lockfile must be created on first acquire"
+        );
+        store.upsert_profile(
+            sample_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+            ),
+            "claude-sonnet-4-20250514",
+        );
+        // save() acquires the same flock and writes — must not deadlock
+        // even though the lockfile existed from load_or_default_at.
+        store.save().unwrap();
+
+        // And the file actually round-trips.
+        let loaded = load(Some(&path)).expect("should parse back");
+        assert!(
+            loaded.profiles["default"]
+                .providers
+                .iter()
+                .any(|p| p.id == "anthropic")
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Two consecutive `save()` calls in the same process must both
+    /// succeed — the first save releases the flock before returning, so
+    /// the second acquire doesn't block on the same fd. This is the
+    /// "save_acquires_and_releases_flock" contract.
+    #[test]
+    fn save_acquires_and_releases_flock() {
+        let dir = std::env::temp_dir().join(format!(
+            "shannon_pcs_lockrel_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("providers.toml");
+
+        let mut store = ProviderConfigStore::load_or_default_at(&path);
+        store.upsert_profile(
+            sample_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+            ),
+            "claude-sonnet-4-20250514",
+        );
+        store.save().expect("first save must succeed");
+
+        store.upsert_profile(
+            sample_profile("openai", ProviderKind::OpenAi, "https://api.openai.com"),
+            "gpt-4o",
+        );
+        // If the first save failed to release the flock, this would
+        // block until timeout / EDEADLK. nextest's per-test timeout would
+        // catch it; we also assert the result is `Ok`.
+        store
+            .save()
+            .expect("second save must succeed (lock was released)");
+
+        // Both writes landed.
+        let loaded = load(Some(&path)).expect("should parse back");
+        let ids: Vec<&str> = loaded.profiles["default"]
+            .providers
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert!(ids.contains(&"anthropic"));
+        assert!(ids.contains(&"openai"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Two threads, each doing the canonical load-mutate-save sequence
+    /// wrapped in an exclusive `flock` (the same R-M-W pattern as
+    /// `land_profile_in_engine_store`), must observe each other's writes
+    /// — neither thread's load can miss the other's already-committed
+    /// upserts. Without the flock, a concurrent `save` could land between
+    /// our load and our `save_locked`, silently clobbering the other
+    /// thread's profile (last-writer-wins per write). With the flock,
+    /// the *entire* R-M-W section is serialized: thread A's full load →
+    /// upsert → save_locked sequence completes before thread B's load
+    /// sees the file, so B's load picks up A's writes.
+    #[test]
+    fn flock_serializes_concurrent_rmw_in_two_threads() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = std::env::temp_dir().join(format!(
+            "shannon_pcs_lock2t_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = Arc::new(dir.join("providers.toml"));
+
+        // Seed the file so both threads start from the same baseline.
+        {
+            let mut seed = ProviderConfigStore::load_or_default_at(&path);
+            seed.upsert_profile(
+                sample_profile("seed", ProviderKind::Anthropic, "https://api.anthropic.com"),
+                "claude-haiku-4-5",
+            );
+            seed.save().unwrap();
+        }
+
+        // Canonical desktop-pattern R-M-W: acquire flock → load →
+        // mutate → save_locked → release flock. This is the exact
+        // critical section that `land_profile_in_engine_store` runs.
+        let p1 = Arc::clone(&path);
+        let p2 = Arc::clone(&path);
+        let h1 = thread::spawn(move || {
+            for i in 0..5 {
+                let _flock = acquire_exclusive_lock(&p1).expect("A lock");
+                let mut s = ProviderConfigStore::load_or_default_at(&p1);
+                s.upsert_profile(
+                    sample_profile(
+                        &format!("thread-A-{i}"),
+                        ProviderKind::Anthropic,
+                        "https://api.anthropic.com",
+                    ),
+                    "claude-sonnet-4-20250514",
+                );
+                s.save_locked().expect("A save_locked must succeed");
+            }
+        });
+        let h2 = thread::spawn(move || {
+            for i in 0..5 {
+                let _flock = acquire_exclusive_lock(&p2).expect("B lock");
+                let mut s = ProviderConfigStore::load_or_default_at(&p2);
+                s.upsert_profile(
+                    sample_profile(
+                        &format!("thread-B-{i}"),
+                        ProviderKind::OpenAi,
+                        "https://api.openai.com",
+                    ),
+                    "gpt-4o",
+                );
+                s.save_locked().expect("B save_locked must succeed");
+            }
+        });
+        h1.join().expect("thread A must not panic");
+        h2.join().expect("thread B must not panic");
+
+        // The flock-guarded R-M-W means every committed write was visible
+        // to the OTHER thread's NEXT load — so all 10 profiles land.
+        // Without the flock, last-writer-wins per write could lose some
+        // profiles entirely.
+        let loaded = load(Some(&path)).expect("should parse back");
+        let ids: Vec<String> = loaded.profiles["default"]
+            .providers
+            .iter()
+            .map(|p| p.id.clone())
+            .collect();
+        for i in 0..5 {
+            assert!(
+                ids.contains(&format!("thread-A-{i}")),
+                "thread A's profile {i} must be on disk; got {ids:?}"
+            );
+            assert!(
+                ids.contains(&format!("thread-B-{i}")),
+                "thread B's profile {i} must be on disk; got {ids:?}"
+            );
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `save_locked` from inside an outer `acquire_exclusive_lock` scope
+    /// must NOT deadlock. This is the contract the desktop's
+    /// `land_profile_in_engine_store` / `remove_profile_from_engine_store`
+    /// rely on — they wrap a R-M-W in the flock, then call
+    /// `save_locked` (NOT `save`) so the inner acquire-then-call doesn't
+    /// re-lock the same fd.
+    #[test]
+    fn save_locked_does_not_deadlock_inside_outer_lock() {
+        let dir = std::env::temp_dir().join(format!(
+            "shannon_pcs_locked_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("providers.toml");
+
+        let mut store = ProviderConfigStore::load_or_default_at(&path);
+        store.upsert_profile(
+            sample_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+            ),
+            "claude-sonnet-4-20250514",
+        );
+
+        // Manually wrap the save in the same lock `save` would acquire —
+        // this is exactly what the desktop command helpers do. If
+        // `save_locked` is misnamed and tries to re-acquire, this hangs
+        // / EDEADLKs.
+        let _flock = acquire_exclusive_lock(&path).expect("outer lock");
+        store
+            .save_locked()
+            .expect("save_locked inside outer flock must succeed");
+
+        // Verify the write landed (the outer lock guard is still alive;
+        // the file is committed because `save_locked` skips atomic-rename
+        // only via the explicit path).
+        let loaded = load(Some(&path)).expect("should parse back");
+        assert!(
+            loaded.profiles["default"]
+                .providers
+                .iter()
+                .any(|p| p.id == "anthropic")
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

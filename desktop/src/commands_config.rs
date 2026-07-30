@@ -55,6 +55,14 @@ fn connection_to_profile(
 /// concurrent desktop commands (e.g. two `save_provider` calls in
 /// flight) can't clobber each other. The lock is released before the
 /// function returns.
+///
+/// Cross-process safety (ADR-0005 P3.6): also acquires an exclusive
+/// `flock` on `<providers.toml>.lock` for the same R-M-W critical
+/// section, so a concurrent `shannon providers add` CLI invocation
+/// can't tear the file between our load and our save. The inner
+/// [`ProviderConfigStore::save_locked`] is used to avoid double-locking
+/// — the outer flock is held for the whole section, and `save` would
+/// attempt to acquire the same fd (Linux: deadlock, macOS: EDEADLK).
 async fn land_profile_in_engine_store(
     state: &tauri::State<'_, AppState>,
     conn: &ProviderConnection,
@@ -62,9 +70,17 @@ async fn land_profile_in_engine_store(
 ) -> Result<(), String> {
     let profile = connection_to_profile(conn);
     let mut store = state.provider_store.lock().await;
+    let path = store.last_path().ok_or_else(|| {
+        // No home dir → no lockfile → can't safely flock. Surface as a
+        // save error rather than panic; same contract as the underlying
+        // I/O failure modes.
+        "cannot determine providers.toml path (no home directory)".to_string()
+    })?;
+    let _flock = shannon_core::provider_config_store::acquire_exclusive_lock(path)
+        .map_err(|e| format!("could not lock providers.toml: {e}"))?;
     store.upsert_profile(profile, model_id);
     store
-        .save()
+        .save_locked()
         .map_err(|e| format!("could not persist to providers.toml: {e}"))?;
     Ok(())
 }
@@ -74,14 +90,23 @@ async fn land_profile_in_engine_store(
 /// slot was the active target, the engine clears
 /// `active_target.{provider_id, model_id}` to empty — the resolver
 /// falls back to synthesis on the next request.
+///
+/// Cross-process safety (ADR-0005 P3.6): wraps the R-M-W section in an
+/// exclusive `flock` on `<providers.toml>.lock` (see
+/// [`land_profile_in_engine_store`] for the rationale).
 async fn remove_profile_from_engine_store(
     state: &tauri::State<'_, AppState>,
     profile_id: &str,
 ) -> Result<(), String> {
     let mut store = state.provider_store.lock().await;
+    let path = store
+        .last_path()
+        .ok_or_else(|| "cannot determine providers.toml path (no home directory)".to_string())?;
+    let _flock = shannon_core::provider_config_store::acquire_exclusive_lock(path)
+        .map_err(|e| format!("could not lock providers.toml: {e}"))?;
     store.remove_profile(profile_id);
     store
-        .save()
+        .save_locked()
         .map_err(|e| format!("could not persist to providers.toml: {e}"))?;
     Ok(())
 }
@@ -413,6 +438,37 @@ pub async fn configure(
 
             Ok(())
         }
+        "enabled_providers" => {
+            // Wire shape: JSON array of slugs as a string. Three
+            // accepted payloads (ADR-0005 P4.9):
+            //   - "[]"             → Some(vec![]) (user toggled all off)
+            //   - '["a","b"]'      → Some(vec!["a","b"])
+            //   - "null" / ""      → None (reset to engine env-var behaviour)
+            let parsed: Option<Vec<String>> = match update.value.trim() {
+                "" | "null" => None,
+                raw => Some(
+                    serde_json::from_str::<Vec<String>>(raw)
+                        .map_err(|e| format!("invalid enabled_providers `{raw}`: {e}"))?,
+                ),
+            };
+
+            let mut desktop_cfg = state.desktop_config.write().await;
+            desktop_cfg.enabled_providers = parsed.clone();
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "enabled_providers".into(),
+                    value: serde_json::to_string(&parsed).unwrap_or_else(|_| "null".into()),
+                },
+            );
+
+            Ok(())
+        }
         "cancel_subscription" => {
             let mut desktop_cfg = state.desktop_config.write().await;
             desktop_cfg.plan = None;
@@ -467,6 +523,7 @@ pub async fn switch_provider(
         notifications_on_failed: existing.notifications_on_failed,
         stt: existing.stt.clone(),
         gateway: existing.gateway.clone(),
+        enabled_providers: existing.enabled_providers.clone(),
     };
     drop(existing);
 
@@ -734,17 +791,6 @@ fn is_known_kind(kind: &str) -> bool {
     )
 }
 
-fn kind_label(kind: &str) -> String {
-    match kind {
-        "anthropic" => "Anthropic".to_string(),
-        "openai" => "OpenAI".to_string(),
-        "deepseek" => "DeepSeek".to_string(),
-        "ollama" => "Ollama".to_string(),
-        "openai-compatible" => "OpenAI-compatible".to_string(),
-        other => other.to_string(),
-    }
-}
-
 /// Lowercase alphanumeric slug from an arbitrary label (mirrors the skill
 /// candidate slugifier, kept local to avoid a cross-module dependency).
 fn slugify_provider(input: &str) -> String {
@@ -886,72 +932,96 @@ fn mirror_provider_into_config(dc: &mut DesktopConfig, conn: &ProviderConnection
     dc.model = conn.model.clone();
 }
 
-/// Build the first-run seeded `ProvidersFile` from the legacy singular config.
-/// Returns `None` when no provider was configured to seed from.
-fn build_seed_file(cfg: &DesktopConfig) -> Option<ProvidersFile> {
-    let kind = cfg
-        .provider
-        .as_deref()
-        .filter(|k| !k.is_empty())?
-        .to_string();
-    let id = unique_provider_slug(&kind, &[]);
-    Some(ProvidersFile {
-        active_provider_id: Some(id.clone()),
-        providers: vec![ProviderConnection {
-            id,
-            label: kind_label(&kind),
-            provider_kind: kind,
-            api_key: cfg.api_key.clone(),
-            base_url: cfg.base_url.clone(),
-            model: cfg.model.clone(),
-            created_at: chrono::Utc::now().to_rfc3339(),
-            ..Default::default()
-        }],
-    })
-}
-
-/// Build a single-entry `ProvidersFile` from the legacy singular config and
-/// persist it, so existing users see their current connection on first load.
-/// Returns `None` when there is no configured provider to seed from.
-async fn seed_from_legacy_config(
-    state: &tauri::State<'_, AppState>,
-) -> Result<Option<ProvidersFile>, String> {
-    let cfg = state.desktop_config.read().await;
-    let Some(file) = build_seed_file(&cfg) else {
-        return Ok(None);
-    };
-    config::save_providers(&file)?;
-    Ok(Some(file))
-}
-
-/// List all managed providers, masking API keys. On first call, lazily migrates
-/// the legacy singular config into a single seeded entry so existing users see
-/// their current connection rather than an empty list. Each read also runs
-/// the credential-store migration (idempotent — moves any plaintext
-/// `api_key` left over from older versions into the credential store and
-/// clears it from `providers.json` so the on-disk config never carries
-/// secrets again, A1).
+/// List all managed providers, masking API keys.
+///
+/// ADR-0005 Phase 2 / task 5: this command is now read-only against the
+/// engine's `~/.shannon/providers.toml` via
+/// [`shannon_core::provider_config_store::ProviderConfigStore`].
+/// `~/.shannon/desktop/providers.json` is no longer consulted on the read
+/// path — it remains as a write-through cache maintained by
+/// `save_provider` / `delete_provider` for legacy UI surfaces, but the
+/// engine store is the single source of truth (ADR-0005 / Phase 2 task
+/// 4 + 5 + P1.1).
+///
+/// The wire shape is unchanged: a [`ProvidersFile`] with
+/// `active_provider_id` + `providers: Vec<ProviderConnection>`. Each
+/// `ProviderProfile` is mapped to a [`ProviderConnection`] via
+/// [`config::from_provider_profile`].
+///
+/// `list_providers` MUST NOT:
+/// - Call `land_profile_in_engine_store` or `save` (this is a read-only
+///   command).
+/// - Read or write `~/.shannon/desktop/providers.json` (the engine
+///   store is the only authority; the legacy file is write-through
+///   cache, not read source).
+/// - Materialize a real api_key. The wire type's `api_key` is
+///   `skip_serializing`; `from_provider_profile` leaves it `None`.
+///
+/// Empty-store policy: an empty engine store returns an empty
+/// `ProvidersFile`. We do NOT attempt to re-migrate from the legacy
+/// file — Phase 2 task 4 already lifted every entry on AppState
+/// startup, so any remaining `providers.json` entries are stale and
+/// must not silently resurrect. If a stale legacy file exists at the
+/// same time, log a warning — that's an inconsistency the user should
+/// hear about.
 #[tauri::command]
 pub async fn list_providers(state: tauri::State<'_, AppState>) -> Result<ProvidersFile, String> {
-    if !config::providers_path().exists() {
-        if let Some(seeded) = seed_from_legacy_config(&state).await? {
-            // The seed path is itself a one-shot migration from the legacy
-            // singular config; a legacy plaintext `api_key` in there is the
-            // only place a non-empty key can enter `providers.json` today.
-            let mut seeded = seeded;
-            let report = config::migrate_providers_to_credentials(&mut seeded)?;
-            if report.migrated > 0 {
-                config::save_providers(&seeded)?;
-            }
-            return Ok(mask_providers(seeded));
+    let store = state.provider_store.lock().await;
+    let file = providers_file_from_store(&store);
+    // Corrupted-state guard: the engine store is empty (after Phase 2
+    // task 4's one-shot migration ran) but a legacy `providers.json`
+    // still exists on disk. Don't silently re-migrate; surface the
+    // inconsistency so a user investigating the empty list knows what
+    // to look at.
+    if file.providers.is_empty() && config::providers_path().exists() {
+        tracing::warn!(
+            "engine ProviderConfigStore is empty but legacy providers.json exists; \
+             not re-migrating — check Phase 2 task 4 migration logs"
+        );
+    }
+    Ok(file)
+}
+
+/// Pure helper that builds the wire-side [`ProvidersFile`] by reading
+/// from the engine [`shannon_core::provider_config_store::ProviderConfigStore`].
+/// The store's `"default"` model profile is the single provider list
+/// `list_providers` reports. `active_target.provider_id` is the
+/// `active_provider_id` the UI uses to highlight the current
+/// selection.
+///
+/// Extracted from [`list_providers`] so the read-side mapping is
+/// unit-testable without a Tauri runtime.
+fn providers_file_from_store(
+    store: &shannon_core::provider_config_store::ProviderConfigStore,
+) -> ProvidersFile {
+    let cfg = store.config();
+    // The engine model is `profiles: HashMap<String, ModelProfile>`;
+    // only the canonical "default" profile holds user-managed
+    // connections on the desktop. Auxiliary / gateway routing profiles
+    // are out of scope for this command.
+    let default_profile = match cfg.profiles.get("default") {
+        Some(p) => p,
+        None => {
+            return ProvidersFile::default();
         }
+    };
+
+    let active_provider_id = if default_profile.active_target.provider_id.is_empty() {
+        None
+    } else {
+        Some(default_profile.active_target.provider_id.clone())
+    };
+
+    let providers: Vec<ProviderConnection> = default_profile
+        .providers
+        .iter()
+        .map(|p| config::from_provider_profile(&p.id, p))
+        .collect();
+
+    ProvidersFile {
+        active_provider_id,
+        providers,
     }
-    let mut file = config::load_providers();
-    let report = config::migrate_providers_to_credentials(&mut file)?;
-    if report.migrated > 0 {
-        config::save_providers(&file)?;
-    }
-    Ok(mask_providers(file))
 }
 
 /// Insert or update a managed provider. Returns the updated (masked) file.
@@ -1318,13 +1388,6 @@ mod tests {
         assert!(input.model.is_none());
     }
 
-    #[test]
-    fn kind_label_is_human_readable() {
-        assert_eq!(kind_label("anthropic"), "Anthropic");
-        assert_eq!(kind_label("openai-compatible"), "OpenAI-compatible");
-        assert_eq!(kind_label("custom"), "custom");
-    }
-
     // === Models P2 command-level logic (helpers extracted from the commands) ===
 
     fn sample_conn(id: &str, kind: &str, _key: Option<&str>) -> ProviderConnection {
@@ -1564,42 +1627,6 @@ mod tests {
         assert_eq!(dc.model.as_deref(), Some("glm-4.6"));
     }
 
-    #[test]
-    fn build_seed_file_returns_none_without_provider() {
-        let cfg = DesktopConfig {
-            provider: None,
-            ..Default::default()
-        };
-        assert!(build_seed_file(&cfg).is_none());
-        let cfg = DesktopConfig {
-            provider: Some(String::new()), // empty => treated as unset
-            ..Default::default()
-        };
-        assert!(build_seed_file(&cfg).is_none());
-    }
-
-    #[test]
-    fn build_seed_file_mirrors_legacy_singular_config() {
-        let cfg = DesktopConfig {
-            provider: Some("anthropic".into()),
-            api_key: Some("sk-legacy".into()),
-            model: Some("claude-sonnet-4-6".into()),
-            ..Default::default()
-        };
-        let file = build_seed_file(&cfg).unwrap();
-        assert_eq!(file.providers.len(), 1);
-        // the active pointer names the sole seeded entry
-        assert_eq!(
-            file.active_provider_id.as_deref(),
-            Some(file.providers[0].id.as_str())
-        );
-        let conn = &file.providers[0];
-        assert_eq!(conn.provider_kind, "anthropic");
-        assert_eq!(conn.label, "Anthropic"); // kind_label
-        assert_eq!(conn.api_key.as_deref(), Some("sk-legacy"));
-        assert_eq!(conn.model.as_deref(), Some("claude-sonnet-4-6"));
-    }
-
     // === Engine-store write helpers (Phase 2 task 4) ===
     //
     // `land_profile_in_engine_store` and `remove_profile_from_engine_store`
@@ -1683,5 +1710,184 @@ mod tests {
         };
         let profile = connection_to_profile(&conn);
         assert_eq!(profile.base_url, "https://api.anthropic.com");
+    }
+
+    // === list_providers / ProviderConfigStore read path (ADR-0005 Phase 2 task 5) ===
+    //
+    // `list_providers` is now a pure read against
+    // `ProviderConfigStore::config().profiles["default"]`. The tests
+    // below pin the wire-shape round-trip: input written through the
+    // engine store surfaces as a `ProvidersFile` that the desktop UI
+    // already knows how to render. In-memory
+    // `ProviderConfigStore::default()` is used so we never touch
+    // `~/.shannon/providers.toml`.
+
+    fn upsert_test_profile(
+        store: &mut shannon_core::provider_config_store::ProviderConfigStore,
+        id: &str,
+        kind: shannon_types::provider_config::ProviderKind,
+        base_url: &str,
+        model_id: &str,
+    ) {
+        use shannon_types::provider_config::{CredentialRef, ProviderProfile, ProviderTiers};
+        let profile = ProviderProfile {
+            id: id.to_string(),
+            kind,
+            display_name: format!("{id} label"),
+            base_url: base_url.to_string(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: id.to_string(),
+            },
+            extra_headers: std::collections::HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+        };
+        store.upsert_profile(profile, model_id);
+    }
+
+    #[test]
+    fn list_providers_returns_empty_when_store_has_no_profiles() {
+        // No upsert → `"default"` profile slot has zero providers.
+        // The wire file must be `{ active: None, providers: [] }`.
+        let store = shannon_core::provider_config_store::ProviderConfigStore::default();
+        let file = providers_file_from_store(&store);
+        assert!(file.active_provider_id.is_none());
+        assert!(file.providers.is_empty());
+    }
+
+    #[test]
+    fn list_providers_maps_engine_profile_to_wire_type() {
+        // One profile written via the engine write path surfaces as
+        // one `ProviderConnection` with id/label/kind/base_url all
+        // preserved.
+        let mut store = shannon_core::provider_config_store::ProviderConfigStore::default();
+        upsert_test_profile(
+            &mut store,
+            "anthropic-main",
+            shannon_types::provider_config::ProviderKind::Anthropic,
+            "https://api.anthropic.com",
+            "claude-sonnet-4-20250514",
+        );
+
+        let file = providers_file_from_store(&store);
+        assert_eq!(file.providers.len(), 1);
+        let conn = &file.providers[0];
+        assert_eq!(conn.id, "anthropic-main");
+        assert_eq!(conn.label, "anthropic-main label");
+        assert_eq!(conn.provider_kind, "anthropic");
+        assert_eq!(conn.base_url.as_deref(), Some("https://api.anthropic.com"));
+        // Active target follows the last upsert.
+        assert_eq!(file.active_provider_id.as_deref(), Some("anthropic-main"));
+    }
+
+    #[test]
+    fn list_providers_reports_active_target() {
+        // Two profiles in the store; the active pointer resolves to
+        // the most-recent upserted one.
+        let mut store = shannon_core::provider_config_store::ProviderConfigStore::default();
+        upsert_test_profile(
+            &mut store,
+            "glm",
+            shannon_types::provider_config::ProviderKind::OpenAiCompatible,
+            "https://open.bigmodel.cn/api/paas/v4",
+            "glm-4.6",
+        );
+        upsert_test_profile(
+            &mut store,
+            "kimi",
+            shannon_types::provider_config::ProviderKind::OpenAiCompatible,
+            "https://api.moonshot.cn/v1",
+            "moonshot-v1-128k",
+        );
+        // Re-point active at `glm` (the third upsert overwrites active).
+        upsert_test_profile(
+            &mut store,
+            "glm",
+            shannon_types::provider_config::ProviderKind::OpenAiCompatible,
+            "https://open.bigmodel.cn/api/paas/v4",
+            "glm-flash",
+        );
+
+        let file = providers_file_from_store(&store);
+        assert_eq!(file.providers.len(), 2, "two profiles in the store");
+        assert_eq!(
+            file.active_provider_id.as_deref(),
+            Some("glm"),
+            "active target follows the most-recent upsert"
+        );
+    }
+
+    #[test]
+    fn list_providers_does_not_serialize_api_key() {
+        // A1: the wire type's `api_key` is `skip_serializing`. The
+        // pure helper always sets it to None — even if an engine
+        // profile could theoretically carry one, we never propagate
+        // it. The masked JSON string must contain no "api_key" / no
+        // secret-looking value.
+        let mut store = shannon_core::provider_config_store::ProviderConfigStore::default();
+        upsert_test_profile(
+            &mut store,
+            "anthropic-main",
+            shannon_types::provider_config::ProviderKind::Anthropic,
+            "https://api.anthropic.com",
+            "claude-sonnet-4-20250514",
+        );
+
+        let file = providers_file_from_store(&store);
+        assert!(file.providers[0].api_key.is_none());
+
+        let json = serde_json::to_string(&file).expect("wire file serializes");
+        assert!(
+            !json.contains("api_key"),
+            "api_key must not appear in wire JSON (saw {json})"
+        );
+        assert!(
+            !json.contains("sk-"),
+            "no secret-like value must appear in wire JSON (saw {json})"
+        );
+    }
+
+    #[test]
+    fn list_providers_with_extra_headers_and_tiers() {
+        // v2 fields (`extra_headers`, `default_max_tokens`, `tiers`)
+        // round-trip from the engine profile to the wire type.
+        use shannon_types::provider_config::{
+            CredentialRef, ProviderKind, ProviderProfile, ProviderTiers,
+        };
+        let mut store = shannon_core::provider_config_store::ProviderConfigStore::default();
+        let mut extra_headers = std::collections::HashMap::new();
+        extra_headers.insert("X-Foo".to_string(), "bar".to_string());
+        extra_headers.insert("X-Region".to_string(), "us-east".to_string());
+        let profile = ProviderProfile {
+            id: "anthropic-main".into(),
+            kind: ProviderKind::Anthropic,
+            display_name: "Anthropic".into(),
+            base_url: "https://api.anthropic.com".into(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: "anthropic-main".into(),
+            },
+            extra_headers: extra_headers.clone(),
+            default_max_tokens: Some(2048),
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers {
+                fast: Some("haiku-model".into()),
+                standard: Some("sonnet-model".into()),
+                pro: Some("opus-model".into()),
+            },
+        };
+        store.upsert_profile(profile, "claude-sonnet-4-20250514");
+
+        let file = providers_file_from_store(&store);
+        let conn = &file.providers[0];
+        assert_eq!(conn.extra_headers, extra_headers);
+        assert_eq!(conn.default_max_tokens, Some(2048));
+        assert_eq!(conn.tiers.fast.as_deref(), Some("haiku-model"));
+        assert_eq!(conn.tiers.standard.as_deref(), Some("sonnet-model"));
+        assert_eq!(conn.tiers.pro.as_deref(), Some("opus-model"));
     }
 }
