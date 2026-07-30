@@ -223,6 +223,70 @@ impl ProviderConfigStore {
         self
     }
 
+    /// Insert or replace a fully-built [`ProviderProfile`] under the
+    /// `"default"` model profile, keyed by `profile.id`. The desktop uses
+    /// this to land managed connections (e.g. two distinct
+    /// `openai-compatible` endpoints like `glm` and `kimi`) without
+    /// collapsing them to the engine's `OpenAI` slot — unlike
+    /// [`ensure_provider`], which derives a fixed id from `&LlmProvider`
+    /// and so cannot distinguish between two `openai-compatible`
+    /// connections.
+    ///
+    /// Behavior:
+    /// - If a slot with the same id exists, it is replaced wholesale
+    ///   (`extra_headers`, `tiers`, `default_max_tokens`, etc. all
+    ///   reflect the new profile). Callers that want to preserve
+    ///   existing fields must read them out first.
+    /// - If absent, the profile is appended and `active_target` is
+    ///   repointed at the new id with `model_id`.
+    /// - Other slots in `default.providers` are left untouched.
+    ///
+    /// This is the write path the desktop shell uses for managed
+    /// provider connections (ADR-0005 Phase 2 task 4 — full
+    /// `ProviderConnection → ProviderProfile` migration). It is **not**
+    /// the REPL's path: the REPL continues to use `ensure_provider` +
+    /// `set_tier` + `set_active`, which preserve its tier-override
+    /// semantics.
+    pub fn upsert_profile(&mut self, profile: ProviderProfile, model_id: &str) -> &mut Self {
+        let profile_id = profile.id.clone();
+        let model_profile = self
+            .config
+            .profiles
+            .entry("default".to_string())
+            .or_insert_with(default_model_profile);
+
+        if let Some(idx) = model_profile
+            .providers
+            .iter()
+            .position(|p| p.id == profile_id)
+        {
+            model_profile.providers[idx] = profile;
+        } else {
+            model_profile.providers.push(profile);
+        }
+
+        model_profile.active_target.provider_id = profile_id;
+        model_profile.active_target.model_id = model_id.to_string();
+        self
+    }
+
+    /// Remove the provider slot whose `id` matches `profile_id` from the
+    /// `"default"` model profile. If that slot was the active target, the
+    /// active pointer is cleared to `""` (the resolver will then fall
+    /// back to synthesis on the next request). No-op if no slot matches
+    /// — the desktop's `delete_provider` flow needs idempotence, not a
+    /// 404.
+    pub fn remove_profile(&mut self, profile_id: &str) -> &mut Self {
+        if let Some(model_profile) = self.config.profiles.get_mut("default") {
+            model_profile.providers.retain(|p| p.id != profile_id);
+            if model_profile.active_target.provider_id == profile_id {
+                model_profile.active_target.provider_id = String::new();
+                model_profile.active_target.model_id = String::new();
+            }
+        }
+        self
+    }
+
     /// Atomically persist to the cached path (or [`default_path`]).
     pub fn save(&self) -> io::Result<PathBuf> {
         save(&self.config, self.last_path.as_deref())
@@ -581,5 +645,240 @@ mod tests {
         assert_eq!(rt.model_id, "gpt-4o");
         assert_eq!(rt.provider, LlmProvider::OpenAI);
         let _ = fs::remove_file(&path);
+    }
+
+    // ---- ProviderConfigStore::upsert_profile + remove_profile (Phase 2 task 4) ----
+    //
+    // These back the desktop's managed-provider write path. The contract
+    // differs from `ensure_provider` in two ways:
+    //   1. The id is supplied by the caller (e.g. "glm" for an
+    //      openai-compatible slot) — `ensure_provider` would collapse
+    //      "glm" and "kimi" to the same "openai" id and lose identity.
+    //   2. The full profile is replaced wholesale (no merging) — the
+    //      desktop treats `save_provider` as an upsert, not a
+    //      tier-by-tier mutation.
+
+    fn sample_profile(id: &str, kind: ProviderKind, base_url: &str) -> ProviderProfile {
+        ProviderProfile {
+            id: id.to_string(),
+            kind,
+            display_name: id.to_string(),
+            base_url: base_url.to_string(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: id.to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+        }
+    }
+
+    #[test]
+    fn upsert_profile_inserts_new_slot_and_points_active_target() {
+        let mut store = ProviderConfigStore::default();
+        let profile = sample_profile(
+            "glm",
+            ProviderKind::OpenAiCompatible,
+            "https://open.bigmodel.cn/api/paas/v4",
+        );
+
+        store.upsert_profile(profile, "glm-4.6");
+
+        let model_profile = store
+            .config()
+            .profiles
+            .get("default")
+            .expect("default model profile");
+        assert_eq!(model_profile.providers.len(), 1);
+        assert_eq!(model_profile.providers[0].id, "glm");
+        assert_eq!(
+            model_profile.providers[0].kind,
+            ProviderKind::OpenAiCompatible
+        );
+        assert_eq!(model_profile.active_target.provider_id, "glm");
+        assert_eq!(model_profile.active_target.model_id, "glm-4.6");
+    }
+
+    #[test]
+    fn upsert_profile_keeps_two_openai_compatible_slots_distinct() {
+        // This is the *raison d'être* of upsert_profile vs ensure_provider:
+        // two managed openai-compatible connections (e.g. "glm" + "kimi")
+        // must NOT collapse to a single "openai" id.
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-4.6",
+        );
+        store.upsert_profile(
+            sample_profile(
+                "kimi",
+                ProviderKind::OpenAiCompatible,
+                "https://api.moonshot.cn/v1",
+            ),
+            "moonshot-v1-128k",
+        );
+
+        let model_profile = store
+            .config()
+            .profiles
+            .get("default")
+            .expect("default model profile");
+        assert_eq!(model_profile.providers.len(), 2);
+        let ids: Vec<&str> = model_profile
+            .providers
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert!(ids.contains(&"glm"));
+        assert!(ids.contains(&"kimi"));
+        // Active target points at the most-recent upsert.
+        assert_eq!(model_profile.active_target.provider_id, "kimi");
+        assert_eq!(model_profile.active_target.model_id, "moonshot-v1-128k");
+    }
+
+    #[test]
+    fn upsert_profile_replaces_existing_slot_wholesale() {
+        let mut store = ProviderConfigStore::default();
+        let mut profile = sample_profile(
+            "glm",
+            ProviderKind::OpenAiCompatible,
+            "https://old.example/v1",
+        );
+        profile.tiers.fast = Some("glm-flash".into());
+        profile.extra_headers.insert("X-Custom".into(), "v1".into());
+        store.upsert_profile(profile, "glm-flash");
+
+        // Second upsert: different tiers, different headers, different model.
+        let mut new_profile = sample_profile(
+            "glm",
+            ProviderKind::OpenAiCompatible,
+            "https://new.example/v2",
+        );
+        new_profile.tiers.standard = Some("glm-4.6".into());
+        new_profile
+            .extra_headers
+            .insert("X-Custom".into(), "v2".into());
+        new_profile.default_max_tokens = Some(8192);
+        store.upsert_profile(new_profile, "glm-4.6");
+
+        let model_profile = store
+            .config()
+            .profiles
+            .get("default")
+            .expect("default model profile");
+        assert_eq!(
+            model_profile.providers.len(),
+            1,
+            "second upsert must replace, not duplicate"
+        );
+        let glm = &model_profile.providers[0];
+        assert_eq!(glm.base_url, "https://new.example/v2");
+        assert_eq!(
+            glm.tiers.fast, None,
+            "replacement is wholesale — old tiers are gone"
+        );
+        assert_eq!(glm.tiers.standard.as_deref(), Some("glm-4.6"));
+        assert_eq!(
+            glm.extra_headers.get("X-Custom").map(String::as_str),
+            Some("v2")
+        );
+        assert_eq!(glm.default_max_tokens, Some(8192));
+    }
+
+    #[test]
+    fn upsert_profile_survives_save_load_cycle() {
+        let path = tmp_path();
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-4.6",
+        );
+        store.save_at(&path).unwrap();
+
+        let loaded = load(Some(&path)).expect("should parse back");
+        use crate::provider_resolver::resolve_active_target;
+        let rt = resolve_active_target(&loaded).expect("active target resolves after reload");
+        // The desktop "glm" id is preserved verbatim through the TOML layer
+        // (no synthesis shenanigans).
+        assert_eq!(rt.profile.id, "glm");
+        assert_eq!(rt.profile.kind, ProviderKind::OpenAiCompatible);
+        assert_eq!(rt.model_id, "glm-4.6");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn remove_profile_drops_slot_and_clears_active_when_was_active() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-4.6",
+        );
+        store.upsert_profile(
+            sample_profile(
+                "kimi",
+                ProviderKind::OpenAiCompatible,
+                "https://api.moonshot.cn/v1",
+            ),
+            "moonshot-v1-128k",
+        );
+        // Re-point active at glm so the test exercises both branches.
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-4.6",
+        );
+
+        store.remove_profile("glm");
+
+        let model_profile = store
+            .config()
+            .profiles
+            .get("default")
+            .expect("default model profile");
+        assert_eq!(model_profile.providers.len(), 1);
+        assert_eq!(model_profile.providers[0].id, "kimi");
+        assert_eq!(model_profile.active_target.provider_id, "");
+        assert_eq!(model_profile.active_target.model_id, "");
+    }
+
+    #[test]
+    fn remove_profile_is_idempotent_for_unknown_id() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-4.6",
+        );
+        // No panic, no error — the desktop delete_provider flow must be
+        // idempotent against concurrent saves.
+        store.remove_profile("does-not-exist");
+        let model_profile = store
+            .config()
+            .profiles
+            .get("default")
+            .expect("default model profile");
+        assert_eq!(model_profile.providers.len(), 1);
+        assert_eq!(model_profile.providers[0].id, "glm");
     }
 }
