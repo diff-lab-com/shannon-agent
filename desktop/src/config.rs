@@ -1396,7 +1396,10 @@ mod tests {
             "enabled_providers":["anthropic","openai"]
         }"#;
         let cfg: DesktopConfig = serde_json::from_str(json).unwrap();
-        let slugs = cfg.enabled_providers.clone().expect("Some(non-empty) round-trips");
+        let slugs = cfg
+            .enabled_providers
+            .clone()
+            .expect("Some(non-empty) round-trips");
         assert_eq!(slugs, vec!["anthropic", "openai"]);
         // And back out — the wire shape is preserved.
         let back = serde_json::to_string(&cfg).unwrap();
