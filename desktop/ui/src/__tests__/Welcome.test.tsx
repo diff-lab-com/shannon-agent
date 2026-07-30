@@ -27,12 +27,29 @@ vi.mock('sonner', () => ({
   },
 }))
 
+// P1.2-C: provider save now goes through AddProviderModal which calls
+// saveProvider + setActiveProvider internally. testProviderConnection is
+// owned by the modal now (covered in AddProviderModal.test.tsx) and is no
+// longer surfaced on the Welcome wizard.
 vi.mock('@/lib/tauri-api', () => ({
   configure: vi.fn().mockResolvedValue(undefined),
   switchProvider: vi.fn().mockResolvedValue(undefined),
   seedSampleData: vi.fn().mockResolvedValue({ tasks_seeded: 3 }),
   detectProviderFromEnv: vi.fn().mockResolvedValue(null),
-  testProviderConnection: vi.fn().mockResolvedValue({ kind: 'success' }),
+  listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
+  saveProvider: vi.fn().mockResolvedValue({
+    active_provider_id: 'anthropic-main',
+    providers: [
+      {
+        id: 'anthropic-main',
+        label: 'Anthropic',
+        provider_kind: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        created_at: '2026-07-30T00:00:00Z',
+      },
+    ],
+  }),
+  setActiveProvider: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -76,6 +93,7 @@ describe('markWelcomeSeen', () => {
 describe('Welcome component — 4-step flow', () => {
   beforeEach(() => {
     window.localStorage.clear()
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue(null)
   })
 
   function wrap() {
@@ -86,6 +104,20 @@ describe('Welcome component — 4-step flow', () => {
         </MemoryRouter>
       </I18nProvider>
     )
+  }
+
+  // The AddProviderModal defaults to `openai-compatible`, which requires
+  // a base URL, and refuses submit without a label. Pick the Anthropic
+  // kind (no base URL required) and fill the label so Save fires.
+  async function saveProviderViaModal() {
+    fireEvent.click(screen.getByTestId('welcome-add-provider'))
+    // Switch the kind to anthropic via the kind <select> (first option = anthropic).
+    const kindSelect = screen.getByRole('combobox') as HTMLSelectElement
+    fireEvent.change(kindSelect, { target: { value: 'anthropic' } })
+    fireEvent.change(screen.getByPlaceholderText('My GLM key'), {
+      target: { value: 'Anthropic' },
+    })
+    fireEvent.click(screen.getByText('Save'))
   }
 
   // Step 0 — Task
@@ -122,27 +154,15 @@ describe('Welcome component — 4-step flow', () => {
     expect(window.localStorage.getItem(WELCOME_SEEN_KEY)).toBe('1')
   })
 
-  // Step 1 — Model
-  it('advances to Model step with provider picker', () => {
+  // Step 1 — Model: now a launcher button → AddProviderModal
+  it('advances to Model step with Add provider button', () => {
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
     expect(screen.getByText('Choose your AI provider')).toBeInTheDocument()
-    expect(screen.getByText('Anthropic')).toBeInTheDocument()
-    expect(screen.getByText('OpenAI')).toBeInTheDocument()
-    expect(screen.getByText('Ollama')).toBeInTheDocument()
-    expect(screen.getByText('DeepSeek')).toBeInTheDocument()
-  })
-
-  it('shows API key field for non-Ollama providers on Model step', () => {
-    wrap()
-    fireEvent.click(screen.getByText('Continue →'))
-    expect(screen.getByLabelText('API key')).toBeInTheDocument()
-  })
-
-  it('hides API key field when Ollama is selected on Model step', () => {
-    wrap()
-    fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.click(screen.getByText('Ollama'))
+    expect(screen.getByTestId('welcome-add-provider')).toBeInTheDocument()
+    // Legacy picker surface is gone.
+    expect(screen.queryByText('OpenAI')).not.toBeInTheDocument()
+    expect(screen.queryByText('DeepSeek')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('API key')).not.toBeInTheDocument()
   })
 
@@ -160,14 +180,63 @@ describe('Welcome component — 4-step flow', () => {
     expect(screen.getByText(/For General, we recommend Anthropic\./)).toBeInTheDocument()
   })
 
-  // Step 2 — Tools
-  it('advances through Model step to Tools step when Ollama selected', async () => {
+  it('disables Continue on Model step until provider saved or env key detected', () => {
     wrap()
-    // Step 0 → Step 1
     fireEvent.click(screen.getByText('Continue →'))
-    // Pick Ollama (no API key needed)
-    fireEvent.click(screen.getByText('Ollama'))
+    const continueButtons = screen.getAllByRole('button', { name: /Continue/ })
+    const modelContinue = continueButtons[continueButtons.length - 1]
+    expect(modelContinue).toBeDisabled()
+    expect(screen.getByText('Click Add provider to continue.')).toBeInTheDocument()
+  })
+
+  it('opens AddProviderModal when the Add provider button is clicked', () => {
+    wrap()
     fireEvent.click(screen.getByText('Continue →'))
+    expect(screen.queryByTestId('add-provider-modal')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('welcome-add-provider'))
+    expect(screen.getByTestId('add-provider-modal')).toBeInTheDocument()
+  })
+
+  it('closes AddProviderModal when the modal cancel button is clicked', () => {
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    fireEvent.click(screen.getByTestId('welcome-add-provider'))
+    expect(screen.getByTestId('add-provider-modal')).toBeInTheDocument()
+    // Cancel button renders inside the modal — pick the last button labelled
+    // "Cancel" on the page (the modal's Cancel), not the model-step Back.
+    const cancelBtns = screen.getAllByRole('button', { name: /Cancel/ })
+    fireEvent.click(cancelBtns[cancelBtns.length - 1])
+    expect(screen.queryByTestId('add-provider-modal')).not.toBeInTheDocument()
+  })
+
+  it('calls saveProvider + setActiveProvider when modal saves, then advances to Tools step', async () => {
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    await saveProviderViaModal()
+    await waitFor(() => {
+      expect(api.saveProvider).toHaveBeenCalled()
+      expect(api.setActiveProvider).toHaveBeenCalledWith('anthropic-main')
+    })
+    // After saving, we land on the Tools step (Step 2).
+    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
+  })
+
+  // Step 2 — Tools (unchanged surface; reached by the modal-save path above)
+  it('advances through Model step to Tools step when env has key for recommended provider', async () => {
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+      provider: 'anthropic',
+      has_api_key: true,
+    })
+    wrap()
+    // env detection fires on mount; let it resolve.
+    await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
+    fireEvent.click(screen.getByText('Continue →'))
+    await waitFor(() => {
+      const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
+      const modelContinue = continueBtns[continueBtns.length - 1]
+      expect(modelContinue).not.toBeDisabled()
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: /Continue/ }).at(-1)!)
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
   })
 
@@ -176,16 +245,16 @@ describe('Welcome component — 4-step flow', () => {
     // Pick Code task → recommends filesystem/git/playwright
     fireEvent.click(screen.getByRole('button', { name: /Build apps, write scripts, debug and refactor\./ }))
     fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.click(screen.getByText('Ollama'))
-    fireEvent.click(screen.getByText('Continue →'))
-    await waitFor(() => expect(screen.getAllByText('Recommended').length).toBeGreaterThanOrEqual(1))
+    await saveProviderViaModal()
+    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
+    expect(screen.getAllByText('Recommended').length).toBeGreaterThanOrEqual(1)
   })
 
   it('toggles tool checkbox off when clicked', async () => {
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.click(screen.getByText('Ollama'))
-    fireEvent.click(screen.getByText('Continue →'))
+    await saveProviderViaModal()
+    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
     const fsCheckbox = await waitFor(() => screen.getByLabelText('Enable Filesystem') as HTMLInputElement)
     // Initially checked for general task (filesystem recommended)
     const initial = fsCheckbox.checked
@@ -197,8 +266,7 @@ describe('Welcome component — 4-step flow', () => {
   it('reaches Done step with summary and shortcuts', async () => {
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.click(screen.getByText('Ollama'))
-    fireEvent.click(screen.getByText('Continue →'))
+    await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
@@ -211,8 +279,7 @@ describe('Welcome component — 4-step flow', () => {
     // Pick Writing task
     fireEvent.click(screen.getByRole('button', { name: /Draft docs, articles, posts, and emails\./ }))
     fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.click(screen.getByText('Ollama'))
-    fireEvent.click(screen.getByText('Continue →'))
+    await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText('Writing')).toBeInTheDocument())
@@ -221,8 +288,7 @@ describe('Welcome component — 4-step flow', () => {
   it('Done step shows Start using Shannon button', async () => {
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.click(screen.getByText('Ollama'))
-    fireEvent.click(screen.getByText('Continue →'))
+    await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByRole('button', { name: /Start using Shannon/ })).toBeInTheDocument())
@@ -230,17 +296,14 @@ describe('Welcome component — 4-step flow', () => {
 
   it('Stepper labels all 4 steps', () => {
     wrap()
-    // First step label shown in aria-label
     const stepper = screen.getByLabelText(/Step 1 of 4: Task/)
     expect(stepper).toBeInTheDocument()
   })
 
-  // Step 3 — Done: Advanced mode opt-in
   it('Done step shows advanced mode checkbox unchecked by default', async () => {
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.click(screen.getByText('Ollama'))
-    fireEvent.click(screen.getByText('Continue →'))
+    await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
@@ -252,8 +315,7 @@ describe('Welcome component — 4-step flow', () => {
   it('toggles advanced mode checkbox on click', async () => {
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.click(screen.getByText('Ollama'))
-    fireEvent.click(screen.getByText('Continue →'))
+    await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
@@ -265,8 +327,7 @@ describe('Welcome component — 4-step flow', () => {
   it('writes SIDEBAR_MODE_KEY=dev on finish when advanced mode checked', async () => {
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.click(screen.getByText('Ollama'))
-    fireEvent.click(screen.getByText('Continue →'))
+    await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
@@ -278,12 +339,10 @@ describe('Welcome component — 4-step flow', () => {
   it('does NOT write SIDEBAR_MODE_KEY when advanced mode unchecked', async () => {
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.click(screen.getByText('Ollama'))
-    fireEvent.click(screen.getByText('Continue →'))
+    await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
-    // Leave advanced mode unchecked
     fireEvent.click(screen.getByRole('button', { name: /Start using Shannon/ }))
     expect(window.localStorage.getItem('shannon-sidebar-mode')).toBeNull()
   })
@@ -291,8 +350,7 @@ describe('Welcome component — 4-step flow', () => {
   it('calls seedSampleData on finish (onboarding sample data)', async () => {
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.click(screen.getByText('Ollama'))
-    fireEvent.click(screen.getByText('Continue →'))
+    await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
@@ -315,7 +373,6 @@ describe('Welcome component — 4-step flow', () => {
     mockSeed.mockRejectedValueOnce(new Error('boom'))
     wrap()
     fireEvent.click(screen.getByRole('button', { name: /Skip welcome/ }))
-    // Should not throw — finish() catches and navigates anyway.
     await waitFor(() => {
       expect(api.seedSampleData).toHaveBeenCalled()
     })
@@ -326,7 +383,6 @@ describe('Welcome — env provider detection (T7.A)', () => {
   beforeEach(() => {
     window.localStorage.clear()
     vi.mocked(api.detectProviderFromEnv).mockResolvedValue(null)
-    vi.mocked(api.testProviderConnection).mockResolvedValue({ kind: 'success' })
   })
 
   function wrap() {
@@ -344,168 +400,50 @@ describe('Welcome — env provider detection (T7.A)', () => {
     await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
   })
 
-  it('pre-selects OpenAI when env has OPENAI_API_KEY', async () => {
-    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
-      provider: 'openai',
-      has_api_key: true,
-    })
-    wrap()
-    fireEvent.click(screen.getByText('Continue →'))
-    await waitFor(() => {
-      const openaiBtn = screen.getByRole('button', { name: /GPT-4o \/ o1/ })
-      expect(openaiBtn).toHaveAttribute('aria-pressed', 'true')
-    })
-  })
-
-  it('pre-selects Ollama and toasts when OLLAMA_HOST is set', async () => {
-    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
-      provider: 'ollama',
-      has_api_key: false,
-    })
-    wrap()
-    fireEvent.click(screen.getByText('Continue →'))
-    await waitFor(() => {
-      const ollamaBtn = screen.getByRole('button', { name: /Local models/ })
-      expect(ollamaBtn).toHaveAttribute('aria-pressed', 'true')
-    })
-  })
-
-  it('allows Continue without API key when env detection confirms a key', async () => {
+  it('pre-selects Anthropic when env has ANTHROPIC_API_KEY', async () => {
     vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
       provider: 'anthropic',
       has_api_key: true,
     })
     wrap()
     await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
+    // envHasKey is set; the Step 1 Continue button should be enabled when
+    // the env-detected provider matches the recommended one (default task =
+    // general → anthropic).
     fireEvent.click(screen.getByText('Continue →'))
-    // Default provider is anthropic and envHasKey=true unlocks Continue.
-    const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
-    const modelContinue = continueBtns[continueBtns.length - 1]
-    expect(modelContinue).not.toBeDisabled()
-  })
-})
-
-describe('Welcome — Test connection button (T7.B + T7.D)', () => {
-  beforeEach(() => {
-    window.localStorage.clear()
-    vi.mocked(api.detectProviderFromEnv).mockResolvedValue(null)
-    vi.mocked(api.testProviderConnection).mockResolvedValue({ kind: 'success' })
-  })
-
-  function wrap() {
-    return render(
-      <I18nProvider>
-        <MemoryRouter>
-          <Welcome />
-        </MemoryRouter>
-      </I18nProvider>
-    )
-  }
-
-  it('renders Test connection button on Model step for non-Ollama', () => {
-    wrap()
-    fireEvent.click(screen.getByText('Continue →'))
-    expect(screen.getByRole('button', { name: /Test connection/ })).toBeInTheDocument()
-  })
-
-  it('disables Test button until API key is entered', () => {
-    wrap()
-    fireEvent.click(screen.getByText('Continue →'))
-    const btn = screen.getByRole('button', { name: /Test connection/ })
-    expect(btn).toBeDisabled()
-  })
-
-  it('enables Test button after API key typed', () => {
-    wrap()
-    fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
-    expect(screen.getByRole('button', { name: /Test connection/ })).not.toBeDisabled()
-  })
-
-  it('hides Test button for Ollama (no API key needed)', () => {
-    wrap()
-    fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.click(screen.getByText('Ollama'))
-    expect(screen.queryByRole('button', { name: /Test connection/ })).not.toBeInTheDocument()
-  })
-
-  it('shows success toast on Success result', async () => {
-    // toast imported at top
-    vi.mocked(api.testProviderConnection).mockResolvedValue({ kind: 'success' })
-    wrap()
-    fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
-    fireEvent.click(screen.getByRole('button', { name: /Test connection/ }))
     await waitFor(() => {
-      expect(api.testProviderConnection).toHaveBeenCalledWith('anthropic', 'sk-test')
-      expect(toast.success).toHaveBeenCalled()
+      const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
+      const modelContinue = continueBtns[continueBtns.length - 1]
+      expect(modelContinue).not.toBeDisabled()
     })
   })
 
-  it('shows invalid-key toast on InvalidKey result', async () => {
-    // toast imported at top
-    vi.mocked(api.testProviderConnection).mockResolvedValue({ kind: 'invalid_key' })
-    wrap()
-    fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-bad' } })
-    fireEvent.click(screen.getByRole('button', { name: /Test connection/ }))
-    await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/Invalid API key/))
+  it('toasts when Ollama is detected via env', async () => {
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+      provider: 'ollama',
+      has_api_key: false,
     })
+    wrap()
+    await waitFor(() => expect(toast.info).toHaveBeenCalled())
   })
 
-  it('shows rate-limited warning on RateLimited result', async () => {
-    // toast imported at top
-    vi.mocked(api.testProviderConnection).mockResolvedValue({ kind: 'rate_limited' })
+  it('shows fallback error toast when setActiveProvider rejects', async () => {
+    vi.mocked(api.setActiveProvider).mockRejectedValueOnce(new Error('activate boom'))
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
-    fireEvent.click(screen.getByRole('button', { name: /Test connection/ }))
-    await waitFor(() => {
-      expect(toast.warning).toHaveBeenCalledWith(expect.stringMatching(/Rate limited/))
+    fireEvent.click(screen.getByTestId('welcome-add-provider'))
+    // Switch kind to anthropic + fill label so the modal can submit.
+    const kindSelect = screen.getByRole('combobox') as HTMLSelectElement
+    fireEvent.change(kindSelect, { target: { value: 'anthropic' } })
+    fireEvent.change(screen.getByPlaceholderText('My GLM key'), {
+      target: { value: 'Anthropic' },
     })
-  })
-
-  it('shows provider error toast with status on ProviderError', async () => {
-    // toast imported at top
-    vi.mocked(api.testProviderConnection).mockResolvedValue({
-      kind: 'provider_error',
-      status: 503,
-    })
-    wrap()
-    fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
-    fireEvent.click(screen.getByRole('button', { name: /Test connection/ }))
+    fireEvent.click(screen.getByText('Save'))
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('503'))
-    })
-  })
-
-  it('shows network-unreachable toast on NetworkUnreachable', async () => {
-    // toast imported at top
-    vi.mocked(api.testProviderConnection).mockResolvedValue({ kind: 'network_unreachable' })
-    wrap()
-    fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
-    fireEvent.click(screen.getByRole('button', { name: /Test connection/ }))
-    await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/Can't reach/))
-    })
-  })
-
-  it('shows fallback error toast when invoke rejects', async () => {
-    // toast imported at top
-    vi.mocked(api.testProviderConnection).mockRejectedValue(new Error('invoke boom'))
-    wrap()
-    fireEvent.click(screen.getByText('Continue →'))
-    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
-    fireEvent.click(screen.getByRole('button', { name: /Test connection/ }))
-    await waitFor(() => {
-      // Migrated to toastError: the title still reads "Test failed", and the
-      // real cause ("invoke boom") now surfaces in the description slot.
+      expect(api.setActiveProvider).toHaveBeenCalled()
       expect(toast.error).toHaveBeenCalledWith(
-        expect.stringMatching(/Test failed/),
-        expect.objectContaining({ description: expect.stringMatching(/invoke boom/) }),
+        expect.stringMatching(/Failed to configure provider/),
+        expect.objectContaining({ description: expect.stringMatching(/activate boom/) }),
       )
     })
   })
