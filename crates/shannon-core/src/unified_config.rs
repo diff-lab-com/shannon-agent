@@ -192,6 +192,7 @@ impl ConfigBuilder {
         if let Some(home) = dirs::home_dir() {
             let path = home.join(".shannon").join("config.toml");
             self.global_toml = load_config_file(&path);
+            crate::substitute::substitute_config(&mut self.global_toml);
         }
         self
     }
@@ -201,6 +202,7 @@ impl ConfigBuilder {
         let path = std::path::Path::new(".shannon.toml");
         let local = load_config_file(path);
         self.local_toml = local;
+        crate::substitute::substitute_config(&mut self.local_toml);
         self
     }
 
@@ -223,6 +225,7 @@ impl ConfigBuilder {
                 notifications: None,
                 provider_model: pm,
             };
+            crate::substitute::substitute_config(&mut self.connected);
         }
         self
     }
