@@ -142,7 +142,18 @@ export interface ModelInfo {
   id: string
   name: string
   provider: string
+  /** Tokens. 0 means unknown — the UI should render "unknown" instead of
+   *  fabricating a number (ADR-0005 P0-2 honest cost/context). */
   context_window: number
+  /** Per-million-token input price. null = unknown / fallback. */
+  price_in?: number | null
+  /** Per-million-token output price. null = unknown / fallback. */
+  price_out?: number | null
+  /** Optional tier label (`fast` / `standard` / `pro`). */
+  tier?: string | null
+  /** Whether this entry comes from the dynamic models.dev overlay (vs the
+   *  static catalog). Surfaces a freshness indicator in the UI. */
+  dynamic?: boolean
 }
 
 export interface ToolInfo {

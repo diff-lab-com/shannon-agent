@@ -5,7 +5,8 @@
 `/config set` flat-key writeback + `{env:VAR}` / `{file:path}` substitution, Phase
 5 ✅ incl. `small_model` ↔ `AuxRole` decision (方案 A — no new field) and
 `settings.toml` evaluation (no new file needed), Phase 6 ✅ `/provider health`
-(no auto-failover); Phase 2 (Desktop re-platforming) ⏳ deferred)
+(no auto-failover); Phase 2 🟡 in progress — `list_models` slice done, full
+provider-model migration deferred to a dedicated sprint)
 **Date**: 2026-07-24
 **Theme**: 统一 Provider/Model/密钥管理 (shannon-code + shannon-desktop)
 **Supersedes**: —
@@ -250,9 +251,22 @@ paths unchanged.
 
 ### Phase 2 — Unified provider model + config convergence  *(architecture, ~4-5 days)*
 
-> **Status: ⏳ Pending.** Largest remaining piece — Tauri (Rust) + React/TS
-> refactor of the Desktop shell onto the engine `ProviderProfile`/`Store`
-> backend. Not started.
+> **Status: 🟡 In Progress (2026-07-30).** The first slice of Phase 2 is
+> delivered (commit `5b54e7f4`): `list_models` no longer returns a
+> hand-written `match` — it routes through
+> `shannon_core::model_registry::merged_models_for_provider` +
+> `pricing_for_model_opt`, so the desktop picker finally sees the same
+> catalog + dynamic overlay + pricing SSOT as the CLI. The `ModelInfo`
+> wire type carries `price_in` / `price_out` / `tier` / `dynamic` so the
+> frontend can render honest costs (P0-2) without fabricating numbers.
+>
+> **Remaining Phase 2 work** (deliberately scoped for a separate sprint,
+> not part of this commit): migrate `ProviderConnection` /
+> `providers.json` to the engine `ProviderProfile` + `ProviderConfigStore`
+> + `credentials/` migration; thread active target through
+> `set_active_provider` → `provider_config_store::set_active`; complete
+> UI i18n sweep (en + zh-CN) for the new pricing/tier/dynamic fields;
+> add Vitest coverage for the React components that consume them.
 >
 > **Parity assessment (P2-9, 2026-07-30).** Audited the Desktop provider/model
 > surface against the CLI's P0–P2 work. Desktop **already covers** connection
