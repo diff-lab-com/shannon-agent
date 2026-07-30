@@ -56,6 +56,21 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn().mockResolvedValue(null),
 }))
 
+// Shared across the two describe blocks below — the AddProviderModal defaults
+// to `openai-compatible`, which requires a base URL, and refuses submit
+// without a label. Pick the Anthropic kind (no base URL required) and fill
+// the label so Save fires.
+async function saveProviderViaModal() {
+  fireEvent.click(screen.getByTestId('welcome-add-provider'))
+  // Switch the kind to anthropic via the kind <select> (first option = anthropic).
+  const kindSelect = screen.getByRole('combobox') as HTMLSelectElement
+  fireEvent.change(kindSelect, { target: { value: 'anthropic' } })
+  fireEvent.change(screen.getByPlaceholderText('My GLM key'), {
+    target: { value: 'Anthropic' },
+  })
+  fireEvent.click(screen.getByText('Save'))
+}
+
 describe('shouldShowWelcome', () => {
   beforeEach(() => {
     window.localStorage.clear()
@@ -104,20 +119,6 @@ describe('Welcome component — 4-step flow', () => {
         </MemoryRouter>
       </I18nProvider>
     )
-  }
-
-  // The AddProviderModal defaults to `openai-compatible`, which requires
-  // a base URL, and refuses submit without a label. Pick the Anthropic
-  // kind (no base URL required) and fill the label so Save fires.
-  async function saveProviderViaModal() {
-    fireEvent.click(screen.getByTestId('welcome-add-provider'))
-    // Switch the kind to anthropic via the kind <select> (first option = anthropic).
-    const kindSelect = screen.getByRole('combobox') as HTMLSelectElement
-    fireEvent.change(kindSelect, { target: { value: 'anthropic' } })
-    fireEvent.change(screen.getByPlaceholderText('My GLM key'), {
-      target: { value: 'Anthropic' },
-    })
-    fireEvent.click(screen.getByText('Save'))
   }
 
   // Step 0 — Task
@@ -446,5 +447,104 @@ describe('Welcome — env provider detection (T7.A)', () => {
         expect.objectContaining({ description: expect.stringMatching(/activate boom/) }),
       )
     })
+  })
+
+  // === pickDirectory (Step 3 working-dir picker) ===
+  //
+  // `open` is mocked globally to return null, so the user-cancel path is
+  // the default. We override it per-test to exercise the success + failure
+  // branches.
+
+  async function reachDoneStep() {
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    await saveProviderViaModal()
+    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Continue →'))
+    await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
+  }
+
+  it('pickDirectory silently no-ops when the user cancels the picker', async () => {
+    // Default `open` mock returns null — treat as cancel.
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    vi.mocked(open).mockResolvedValueOnce(null)
+    await reachDoneStep()
+    fireEvent.click(screen.getByRole('button', { name: /Choose folder|Choose another/i }))
+    await waitFor(() => expect(open).toHaveBeenCalled())
+    // No configure call, no toast — the cancel branch is a no-op.
+    expect(api.configure).not.toHaveBeenCalled()
+  })
+
+  it('pickDirectory configures working_dir and refreshes config on selection', async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    vi.mocked(open).mockResolvedValueOnce('/Users/test/Code/myproj')
+    await reachDoneStep()
+    fireEvent.click(screen.getByRole('button', { name: /Choose folder/i }))
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'working_dir', value: '/Users/test/Code/myproj' })
+      expect(ctx.refreshConfig).toHaveBeenCalled()
+    })
+  })
+
+  it('pickDirectory surfaces an error toast when configure rejects', async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    vi.mocked(open).mockResolvedValueOnce('/Users/test/Code/myproj')
+    vi.mocked(api.configure).mockRejectedValueOnce(new Error('write failed'))
+    await reachDoneStep()
+    fireEvent.click(screen.getByRole('button', { name: /Choose folder/i }))
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Could not save working directory|working dir|Working directory/i),
+        expect.objectContaining({ description: expect.stringMatching(/write failed/) }),
+      )
+    })
+  })
+
+  // === handleAddProviderSaved — multiple save passes ===
+  //
+  // The Welcome wizard is one-shot for new users, but the modal-launcher
+  // design lets the user open the modal, save, then return to Model step
+  // and save a *different* provider (without ever leaving the wizard).
+  // That second save path must refresh state + advance the same way the
+  // first one did, even though `providerSaved` was already true.
+
+  it('accepts a second AddProviderModal save and advances the same way', async () => {
+    // First save returns one provider; second save returns a different one.
+    vi.mocked(api.saveProvider)
+      .mockResolvedValueOnce({
+        active_provider_id: 'anthropic-main',
+        providers: [
+          { id: 'anthropic-main', label: 'Anthropic', provider_kind: 'anthropic', model: 'claude-sonnet-4-6', created_at: '2026-07-30T00:00:00Z' },
+        ],
+      })
+      .mockResolvedValueOnce({
+        active_provider_id: 'openai-main',
+        providers: [
+          { id: 'openai-main', label: 'OpenAI', provider_kind: 'openai', model: 'gpt-4o', created_at: '2026-07-30T00:00:00Z' },
+        ],
+      })
+
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    await saveProviderViaModal()
+    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
+
+    // Walk back to Model step (still inside the wizard).
+    fireEvent.click(screen.getByText('← Back'))
+    fireEvent.click(screen.getByTestId('welcome-add-provider'))
+
+    // Save again — switch kind + label + click Save.
+    const kindSelect = screen.getByRole('combobox') as HTMLSelectElement
+    fireEvent.change(kindSelect, { target: { value: 'openai' } })
+    fireEvent.change(screen.getByPlaceholderText('My GLM key'), {
+      target: { value: 'OpenAI' },
+    })
+    fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => {
+      // Both saves fired setActiveProvider — the second with the new id.
+      expect(api.setActiveProvider).toHaveBeenCalledWith('openai-main')
+    })
+    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
   })
 })
