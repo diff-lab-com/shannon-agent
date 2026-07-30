@@ -271,18 +271,36 @@ impl AppState {
     /// Create a new AppState, initializing the LLM client from env/config.
     pub fn new() -> Self {
         let desktop_config = config::load_config();
-        let client_config = Self::build_client_config(&desktop_config);
 
         // One-shot migration: if the desktop has a populated
         // `providers.json` cache but the engine's `providers.toml` is
         // missing or empty, lift each entry into the engine store and
         // remove the legacy file. Idempotent — re-running on a clean
         // store is a no-op. See [`config::migrate_providers_to_toml`].
+        //
+        // P1.1 (ADR-0005): the provider store must be loaded *first*
+        // because the runtime client config is now built from its
+        // resolved active target (see `build_client_config`). Reading
+        // `DesktopConfig.provider`/`api_key`/`base_url`/`model` for
+        // the runtime is intentionally gone — those legacy singular
+        // fields are scheduled for removal in T2.
         let provider_store = if let Some(seed) = config::migrate_providers_to_toml() {
             shannon_core::provider_config_store::ProviderConfigStore::from_config(seed)
         } else {
             shannon_core::provider_config_store::ProviderConfigStore::load_or_default()
         };
+
+        // Build the engine-side `ShannonConfig` carrying only the behavioural
+        // overrides (`max_tokens`/`temperature`) from the desktop's legacy
+        // `DesktopConfig`. Provider identity, base_url, model and credential
+        // are sourced from `provider_store` via `build_client_config` below.
+        let shannon_overrides = shannon_core::unified_config::ShannonConfig {
+            max_tokens: desktop_config.max_tokens.map(|v| v as usize),
+            temperature: desktop_config.temperature,
+            ..Default::default()
+        };
+        let client_config = Self::build_client_config(&provider_store, &shannon_overrides)
+            .unwrap_or_else(LlmClientConfig::default);
 
         let model = desktop_config
             .model
@@ -374,30 +392,29 @@ impl AppState {
         self.notifier = Arc::new(notifier);
     }
 
-    pub(crate) fn build_client_config(cfg: &DesktopConfig) -> LlmClientConfig {
-        let provider_str = cfg.provider.as_deref().unwrap_or("anthropic");
-        let provider = provider_from_str(provider_str);
-        let api_key = cfg
-            .api_key
-            .clone()
-            .filter(|k| !k.is_empty())
-            .unwrap_or_else(|| provider.resolve_api_key_from_env());
-        let base_url = cfg
-            .base_url
-            .clone()
-            .unwrap_or_else(|| provider.default_base_url().to_string());
-        let model = cfg
-            .model
-            .clone()
-            .unwrap_or_else(|| "claude-sonnet-4-6".into());
+    /// Build the runtime `LlmClientConfig` from the engine `ProviderConfigStore`
+    /// (v2 active target) plus the engine-side `ShannonConfig` for
+    /// behavioural overrides (`max_tokens`/`timeout`/`temperature`).
+    ///
+    /// Returns `None` when the store has no resolvable active target — the
+    /// caller is expected to fall back to [`LlmClientConfig::default`] in that
+    /// case (which reads `SHANNON_*` env vars).
+    ///
+    /// P1.1 (ADR-0005): the legacy path that read singular fields off
+    /// `DesktopConfig` (`provider`/`api_key`/`base_url`/`model`) is removed.
+    /// Provider identity, base_url, model and credential are now sourced
+    /// from the `"default"` [`crate::provider_resolver::ResolvedTarget`] of
+    /// `provider_store`. The legacy fields are scheduled for full removal
+    /// in T2.
+    pub(crate) fn build_client_config(
+        provider_store: &shannon_core::provider_config_store::ProviderConfigStore,
+        shannon_config: &shannon_core::unified_config::ShannonConfig,
+    ) -> Option<LlmClientConfig> {
+        use shannon_core::provider_resolver::resolve_active_target;
+        use shannon_core::unified_config::build_client_from_resolved;
 
-        LlmClientConfig {
-            api_key,
-            base_url,
-            model,
-            provider,
-            ..LlmClientConfig::default()
-        }
+        let rt = resolve_active_target(provider_store.config())?;
+        Some(build_client_from_resolved(shannon_config, rt))
     }
 }
 
@@ -898,22 +915,6 @@ pub(crate) fn chrono_timestamp() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
-}
-
-fn provider_from_str(s: &str) -> shannon_engine::api::types::LlmProvider {
-    use shannon_engine::api::types::LlmProvider;
-    match s {
-        "anthropic" => LlmProvider::Anthropic,
-        "openai" => LlmProvider::OpenAI,
-        "ollama" => LlmProvider::Ollama,
-        "deepseek" => LlmProvider::DeepSeek,
-        "gemini" => LlmProvider::Gemini,
-        "mistral" => LlmProvider::Mistral,
-        "groq" => LlmProvider::Groq,
-        "openrouter" => LlmProvider::OpenRouter,
-        "xai" => LlmProvider::Xai,
-        _ => LlmProvider::Custom,
-    }
 }
 
 /// Start a new background task.
@@ -1687,22 +1688,6 @@ mod pure_function_tests {
         assert!(detect_media_type("").is_none());
     }
 
-    // ── provider_from_str ─────────────────────────────────────────────
-
-    #[test]
-    fn provider_from_str_maps_known_providers() {
-        use shannon_engine::api::types::LlmProvider;
-        assert_eq!(provider_from_str("anthropic"), LlmProvider::Anthropic);
-        assert_eq!(provider_from_str("openai"), LlmProvider::OpenAI);
-        assert_eq!(provider_from_str("ollama"), LlmProvider::Ollama);
-        assert_eq!(provider_from_str("deepseek"), LlmProvider::DeepSeek);
-        assert_eq!(provider_from_str("gemini"), LlmProvider::Gemini);
-        assert_eq!(provider_from_str("mistral"), LlmProvider::Mistral);
-        assert_eq!(provider_from_str("groq"), LlmProvider::Groq);
-        assert_eq!(provider_from_str("openrouter"), LlmProvider::OpenRouter);
-        assert_eq!(provider_from_str("xai"), LlmProvider::Xai);
-    }
-
     // ── iso_days_ago ──────────────────────────────────────────────────
 
     #[test]
@@ -1731,5 +1716,211 @@ mod pure_function_tests {
             && b[..4].iter().all(|c| c.is_ascii_digit())
             && b[5..7].iter().all(|c| c.is_ascii_digit())
             && b[8..10].iter().all(|c| c.is_ascii_digit())
+    }
+}
+
+// ── P1.1 (ADR-0005): `build_client_config` reads from the v2 ProviderConfigStore ────
+// These tests pin the contract that the desktop runtime client construction
+// consumes `ProviderProfile` data (not the legacy `DesktopConfig` singular
+// fields). The provider/store fixtures are constructed in-memory — no disk
+// reads, no `~/.shannon/providers.toml` writes.
+
+#[cfg(test)]
+mod build_client_config_tests {
+    use super::*;
+    use shannon_core::provider_config_store::ProviderConfigStore;
+    use shannon_core::unified_config::ShannonConfig;
+    use shannon_engine::api::{LlmClientConfig, LlmProvider};
+    use shannon_types::provider_config::{
+        CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderProfile, ProviderTiers,
+        Scope,
+    };
+    use std::collections::HashMap;
+
+    /// Build a single-active-profile `ProviderModelConfig` and wrap it in a
+    /// `ProviderConfigStore`. No disk access — safe under nextest isolation.
+    fn store_with_active(profile: ProviderProfile, model: &str) -> ProviderConfigStore {
+        use shannon_types::provider_config::{ActiveTarget, ProviderModelConfig};
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ModelProfile {
+                name: "default".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: profile.id.clone(),
+                    model_id: model.to_string(),
+                    scope: Scope::Global,
+                },
+                providers: vec![profile],
+                auxiliary: HashMap::new(),
+                credential_scope: CredentialScope::Shared,
+            },
+        );
+        ProviderConfigStore::from_config(ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            profiles,
+            gateway: Default::default(),
+        })
+    }
+
+    fn anthropic_profile(cred_var: &str, base_url: &str) -> ProviderProfile {
+        ProviderProfile {
+            id: "anthropic".to_string(),
+            kind: ProviderKind::Anthropic,
+            display_name: "anthropic".to_string(),
+            base_url: base_url.to_string(),
+            models_url: None,
+            credential: CredentialRef::Env {
+                var: cred_var.to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+        }
+    }
+
+    #[test]
+    fn returns_none_when_store_has_no_active_target() {
+        // Empty store → no `default` profile → no resolved target → None.
+        let store = ProviderConfigStore::default();
+        let cfg = ShannonConfig::default();
+        assert!(AppState::build_client_config(&store, &cfg).is_none());
+    }
+
+    #[test]
+    fn returns_none_when_profile_present_but_no_active_target() {
+        // Defensive: even with a profile in the store, if `active_target`
+        // is blank (the post-`remove_profile` state) we get None.
+        let mut store = ProviderConfigStore::default();
+        let profile = anthropic_profile("UNUSED", "https://api.anthropic.com");
+        // Use ensure_provider so the active_target stays blank.
+        let _ = store.ensure_provider(&LlmProvider::Anthropic);
+        // Sanity: a profile was added but active_target.provider_id == "".
+        let cfg = ShannonConfig::default();
+        assert!(AppState::build_client_config(&store, &cfg).is_none());
+        // Suppress the unused-var warning without changing behaviour.
+        let _ = profile;
+    }
+
+    #[test]
+    fn single_active_profile_returns_some_with_matching_fields() {
+        // SAFETY: unique key read only by this test thread; no concurrent
+        // set/remove of the same key elsewhere.
+        unsafe { std::env::set_var("BCC_TEST_KEY", "resolved-key") };
+        let store = store_with_active(
+            anthropic_profile("BCC_TEST_KEY", "https://api.anthropic.com"),
+            "claude-sonnet-4-6",
+        );
+        let cfg = ShannonConfig::default();
+
+        let out =
+            AppState::build_client_config(&store, &cfg).expect("active target should resolve");
+        assert_eq!(out.provider, LlmProvider::Anthropic);
+        assert_eq!(out.base_url, "https://api.anthropic.com");
+        assert_eq!(out.model, "claude-sonnet-4-6");
+        assert_eq!(out.api_key, "resolved-key");
+        // SAFETY: see above.
+        unsafe { std::env::remove_var("BCC_TEST_KEY") };
+    }
+
+    #[test]
+    fn extra_headers_round_trip_from_profile_to_config() {
+        let mut profile = anthropic_profile("BCC_UNSET", "https://api.anthropic.com");
+        profile
+            .extra_headers
+            .insert("X-Foo".to_string(), "bar".to_string());
+        profile
+            .extra_headers
+            .insert("X-Trace".to_string(), "abc-123".to_string());
+        let store = store_with_active(profile, "claude-sonnet-4-6");
+        let cfg = ShannonConfig::default();
+
+        let out =
+            AppState::build_client_config(&store, &cfg).expect("active target should resolve");
+        assert_eq!(
+            out.extra_headers.get("X-Foo").map(String::as_str),
+            Some("bar")
+        );
+        assert_eq!(
+            out.extra_headers.get("X-Trace").map(String::as_str),
+            Some("abc-123")
+        );
+    }
+
+    #[test]
+    fn default_max_tokens_overrides_when_no_cfg_override() {
+        // No `cfg.max_tokens` → use profile.default_max_tokens.
+        let mut profile = anthropic_profile("BCC_UNSET", "https://api.anthropic.com");
+        profile.default_max_tokens = Some(8192);
+        let store = store_with_active(profile, "claude-sonnet-4-6");
+        let cfg = ShannonConfig::default();
+
+        let out =
+            AppState::build_client_config(&store, &cfg).expect("active target should resolve");
+        assert_eq!(out.max_tokens, 8192);
+    }
+
+    #[test]
+    fn cfg_max_tokens_wins_when_both_set() {
+        // Explicit `cfg.max_tokens` beats the profile's `default_max_tokens`.
+        let mut profile = anthropic_profile("BCC_UNSET", "https://api.anthropic.com");
+        profile.default_max_tokens = Some(8192);
+        let store = store_with_active(profile, "claude-sonnet-4-6");
+        let mut cfg = ShannonConfig::default();
+        cfg.max_tokens = Some(1024);
+
+        let out =
+            AppState::build_client_config(&store, &cfg).expect("active target should resolve");
+        assert_eq!(out.max_tokens, 1024);
+    }
+
+    #[test]
+    fn engine_fallback_when_neither_max_tokens_set() {
+        // Neither `cfg.max_tokens` nor `profile.default_max_tokens` set →
+        // engine fallback to 4096.
+        let profile = anthropic_profile("BCC_UNSET", "https://api.anthropic.com");
+        let store = store_with_active(profile, "claude-sonnet-4-6");
+        let cfg = ShannonConfig::default();
+
+        let out =
+            AppState::build_client_config(&store, &cfg).expect("active target should resolve");
+        assert_eq!(out.max_tokens, 4096);
+    }
+
+    #[test]
+    fn ollama_profile_no_api_key_uses_300s_timeout() {
+        // Ollama branch: empty api_key + provider-conditional timeout (300s).
+        // SAFETY: unique key read only by this test thread.
+        unsafe { std::env::remove_var("BCC_OLLAMA_KEY") };
+        let profile = ProviderProfile {
+            id: "ollama".to_string(),
+            kind: ProviderKind::Ollama,
+            display_name: "ollama".to_string(),
+            base_url: "http://localhost:11434".to_string(),
+            models_url: None,
+            credential: CredentialRef::Env {
+                var: "BCC_OLLAMA_KEY".to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+        };
+        let store = store_with_active(profile, "llama3");
+        let cfg = ShannonConfig::default();
+
+        let out =
+            AppState::build_client_config(&store, &cfg).expect("active target should resolve");
+        assert_eq!(out.provider, LlmProvider::Ollama);
+        assert_eq!(out.api_key, "", "ollama has no credential");
+        assert_eq!(
+            out.timeout_seconds, 300,
+            "Ollama auto-uses the 300s timeout branch"
+        );
+        assert_eq!(out.base_url, "http://localhost:11434");
+        assert_eq!(out.model, "llama3");
     }
 }

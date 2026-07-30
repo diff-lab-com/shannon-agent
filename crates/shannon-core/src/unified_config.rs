@@ -480,7 +480,14 @@ impl From<ShannonConfig> for shannon_engine::api::LlmClientConfig {
 /// credential; the flat v1 fields are consulted only for behavioural overrides
 /// (`max_tokens`, `timeout`). Credentials are resolved strictly per A1 — only
 /// the profile's own [`CredentialRef`] is consulted.
-fn build_client_from_resolved(
+///
+/// `pub` so the desktop shell's `AppState::build_client_config` (and any other
+/// downstream crate that has a `ShannonConfig` + resolved active target) can
+/// share this exact construction — T1 (ADR-0005 P1.1). Note: callers must
+/// have already obtained a [`crate::provider_resolver::ResolvedTarget`] via
+/// [`crate::provider_resolver::resolve_active_target`]; this function does not
+/// synthesize a fallback (synthesis lives in the `From<ShannonConfig>` impl).
+pub fn build_client_from_resolved(
     cfg: &ShannonConfig,
     rt: crate::provider_resolver::ResolvedTarget<'_>,
 ) -> shannon_engine::api::LlmClientConfig {

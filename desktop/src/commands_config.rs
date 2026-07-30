@@ -9,6 +9,7 @@ use crate::commands::AppState;
 use crate::config::{self, DesktopConfig, ProviderConnection, ProvidersFile};
 use crate::events;
 use crate::events::event_names;
+use shannon_types::provider_config::ProviderTiers;
 
 /// Resolve a desktop kind slug to the engine's canonical default base
 /// URL for that kind. Returns `None` for kinds that have no canonical
@@ -469,7 +470,19 @@ pub async fn switch_provider(
     };
     drop(existing);
 
-    let client_config = AppState::build_client_config(&new_config);
+    // P1.1 (ADR-0005): the runtime client config now reads from the engine
+    // `ProviderConfigStore`. Synthesize the engine-side `ShannonConfig`
+    // overrides from `new_config`. Provider identity, base_url, model and
+    // credential come from the store (see `build_client_config`).
+    let shannon_overrides = shannon_core::unified_config::ShannonConfig {
+        max_tokens: new_config.max_tokens.map(|v| v as usize),
+        temperature: new_config.temperature,
+        ..Default::default()
+    };
+    let client_config = {
+        let store_guard = state.provider_store.lock().await;
+        AppState::build_client_config(&store_guard, &shannon_overrides).unwrap_or_default()
+    };
 
     {
         let mut c = state.client_config.write().await;
@@ -677,6 +690,14 @@ pub async fn test_provider_connection(
 /// connection. On edit, `id` identifies the entry; on add it is `None` and the
 /// server generates one. An `api_key` of `"***"` or empty means "keep the
 /// existing key", so editing the label never blanks the stored secret.
+///
+/// Phase 2 task 3: the desktop Add Provider modal authors three of the
+/// v2 ProviderProfile fields. `extra_headers`, `default_max_tokens`, and
+/// `tiers` are mirrored into the connection and passed through to the
+/// engine's `ProviderConfigStore` (see `connection_to_profile`). The
+/// remaining three v2 fields (`models_url`, `fallback_models`, `quirks`)
+/// are read-only on the wire today — the modal doesn't edit them yet —
+/// so they stay out of this input shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderInput {
     #[serde(default)]
@@ -689,6 +710,21 @@ pub struct ProviderInput {
     pub base_url: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// Per-request HTTP headers. The desktop modal collects key/value
+    /// rows; rows with an empty key are dropped client-side so this map
+    /// never carries `""` keys. `None` means "don't change" on edit.
+    #[serde(default)]
+    pub extra_headers: Option<std::collections::HashMap<String, String>>,
+    /// Profile-level `max_tokens` default. `None` (or `Some(None)`) means
+    /// "no override" — the engine falls back to `cfg.max_tokens` then
+    /// 4096. The frontend emits `null` for an empty input.
+    #[serde(default)]
+    pub default_max_tokens: Option<Option<u32>>,
+    /// Per-tier model id overrides. Canonical names only — the modal
+    /// doesn't surface the alias vocabulary (`haiku` / `sonnet` / ...)
+    /// so the wire shape stays canonical.
+    #[serde(default)]
+    pub tiers: Option<ProviderTiers>,
 }
 
 fn is_known_kind(kind: &str) -> bool {
@@ -809,6 +845,21 @@ fn apply_provider_update(
     }
     conn.base_url = base_url;
     conn.model = input.model.clone().filter(|s| !s.is_empty());
+    // Phase 2 task 3 — v2 ProviderProfile fields. `None` means "don't
+    // touch" so editing the label never blanks an existing setting.
+    // `extra_headers` and `default_max_tokens` use `None` for "leave
+    // alone" and the inner Option for the value-or-clear signal.
+    // `tiers` is plain — replace-on-send matches how the engine store
+    // upserts the whole field.
+    if let Some(h) = input.extra_headers.as_ref() {
+        conn.extra_headers = h.clone();
+    }
+    if let Some(dmt) = input.default_max_tokens {
+        conn.default_max_tokens = dmt;
+    }
+    if let Some(tiers) = input.tiers.as_ref() {
+        conn.tiers = tiers.clone();
+    }
 }
 
 /// Remove a provider by id, clearing the active pointer when it matched.
@@ -944,6 +995,14 @@ pub async fn save_provider(
             api_key: None,
             base_url,
             model: input.model.filter(|s| !s.is_empty()),
+            // Phase 2 task 3 — v2 ProviderProfile fields authored by
+            // the Add Provider modal. On insert the client sends the
+            // explicit value (or `None` for "unset") for all three;
+            // defaulting on the wire keeps the Rust path free of
+            // `unwrap_or_default()` foot-guns.
+            extra_headers: input.extra_headers.clone().unwrap_or_default(),
+            default_max_tokens: input.default_max_tokens.unwrap_or(None),
+            tiers: input.tiers.clone().unwrap_or_default(),
             created_at: chrono::Utc::now().to_rfc3339(),
             ..Default::default()
         };
@@ -1034,7 +1093,30 @@ pub async fn set_active_provider(
         dc.clone()
     };
 
-    let client_config = AppState::build_client_config(&desktop_cfg);
+    // Land the activation in the engine's `~/.shannon/providers.toml`
+    // *before* rebuilding the client config, because the new
+    // `build_client_config` (P1.1 / ADR-0005) reads from the engine
+    // store, not from the legacy mirror. `upsert_profile` (not
+    // `set_active(&LlmProvider, ...)`) is used so a managed
+    // openai-compatible slot (glm / kimi) keeps its desktop slug as
+    // the profile id and does not collapse onto the engine's single
+    // "openai" slot.
+    let model_id = model.clone().unwrap_or_else(|| "default".to_string());
+    land_profile_in_engine_store(&state, &conn, &model_id).await?;
+
+    // P1.1 (ADR-0005): the runtime client config reads from the engine
+    // store (now updated by `land_profile_in_engine_store` above);
+    // `new_config`/`desktop_cfg` only contribute behavioural overrides
+    // (`max_tokens`/`temperature`).
+    let shannon_overrides = shannon_core::unified_config::ShannonConfig {
+        max_tokens: desktop_cfg.max_tokens.map(|v| v as usize),
+        temperature: desktop_cfg.temperature,
+        ..Default::default()
+    };
+    let client_config = {
+        let store_guard = state.provider_store.lock().await;
+        AppState::build_client_config(&store_guard, &shannon_overrides).unwrap_or_default()
+    };
     {
         let mut c = state.client_config.write().await;
         *c = client_config;
@@ -1052,17 +1134,6 @@ pub async fn set_active_provider(
 
     file.active_provider_id = Some(id.clone());
     config::save_providers(&file)?;
-
-    // Land the activation in the engine's `~/.shannon/providers.toml`
-    // so the desktop shell and the CLI share one active target. The
-    // engine's active target is what `/provider health`, `Auto`
-    // resolver, and CLI restart all read — not the desktop singular
-    // config. `upsert_profile` (not `set_active(&LlmProvider, ...)`)
-    // is used so a managed openai-compatible slot (glm / kimi) keeps
-    // its desktop slug as the profile id and does not collapse onto
-    // the engine's single "openai" slot.
-    let model_id = model.clone().unwrap_or_else(|| "default".to_string());
-    land_profile_in_engine_store(&state, &conn, &model_id).await?;
 
     let _ = app_handle.emit(
         event_names::CONFIG_UPDATED,
@@ -1286,6 +1357,12 @@ mod tests {
             api_key: key.map(str::to_string),
             base_url: None,
             model: None,
+            // Phase 2 task 3 — default to `None` so the helper doesn't
+            // touch the v2 fields; individual tests pass the field
+            // explicitly when they care about it.
+            extra_headers: None,
+            default_max_tokens: None,
+            tiers: None,
         }
     }
 
@@ -1323,6 +1400,9 @@ mod tests {
             api_key: Some("***".into()),
             base_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
             model: Some("".into()), // empty => cleared
+            extra_headers: None,
+            default_max_tokens: None,
+            tiers: None,
         };
         apply_provider_update(
             &mut conn,
@@ -1334,6 +1414,93 @@ mod tests {
             Some("https://open.bigmodel.cn/api/paas/v4")
         );
         assert!(conn.model.is_none());
+    }
+
+    /// Phase 2 task 3 — the desktop Add Provider modal authors
+    /// `extra_headers`, `default_max_tokens`, and `tiers`. The wire shape
+    /// uses `Option<...>` so the backend can distinguish "leave the
+    /// existing value alone" (`None`) from "set to this value"
+    /// (`Some(...)`). The tests below pin both signals.
+    #[test]
+    fn apply_provider_update_applies_v2_profile_fields_when_present() {
+        let mut conn = sample_conn("anthropic", "anthropic", Some("k"));
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("X-Custom".to_string(), "yes".to_string());
+        let input = ProviderInput {
+            id: Some("anthropic".into()),
+            label: "Anthropic".into(),
+            provider_kind: "anthropic".into(),
+            api_key: Some("***".into()),
+            base_url: None,
+            model: None,
+            extra_headers: Some(headers.clone()),
+            default_max_tokens: Some(Some(8192)),
+            tiers: Some(ProviderTiers {
+                fast: Some("haiku-model".into()),
+                standard: Some("sonnet-model".into()),
+                pro: Some("opus-model".into()),
+            }),
+        };
+        apply_provider_update(&mut conn, &input, None);
+        assert_eq!(conn.extra_headers, headers);
+        assert_eq!(conn.default_max_tokens, Some(8192));
+        assert_eq!(conn.tiers.fast.as_deref(), Some("haiku-model"));
+        assert_eq!(conn.tiers.standard.as_deref(), Some("sonnet-model"));
+        assert_eq!(conn.tiers.pro.as_deref(), Some("opus-model"));
+    }
+
+    #[test]
+    fn apply_provider_update_leaves_v2_profile_fields_untouched_when_none() {
+        // Editing the label must not blank out an existing
+        // `default_max_tokens` override the user previously set.
+        let mut conn = sample_conn("anthropic", "anthropic", Some("k"));
+        conn.extra_headers.insert("X-Existing".into(), "yes".into());
+        conn.default_max_tokens = Some(4096);
+        conn.tiers.standard = Some("prev".into());
+
+        let input = ProviderInput {
+            id: Some("anthropic".into()),
+            label: "Renamed".into(),
+            provider_kind: "anthropic".into(),
+            api_key: Some("***".into()),
+            base_url: None,
+            model: None,
+            extra_headers: None,
+            default_max_tokens: None,
+            tiers: None,
+        };
+        apply_provider_update(&mut conn, &input, None);
+        assert_eq!(conn.label, "Renamed");
+        assert_eq!(
+            conn.extra_headers.get("X-Existing").map(String::as_str),
+            Some("yes"),
+        );
+        assert_eq!(conn.default_max_tokens, Some(4096));
+        assert_eq!(conn.tiers.standard.as_deref(), Some("prev"));
+    }
+
+    /// `Some(None)` on `default_max_tokens` is the explicit "clear the
+    /// override" signal. The modal never emits this (an empty input
+    /// becomes `None` on the wire), but the wire shape supports it so
+    /// future editors can clear a previously-set value.
+    #[test]
+    fn apply_provider_update_explicit_none_on_default_max_tokens_clears_it() {
+        let mut conn = sample_conn("anthropic", "anthropic", Some("k"));
+        conn.default_max_tokens = Some(4096);
+
+        let input = ProviderInput {
+            id: Some("anthropic".into()),
+            label: "Anthropic".into(),
+            provider_kind: "anthropic".into(),
+            api_key: Some("***".into()),
+            base_url: None,
+            model: None,
+            extra_headers: None,
+            default_max_tokens: Some(None),
+            tiers: None,
+        };
+        apply_provider_update(&mut conn, &input, None);
+        assert!(conn.default_max_tokens.is_none());
     }
 
     #[test]
