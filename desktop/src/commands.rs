@@ -211,13 +211,31 @@ pub struct StatusResponse {
     pub working_dir: String,
 }
 
-/// Model info for the model selector.
+/// Model info for the model selector. The optional fields are populated
+/// when `list_models` is routed through the engine model registry (ADR-0005
+/// Phase 2 / task 4); `null` means unknown / not in pricing SSOT.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
     pub provider: String,
+    /// Tokens. `0` means unknown — the UI should render "unknown" instead
+    /// of fabricating a number (P0-2 honest cost/context).
     pub context_window: usize,
+    /// Per-million-token input price (USD). `None` = unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_in: Option<f64>,
+    /// Per-million-token output price (USD). `None` = unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_out: Option<f64>,
+    /// Tier label (`fast` / `standard` / `pro`). Optional — not all
+    /// catalog entries carry tier metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    /// Whether this entry comes from the dynamic models.dev overlay rather
+    /// than the static catalog. Surfaces a freshness indicator in the UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic: Option<bool>,
 }
 
 /// Tool info for the tools panel.
@@ -1157,6 +1175,10 @@ mod tests {
             name: "GPT-4".to_string(),
             provider: "openai".to_string(),
             context_window: 128_000,
+            price_in: None,
+            price_out: None,
+            tier: None,
+            dynamic: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: ModelInfo = serde_json::from_str(&json).unwrap();
