@@ -24,6 +24,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 - `arg_hint` placeholders renamed from `<file>` to `<FILE_PATH>` (ALL_CAPS) to reduce LLM misidentification risk
 - `MODEL_CATALOG` is now the canonical pricing source of truth (SSOT) — cost tracking resolves per-model pricing through the catalog first, then file/env overrides, then LiteLLM, then a documented `$3/$15` fallback. Local catalog entries no longer get mispriced as hosted (bare `qwen` alias removed).
 - Model picker shows an honest cost label — models with unknown pricing or context windows render `unknown` instead of fabricating a 200K window or a default price.
+- Config files (`config.toml`, `.shannon.toml`, `providers.toml`) now resolve `{env:VAR}`, `{env:VAR:-default}`, and `{file:/abs/path}` / `{file:~/.shannon/x}` tokens in every string field. Single-pass so `{env:X}` whose value is `{env:Y}` stays literal (no recursive injection); `file:` paths must be absolute or `~/.shannon/`-rooted and may not contain `..`. Lets users reference secrets without inlining them, strengthening A1.
 
 ### Fixed
 

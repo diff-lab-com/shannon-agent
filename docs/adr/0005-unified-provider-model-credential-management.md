@@ -1,9 +1,11 @@
 # ADR 0005 — Unified Provider/Model/Credential Management
 
 **Status**: Proposed → **largely implemented** on `feat/unified-provider-model-mgmt`
-(Phase 0 ✅, Phase 1 ✅, Phase 3 ✅ incl. `/connect` credential probe, Phase 5 ✅,
-Phase 6 ✅ `/provider health` (no auto-failover); Phase 4 🟡 in progress;
-Phase 2 (Desktop re-platforming) ⏳ deferred)
+(Phase 0 ✅, Phase 1 ✅, Phase 3 ✅ incl. `/connect` credential probe, Phase 4 ✅
+`/config set` flat-key writeback + `{env:VAR}` / `{file:path}` substitution, Phase
+5 ✅ incl. `small_model` ↔ `AuxRole` decision (方案 A — no new field) and
+`settings.toml` evaluation (no new file needed), Phase 6 ✅ `/provider health`
+(no auto-failover); Phase 2 (Desktop re-platforming) ⏳ deferred)
 **Date**: 2026-07-24
 **Theme**: 统一 Provider/Model/密钥管理 (shannon-code + shannon-desktop)
 **Supersedes**: —
@@ -349,12 +351,36 @@ unified underneath.
 > `SHANNON_ENABLED_PROVIDERS` / `SHANNON_DISABLED_PROVIDERS` env vars — these
 > restrict the model picker, first-screen status card, and the `/provider` /
 > `/connect` listings, and **fail open** (full list) when an allowlist matches
-> nothing so a typo never bricks the picker. The `settings.toml` persistence
-> variant and the `small_model` field remain **deferred**.
+> nothing so a typo never bricks the picker.
+>
+> **Decision (2026-07-30) — `small_model` ↔ `AuxRole` mapping (方案 A).**
+> The v2 schema already carries the auxiliary-model role via
+> `ModelProfile.auxiliary: HashMap<AuxRole, ActiveTarget>` in
+> `shannon-types/provider_config.rs`, with `AuxRole::{Compression,
+> TitleGeneration, Vision, WebExtract, SessionSearch}`. The two new
+> semantics `small_model` would have introduced (`compression`,
+> `title-generation`) are **already covered** by `auxiliary[Compression]`
+> and `auxiliary[TitleGeneration]`. Adding a new `small_model` field
+> would duplicate these concepts without adding capability. Decision: **no
+> new field** — users map their lightweight model via `auxiliary` with
+> the existing `Compression` / `TitleGeneration` keys. Zero new schema;
+> zero new code.
+>
+> **Decision (2026-07-30) — `settings.toml` deferred item resolved as
+> unnecessary.** Investigated whether a separate `settings.toml` (distinct
+> from `config.toml` + `providers.toml`) is needed for cross-provider
+> user preferences (tier default, notification defaults, UI prefs).
+> Conclusion: **no new file**. Existing storage already covers the
+> territory — `config.toml` (flat keys via `config_persist`) for scalar
+> preferences, `providers.toml` (via `ProviderConfigStore`) for
+> per-profile structure. Adding `settings.toml` would introduce a third
+> toml with overlapping scope and no clear owning writer. The
+> `{env:VAR}` / `{file:path}` substitution (Phase 4, 2026-07-30) further
+> reduces pressure to add new persistence by letting users reference
+> secrets without inventing a new file.
 
 **Scope**: models.dev fetch (cached, static-catalog offline fallback — must not
-break headless/CI), `enabled_providers` / `disabled_providers` allowlists,
-`small_model` field.
+break headless/CI), `enabled_providers` / `disabled_providers` allowlists.
 
 ### Phase 6 — Provider health check (informational; no auto-failover)
 
