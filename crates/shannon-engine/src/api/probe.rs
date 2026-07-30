@@ -15,11 +15,33 @@
 //! - network / timeout → [`ApiError::HttpError`] / [`ApiError::Timeout`]
 
 use crate::api::error::ApiError;
+use crate::api::types::LlmProvider;
 use std::time::Duration;
 
 /// Timeout for the probe HTTP round-trip. Matches the desktop shell's prior
 /// `reqwest::Client::builder().timeout(10s)` so behaviour is preserved.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Map an `LlmProvider` to the probe slug used by [`probe_provider_endpoint`.
+///
+/// Returns `None` for providers that have no shared list-models endpoint we
+/// can probe (Gemini, Bedrock, Azure, Replicate, … — they all speak bespoke
+/// list-models APIs). Used by `QueryEngine::probe_all_health` to fan out a
+/// health check over every allowed provider in a single pass.
+pub fn probe_kind_for_provider(p: &LlmProvider) -> Option<&'static str> {
+    match p {
+        LlmProvider::Anthropic => Some("anthropic"),
+        LlmProvider::OpenAI => Some("openai"),
+        LlmProvider::DeepSeek => Some("deepseek"),
+        LlmProvider::Ollama => Some("ollama"),
+        // Every other OpenAI-wire-format provider (Zhipu / Moonshot / Groq /
+        // Together / OpenRouter / Cohere / Fireworks / Perplexity / Xai /
+        // Ai21 / Cloudflare / SiliconFlow / Minimax / DashScope) shares the
+        // openai-compatible `/models` endpoint.
+        p if p.is_openai_compatible() => Some("openai-compatible"),
+        _ => None,
+    }
+}
 
 /// Lightweight, non-billable probe. `provider_kind` is the canonical slug
 /// (`anthropic` / `openai` / `deepseek` / `ollama` / `openai-compatible`).
@@ -221,5 +243,58 @@ mod tests {
             build_authenticated_probe_url("openai-compatible", "k", Some("javascript:alert(1)"))
                 .unwrap_err();
         assert!(err.to_string().contains("http or https"));
+    }
+
+    #[test]
+    fn probe_kind_canonical_providers() {
+        use crate::api::types::LlmProvider;
+        assert_eq!(
+            probe_kind_for_provider(&LlmProvider::Anthropic),
+            Some("anthropic")
+        );
+        assert_eq!(
+            probe_kind_for_provider(&LlmProvider::OpenAI),
+            Some("openai")
+        );
+        assert_eq!(
+            probe_kind_for_provider(&LlmProvider::DeepSeek),
+            Some("deepseek")
+        );
+        assert_eq!(
+            probe_kind_for_provider(&LlmProvider::Ollama),
+            Some("ollama")
+        );
+    }
+
+    #[test]
+    fn probe_kind_openai_compatible_collapses_to_openai_compatible() {
+        use crate::api::types::LlmProvider;
+        // Every other OpenAI-wire-format provider shares the openai-compatible
+        // /models endpoint, so they all map to that probe slug regardless of
+        // their specific default base_url.
+        assert_eq!(
+            probe_kind_for_provider(&LlmProvider::Zhipu),
+            Some("openai-compatible")
+        );
+        assert_eq!(
+            probe_kind_for_provider(&LlmProvider::Moonshot),
+            Some("openai-compatible")
+        );
+        assert_eq!(
+            probe_kind_for_provider(&LlmProvider::Groq),
+            Some("openai-compatible")
+        );
+        assert_eq!(
+            probe_kind_for_provider(&LlmProvider::OpenRouter),
+            Some("openai-compatible")
+        );
+    }
+
+    #[test]
+    fn probe_kind_unsupported_returns_none() {
+        use crate::api::types::LlmProvider;
+        // Gemini uses a bespoke list-models API (WireFormat::Gemini), so the
+        // shared openai-compatible probe slug does not apply.
+        assert_eq!(probe_kind_for_provider(&LlmProvider::Gemini), None);
     }
 }

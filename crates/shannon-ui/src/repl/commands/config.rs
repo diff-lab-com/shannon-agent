@@ -258,73 +258,146 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
-/// `/provider health` — live-probe the active provider and inventory every
-/// provider's credential status (ADR-0005 Phase 6).
+/// `/provider health` — live-probe every allowed provider and inventory
+/// their credential status (ADR-0005 Phase 6 + task 6).
 ///
-/// The **active** provider gets a real 1-token network probe
-/// (`engine.probe_active_health()` — uses the running client's existing key,
-/// no key swap, 15s timeout). Other providers are inventoried by their
-/// stored-credential status only: a per-provider network round-trip would be
-/// slow and surprising for a status command. The probe is fail-soft — a
-/// transport error reports "unreachable" but never crashes the REPL.
+/// `engine.probe_all_health()` runs the per-provider endpoint probe
+/// concurrently (5s per-provider timeout) and returns a snapshot. The
+/// active provider is reported first; if it is unreachable, the command
+/// prints a list of reachable candidates as a switch hint — **without**
+/// switching automatically (Shannon ships no model router, spec §11).
 ///
-/// **Non-goal — automatic failover.** Shannon deliberately ships no model
-/// router (spec §11), so this command is informational only. If the active
-/// provider is down, switch manually with `/provider <name>` or `/connect`.
-/// Automatic failover and per-provider multi-probing are documented as future
-/// work rather than implemented here.
+/// Probe is fail-soft: a transport error reports "unreachable" but never
+/// crashes the REPL. Bespoke-API providers (Gemini / Bedrock / Azure /
+/// Replicate) are skipped because they have no shared list-models endpoint.
 fn handle_provider_health(repl: &mut Repl) -> Result<()> {
     use shannon_core::credential_manager::read_credential_value_default;
     use shannon_core::provider_resolver::llm_provider_id;
+    use shannon_core::{ProviderHealth, ProviderHealthStatus};
+    use std::time::Duration;
 
     let connected = connected_provider_slugs();
     let providers = model_registry::available_providers();
+    let active = repl.state.selected_provider.clone();
+    let active_model = repl.state.model.clone().unwrap_or_else(|| "—".to_string());
 
     let mut lines = vec!["Provider health:".to_string(), String::new()];
 
-    // 1. Live-probe the active provider (1-token round-trip, 15s timeout).
-    //    `probe_active_health` reuses the running client's key; if the engine
-    //    was started without connecting, the probe reports that honestly.
-    let active = repl.state.selected_provider.clone();
-    let active_model = repl.state.model.clone().unwrap_or_else(|| "—".to_string());
-    match (active.as_ref(), repl.query_engine.as_ref()) {
-        (Some(provider), Some(engine)) => {
-            let probed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                repl.runtime.block_on(engine.probe_active_health())
-            }));
-            let verdict = match probed {
-                Ok(Ok(())) => {
-                    format!("● reachable — provider: {provider}, model: {active_model}")
-                }
-                Ok(Err(shannon_engine::api::ApiError::AuthenticationFailed)) => {
-                    format!("○ auth rejected — provider: {provider} (key not accepted)")
-                }
-                Ok(Err(e)) => {
-                    format!("○ unreachable — provider: {provider} ({e})")
-                }
-                Err(_) => {
-                    format!("○ probe failed — provider: {provider} (health check itself errored)")
-                }
-            };
-            lines.push(verdict);
-            lines.push(String::new());
-        }
-        (Some(provider), None) => {
-            lines.push(format!(
-                "● {provider} active — query engine not initialized; skipping live probe."
-            ));
-            lines.push(String::new());
-        }
-        (None, _) => {
-            lines.push(
-                "No active provider selected. Use /provider <name> to choose one.".to_string(),
-            );
-            lines.push(String::new());
+    // 1. Concurrently live-probe every allowed provider (5s each, joined).
+    //    Engines run inside catch_unwind so a panic in one provider's probe
+    //    can never crash the REPL.
+    let probes: Vec<ProviderHealth> = match repl.query_engine.as_ref() {
+        Some(engine) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            repl.runtime
+                .block_on(engine.probe_all_health(Duration::from_secs(5)))
+        }))
+        .unwrap_or_default(),
+        None => Vec::new(),
+    };
+
+    // 2. Active provider verdict first. If absent (no engine or no selection),
+    //    skip; the inventory table below still lists everything.
+    let active_probe = active
+        .as_ref()
+        .and_then(|p| probes.iter().find(|h| &h.provider == p));
+    if let (Some(provider), Some(probe)) = (active.as_ref(), active_probe) {
+        let verdict = match probe.status {
+            ProviderHealthStatus::Reachable => format!(
+                "● reachable — provider: {provider}, model: {active_model} ({}ms)",
+                probe.latency_ms.unwrap_or(0)
+            ),
+            ProviderHealthStatus::AuthFailed => {
+                format!("○ auth rejected — provider: {provider} (key not accepted)")
+            }
+            ProviderHealthStatus::Unreachable => {
+                format!("○ unreachable — provider: {provider}")
+            }
+            ProviderHealthStatus::NotConfigured => {
+                format!("○ not configured — provider: {provider} (no key resolvable)")
+            }
+        };
+        lines.push(verdict);
+        lines.push(String::new());
+    } else if let (Some(provider), None) = (active.as_ref(), repl.query_engine.as_ref()) {
+        lines.push(format!(
+            "● {provider} active — query engine not initialized; skipping live probe."
+        ));
+        lines.push(String::new());
+    } else if active.is_none() {
+        lines.push("No active provider selected. Use /provider <name> to choose one.".to_string());
+        lines.push(String::new());
+    }
+
+    // 3. Full per-provider health table — sorted active-first then by name.
+    lines.push("All providers (live):".to_string());
+    let mut ordered: Vec<&ProviderHealth> = probes.iter().collect();
+    ordered.sort_by_key(|h| {
+        let is_active = active.as_ref() == Some(&h.provider);
+        (!is_active, format!("{:?}", h.provider))
+    });
+    for h in &ordered {
+        let mark = match h.status {
+            ProviderHealthStatus::Reachable => "●",
+            ProviderHealthStatus::AuthFailed => "○",
+            ProviderHealthStatus::Unreachable => "○",
+            ProviderHealthStatus::NotConfigured => "·",
+        };
+        let latency = h
+            .latency_ms
+            .map(|ms| format!(" ({ms}ms)"))
+            .unwrap_or_default();
+        let detail = match h.status {
+            ProviderHealthStatus::Reachable => "reachable".to_string(),
+            ProviderHealthStatus::AuthFailed => "auth rejected".to_string(),
+            ProviderHealthStatus::Unreachable => "unreachable".to_string(),
+            ProviderHealthStatus::NotConfigured => "not configured".to_string(),
+        };
+        let active_marker = if active.as_ref() == Some(&h.provider) {
+            " *"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "  {mark} {provider}{active_marker} — {detail}{latency}",
+            provider = h.provider
+        ));
+    }
+
+    // 4. Switch hint: when the active provider is down, list reachable
+    //    candidates the user can switch to. **Manual only** — Shannon has no
+    //    model router (spec §11). Pick up to 3 alphabetically.
+    if let Some(active_provider) = active.as_ref() {
+        let active_status = probes
+            .iter()
+            .find(|h| &h.provider == active_provider)
+            .map(|h| h.status);
+        if matches!(
+            active_status,
+            Some(ProviderHealthStatus::Unreachable | ProviderHealthStatus::AuthFailed)
+        ) {
+            let candidates: Vec<&ProviderHealth> = probes
+                .iter()
+                .filter(|h| {
+                    h.status == ProviderHealthStatus::Reachable
+                        && active.as_ref() != Some(&h.provider)
+                })
+                .take(3)
+                .collect();
+            if !candidates.is_empty() {
+                let names: Vec<String> =
+                    candidates.iter().map(|h| h.provider.to_string()).collect();
+                lines.push(String::new());
+                lines.push(format!(
+                    "Hint: active provider is down. Candidates reachable now: {}. Switch with /provider <name>.",
+                    names.join(", ")
+                ));
+            }
         }
     }
 
-    // 2. Inventory every allowed provider by stored-credential status (no
-    //    per-provider network probe — see the non-goal note in the doc comment).
+    // 5. Configured-but-unprobed inventory (keeps the credential view from
+    //    before task 6 — useful when many providers are NotConfigured).
+    lines.push(String::new());
     lines.push("Configured providers:".to_string());
     for p in &providers {
         let slug = llm_provider_id(p);
@@ -339,8 +412,7 @@ fn handle_provider_health(repl: &mut Repl) -> Result<()> {
     }
     lines.push(String::new());
     lines.push(
-        "Health probes the active provider only. Switch with /provider <name> or /connect."
-            .to_string(),
+        "Probes run concurrently (5s each). Switch with /provider <name> or /connect.".to_string(),
     );
     repl.chat.add_message(ChatRole::System, lines.join("\n"));
     Ok(())
