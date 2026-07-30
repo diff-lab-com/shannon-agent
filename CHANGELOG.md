@@ -11,6 +11,10 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 - `/model --save` flag persists tier choice to `~/.shannon/providers.toml`
 - Three-level picker navigation (provider → tier → model)
 - `TierName` enum (`fast`/`standard`/`pro`/`auto`) with alias normalization
+- `/connect` validates the credential with a 1-token probe at connect time, so a bad key/region/model fails immediately instead of mid-query (fail-soft: a non-auth error warns but keeps the connection)
+- Provider allowlist via `SHANNON_ENABLED_PROVIDERS` / `SHANNON_DISABLED_PROVIDERS` env vars — restricts the model picker, first-screen status card, and `/provider` / `/connect` listings; fails open (full list) when an allowlist matches nothing so a typo never bricks the picker
+- LiteLLM community pricing table — `/model refresh` now also refreshes `model_prices_and_context_window.json`, so dynamic/custom models show real per-token prices instead of the estimate fallback
+- `/model --tier auto` — resolves `auto` to a concrete tier via a lightweight best-default heuristic (standard → pro → fast); `auto` is input-only and never persisted
 - `/provider health` — live-probes the active provider (1-token round-trip, 15s timeout, reuses the running key) and inventories every allowed provider's credential status. Informational only; no automatic failover (Shannon ships no model router by design).
 
 ### Changed
@@ -18,6 +22,8 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 - `/help` now opens a modal overlay instead of injecting a System message into chat history (prevents `<file>`/`<line>`/`<character>` placeholders from leaking into LLM context)
 - StatusBar pill format upgraded from `[model]` to `[provider/model · tier]`
 - `arg_hint` placeholders renamed from `<file>` to `<FILE_PATH>` (ALL_CAPS) to reduce LLM misidentification risk
+- `MODEL_CATALOG` is now the canonical pricing source of truth (SSOT) — cost tracking resolves per-model pricing through the catalog first, then file/env overrides, then LiteLLM, then a documented `$3/$15` fallback. Local catalog entries no longer get mispriced as hosted (bare `qwen` alias removed).
+- Model picker shows an honest cost label — models with unknown pricing or context windows render `unknown` instead of fabricating a 200K window or a default price.
 
 ### Fixed
 
