@@ -93,6 +93,32 @@ text from a `useRef` and calls `setMessages` directly.
 through `react-intl`: natural-language cron descriptors, calendar
 localization, and the statusBadge tail. Key parity 2300 → 2331.
 
+### Models P3 — parity follow-ups (ADR-0005 P4.11 / P4.12 / P4.13)
+
+- **Tier authoring UX** (`feat/ui-tier-authoring`, ADR-0005 P4.11): the
+  Add/Edit Provider modal's tier rows now show (a) a "current" pill on
+  the row whose override matches the active model id, (b) a per-row
+  clear button (hides when the row is empty so the surface stays
+  uncluttered), and (c) a help-line explaining the override semantics.
+  Two new vitest cases; 3 i18n keys added to both locales.
+- **`test_all_providers` fan-out probe** (`feat/desktop-test-all-providers`,
+  ADR-0005 P4.12): new `test_all_providers` Tauri command probes every
+  connection in the engine `ProviderConfigStore` in parallel via the
+  same `probe_provider_endpoint` the single-provider test uses, with a
+  6s per-provider timeout. Reads API keys from
+  `~/.shannon/credentials/<id>.json` (A1 — never the plaintext field);
+  connections without a key return `TestConnectionResult::Unknown`
+  without a round-trip. `ProviderTestRow` struct + `testAllProviders`
+  wrapper in `tauri-api.ts`. UI button to be wired in a follow-up.
+- **REPL `/model --max-tokens <N> --save`** (`feat/core-ui-model-max-tokens`,
+  ADR-0005 P4.13): closes the parity gap with `/model --tier --save`.
+  Adds `ProviderConfigStore::set_default_max_tokens` engine mutator
+  (chainable like `set_tier` / `set_active`); REPL handler accepts
+  `--max-tokens N` and `--max-tokens=N` forms, `0` / `clear` to revert
+  to the catalog default. 3 engine tests cover write / clear / save-load
+  cycle contracts. Available in the REPL only; the `shannon` CLI's
+  top-level `--max-tokens` flag remains session-scoped.
+
 ### Voice input — cloud speech-to-text (D4 Phase 1)
 
 Branch `s2/voice-cloud-stt` (PR #100). Replaces the browser Web Speech API
