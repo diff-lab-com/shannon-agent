@@ -152,4 +152,94 @@ describe('ModelsSettings', () => {
     // pricing is loaded.
     expect(() => render(wrap(<ModelsSettings />))).not.toThrow()
   })
+
+  // === Provider visibility (ADR-0005 P4.9) ===
+  //
+  // The "Provider visibility" section is the desktop-side authoring
+  // surface for the engine's `SHANNON_*_PROVIDERS` allowlist. The
+  // tests below pin the three documented states (None / Some([]) /
+  // Some(non_empty)) and the configure call shape so the wire shape
+  // doesn't silently drift.
+
+  it('renders provider visibility section with all 6 kinds checked when no override is set', async () => {
+    // Default test setup returns `null` for `getProviderAllowlist`
+    // and an empty `getConfig` (no `enabled_providers` field) — so
+    // the section should render every kind as checked.
+    render(wrap(<ModelsSettings />))
+    // Wait for the async useEffect to settle.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.getByText('Provider visibility')).toBeInTheDocument()
+    expect(
+      screen.getByText(/Restrict which providers appear/i),
+    ).toBeInTheDocument()
+    // All 6 provider kinds should be present.
+    expect(screen.getByText('Anthropic')).toBeInTheDocument()
+    expect(screen.getByText('OpenAI')).toBeInTheDocument()
+    expect(screen.getByText('DeepSeek')).toBeInTheDocument()
+    expect(screen.getByText('Ollama')).toBeInTheDocument()
+    // Gemini
+    expect(screen.getByText('Gemini')).toBeInTheDocument()
+    // OpenAI-compatible label
+    expect(screen.getByText('OpenAI-compatible')).toBeInTheDocument()
+    // Reset button is disabled while override is null (no state to clear).
+    const resetBtn = screen.getByRole('button', { name: /Reset to default/i })
+    expect(resetBtn).toBeDisabled()
+  })
+
+  it('toggling a provider off updates the configure call payload', async () => {
+    render(wrap(<ModelsSettings />))
+    await new Promise((r) => setTimeout(r, 0))
+    // Find the checkbox for Anthropic (the label wraps the input).
+    const anthropicLabel = screen.getByText('Anthropic').closest('label')
+    expect(anthropicLabel).not.toBeNull()
+    const checkbox = anthropicLabel!.querySelector('input[type="checkbox"]') as HTMLInputElement
+    expect(checkbox).toBeInTheDocument()
+    expect(checkbox.checked).toBe(true)
+
+    // Toggle Anthropic off.
+    fireEvent.click(checkbox)
+    await new Promise((r) => setTimeout(r, 0))
+
+    // The configure call should be invoked with the new payload
+    // (a JSON-encoded array of the remaining 5 kinds).
+    expect(api.configure).toHaveBeenCalled()
+    const lastCall = vi.mocked(api.configure).mock.calls.at(-1)?.[0]
+    expect(lastCall?.key).toBe('enabled_providers')
+    const parsed: string[] = JSON.parse(lastCall!.value)
+    expect(parsed).not.toContain('anthropic')
+    expect(parsed).toContain('openai')
+    expect(parsed).toContain('deepseek')
+    expect(parsed).toContain('ollama')
+    expect(parsed).toContain('gemini')
+    expect(parsed).toContain('openai-compatible')
+  })
+
+  it('reset button clears the override when one is set', async () => {
+    // Override set to a single kind → the reset button is enabled.
+    // Mock both the effective allowlist (what `getProviderAllowlist`
+    // returns) and the desktop `enabled_providers` field (read via
+    // `getConfig`). The component reads the latter to distinguish
+    // `null` from `Some(...)`.
+    vi.mocked(api.getProviderAllowlist).mockResolvedValue(['anthropic'])
+    vi.mocked(api.getConfig).mockResolvedValue({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      enabled_providers: ['anthropic'],
+    } as Awaited<ReturnType<typeof api.getConfig>>)
+
+    render(wrap(<ModelsSettings />))
+    await new Promise((r) => setTimeout(r, 50))
+
+    const resetBtn = screen.getByRole('button', { name: /Reset to default/i })
+    expect(resetBtn).not.toBeDisabled()
+
+    fireEvent.click(resetBtn)
+    await new Promise((r) => setTimeout(r, 50))
+
+    // The configure call should be invoked with value "null" to
+    // clear the desktop override (falls back to engine env vars).
+    expect(api.configure).toHaveBeenCalledWith(
+      expect.objectContaining({ key: 'enabled_providers', value: 'null' }),
+    )
+  })
 })

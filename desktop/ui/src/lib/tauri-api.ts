@@ -275,7 +275,7 @@ export async function listModels(): Promise<ModelInfo[]> {
  * (falls back to env vars).
  */
 export async function getProviderAllowlist(): Promise<string[] | null> {
-  return invoke<Option<string[]>>('get_provider_allowlist')
+  return invoke<string[] | null>('get_provider_allowlist')
 }
 
 export async function getStatus(): Promise<StatusResponse> {

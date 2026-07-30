@@ -122,6 +122,11 @@ export default function ModelsSettings() {
           onActivated={async () => { await Promise.all([refreshModels(), refreshStatus()]) }}
         />
 
+        {/* Provider visibility (ADR-0005 P4.9) */}
+        <ProviderVisibilitySection
+          onChanged={async () => { await refreshModels() }}
+        />
+
         {/* Provider Tabs */}
         <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl shadow-sm overflow-hidden">
           <div className="border-b border-outline-variant/30 bg-surface-container-low/30 px-lg pt-md">
@@ -248,6 +253,7 @@ const KIND_INFO: Record<string, KindInfo> = {
   openai: { labelKey: 'settings.models.providers.kinds.openai', icon: 'bolt', baseUrlRequired: false, needsKey: true },
   deepseek: { labelKey: 'settings.models.providers.kinds.deepseek', icon: 'psychology', baseUrlRequired: false, needsKey: true },
   ollama: { labelKey: 'settings.models.providers.kinds.ollama', icon: 'dns', baseUrlRequired: false, needsKey: false },
+  gemini: { labelKey: 'settings.models.providers.kinds.gemini', icon: 'spark', baseUrlRequired: false, needsKey: true },
   'openai-compatible': { labelKey: 'settings.models.providers.kinds.openaiCompatible', icon: 'hub', baseUrlRequired: true, needsKey: true },
 }
 
@@ -496,6 +502,161 @@ function ProvidersSection({
           onCancel={() => setDeleteTarget(null)}
         />
       ) : null}
+    </section>
+  )
+}
+
+// === Provider visibility (ADR-0005 P4.9) ===
+//
+// Settings panel that toggles which provider kinds appear in the model
+// picker. Backed by `DesktopConfig.enabled_providers` (persisted to
+// `~/.shannon/desktop/config.json`); the engine's `SHANNON_*_PROVIDERS`
+// env vars are honoured only when the override is `null`.
+//
+// `null` (no override) is rendered as every checkbox checked — the user
+// sees the engine env-var state would apply, even though no explicit
+// state is persisted. `[]` is rendered as none checked. Otherwise only
+// the listed slugs are checked.
+
+const PROVIDER_KINDS_FOR_VISIBILITY = [
+  'anthropic',
+  'openai',
+  'deepseek',
+  'ollama',
+  'gemini',
+  'openai-compatible',
+] as const
+
+function ProviderVisibilitySection({
+  onChanged,
+}: {
+  onChanged: () => Promise<void>
+}) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+  // `null` ⇒ no desktop override (engine env vars decide).
+  // `Some([])` ⇒ user toggled every provider off.
+  // `Some([..])` ⇒ explicit allowlist.
+  const [override, setOverride] = useState<string[] | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    api.getProviderAllowlist()
+      .then(() => {
+        if (!cancelled) {
+          // The backend returns the *effective* allowlist (env vars
+          // resolved when desktop override is `null`). For the UI we
+          // want the desktop override specifically — `null` ⇒
+          // "use env vars", `Some([])` ⇒ "all off",
+          // `Some(non_empty)` ⇒ explicit list. Read `enabled_providers`
+          // through `getConfig` to disambiguate.
+          api.getConfig().then((cfg) => {
+            if (cancelled) return
+            const ep = (cfg as { enabled_providers?: string[] | null }).enabled_providers
+            setOverride(ep === undefined ? null : ep)
+            setLoading(false)
+          }).catch(() => { if (!cancelled) setLoading(false) })
+        }
+      })
+      .catch(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  const isChecked = (kind: string): boolean => {
+    // `null` (no override) ⇒ all checked (engine env-var decides).
+    // `Some([])` ⇒ none checked. `Some(non_empty)` ⇒ only those.
+    if (override === null) return true
+    return override.includes(kind)
+  }
+
+  const toggle = async (kind: string) => {
+    if (saving) return
+    const current = override === null
+      ? [...PROVIDER_KINDS_FOR_VISIBILITY]
+      : override
+    const next = current.includes(kind)
+      ? current.filter((k) => k !== kind)
+      : [...current, kind]
+    setSaving(true)
+    try {
+      await api.configure({
+        key: 'enabled_providers',
+        value: JSON.stringify(next),
+      })
+      setOverride(next)
+      await onChanged()
+    } catch (e) {
+      toastError(t('settings.models.providers.saveFailed'), e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const resetToDefault = async () => {
+    if (saving) return
+    setSaving(true)
+    try {
+      // `null` clears the desktop override (falls back to env vars).
+      await api.configure({ key: 'enabled_providers', value: 'null' })
+      setOverride(null)
+      await onChanged()
+      toast.success(t('settings.models.providerVisibility.reset'))
+    } catch (e) {
+      toastError(t('settings.models.providers.saveFailed'), e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-sm">
+      <div className="flex items-start justify-between mb-md gap-md">
+        <div>
+          <h3 className="font-headline-md text-on-surface">
+            {t('settings.models.providerVisibility.title')}
+          </h3>
+          <p className="text-body-sm text-on-surface-variant mt-xs">
+            {t('settings.models.providerVisibility.subtitle')}
+          </p>
+        </div>
+        <Button
+          variant="ghost"
+          className="px-md py-sm text-on-surface-variant hover:text-primary whitespace-nowrap cursor-pointer disabled:opacity-50"
+          onClick={resetToDefault}
+          disabled={loading || saving || override === null}
+        >
+          {t('settings.models.providerVisibility.reset')}
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm">
+        {PROVIDER_KINDS_FOR_VISIBILITY.map((kind) => {
+          const checked = isChecked(kind)
+          return (
+            <label
+              key={kind}
+              className={`flex items-center gap-md p-sm rounded-lg border cursor-pointer transition-colors ${
+                checked
+                  ? 'border-primary/50 bg-primary-container/5'
+                  : 'border-outline-variant/30 hover:border-outline-variant'
+              }`}
+            >
+              <input
+                type="checkbox"
+                className="w-4 h-4 cursor-pointer accent-primary"
+                checked={checked}
+                disabled={loading || saving}
+                onChange={() => toggle(kind)}
+              />
+              <span className="font-label-md text-on-surface">
+                {kindLabel(intl, kind)}
+              </span>
+            </label>
+          )
+        })}
+      </div>
     </section>
   )
 }
