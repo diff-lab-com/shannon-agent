@@ -119,6 +119,95 @@ localization, and the statusBadge tail. Key parity 2300 → 2331.
   cycle contracts. Available in the REPL only; the `shannon` CLI's
   top-level `--max-tokens` flag remains session-scoped.
 
+### Models P3 — `DesktopConfig` singular-fields removal + Welcome rewrite (ADR-0005 P1.2-A / P1.2-B / P1.2-C)
+
+Closes the last A1 plaintext-API-key write path on the desktop and
+makes the engine `ProviderConfigStore` the single source of truth for
+provider / model / api_key / base_url. Three concentric commits; the
+config.json plaintext `api_key` field is gone for good.
+
+- **`configure()` routes through the engine store** (`feat/desktop-configure-engine-store`,
+  ADR-0005 P1.2-A, commit `3e1b8718`): the four
+  `configure('model' | 'api_key' | 'base_url' | 'provider')` arms used
+  to write only to `DesktopConfig` + `state.client_config` — never to
+  the engine store. That split meant the runtime client config (read
+  from the store per P1.1) silently diverged from the legacy mirror,
+  and the `api_key` arm persisted plaintext to
+  `~/.shannon/desktop/config.json` (A1 violation). Now each arm
+  consults the engine store to find the active target, applies the
+  mutation via `set_active` / `upsert_profile` + `save()` (persists
+  `~/.shannon/providers.toml`), and for `api_key` writes through
+  `CredentialManager` to
+  `~/.shannon/credentials/<provider_id>.json` (0600). Rejects when no
+  active provider. New helpers: `active_provider_id_and_kind`,
+  `find_provider_by_kind`, `provider_kind_slug`,
+  `rebuild_client_config_from_store`. 5 new helper tests; legacy
+  mirror fields are kept in sync so existing readers don't break
+  until B drops them.
+- **Drop `DesktopConfig` singular fields + `AppState` mutexes**
+  (`refactor/desktop-remove-singular-fields`, ADR-0005 P1.2-B, commit
+  `714093e9`): removes `DesktopConfig.{provider,api_key,base_url,model}`
+  and `AppState.{model,provider}` mutexes now that the engine store is
+  authoritative. Every reader (`send_message`, `start_background_task`,
+  `list_models`, `get_status`, the five session-persistence sites in
+  `commands_sessions.rs`) sources the value from
+  `state.client_config.{model,provider}`. `switch_provider` simplifies
+  to a thin shim — its request fields are effectively ignored (the
+  store is the source of truth); the Welcome wizard (P1.2-C) drops
+  its call to this command in favor of `saveProvider` +
+  `setActiveProvider`. `mirror_provider_into_config` helper deleted;
+  `get_config()` drops the top-level `api_key` masking branch (the
+  field is gone). `tray_status_label` in `main.rs` threads the
+  `AppHandle` so it can read `client_config` via `try_state()`. Tests
+  + `TestDesktopConfig` updated; 546 desktop lib tests pass.
+- **Welcome wizard launches `AddProviderModal`**
+  (`feat/ui-welcome-add-provider-modal`, ADR-0005 P1.2-C, commit
+  `d8f0390f`): closes the last plaintext write — the wizard's Step 1
+  was a bespoke provider picker + `<input type="password">` calling
+  `api.configure({ key: 'api_key', value: apiKey })`. Now Step 1
+  renders a single launcher button (`data-testid="welcome-add-provider"`)
+  that mounts the same `AddProviderModal` Settings → Models uses. The
+  modal's `onSaved` handler resolves the new provider id from the
+  returned `ProvidersFile`, calls `api.setActiveProvider(id)`, refreshes
+  config/status, pre-checks the task-recommended tools, closes the
+  modal, and advances to Step 2. The Step 1 "Continue" button is now
+  gated on `(providerSaved || envHasKey-and-recommended)`. The API key
+  never enters the Welcome React state — it lives only in the modal's
+  local form and lands in
+  `~/.shannon/credentials/<id>.json` via the standard `saveProvider`
+  flow. i18n: dropped `welcome.model.saving`, `welcome.model.apiKey.*`
+  (4), `welcome.testConnection.*` (9); added
+  `welcome.model.addProvider.*` (3) + `welcome.model.continue.hint`.
+  Both locales updated at parity. `Welcome.test.tsx` rewritten — 22 →
+  35 `it()` blocks; A1 verified via grep (`api.configure({ key: 'api_key'`
+  writes: zero remaining in `Welcome.tsx`).
+
+### Voice input — cloud speech-to-text (D4 Phase 1)
+
+- **Tier authoring UX** (`feat/ui-tier-authoring`, ADR-0005 P4.11): the
+  Add/Edit Provider modal's tier rows now show (a) a "current" pill on
+  the row whose override matches the active model id, (b) a per-row
+  clear button (hides when the row is empty so the surface stays
+  uncluttered), and (c) a help-line explaining the override semantics.
+  Two new vitest cases; 3 i18n keys added to both locales.
+- **`test_all_providers` fan-out probe** (`feat/desktop-test-all-providers`,
+  ADR-0005 P4.12): new `test_all_providers` Tauri command probes every
+  connection in the engine `ProviderConfigStore` in parallel via the
+  same `probe_provider_endpoint` the single-provider test uses, with a
+  6s per-provider timeout. Reads API keys from
+  `~/.shannon/credentials/<id>.json` (A1 — never the plaintext field);
+  connections without a key return `TestConnectionResult::Unknown`
+  without a round-trip. `ProviderTestRow` struct + `testAllProviders`
+  wrapper in `tauri-api.ts`. UI button to be wired in a follow-up.
+- **REPL `/model --max-tokens <N> --save`** (`feat/core-ui-model-max-tokens`,
+  ADR-0005 P4.13): closes the parity gap with `/model --tier --save`.
+  Adds `ProviderConfigStore::set_default_max_tokens` engine mutator
+  (chainable like `set_tier` / `set_active`); REPL handler accepts
+  `--max-tokens N` and `--max-tokens=N` forms, `0` / `clear` to revert
+  to the catalog default. 3 engine tests cover write / clear / save-load
+  cycle contracts. Available in the REPL only; the `shannon` CLI's
+  top-level `--max-tokens` flag remains session-scoped.
+
 ### Voice input — cloud speech-to-text (D4 Phase 1)
 
 Branch `s2/voice-cloud-stt` (PR #100). Replaces the browser Web Speech API
