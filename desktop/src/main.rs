@@ -80,6 +80,7 @@ fn main() {
             commands_config::get_config,
             commands_config::detect_provider_from_env,
             commands_config::test_provider_connection,
+            commands_config::test_all_providers,
             commands_config::list_providers,
             commands_config::save_provider,
             commands_config::delete_provider,

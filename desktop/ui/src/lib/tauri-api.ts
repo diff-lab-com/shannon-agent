@@ -230,6 +230,27 @@ export async function testProviderConnection(
   return invoke('test_provider_connection', { provider, apiKey, baseUrl })
 }
 
+/// One row in the response from `testAllProviders`. Mirrors the Rust
+/// `ProviderTestRow` shape; the Settings → Models "Test all" UI renders one
+/// per managed connection with a status pill.
+export interface ProviderTestRow {
+  id: string
+  label: string
+  provider_kind: string
+  result: TestConnectionResult
+  latency_ms: number | null
+}
+
+/// Probe every configured provider connection in parallel (ADR-0005 P4.12).
+///
+/// Reuses the engine `probe_provider_endpoint` so the per-row verdict is the
+/// same shape the single-provider `testProviderConnection` returns. Rows are
+/// returned in the same order as `listProviders()` so the UI can join them
+/// without an extra index lookup.
+export async function testAllProviders(): Promise<ProviderTestRow[]> {
+  return invoke('test_all_providers')
+}
+
 // --- Managed providers (Models P2) ---
 
 /// List all managed providers (API keys masked). Lazily migrates the legacy
