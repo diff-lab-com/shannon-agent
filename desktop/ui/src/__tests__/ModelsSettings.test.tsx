@@ -242,4 +242,69 @@ describe('ModelsSettings', () => {
       expect.objectContaining({ key: 'enabled_providers', value: 'null' }),
     )
   })
+
+  // === Test all providers (ADR-0005 P4.12) ===
+  //
+  // The "Test all" button calls the fan-out `testAllProviders` command
+  // and renders one row per managed connection. These tests pin the
+  // button-click → command-call → results-render path so the UI doesn't
+  // silently lose the per-row status pills.
+
+  it('renders the Test all button with empty-state disabled', async () => {
+    // Default mock: listProviders returns `{ providers: [], active_provider_id: null }`.
+    render(wrap(<ModelsSettings />))
+    await new Promise((r) => setTimeout(r, 0))
+    const btn = screen.getByRole('button', { name: /Test all/i })
+    expect(btn).toBeInTheDocument()
+    expect(btn).toBeDisabled()
+  })
+
+  it('runs testAllProviders on click and renders per-row status pills', async () => {
+    vi.mocked(api.listProviders).mockResolvedValueOnce({
+      active_provider_id: 'p-anthropic',
+      providers: [
+        { id: 'p-anthropic', label: 'Anthropic', provider_kind: 'anthropic', api_key: '***', model: 'claude-sonnet-4-6' },
+        { id: 'p-ollama',    label: 'Local',     provider_kind: 'ollama',    api_key: '',     model: 'qwen2.5-coder:7b' },
+      ],
+    })
+    vi.mocked(api.testAllProviders).mockResolvedValueOnce([
+      { id: 'p-anthropic', label: 'Anthropic', provider_kind: 'anthropic', result: { kind: 'success' },            latency_ms: 412 },
+      { id: 'p-ollama',    label: 'Local',     provider_kind: 'ollama',    result: { kind: 'network_unreachable' }, latency_ms: 6001 },
+    ])
+
+    render(wrap(<ModelsSettings />))
+    await new Promise((r) => setTimeout(r, 0))
+
+    const btn = screen.getByRole('button', { name: /Test all/i })
+    expect(btn).not.toBeDisabled()
+    fireEvent.click(btn)
+
+    // Wait for the async probe + state update.
+    await screen.findByTestId('test-all-results')
+    expect(api.testAllProviders).toHaveBeenCalledTimes(1)
+
+    // Two rows rendered, one per managed connection.
+    expect(screen.getByTestId('test-all-result-p-anthropic')).toBeInTheDocument()
+    expect(screen.getByTestId('test-all-result-p-ollama')).toBeInTheDocument()
+
+    // Latency rendered for both rows (both reported a latency).
+    expect(screen.getByText(/412 ms/)).toBeInTheDocument()
+    expect(screen.getByText(/6001 ms/)).toBeInTheDocument()
+  })
+
+  it('handles a testAllProviders error by surfacing a toast and not rendering the panel', async () => {
+    vi.mocked(api.listProviders).mockResolvedValueOnce({
+      active_provider_id: 'p-1',
+      providers: [{ id: 'p-1', label: 'Anthropic', provider_kind: 'anthropic', api_key: '***', model: 'claude-sonnet-4-6' }],
+    })
+    vi.mocked(api.testAllProviders).mockRejectedValueOnce(new Error('boom'))
+
+    render(wrap(<ModelsSettings />))
+    await new Promise((r) => setTimeout(r, 0))
+
+    fireEvent.click(screen.getByRole('button', { name: /Test all/i }))
+
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByTestId('test-all-results')).toBeNull()
+  })
 })

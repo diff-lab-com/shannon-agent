@@ -127,6 +127,8 @@ vi.mock('@/lib/tauri-api', () => ({
   saveProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   deleteProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   setActiveProvider: vi.fn().mockResolvedValue(undefined),
+  // ADR-0005 P4.12 — fan-out probe. Default: empty roster.
+  testAllProviders: vi.fn().mockResolvedValue([]),
   listModels: vi.fn().mockResolvedValue([
     { id: 'claude-sonnet-4-6', name: 'Claude Sonnet', provider: 'anthropic', context_window: 200000 },
   ]),

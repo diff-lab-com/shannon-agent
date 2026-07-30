@@ -303,6 +303,88 @@ function toastTestResult(
   }
 }
 
+/**
+ * Renders the results of the "Test all providers" fan-out probe as a compact
+ * list of provider label + status pill + latency. Status pill reuses the
+ * same `settings.models.testResult.*` keys the single-provider toast uses so
+ * the wording stays identical between the two surfaces.
+ */
+function TestAllResultsPanel({
+  rows,
+  intl,
+  t,
+}: {
+  rows: api.ProviderTestRow[]
+  intl: ReturnType<typeof useIntl>
+  t: (id: string) => string
+}) {
+  const okCount = rows.filter(r => r.result.kind === 'success').length
+  const summary = intl.formatMessage(
+    { id: 'settings.models.providers.testAllSummary' },
+    { ok: okCount, total: rows.length },
+  )
+  return (
+    <div
+      data-testid="test-all-results"
+      className="mt-md rounded-lg border border-outline-variant/30 bg-surface-container-low/30 p-md space-y-sm"
+    >
+      <p className="font-label-sm text-on-surface-variant">{summary}</p>
+      <div className="grid grid-cols-1 gap-xs">
+        {rows.map(r => {
+          const result = r.result
+          const pillClass =
+            result.kind === 'success'
+              ? 'bg-primary-container text-on-primary-container'
+              : result.kind === 'rate_limited'
+                ? 'bg-tertiary-container text-on-tertiary-container'
+                : 'bg-error-container text-on-error-container'
+          const pillLabel = (() => {
+            switch (result.kind) {
+              case 'success':
+                return t('settings.models.testResult.success')
+              case 'invalid_key':
+                return t('settings.models.testResult.invalidKey')
+              case 'rate_limited':
+                return t('settings.models.testResult.rateLimited')
+              case 'network_unreachable':
+                return intl.formatMessage({ id: 'settings.models.testResult.networkUnreachable' }, { provider: r.provider_kind })
+              case 'provider_error':
+                return intl.formatMessage({ id: 'settings.models.testResult.providerError' }, { provider: r.provider_kind, status: result.status })
+              case 'unknown':
+                return intl.formatMessage({ id: 'settings.models.testResult.unknown' }, { message: result.message })
+            }
+          })()
+          return (
+            <div
+              key={r.id}
+              className="flex items-center justify-between gap-md px-sm py-xs rounded-md bg-surface-container-lowest"
+            >
+              <div className="flex items-center gap-sm min-w-0">
+                <span className="font-label-md text-on-surface truncate">{r.label}</span>
+                <span className="font-label-xs text-[11px] text-on-surface-variant">{r.provider_kind}</span>
+              </div>
+              <div className="flex items-center gap-sm shrink-0">
+                {r.latency_ms !== null ? (
+                  <span className="font-label-xs text-[11px] text-on-surface-variant">
+                    {intl.formatMessage({ id: 'settings.models.providers.latency' }, { ms: r.latency_ms })}
+                  </span>
+                ) : null}
+                <span
+                  data-testid={`test-all-result-${r.id}`}
+                  className={`px-sm py-[2px] rounded-full text-[10px] font-bold uppercase tracking-wider ${pillClass}`}
+                  title={pillLabel}
+                >
+                  {pillLabel}
+                </span>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function ProvidersSection({
   providersFile,
   loading,
@@ -321,6 +403,8 @@ function ProvidersSection({
   const [testingId, setTestingId] = useState<string | null>(null)
   const [activatingId, setActivatingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ProviderConnection | null>(null)
+  const [testAllRunning, setTestAllRunning] = useState(false)
+  const [testAllRows, setTestAllRows] = useState<api.ProviderTestRow[] | null>(null)
 
   const handleTest = async (conn: ProviderConnection) => {
     // Only the active provider's key is mirrored into config; for a connection
@@ -384,7 +468,23 @@ function ProvidersSection({
     onChange(fresh)
     setModalOpen(false)
     setEditing(null)
+    // Stale "test all" results would mislead if the user then re-runs the
+    // batch probe — drop them and force the user to re-run.
+    setTestAllRows(null)
     toast.success(t('settings.models.providers.saved'))
+  }
+
+  const handleTestAll = async () => {
+    if (testAllRunning) return
+    setTestAllRunning(true)
+    try {
+      const rows = await api.testAllProviders()
+      setTestAllRows(rows)
+    } catch (e) {
+      toastError(t('settings.models.testResult.failed'), e)
+    } finally {
+      setTestAllRunning(false)
+    }
   }
 
   return (
@@ -400,6 +500,27 @@ function ProvidersSection({
         >
           <span className="material-symbols-outlined text-[18px]">add</span>
           {t('settings.models.providers.add')}
+        </Button>
+      </div>
+      <div className="flex justify-end -mt-md mb-md">
+        <Button
+          variant="ghost"
+          className="px-md py-sm text-on-surface-variant hover:text-primary whitespace-nowrap cursor-pointer disabled:opacity-50"
+          onClick={handleTestAll}
+          disabled={testAllRunning || providersFile.providers.length === 0}
+          aria-label={t('settings.models.providers.testAll')}
+        >
+          {testAllRunning ? (
+            <>
+              <span className="material-symbols-outlined text-[18px] animate-spin">progress_activity</span>
+              {t('settings.models.providers.testAllInProgress')}
+            </>
+          ) : (
+            <>
+              <span className="material-symbols-outlined text-[18px]">cable</span>
+              {t('settings.models.providers.testAll')}
+            </>
+          )}
         </Button>
       </div>
 
@@ -481,6 +602,14 @@ function ProvidersSection({
           })}
         </div>
       )}
+
+      {testAllRows !== null ? (
+        testAllRows.length === 0 ? (
+          <p className="text-body-sm text-on-surface-variant py-md text-center">{t('settings.models.providers.testAllEmpty')}</p>
+        ) : (
+          <TestAllResultsPanel rows={testAllRows} intl={intl} t={t} />
+        )
+      ) : null}
 
       {modalOpen ? (
         <AddProviderModal
