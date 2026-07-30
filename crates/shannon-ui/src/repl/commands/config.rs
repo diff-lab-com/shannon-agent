@@ -39,6 +39,15 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
         return handle_model_tier(repl, args);
     }
 
+    // /model --max-tokens <N> [--save] — override the per-request max-tokens
+    // ceiling for the active provider, optionally persisting to providers.toml.
+    // Order matters: the `--tier` check above would also match a `--max-tokens`
+    // string that happens to start with the same prefix, so we test
+    // `--max-tokens` first.
+    if args.starts_with("--max-tokens") {
+        return handle_model_max_tokens(repl, args);
+    }
+
     // /model refresh — pull models.dev and rebuild the dynamic overlay (Phase D).
     if args.trim() == "refresh" {
         return handle_model_refresh(repl);
@@ -1550,6 +1559,123 @@ pub(crate) fn handle_lang(repl: &mut Repl, args: &str) -> Result<()> {
             ),
         );
     }
+    Ok(())
+}
+
+/// Handle /model --max-tokens <N> [--save] — set or persist a per-provider
+/// `default_max_tokens` override. The override is the fallback the engine
+/// uses when a request does not specify `max_tokens`
+/// ([`shannon_core::unified_config::build_client_from_resolved`] reads it
+/// from the active profile).
+///
+/// Forms accepted:
+/// - `/model --max-tokens 8192` — preview the override; do not persist.
+/// - `/model --max-tokens 8192 --save` — also persist to providers.toml.
+/// - `/model --max-tokens=8192 --save` — equals form, same semantics.
+///
+/// Special values:
+/// - `0` or `clear` — clear the override (revert to the catalog default).
+/// - Any other integer is parsed as `u32`; non-numeric input is an error.
+///
+/// Persistence path: `ProviderConfigStore::set_default_max_tokens` +
+/// `save()`. The active provider is taken from `repl.state.selected_provider`;
+/// if none is selected the command errors out (same contract as `/model --tier`
+/// without an explicit provider).
+///
+/// Mirrors ADR-0005 P4.13 — closes the parity gap with `/model --tier --save`.
+fn handle_model_max_tokens(repl: &mut Repl, args: &str) -> Result<()> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let first = parts.first().copied().unwrap_or("");
+    let raw_value = if first == "--max-tokens" {
+        parts.get(1).copied().unwrap_or("")
+    } else if let Some(rest) = first.strip_prefix("--max-tokens=") {
+        rest
+    } else {
+        return Err("internal: handle_model_max_tokens called without --max-tokens prefix".into());
+    };
+
+    if raw_value.is_empty() {
+        return Err(
+            "missing value for --max-tokens; usage: /model --max-tokens <N|clear> [--save]".into(),
+        );
+    }
+
+    // "0" and "clear" both mean "revert to the catalog default" so the user
+    // has an obvious escape hatch when an earlier `--save` left an unwanted
+    // override behind. Other non-numeric input is rejected as a typo.
+    let next = if raw_value == "0" || raw_value.eq_ignore_ascii_case("clear") {
+        None
+    } else {
+        let parsed = raw_value.parse::<u32>().map_err(|e| {
+            format!(
+                "invalid --max-tokens value '{raw_value}' (expected non-negative integer or 'clear'): {e}"
+            )
+        })?;
+        // A max-tokens ceiling of 0 would be indistinguishable from "unset"
+        // by the engine, so guard against it silently slipping through as a
+        // non-`clear` value.
+        if parsed == 0 {
+            return Err(
+                "0 is reserved for 'clear'; use 'clear' or omit --max-tokens to revert".into(),
+            );
+        }
+        Some(parsed)
+    };
+
+    let save = parts.contains(&"--save");
+    let provider = repl.state.selected_provider.clone().ok_or_else(|| {
+        "No provider selected; switch to a provider first (`/provider <name>`), \
+         then re-run /model --max-tokens"
+            .to_string()
+    })?;
+
+    if save {
+        persist_max_tokens_to_providers_toml(&provider, next)?;
+    }
+
+    let action = match next {
+        Some(n) => format!("set to {n}"),
+        None => "cleared (revert to catalog default)".to_string(),
+    };
+    let saved_note = if save {
+        " and saved to providers.toml"
+    } else {
+        " (not saved)"
+    };
+    let msg = format!("default_max_tokens for {provider:?} {action}{saved_note}");
+    repl.chat.add_message(ChatRole::System, msg);
+    Ok(())
+}
+
+/// Persist the resolved `default_max_tokens` override back into
+/// `~/.shannon/providers.toml` for the named provider (ADR-0005 P4.13).
+///
+/// Steps:
+/// 1. Load (or default-construct) a [`ProviderConfigStore`] for the v2 file.
+/// 2. Write `default_max_tokens` on the active provider slot via
+///    `set_default_max_tokens` — `None` clears the override.
+/// 3. Atomically persist via `store.save()`.
+///
+/// Errors do not roll back REPL state: `/model --max-tokens` is a one-shot
+/// metadata write, not a model switch, so a transient save failure should be
+/// surfaced but must not corrupt the running engine. The caller (`handle_model_max_tokens`)
+/// does not depend on `repl.state` to apply the value — the engine reads it
+/// on the next request from disk.
+fn persist_max_tokens_to_providers_toml(provider: &LlmProvider, next: Option<u32>) -> Result<()> {
+    use shannon_core::provider_config_store::ProviderConfigStore;
+
+    let mut store = ProviderConfigStore::load_or_default();
+    store
+        .set_default_max_tokens(provider, next)
+        .save()
+        .map_err(|e| {
+            format!(
+                "failed to persist default_max_tokens to providers.toml: {e} \
+                 (provider={}, next={:?})",
+                format!("{provider:?}").to_lowercase(),
+                next,
+            )
+        })?;
     Ok(())
 }
 

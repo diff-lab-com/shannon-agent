@@ -389,6 +389,27 @@ impl ProviderConfigStore {
         self
     }
 
+    /// Set `default_max_tokens` on the active provider profile. Persists the
+    /// ceiling the engine uses when the request does not specify one
+    /// ([`crate::unified_config::build_client_from_resolved`] reads it via the
+    /// `default_max_tokens` fallback chain). Pass `None` to clear the
+    /// override and revert to the catalog default.
+    ///
+    /// Mirrors the chainability of [`set_tier`] / [`set_active`], and uses
+    /// [`ensure_provider`] so the slot exists before writing — same defense
+    /// against a missing profile as the other mutators. The REPL `/model
+    /// --max-tokens <N> --save` path uses this so a one-shot override survives
+    /// restarts (ADR-0005 P4.13 parity with `/model --tier --save`).
+    pub fn set_default_max_tokens(
+        &mut self,
+        provider: &LlmProvider,
+        max_tokens: Option<u32>,
+    ) -> &mut Self {
+        let profile = self.ensure_provider(provider);
+        profile.default_max_tokens = max_tokens;
+        self
+    }
+
     /// Insert or replace a fully-built [`ProviderProfile`] under the
     /// `"default"` model profile, keyed by `profile.id`. The desktop uses
     /// this to land managed connections (e.g. two distinct
@@ -841,6 +862,55 @@ mod tests {
         let rt = resolve_active_target(&loaded).expect("active resolves after reload");
         assert_eq!(rt.model_id, "gpt-4o");
         assert_eq!(rt.provider, LlmProvider::OpenAI);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn store_set_default_max_tokens_writes_to_provider_profile() {
+        // ADR-0005 P4.13: `/model --max-tokens N --save` writes the override
+        // to the active provider's profile.
+        let mut store = ProviderConfigStore::default();
+        store.set_default_max_tokens(&LlmProvider::Anthropic, Some(8192));
+        let profile = store
+            .config
+            .profiles
+            .get("default")
+            .and_then(|p| p.providers.iter().find(|pr| pr.id == "anthropic"))
+            .expect("anthropic slot should exist after ensure_provider");
+        assert_eq!(profile.default_max_tokens, Some(8192));
+    }
+
+    #[test]
+    fn store_set_default_max_tokens_none_clears_override() {
+        // ADR-0005 P4.13: passing None reverts to the catalog default.
+        let mut store = ProviderConfigStore::default();
+        store.set_default_max_tokens(&LlmProvider::Anthropic, Some(4096));
+        store.set_default_max_tokens(&LlmProvider::Anthropic, None);
+        let profile = store
+            .config
+            .profiles
+            .get("default")
+            .and_then(|p| p.providers.iter().find(|pr| pr.id == "anthropic"))
+            .expect("anthropic slot exists");
+        assert_eq!(profile.default_max_tokens, None);
+    }
+
+    #[test]
+    fn store_set_default_max_tokens_survives_save_load_cycle() {
+        // The save/load cycle must round-trip default_max_tokens — same
+        // contract as the other mutators. Without this the REPL `/model
+        // --max-tokens N --save` change is silently lost on restart.
+        let path = tmp_path();
+        let mut store = ProviderConfigStore::load_or_default();
+        store.set_default_max_tokens(&LlmProvider::OpenAI, Some(16384));
+        store.save_at(&path).unwrap();
+        let loaded = load(Some(&path)).expect("should parse back");
+        let profile = loaded
+            .profiles
+            .get("default")
+            .and_then(|p| p.providers.iter().find(|pr| pr.id == "openai"))
+            .expect("openai slot persisted");
+        assert_eq!(profile.default_max_tokens, Some(16384));
         let _ = fs::remove_file(&path);
     }
 
