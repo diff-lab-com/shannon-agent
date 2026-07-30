@@ -21,7 +21,7 @@ pub async fn new_session(
     let now = chrono_timestamp();
 
     // Create empty session file using StateManager
-    let model = state.model.lock().await.clone();
+    let model = state.client_config.read().await.model.clone();
     let metadata = shannon_engine::state::SessionPersistMetadata {
         model,
         turn_count: 0,
@@ -334,7 +334,7 @@ pub async fn switch_session(
         if let Some(ref sid) = current_id {
             let messages = state.messages.lock().await.clone();
             if let Ok(uuid) = uuid::Uuid::parse_str(sid) {
-                let model = state.model.lock().await.clone();
+                let model = state.client_config.read().await.model.clone();
                 let core_msgs: Vec<shannon_engine::api::Message> = messages
                     .iter()
                     .map(|m| shannon_engine::api::Message {
@@ -617,7 +617,7 @@ pub async fn rename_session(
         session.title = title.clone();
 
         // Update persisted session metadata
-        let model = state.model.lock().await.clone();
+        let model = state.client_config.read().await.model.clone();
         let messages = state.messages.lock().await.clone();
         let core_msgs: Vec<shannon_engine::api::Message> = messages
             .iter()
@@ -676,7 +676,7 @@ pub async fn duplicate_session(
     let new_title = format!("Copy of {}", original_session.title);
     let now = chrono_timestamp();
 
-    let model_name = state.model.lock().await.clone();
+    let model_name = state.client_config.read().await.model.clone();
     let metadata = shannon_engine::state::SessionPersistMetadata {
         model: model_name,
         turn_count: session_data.messages.len() / 2,
@@ -770,7 +770,7 @@ pub(crate) async fn branch_session_internal(
         .cloned()
         .collect();
 
-    let model_name = state.model.lock().await.clone();
+    let model_name = state.client_config.read().await.model.clone();
     let metadata = shannon_engine::state::SessionPersistMetadata {
         model: model_name,
         turn_count: branch_messages.len() / 2,

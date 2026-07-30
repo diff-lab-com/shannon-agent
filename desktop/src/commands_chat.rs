@@ -41,7 +41,7 @@ pub async fn get_conversation(
 pub async fn list_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
     use shannon_core::model_registry::effective_provider_allowlist;
 
-    let provider_str = state.provider.lock().await.clone();
+    let provider_str = state.client_config.read().await.provider.to_string();
     let allowlist = {
         let dc = state.desktop_config.read().await;
         dc.enabled_providers.clone()
@@ -156,8 +156,10 @@ fn llm_provider_from_slug(s: &str) -> Option<shannon_engine::api::LlmProvider> {
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<StatusResponse, String> {
-    let model = state.model.lock().await;
-    let provider = state.provider.lock().await;
+    let cc = state.client_config.read().await;
+    let model = cc.model.clone();
+    let provider = cc.provider.to_string();
+    drop(cc);
     let querying = state.querying.lock().await;
     let messages = state.messages.lock().await;
     let working_dir = std::env::current_dir()
@@ -165,8 +167,8 @@ pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<StatusRespo
         .unwrap_or_else(|_| ".".into());
 
     Ok(StatusResponse {
-        model: model.clone(),
-        provider: provider.clone(),
+        model,
+        provider,
         querying: *querying,
         message_count: messages.len(),
         working_dir,
