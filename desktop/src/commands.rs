@@ -65,6 +65,15 @@ pub struct AppState {
     pub(crate) provider: Arc<Mutex<String>>,
     /// LLM client config — used to build clients on demand.
     pub(crate) client_config: Arc<RwLock<LlmClientConfig>>,
+    /// Engine-side `~/.shannon/providers.toml` write path. Held behind
+    /// an in-process `Mutex` so the three desktop commands that touch
+    /// it (`save_provider`, `set_active_provider`, `delete_provider`)
+    /// can't clobber each other via the load-mutate-save race that
+    /// `ProviderConfigStore::save` is otherwise vulnerable to. On
+    /// startup the in-memory state is loaded from disk; subsequent
+    /// edits round-trip through this single instance.
+    pub(crate) provider_store:
+        Arc<tokio::sync::Mutex<shannon_core::provider_config_store::ProviderConfigStore>>,
     /// Tool registry with default tools.
     pub(crate) tools: Arc<ToolRegistry>,
     /// Permission manager.
@@ -284,6 +293,9 @@ impl AppState {
             model: Arc::new(Mutex::new(model)),
             provider: Arc::new(Mutex::new(provider)),
             client_config: Arc::new(RwLock::new(client_config)),
+            provider_store: Arc::new(tokio::sync::Mutex::new(
+                shannon_core::provider_config_store::ProviderConfigStore::load_or_default(),
+            )),
             tools: Arc::new(tool_registry),
             permissions: Arc::new(RwLock::new(PermissionManager::new())),
             state_manager: Arc::new(StateManager::new()),

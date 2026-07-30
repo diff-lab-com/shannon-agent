@@ -10,6 +10,81 @@ use crate::config::{self, DesktopConfig, ProviderConnection, ProvidersFile};
 use crate::events;
 use crate::events::event_names;
 
+/// Resolve a desktop kind slug to the engine's canonical default base
+/// URL for that kind. Returns `None` for kinds that have no canonical
+/// URL (today: `openai-compatible`, which is the catch-all the user
+/// must supply a custom URL for, and any unknown slug). The caller
+/// falls back to an empty string when this is `None`, which the
+/// engine's `resolve_provider` will reject — a user error, not a
+/// default.
+fn default_base_url_for_kind(kind: &str) -> Option<&'static str> {
+    if kind == "openai-compatible" {
+        return None;
+    }
+    let provider = llm_provider_for_active_mirror(kind)?;
+    Some(provider.default_base_url())
+}
+
+/// Build a v2 `ProviderProfile` from a `ProviderConnection` using the
+/// engine's canonical default base URL for the connection's kind. The
+/// user-supplied `base_url` always wins; the default is the fallback
+/// for connections that don't set one (e.g. a brand-new Anthropic
+/// connection — engine should still be able to talk to
+/// `https://api.anthropic.com`).
+fn connection_to_profile(
+    conn: &ProviderConnection,
+) -> shannon_types::provider_config::ProviderProfile {
+    let default = default_base_url_for_kind(&conn.provider_kind).unwrap_or("");
+    conn.to_provider_profile(default)
+}
+
+/// Land a managed connection in the engine's
+/// `~/.shannon/providers.toml` via
+/// `ProviderConfigStore::upsert_profile + save`. The desktop's
+/// `providers.json` cache is the read-side fan-out for the UI; the
+/// engine store is the source of truth for the runtime path.
+///
+/// `upsert_profile` sets `active_target.{provider_id, model_id}` on
+/// the `"default"` model profile as a side effect, so this single
+/// helper covers both the `save_provider` and `set_active_provider`
+/// desktop flows — there is no separate "activate" call against the
+/// engine store.
+///
+/// Holds `AppState::provider_store` for the full R-M-W sequence so
+/// concurrent desktop commands (e.g. two `save_provider` calls in
+/// flight) can't clobber each other. The lock is released before the
+/// function returns.
+async fn land_profile_in_engine_store(
+    state: &tauri::State<'_, AppState>,
+    conn: &ProviderConnection,
+    model_id: &str,
+) -> Result<(), String> {
+    let profile = connection_to_profile(conn);
+    let mut store = state.provider_store.lock().await;
+    store.upsert_profile(profile, model_id);
+    store
+        .save()
+        .map_err(|e| format!("could not persist to providers.toml: {e}"))?;
+    Ok(())
+}
+
+/// Remove a managed connection from the engine's `providers.toml`
+/// via `ProviderConfigStore::remove_profile + save`. If the removed
+/// slot was the active target, the engine clears
+/// `active_target.{provider_id, model_id}` to empty — the resolver
+/// falls back to synthesis on the next request.
+async fn remove_profile_from_engine_store(
+    state: &tauri::State<'_, AppState>,
+    profile_id: &str,
+) -> Result<(), String> {
+    let mut store = state.provider_store.lock().await;
+    store.remove_profile(profile_id);
+    store
+        .save()
+        .map_err(|e| format!("could not persist to providers.toml: {e}"))?;
+    Ok(())
+}
+
 /// Configuration update payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigUpdate {
@@ -833,8 +908,13 @@ pub async fn list_providers(state: tauri::State<'_, AppState>) -> Result<Provide
 /// New keys (non-empty, non-`"***"`) are routed into the credential store
 /// (`~/.shannon/credentials/<id>.json`); the on-disk `providers.json` never
 /// carries plaintext anymore (A1 — config never carries plaintext secrets).
+/// The connection is also landed in the engine's
+/// `~/.shannon/providers.toml` via `ProviderConfigStore::upsert_profile`
+/// so the runtime path sees the same shape as the REPL's `/connect`
+/// (ADR-0005 Phase 2 / task 4).
 #[tauri::command]
 pub async fn save_provider(
+    state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
     input: ProviderInput,
 ) -> Result<ProvidersFile, String> {
@@ -880,32 +960,56 @@ pub async fn save_provider(
     store_provider_key(&target_id, &target_label, input.api_key.as_deref())?;
 
     config::save_providers(&file)?;
+
+    // Mirror the saved connection into the engine's providers.toml so
+    // the runtime path reads the same shape as the UI. The model_id
+    // we hand the engine is the user-supplied default for this
+    // connection (or "default" when the user didn't pick one). For
+    // managed openai-compatible connections (glm / kimi / etc.) this
+    // uses the desktop's slug ("glm") as the profile id, which
+    // `upsert_profile` preserves verbatim — no OpenAI-collapse.
+    let updated_conn = file
+        .providers
+        .iter()
+        .find(|p| p.id == target_id)
+        .expect("just inserted/updated")
+        .clone();
+    let model_id = updated_conn
+        .model
+        .clone()
+        .unwrap_or_else(|| "default".to_string());
+    land_profile_in_engine_store(&state, &updated_conn, &model_id).await?;
+
     emit_providers_changed(&app_handle, &file);
     Ok(mask_providers(file))
 }
 
 /// Delete a managed provider by id. Clears `active_provider_id` if it pointed
-/// at the deleted entry. Returns the updated (masked) file.
+/// at the deleted entry. Returns the updated (masked) file. Also removes
+/// the slot from the engine's `providers.toml` so a stale connection
+/// cannot survive a desktop restart.
 #[tauri::command]
 pub async fn delete_provider(
+    state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<ProvidersFile, String> {
     let file = remove_provider(config::load_providers(), &id)?;
     config::save_providers(&file)?;
+    remove_profile_from_engine_store(&state, &id).await?;
     emit_providers_changed(&app_handle, &file);
     Ok(mask_providers(file))
 }
 
 /// Activate a managed provider: mirrors its fields into the singular
 /// `DesktopConfig` that the engine reads (for the running session),
-/// rebuilds the client config, **and** mirrors the activation into
-/// `~/.shannon/providers.toml` via `provider_config_store::set_active` so
-/// the desktop shell and the CLI agree on the active target on the next
-/// launch (ADR-0005 Phase 2 acceptance: switching provider in Desktop is
-/// observed by the CLI reading the same active_target). Emits
-/// `CONFIG_UPDATED` so the tray and any open windows refresh their
-/// provider label.
+/// rebuilds the client config, **and** lands the connection in the
+/// engine's `~/.shannon/providers.toml` via
+/// `ProviderConfigStore::upsert_profile` so the desktop shell and the
+/// CLI agree on the active target on the next launch (ADR-0005 Phase 2
+/// acceptance: switching provider in Desktop is observed by the CLI
+/// reading the same `active_target`). Emits `CONFIG_UPDATED` so the
+/// tray and any open windows refresh their provider label.
 #[tauri::command]
 pub async fn set_active_provider(
     state: tauri::State<'_, AppState>,
@@ -946,30 +1050,19 @@ pub async fn set_active_provider(
 
     config::save_config(&desktop_cfg)?;
 
-    file.active_provider_id = Some(id);
+    file.active_provider_id = Some(id.clone());
     config::save_providers(&file)?;
 
-    // Mirror the activation into the engine's `~/.shannon/providers.toml`
-    // so the desktop shell and the CLI share one active target. `Auto`
-    // resolver / `/provider health` / CLI restart all read from this file,
-    // not from the desktop singular config. We resolve the desktop slug
-    // back to an `LlmProvider` best-effort — when the slug is
-    // `openai-compatible` we collapse to `OpenAI` (the actual request still
-    // uses the user's `base_url` via the DesktopConfig mirror above).
-    if let Some(provider) = llm_provider_for_active_mirror(&provider_kind) {
-        let model_id = model.as_deref().unwrap_or("default");
-        let mut store = shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
-        store.set_active(&provider, model_id);
-        // Failures writing the engine store are non-fatal — the desktop
-        // activation already succeeded; log + continue.
-        if let Err(e) = store.save() {
-            tracing::warn!(
-                provider = %provider_kind,
-                error = %e,
-                "could not mirror activation into providers.toml"
-            );
-        }
-    }
+    // Land the activation in the engine's `~/.shannon/providers.toml`
+    // so the desktop shell and the CLI share one active target. The
+    // engine's active target is what `/provider health`, `Auto`
+    // resolver, and CLI restart all read — not the desktop singular
+    // config. `upsert_profile` (not `set_active(&LlmProvider, ...)`)
+    // is used so a managed openai-compatible slot (glm / kimi) keeps
+    // its desktop slug as the profile id and does not collapse onto
+    // the engine's single "openai" slot.
+    let model_id = model.clone().unwrap_or_else(|| "default".to_string());
+    land_profile_in_engine_store(&state, &conn, &model_id).await?;
 
     let _ = app_handle.emit(
         event_names::CONFIG_UPDATED,
@@ -1338,5 +1431,90 @@ mod tests {
         assert_eq!(conn.label, "Anthropic"); // kind_label
         assert_eq!(conn.api_key.as_deref(), Some("sk-legacy"));
         assert_eq!(conn.model.as_deref(), Some("claude-sonnet-4-6"));
+    }
+
+    // === Engine-store write helpers (Phase 2 task 4) ===
+    //
+    // `land_profile_in_engine_store` and `remove_profile_from_engine_store`
+    // are async and require a Tauri State, so they're hard to unit-test
+    // in isolation. The pure helpers they build on are tested here —
+    // the rest is exercised by the engine-side tests for
+    // `ProviderConfigStore::upsert_profile / remove_profile`.
+
+    #[test]
+    fn default_base_url_for_kind_returns_canonical_url_per_kind() {
+        assert_eq!(
+            default_base_url_for_kind("anthropic"),
+            Some("https://api.anthropic.com")
+        );
+        assert_eq!(
+            default_base_url_for_kind("openai"),
+            Some("https://api.openai.com")
+        );
+        assert_eq!(
+            default_base_url_for_kind("ollama"),
+            Some("http://localhost:11434")
+        );
+        assert_eq!(
+            default_base_url_for_kind("deepseek"),
+            Some("https://api.deepseek.com")
+        );
+    }
+
+    #[test]
+    fn default_base_url_for_kind_returns_none_for_openai_compatible() {
+        // openai-compatible is the user-supplied-URL catch-all — the
+        // engine has no canonical default for it.
+        assert_eq!(default_base_url_for_kind("openai-compatible"), None);
+    }
+
+    #[test]
+    fn default_base_url_for_kind_returns_none_for_unknown_kind() {
+        // Unknown slugs should not panic — they get the openai-
+        // compatible collapse path in `to_provider_profile`.
+        assert_eq!(default_base_url_for_kind("anthropicc"), None);
+    }
+
+    #[test]
+    fn connection_to_profile_passes_user_base_url_through() {
+        // When the user supplies a custom base_url (the openai-
+        // compatible case), the default-base-url fallback is not used.
+        let conn = ProviderConnection {
+            id: "kimi".into(),
+            label: "Kimi".into(),
+            provider_kind: "openai-compatible".into(),
+            api_key: None,
+            base_url: Some("https://api.moonshot.cn/v1".into()),
+            model: Some("moonshot-v1-128k".into()),
+            created_at: "2026-07-30T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let profile = connection_to_profile(&conn);
+        assert_eq!(profile.base_url, "https://api.moonshot.cn/v1");
+        assert_eq!(profile.id, "kimi");
+        // OpenAI-compatible collapses to OpenAI in the engine's
+        // kind enum; the engine's resolve_provider recovers
+        // identity from base_url at resolution time.
+        assert_eq!(
+            profile.kind,
+            shannon_types::provider_config::ProviderKind::OpenAiCompatible
+        );
+    }
+
+    #[test]
+    fn connection_to_profile_falls_back_to_engine_canonical_default() {
+        // Anthropic without an explicit base_url → engine default.
+        let conn = ProviderConnection {
+            id: "anthropic-main".into(),
+            label: "Anthropic".into(),
+            provider_kind: "anthropic".into(),
+            api_key: None,
+            base_url: None,
+            model: None,
+            created_at: "2026-07-30T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let profile = connection_to_profile(&conn);
+        assert_eq!(profile.base_url, "https://api.anthropic.com");
     }
 }
