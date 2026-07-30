@@ -85,6 +85,97 @@ async fn land_profile_in_engine_store(
     Ok(())
 }
 
+/// Look up the active provider's id and kind in the engine
+/// `ProviderConfigStore`. Returns `None` when no active target is set
+/// (an empty `provider_id` in `active_target`). Used by the
+/// `configure('model' | 'api_key' | 'base_url' | 'provider')` arms to
+/// route write paths through the store without touching the legacy
+/// `DesktopConfig.{provider,api_key,base_url,model}` mirror fields
+/// (P1.2-A — the A1 fix).
+fn active_provider_id_and_kind(
+    store: &shannon_core::provider_config_store::ProviderConfigStore,
+) -> Option<(String, String)> {
+    let cfg = store.config();
+    let pf = cfg.profiles.get("default")?;
+    let id = pf.active_target.provider_id.clone();
+    if id.is_empty() {
+        return None;
+    }
+    let profile = pf.providers.iter().find(|p| p.id == id)?;
+    Some((id, provider_kind_slug(&profile.kind).to_string()))
+}
+
+/// Find the first managed provider whose `kind` matches `kind_str`.
+/// Returns `(provider_id, model_id)` of the matching slot; the model
+/// id is the current `active_target.model_id` (preserved across the
+/// switch so a `/model X` followed by `configure('provider', Y)`
+/// keeps the chosen model in the new provider's default slot).
+fn find_provider_by_kind(
+    store: &shannon_core::provider_config_store::ProviderConfigStore,
+    kind_str: &str,
+) -> Option<(String, String)> {
+    let cfg = store.config();
+    let pf = cfg.profiles.get("default")?;
+    let profile = pf
+        .providers
+        .iter()
+        .find(|p| provider_kind_slug(&p.kind) == kind_str)?;
+    Some((profile.id.clone(), pf.active_target.model_id.clone()))
+}
+
+/// Map a [`shannon_types::provider_config::ProviderKind`] to the
+/// kebab-case slug the desktop UI speaks (matches
+/// `LlmProvider::default_base_url` + the `llm_provider_for_active_mirror`
+/// mirror in the reverse direction). The wire format is also kebab-case
+/// per `#[serde(rename_all = "kebab-case")]` on the enum, so this stays
+/// the one canonical mapping the desktop needs.
+fn provider_kind_slug(k: &shannon_types::provider_config::ProviderKind) -> &'static str {
+    use shannon_types::provider_config::ProviderKind as K;
+    match k {
+        K::Anthropic => "anthropic",
+        K::OpenAi => "openai",
+        K::OpenAiCompatible => "openai-compatible",
+        K::Ollama => "ollama",
+        K::Gemini => "gemini",
+        K::Deepseek => "deepseek",
+        // Defensive default for `#[non_exhaustive]`; the engine
+        // adds new kinds before the desktop picks them up, so an
+        // unrecognised kind lands as "unsupported" rather than a panic.
+        _ => "unsupported",
+    }
+}
+
+/// Rebuild `state.client_config` from the engine
+/// `ProviderConfigStore`, layering the desktop `ShannonConfig`
+/// overrides (temperature, max_tokens) on top. Called by every
+/// `configure` arm that changes the store so the live query path
+/// (`send_message` / `cancel_query`) sees the new target without
+/// waiting for a restart.
+///
+/// `build_client_config` is `pub(crate)` and pure on the store +
+/// overrides, so this just locks, computes, and writes
+/// `state.client_config` in place. Drops both locks before
+/// returning.
+async fn rebuild_client_config_from_store(
+    state: &tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let overrides = {
+        let dc = state.desktop_config.read().await;
+        shannon_core::unified_config::ShannonConfig {
+            max_tokens: dc.max_tokens.map(|v| v as usize),
+            temperature: dc.temperature,
+            ..Default::default()
+        }
+    };
+    let new_cc = {
+        let store = state.provider_store.lock().await;
+        AppState::build_client_config(&store, &overrides).unwrap_or_default()
+    };
+    let mut cc = state.client_config.write().await;
+    *cc = new_cc;
+    Ok(())
+}
+
 /// Remove a managed connection from the engine's `providers.toml`
 /// via `ProviderConfigStore::remove_profile + save`. If the removed
 /// slot was the active target, the engine clears
@@ -139,39 +230,79 @@ pub async fn configure(
 ) -> Result<(), String> {
     match update.key.as_str() {
         "model" => {
-            let mut model = state.model.lock().await;
-            *model = update.value.clone();
-            let mut cfg = state.client_config.write().await;
-            cfg.model = update.value;
-
-            let mut desktop_cfg = state.desktop_config.write().await;
-            desktop_cfg.model = Some((*model).clone());
-            drop(desktop_cfg);
-
-            let desktop_cfg = state.desktop_config.read().await;
-            config::save_config(&desktop_cfg)?;
-
+            // P1.2-A: route the write through the engine
+            // `ProviderConfigStore` so the runtime client sees the new
+            // target without relying on the legacy `state.model` /
+            // `desktop_cfg.model` mirror. The mirror fields stay
+            // populated until P1.2-B removes them.
+            let new_model_id = update.value.clone();
+            let kind_str = {
+                let mut store = state.provider_store.lock().await;
+                let (_, kind_str) = active_provider_id_and_kind(&store).ok_or_else(|| {
+                    "configure('model'): no active provider — add one in Settings → Models first"
+                        .to_string()
+                })?;
+                let provider = llm_provider_for_active_mirror(&kind_str).ok_or_else(|| {
+                    format!("configure('model'): unsupported active kind `{kind_str}`")
+                })?;
+                store.set_active(&provider, &new_model_id);
+                store
+                    .save()
+                    .map_err(|e| format!("could not persist providers.toml: {e}"))?;
+                kind_str
+            };
+            rebuild_client_config_from_store(&state).await?;
+            // Legacy mirror — kept in sync so existing readers in
+            // commands.rs::send_message + commands_chat.rs::get_status
+            // and get_config() don't break before P1.2-B.
+            *state.model.lock().await = new_model_id.clone();
+            {
+                let mut dc = state.desktop_config.write().await;
+                dc.model = Some(new_model_id.clone());
+                drop(dc);
+                let dc = state.desktop_config.read().await;
+                let _ = config::save_config(&dc);
+            }
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
                     key: "model".into(),
-                    value: (*model).clone(),
+                    value: new_model_id,
                 },
             );
-
+            let _ = kind_str;
             Ok(())
         }
         "api_key" => {
-            let mut desktop_cfg = state.desktop_config.write().await;
-            desktop_cfg.api_key = Some(update.value.clone());
-
-            let mut cfg = state.client_config.write().await;
-            cfg.api_key = update.value.clone();
-
-            drop(desktop_cfg);
-            let desktop_cfg = state.desktop_config.read().await;
-            config::save_config(&desktop_cfg)?;
-
+            // P1.2-A — the A1 fix: write the API key to
+            // `~/.shannon/credentials/<provider_id>.json` via
+            // `CredentialManager`, NOT to `desktop_cfg.api_key` /
+            // `cfg.api_key` (plaintext in `config.json`). The
+            // engine resolver reads the credential file at request
+            // time so no in-memory cache update is needed.
+            let new_key = update.value.clone();
+            let (active_id, label) = {
+                let store = state.provider_store.lock().await;
+                let pf = store.config().profiles.get("default").ok_or_else(|| {
+                    "configure('api_key'): no providers configured — add one first".to_string()
+                })?;
+                let active_id = pf.active_target.provider_id.clone();
+                if active_id.is_empty() {
+                    return Err(
+                        "configure('api_key'): no active provider — add one in Settings → Models first"
+                            .to_string(),
+                    );
+                }
+                let profile = pf
+                    .providers
+                    .iter()
+                    .find(|p| p.id == active_id)
+                    .ok_or_else(|| {
+                        format!("configure('api_key'): active provider `{active_id}` not in store")
+                    })?;
+                (active_id, profile.display_name.clone())
+            };
+            store_provider_key(&active_id, &label, Some(&new_key))?;
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
@@ -179,49 +310,110 @@ pub async fn configure(
                     value: "***".into(),
                 },
             );
-
             Ok(())
         }
         "base_url" => {
-            let mut desktop_cfg = state.desktop_config.write().await;
-            desktop_cfg.base_url = Some(update.value.clone());
-
-            let mut cfg = state.client_config.write().await;
-            cfg.base_url = update.value.clone();
-
-            drop(desktop_cfg);
-            let desktop_cfg = state.desktop_config.read().await;
-            config::save_config(&desktop_cfg)?;
-
+            // P1.2-A: route through the engine store via
+            // `upsert_profile`. Preserves every other field of the
+            // active profile (kind, credential, tiers,
+            // default_max_tokens, extra_headers, quirks).
+            let new_url = validate_base_url(&update.value)?;
+            let (active_id, model_id, mut profile) = {
+                let store = state.provider_store.lock().await;
+                let pf =
+                    store.config().profiles.get("default").ok_or_else(|| {
+                        "configure('base_url'): no providers configured".to_string()
+                    })?;
+                let active_id = pf.active_target.provider_id.clone();
+                if active_id.is_empty() {
+                    return Err(
+                        "configure('base_url'): no active provider — add one first".to_string()
+                    );
+                }
+                let model_id = pf.active_target.model_id.clone();
+                let profile = pf
+                    .providers
+                    .iter()
+                    .find(|p| p.id == active_id)
+                    .ok_or_else(|| {
+                        format!("configure('base_url'): active provider `{active_id}` not in store")
+                    })?
+                    .clone();
+                (active_id, model_id, profile)
+            };
+            profile.base_url = new_url.clone();
+            {
+                let mut store = state.provider_store.lock().await;
+                store.upsert_profile(profile, &model_id);
+                store
+                    .save()
+                    .map_err(|e| format!("could not persist providers.toml: {e}"))?;
+            }
+            rebuild_client_config_from_store(&state).await?;
+            // Legacy mirror — kept in sync until P1.2-B drops the
+            // singular field.
+            {
+                let mut dc = state.desktop_config.write().await;
+                dc.base_url = Some(new_url.clone());
+                drop(dc);
+                let dc = state.desktop_config.read().await;
+                let _ = config::save_config(&dc);
+            }
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
                     key: "base_url".into(),
-                    value: update.value,
+                    value: new_url,
                 },
             );
-
+            let _ = active_id;
             Ok(())
         }
         "provider" => {
-            let mut provider = state.provider.lock().await;
-            *provider = update.value.clone();
-
-            let mut desktop_cfg = state.desktop_config.write().await;
-            desktop_cfg.provider = Some((*provider).clone());
-
-            drop(desktop_cfg);
-            let desktop_cfg = state.desktop_config.read().await;
-            config::save_config(&desktop_cfg)?;
-
+            // P1.2-A: the legacy write-path bug — `configure('provider')`
+            // used to update only `state.provider` / `desktop_cfg.provider`
+            // and never touched the engine store, so the runtime client
+            // kept using the old target until restart. Now routes through
+            // `set_active` on the engine store and rebuilds the live
+            // client_config.
+            let kind_str = update.value.clone();
+            let (provider_id, model_id) = {
+                let store = state.provider_store.lock().await;
+                find_provider_by_kind(&store, &kind_str).ok_or_else(|| {
+                    format!(
+                        "configure('provider'): no managed provider with kind `{kind_str}` — \
+                         add one in Settings → Models first"
+                    )
+                })?
+            };
+            let provider = llm_provider_for_active_mirror(&kind_str)
+                .ok_or_else(|| format!("configure('provider'): unsupported kind `{kind_str}`"))?;
+            {
+                let mut store = state.provider_store.lock().await;
+                store.set_active(&provider, &model_id);
+                store
+                    .save()
+                    .map_err(|e| format!("could not persist providers.toml: {e}"))?;
+            }
+            rebuild_client_config_from_store(&state).await?;
+            // Legacy mirrors — kept in sync until P1.2-B drops the
+            // mutexes + singular field.
+            *state.provider.lock().await = kind_str.clone();
+            {
+                let mut dc = state.desktop_config.write().await;
+                dc.provider = Some(kind_str.clone());
+                drop(dc);
+                let dc = state.desktop_config.read().await;
+                let _ = config::save_config(&dc);
+            }
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
                     key: "provider".into(),
-                    value: update.value,
+                    value: kind_str,
                 },
             );
-
+            let _ = provider_id;
             Ok(())
         }
         "working_dir" => {
@@ -2097,5 +2289,94 @@ mod tests {
         assert_eq!(engine_kind_str(&ProviderKind::Ollama), "ollama");
         assert_eq!(engine_kind_str(&ProviderKind::Deepseek), "deepseek");
         assert_eq!(engine_kind_str(&ProviderKind::Gemini), "gemini");
+    }
+
+    // === P1.2-A: routing helpers for configure() engine-store path ===
+    //
+    // The new `configure('model' | 'api_key' | 'base_url' | 'provider')`
+    // arms consult the engine `ProviderConfigStore` to find the active
+    // target before writing. These tests pin the lookup helpers —
+    // `active_provider_id_and_kind` and `find_provider_by_kind` — plus
+    // `provider_kind_slug`, which is the kebab-case ↔ enum bridge the
+    // arms rely on.
+
+    fn store_with_single_anthropic_profile(
+        id: &str,
+        model_id: &str,
+    ) -> shannon_core::provider_config_store::ProviderConfigStore {
+        use shannon_types::provider_config::{CredentialRef, ProviderProfile, ProviderTiers};
+        let mut store = shannon_core::provider_config_store::ProviderConfigStore::default();
+        store.upsert_profile(
+            ProviderProfile {
+                id: id.to_string(),
+                kind: shannon_types::provider_config::ProviderKind::Anthropic,
+                display_name: format!("{id} label"),
+                base_url: "https://api.anthropic.com".into(),
+                models_url: None,
+                credential: CredentialRef::Store {
+                    service: id.to_string(),
+                },
+                extra_headers: std::collections::HashMap::new(),
+                default_max_tokens: None,
+                fallback_models: Vec::new(),
+                quirks: Default::default(),
+                tiers: ProviderTiers::default(),
+            },
+            model_id,
+        );
+        store
+    }
+
+    #[test]
+    fn active_provider_id_and_kind_returns_some_when_active_is_set() {
+        let store = store_with_single_anthropic_profile("anthropic-main", "claude-opus-4-8");
+        let (id, kind) = active_provider_id_and_kind(&store).expect("active target is set");
+        assert_eq!(id, "anthropic-main");
+        assert_eq!(kind, "anthropic");
+    }
+
+    #[test]
+    fn active_provider_id_and_kind_returns_none_when_no_profiles() {
+        // No upsert → `"default"` profile has zero providers and
+        // `active_target.provider_id` is empty. The lookup must
+        // return `None` so the configure('model'|'api_key'|'base_url')
+        // arms emit a clear "no active provider" error instead of
+        // crashing on an unwrap.
+        let store = shannon_core::provider_config_store::ProviderConfigStore::default();
+        assert!(active_provider_id_and_kind(&store).is_none());
+    }
+
+    #[test]
+    fn find_provider_by_kind_returns_first_matching_slot() {
+        let store = store_with_single_anthropic_profile("anthropic-main", "claude-opus-4-8");
+        let (id, model_id) =
+            find_provider_by_kind(&store, "anthropic").expect("anthropic slot is in the store");
+        assert_eq!(id, "anthropic-main");
+        assert_eq!(model_id, "claude-opus-4-8");
+    }
+
+    #[test]
+    fn find_provider_by_kind_returns_none_when_kind_unknown() {
+        let store = store_with_single_anthropic_profile("anthropic-main", "claude-opus-4-8");
+        assert!(find_provider_by_kind(&store, "openai").is_none());
+        assert!(find_provider_by_kind(&store, "").is_none());
+    }
+
+    #[test]
+    fn provider_kind_slug_covers_all_supported_variants() {
+        // Mirrors `engine_kind_str`'s coverage — but on the reverse
+        // direction (enum → kebab-case slug). If a new variant is added
+        // to ProviderKind, this catches a missing branch in the mapping
+        // before `configure('provider')` defaults it to "unsupported".
+        use shannon_types::provider_config::ProviderKind as K;
+        assert_eq!(provider_kind_slug(&K::Anthropic), "anthropic");
+        assert_eq!(provider_kind_slug(&K::OpenAi), "openai");
+        assert_eq!(
+            provider_kind_slug(&K::OpenAiCompatible),
+            "openai-compatible"
+        );
+        assert_eq!(provider_kind_slug(&K::Ollama), "ollama");
+        assert_eq!(provider_kind_slug(&K::Deepseek), "deepseek");
+        assert_eq!(provider_kind_slug(&K::Gemini), "gemini");
     }
 }
