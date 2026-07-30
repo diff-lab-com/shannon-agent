@@ -305,6 +305,32 @@ fn classify_query_complexity(query: &str) -> QueryComplexity {
     QueryComplexity::Standard
 }
 
+/// Verdict for a single provider returned by [`QueryEngine::probe_all_health`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderHealthStatus {
+    /// Endpoint answered 2xx within the per-provider timeout.
+    Reachable,
+    /// Endpoint reachable but credential rejected (401 / 403).
+    AuthFailed,
+    /// Endpoint unreachable (timeout, network error, 5xx, or non-http probe
+    /// failure). Surface as a hint, never as automatic failover.
+    Unreachable,
+    /// Provider requires auth but no key is resolvable from the env chain.
+    /// Marked without a network round-trip so the table stays honest.
+    NotConfigured,
+}
+
+/// Per-provider health snapshot returned by [`QueryEngine::probe_all_health`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderHealth {
+    pub provider: shannon_engine::api::LlmProvider,
+    pub status: ProviderHealthStatus,
+    /// Round-trip latency in milliseconds. `None` for `NotConfigured` (no
+    /// network call made) and for providers skipped because their bespoke
+    /// list-models API is not generically probeable.
+    pub latency_ms: Option<u32>,
+}
+
 /// Main query engine orchestrator
 pub struct QueryEngine {
     pub(crate) client: LlmClient,
@@ -881,6 +907,85 @@ impl QueryEngine {
         cfg.timeout_seconds = 15;
         let probe = shannon_engine::api::LlmClient::new(cfg);
         probe.validate_connection().await
+    }
+
+    /// Concurrently live-probe every allowed provider
+    /// (`shannon_core::model_registry::available_providers`, honouring the
+    /// `SHANNON_*_PROVIDERS` allowlist) and return per-provider verdicts.
+    ///
+    /// Each provider is wrapped in its own `per_provider_timeout` so a single
+    /// slow / unreachable provider cannot stall the whole table. Auth-required
+    /// providers with no key are reported as [`ProviderHealthStatus::NotConfigured`]
+    /// without a network round-trip (no point pinging without credentials).
+    /// Non-probeable providers (Gemini, Bedrock, Azure, Replicate — bespoke
+    /// list-models APIs) are skipped entirely.
+    ///
+    /// **Non-goal — automatic failover.** This is informational only (per
+    /// ADR-0005 spec §11: Shannon ships no model router). Used by `/provider
+    /// health` to populate the multi-provider table and the active-provider
+    /// switch hint.
+    pub async fn probe_all_health(
+        &self,
+        per_provider_timeout: std::time::Duration,
+    ) -> Vec<ProviderHealth> {
+        use shannon_engine::api::probe::probe_kind_for_provider;
+
+        let providers = crate::model_registry::available_providers();
+        let mut tasks = Vec::with_capacity(providers.len());
+        for p in providers {
+            // Auth-required but no key → mark NotConfigured without probing
+            // (no point in a 401 round-trip; the report should be honest).
+            let api_key = p.resolve_api_key_from_env();
+            if p.requires_auth() && api_key.is_empty() {
+                tasks.push(tokio::spawn(async move {
+                    ProviderHealth {
+                        provider: p,
+                        status: ProviderHealthStatus::NotConfigured,
+                        latency_ms: None,
+                    }
+                }));
+                continue;
+            }
+
+            let Some(probe_kind) = probe_kind_for_provider(&p) else {
+                // Bespoke list-models API we cannot probe generically.
+                continue;
+            };
+            let base_url = p.default_base_url().to_string();
+            tasks.push(tokio::spawn(async move {
+                let start = std::time::Instant::now();
+                let result = tokio::time::timeout(
+                    per_provider_timeout,
+                    shannon_engine::api::probe::probe_provider_endpoint(
+                        probe_kind,
+                        &api_key,
+                        Some(&base_url),
+                    ),
+                )
+                .await;
+                let latency_ms = start.elapsed().as_millis() as u32;
+                let status = match result {
+                    Ok(Ok(())) => ProviderHealthStatus::Reachable,
+                    Ok(Err(shannon_engine::api::ApiError::AuthenticationFailed)) => {
+                        ProviderHealthStatus::AuthFailed
+                    }
+                    Ok(Err(_)) | Err(_) => ProviderHealthStatus::Unreachable,
+                };
+                ProviderHealth {
+                    provider: p,
+                    status,
+                    latency_ms: Some(latency_ms),
+                }
+            }));
+        }
+
+        let mut out = Vec::with_capacity(tasks.len());
+        for t in tasks {
+            if let Ok(h) = t.await {
+                out.push(h);
+            }
+        }
+        out
     }
 
     /// Update the model used for API calls.
@@ -3764,6 +3869,40 @@ mod tests {
             result.is_err(),
             "an unreachable endpoint must surface an error, not Ok or a panic"
         );
+    }
+
+    #[tokio::test]
+    async fn probe_all_health_returns_valid_verdicts() {
+        // Smoke test: `probe_all_health` returns a Vec<ProviderHealth> whose
+        // entries are well-formed. We do NOT assert specific providers (the
+        // SHANNON_*_PROVIDERS allowlist may filter them in CI) or specific
+        // statuses (those depend on the local env's keys and network state).
+        // We only require the structure to be sound.
+        let engine = create_test_engine();
+        let health = engine
+            .probe_all_health(std::time::Duration::from_millis(200))
+            .await;
+        // Every entry has a documented status variant; NotConfigured carries
+        // no latency.
+        for h in &health {
+            assert!(
+                matches!(
+                    h.status,
+                    ProviderHealthStatus::Reachable
+                        | ProviderHealthStatus::AuthFailed
+                        | ProviderHealthStatus::Unreachable
+                        | ProviderHealthStatus::NotConfigured
+                ),
+                "unexpected status: {:?}",
+                h.status
+            );
+            if h.status == ProviderHealthStatus::NotConfigured {
+                assert!(
+                    h.latency_ms.is_none(),
+                    "NotConfigured must have no latency_ms"
+                );
+            }
+        }
     }
 
     #[test]
