@@ -3,6 +3,7 @@ use clap::Parser;
 use clap::Subcommand;
 use futures::StreamExt;
 
+mod commands_providers;
 mod loop_command;
 mod mcp_install;
 mod notifications;
@@ -609,6 +610,103 @@ enum Commands {
 
     /// Run diagnostics: check toolchain, ports, and services.
     Doctor,
+
+    /// List provider profiles configured in `~/.shannon/providers.toml`.
+    ///
+    /// Mirrors the desktop's provider picker. With `--json` prints the full
+    /// `{active, providers}` structure for scripting (never includes raw
+    /// api-key values — credential info is exposed only as `store:<service>`).
+    ListProviders {
+        /// Emit JSON instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Manage provider profiles (add/remove).
+    ///
+    /// Mirrors the desktop's Add Provider / Delete Provider flows. Writes
+    /// through the engine `ProviderConfigStore`, so the CLI and desktop
+    /// join the same `~/.shannon/providers.toml` file.
+    Providers {
+        #[command(subcommand)]
+        command: ProvidersSubcommand,
+    },
+}
+
+/// Subcommands for `shannon providers <add|remove>`.
+#[derive(Subcommand, Debug)]
+enum ProvidersSubcommand {
+    /// Add or replace a provider profile.
+    ///
+    /// Validates the inputs, persists the profile via
+    /// `ProviderConfigStore::upsert_profile`, and (with `--set-active`) makes
+    /// it the active target. Credentials are always stored as
+    /// `CredentialRef::Store { service }` — never as a raw api-key string.
+    Add(ProvidersAddArgs),
+
+    /// Remove a provider profile by id. If the removed profile was the
+    /// active target, the active pointer is cleared (engine falls back to
+    /// synthesis on the next request).
+    Remove {
+        /// The provider id to remove (positional).
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+}
+
+/// Args for `shannon providers add <ID> --kind <KIND> [--base-url …] --model …`.
+///
+/// Mirrors the desktop's Add Provider form. See
+/// `crates/shannon-cli/src/commands_providers.rs` for the validation
+/// surface (canonical tier names only, alias rejection, required base-url
+/// for openai-compatible / ollama, optional `--api-key-ref` that maps to
+/// `CredentialRef::Store { service }`).
+#[derive(clap::Args, Debug)]
+struct ProvidersAddArgs {
+    /// Provider id (positional). Names must be unique across the configured
+    /// `~/.shannon/providers.toml`.
+    #[arg(value_name = "ID")]
+    id: String,
+
+    /// Provider wire-protocol kind.
+    #[arg(long = "kind", value_name = "KIND")]
+    kind: String,
+
+    /// Base URL of the provider endpoint. Required for `--kind
+    /// openai-compatible` and `--kind ollama`; defaults to the canonical
+    /// endpoint for known kinds (anthropic, openai, gemini, deepseek).
+    #[arg(long = "base-url", value_name = "URL")]
+    base_url: Option<String>,
+
+    /// Model id (the primary model for this profile — also written to
+    /// the `--tier` slot when `--tier` is supplied).
+    #[arg(long = "model", value_name = "MODEL")]
+    model: String,
+
+    /// Credential service name. Maps to `CredentialRef::Store { service }`.
+    /// Defaults to the provider id when omitted (one credential per
+    /// provider). The CLI never accepts a raw api-key string.
+    #[arg(long = "api-key-ref", value_name = "SERVICE")]
+    api_key_ref: Option<String>,
+
+    /// Canonical tier name (`fast` / `standard` / `pro`) to assign this
+    /// model to. The persisted schema does not have alias keys (no
+    /// `haiku`/`sonnet`/`opus`), so alias inputs are rejected with a
+    /// helpful error.
+    #[arg(long = "tier", value_name = "TIER")]
+    tier: Option<String>,
+
+    /// Extra header in KEY=VALUE form. Repeatable. Empty key or empty value
+    /// is rejected.
+    #[arg(long = "extra-header", value_name = "KEY=VALUE")]
+    extra_header: Vec<String>,
+
+    /// After upsert, make this provider the active target.
+    /// (`upsert_profile` already pins `active_target` to the new id, but
+    /// the flag is explicit so callers/scripts can read intent from the
+    /// command line.)
+    #[arg(long = "set-active")]
+    set_active: bool,
 }
 
 /// Subcommands for `shannon gateway` (delegated to the external binary).
@@ -3051,7 +3149,9 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         | Some(Commands::Desktop { .. })
         | Some(Commands::Gateway { .. })
         | Some(Commands::Update)
-        | Some(Commands::Doctor) => CliConfig::default(),
+        | Some(Commands::Doctor)
+        | Some(Commands::ListProviders { .. })
+        | Some(Commands::Providers { .. }) => CliConfig::default(),
     };
 
     // Initialize tracing if debug mode enabled
@@ -3317,6 +3417,64 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         Some(Commands::Doctor) => {
             run_doctor_command()?;
         }
+        Some(Commands::ListProviders { json }) => {
+            // Engine store reads from `~/.shannon/providers.toml`. The CLI
+            // and the desktop join the same file (ADR-0005 Phase 2 task 4).
+            let store = shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+            if let Err(e) = commands_providers::run_list_providers(&store, json) {
+                eprintln!("list-providers failed: {e:?}");
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Providers { command }) => match command {
+            ProvidersSubcommand::Add(add_args) => {
+                let parsed_kind = match commands_providers::parse_kind_cli(&add_args.kind) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                };
+
+                let cli_args = commands_providers::AddProviderArgs {
+                    id: add_args.id.clone(),
+                    kind: parsed_kind,
+                    base_url: add_args.base_url.clone(),
+                    model: add_args.model.clone(),
+                    api_key_ref: add_args.api_key_ref.clone(),
+                    tier: add_args.tier.clone(),
+                    extra_header: add_args.extra_header.clone(),
+                    set_active: add_args.set_active,
+                };
+
+                let mut store =
+                    shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+                if let Err(e) = commands_providers::run_providers_add(&mut store, &cli_args) {
+                    eprintln!("providers add failed: {e:?}");
+                    std::process::exit(1);
+                }
+            }
+            ProvidersSubcommand::Remove { id } => {
+                let remove_args = commands_providers::RemoveProviderArgs { id: id.clone() };
+                let mut store =
+                    shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+                match commands_providers::run_providers_remove(&mut store, &remove_args) {
+                    Ok(was_active) => {
+                        if was_active {
+                            eprintln!(
+                                "warning: removed provider was the active target; \
+                                 engine will fall back to synthesis on the next request. \
+                                 Run `shannon list-providers` to confirm."
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("providers remove failed: {e:?}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        },
     }
 
     Ok(())
