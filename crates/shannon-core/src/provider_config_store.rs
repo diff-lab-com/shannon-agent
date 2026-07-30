@@ -66,6 +66,23 @@ fn lockfile_for(path: &Path) -> PathBuf {
 /// Linux `flock(2)` semantics release on `close(2)`, so dropping the guard
 /// unwinds the lock. Callers that need explicit unlock can call
 /// [`FileExt::unlock`] on the returned `File` directly.
+///
+/// # Reentrancy warning
+/// `flock(2)` is **NOT** reentrant across distinct file descriptors on
+/// the same lockfile inode — opening the lockfile twice and calling
+/// `lock_exclusive` on each fd deadlocks. This matters for callers that
+/// wrap a R-M-W section in an outer `acquire_exclusive_lock` and then
+/// invoke the lock-aware helpers ([`load`], [`save`], [`load_or_default`],
+/// [`ProviderConfigStore::save`]). They MUST use the no-lock variants
+/// inside the critical section:
+/// - For reads: [`ProviderConfigStore::load_or_default_at`] (a wrapper
+///   around `load` that trusts the caller holds the flock).
+/// - For writes: [`ProviderConfigStore::save_locked`] or
+///   [`save_locked`].
+///
+/// The desktop's `land_profile_in_engine_store` /
+/// `remove_profile_from_engine_store` follow this contract — see their
+/// doc-comments for the rationale.
 pub fn acquire_exclusive_lock(path: &Path) -> io::Result<File> {
     let lock_path = lockfile_for(path);
     if let Some(parent) = lock_path.parent() {
@@ -215,8 +232,16 @@ impl ProviderConfigStore {
     /// for the duration of the read so the file cannot change under us
     /// while we're parsing it. Blocks if a concurrent writer (desktop /
     /// CLI save) holds the lock — a `save` completes in milliseconds, so
-    /// contention is bounded. Pair with [`Self::save`] / [`Self::save_locked`]
-    /// for the matching write-side protection.
+    /// contention is bounded. Pair with [`Self::save`] (or
+    /// [`Self::save_locked`] from inside an outer flock) for the matching
+    /// write-side protection.
+    ///
+    /// **Reentrancy:** if the caller already holds the flock via
+    /// [`acquire_exclusive_lock`] on the same `default_path`, calling this
+    /// function will deadlock — `flock(2)` is not reentrant across
+    /// distinct fds on the same inode. Use
+    /// [`ProviderConfigStore::load_or_default_at`] inside an outer-flock
+    /// critical section (it trusts the caller to hold the lock).
     pub fn load_or_default() -> Self {
         let path = default_path();
         let Some(path) = path else {
@@ -238,17 +263,19 @@ impl ProviderConfigStore {
         }
     }
 
-    /// Test-only: load from an explicit `path`. The production
-    /// `load_or_default` uses [`default_path`] and acquires the cross-process
-    /// flock; this helper exists so unit tests can point at a tempfile
-    /// without touching `~/.shannon/`. Still acquires the same flock so
-    /// the lock semantics match production.
+    /// Load from an explicit `path` without acquiring the flock. **The
+    /// caller MUST already hold the flock** via [`acquire_exclusive_lock`]
+    /// on the same `path` (or have wrapped the R-M-W critical section in
+    /// one) — this function deliberately skips re-locking because
+    /// `flock(2)` is not reentrant across distinct fds and would deadlock
+    /// the calling thread.
+    ///
+    /// Production callers inside a desktop command's R-M-W should use
+    /// this rather than [`Self::load_or_default`] / [`Self::save`] to
+    /// avoid nested flock attempts on the same lockfile inode.
     #[doc(hidden)]
     pub fn load_or_default_at(path: &Path) -> Self {
-        let lock = acquire_exclusive_lock(path)
-            .expect("test lock acquisition should not fail on a fresh tempfile");
         let config = load(Some(path)).unwrap_or_default();
-        release_exclusive_lock(&lock);
         Self {
             config,
             last_path: Some(path.to_path_buf()),
@@ -1068,9 +1095,11 @@ mod tests {
     //   * a `save_locked` call from inside an outer `acquire_exclusive_lock`
     //     scope does NOT deadlock.
 
-    /// A `load_or_default_at(path)` -> mutate -> `save()` round trip on a
-    /// never-before-touched path must not panic. The lockfile is created
-    /// on the fly by `acquire_exclusive_lock`.
+    /// A `save()` on a never-before-touched path must not panic. The
+    /// sidecar `<path>.lock` file is created on the fly by
+    /// `acquire_exclusive_lock` — first-launch users have no pre-existing
+    /// lockfile, and `flock(LOCK_EX)` on a fresh fd succeeds, so no
+    /// `NotFound` error escapes.
     #[test]
     fn load_or_default_does_not_panic_when_lockfile_missing() {
         let dir = std::env::temp_dir().join(format!(
@@ -1086,12 +1115,9 @@ mod tests {
         let lock_path = dir.join("providers.toml.lock");
         assert!(!lock_path.exists(), "lockfile must not pre-exist");
 
-        // load_or_default_at creates the lockfile as a side effect.
+        // save() is the production entry point that touches the flock —
+        // it must create the lockfile as a side effect and succeed.
         let mut store = ProviderConfigStore::load_or_default_at(&path);
-        assert!(
-            lock_path.exists(),
-            "lockfile must be created on first acquire"
-        );
         store.upsert_profile(
             sample_profile(
                 "anthropic",
@@ -1100,9 +1126,11 @@ mod tests {
             ),
             "claude-sonnet-4-20250514",
         );
-        // save() acquires the same flock and writes — must not deadlock
-        // even though the lockfile existed from load_or_default_at.
-        store.save().unwrap();
+        store.save().expect("save on fresh path must succeed");
+        assert!(
+            lock_path.exists(),
+            "lockfile must be created on first save()"
+        );
 
         // And the file actually round-trips.
         let loaded = load(Some(&path)).expect("should parse back");
@@ -1112,6 +1140,15 @@ mod tests {
                 .iter()
                 .any(|p| p.id == "anthropic")
         );
+
+        // A second save in the same process re-acquires the lock from
+        // the now-existing lockfile and releases it cleanly — proves the
+        // lockfile can be re-opened without state leaks.
+        store.upsert_profile(
+            sample_profile("openai", ProviderKind::OpenAi, "https://api.openai.com"),
+            "gpt-4o",
+        );
+        store.save().expect("second save on same path must succeed");
 
         let _ = fs::remove_dir_all(&dir);
     }
