@@ -427,6 +427,114 @@ break headless/CI), `enabled_providers` / `disabled_providers` allowlists.
 > future work rather than implemented, to avoid invasive routing logic that
 > conflicts with the explicit no-auto-routing philosophy.
 
+### Phase 7 — `ProviderConnection` boundary decision (ADR-0005 P1.3)
+
+> **Status: ✅ Decided (2026-07-30).** Documents the boundary between
+> desktop-managed provider descriptors and the engine provider store now
+> that Phase 2 task 4 has landed. No code change — captures the
+> intent of the existing P1.2-B state in a single place so the next
+> contributor doesn't rediscover the question.
+
+**Why**: Phase 2 task 4 removed the singular `provider` / `api_key` /
+`base_url` / `model` fields from the top-level `DesktopConfig`
+(`desktop/src/config.rs`) and migrated them into the engine
+`ProviderConfigStore` (the canonical source of truth in
+`~/.shannon/providers.toml`). But `ProviderConnection` (the
+desktop-side per-managed-connection descriptor, persisted to
+`~/.shannon/desktop/providers.json`) still carries its own copies of
+those four fields, plus the v2 `ProviderProfile` extras (`models_url`,
+`extra_headers`, `default_max_tokens`, `fallback_models`, `quirks`,
+`tiers`). On every read path the desktop round-trips
+`ProviderConnection → ProviderProfile → ProviderConnection` to refresh
+the engine store and rebuild `LlmClientConfig`. The open question is:
+
+> Should `ProviderConnection` shrink to a UI-only descriptor (label,
+> id, kind, icon), with the engine store as the only place those
+> fields actually live? Or is the current "two near-subsets" shape
+> the right boundary, with one eventual merge once the engine runtime
+> catches up?
+
+**Decision**: keep `ProviderConnection` as a near-superset of the
+engine `ProviderProfile` for now. Treat the duplicate fields
+(`api_key`, `base_url`, `model`) as **transitional seams** until the
+engine runtime path consumes every v2 field. Concretely:
+
+- `ProviderConnection.api_key` — already `#[serde(default, skip_serializing)]`
+  and only consumed by `migrate_providers_to_credentials` (one-shot
+  legacy JSON heal). Future: remove entirely once we are confident no
+  production install still has a plaintext legacy file.
+- `ProviderConnection.base_url` — read by `to_provider_profile` to
+  populate the engine store's `base_url`. The desktop keeps the copy
+  so the Settings → Models list can render the URL inline (the engine
+  store is not directly readable from the UI bridge). Future: once
+  `listProviders` returns the engine store's view directly (no JSON
+  cache), this collapses to a cached projection.
+- `ProviderConnection.model` — read by `to_provider_profile` to
+  populate the engine store's default model id AND by `build_migrated_provider_model`
+  for the legacy `providers.json → providers.toml` migration. Future:
+  collapse to a `default_model_id: Option<String>` once the engine
+  store has an authoritative read path.
+- `ProviderConnection.models_url` / `extra_headers` /
+  `default_max_tokens` / `fallback_models` / `quirks` / `tiers` —
+  these are the v2 fields. They round-trip verbatim through
+  `to_provider_profile` today. Future: the runtime path picks up
+  `extra_headers` and `default_max_tokens`; `fallback_models` /
+  `quirks` / per-tier overrides remain persisted-but-unconsumed
+  until Phase 5 lands.
+
+**Rationale**:
+
+1. **One canonical write target.** Today the desktop has only one
+   write path: `save_provider` → engine store (P1.2-A). The
+   `ProviderConnection` struct is a write-time input, not a separate
+   store. Reading it back from the JSON cache file (`list_providers`
+   → `load_providers`) is fine because the JSON file is a write
+   shadow that the engine's `save()` keeps in sync.
+2. **Schema symmetry is cheap.** Keeping
+   `ProviderConnection` ⊇ `ProviderProfile` costs ~50 LoC and
+   eliminates a class of "field silently dropped during round-trip"
+   bugs (see test
+   `to_provider_profile_maps_known_kind_to_engine_enum` for the
+   field-set pin).
+3. **No new boundary to design.** A "thin UI descriptor" shape
+   would require a parallel `ProviderProfileLite` type to bridge the
+   JSON cache to the engine store, with a separate test surface. The
+   near-superset shape already has the bridge
+   (`to_provider_profile` + `from_provider_profile`); refactoring it
+   away saves no real engineering.
+
+**Non-goals**:
+
+- **Auto-sync on legacy drift.** If the user hand-edits
+  `~/.shannon/providers.toml` between desktop sessions, the desktop
+  JSON cache and the engine store may diverge until the next
+  `list_providers` → `save_provider` cycle. The one-shot
+  `migrate_providers_to_toml` heals the *legacy* file but not
+  post-launch drift. Adding drift detection is **deferred** — the
+  user is expected to drive all writes through the UI / CLI.
+- **Removing the JSON cache file.** `providers.json` could in
+  principle be deleted once `list_providers` reads directly from
+  the engine store. The cache exists today because the engine
+  `ProviderConfigStore` is wrapped in `tauri::State<Mutex<…>>`
+  rather than exposed through a read-side facade that the UI can
+  query without holding the lock. Designing that facade is a
+  separate ADR (`provider_store_read_facade`, deferred).
+
+**Acceptance**:
+
+- `ProviderConnection` field set stays a superset of the v2
+  `ProviderProfile` until the engine runtime consumes every v2
+  field, or a concrete user-facing bug forces a tighter boundary.
+- A new contributor adding a v2 field must update
+  `ProviderConnection::to_provider_profile` + the matching
+  `from_provider_profile` + add a unit test in
+  `config.rs::tests::to_provider_profile_*`. This is enforced by
+  the existing test pin (`to_provider_profile_maps_known_kind_to_engine_enum`
+  asserts every field round-trips).
+- The two follow-up refactors (`api_key` removal; JSON cache
+  elimination) are tracked as **future work**, not part of any
+  current phase.
+
 ## Open decisions (need sign-off before Phase 1+)
 
 1. **Default credential backend** — confirm D3: plaintext `credentials/` file
