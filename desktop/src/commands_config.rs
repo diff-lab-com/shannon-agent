@@ -230,11 +230,12 @@ pub async fn configure(
 ) -> Result<(), String> {
     match update.key.as_str() {
         "model" => {
-            // P1.2-A: route the write through the engine
-            // `ProviderConfigStore` so the runtime client sees the new
-            // target without relying on the legacy `state.model` /
-            // `desktop_cfg.model` mirror. The mirror fields stay
-            // populated until P1.2-B removes them.
+            // P1.2-B: the engine `ProviderConfigStore` is the source of
+            // truth for the active model. Configure writes only touch
+            // the store; the live `state.client_config` is rebuilt from
+            // it by `rebuild_client_config_from_store` so any reader
+            // (`send_message`, `get_status`, etc.) sees the new model
+            // on the next read.
             let new_model_id = update.value.clone();
             let kind_str = {
                 let mut store = state.provider_store.lock().await;
@@ -252,17 +253,6 @@ pub async fn configure(
                 kind_str
             };
             rebuild_client_config_from_store(&state).await?;
-            // Legacy mirror — kept in sync so existing readers in
-            // commands.rs::send_message + commands_chat.rs::get_status
-            // and get_config() don't break before P1.2-B.
-            *state.model.lock().await = new_model_id.clone();
-            {
-                let mut dc = state.desktop_config.write().await;
-                dc.model = Some(new_model_id.clone());
-                drop(dc);
-                let dc = state.desktop_config.read().await;
-                let _ = config::save_config(&dc);
-            }
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
@@ -350,15 +340,6 @@ pub async fn configure(
                     .map_err(|e| format!("could not persist providers.toml: {e}"))?;
             }
             rebuild_client_config_from_store(&state).await?;
-            // Legacy mirror — kept in sync until P1.2-B drops the
-            // singular field.
-            {
-                let mut dc = state.desktop_config.write().await;
-                dc.base_url = Some(new_url.clone());
-                drop(dc);
-                let dc = state.desktop_config.read().await;
-                let _ = config::save_config(&dc);
-            }
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
@@ -396,16 +377,6 @@ pub async fn configure(
                     .map_err(|e| format!("could not persist providers.toml: {e}"))?;
             }
             rebuild_client_config_from_store(&state).await?;
-            // Legacy mirrors — kept in sync until P1.2-B drops the
-            // mutexes + singular field.
-            *state.provider.lock().await = kind_str.clone();
-            {
-                let mut dc = state.desktop_config.write().await;
-                dc.provider = Some(kind_str.clone());
-                drop(dc);
-                let dc = state.desktop_config.read().await;
-                let _ = config::save_config(&dc);
-            }
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
@@ -675,88 +646,49 @@ pub async fn configure(
 }
 
 /// Switch to a different LLM provider.
+///
+/// P1.2-B (ADR-0005): with the singular `DesktopConfig.provider` /
+/// `api_key` / `base_url` / `model` fields removed, this command is a
+/// thin shim that simply rebuilds the live client config from the
+/// engine `ProviderConfigStore` (which has already been updated by the
+/// caller via [`save_provider`] / [`set_active_provider`]) and emits
+/// `CONFIG_UPDATED` so the tray refreshes its label.
+///
+/// Pre-P1.2 callers wrote `state.model` / `state.provider` mutexes and
+/// mirrored the new fields into `DesktopConfig`. Those targets are gone,
+/// so the function now does almost nothing on its own — it exists
+/// primarily so the frontend `switchProvider` invoke keeps its existing
+/// wire contract.
 #[tauri::command]
 pub async fn switch_provider(
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
     request: ProviderSwitchRequest,
 ) -> Result<(), String> {
-    let existing = state.desktop_config.read().await;
-    let new_config = DesktopConfig {
-        provider: Some(request.provider.clone()),
-        api_key: request.api_key.clone().or_else(|| existing.api_key.clone()),
-        base_url: request
-            .base_url
-            .clone()
-            .or_else(|| existing.base_url.clone()),
-        model: Some(request.model.clone()),
-        working_dir: existing.working_dir.clone(),
-        theme: existing.theme.clone(),
-        mcp_servers: existing.mcp_servers.clone(),
-        approval_mode: existing.approval_mode.clone(),
-        strategic_focus: existing.strategic_focus.clone(),
-        performance_strategy: existing.performance_strategy.clone(),
-        memory_enabled: existing.memory_enabled,
-        telemetry_enabled: existing.telemetry_enabled,
-        encryption_enabled: existing.encryption_enabled,
-        debug_console: existing.debug_console,
-        temperature: existing.temperature,
-        max_tokens: existing.max_tokens,
-        plan: existing.plan.clone(),
-        skill_loop_enabled: existing.skill_loop_enabled,
-        skill_loop_min_duration_secs: existing.skill_loop_min_duration_secs,
-        skill_loop_min_tool_calls: existing.skill_loop_min_tool_calls,
-        skill_detection_enabled: existing.skill_detection_enabled,
-        notifications_master_enabled: existing.notifications_master_enabled,
-        notifications_dnd_enabled: existing.notifications_dnd_enabled,
-        notifications_dnd_start: existing.notifications_dnd_start.clone(),
-        notifications_dnd_end: existing.notifications_dnd_end.clone(),
-        notifications_on_completed: existing.notifications_on_completed,
-        notifications_on_failed: existing.notifications_on_failed,
-        stt: existing.stt.clone(),
-        gateway: existing.gateway.clone(),
-        enabled_providers: existing.enabled_providers.clone(),
-    };
-    drop(existing);
+    let _ = request;
 
-    // P1.1 (ADR-0005): the runtime client config now reads from the engine
-    // `ProviderConfigStore`. Synthesize the engine-side `ShannonConfig`
-    // overrides from `new_config`. Provider identity, base_url, model and
-    // credential come from the store (see `build_client_config`).
+    let desktop_cfg = state.desktop_config.read().await.clone();
     let shannon_overrides = shannon_core::unified_config::ShannonConfig {
-        max_tokens: new_config.max_tokens.map(|v| v as usize),
-        temperature: new_config.temperature,
+        max_tokens: desktop_cfg.max_tokens.map(|v| v as usize),
+        temperature: desktop_cfg.temperature,
         ..Default::default()
     };
-    let client_config = {
+    let new_client_config = {
         let store_guard = state.provider_store.lock().await;
         AppState::build_client_config(&store_guard, &shannon_overrides).unwrap_or_default()
     };
 
+    let new_provider_label = new_client_config.provider.to_string();
     {
         let mut c = state.client_config.write().await;
-        *c = client_config;
+        *c = new_client_config;
     }
-    {
-        let mut m = state.model.lock().await;
-        *m = request.model.clone();
-    }
-    {
-        let mut p = state.provider.lock().await;
-        *p = request.provider;
-    }
-    {
-        let mut dc = state.desktop_config.write().await;
-        *dc = new_config.clone();
-    }
-
-    config::save_config(&new_config)?;
 
     let _ = app_handle.emit(
         event_names::CONFIG_UPDATED,
         events::ConfigUpdatedPayload {
             key: "provider".into(),
-            value: new_config.provider.clone().unwrap_or_default(),
+            value: new_provider_label,
         },
     );
 
@@ -764,13 +696,16 @@ pub async fn switch_provider(
 }
 
 /// Get the current desktop config (for settings panel).
+///
+/// P1.2-B (ADR-0005): the top-level `api_key` masking branch is gone —
+/// `DesktopConfig` no longer carries the singular `api_key` field (the
+/// engine `ProviderConfigStore` + `CredentialManager` own it now). The
+/// `stt.api_key` masking stays since the STT sub-config still persists
+/// its own key on disk for now.
 #[tauri::command]
 pub async fn get_config(state: tauri::State<'_, AppState>) -> Result<DesktopConfig, String> {
     let cfg = state.desktop_config.read().await;
     let mut display = cfg.clone();
-    if display.api_key.is_some() {
-        display.api_key = Some("***".into());
-    }
     if let Some(stt) = display.stt.as_mut() {
         if stt.api_key.is_some() {
             stt.api_key = Some("***".into());
@@ -1302,16 +1237,6 @@ fn remove_provider(mut file: ProvidersFile, id: &str) -> Result<ProvidersFile, S
     Ok(file)
 }
 
-/// Mirror a managed provider's fields into the singular `DesktopConfig` that
-/// the engine reads. Kept separate so the active-selection logic is testable
-/// without a Tauri runtime.
-fn mirror_provider_into_config(dc: &mut DesktopConfig, conn: &ProviderConnection) {
-    dc.provider = Some(conn.provider_kind.clone());
-    dc.api_key = conn.api_key.clone();
-    dc.base_url = conn.base_url.clone();
-    dc.model = conn.model.clone();
-}
-
 /// List all managed providers, masking API keys.
 ///
 /// ADR-0005 Phase 2 / task 5: this command is now read-only against the
@@ -1510,15 +1435,18 @@ pub async fn delete_provider(
     Ok(mask_providers(file))
 }
 
-/// Activate a managed provider: mirrors its fields into the singular
-/// `DesktopConfig` that the engine reads (for the running session),
-/// rebuilds the client config, **and** lands the connection in the
-/// engine's `~/.shannon/providers.toml` via
-/// `ProviderConfigStore::upsert_profile` so the desktop shell and the
-/// CLI agree on the active target on the next launch (ADR-0005 Phase 2
-/// acceptance: switching provider in Desktop is observed by the CLI
-/// reading the same `active_target`). Emits `CONFIG_UPDATED` so the
-/// tray and any open windows refresh their provider label.
+/// Activate a managed provider: lands the connection in the engine's
+/// `~/.shannon/providers.toml` via `ProviderConfigStore::upsert_profile`
+/// (so the desktop shell and the CLI agree on the active target on the
+/// next launch — ADR-0005 Phase 2 acceptance), rebuilds the live
+/// `state.client_config` from the engine store, and emits
+/// `CONFIG_UPDATED` so the tray and any open windows refresh their
+/// provider label.
+///
+/// P1.2-B (ADR-0005): the legacy mirror step that wrote
+/// `DesktopConfig.provider`/`api_key`/`base_url`/`model` is gone —
+/// those fields no longer exist. `land_profile_in_engine_store` is the
+/// single source-of-truth writer.
 #[tauri::command]
 pub async fn set_active_provider(
     state: tauri::State<'_, AppState>,
@@ -1536,15 +1464,8 @@ pub async fn set_active_provider(
     let provider_kind = conn.provider_kind.clone();
     let model = conn.model.clone();
 
-    // Mirror into the singular config the engine consumes.
-    let desktop_cfg = {
-        let mut dc = state.desktop_config.write().await;
-        mirror_provider_into_config(&mut dc, &conn);
-        dc.clone()
-    };
-
     // Land the activation in the engine's `~/.shannon/providers.toml`
-    // *before* rebuilding the client config, because the new
+    // *before* rebuilding the client config, because the
     // `build_client_config` (P1.1 / ADR-0005) reads from the engine
     // store, not from the legacy mirror. `upsert_profile` (not
     // `set_active(&LlmProvider, ...)`) is used so a managed
@@ -1554,10 +1475,10 @@ pub async fn set_active_provider(
     let model_id = model.clone().unwrap_or_else(|| "default".to_string());
     land_profile_in_engine_store(&state, &conn, &model_id).await?;
 
-    // P1.1 (ADR-0005): the runtime client config reads from the engine
-    // store (now updated by `land_profile_in_engine_store` above);
-    // `new_config`/`desktop_cfg` only contribute behavioural overrides
-    // (`max_tokens`/`temperature`).
+    // The runtime client config reads from the engine store (now
+    // updated by `land_profile_in_engine_store` above). Behavioural
+    // overrides (`max_tokens`/`temperature`) come from `desktop_cfg`.
+    let desktop_cfg = state.desktop_config.read().await.clone();
     let shannon_overrides = shannon_core::unified_config::ShannonConfig {
         max_tokens: desktop_cfg.max_tokens.map(|v| v as usize),
         temperature: desktop_cfg.temperature,
@@ -1571,16 +1492,6 @@ pub async fn set_active_provider(
         let mut c = state.client_config.write().await;
         *c = client_config;
     }
-    {
-        let mut m = state.model.lock().await;
-        *m = model.clone().unwrap_or_default();
-    }
-    {
-        let mut p = state.provider.lock().await;
-        *p = provider_kind.clone();
-    }
-
-    config::save_config(&desktop_cfg)?;
 
     file.active_provider_id = Some(id.clone());
     config::save_providers(&file)?;
@@ -1982,29 +1893,6 @@ mod tests {
             providers: vec![sample_conn("a", "anthropic", Some("k1"))],
         };
         assert!(remove_provider(file, "nope").is_err());
-    }
-
-    #[test]
-    fn mirror_provider_into_config_copies_all_singular_fields() {
-        let mut dc = DesktopConfig::default();
-        let conn = ProviderConnection {
-            id: "glm".into(),
-            label: "My GLM".into(),
-            provider_kind: "openai-compatible".into(),
-            api_key: Some("sk-glm".into()),
-            base_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
-            model: Some("glm-4.6".into()),
-            created_at: "2026-06-28T00:00:00Z".into(),
-            ..Default::default()
-        };
-        mirror_provider_into_config(&mut dc, &conn);
-        assert_eq!(dc.provider.as_deref(), Some("openai-compatible"));
-        assert_eq!(dc.api_key.as_deref(), Some("sk-glm"));
-        assert_eq!(
-            dc.base_url.as_deref(),
-            Some("https://open.bigmodel.cn/api/paas/v4")
-        );
-        assert_eq!(dc.model.as_deref(), Some("glm-4.6"));
     }
 
     // === Engine-store write helpers (Phase 2 task 4) ===

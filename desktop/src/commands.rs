@@ -59,12 +59,14 @@ pub struct AppState {
     pub(crate) messages: Arc<Mutex<Vec<ChatMessage>>>,
     /// Whether a query is currently in progress.
     pub(crate) querying: Arc<Mutex<bool>>,
-    /// Current model identifier.
-    pub(crate) model: Arc<Mutex<String>>,
-    /// Current provider name.
-    pub(crate) provider: Arc<Mutex<String>>,
-    /// LLM client config — used to build clients on demand.
-    pub(crate) client_config: Arc<RwLock<LlmClientConfig>>,
+    /// LLM client config — used to build clients on demand. P1.2-B:
+    /// this is the single source of truth for the active `model` /
+    /// `provider`; the legacy `Arc<Mutex<String>>` mirrors were
+    /// removed when the engine `ProviderConfigStore` took ownership.
+    /// `pub` (not `pub(crate)`) so the `shannon-desktop` binary
+    /// crate's `main.rs` can read it for the tray status label —
+    /// `pub(crate)` only spans lib-internal code, not the bin.
+    pub client_config: Arc<RwLock<LlmClientConfig>>,
     /// Engine-side `~/.shannon/providers.toml` write path. Held behind
     /// an in-process `Mutex` so the three desktop commands that touch
     /// it (`save_provider`, `set_active_provider`, `delete_provider`)
@@ -302,15 +304,6 @@ impl AppState {
         let client_config = Self::build_client_config(&provider_store, &shannon_overrides)
             .unwrap_or_else(LlmClientConfig::default);
 
-        let model = desktop_config
-            .model
-            .clone()
-            .unwrap_or_else(|| "claude-sonnet-4-6".into());
-        let provider = desktop_config
-            .provider
-            .clone()
-            .unwrap_or_else(|| "anthropic".into());
-
         // Initialize tool registry with default tools
         let mut tool_registry = ToolRegistry::new();
         let _agent_context =
@@ -319,8 +312,6 @@ impl AppState {
         Self {
             messages: Arc::new(Mutex::new(Vec::new())),
             querying: Arc::new(Mutex::new(false)),
-            model: Arc::new(Mutex::new(model)),
-            provider: Arc::new(Mutex::new(provider)),
             client_config: Arc::new(RwLock::new(client_config)),
             provider_store: Arc::new(tokio::sync::Mutex::new(provider_store)),
             tools: Arc::new(tool_registry),
@@ -521,7 +512,7 @@ pub async fn send_message(
     let engine = QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new());
 
     // Create query context
-    let model = state.model.lock().await.clone();
+    let model = state.client_config.read().await.model.clone();
     let message_for_skill_loop = message.clone();
     let context = QueryContext {
         query_id,
@@ -544,8 +535,7 @@ pub async fn send_message(
     let cancel_token_clone = cancel_token.clone();
     let current_session_id_arc = state.current_session_id.clone();
     let state_mgr_arc = state.state_manager.clone();
-    let model_arc = state.model.clone();
-    let provider_arc = state.provider.clone();
+    let client_config_arc = state.client_config.clone();
     let usage_store_arc = state.usage_store.clone();
     let notifier_arc = state.notifier.clone();
 
@@ -660,8 +650,10 @@ pub async fn send_message(
                     } => {
                         // Persist to the local usage ledger. Best-effort:
                         // a log write failure must never break the stream.
-                        let model_now = model_arc.lock().await.clone();
-                        let provider_now = provider_arc.lock().await.clone();
+                        let cc_now = client_config_arc.read().await;
+                        let model_now = cc_now.model.clone();
+                        let provider_now = cc_now.provider.to_string();
+                        drop(cc_now);
                         let _ = usage_store_arc.append(&crate::commands_usage::record_event(
                             &model_now,
                             &provider_now,
@@ -702,7 +694,7 @@ pub async fn send_message(
                             let session_id_opt = current_session_id_arc.lock().await.clone();
                             if let Some(sid) = session_id_opt {
                                 let msgs = messages_arc.lock().await.clone();
-                                let model = model_arc.lock().await.clone();
+                                let model = client_config_arc.read().await.model.clone();
                                 if let Ok(session_uuid) = uuid::Uuid::parse_str(&sid) {
                                     let core_msgs: Vec<shannon_engine::api::Message> = msgs
                                         .iter()
@@ -952,8 +944,8 @@ pub async fn start_background_task(
     let client_config = state.client_config.read().await.clone();
     let tools = state.tools.clone();
     let _qe_config = state.qe_config.read().await.clone();
-    let model = state.model.lock().await.clone();
-    let provider = state.provider.lock().await.clone();
+    let model = client_config.model.clone();
+    let provider = client_config.provider.to_string();
     let usage_store = state.usage_store.clone();
     let approval_mode_str = state.desktop_config.read().await.approval_mode.clone();
 

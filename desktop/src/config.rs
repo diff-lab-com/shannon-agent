@@ -9,12 +9,17 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Desktop app configuration persisted across sessions.
+///
+/// P1.2-B (ADR-0005): the legacy singular `provider` / `api_key` /
+/// `base_url` / `model` fields were removed — the engine
+/// `ProviderConfigStore` is now the single source of truth for those
+/// values (see [`crate::commands::AppState::provider_store`] and
+/// [`crate::commands::AppState::build_client_config`]). Persisted
+/// `desktop/config.json` from older installs may still carry them, but
+/// they are silently ignored on load (no field to deserialize into) and
+/// never written back out.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesktopConfig {
-    pub provider: Option<String>,
-    pub api_key: Option<String>,
-    pub base_url: Option<String>,
-    pub model: Option<String>,
     pub working_dir: Option<String>,
     pub theme: Option<String>,
     pub mcp_servers: Vec<McpServerConfig>,
@@ -474,10 +479,6 @@ pub struct SttConfig {
 impl Default for DesktopConfig {
     fn default() -> Self {
         Self {
-            provider: Some("anthropic".into()),
-            api_key: None,
-            base_url: None,
-            model: Some("claude-sonnet-4-6".into()),
             working_dir: None,
             theme: None,
             mcp_servers: Vec::new(),
@@ -781,9 +782,6 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = DesktopConfig::default();
-        assert_eq!(config.provider, Some("anthropic".into()));
-        assert!(config.api_key.is_none());
-        assert_eq!(config.model, Some("claude-sonnet-4-6".into()));
         assert!(config.working_dir.is_none());
         assert!(config.theme.is_none());
         assert_eq!(config.approval_mode, Some("confirm".into()));
@@ -792,10 +790,6 @@ mod tests {
     #[test]
     fn test_config_serialization_roundtrip() {
         let config = DesktopConfig {
-            provider: Some("openai".into()),
-            api_key: Some("sk-test".into()),
-            base_url: Some("https://api.openai.com".into()),
-            model: Some("gpt-4.1".into()),
             working_dir: None,
             theme: None,
             mcp_servers: vec![],
@@ -824,9 +818,7 @@ mod tests {
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.provider, Some("openai".into()));
-        assert_eq!(parsed.api_key, Some("sk-test".into()));
-        assert_eq!(parsed.model, Some("gpt-4.1".into()));
+        assert_eq!(parsed.approval_mode, None);
     }
 
     #[test]
@@ -848,10 +840,6 @@ mod tests {
     #[test]
     fn test_approval_mode_serialization() {
         let config = DesktopConfig {
-            provider: Some("anthropic".into()),
-            api_key: None,
-            base_url: None,
-            model: Some("claude-sonnet-4-6".into()),
             working_dir: None,
             theme: None,
             mcp_servers: vec![],
@@ -886,10 +874,6 @@ mod tests {
     #[test]
     fn test_approval_mode_persistence() {
         let config = DesktopConfig {
-            provider: Some("anthropic".into()),
-            api_key: None,
-            base_url: None,
-            model: Some("claude-sonnet-4-6".into()),
             working_dir: None,
             theme: None,
             mcp_servers: vec![],
@@ -1390,8 +1374,6 @@ mod tests {
     #[test]
     fn enabled_providers_round_trips_through_serde() {
         let json = r#"{
-            "provider":"anthropic",
-            "model":"claude-sonnet-4-6",
             "mcp_servers":[],
             "enabled_providers":["anthropic","openai"]
         }"#;
@@ -1416,10 +1398,8 @@ mod tests {
         let cfg_none = DesktopConfig::default();
         assert!(cfg_none.enabled_providers.is_none());
 
-        let cfg_empty: DesktopConfig = serde_json::from_str(
-            r#"{"provider":"anthropic","model":"claude-sonnet-4-6","mcp_servers":[],"enabled_providers":[]}"#,
-        )
-        .unwrap();
+        let cfg_empty: DesktopConfig =
+            serde_json::from_str(r#"{"mcp_servers":[],"enabled_providers":[]}"#).unwrap();
         assert_eq!(cfg_empty.enabled_providers, Some(vec![]));
     }
 }
