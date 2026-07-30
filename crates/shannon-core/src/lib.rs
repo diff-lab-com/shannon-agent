@@ -71,6 +71,7 @@ pub mod remote_settings;
 pub mod settings;
 pub mod settings_sync;
 pub mod smart_context;
+pub mod substitute;
 pub mod suggestions;
 pub mod tips;
 pub mod token_estimation;
