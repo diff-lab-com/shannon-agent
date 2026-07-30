@@ -549,128 +549,45 @@ fn resolve_base_url(raw: &Option<String>) -> Result<Option<String>, String> {
     }
 }
 
-/// Resolve the list-models probe URL + `Name: value` auth header for a provider
-/// kind and an optional base_url override. Pure (no network) so it is
-/// unit-testable. Ollama is handled by the caller because it uses no auth and
-/// an env-derived default host.
-///
-/// The optional `base_url` lets a user point a built-in kind at a proxy or
-/// self-host, and is **required** for `openai-compatible` (GLM/Zhipu,
-/// Moonshot/Kimi, MiniMax, Together, Groq, …), which closes the gap where
-/// those providers previously fell through to "unknown provider".
-fn provider_probe_url(
-    provider: &str,
-    api_key: &str,
-    base_url: Option<&str>,
-) -> Result<(String, Option<String>), String> {
-    let validated = match base_url {
-        Some(raw) => Some(validate_base_url(raw)?),
-        None => None,
-    };
-    let trimmed = validated.as_deref();
-    Ok(match provider {
-        "anthropic" => {
-            let base = trimmed.unwrap_or("https://api.anthropic.com");
-            (
-                format!("{base}/v1/models?limit=1"),
-                Some(format!("x-api-key: {api_key}")),
-            )
-        }
-        "openai" => {
-            let base = trimmed.unwrap_or("https://api.openai.com");
-            (
-                format!("{base}/v1/models"),
-                Some(format!("Authorization: Bearer {api_key}")),
-            )
-        }
-        "deepseek" => {
-            let base = trimmed.unwrap_or("https://api.deepseek.com");
-            (
-                format!("{base}/models"),
-                Some(format!("Authorization: Bearer {api_key}")),
-            )
-        }
-        "openai-compatible" => {
-            let base = trimmed
-                .ok_or_else(|| "openai-compatible provider requires a base_url".to_string())?;
-            (
-                format!("{base}/models"),
-                Some(format!("Authorization: Bearer {api_key}")),
-            )
-        }
-        other => return Err(format!("unknown provider: {other}")),
-    })
-}
-
 /// Ping a provider's "list models" endpoint to verify the API key works.
 ///
-/// Each provider has a cheap GET endpoint that requires auth — we use it as
-/// a liveness check. 200 → Success, 401/403 → InvalidKey, 429 → RateLimited,
-/// 5xx → ProviderError, network failure → NetworkUnreachable, everything
-/// else → Unknown. An optional `base_url` overrides the canonical endpoint
-/// (required for `openai-compatible` providers).
+/// Thin Tauri-command wrapper over `shannon_engine::api::probe::probe_provider_endpoint`
+/// (ADR-0005 task 5 — the engine is the single implementation; this module
+/// adds desktop's stricter `validate_base_url` and the typed
+/// `TestConnectionResult` mapping so the frontend keeps its existing
+/// response shape). 200 → Success, 401/403 → InvalidKey, 429 → RateLimited,
+/// 5xx → ProviderError, network/timeout failure → NetworkUnreachable,
+/// anything else → Unknown.
 #[tauri::command]
 pub async fn test_provider_connection(
     provider: String,
     api_key: String,
     base_url: Option<String>,
 ) -> Result<TestConnectionResult, String> {
-    // Ollama needs no auth and uses a bespoke tags endpoint whose default host
-    // comes from OLLAMA_HOST (or localhost:11434).
-    if provider == "ollama" {
-        let host = match base_url.as_deref() {
-            Some(raw) => validate_base_url(raw)?,
-            None => std::env::var("OLLAMA_HOST")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string()),
-        };
-        return ping_provider(&format!("{host}/api/tags"), None)
-            .await
-            .map_err(|e| e.to_string());
+    use shannon_engine::api::ApiError;
+    use shannon_engine::api::probe::probe_provider_endpoint;
+
+    // Desktop-side strict validation: no embedded credentials, requires a
+    // host. The engine does its own defence-in-depth scheme check.
+    if let Some(raw) = base_url.as_deref().filter(|s| !s.is_empty()) {
+        validate_base_url(raw)?;
     }
 
-    let (url, auth_header) = provider_probe_url(&provider, &api_key, base_url.as_deref())?;
-    ping_provider(&url, auth_header.as_deref())
-        .await
-        .map_err(|e| e.to_string())
-}
-
-async fn ping_provider(
-    url: &str,
-    auth_header: Option<&str>,
-) -> Result<TestConnectionResult, Box<dyn std::error::Error + Send + Sync>> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?;
-    let mut req = client.get(url);
-    if let Some(auth) = auth_header {
-        let (name, value) = auth
-            .split_once(": ")
-            .ok_or_else(|| "malformed auth header".to_string())?;
-        req = req.header(name, value);
-    }
-    if auth_header.is_some() && auth_header.unwrap().starts_with("x-api-key:") {
-        req = req.header("anthropic-version", "2023-06-01");
-    }
-    let resp = req.send().await.map_err(|e| {
-        if e.is_connect() || e.is_timeout() {
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::NetworkUnreachable,
-                e.to_string(),
-            )) as Box<dyn std::error::Error + Send + Sync>
-        } else {
-            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+    match probe_provider_endpoint(&provider, &api_key, base_url.as_deref()).await {
+        Ok(()) => Ok(TestConnectionResult::Success),
+        Err(ApiError::AuthenticationFailed) => Ok(TestConnectionResult::InvalidKey),
+        Err(ApiError::RateLimitExceeded { .. }) => Ok(TestConnectionResult::RateLimited),
+        Err(ApiError::ApiError { status, .. }) if (500..=599).contains(&status) => {
+            Ok(TestConnectionResult::ProviderError { status })
         }
-    })?;
-    let status = resp.status().as_u16();
-    Ok(match status {
-        200..=299 => TestConnectionResult::Success,
-        401 | 403 => TestConnectionResult::InvalidKey,
-        429 => TestConnectionResult::RateLimited,
-        500..=599 => TestConnectionResult::ProviderError { status },
-        _ => TestConnectionResult::Unknown {
-            message: format!("HTTP {status}"),
-        },
-    })
+        Err(ApiError::Timeout) => Ok(TestConnectionResult::NetworkUnreachable),
+        Err(ApiError::HttpError(e)) if e.is_connect() || e.is_timeout() => {
+            Ok(TestConnectionResult::NetworkUnreachable)
+        }
+        Err(other) => Ok(TestConnectionResult::Unknown {
+            message: other.to_string(),
+        }),
+    }
 }
 
 // ===== Managed providers (Models P2) =====
@@ -1004,63 +921,6 @@ mod tests {
         let back: ProviderSwitchRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(back.provider, "openai");
         assert_eq!(back.api_key, Some("sk-test".to_string()));
-    }
-
-    #[test]
-    fn probe_url_uses_canonical_endpoints_by_default() {
-        let (url, auth) = provider_probe_url("anthropic", "sk-1", None).unwrap();
-        assert_eq!(url, "https://api.anthropic.com/v1/models?limit=1");
-        assert_eq!(auth.as_deref(), Some("x-api-key: sk-1"));
-
-        let (url, auth) = provider_probe_url("openai", "sk-2", None).unwrap();
-        assert_eq!(url, "https://api.openai.com/v1/models");
-        assert_eq!(auth.as_deref(), Some("Authorization: Bearer sk-2"));
-
-        let (url, _) = provider_probe_url("deepseek", "sk-3", None).unwrap();
-        assert_eq!(url, "https://api.deepseek.com/models");
-    }
-
-    #[test]
-    fn probe_url_respects_base_url_override() {
-        // Anthropic behind a proxy.
-        let (url, auth) =
-            provider_probe_url("anthropic", "sk-1", Some("https://my-proxy.example.com/")).unwrap();
-        assert_eq!(url, "https://my-proxy.example.com/v1/models?limit=1");
-        assert_eq!(auth.as_deref(), Some("x-api-key: sk-1"));
-    }
-
-    #[test]
-    fn probe_url_openai_compatible_requires_base_url() {
-        let err = provider_probe_url("openai-compatible", "sk-x", None).unwrap_err();
-        assert!(err.contains("base_url"), "unexpected error: {err}");
-
-        let (url, auth) = provider_probe_url(
-            "openai-compatible",
-            "sk-x",
-            Some("https://open.bigmodel.cn/api/paas/v4"),
-        )
-        .unwrap();
-        assert_eq!(url, "https://open.bigmodel.cn/api/paas/v4/models");
-        assert_eq!(auth.as_deref(), Some("Authorization: Bearer sk-x"));
-    }
-
-    #[test]
-    fn probe_url_rejects_unknown_provider() {
-        assert!(provider_probe_url("grok", "sk", None).is_err());
-    }
-
-    #[test]
-    fn probe_url_rejects_unsafe_base_url() {
-        // Validation now runs inside provider_probe_url.
-        assert!(provider_probe_url("openai", "sk", Some("file:///etc/passwd")).is_err());
-        assert!(
-            provider_probe_url(
-                "openai-compatible",
-                "sk",
-                Some("https://user:pass@evil.example.com")
-            )
-            .is_err()
-        );
     }
 
     #[test]
