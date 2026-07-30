@@ -779,6 +779,7 @@ fn build_seed_file(cfg: &DesktopConfig) -> Option<ProvidersFile> {
             base_url: cfg.base_url.clone(),
             model: cfg.model.clone(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            ..Default::default()
         }],
     })
 }
@@ -864,6 +865,7 @@ pub async fn save_provider(
             base_url,
             model: input.model.filter(|s| !s.is_empty()),
             created_at: chrono::Utc::now().to_rfc3339(),
+            ..Default::default()
         };
         let label = conn.label.clone();
         file.providers.push(conn);
@@ -1101,6 +1103,7 @@ mod tests {
             base_url: None,
             model: None,
             created_at: "2026-06-27T00:00:00Z".into(),
+            ..Default::default()
         }];
         // "glm" already exists → first collision gets "-2".
         assert_eq!(unique_provider_slug("GLM", &existing), "glm-2");
@@ -1121,6 +1124,7 @@ mod tests {
                     base_url: None,
                     model: None,
                     created_at: "2026-06-27T00:00:00Z".into(),
+                    ..Default::default()
                 },
                 ProviderConnection {
                     id: "b".into(),
@@ -1130,6 +1134,7 @@ mod tests {
                     base_url: None,
                     model: None,
                     created_at: "2026-06-27T00:00:00Z".into(),
+                    ..Default::default()
                 },
             ],
         };
@@ -1171,6 +1176,7 @@ mod tests {
             base_url: None,
             model: None,
             created_at: "2026-06-28T00:00:00Z".into(),
+            ..Default::default()
         }
     }
 
@@ -1286,6 +1292,7 @@ mod tests {
             base_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
             model: Some("glm-4.6".into()),
             created_at: "2026-06-28T00:00:00Z".into(),
+            ..Default::default()
         };
         mirror_provider_into_config(&mut dc, &conn);
         assert_eq!(dc.provider.as_deref(), Some("openai-compatible"));

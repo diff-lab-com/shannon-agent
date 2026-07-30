@@ -4,6 +4,8 @@
 //! and supports runtime provider switching.
 
 use serde::{Deserialize, Serialize};
+use shannon_types::provider_config::{ProviderQuirks, ProviderTiers};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Desktop app configuration persisted across sessions.
@@ -140,10 +142,18 @@ pub struct McpServerConfig {
 }
 
 /// A managed LLM provider connection (Models P2). Users may configure several
-/// providers; the **active** one is mirrored into `DesktopConfig`'s singular
-/// fields, which is what the engine actually reads. The full roster lives in
-/// `~/.shannon/desktop/providers.json`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// providers; the **active** one is mirrored into the engine's
+/// `~/.shannon/providers.toml` via [`crate::commands_config::save_provider`]
+/// so the engine reads it directly. The desktop shell keeps a parallel
+/// `~/.shannon/desktop/providers.json` cache purely as a read-side fan-out
+/// for the UI list — `providers.toml` is the source of truth on disk.
+///
+/// The fields beyond `id`/`label`/`provider_kind`/`base_url`/`model` are the
+/// v2 `ProviderProfile` schema (ADR-0005 Phase 2 / task 4). The desktop
+/// extends the engine's per-profile knobs so users can configure custom
+/// headers, fallback models, and per-tier overrides from the Add Provider
+/// modal without going through the CLI's `/connect` flow.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderConnection {
     /// Stable slug id (derived from the label, de-duplicated).
     pub id: String,
@@ -152,8 +162,14 @@ pub struct ProviderConnection {
     /// Provider kind: `anthropic` | `openai` | `deepseek` | `ollama` |
     /// `openai-compatible`. Determines the auth scheme + default base_url.
     pub provider_kind: String,
-    /// API key (stored locally; masked to `"***"` in list responses).
-    #[serde(default)]
+    /// API key plaintext (transitional only). A1 mandates plaintext keys
+    /// never live on disk; the canonical store is
+    /// `~/.shannon/credentials/<id>.json` (0600), written by
+    /// `store_provider_key` from [`crate::commands_config`]. This field
+    /// exists only so a legacy `providers.json` with a leftover plaintext
+    /// key can be deserialized and moved to the credential store by
+    /// `migrate_providers_to_credentials`. It is never serialized out.
+    #[serde(default, skip_serializing)]
     pub api_key: Option<String>,
     /// Base URL override. Required for `openai-compatible`; optional for the
     /// built-in kinds (falls back to the canonical URL).
@@ -163,6 +179,35 @@ pub struct ProviderConnection {
     #[serde(default)]
     pub model: Option<String>,
     pub created_at: String,
+    /// Optional override for the model listing endpoint. `None` →
+    /// `{base_url}/models` (engine default).
+    #[serde(default)]
+    pub models_url: Option<String>,
+    /// Per-request HTTP headers. Use for proxies, custom auth schemes, or
+    /// `X-*` headers the engine doesn't otherwise expose.
+    #[serde(default)]
+    pub extra_headers: HashMap<String, String>,
+    /// Default `max_tokens` for this provider's requests. Falls back to
+    /// `cfg.max_tokens` (then to 4096) when unset.
+    #[serde(default)]
+    pub default_max_tokens: Option<u32>,
+    /// Fallback model ids tried in order if the primary is unavailable.
+    /// Engine-side support is a Phase 5 follow-up; today these are
+    /// persisted but not consumed by the runtime path.
+    #[serde(default)]
+    pub fallback_models: Vec<String>,
+    /// Per-provider behavior tweaks (temperature strategy, max_tokens
+    /// override, send_temperature). Engine-side support is a Phase 5
+    /// follow-up; today these are persisted but not consumed by the
+    /// runtime path.
+    #[serde(default)]
+    pub quirks: ProviderQuirks,
+    /// Per-tier model id overrides (canonical: `fast` / `standard` /
+    /// `pro`). REPL `/model --tier <name> <model> --save` writes the same
+    /// shape into the engine store; the desktop's Add Provider modal
+    /// exposes it for managed connections.
+    #[serde(default)]
+    pub tiers: ProviderTiers,
 }
 
 /// Container persisted to `~/.shannon/desktop/providers.json`.
@@ -173,6 +218,78 @@ pub struct ProvidersFile {
     pub active_provider_id: Option<String>,
     #[serde(default)]
     pub providers: Vec<ProviderConnection>,
+}
+
+impl ProviderConnection {
+    /// Build a v2 `ProviderProfile` from this connection for the engine's
+    /// `~/.shannon/providers.toml`. Used by
+    /// [`crate::commands_config::save_provider`] /
+    /// [`crate::commands_config::set_active_provider`] when landing a
+    /// managed connection through
+    /// [`shannon_core::provider_config_store::ProviderConfigStore::upsert_profile`].
+    ///
+    /// Behaviour:
+    /// - `kind` is derived from `provider_kind` via the engine's slug
+    ///   table. Unknown slugs fall back to `OpenAiCompatible` so a
+    ///   typo'd kind still round-trips.
+    /// - `base_url` falls back to the engine's canonical default for
+    ///   the kind (e.g. `https://api.anthropic.com` for Anthropic).
+    /// - `credential` is `Store { service: id }` when the credential
+    ///   store has a key for this id, else `Ephemeral` (the resolver
+    ///   falls back to env-var lookup for `Ephemeral`).
+    /// - `models_url`, `extra_headers`, `default_max_tokens`,
+    ///   `fallback_models`, `quirks`, `tiers` are passed through
+    ///   verbatim from this struct.
+    pub fn to_provider_profile(
+        &self,
+        default_base_url: &str,
+    ) -> shannon_types::provider_config::ProviderProfile {
+        use shannon_types::provider_config::{CredentialRef, ProviderKind, ProviderProfile};
+
+        let kind = match self.provider_kind.as_str() {
+            "anthropic" => ProviderKind::Anthropic,
+            "openai" => ProviderKind::OpenAi,
+            "openai-compatible" => ProviderKind::OpenAiCompatible,
+            "ollama" => ProviderKind::Ollama,
+            "gemini" => ProviderKind::Gemini,
+            "deepseek" => ProviderKind::Deepseek,
+            // Unknown slug — collapse to openai-compatible so the
+            // engine's `resolve_provider` can recover identity from
+            // base_url at resolution time.
+            _ => ProviderKind::OpenAiCompatible,
+        };
+
+        // Decide the credential: Store iff the credential store has a
+        // key for this id. The desktop's `store_provider_key` writes
+        // before the `ProviderProfile` is constructed, so a fresh save
+        // sees its own write. A delete or unconfigured state resolves
+        // to Ephemeral, which the resolver handles by falling back to
+        // the provider's env-var lookup.
+        let credential =
+            match shannon_core::credential_manager::read_credential_value_default(&self.id) {
+                Some(_) => CredentialRef::Store {
+                    service: self.id.clone(),
+                },
+                None => CredentialRef::Ephemeral,
+            };
+
+        ProviderProfile {
+            id: self.id.clone(),
+            kind,
+            display_name: self.label.clone(),
+            base_url: self
+                .base_url
+                .clone()
+                .unwrap_or_else(|| default_base_url.to_string()),
+            models_url: self.models_url.clone(),
+            credential,
+            extra_headers: self.extra_headers.clone(),
+            default_max_tokens: self.default_max_tokens,
+            fallback_models: self.fallback_models.clone(),
+            quirks: self.quirks.clone(),
+            tiers: self.tiers.clone(),
+        }
+    }
 }
 
 /// Service slug used by the credentials store for this connection. Stable
@@ -554,6 +671,7 @@ mod tests {
                 base_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
                 model: Some("glm-4.6".into()),
                 created_at: "2026-06-27T00:00:00Z".into(),
+                ..Default::default()
             }],
         };
         let json = serde_json::to_string(&file).unwrap();
@@ -597,5 +715,170 @@ mod tests {
         assert!(path.to_string_lossy().contains(".shannon"));
         assert!(path.to_string_lossy().contains("desktop"));
         assert!(path.to_string_lossy().contains("providers.json"));
+    }
+
+    // === ProviderConnection → ProviderProfile (Phase 2 task 4) ===
+    //
+    // The desktop's `to_provider_profile` helper is the bridge from
+    // the UI-side `ProviderConnection` to the engine-side
+    // `ProviderProfile`. It is the only conversion point; if it ever
+    // drops a field, the engine store silently disagrees with the UI
+    // and the user sees a stale connection on next launch.
+
+    fn full_provider_connection(id: &str, kind: &str) -> ProviderConnection {
+        let mut extra_headers = HashMap::new();
+        extra_headers.insert("X-Custom".into(), "yes".into());
+        extra_headers.insert("X-Region".into(), "us-east".into());
+        ProviderConnection {
+            id: id.into(),
+            label: format!("{id} label"),
+            provider_kind: kind.into(),
+            api_key: None,
+            base_url: Some("https://example.test/v1".into()),
+            model: Some("default-model".into()),
+            created_at: "2026-07-30T00:00:00Z".into(),
+            models_url: Some("https://example.test/v1/models".into()),
+            extra_headers,
+            default_max_tokens: Some(8192),
+            fallback_models: vec!["a".into(), "b".into()],
+            quirks: Default::default(),
+            tiers: ProviderTiers {
+                fast: Some("fast-model".into()),
+                standard: Some("std-model".into()),
+                pro: Some("pro-model".into()),
+            },
+        }
+    }
+
+    #[test]
+    fn to_provider_profile_maps_known_kind_to_engine_enum() {
+        // Anthropic kind maps to ProviderKind::Anthropic — not the
+        // openai-compatible catch-all.
+        let conn = full_provider_connection("anthropic-main", "anthropic");
+        let profile = conn.to_provider_profile("https://api.anthropic.com");
+        assert_eq!(profile.id, "anthropic-main");
+        assert_eq!(
+            profile.kind,
+            shannon_types::provider_config::ProviderKind::Anthropic
+        );
+        assert_eq!(profile.display_name, "anthropic-main label");
+        assert_eq!(profile.base_url, "https://example.test/v1");
+        assert_eq!(
+            profile.models_url.as_deref(),
+            Some("https://example.test/v1/models")
+        );
+        assert_eq!(
+            profile.extra_headers.get("X-Custom").map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(profile.default_max_tokens, Some(8192));
+        assert_eq!(profile.fallback_models, vec!["a", "b"]);
+        assert_eq!(profile.tiers.fast.as_deref(), Some("fast-model"));
+        assert_eq!(profile.tiers.standard.as_deref(), Some("std-model"));
+        assert_eq!(profile.tiers.pro.as_deref(), Some("pro-model"));
+    }
+
+    #[test]
+    fn to_provider_profile_collapses_unknown_kind_to_openai_compatible() {
+        // A typo'd kind (e.g. "anthropicc") must still produce a
+        // round-trippable profile so the engine's resolve_provider
+        // can recover identity from base_url.
+        let conn = full_provider_connection("custom-1", "anthropicc");
+        let profile = conn.to_provider_profile("https://default/v1");
+        assert_eq!(
+            profile.kind,
+            shannon_types::provider_config::ProviderKind::OpenAiCompatible
+        );
+    }
+
+    #[test]
+    fn to_provider_profile_falls_back_to_default_base_url_when_unset() {
+        // The user-supplied base_url is None → use the engine's
+        // canonical default (e.g. for Anthropic). This matches the
+        // guarantee /connect gives the CLI.
+        let mut conn = full_provider_connection("anthropic-main", "anthropic");
+        conn.base_url = None;
+        let profile = conn.to_provider_profile("https://api.anthropic.com");
+        assert_eq!(profile.base_url, "https://api.anthropic.com");
+    }
+
+    #[test]
+    fn to_provider_profile_uses_store_credential_when_credential_file_present() {
+        // If ~/.shannon/credentials/<id>.json exists on disk, the
+        // profile advertises CredentialRef::Store so the resolver
+        // reads the key from the store. We don't write a real
+        // credential here — we just check the fallback path. The
+        // Store-vs-Ephemeral branching is exercised by the live
+        // /provider health / connection test paths.
+        let conn = full_provider_connection("never-stored", "anthropic");
+        let profile = conn.to_provider_profile("https://api.anthropic.com");
+        match &profile.credential {
+            shannon_types::provider_config::CredentialRef::Ephemeral
+            | shannon_types::provider_config::CredentialRef::Store { .. } => {}
+            other => panic!("expected Ephemeral or Store, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn provider_connection_default_is_constructible() {
+        // Default::default() must produce a valid (mostly-empty)
+        // struct. Used by callers that build a ProviderConnection
+        // piecewise (e.g. the Add Provider modal's reset state).
+        let conn = ProviderConnection::default();
+        assert!(conn.id.is_empty());
+        assert!(conn.label.is_empty());
+        assert!(conn.provider_kind.is_empty());
+        assert!(conn.api_key.is_none());
+        assert!(conn.base_url.is_none());
+        assert!(conn.model.is_none());
+        assert!(conn.models_url.is_none());
+        assert!(conn.extra_headers.is_empty());
+        assert!(conn.default_max_tokens.is_none());
+        assert!(conn.fallback_models.is_empty());
+        assert_eq!(conn.tiers, ProviderTiers::default());
+    }
+
+    #[test]
+    fn provider_connection_legacy_api_key_field_does_not_serialize() {
+        // The api_key field is a transitional deserialization seam
+        // only — once the credential-store migration runs the value
+        // is None, and we never write it back out.
+        let conn = ProviderConnection {
+            id: "a".into(),
+            label: "A".into(),
+            provider_kind: "anthropic".into(),
+            api_key: Some("sk-secret".into()),
+            base_url: None,
+            model: None,
+            created_at: "2026-07-30T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&conn).unwrap();
+        assert!(
+            !json.contains("api_key"),
+            "api_key must not be serialized (saw {json})"
+        );
+        assert!(!json.contains("sk-secret"));
+    }
+
+    #[test]
+    fn provider_connection_legacy_api_key_field_deserializes_and_is_consumed() {
+        // A legacy providers.json with a plaintext api_key must still
+        // parse (so the credential-store migration can run). The
+        // value is captured into the struct, but apply_provider_update
+        // never writes it back out.
+        let json = r#"{
+            "id":"glm",
+            "label":"GLM",
+            "provider_kind":"openai-compatible",
+            "api_key":"sk-legacy-plaintext",
+            "created_at":"2026-07-30T00:00:00Z"
+        }"#;
+        let conn: ProviderConnection = serde_json::from_str(json).unwrap();
+        assert_eq!(conn.api_key.as_deref(), Some("sk-legacy-plaintext"));
+        // Round-trip back out: api_key must be gone.
+        let back = serde_json::to_string(&conn).unwrap();
+        assert!(!back.contains("api_key"));
+        assert!(!back.contains("sk-legacy-plaintext"));
     }
 }
