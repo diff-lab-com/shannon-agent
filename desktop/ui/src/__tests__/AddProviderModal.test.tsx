@@ -204,4 +204,46 @@ describe('AddProviderModal — Advanced disclosure (Phase 2 task 3)', () => {
       pro: 'opus-fast',
     })
   })
+
+  it('shows an active-tier badge when the model field matches a tier override', async () => {
+    // P4.11: badge the tier row whose override matches the provider's
+    // active model so the user knows which tier their engine is using.
+    renderModal()
+    fillRequiredFields()
+    // Set the model field to match a tier value. The model input has no
+    // data-testid; identify it by its placeholder (`claude-sonnet-4-6`) — same
+    // trick used by the production quick-fill chip.
+    fireEvent.change(screen.getByPlaceholderText('claude-sonnet-4-6'), {
+      target: { value: 'claude-sonnet-4-6' },
+    })
+    fireEvent.click(screen.getByTestId('add-provider-advanced-toggle'))
+    fireEvent.change(screen.getByTestId('tier-standard-input'), {
+      target: { value: 'claude-sonnet-4-6' },
+    })
+    expect(screen.getByTestId('tier-standard-active')).toBeInTheDocument()
+    expect(screen.queryByTestId('tier-fast-active')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tier-pro-active')).not.toBeInTheDocument()
+  })
+
+  it('clears a tier override when the row clear button is clicked', async () => {
+    // P4.11: per-row clear button resets a single tier to the catalog
+    // default without touching the others.
+    renderModal()
+    fillRequiredFields()
+    fireEvent.click(screen.getByTestId('add-provider-advanced-toggle'))
+    fireEvent.change(screen.getByTestId('tier-fast-input'), {
+      target: { value: 'haiku-4-5' },
+    })
+    fireEvent.change(screen.getByTestId('tier-pro-input'), {
+      target: { value: 'opus-4-8' },
+    })
+    expect(screen.getByTestId('tier-fast-clear')).toBeInTheDocument()
+    expect(screen.getByTestId('tier-pro-clear')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('tier-fast-clear'))
+    expect((screen.getByTestId('tier-fast-input') as HTMLInputElement).value).toBe('')
+    // Pro row is untouched.
+    expect((screen.getByTestId('tier-pro-input') as HTMLInputElement).value).toBe('opus-4-8')
+    // Clear button hides on empty rows.
+    expect(screen.queryByTestId('tier-fast-clear')).not.toBeInTheDocument()
+  })
 })
