@@ -807,6 +807,46 @@ mod tests {
     }
 
     #[test]
+    fn picker_entered_via_connect_defaults_to_false() {
+        // A picker opened via `/model` (the legacy path) must keep the flag
+        // false. Only `/connect` flips it on — the flag is the stable signal
+        // for any future "Esc reverts to connect-time default" affordance.
+        let picker = ModelPickerWidget::new(None);
+        assert!(!picker.was_entered_via_connect());
+    }
+
+    #[test]
+    fn picker_entered_via_connect_setter_roundtrip() {
+        // After `apply_connect` constructs and tags the picker, the getter
+        // reflects the same value. This locks the contract used by the
+        // connect flow at crates/shannon-ui/src/repl/commands/config.rs.
+        let mut picker = ModelPickerWidget::new(Some("claude-sonnet-4-20250514"));
+        assert!(!picker.was_entered_via_connect(), "fresh picker is false");
+
+        picker.set_entered_via_connect(true);
+        assert!(picker.was_entered_via_connect());
+
+        picker.set_entered_via_connect(false);
+        assert!(!picker.was_entered_via_connect(), "setter is symmetric");
+    }
+
+    #[test]
+    fn picker_entered_via_connect_survives_provider_navigation() {
+        // Tabbing between provider tabs must not reset the flag — once a
+        // picker is "via connect", it stays that way for its lifetime so a
+        // user who arrows across tabs still gets the connect-time banner.
+        let mut picker = ModelPickerWidget::new(Some("claude-sonnet-4-20250514"));
+        picker.set_entered_via_connect(true);
+        picker.next_provider();
+        picker.next_provider();
+        picker.next_tier();
+        assert!(
+            picker.was_entered_via_connect(),
+            "navigation must not clear the flag"
+        );
+    }
+
+    #[test]
     fn model_cost_label_honest_about_unknown() {
         use shannon_core::model_registry::{ModelCapabilities, ModelInfo};
         use shannon_engine::api::LlmProvider;
@@ -954,6 +994,10 @@ pub struct ModelPickerWidget {
     manual_mode: bool,
     /// Typed model id while in manual entry mode.
     manual_input: String,
+    /// True when the picker was opened by `/connect` (rather than `/model`).
+    /// Cosmetic today (banner copy); reserves room for future behavioral
+    /// hooks — e.g. an "Esc reverts to the connect-time default" affordance.
+    entered_via_connect: bool,
 }
 
 /// Honest cost label for a model shown in the picker detail line.
@@ -1003,6 +1047,7 @@ impl ModelPickerWidget {
             current_tier_idx: 0,
             manual_mode: false,
             manual_input: String::new(),
+            entered_via_connect: false,
         };
 
         // Find the provider of the current model to open the right tab
@@ -1030,6 +1075,21 @@ impl ModelPickerWidget {
         }
 
         picker
+    }
+
+    /// Mark this picker as having been opened by `/connect`. Cosmetic today —
+    /// banner copy in `apply_connect` reads this to phrase the "you can pick
+    /// below" hint — but kept as an explicit flag so future hooks (e.g. an
+    /// "Esc reverts to the connect-time default" affordance) have a stable
+    /// signal to test against.
+    pub fn set_entered_via_connect(&mut self, value: bool) {
+        self.entered_via_connect = value;
+    }
+
+    /// Read-only access to the `entered_via_connect` flag. Used by the picker
+    /// banner to phrase copy differently after a fresh connect.
+    pub fn was_entered_via_connect(&self) -> bool {
+        self.entered_via_connect
     }
 
     /// Get models for a provider, including Ollama local models.

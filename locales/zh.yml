@@ -47,6 +47,12 @@ commands:
     context_unknown: "未知 (按 provider)"
     cost_unknown: "估算不可用"
     cost_free_local: "免费 (本地)"
+  connect:
+    success: "✓ 已连接到 %{provider}"
+    choose_model: "请在下方选择模型 (Enter = 默认, ↑↓ = 选择, Esc = 使用默认)。"
+    refresh_started: "正在后台刷新模型目录…"
+    refresh_success: "目录已刷新 — %{count} 个模型可用。"
+    refresh_failed: "离线 — 使用缓存目录。"
   config:
     warning_load: "警告: 无法加载配置: %{error}"
     key_not_found: "未找到配置项: %{key}"

@@ -707,6 +707,28 @@ pub(crate) fn apply_connect(
         cp.provider, cp.model_id
     ));
     repl.chat.add_message(ChatRole::System, lines.join("\n"));
+
+    // 5. Spawn a non-blocking models.dev refresh so the picker (next step)
+    //    can show freshly discovered models. 5s timeout — if the user is
+    //    offline the static catalog remains authoritative and the picker
+    //    falls back to it transparently. Errors are swallowed by design.
+    //    Explicit `drop` to satisfy clippy::let_underscore_future: the
+    //    JoinHandle is intentionally discarded (we don't await or report).
+    std::mem::drop(repl.runtime.spawn(async {
+        use std::time::Duration;
+        let _ =
+            shannon_core::model_registry::dynamic::refresh_overlay_async(Duration::from_secs(5))
+                .await;
+    }));
+
+    // 6. Open the model picker on the freshly connected provider so the user
+    //    can confirm or change the default model. Enter commits the
+    //    selection (overwriting `cp.model_id`); Esc keeps `cp.model_id`
+    //    (already applied at phase 3). Both paths are non-breaking.
+    let mut picker = crate::widgets::select::ModelPickerWidget::new(Some(&cp.model_id));
+    picker.set_entered_via_connect(true);
+    repl.state.model_picker = Some(picker);
+
     Ok(())
 }
 
