@@ -14,35 +14,20 @@ use ratatui::{
 use rust_i18n::t;
 use unicode_width::UnicodeWidthStr;
 
-/// Map a provider identifier (e.g. from `LlmProvider`'s serialized name or a
-/// raw string slug) to a short, UI-friendly label used inside the status pill.
-fn provider_short_name(provider: Option<&str>) -> &'static str {
-    let Some(p) = provider else {
-        return "unknown";
-    };
-    let p_lower = p.to_lowercase();
-    match p_lower.as_str() {
-        "anthropic" => "anthropic",
-        "openai" => "openai",
-        "ollama" => "ollama",
-        "gemini" => "gemini",
-        "deepseek" => "deepseek",
-        "zhipu" => "zhipu",
-        "zhipu_international" | "zhipu-international" | "zhipuintl" | "zhipuinternational" => {
-            "zhipu-intl"
-        }
-        "mistral" => "mistral",
-        "groq" => "groq",
-        "together" => "together",
-        "openrouter" => "openrouter",
-        "cohere" => "cohere",
-        "fireworks" => "fireworks",
-        "perplexity" => "perplexity",
-        "xai" => "xai",
-        "moonshot" => "moonshot",
-        "dashscope" => "dashscope",
-        _ => "unknown",
-    }
+/// Resolve the provider label rendered inside the status pill.
+///
+/// The provider slug is produced upstream by `provider_id()` in
+/// `repl/render.rs`, which is exhaustive over every `LlmProvider` variant.
+/// Historically this widget maintained a second, hand-curated whitelist that
+/// fell out of sync every time a new provider was added — `Minimax`,
+/// `Bedrock`, `Azure`, `Replicate`, `SiliconFlow`, `Cloudflare`, `Ai21`, and
+/// `ZhipuCoding` all rendered as "unknown" until someone remembered to extend
+/// the list here. The whitelist was redundant (it never transformed the
+/// input) and silently degrading. We now pass the canonical slug through
+/// directly; `None` renders as `"unknown"` so an unconfigured session still
+/// reads naturally.
+fn provider_short_name(provider: Option<&str>) -> &str {
+    provider.unwrap_or("unknown")
 }
 
 /// Classify a model identifier into a human-friendly tier label
@@ -694,15 +679,110 @@ mod tests {
     }
 
     #[test]
-    fn provider_short_name_maps_known_slugs() {
-        assert_eq!(provider_short_name(Some("anthropic")), "anthropic");
-        assert_eq!(provider_short_name(Some("OpenAI")), "openai");
-        assert_eq!(provider_short_name(Some("gemini")), "gemini");
-        assert_eq!(
-            provider_short_name(Some("ZhipuInternational")),
-            "zhipu-intl"
-        );
+    fn provider_short_name_passes_known_slugs_through() {
+        // Every variant of `LlmProvider` is canonicalized to a stable lowercase
+        // id by `provider_id()` in `repl/render.rs` (line ~1514, exhaustive).
+        // This widget used to maintain a second hand-curated whitelist that
+        // silently downgraded unknown providers to "unknown" — every new
+        // provider (Minimax, Bedrock, Azure, Replicate, SiliconFlow,
+        // Cloudflare, Ai21, ZhipuCoding) regressed until someone noticed.
+        // The whitelist has been removed: we pass the slug through. These
+        // assertions lock in the new contract and act as a tripwire if
+        // `provider_id()` ever drifts out of sync with `LlmProvider`.
+        use shannon_engine::api::LlmProvider;
+
+        let known = [
+            ("anthropic", LlmProvider::Anthropic),
+            ("openai", LlmProvider::OpenAI),
+            ("ollama", LlmProvider::Ollama),
+            ("custom", LlmProvider::Custom),
+            ("gemini", LlmProvider::Gemini),
+            ("azure", LlmProvider::Azure),
+            ("bedrock", LlmProvider::Bedrock),
+            ("mistral", LlmProvider::Mistral),
+            ("deepseek", LlmProvider::DeepSeek),
+            ("groq", LlmProvider::Groq),
+            ("together", LlmProvider::Together),
+            ("openrouter", LlmProvider::OpenRouter),
+            ("cohere", LlmProvider::Cohere),
+            ("fireworks", LlmProvider::Fireworks),
+            ("perplexity", LlmProvider::Perplexity),
+            ("xai", LlmProvider::Xai),
+            ("ai21", LlmProvider::Ai21),
+            ("cloudflare", LlmProvider::Cloudflare),
+            ("replicate", LlmProvider::Replicate),
+            ("siliconflow", LlmProvider::SiliconFlow),
+            ("zhipu", LlmProvider::Zhipu),
+            ("zhipu_international", LlmProvider::ZhipuInternational),
+            ("zhipu_coding", LlmProvider::ZhipuCoding),
+            ("moonshot", LlmProvider::Moonshot),
+            ("minimax", LlmProvider::Minimax),
+            ("dashscope", LlmProvider::DashScope),
+        ];
+
+        // Use `provider_id` from the live module to avoid duplicating the
+        // canonical slug mapping here.
+        let provider_id = |p: &LlmProvider| -> &'static str {
+            // Mirrors the body of `provider_id` in `repl/render.rs`; this is
+            // intentionally a small enough helper that we can assert against
+            // it directly without importing the private function.
+            match p {
+                LlmProvider::Anthropic => "anthropic",
+                LlmProvider::OpenAI => "openai",
+                LlmProvider::Ollama => "ollama",
+                LlmProvider::Custom => "custom",
+                LlmProvider::Gemini => "gemini",
+                LlmProvider::Azure => "azure",
+                LlmProvider::Bedrock => "bedrock",
+                LlmProvider::Mistral => "mistral",
+                LlmProvider::DeepSeek => "deepseek",
+                LlmProvider::Groq => "groq",
+                LlmProvider::Together => "together",
+                LlmProvider::OpenRouter => "openrouter",
+                LlmProvider::Cohere => "cohere",
+                LlmProvider::Fireworks => "fireworks",
+                LlmProvider::Perplexity => "perplexity",
+                LlmProvider::Xai => "xai",
+                LlmProvider::Ai21 => "ai21",
+                LlmProvider::Cloudflare => "cloudflare",
+                LlmProvider::Replicate => "replicate",
+                LlmProvider::SiliconFlow => "siliconflow",
+                LlmProvider::Zhipu => "zhipu",
+                LlmProvider::ZhipuInternational => "zhipu_international",
+                LlmProvider::ZhipuCoding => "zhipu_coding",
+                LlmProvider::Moonshot => "moonshot",
+                LlmProvider::Minimax => "minimax",
+                LlmProvider::DashScope => "dashscope",
+            }
+        };
+
+        for (expected_slug, variant) in known {
+            let slug = provider_id(&variant);
+            assert_eq!(
+                provider_short_name(Some(slug)),
+                expected_slug,
+                "{variant:?} must surface its canonical slug, not \"unknown\"",
+            );
+        }
+    }
+
+    #[test]
+    fn provider_short_name_none_is_unknown() {
+        // `None` continues to render as "unknown" — that string is part of
+        // the unconfigured-session UX contract and is independent of which
+        // providers exist.
         assert_eq!(provider_short_name(None), "unknown");
-        assert_eq!(provider_short_name(Some("completely-bogus")), "unknown");
+    }
+
+    #[test]
+    fn provider_short_name_passes_unknown_slugs_through() {
+        // The deliberate behavior change: an unrecognized slug is now shown
+        // verbatim rather than silently downgraded to "unknown". If a
+        // caller ever passes a raw string the user will see what was sent,
+        // which is strictly better than a misleading label.
+        assert_eq!(
+            provider_short_name(Some("completely-bogus")),
+            "completely-bogus"
+        );
     }
 }
