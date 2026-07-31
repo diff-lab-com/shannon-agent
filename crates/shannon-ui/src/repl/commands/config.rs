@@ -7,6 +7,7 @@ use shannon_engine::api::LlmProvider;
 use shannon_types::model_ref::ModelRef;
 use shannon_types::provider_config::{ProviderTiers, TierName};
 use shannon_types::recover_lock;
+use std::ops::ControlFlow;
 
 /// Per-provider timeout for the concurrent `/health` live probe. Short on
 /// purpose: the verdict is only a hint and a slow provider shouldn't make the
@@ -721,6 +722,12 @@ fn has_connect_key(provider: &LlmProvider) -> bool {
 /// state to the provider's default model. Shared by the inline-key path and the
 /// wizard's submit handler.
 ///
+/// Thin orchestrator over seven steps (ADR-0008 P3-4 split): `store_credential`
+/// → `persist_profile` → [`apply_model_selection`] → `validate_credential` →
+/// `reload_credential` (inline) → `spawn_refresh` → `open_picker`. Each step
+/// that can fail returns a [`std::ops::ControlFlow`]; `Break` means the error
+/// was already surfaced via `set_error` and the flow stops (returns `Ok(())`).
+///
 /// `key == None` means "no new key supplied" — the caller has already verified
 /// a key is stored (or the provider needs no auth), so we just reuse what's on
 /// disk. Decision A1: a plaintext key is written only to
@@ -730,129 +737,47 @@ pub(crate) fn apply_connect(
     provider: LlmProvider,
     key: Option<&str>,
 ) -> Result<()> {
-    use shannon_core::credential_manager::{
-        Credential, CredentialManager, read_credential_value_default,
-    };
-    use shannon_core::provider_config_service::ProviderConfigService;
     use shannon_core::provider_resolver::llm_provider_id;
 
     let display = format!("{provider}");
     let service = llm_provider_id(&provider);
     let mut lines: Vec<String> = Vec::new();
 
-    // 1. API key → credential Store (idempotent; plaintext lands only on disk
+    // 1. API key → credential store (idempotent; plaintext lands only on disk
     //    at ~/.shannon/credentials/<service>.json, 0600 — never in a config).
-    if let Some(new_key) = key.filter(|k| !k.is_empty()) {
-        match CredentialManager::new()
-            .and_then(|mut m| m.store_or_update(Credential::new(&service, &service, new_key)))
-        {
-            Ok(_) => lines.push(
-                t!(
-                    "commands.connect.key_stored",
-                    provider = &display,
-                    service = &service
-                )
-                .to_string(),
-            ),
-            Err(e) => {
-                super::set_error(
-                    repl,
-                    &t!("commands.connect.storing_error", error = &e.to_string()),
-                );
-                return Ok(());
-            }
-        }
-    } else if read_credential_value_default(&service).is_some() {
-        lines.push(
-            t!(
-                "commands.connect.reusing_key",
-                provider = &display,
-                service = &service
-            )
-            .to_string(),
-        );
+    if store_credential(repl, &service, &display, key, &mut lines).is_break() {
+        return Ok(());
     }
-    // No "no key" warning branch here: the no-key case is intercepted upstream
-    // (guide_to_inline_connect) before apply_connect runs; no-auth providers
-    // intentionally print nothing.
 
-    // 2. Persist the v2 provider config via the single write path — an
-    //    additive upsert, so connecting a second provider no longer drops the
-    //    first (ADR-0008 P2-5 step 4 / Decision 3). Returns the resolved model
-    //    id (catalog default); the engine loads the config on next launch, no
-    //    env var required.
-    let mut svc = ProviderConfigService::load();
-    let connected = match svc.connect(provider.clone(), None, None, true) {
-        Ok(c) => c,
-        Err(e) => {
-            super::set_error(
-                repl,
-                &t!("commands.connect.saving_error", error = &e.to_string()),
-            );
-            return Ok(());
-        }
+    // 2. Persist the v2 provider config via the single write path — an additive
+    //    upsert, so connecting a second provider no longer drops the first
+    //    (ADR-0008 P2-5 step 4 / Decision 3).
+    let model_id = match persist_profile(repl, &provider, &mut lines) {
+        ControlFlow::Continue(id) => id,
+        ControlFlow::Break(()) => return Ok(()),
     };
-    let model_id = connected.model_id;
-    lines.push(
-        t!(
-            "commands.connect.config_saved",
-            path = &connected.saved_path.display().to_string()
-        )
-        .to_string(),
-    );
 
-    // 3. Switch the running engine + REPL state to the provider's default
-    //    model via the single switch path (mirrors /provider). This updates the
-    //    client's provider/model/base_url; the key is swapped in step 5 below
-    //    via reload_credential (ADR-0008 Decision 4).
+    // 3. Switch the running engine + REPL state to the provider's default model
+    //    via the single switch path (mirrors /provider). Updates the client's
+    //    provider/model/base_url; the key is swapped in step 5 below via
+    //    reload_credential (ADR-0008 Decision 4).
     let _ = apply_model_selection(repl, provider.clone(), Some(model_id.clone()), None, false)?;
 
     // 4. Validate the credential with a 1-token probe so a bad key/region/model
-    //    fails at connect time, not mid-query. Fail-soft: a non-auth error warns
-    //    but keeps the connection (it may be transient). A hard auth failure
-    //    stops here so we don't print a misleading "✓ Switched".
-    let probe_key = key
-        .filter(|k| !k.is_empty())
-        .map(str::to_string)
-        .or_else(|| read_credential_value_default(&service));
-    if provider.requires_auth() {
-        if let (Some(api_key), Some(engine)) = (probe_key.as_deref(), repl.query_engine.as_ref()) {
-            let probed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                repl.runtime.block_on(engine.validate_credential(api_key))
-            }));
-            match probed {
-                Ok(Ok(())) => {
-                    lines.push(t!("commands.connect.cred_verified", model = &model_id).to_string())
-                }
-                Ok(Err(shannon_engine::api::ApiError::AuthenticationFailed)) => {
-                    lines.push(t!("commands.connect.auth_failed", provider = &display).to_string());
-                    repl.chat.add_message(ChatRole::System, lines.join("\n"));
-                    super::set_error(
-                        repl,
-                        &t!("commands.connect.auth_failed", provider = &display),
-                    );
-                    return Ok(());
-                }
-                Ok(Err(e)) => lines.push(
-                    t!(
-                        "commands.connect.verify_warning",
-                        provider = &display,
-                        error = &e.to_string()
-                    )
-                    .to_string(),
-                ),
-                Err(_) => {
-                    lines.push(t!("commands.connect.probe_failed", provider = &display).to_string())
-                }
-            }
-        }
-    }
+    //    fails at connect time. Hard auth failure aborts (chat already flushed);
+    //    other errors warn but keep the connection.
+    let probe_key = match validate_credential(
+        repl, &provider, &service, &display, &model_id, key, &mut lines,
+    ) {
+        ControlFlow::Continue(k) => k,
+        ControlFlow::Break(()) => return Ok(()),
+    };
 
     // 5. Hot-reload the running client with the resolved key so the next query
     //    uses it immediately — no restart (ADR-0008 Decision 4 / P1-1). The
-    //    client config already carries the switched provider/base_url/model
-    //    from step 3; reload_credential only swaps the key. Skipped when there
-    //    is no key to load (no-auth providers, or a connect that reused nothing).
+    //    client config already carries the switched provider/base_url/model from
+    //    step 3; reload_credential only swaps the key. Skipped when there is no
+    //    key to load (no-auth providers, or a connect that reused nothing).
     if let Some(api_key) = probe_key.as_deref() {
         if let Some(engine) = repl.query_engine.as_mut() {
             engine.reload_credential(api_key);
@@ -869,26 +794,184 @@ pub(crate) fn apply_connect(
     );
     repl.chat.add_message(ChatRole::System, lines.join("\n"));
 
-    // 6. Spawn a non-blocking models.dev refresh so the picker (next step)
-    //    can show freshly discovered models. CONNECT_REFRESH_TIMEOUT — if the
-    //    user is offline the static catalog remains authoritative and the
-    //    picker falls back to it transparently. Errors are swallowed by design.
-    //    Explicit `drop` to satisfy clippy::let_underscore_future: the
-    //    JoinHandle is intentionally discarded (we don't await or report).
+    // 6. Spawn a non-blocking models.dev refresh so the picker (next step) can
+    //    show freshly discovered models (ADR-0008 P3-4 — extracted step fn).
+    spawn_refresh(repl);
+
+    // 7. Open the model picker on the freshly connected provider so the user
+    //    can confirm or change the default model (ADR-0008 P3-4).
+    open_picker(repl, &model_id);
+
+    Ok(())
+}
+
+/// Step 1 of [`apply_connect`]: write the new API key (if any) to the credential
+/// store, or note that we're reusing the stored one (ADR-0008 P3-4).
+///
+/// Returns `Break` if the store failed (error already shown via `set_error`);
+/// `Continue` otherwise. Appends a user-facing line on success. Decision A1: a
+/// plaintext key is written only to `~/.shannon/credentials/<service>.json`
+/// (0600), never to a config file. The no-key case is intercepted upstream
+/// (`guide_to_inline_connect`); no-auth providers intentionally print nothing.
+fn store_credential(
+    repl: &mut Repl,
+    service: &str,
+    display: &str,
+    key: Option<&str>,
+    lines: &mut Vec<String>,
+) -> ControlFlow<()> {
+    use shannon_core::credential_manager::{
+        Credential, CredentialManager, read_credential_value_default,
+    };
+
+    if let Some(new_key) = key.filter(|k| !k.is_empty()) {
+        match CredentialManager::new()
+            .and_then(|mut m| m.store_or_update(Credential::new(service, service, new_key)))
+        {
+            Ok(_) => lines.push(
+                t!(
+                    "commands.connect.key_stored",
+                    provider = display,
+                    service = service
+                )
+                .to_string(),
+            ),
+            Err(e) => {
+                super::set_error(
+                    repl,
+                    &t!("commands.connect.storing_error", error = &e.to_string()),
+                );
+                return ControlFlow::Break(());
+            }
+        }
+    } else if read_credential_value_default(service).is_some() {
+        lines.push(
+            t!(
+                "commands.connect.reusing_key",
+                provider = display,
+                service = service
+            )
+            .to_string(),
+        );
+    }
+    ControlFlow::Continue(())
+}
+
+/// Step 2 of [`apply_connect`]: upsert the provider config via the single write
+/// path (`ProviderConfigService::connect`) — an additive merge, so a second
+/// `/connect` no longer drops the first (ADR-0008 P2-5 step 4 / Decision 3).
+///
+/// Returns `Continue(model_id)` (catalog default; the engine loads the config on
+/// next launch, no env var required) or `Break` if persistence failed (error
+/// already shown). Appends a "config saved" line on success.
+fn persist_profile(
+    repl: &mut Repl,
+    provider: &LlmProvider,
+    lines: &mut Vec<String>,
+) -> ControlFlow<(), String> {
+    use shannon_core::provider_config_service::ProviderConfigService;
+
+    let mut svc = ProviderConfigService::load();
+    let connected = match svc.connect(provider.clone(), None, None, true) {
+        Ok(c) => c,
+        Err(e) => {
+            super::set_error(
+                repl,
+                &t!("commands.connect.saving_error", error = &e.to_string()),
+            );
+            return ControlFlow::Break(());
+        }
+    };
+    let model_id = connected.model_id;
+    lines.push(
+        t!(
+            "commands.connect.config_saved",
+            path = &connected.saved_path.display().to_string()
+        )
+        .to_string(),
+    );
+    ControlFlow::Continue(model_id)
+}
+
+/// Step 4 of [`apply_connect`]: probe the credential with a 1-token request so a
+/// bad key/region/model fails at connect time, not mid-query (ADR-0008 P3-4).
+///
+/// Fail-soft: a non-auth error warns but keeps the connection (it may be
+/// transient). A hard auth failure flushes the accumulated `lines` to chat, sets
+/// the error, and signals `Break` so the caller stops without printing a
+/// misleading "✓ Switched". Returns `Continue(probe_key)` — the resolved key
+/// (new or reused), which step 5 feeds into `engine.reload_credential`.
+fn validate_credential(
+    repl: &mut Repl,
+    provider: &LlmProvider,
+    service: &str,
+    display: &str,
+    model_id: &str,
+    key: Option<&str>,
+    lines: &mut Vec<String>,
+) -> ControlFlow<(), Option<String>> {
+    use shannon_core::credential_manager::read_credential_value_default;
+
+    let probe_key = key
+        .filter(|k| !k.is_empty())
+        .map(str::to_string)
+        .or_else(|| read_credential_value_default(service));
+    if provider.requires_auth() {
+        if let (Some(api_key), Some(engine)) = (probe_key.as_deref(), repl.query_engine.as_ref()) {
+            let probed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                repl.runtime.block_on(engine.validate_credential(api_key))
+            }));
+            match probed {
+                Ok(Ok(())) => {
+                    lines.push(t!("commands.connect.cred_verified", model = model_id).to_string())
+                }
+                Ok(Err(shannon_engine::api::ApiError::AuthenticationFailed)) => {
+                    lines.push(t!("commands.connect.auth_failed", provider = display).to_string());
+                    repl.chat.add_message(ChatRole::System, lines.join("\n"));
+                    super::set_error(
+                        repl,
+                        &t!("commands.connect.auth_failed", provider = display),
+                    );
+                    return ControlFlow::Break(());
+                }
+                Ok(Err(e)) => lines.push(
+                    t!(
+                        "commands.connect.verify_warning",
+                        provider = display,
+                        error = &e.to_string()
+                    )
+                    .to_string(),
+                ),
+                Err(_) => {
+                    lines.push(t!("commands.connect.probe_failed", provider = display).to_string())
+                }
+            }
+        }
+    }
+    ControlFlow::Continue(probe_key)
+}
+
+/// Step 6 of [`apply_connect`]: spawn a non-blocking models.dev refresh so the
+/// picker (next step) can show freshly discovered models. `CONNECT_REFRESH_TIMEOUT`
+/// — if the user is offline the static catalog remains authoritative and the
+/// picker falls back to it transparently. Errors are swallowed by design
+/// (ADR-0008 P3-4). Explicit `drop` to satisfy `clippy::let_underscore_future`:
+/// the `JoinHandle` is intentionally discarded (we don't await or report it).
+fn spawn_refresh(repl: &mut Repl) {
     std::mem::drop(repl.runtime.spawn(async move {
         let _ =
             shannon_core::model_registry::dynamic::refresh_overlay_async(CONNECT_REFRESH_TIMEOUT)
                 .await;
     }));
+}
 
-    // 7. Open the model picker on the freshly connected provider so the user
-    //    can confirm or change the default model. Enter commits the
-    //    selection (overwriting `model_id`); Esc keeps `model_id`
-    //    (already applied at step 3). Both paths are non-breaking.
-    let picker = crate::widgets::select::ModelPickerWidget::new(Some(&model_id));
+/// Step 7 of [`apply_connect`]: open the model picker on the freshly connected
+/// provider so the user can confirm or change the default model. Enter commits
+/// the selection (overwriting `model_id`); Esc keeps `model_id` (already applied
+/// at step 3). Both paths are non-breaking (ADR-0008 P3-4).
+fn open_picker(repl: &mut Repl, model_id: &str) {
+    let picker = crate::widgets::select::ModelPickerWidget::new(Some(model_id));
     repl.state.model_picker = Some(picker);
-
-    Ok(())
 }
 
 /// `/disconnect <provider>` — remove a provider's persisted provider config
