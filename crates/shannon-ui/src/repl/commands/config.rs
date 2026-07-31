@@ -771,9 +771,9 @@ pub(crate) fn apply_connect(
     }
 
     // 3. Switch the running engine + REPL state to the provider's default
-    //    model via the single switch path (mirrors /provider). The stored key
-    //    activates on next launch; the current client keeps its startup
-    //    credential until ADR-0008 Decision 4 (hot-reload) lands.
+    //    model via the single switch path (mirrors /provider). This updates the
+    //    client's provider/model/base_url; the key is swapped in step 5 below
+    //    via reload_credential (ADR-0008 Decision 4).
     let _ = apply_model_selection(
         repl,
         cp.provider.clone(),
@@ -784,8 +784,8 @@ pub(crate) fn apply_connect(
 
     // 4. Validate the credential with a 1-token probe so a bad key/region/model
     //    fails at connect time, not mid-query. Fail-soft: a non-auth error warns
-    //    but keeps the connection (it may work on restart or be transient). A
-    //    hard auth failure stops here so we don't print a misleading "✓ Switched".
+    //    but keeps the connection (it may be transient). A hard auth failure
+    //    stops here so we don't print a misleading "✓ Switched".
     let probe_key = key
         .filter(|k| !k.is_empty())
         .map(str::to_string)
@@ -818,13 +818,24 @@ pub(crate) fn apply_connect(
         }
     }
 
+    // 5. Hot-reload the running client with the resolved key so the next query
+    //    uses it immediately — no restart (ADR-0008 Decision 4 / P1-1). The
+    //    client config already carries the switched provider/base_url/model
+    //    from step 3; reload_credential only swaps the key. Skipped when there
+    //    is no key to load (no-auth providers, or a connect that reused nothing).
+    if let Some(api_key) = probe_key.as_deref() {
+        if let Some(engine) = repl.query_engine.as_mut() {
+            engine.reload_credential(api_key);
+        }
+    }
+
     lines.push(format!(
-        "✓ Switched to {} — model: {} (restart shannon to apply the new credential)",
+        "✓ Switched to {} — model: {} (new credential active; no restart needed)",
         cp.provider, cp.model_id
     ));
     repl.chat.add_message(ChatRole::System, lines.join("\n"));
 
-    // 5. Spawn a non-blocking models.dev refresh so the picker (next step)
+    // 6. Spawn a non-blocking models.dev refresh so the picker (next step)
     //    can show freshly discovered models. CONNECT_REFRESH_TIMEOUT — if the
     //    user is offline the static catalog remains authoritative and the
     //    picker falls back to it transparently. Errors are swallowed by design.
@@ -836,10 +847,10 @@ pub(crate) fn apply_connect(
                 .await;
     }));
 
-    // 6. Open the model picker on the freshly connected provider so the user
+    // 7. Open the model picker on the freshly connected provider so the user
     //    can confirm or change the default model. Enter commits the
     //    selection (overwriting `cp.model_id`); Esc keeps `cp.model_id`
-    //    (already applied at phase 3). Both paths are non-breaking.
+    //    (already applied at step 3). Both paths are non-breaking.
     let picker = crate::widgets::select::ModelPickerWidget::new(Some(&cp.model_id));
     repl.state.model_picker = Some(picker);
 
