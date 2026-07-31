@@ -840,8 +840,7 @@ pub(crate) fn apply_connect(
     //    can confirm or change the default model. Enter commits the
     //    selection (overwriting `cp.model_id`); Esc keeps `cp.model_id`
     //    (already applied at phase 3). Both paths are non-breaking.
-    let mut picker = crate::widgets::select::ModelPickerWidget::new(Some(&cp.model_id));
-    picker.set_entered_via_connect(true);
+    let picker = crate::widgets::select::ModelPickerWidget::new(Some(&cp.model_id));
     repl.state.model_picker = Some(picker);
 
     Ok(())
