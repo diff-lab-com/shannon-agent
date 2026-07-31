@@ -729,37 +729,36 @@ impl ChatWidget {
             if let Some(card_area) = status_card_area {
                 use crate::widgets::status_card::{CardStatus, render_status_card};
 
-                // Real catalog: group MODEL_CATALOG by provider (in catalog
-                // order) so the welcome screen reflects what Shannon actually
-                // supports — not a hardcoded two-provider stub. ratatui's List
+                // Real catalog: the models.dev dynamic overlay merged over the
+                // static MODEL_CATALOG, grouped by provider (in catalog order)
+                // so the welcome screen reflects what Shannon actually supports
+                // — not a hardcoded two-provider stub, and not a stale snapshot
+                // of the static catalog once a refresh has run. ratatui's List
                 // clips anything beyond the card height. Honours the
-                // SHANNON_*_PROVIDERS allowlist/denylist (ADR-0005 Phase 5).
+                // SHANNON_*_PROVIDERS allowlist/denylist (ADR-0005 Phase 5;
+                // ADR-0008 Decision 3 — one merged-catalog source of truth).
                 let available: Vec<(String, Vec<String>)> =
                     shannon_core::model_registry::available_providers()
                         .into_iter()
                         .map(|p| {
                             let slug = shannon_core::provider_resolver::llm_provider_id(&p);
-                            let models: Vec<String> = shannon_core::model_registry::MODEL_CATALOG
-                                .iter()
-                                .filter(|m| m.provider == p)
-                                .map(|m| m.id.to_string())
-                                .collect();
+                            let models: Vec<String> =
+                                shannon_core::model_registry::merged_models_for_provider(p)
+                                    .into_iter()
+                                    .map(|m| m.id.to_string())
+                                    .collect();
                             (slug, models)
                         })
                         .collect();
 
                 // Real connection state: provider ids present in the persisted
                 // providers.toml profile (configured via /connect or
-                // /model --save). Mirrors `connected_provider_slugs()` in the
-                // /connect dashboard so the ●/○ markers match reality.
-                let connected: Vec<String> = shannon_core::provider_config_store::load(None)
-                    .map(|pm| {
-                        pm.profiles
-                            .values()
-                            .flat_map(|p| p.providers.iter().map(|pp| pp.id.clone()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                // /model --save). Shares the single helper with the `/connect`
+                // dashboard so the ●/○ markers match reality everywhere
+                // (ADR-0008 Decision 3).
+                let connected: Vec<String> = shannon_core::provider_config_store::connected_slugs()
+                    .into_iter()
+                    .collect();
                 let connected_refs: Vec<&str> = connected.iter().map(|s| s.as_str()).collect();
 
                 let status = if self.active_provider.is_some() {
