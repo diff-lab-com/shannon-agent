@@ -713,9 +713,8 @@ fn should_prompt_for_key(requires_auth: bool, key_arg: Option<&str>, has_stored_
 
 /// Whether a key is already stored for `provider`'s credential service.
 fn has_connect_key(provider: &LlmProvider) -> bool {
-    use shannon_core::provider_resolver::build_connect_profile;
-    let cp = build_connect_profile(provider.clone(), None, None);
-    shannon_core::credential_manager::read_credential_value_default(&cp.service).is_some()
+    let service = shannon_core::provider_resolver::llm_provider_id(provider);
+    shannon_core::credential_manager::read_credential_value_default(&service).is_some()
 }
 
 /// Persist the key (if any) + v2 profile and switch the running engine + REPL
@@ -734,24 +733,24 @@ pub(crate) fn apply_connect(
     use shannon_core::credential_manager::{
         Credential, CredentialManager, read_credential_value_default,
     };
-    use shannon_core::provider_config_store;
-    use shannon_core::provider_resolver::build_connect_profile;
+    use shannon_core::provider_config_service::ProviderConfigService;
+    use shannon_core::provider_resolver::llm_provider_id;
 
-    let cp = build_connect_profile(provider, None, None);
-    let display = format!("{}", cp.provider);
+    let display = format!("{provider}");
+    let service = llm_provider_id(&provider);
     let mut lines: Vec<String> = Vec::new();
 
     // 1. API key → credential Store (idempotent; plaintext lands only on disk
     //    at ~/.shannon/credentials/<service>.json, 0600 — never in a config).
     if let Some(new_key) = key.filter(|k| !k.is_empty()) {
         match CredentialManager::new()
-            .and_then(|mut m| m.store_or_update(Credential::new(&cp.service, &cp.service, new_key)))
+            .and_then(|mut m| m.store_or_update(Credential::new(&service, &service, new_key)))
         {
             Ok(_) => lines.push(
                 t!(
                     "commands.connect.key_stored",
                     provider = &display,
-                    service = &cp.service
+                    service = &service
                 )
                 .to_string(),
             ),
@@ -763,12 +762,12 @@ pub(crate) fn apply_connect(
                 return Ok(());
             }
         }
-    } else if read_credential_value_default(&cp.service).is_some() {
+    } else if read_credential_value_default(&service).is_some() {
         lines.push(
             t!(
                 "commands.connect.reusing_key",
                 provider = &display,
-                service = &cp.service
+                service = &service
             )
             .to_string(),
         );
@@ -777,16 +776,14 @@ pub(crate) fn apply_connect(
     // (guide_to_inline_connect) before apply_connect runs; no-auth providers
     // intentionally print nothing.
 
-    // 2. Persist the v2 provider config (CredentialRef::Store) so the engine loads it
-    //    on next launch — the durable, env-var-free contract.
-    match provider_config_store::save(&cp.config, None) {
-        Ok(path) => lines.push(
-            t!(
-                "commands.connect.config_saved",
-                path = &path.display().to_string()
-            )
-            .to_string(),
-        ),
+    // 2. Persist the v2 provider config via the single write path — an
+    //    additive upsert, so connecting a second provider no longer drops the
+    //    first (ADR-0008 P2-5 step 4 / Decision 3). Returns the resolved model
+    //    id (catalog default); the engine loads the config on next launch, no
+    //    env var required.
+    let mut svc = ProviderConfigService::load();
+    let connected = match svc.connect(provider.clone(), None, None, true) {
+        Ok(c) => c,
         Err(e) => {
             super::set_error(
                 repl,
@@ -794,19 +791,21 @@ pub(crate) fn apply_connect(
             );
             return Ok(());
         }
-    }
+    };
+    let model_id = connected.model_id;
+    lines.push(
+        t!(
+            "commands.connect.config_saved",
+            path = &connected.saved_path.display().to_string()
+        )
+        .to_string(),
+    );
 
     // 3. Switch the running engine + REPL state to the provider's default
     //    model via the single switch path (mirrors /provider). This updates the
     //    client's provider/model/base_url; the key is swapped in step 5 below
     //    via reload_credential (ADR-0008 Decision 4).
-    let _ = apply_model_selection(
-        repl,
-        cp.provider.clone(),
-        Some(cp.model_id.clone()),
-        None,
-        false,
-    )?;
+    let _ = apply_model_selection(repl, provider.clone(), Some(model_id.clone()), None, false)?;
 
     // 4. Validate the credential with a 1-token probe so a bad key/region/model
     //    fails at connect time, not mid-query. Fail-soft: a non-auth error warns
@@ -815,15 +814,16 @@ pub(crate) fn apply_connect(
     let probe_key = key
         .filter(|k| !k.is_empty())
         .map(str::to_string)
-        .or_else(|| read_credential_value_default(&cp.service));
-    if cp.provider.requires_auth() {
+        .or_else(|| read_credential_value_default(&service));
+    if provider.requires_auth() {
         if let (Some(api_key), Some(engine)) = (probe_key.as_deref(), repl.query_engine.as_ref()) {
             let probed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 repl.runtime.block_on(engine.validate_credential(api_key))
             }));
             match probed {
-                Ok(Ok(())) => lines
-                    .push(t!("commands.connect.cred_verified", model = &cp.model_id).to_string()),
+                Ok(Ok(())) => {
+                    lines.push(t!("commands.connect.cred_verified", model = &model_id).to_string())
+                }
                 Ok(Err(shannon_engine::api::ApiError::AuthenticationFailed)) => {
                     lines.push(t!("commands.connect.auth_failed", provider = &display).to_string());
                     repl.chat.add_message(ChatRole::System, lines.join("\n"));
@@ -862,8 +862,8 @@ pub(crate) fn apply_connect(
     lines.push(
         t!(
             "commands.connect.switched",
-            provider = &cp.provider.to_string(),
-            model = &cp.model_id
+            provider = &provider.to_string(),
+            model = &model_id
         )
         .to_string(),
     );
@@ -883,9 +883,9 @@ pub(crate) fn apply_connect(
 
     // 7. Open the model picker on the freshly connected provider so the user
     //    can confirm or change the default model. Enter commits the
-    //    selection (overwriting `cp.model_id`); Esc keeps `cp.model_id`
+    //    selection (overwriting `model_id`); Esc keeps `model_id`
     //    (already applied at step 3). Both paths are non-breaking.
-    let picker = crate::widgets::select::ModelPickerWidget::new(Some(&cp.model_id));
+    let picker = crate::widgets::select::ModelPickerWidget::new(Some(&model_id));
     repl.state.model_picker = Some(picker);
 
     Ok(())
