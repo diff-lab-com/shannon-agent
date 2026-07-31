@@ -249,6 +249,11 @@ pub fn format_preset_detail(name: &str, preset: &ConversationPreset) -> String {
 const PRESET_PROMPT: &str = r##"
 Apply or manage conversation presets (pre-configured session templates).
 
+> **Note:** The `/profile` alias for `/preset` is **deprecated** — "profile" is
+> overloaded (it also means a permission profile and a provider config entry).
+> Prefer `/preset` or `/template`; the `/profile` alias still works for
+> backward compatibility.
+
 Arguments: {args}
 
 ## Actions
