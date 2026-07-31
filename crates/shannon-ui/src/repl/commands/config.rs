@@ -33,6 +33,121 @@ pub(crate) fn resolve_model_arg(args: &str) -> (String, Option<LlmProvider>) {
     }
 }
 
+/// Refresh the chat widget's first-screen StatusCard from `repl.state`.
+///
+/// Centralizes provider/model/tier derivation so every switch path and the
+/// REPL init/resume paths render identical values. The tier label is the
+/// **authoritative** `tier_label_for_id` (catalog capabilities) — never the
+/// status-bar substring heuristic — so the card and the status pill agree
+/// (ADR-0008 Decision 1).
+pub(crate) fn sync_active_to_chat(repl: &mut Repl) {
+    let provider = repl
+        .state
+        .selected_provider
+        .as_ref()
+        .map(shannon_core::provider_resolver::llm_provider_id);
+    let model = repl.state.model.clone();
+    let tier = repl.state.model.as_deref().map(|m| {
+        shannon_core::model_registry::tier_label_for_id(m)
+            .as_str()
+            .to_string()
+    });
+    repl.chat.set_active(provider, model, tier);
+}
+
+/// Infer a canonical tier for a model id, returning `None` for catalog
+/// unknowns so we never persist an inferred tier for a model we cannot
+/// classify (ADR-0008 Decision 2 helper).
+fn infer_tier_for_model(model_id: &str) -> Option<TierName> {
+    use shannon_core::model_registry::{TierLabel, tier_label_for_id};
+    match tier_label_for_id(model_id) {
+        TierLabel::Fast => Some(TierName::Fast),
+        TierLabel::Standard => Some(TierName::Standard),
+        TierLabel::Pro => Some(TierName::Pro),
+        TierLabel::Unknown => None,
+    }
+}
+
+/// The single mutation path for switching the active provider/model/tier
+/// (ADR-0008 Decision 2).
+///
+/// Every `/model`, `/provider`, `/connect`, and `/model --tier` switch goes
+/// through here so the four call sites cannot drift. In one place it:
+/// 1. Updates `repl.state` (model, selected_provider, context_window).
+/// 2. Syncs the query engine (`set_model_for_provider` + `pre_resolve_context`).
+/// 3. Persists runtime preferences (and, when `persist_tier`, the tier pin to
+///    `providers.toml`, rolling back state on failure).
+/// 4. Refreshes the chat widget via [`sync_active_to_chat`] so the
+///    first-screen StatusCard reflects the switch immediately.
+///
+/// `model_id = None` means "switch provider, keep the current model" — used by
+/// `/provider` when a provider has no built-in catalog.
+///
+/// Returns the resolved context window (`None` when genuinely unknown) so
+/// callers that print a "context: …" label can format it honestly.
+pub(crate) fn apply_model_selection(
+    repl: &mut Repl,
+    provider: LlmProvider,
+    model_id: Option<String>,
+    tier: Option<TierName>,
+    persist_tier: bool,
+) -> Result<Option<usize>> {
+    let prev_model = repl.state.model.clone();
+    let prev_provider = repl.state.selected_provider.clone();
+
+    if let Some(ref m) = model_id {
+        repl.state.model = Some(m.clone());
+    }
+    repl.state.selected_provider = Some(provider.clone());
+
+    // Sync the engine + resolve the real context window. `catch_unwind`
+    // consolidates the four former panic-swallow sites into one, and now
+    // logs at ERROR instead of failing silently (ADR-0008 / plan P2-6).
+    let effective_model = repl.state.model.clone().unwrap_or_default();
+    let ctx_opt = if let Some(ref mut engine) = repl.query_engine {
+        engine.set_model_for_provider(effective_model.clone(), provider.clone());
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            repl.runtime.block_on(engine.pre_resolve_context());
+        }));
+        if panicked.is_err() {
+            tracing::error!(
+                model = %effective_model,
+                provider = ?provider,
+                "pre_resolve_context panicked while switching model (recovered)"
+            );
+        }
+        engine.resolved_context_window_opt()
+    } else {
+        shannon_core::model_registry::context_window_for_opt(&effective_model)
+    };
+    repl.state.context_window =
+        ctx_opt.unwrap_or(shannon_core::model_registry::FALLBACK_CONTEXT_WINDOW);
+
+    crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
+        model: repl.state.model.clone(),
+        provider: repl.state.selected_provider.clone(),
+        theme: Some(repl.state.theme.name.to_string()),
+    });
+
+    // Optional tier pin → providers.toml. Roll back state on failure so a bad
+    // write never leaves the REPL pointing at an unpinned selection.
+    if persist_tier {
+        if let Some(resolved_tier) = tier.or_else(|| infer_tier_for_model(&effective_model)) {
+            if let Err(e) =
+                persist_model_to_providers_toml(&provider, &effective_model, resolved_tier)
+            {
+                repl.state.model = prev_model;
+                repl.state.selected_provider = prev_provider;
+                sync_active_to_chat(repl);
+                return Err(e);
+            }
+        }
+    }
+
+    sync_active_to_chat(repl);
+    Ok(ctx_opt)
+}
+
 pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
     // /model --tier <name> [provider] [--save]
     if args.starts_with("--tier") {
@@ -59,38 +174,22 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
     } else {
         let (resolved_id, resolved_provider) = resolve_model_arg(args);
 
-        // If a provider was resolved and differs from the current one, switch.
-        if let Some(provider) = resolved_provider {
-            if repl.state.selected_provider.as_ref() != Some(&provider) {
-                repl.state.selected_provider = Some(provider);
+        // Effective provider: the one implied by the arg, else the current
+        // one. A bare alias/id without a resolvable provider keeps the active
+        // provider; if none is active, the user must `/connect` first.
+        let provider = match resolved_provider.or_else(|| repl.state.selected_provider.clone()) {
+            Some(p) => p,
+            None => {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No provider selected. Run /connect <provider> <key> first.".to_string(),
+                );
+                return Ok(());
             }
-        }
-
-        repl.state.model = Some(resolved_id.clone());
-        crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
-            model: repl.state.model.clone(),
-            provider: repl.state.selected_provider.clone(),
-            theme: Some(repl.state.theme.name.to_string()),
-        });
-
-        // Sync model to query engine and resolve real context window.
-        // `ctx_opt` is None when the window is genuinely unknown — the label
-        // then renders "unknown" instead of fabricating 200K (Phase E).
-        let ctx_opt = if let Some(ref mut engine) = repl.query_engine {
-            if let Some(ref provider) = repl.state.selected_provider {
-                engine.set_model_for_provider(resolved_id.clone(), provider.clone());
-            } else {
-                engine.set_model(resolved_id.clone());
-            }
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                repl.runtime.block_on(engine.pre_resolve_context());
-            }));
-            engine.resolved_context_window_opt()
-        } else {
-            shannon_core::model_registry::context_window_for_opt(&resolved_id)
         };
-        repl.state.context_window =
-            ctx_opt.unwrap_or(shannon_core::model_registry::FALLBACK_CONTEXT_WINDOW);
+
+        let ctx_opt =
+            apply_model_selection(repl, provider, Some(resolved_id.clone()), None, false)?;
         let ctx_label = format_context_label(ctx_opt);
         let msg = format!(
             "{} (context: {ctx_label})",
@@ -211,54 +310,30 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
         lines.push("* = current | Use /provider <name> to switch".to_string());
         repl.chat.add_message(ChatRole::System, lines.join("\n"));
     } else {
-        // Switch to specified provider
+        // Switch to specified provider.
         let provider = parse_provider_name(args.trim())?;
         let models = model_registry::merged_models_for_provider(provider.clone());
         let default_model = models.first().map(|m| m.id.to_string());
 
-        // Only overwrite the active model when the provider has a built-in
-        // catalog entry. Providers without a static catalog (Ollama, OpenRouter,
-        // Bedrock, Custom, …) keep the current model id instead of being
-        // clobbered with a bogus "unknown"; the user picks the concrete model
-        // via `/model <provider>/<model-id>` (resolved by resolve_model_arg).
-        if let Some(ref m) = default_model {
-            repl.state.model = Some(m.clone());
-        }
-        repl.state.selected_provider = Some(provider.clone());
-
-        // Sync to query engine
-        let model_for_engine = repl.state.model.clone().unwrap_or_default();
-        if let Some(ref mut engine) = repl.query_engine {
-            engine.set_model_for_provider(model_for_engine.clone(), provider.clone());
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                repl.runtime.block_on(engine.pre_resolve_context());
-            }));
-            repl.state.context_window = engine.resolved_context_window();
-        }
-
-        crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
-            model: repl.state.model.clone(),
-            provider: Some(provider),
-            theme: Some(repl.state.theme.name.to_string()),
-        });
+        // Single switch path. `default_model = None` means "this provider has
+        // no built-in catalog (Ollama, OpenRouter, Bedrock, Custom, …)" — the
+        // current model id is kept and the user picks via
+        // `/model <provider>/<model-id>`.
+        apply_model_selection(repl, provider.clone(), default_model.clone(), None, false)?;
 
         match default_model {
             Some(m) => {
                 repl.chat.add_message(
                     ChatRole::System,
-                    format!(
-                        "Provider: {} | Model: {}",
-                        repl.state.selected_provider.as_ref().unwrap(),
-                        m
-                    ),
+                    format!("Provider: {provider} | Model: {m}"),
                 );
             }
             None => {
                 repl.chat.add_message(
                     ChatRole::System,
                     format!(
-                        "Provider set to {}. It has no built-in model list — use `/model <provider>/<model-id>` to choose a model.",
-                        repl.state.selected_provider.as_ref().unwrap(),
+                        "Provider set to {provider}. It has no built-in model list — use \
+                         `/model <provider>/<model-id>` to choose a model."
                     ),
                 );
             }
@@ -649,22 +724,16 @@ pub(crate) fn apply_connect(
     }
 
     // 3. Switch the running engine + REPL state to the provider's default
-    //    model (mirrors /provider). The stored key activates on next launch;
-    //    the current client keeps its startup credential.
-    repl.state.model = Some(cp.model_id.clone());
-    repl.state.selected_provider = Some(cp.provider.clone());
-    if let Some(ref mut engine) = repl.query_engine {
-        engine.set_model_for_provider(cp.model_id.clone(), cp.provider.clone());
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            repl.runtime.block_on(engine.pre_resolve_context());
-        }));
-        repl.state.context_window = engine.resolved_context_window();
-    }
-    crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
-        model: repl.state.model.clone(),
-        provider: repl.state.selected_provider.clone(),
-        theme: Some(repl.state.theme.name.to_string()),
-    });
+    //    model via the single switch path (mirrors /provider). The stored key
+    //    activates on next launch; the current client keeps its startup
+    //    credential until ADR-0008 Decision 4 (hot-reload) lands.
+    let _ = apply_model_selection(
+        repl,
+        cp.provider.clone(),
+        Some(cp.model_id.clone()),
+        None,
+        false,
+    )?;
 
     // 4. Validate the credential with a 1-token probe so a bad key/region/model
     //    fails at connect time, not mid-query. Fail-soft: a non-auth error warns
@@ -1762,39 +1831,16 @@ fn handle_model_tier(repl: &mut Repl, args: &str) -> Result<()> {
         (tier, id)
     };
 
-    let prev_model = repl.state.model.clone();
-    let prev_provider = repl.state.selected_provider.clone();
-    repl.state.model = Some(model_id.clone());
-    repl.state.selected_provider = Some(provider.clone());
-
-    // Sync to the engine (mirrors the bare-id branch above).
-    let ctx_opt = if let Some(ref mut engine) = repl.query_engine {
-        engine.set_model_for_provider(model_id.clone(), provider.clone());
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            repl.runtime.block_on(engine.pre_resolve_context());
-        }));
-        engine.resolved_context_window_opt()
-    } else {
-        shannon_core::model_registry::context_window_for_opt(&model_id)
-    };
-    repl.state.context_window =
-        ctx_opt.unwrap_or(shannon_core::model_registry::FALLBACK_CONTEXT_WINDOW);
-
-    crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
-        model: repl.state.model.clone(),
-        provider: repl.state.selected_provider.clone(),
-        theme: Some(repl.state.theme.name.to_string()),
-    });
-
-    if save {
-        // Rollback state on failure so a bad write doesn't leave the REPL
-        // pointing at an unpinned tier.
-        if let Err(e) = persist_model_to_providers_toml(&provider, &model_id, tier) {
-            repl.state.model = prev_model;
-            repl.state.selected_provider = prev_provider;
-            return Err(e);
-        }
-    }
+    // Single switch path: state, engine, preferences, and (when --save) the
+    // providers.toml tier pin with rollback — all consolidated in
+    // apply_model_selection (ADR-0008 Decision 2).
+    let ctx_opt = apply_model_selection(
+        repl,
+        provider.clone(),
+        Some(model_id.clone()),
+        Some(tier),
+        save,
+    )?;
 
     let ctx_label = format_context_label(ctx_opt);
     // For `auto`, surface which concrete tier the heuristic picked.
