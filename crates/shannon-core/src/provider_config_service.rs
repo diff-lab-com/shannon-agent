@@ -93,6 +93,15 @@ impl ProviderConfigService {
         }
     }
 
+    /// Wrap a store the caller already loaded. The service persists to the
+    /// store's pinned path. Lets a caller that already holds a
+    /// `ProviderConfigStore` route its write through the service without a
+    /// reload — the CLI's `run_providers_add` does this so the command layer
+    /// has exactly one write path (ADR-0008 P2-5 step 2).
+    pub fn from_store(store: ProviderConfigStore) -> Self {
+        Self { store }
+    }
+
     /// Slugs currently connected — read from the in-memory config the service
     /// holds (no extra disk read).
     pub fn connected_slugs(&self) -> HashSet<String> {
@@ -135,9 +144,48 @@ impl ProviderConfigService {
             })
             .unwrap_or_else(|| "default".to_string());
 
-        // `upsert_profile` always repoints `active_target` at the new id. For
-        // `make_active = false` (e.g. CLI without --set-active) snapshot the
-        // previous selection first and restore it after.
+        self.upsert_profile_with_active(profile, &model_id, make_active);
+
+        let saved_path = self.store.save()?;
+        Ok(ConnectedProvider {
+            provider,
+            model_id,
+            service: provider_id,
+            saved_path,
+        })
+    }
+
+    /// Insert or replace a fully-built [`ProviderProfile`] — the entry point
+    /// for callers that construct a profile from richer inputs than a single
+    /// [`LlmProvider`] (the CLI's `providers add` with `--kind openai-compatible`,
+    /// custom `--base-url`, `--extra-header`, …). Additive: other providers are
+    /// kept. `make_active` pins `active_target` at the new profile (`true`
+    /// preserves the CLI's current "the new provider becomes active" behavior);
+    /// `false` restores the prior selection. Persists to disk.
+    pub fn upsert(
+        &mut self,
+        profile: ProviderProfile,
+        model_id: &str,
+        make_active: bool,
+    ) -> io::Result<PathBuf> {
+        self.upsert_profile_with_active(profile, model_id, make_active);
+        self.store.save()
+    }
+
+    /// Upsert + `active_target` handling, without persisting. Shared by
+    /// [`Self::connect`] and [`Self::upsert`] so the make-active restore logic
+    /// lives in one place.
+    ///
+    /// `upsert_profile` always repoints `active_target` at the new id. For
+    /// `make_active = false` we snapshot the previous selection first and
+    /// restore it after (best-effort: a custom/unknown prior slug is left on
+    /// the new provider — rare, acceptable).
+    fn upsert_profile_with_active(
+        &mut self,
+        profile: ProviderProfile,
+        model_id: &str,
+        make_active: bool,
+    ) {
         let prev_active = if make_active {
             None
         } else {
@@ -148,7 +196,7 @@ impl ProviderConfigService {
                 .map(|mp| mp.active_target.clone())
         };
 
-        self.store.upsert_profile(profile, &model_id);
+        self.store.upsert_profile(profile, model_id);
 
         if !make_active {
             if let Some(prev) = prev_active {
@@ -159,14 +207,6 @@ impl ProviderConfigService {
                 }
             }
         }
-
-        let saved_path = self.store.save()?;
-        Ok(ConnectedProvider {
-            provider,
-            model_id,
-            service: provider_id,
-            saved_path,
-        })
     }
 
     /// Disconnect (remove) a provider slot. Idempotent — returns
@@ -418,5 +458,96 @@ mod tests {
             .active_target;
         assert_eq!(active.provider_id, "anthropic");
         assert_eq!(active.model_id, "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn upsert_accepts_prebuilt_profile_and_keeps_existing_providers() {
+        // The CLI's `providers add` builds a richer profile than `connect`
+        // (custom kind, base url, headers) and hands it to `upsert`. This
+        // proves that path is additive — a prior connect survives — and that
+        // the make_active=true default pins the new profile (matching the
+        // CLI's historical "new provider becomes active" behavior).
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .unwrap();
+
+        let custom = ProviderProfile {
+            id: "my-gateway".into(),
+            kind: shannon_types::provider_config::ProviderKind::OpenAiCompatible,
+            display_name: "my-gateway".into(),
+            base_url: "https://gateway.example.com/v1".into(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: "my-gateway".into(),
+            },
+            extra_headers: std::collections::HashMap::from([("X-Foo".into(), "bar".into())]),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+        };
+        svc.upsert(custom, "gpt-4o", true).unwrap();
+
+        let connected = svc.connected_slugs();
+        assert!(connected.contains("anthropic"), "anthropic must survive");
+        assert!(connected.contains("my-gateway"), "custom provider added");
+
+        // make_active=true → new profile is the active target.
+        let active = &svc
+            .store
+            .config()
+            .profiles
+            .get("default")
+            .unwrap()
+            .active_target;
+        assert_eq!(active.provider_id, "my-gateway");
+        assert_eq!(active.model_id, "gpt-4o");
+    }
+
+    #[test]
+    fn upsert_make_active_false_preserves_prior_selection() {
+        // The CLI passes make_active=true today (behavior-compat), but the
+        // service exposes false so --set-active can be wired later. Guard the
+        // restore logic for the prebuilt-profile path too.
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(
+                LlmProvider::Anthropic,
+                Some("claude-sonnet-4-6"),
+                None,
+                true,
+            )
+            .unwrap();
+
+        let custom = ProviderProfile {
+            id: "openai".into(),
+            kind: shannon_types::provider_config::ProviderKind::OpenAi,
+            display_name: "openai".into(),
+            base_url: LlmProvider::OpenAI.default_base_url().to_string(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: "openai".into(),
+            },
+            extra_headers: std::collections::HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+        };
+        svc.upsert(custom, "gpt-4o", false).unwrap();
+
+        assert!(svc.connected_slugs().contains("openai"));
+        let active = &svc
+            .store
+            .config()
+            .profiles
+            .get("default")
+            .unwrap()
+            .active_target;
+        assert_eq!(
+            active.provider_id, "anthropic",
+            "make_active=false must preserve the prior selection"
+        );
     }
 }
