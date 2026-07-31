@@ -67,6 +67,7 @@ Things deferred to future work.
 | [0003](0003-vcr-replay-for-agent-ci-regression.md) | VCR Replay for Agent-Level CI Regression | Accepted | 2026-07-12 |
 | [0004](0004-build-schema-redeclaration.md) | `build.rs` schema-stubs redeclaration pattern | Proposed | 2026-07-22 |
 | [0005](0005-unified-provider-model-credential-management.md) | Unified Provider/Model/Credential Management (code + desktop) | Proposed | 2026-07-24 |
+| [0006](0006-no-assistant-ui-chat-ui-migration.md) | Do Not Migrate Shannon Desktop Chat UI to assistant-ui | Accepted | 2026-07-31 |
 
 ## Numbering
 
