@@ -1,6 +1,8 @@
 # P2-5 Execution Plan — `ProviderConfigService` (ADR-0008 Decision 3)
 
-> Status: **Draft for review — no code changes yet.**
+> Status: **Done — all 5 steps landed.** Commits: step 1 `d9e970d7`, step 2
+> `b7c561b2`, step 3 `1243ea0e`, step 4 `50687271` (the overwrite→upsert fix,
+> flagged in `CHANGELOG.md`), step 5 (this doc + the free-`save` guidance note).
 > Parent: [`docs/adr/0008-provider-model-command-architecture-remediation.md`](../adr/0008-provider-model-command-architecture-remediation.md) Decision 3; task [`docs/plans/provider-model-command-remediation.md`](provider-model-command-remediation.md) §P2-5.
 > Estimate: ~2 days. Prerequisite P1-4 (`/disconnect`) ✅ done.
 

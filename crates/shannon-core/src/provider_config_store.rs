@@ -172,6 +172,22 @@ pub fn connected_slugs() -> std::collections::HashSet<String> {
 /// take milliseconds, so contention is bounded; this matches the in-process
 /// `tokio::sync::Mutex` semantic on `AppState::provider_store` so callers
 /// transitioning from one to the other don't observe a behaviour change.
+///
+/// # When to call this
+///
+/// This is the **low-level atomic-write primitive** — it writes whatever
+/// `ProviderModelConfig` you hand it, wholesale. [`ProviderConfigStore::save`]
+/// and [`ProviderConfigStore::save_at`] delegate here, and the module tests
+/// exercise the flock + chmod behaviour through it directly.
+///
+/// **Command-layer callers must not call this directly.** REPL `/connect` +
+/// `/disconnect` and the CLI's `providers add` route through
+/// [`crate::provider_config_service::ProviderConfigService`] instead — the
+/// service owns the load → mutate → persist sequence as a single semantic
+/// write, so the two front-ends cannot diverge on the on-disk shape again
+/// (ADR-0008 Decision 3 / P2-5). Calling this free `save` with a freshly built
+/// single-provider config is the historical overwrite bug that dropped every
+/// other connected provider; the service's upsert replaced it.
 pub fn save(cfg: &ProviderModelConfig, path: Option<&Path>) -> io::Result<PathBuf> {
     let path = path
         .map(Path::to_path_buf)
