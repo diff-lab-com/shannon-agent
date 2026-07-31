@@ -857,6 +857,98 @@ pub(crate) fn apply_connect(
     Ok(())
 }
 
+/// `/disconnect <provider>` — remove a provider's persisted profile (and thus
+/// its "connected" state) so it no longer appears as connected in the welcome
+/// card or `/connect` dashboard (ADR-0008 P1-4).
+///
+/// Minimal version using the existing `ProviderConfigStore` API: removes the
+/// provider slot from the default profile (clearing `active_target` if it
+/// pointed there), persists, and — when the disconnected provider was the
+/// active selection — switches to the next still-connected provider, or falls
+/// back to the unconfigured state if none remain. The on-disk credential is
+/// intentionally kept so a subsequent `/connect` is a one-step re-connect.
+pub(crate) fn handle_disconnect(repl: &mut Repl, args: &str) -> Result<()> {
+    use shannon_core::provider_config_store::ProviderConfigStore;
+    use shannon_core::provider_resolver::{llm_provider_from_slug, llm_provider_id};
+
+    let name = args.trim();
+    if name.is_empty() {
+        repl.chat.add_message(
+            ChatRole::System,
+            "Usage: /disconnect <provider>\nRemoves a provider's saved profile so it is no \
+             longer connected. Your stored API key is kept — re-run /connect to reconnect."
+                .to_string(),
+        );
+        return Ok(());
+    }
+
+    let provider = parse_provider_name(name)?;
+    let slug = llm_provider_id(&provider);
+    let display = format!("{provider}");
+
+    // Remove the slot (idempotent — returns whether it was present). The store
+    // also clears `active_target` when it pointed at the removed slot, so the
+    // persisted config never references a missing provider.
+    let mut store = ProviderConfigStore::load_or_default();
+    let was_connected = store
+        .config()
+        .profiles
+        .get("default")
+        .map(|mp| mp.providers.iter().any(|p| p.id == slug))
+        .unwrap_or(false);
+    store.remove_profile(&slug);
+    if let Err(e) = store.save() {
+        super::set_error(repl, &format!("saving providers.toml: {e}"));
+        return Ok(());
+    }
+
+    if !was_connected {
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("'{display}' was not connected. Use /connect to connect it."),
+        );
+        return Ok(());
+    }
+
+    // If we just disconnected the active selection, switch to the next
+    // still-connected provider; otherwise just refresh the card. We pick the
+    // first remaining connected slug (deterministic) and resolve its default
+    // model through the single switch path so state, engine, and card stay in
+    // sync.
+    let was_active = repl.state.selected_provider.as_ref() == Some(&provider);
+    let mut lines = vec![format!("✓ Disconnected '{display}'.")];
+    if was_active {
+        let next = shannon_core::provider_config_store::connected_slugs()
+            .into_iter()
+            .next()
+            .and_then(|s| llm_provider_from_slug(&s));
+        match next {
+            Some(p) => {
+                let default_model = model_registry::merged_models_for_provider(p.clone())
+                    .first()
+                    .map(|m| m.id.to_string());
+                let _ = apply_model_selection(repl, p.clone(), default_model.clone(), None, false)?;
+                lines.push(format!(
+                    "Switched active provider to {p} (model: {}).",
+                    default_model.unwrap_or_else(|| "—".to_string())
+                ));
+            }
+            None => {
+                repl.state.selected_provider = None;
+                sync_active_to_chat(repl);
+                lines.push(
+                    "No connected providers remain — run /connect <provider> <key> to reconnect."
+                        .to_string(),
+                );
+            }
+        }
+    } else {
+        sync_active_to_chat(repl);
+    }
+    repl.chat.add_message(ChatRole::System, lines.join("\n"));
+    Ok(())
+}
+
 /// Print a guidance message pointing the user to the inline connect form.
 ///
 /// We deliberately do NOT open an API-key input dialog: the inline form

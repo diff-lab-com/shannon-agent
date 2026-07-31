@@ -389,6 +389,23 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             )
             .with_related(vec!["provider", "model", "credentials"]),
         ),
+        "disconnect" => Some(
+            CommandHelpEntry::new(
+                "disconnect".to_string(),
+                "Remove a provider's saved profile so it is no longer connected".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("<provider>")
+            .with_examples(vec!["/disconnect anthropic", "/disconnect ollama"])
+            .with_when_to_use(
+                "To remove a provider connection. The persisted profile is deleted from \
+                 ~/.shannon/providers.toml and the provider stops appearing as connected. \
+                 The stored API key is kept, so re-running /connect is a one-step reconnect. \
+                 If you disconnect the active provider, Shannon switches to the next \
+                 connected one (or goes unconfigured).",
+            )
+            .with_related(vec!["connect", "provider"]),
+        ),
         "config" => Some(
             CommandHelpEntry::new(
                 "config".to_string(),
@@ -1094,6 +1111,7 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         "export",
         "config",
         "connect",
+        "disconnect",
         "debug",
         "clear",
         "quit",
