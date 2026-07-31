@@ -65,37 +65,58 @@ pub fn resolve_active_target(pm: &ProviderModelConfig) -> Option<ResolvedTarget<
 /// `"zhipu"`, `"anthropic"`) back to its [`LlmProvider`] enum value. Returns
 /// `None` for unknown slugs — callers should fall back to
 /// [`resolve_provider`].
+///
+/// Thin delegate over [`llm_provider_from_slug`] (ADR-0008 Decision 1 / P2-3):
+/// profile ids are always canonical lower-case Debug names produced by
+/// [`llm_provider_id`], so the alias arms in `llm_provider_from_slug` never
+/// fire for a real profile id — the delegation is behaviour-preserving while
+/// collapsing three parallel provider-name tables into one.
 pub(crate) fn llm_provider_from_id(id: &str) -> Option<LlmProvider> {
+    llm_provider_from_slug(id)
+}
+
+/// The single source of truth for mapping a provider name slug (canonical or
+/// alias) to an [`LlmProvider`] (ADR-0008 Decision 1 / P2-3).
+///
+/// This is the union of every provider-name table that previously existed
+/// independently: the REPL's `parse_provider_name`, the config-loading
+/// `provider_str_to_llm`, and the strict `llm_provider_from_id`. Adding a new
+/// alias now means editing one match instead of three, and the exhaustive
+/// `from_slug_*` tests guard against drift.
+///
+/// Input is trimmed and lower-cased, so `"Anthropic"`, `"  anthropic  "`, and
+/// `"anthropic"` all resolve the same. Returns `None` for unknown names;
+/// callers decide whether to fall back to [`LlmProvider::from_base_url`] or
+/// surface an error.
+pub fn llm_provider_from_slug(slug: &str) -> Option<LlmProvider> {
     use LlmProvider::*;
-    // Single source of truth: every LlmProvider variant's Debug name (in
-    // snake/kebab form) is what `llm_provider_id` emits. We enumerate the
-    // recognised ones explicitly so a typo or a future-added variant
-    // resolves to `None` (and `resolve_provider`'s heuristics take over).
-    match id {
-        "anthropic" => Some(Anthropic),
-        "openai" => Some(OpenAI),
-        "ollama" => Some(Ollama),
-        "gemini" => Some(Gemini),
-        "azure" => Some(Azure),
-        "bedrock" => Some(Bedrock),
-        "mistral" => Some(Mistral),
-        "deepseek" => Some(DeepSeek),
+    match slug.trim().to_lowercase().as_str() {
+        "anthropic" | "claude" => Some(Anthropic),
+        "openai" | "gpt" | "chatgpt" => Some(OpenAI),
+        "ollama" | "local" => Some(Ollama),
+        "gemini" | "google" => Some(Gemini),
+        "azure" | "azure-openai" => Some(Azure),
+        "bedrock" | "aws" => Some(Bedrock),
+        "mistral" | "mistral-ai" => Some(Mistral),
+        "deepseek" | "ds" => Some(DeepSeek),
         "groq" => Some(Groq),
-        "together" => Some(Together),
+        "together" | "together-ai" => Some(Together),
         "openrouter" => Some(OpenRouter),
         "cohere" => Some(Cohere),
         "fireworks" => Some(Fireworks),
         "perplexity" => Some(Perplexity),
-        "xai" => Some(Xai),
+        "xai" | "grok" => Some(Xai),
         "ai21" => Some(Ai21),
-        "siliconflow" => Some(SiliconFlow),
-        "zhipu" => Some(Zhipu),
-        "zhipuinternational" => Some(ZhipuInternational),
-        "zhipucoding" => Some(ZhipuCoding),
-        "moonshot" => Some(Moonshot),
-        "minimax" => Some(Minimax),
-        "dashscope" => Some(DashScope),
-        "cloudflare" => Some(Cloudflare),
+        "siliconflow" | "sf" => Some(SiliconFlow),
+        "zhipu" | "zhipu-cn" | "glm" => Some(Zhipu),
+        "zhipuinternational" | "zhipu-international" | "zhipu-intl" | "glm-intl" => {
+            Some(ZhipuInternational)
+        }
+        "zhipucoding" | "zhipu-coding" | "zhipu-anthropic" => Some(ZhipuCoding),
+        "moonshot" | "kimi" => Some(Moonshot),
+        "minimax" | "mm" => Some(Minimax),
+        "dashscope" | "qwen" | "aliyun" => Some(DashScope),
+        "cloudflare" | "cf" => Some(Cloudflare),
         "replicate" => Some(Replicate),
         _ => None,
     }
@@ -487,38 +508,16 @@ fn build_default_profiles_map(
 /// Map an LlmProvider-name string to an [`LlmProvider`] enum value, falling
 /// back to the resolved `base_url` for unrecognized names. Mirrors the
 /// string→provider table that used to live in the v1 `From<ShannonConfig>` impl.
+///
+/// The name→variant arms now delegate to [`llm_provider_from_slug`] (the single
+/// alias table, ADR-0008 Decision 1); only the `base_url` fallback for truly
+/// unknown names remains here, since that is config-loading-specific behaviour.
 fn provider_str_to_llm(p: &str, base_url: Option<&str>) -> LlmProvider {
-    use LlmProvider::*;
-    match p.to_lowercase().as_str() {
-        "anthropic" => Anthropic,
-        "openai" => OpenAI,
-        "ollama" => Ollama,
-        "gemini" | "google" => Gemini,
-        "azure" | "azure-openai" => Azure,
-        "bedrock" | "aws" => Bedrock,
-        "mistral" | "mistral-ai" => Mistral,
-        "deepseek" => DeepSeek,
-        "groq" => Groq,
-        "together" | "together-ai" => Together,
-        "openrouter" => OpenRouter,
-        "cohere" => Cohere,
-        "fireworks" => Fireworks,
-        "perplexity" => Perplexity,
-        "xai" => Xai,
-        "ai21" => Ai21,
-        "siliconflow" => SiliconFlow,
-        "zhipu" | "zhipu-cn" => Zhipu,
-        "zhipu-international" | "zhipu-intl" => ZhipuInternational,
-        "zhipu-coding" | "zhipu-anthropic" => ZhipuCoding,
-        "moonshot" | "kimi" => Moonshot,
-        "minimax" => Minimax,
-        "dashscope" | "qwen" => DashScope,
-        "cloudflare" => Cloudflare,
-        "replicate" => Replicate,
-        _ => base_url
+    llm_provider_from_slug(p).unwrap_or_else(|| {
+        base_url
             .map(LlmProvider::from_base_url)
-            .unwrap_or(LlmProvider::Custom),
-    }
+            .unwrap_or(LlmProvider::Custom)
+    })
 }
 
 /// Coarse wire-protocol discriminator for a provider profile's `kind` field.
@@ -593,6 +592,112 @@ mod tests {
             profiles,
             gateway: Default::default(),
         }
+    }
+
+    // ── llm_provider_from_slug (ADR-0008 Decision 1 / P2-3) ──────────────
+    //
+    // Exhaustive guard over the single alias table. Every alias that previously
+    // lived in `parse_provider_name`, `provider_str_to_llm`, or
+    // `llm_provider_from_id` must resolve here, so a future edit can't silently
+    // drop a name and regress `/provider <alias>` or config loading.
+
+    #[test]
+    fn from_slug_round_trips_every_catalog_provider_slug() {
+        // Every canonical slug emitted by `llm_provider_id` for a catalog
+        // provider must round-trip through `from_slug`. Guards against a
+        // slug/parser rename drift. (`Custom` has no catalog presence and is
+        // intentionally a `None` — covered by `from_slug_returns_none_for_unknown_and_custom`.)
+        for p in crate::model_registry::all_providers() {
+            let slug = llm_provider_id(&p);
+            assert_eq!(
+                llm_provider_from_slug(&slug),
+                Some(p.clone()),
+                "canonical slug '{slug}' did not resolve to {p:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_slug_resolves_all_known_aliases() {
+        // The union of every alias arm from the three former tables.
+        let cases: &[(&str, LlmProvider)] = &[
+            ("anthropic", LlmProvider::Anthropic),
+            ("claude", LlmProvider::Anthropic),
+            ("openai", LlmProvider::OpenAI),
+            ("gpt", LlmProvider::OpenAI),
+            ("chatgpt", LlmProvider::OpenAI),
+            ("ollama", LlmProvider::Ollama),
+            ("local", LlmProvider::Ollama),
+            ("gemini", LlmProvider::Gemini),
+            ("google", LlmProvider::Gemini),
+            ("azure", LlmProvider::Azure),
+            ("azure-openai", LlmProvider::Azure),
+            ("bedrock", LlmProvider::Bedrock),
+            ("aws", LlmProvider::Bedrock),
+            ("mistral", LlmProvider::Mistral),
+            ("mistral-ai", LlmProvider::Mistral),
+            ("deepseek", LlmProvider::DeepSeek),
+            ("ds", LlmProvider::DeepSeek),
+            ("groq", LlmProvider::Groq),
+            ("together", LlmProvider::Together),
+            ("together-ai", LlmProvider::Together),
+            ("openrouter", LlmProvider::OpenRouter),
+            ("cohere", LlmProvider::Cohere),
+            ("fireworks", LlmProvider::Fireworks),
+            ("perplexity", LlmProvider::Perplexity),
+            ("xai", LlmProvider::Xai),
+            ("grok", LlmProvider::Xai),
+            ("ai21", LlmProvider::Ai21),
+            ("siliconflow", LlmProvider::SiliconFlow),
+            ("sf", LlmProvider::SiliconFlow),
+            ("zhipu", LlmProvider::Zhipu),
+            ("zhipu-cn", LlmProvider::Zhipu),
+            ("glm", LlmProvider::Zhipu),
+            ("zhipuinternational", LlmProvider::ZhipuInternational),
+            ("zhipu-international", LlmProvider::ZhipuInternational),
+            ("zhipu-intl", LlmProvider::ZhipuInternational),
+            ("glm-intl", LlmProvider::ZhipuInternational),
+            ("zhipucoding", LlmProvider::ZhipuCoding),
+            ("zhipu-coding", LlmProvider::ZhipuCoding),
+            ("zhipu-anthropic", LlmProvider::ZhipuCoding),
+            ("moonshot", LlmProvider::Moonshot),
+            ("kimi", LlmProvider::Moonshot),
+            ("minimax", LlmProvider::Minimax),
+            ("mm", LlmProvider::Minimax),
+            ("dashscope", LlmProvider::DashScope),
+            ("qwen", LlmProvider::DashScope),
+            ("aliyun", LlmProvider::DashScope),
+            ("cloudflare", LlmProvider::Cloudflare),
+            ("cf", LlmProvider::Cloudflare),
+            ("replicate", LlmProvider::Replicate),
+        ];
+        for (alias, expected) in cases {
+            assert_eq!(
+                llm_provider_from_slug(alias),
+                Some(expected.clone()),
+                "alias '{alias}' should resolve to {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_slug_is_case_insensitive_and_trim_tolerant() {
+        assert_eq!(
+            llm_provider_from_slug("Anthropic"),
+            Some(LlmProvider::Anthropic)
+        );
+        assert_eq!(
+            llm_provider_from_slug("  CLAUDE  "),
+            Some(LlmProvider::Anthropic)
+        );
+        assert_eq!(llm_provider_from_slug("Qwen"), Some(LlmProvider::DashScope));
+    }
+
+    #[test]
+    fn from_slug_returns_none_for_unknown_and_custom() {
+        assert!(llm_provider_from_slug("unknown-provider").is_none());
+        assert!(llm_provider_from_slug("custom").is_none());
+        assert!(llm_provider_from_slug("").is_none());
     }
 
     #[test]

@@ -281,38 +281,15 @@ fn format_context_label(ctx: Option<usize>) -> String {
 
 /// Parse a provider name string (with aliases) into an [`LlmProvider`].
 fn parse_provider_name(name: &str) -> Result<LlmProvider> {
-    let lower = name.to_lowercase();
-    match lower.as_str() {
-        "anthropic" | "claude" => Ok(LlmProvider::Anthropic),
-        "openai" | "gpt" | "chatgpt" => Ok(LlmProvider::OpenAI),
-        "gemini" | "google" => Ok(LlmProvider::Gemini),
-        "azure" | "azure-openai" => Ok(LlmProvider::Azure),
-        "bedrock" | "aws" => Ok(LlmProvider::Bedrock),
-        "mistral" | "mistral-ai" => Ok(LlmProvider::Mistral),
-        "deepseek" | "ds" => Ok(LlmProvider::DeepSeek),
-        "groq" => Ok(LlmProvider::Groq),
-        "together" | "together-ai" => Ok(LlmProvider::Together),
-        "openrouter" => Ok(LlmProvider::OpenRouter),
-        "cohere" => Ok(LlmProvider::Cohere),
-        "fireworks" => Ok(LlmProvider::Fireworks),
-        "perplexity" => Ok(LlmProvider::Perplexity),
-        "xai" | "grok" => Ok(LlmProvider::Xai),
-        "ai21" => Ok(LlmProvider::Ai21),
-        "siliconflow" | "sf" => Ok(LlmProvider::SiliconFlow),
-        "zhipu" | "zhipu-cn" | "glm" => Ok(LlmProvider::Zhipu),
-        "zhipu-international" | "zhipu-intl" | "glm-intl" => Ok(LlmProvider::ZhipuInternational),
-        "moonshot" | "kimi" => Ok(LlmProvider::Moonshot),
-        "minimax" | "mm" => Ok(LlmProvider::Minimax),
-        "dashscope" | "qwen" | "aliyun" => Ok(LlmProvider::DashScope),
-        "ollama" | "local" => Ok(LlmProvider::Ollama),
-        "cloudflare" | "cf" => Ok(LlmProvider::Cloudflare),
-        "replicate" => Ok(LlmProvider::Replicate),
-        _ => {
-            let msg =
-                format!("Unknown provider: {name}. Use /provider to list available providers.");
-            Err(msg.into())
-        }
-    }
+    // Thin delegate over the single alias table (ADR-0008 Decision 1 / P2-3):
+    // `llm_provider_from_slug` is the union of every provider-name match that
+    // used to live here, in `provider_str_to_llm`, and in `llm_provider_from_id`,
+    // so adding a provider alias is now a one-place edit. Case-insensitive and
+    // whitespace-tolerant.
+    shannon_core::provider_resolver::llm_provider_from_slug(name).ok_or_else(|| {
+        let msg = format!("Unknown provider: {name}. Use /provider to list available providers.");
+        msg.into()
+    })
 }
 
 pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
