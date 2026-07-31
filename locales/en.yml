@@ -47,6 +47,12 @@ commands:
     context_unknown: "unknown (per provider)"
     cost_unknown: "estimate unavailable"
     cost_free_local: "free (local)"
+  connect:
+    success: "✓ Connected to %{provider}"
+    choose_model: "Pick a model below (Enter = default, ↑↓ = select, Esc = use default)."
+    refresh_started: "Refreshing model catalog in the background…"
+    refresh_success: "Catalog refreshed — %{count} models available."
+    refresh_failed: "Offline — using cached catalog."
   config:
     warning_load: "Warning: could not load config: %{error}"
     key_not_found: "Config key not found: %{key}"
