@@ -563,9 +563,9 @@ pub(crate) fn parse_connect_args(args: &str) -> Option<ConnectArgs<'_>> {
 pub(crate) enum ProviderConnectionStatus {
     /// Provider needs no key (e.g. Ollama).
     NoAuth,
-    /// A profile is persisted AND a credential is stored → works on next launch.
+    /// A provider config is persisted AND a credential is stored → works on next launch.
     Connected,
-    /// A credential exists but `/connect` hasn't persisted a profile yet.
+    /// A credential exists but `/connect` hasn't persisted a provider config yet.
     KeyStored,
     /// Auth required, nothing stored.
     NoKey,
@@ -604,7 +604,7 @@ fn connect_status(requires_auth: bool, connected: bool, has_key: bool) -> Provid
     ProviderConnectionStatus::classify(requires_auth, connected, has_key)
 }
 
-/// Slugs of providers that have a persisted profile in
+/// Slugs of providers that have a persisted provider config in
 /// `~/.shannon/providers.toml` (i.e. `/connect` was run for them).
 ///
 /// Thin delegate over [`shannon_core::provider_config_store::connected_slugs`]
@@ -663,7 +663,7 @@ fn show_connect_dashboard(repl: &mut Repl) {
 /// the session JSON. The real key still reaches `apply_connect` for execution.
 ///
 /// The stored key lives only in `~/.shannon/credentials/<service>.json` (0600)
-/// — never in a config file (decision A1). The persisted v2 profile
+/// — never in a config file (decision A1). The persisted v2 provider config
 /// (`CredentialRef::Store`) activates on the next launch via the `ConfigBuilder`
 /// connected layer (which wins over ambient `SHANNON_*` env vars), so the
 /// connection is durable with zero env vars.
@@ -777,12 +777,12 @@ pub(crate) fn apply_connect(
     // (guide_to_inline_connect) before apply_connect runs; no-auth providers
     // intentionally print nothing.
 
-    // 2. Persist the v2 profile (CredentialRef::Store) so the engine loads it
+    // 2. Persist the v2 provider config (CredentialRef::Store) so the engine loads it
     //    on next launch — the durable, env-var-free contract.
     match provider_config_store::save(&cp.config, None) {
         Ok(path) => lines.push(
             t!(
-                "commands.connect.profile_saved",
+                "commands.connect.config_saved",
                 path = &path.display().to_string()
             )
             .to_string(),
@@ -891,14 +891,14 @@ pub(crate) fn apply_connect(
     Ok(())
 }
 
-/// `/disconnect <provider>` — remove a provider's persisted profile (and thus
-/// its "connected" state) so it no longer appears as connected in the welcome
-/// card or `/connect` dashboard (ADR-0008 P1-4).
+/// `/disconnect <provider>` — remove a provider's persisted provider config
+/// (and thus its "connected" state) so it no longer appears as connected in
+/// the welcome card or `/connect` dashboard (ADR-0008 P1-4).
 ///
 /// Minimal version using the existing `ProviderConfigStore` API: removes the
-/// provider slot from the default profile (clearing `active_target` if it
-/// pointed there), persists, and — when the disconnected provider was the
-/// active selection — switches to the next still-connected provider, or falls
+/// provider slot from the `"default"` model profile (clearing `active_target`
+/// if it pointed there), persists, and — when the disconnected provider was
+/// the active selection — switches to the next still-connected provider, or falls
 /// back to the unconfigured state if none remain. The on-disk credential is
 /// intentionally kept so a subsequent `/connect` is a one-step re-connect.
 pub(crate) fn handle_disconnect(repl: &mut Repl, args: &str) -> Result<()> {

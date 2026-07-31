@@ -58,7 +58,7 @@ commands:
     dashboard_usage: "用法：/connect <provider> <api-key>"
     dashboard_help: "详情：/help connect"
     key_stored: "✓ 已为 '%{provider}' 存储 API key（service：%{service}）"
-    profile_saved: "✓ Profile 已保存：%{path}"
+    config_saved: "✓ Provider 配置已保存：%{path}"
     reusing_key: "• 复用 '%{provider}' 已存储的 key（service：%{service}）"
     cred_verified: "✓ 凭据已验证 — '%{model}' 使用此 key 可达。"
     auth_failed: "✗ '%{provider}' 认证失败。Key 已存储但被 provider 拒绝 — 请检查 key 后重新运行 /connect。"
@@ -74,7 +74,7 @@ commands:
     switched_no_catalog: "Provider 已设为 %{provider}。它没有内置模型列表 — 使用 `/model <provider>/<model-id>` 选择模型。"
     no_selection: "未选择 provider。请先运行 /connect <provider> <key>。"
   disconnect:
-    usage: "用法：/disconnect <provider>\n移除某 provider 已保存的 profile，使其不再处于已连接状态。已存储的 API key 会保留 — 重新运行 /connect 即可再次连接。"
+    usage: "用法：/disconnect <provider>\n移除某 provider 已保存的连接（其在 providers.toml 中的条目），使其不再处于已连接状态。已存储的 API key 会保留 — 重新运行 /connect 即可再次连接。"
     not_connected: "'%{provider}' 未连接。使用 /connect 连接它。"
     done: "✓ 已断开 '%{provider}'。"
     switched: "已将当前 provider 切换为 %{provider}（模型：%{model}）。"

@@ -58,7 +58,7 @@ commands:
     dashboard_usage: "Usage: /connect <provider> <api-key>"
     dashboard_help: "detail: /help connect"
     key_stored: "✓ API key stored for '%{provider}' (service: %{service})"
-    profile_saved: "✓ Profile saved: %{path}"
+    config_saved: "✓ Provider config saved: %{path}"
     reusing_key: "• Reusing stored key for '%{provider}' (service: %{service})"
     cred_verified: "✓ Credential verified — '%{model}' is reachable with this key."
     auth_failed: "✗ Authentication failed for '%{provider}'. The key was stored but the provider rejected it — check the key and run /connect again."
@@ -74,7 +74,7 @@ commands:
     switched_no_catalog: "Provider set to %{provider}. It has no built-in model list — use `/model <provider>/<model-id>` to choose a model."
     no_selection: "No provider selected. Run /connect <provider> <key> first."
   disconnect:
-    usage: "Usage: /disconnect <provider>\nRemoves a provider's saved profile so it is no longer connected. Your stored API key is kept — re-run /connect to reconnect."
+    usage: "Usage: /disconnect <provider>\nRemoves a provider's saved connection (its providers.toml entry) so it is no longer connected. Your stored API key is kept — re-run /connect to reconnect."
     not_connected: "'%{provider}' was not connected. Use /connect to connect it."
     done: "✓ Disconnected '%{provider}'."
     switched: "Switched active provider to %{provider} (model: %{model})."
