@@ -550,4 +550,136 @@ mod tests {
             "make_active=false must preserve the prior selection"
         );
     }
+
+    // ── /connect profile shape (migrated from provider_resolver's
+    // build_connect_profile tests — ADR-0008 P2-5 step 4) ──────────────
+    //
+    // `ProviderConfigService::connect` is now the only producer of the on-disk
+    // profile shape, so the field-by-field shape + A1 (no-plaintext) checks
+    // live here next to it.
+
+    /// Find a connected provider's profile by slug from the service's
+    /// in-memory config (test helper).
+    fn profile_for<'a>(svc: &'a ProviderConfigService, slug: &str) -> &'a ProviderProfile {
+        svc.store
+            .config()
+            .profiles
+            .get("default")
+            .and_then(|mp| mp.providers.iter().find(|p| p.id == slug))
+            .unwrap_or_else(|| panic!("provider {slug} should be connected"))
+    }
+
+    #[test]
+    fn connect_anthropic_uses_store_credential_and_catalog_default_model() {
+        let (mut svc, _dir) = service();
+        let connected = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .unwrap();
+        assert_eq!(connected.provider, LlmProvider::Anthropic);
+        assert_eq!(connected.service, "anthropic");
+        // No model requested → the provider's first catalog model.
+        assert!(
+            connected.model_id.starts_with("claude-"),
+            "got {}",
+            connected.model_id
+        );
+        // Credential is a Store reference (A1: no plaintext), keyed at the slug.
+        let p = profile_for(&svc, "anthropic");
+        match &p.credential {
+            CredentialRef::Store { service } => assert_eq!(service, "anthropic"),
+            other => panic!("expected Store credential, got {other:?}"),
+        }
+        // Active target points at anthropic + the resolved model.
+        let active = &svc
+            .store
+            .config()
+            .profiles
+            .get("default")
+            .unwrap()
+            .active_target;
+        assert_eq!(active.provider_id, "anthropic");
+        assert_eq!(active.model_id, connected.model_id);
+    }
+
+    #[test]
+    fn connect_respects_explicit_model() {
+        let (mut svc, _dir) = service();
+        let connected = svc
+            .connect(LlmProvider::OpenAI, Some("gpt-4o"), None, true)
+            .unwrap();
+        assert_eq!(connected.provider, LlmProvider::OpenAI);
+        assert_eq!(connected.service, "openai");
+        assert_eq!(connected.model_id, "gpt-4o");
+    }
+
+    #[test]
+    fn connect_base_url_override_wins_over_default() {
+        let (mut svc, _dir) = service();
+        svc.connect(
+            LlmProvider::Anthropic,
+            None,
+            Some("https://proxy.example.com"),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            profile_for(&svc, "anthropic").base_url,
+            "https://proxy.example.com"
+        );
+    }
+
+    #[test]
+    fn connect_uses_provider_default_base_url_for_ollama() {
+        // Ollama needs no auth, but the profile still carries a Store ref so
+        // the shape is uniform (the stored value is simply empty/unused).
+        let (mut svc, _dir) = service();
+        let connected = svc
+            .connect(LlmProvider::Ollama, Some("llama3"), None, true)
+            .unwrap();
+        assert_eq!(connected.service, "ollama");
+        assert_eq!(connected.model_id, "llama3");
+        let p = profile_for(&svc, "ollama");
+        assert_eq!(p.base_url, "http://localhost:11434");
+        match &p.credential {
+            CredentialRef::Store { service } => assert_eq!(service, "ollama"),
+            other => panic!("expected Store credential, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn connect_providers_toml_trips_no_secret_scanner_matches() {
+        // A1 regression: the on-disk providers.toml written by the /connect
+        // path (now `ProviderConfigService::connect`) carries only
+        // CredentialRef::Store references (service slugs), never plaintext
+        // keys. The gitleaks-derived SecretScanner must find nothing for every
+        // provider with a key-shaped rule.
+        use crate::team_memory_sync::SecretScanner;
+        let scanner = SecretScanner::new();
+        assert!(
+            !scanner.rule_ids().is_empty(),
+            "scanner must have default rules"
+        );
+
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        for provider in [
+            LlmProvider::Anthropic,
+            LlmProvider::OpenAI,
+            LlmProvider::DeepSeek,
+            LlmProvider::Zhipu,
+        ] {
+            let path = dir
+                .path()
+                .join(format!("{}.toml", llm_provider_id(&provider)));
+            let mut svc = ProviderConfigService::load_at(&path);
+            svc.connect(provider.clone(), None, None, true).unwrap();
+            drop(svc);
+            let matches = scanner
+                .scan_file(&path)
+                .expect("scan should read the saved file");
+            assert!(
+                matches.is_empty(),
+                "providers.toml for {provider:?} tripped the secret scanner: {matches:?}"
+            );
+        }
+    }
 }
