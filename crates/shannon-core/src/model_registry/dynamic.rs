@@ -53,6 +53,22 @@ fn overlay() -> &'static Mutex<Vec<ModelInfo>> {
     DYNAMIC_OVERLAY.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Monotonic counter bumped each time the models.dev overlay is repopulated
+/// (lazy on-disk cache load or an explicit `/model refresh`). Render-layer
+/// caches compare this to detect that the merged catalog changed — without
+/// re-reading disk every frame (ADR-0008 P3-1).
+static OVERLAY_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Current overlay generation. `Relaxed` ordering is sufficient: this is a
+/// "did it change since I last looked" signal, not a synchronization primitive.
+pub fn overlay_generation() -> u64 {
+    OVERLAY_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn bump_overlay_generation() {
+    OVERLAY_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Snapshot the overlay for merge. Empty on lock poisoning (fail-open to
 /// static).
 pub fn overlay_snapshot() -> Vec<ModelInfo> {
@@ -70,6 +86,7 @@ pub fn ensure_overlay_loaded() {
         let models = build_overlay_from_payload(&payload);
         if let Ok(mut g) = overlay().lock() {
             *g = models;
+            bump_overlay_generation();
         }
     }
     let _ = OVERLAY_INITIALIZED.set(());
@@ -307,6 +324,7 @@ pub async fn refresh_overlay_async(timeout: Duration) -> Result<usize, DynamicCa
     let count = models.len();
     if let Ok(mut g) = overlay().lock() {
         *g = models;
+        bump_overlay_generation();
     }
     // Cache is now authoritative; prevent a later lazy read from overriding it.
     let _ = OVERLAY_INITIALIZED.set(());
@@ -342,6 +360,21 @@ impl std::error::Error for DynamicCatalogError {}
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn overlay_generation_increments_on_bump() {
+        // P3-1: the welcome-screen cache compares generations to detect that a
+        // background models.dev refresh landed. Each bump must advance it by
+        // exactly one so a stale cache is recognized precisely once.
+        let before = overlay_generation();
+        bump_overlay_generation();
+        let after = overlay_generation();
+        assert_eq!(
+            after,
+            before + 1,
+            "overlay_generation must increment by exactly 1 per bump"
+        );
+    }
 
     #[test]
     fn parse_handles_minimal_and_unknown_fields() {
