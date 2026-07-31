@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 
 use anyhow::{Context, Result, anyhow, bail};
+use shannon_core::provider_config_service::ProviderConfigService;
 use shannon_core::provider_config_store::ProviderConfigStore;
 use shannon_engine::api::LlmProvider;
 use shannon_types::provider_config::{CredentialRef, ProviderKind, ProviderProfile, ProviderTiers};
@@ -475,50 +476,74 @@ fn build_profile(args: &AddProviderArgs) -> Result<(ProviderProfile, String)> {
     Ok((profile, service))
 }
 
-/// Validate args and apply the upsert to `store`. Returns the resolved
-/// credential service name and the resolved model id used for
-/// `active_target`. **Does not persist** — that's the caller's job.
-///
-/// Splitting persistence from the mutation keeps the unit tests hermetic
-/// (no touching of `~/.shannon/`).
-pub fn apply_provider_add(
-    store: &mut ProviderConfigStore,
-    args: &AddProviderArgs,
-) -> Result<(String, String)> {
+/// Validate args and build the profile + resolved credential service name +
+/// resolved model id. Pure (no store mutation, no disk I/O) so the unit tests
+/// stay hermetic. Shared by the test seam [`apply_provider_add`] and the
+/// production path [`run_providers_add`] (which persists via
+/// [`ProviderConfigService`]).
+fn build_and_validate(args: &AddProviderArgs) -> Result<(ProviderProfile, String, String)> {
     let (profile, service) = build_profile(args)?;
-
     let model_for_active = args.model.trim().to_string();
     if model_for_active.is_empty() {
         bail!("--model cannot be empty");
     }
+    Ok((profile, service, model_for_active))
+}
 
+/// Validate args and apply the upsert to `store`. Returns the resolved
+/// credential service name and the resolved model id used for
+/// `active_target`. **Does not persist** — that's the caller's job.
+///
+/// This is the non-persisting half of `providers add`, kept as a hermetic
+/// test seam (the unit tests assert on `store.config()` without touching
+/// `~/.shannon/`). The production write path is [`run_providers_add`], which
+/// routes the same build through [`ProviderConfigService::upsert`] — the
+/// single semantic write path for `providers.toml` (ADR-0008 P2-5).
+#[cfg(test)]
+pub fn apply_provider_add(
+    store: &mut ProviderConfigStore,
+    args: &AddProviderArgs,
+) -> Result<(String, String)> {
+    let (profile, service, model_for_active) = build_and_validate(args)?;
     store.upsert_profile(profile, &model_for_active);
-    if args.set_active {
-        // `upsert_profile` already pins `active_target` to the new id;
-        // the flag is explicit so scripts can read intent from the
-        // command line. (Kept as an explicit branch so future semantics
-        // can land without re-plumbing the CLI.)
-        let _ = args.set_active;
-    }
     Ok((service, model_for_active))
 }
 
 /// Run `shannon providers add …`.
 ///
-/// Validates args, mutates the supplied store, persists to disk. Returns an
-/// error before any state mutation if validation fails.
+/// Validates args, then routes the upsert + persist through
+/// [`ProviderConfigService`] — the single write path for `providers.toml`
+/// shared with the REPL's `/connect` (ADR-0008 P2-5 step 2). The new provider
+/// always becomes the active target (`make_active = true`), matching the
+/// pre-refactor behavior where `upsert_profile` pinned `active_target`
+/// regardless of `--set-active`; that flag remains a documented no-op so the
+/// command-line contract is unchanged. Returns an error before any state
+/// mutation if validation fails.
 pub fn run_providers_add(store: &mut ProviderConfigStore, args: &AddProviderArgs) -> Result<()> {
-    let parsed = args;
-    let (service, model_for_active) = apply_provider_add(store, parsed)?;
+    let (profile, service, model_for_active) = build_and_validate(args)?;
 
-    let saved_path = store
-        .save()
-        .with_context(|| "failed to persist providers.toml")?;
+    // `--set-active` is a documented no-op: the new provider always becomes
+    // active (`make_active = true`), which is the sensible default for
+    // `providers add` (a user adding their first provider expects it active).
+    // The flag is retained so scripts can express intent; the service can now
+    // express `make_active = false`, but wiring the flag would harm the common
+    // case, so we deliberately keep the always-active behavior.
+    let _ = args.set_active;
+
+    // Hand the already-loaded store to the service so the write goes through
+    // the one semantic path. `mem::take` lets us move the store into the
+    // service and recover it afterward without a clone.
+    let mut svc = ProviderConfigService::from_store(std::mem::take(store));
+    let upsert_result = svc.upsert(profile, &model_for_active, true);
+    // Always recover the store (the service owns it) whether or not the
+    // persist succeeded, so the caller's `&mut` reflects the in-memory state.
+    *store = svc.into_inner();
+    let saved_path = upsert_result.with_context(|| "failed to persist providers.toml")?;
 
     println!(
         "Added provider {id} (kind={kind}, model={model})",
-        id = parsed.id.trim(),
-        kind = format_kind(&parsed.kind),
+        id = args.id.trim(),
+        kind = format_kind(&args.kind),
         model = model_for_active,
     );
     println!("  Credential ref: store:{service}");
