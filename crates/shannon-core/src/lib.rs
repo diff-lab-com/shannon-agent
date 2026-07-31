@@ -62,6 +62,7 @@ pub mod prevent_sleep;
 pub mod progressive_loader;
 pub mod project_instructions;
 pub mod project_memory;
+pub mod provider_config_service;
 pub mod provider_config_store;
 pub mod provider_resolver;
 pub mod query_engine;
