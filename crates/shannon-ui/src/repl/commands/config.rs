@@ -8,6 +8,20 @@ use shannon_types::model_ref::ModelRef;
 use shannon_types::provider_config::{ProviderTiers, TierName};
 use shannon_types::recover_lock;
 
+/// Per-provider timeout for the concurrent `/health` live probe. Short on
+/// purpose: the verdict is only a hint and a slow provider shouldn't make the
+/// dashboard feel frozen. (ADR-0008 P3-3 — named instead of an inline magic
+/// number so the probe and the connect-refresh stay independently tunable.)
+const HEALTH_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Background models.dev refresh spawned by `/connect` so the model picker that
+/// opens right after shows freshly discovered models. Distinct from
+/// [`model_registry::dynamic::DEFAULT_FETCH_TIMEOUT`] (15s), which backs the
+/// explicit `/model refresh` command: the connect flow should be snappy since
+/// the static catalog is the authoritative fallback, while an explicit refresh
+/// is the user opting into "wait as long as it takes". (ADR-0008 P3-3.)
+const CONNECT_REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Resolve a `/model` argument into `(model_id, optional provider)` (ADR-0005
 /// Phase 3).
 ///
@@ -191,8 +205,20 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
         let ctx_opt =
             apply_model_selection(repl, provider, Some(resolved_id.clone()), None, false)?;
         let ctx_label = format_context_label(ctx_opt);
+        // `ctx_opt = None` means the id is unknown to both the static catalog
+        // and the models.dev overlay — surface a warning so typos don't fail
+        // silently at the next query (plan P1-7). The model is still set as-is
+        // as an escape hatch for ids the catalog hasn't indexed yet.
+        let prefix = if ctx_opt.is_none() {
+            format!(
+                "⚠ '{resolved_id}' is not in the catalog; using as-is. Run /model refresh to \
+                 pull the latest models, or /model <provider>/<id> for a qualified id.\n\n"
+            )
+        } else {
+            String::new()
+        };
         let msg = format!(
-            "{} (context: {ctx_label})",
+            "{prefix}{} (context: {ctx_label})",
             t!("commands.model.set", name = &resolved_id)
         );
         repl.chat.add_message(ChatRole::System, msg);
@@ -200,39 +226,33 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
-/// `/model refresh` — fetch models.dev and rebuild the dynamic overlay (Phase D),
-/// and refresh the LiteLLM community pricing table so dynamic/custom models
-/// show real prices instead of the estimate fallback.
+/// `/model refresh` — fetch models.dev and rebuild the dynamic overlay, and
+/// refresh the LiteLLM community pricing table, **in the background**.
 ///
-/// On success the picker, `/provider` default, and tier tabs immediately
-/// reflect freshly published models. On any error (offline, timeout, non-200,
-/// malformed payload) the built-in catalog is left untouched and the user is
-/// told so — never a crash.
+/// The two network fetches run on the tokio runtime via `runtime.spawn`, so
+/// the REPL never blocks on them. This replaces the old `block_on` of two
+/// sequential fetches that froze the UI for up to 2× timeout (plan P1-3), and
+/// mirrors the `/connect` background-refresh pattern (ADR-0007).
+///
+/// On any error (offline, timeout, non-200, malformed payload) the built-in
+/// catalog is left untouched — never a crash. Outcome reporting (success
+/// count / error) back into chat is deferred to a channel follow-up; for now
+/// the picker re-reads the overlay on next open, so a successful refresh is
+/// visible the moment the user re-opens `/model`.
 fn handle_model_refresh(repl: &mut Repl) -> Result<()> {
     let timeout = model_registry::dynamic::DEFAULT_FETCH_TIMEOUT;
-    let catalog_result = repl
-        .runtime
-        .block_on(model_registry::dynamic::refresh_overlay_async(timeout));
-    // Best-effort: LiteLLM pricing is independent of the model catalog. A
-    // failure here must not mask a successful catalog refresh, so it only adds
-    // a note rather than failing the whole command.
-    let pricing_result = repl
-        .runtime
-        .block_on(shannon_core::query_engine::litellm::refresh_async(timeout));
+    repl.chat.add_message(
+        ChatRole::System,
+        "Refreshing models.dev catalog + LiteLLM pricing in the background…".to_string(),
+    );
 
-    let mut msg = match catalog_result {
-        Ok(n) => {
-            format!("Refreshed models.dev catalog — {n} models available across provider tabs.")
-        }
-        Err(e) => format!(
-            "Could not refresh models.dev catalog ({e}). The built-in catalog is still in use."
-        ),
-    };
-    // Offline/timeout/parse — silent; pricing simply stays on the existing fallback.
-    if let Ok(n) = pricing_result {
-        msg.push_str(&format!("\nPricing: loaded {n} LiteLLM price entries."));
-    }
-    repl.chat.add_message(ChatRole::System, msg);
+    // Non-blocking: discard the JoinHandle (clippy::let_underscore_future).
+    // Errors are swallowed by design — a failure leaves the cached overlay in
+    // place and the user can simply retry.
+    std::mem::drop(repl.runtime.spawn(async move {
+        let _ = model_registry::dynamic::refresh_overlay_async(timeout).await;
+        let _ = shannon_core::query_engine::litellm::refresh_async(timeout).await;
+    }));
     Ok(())
 }
 
@@ -358,7 +378,6 @@ fn handle_provider_health(repl: &mut Repl) -> Result<()> {
     use shannon_core::credential_manager::read_credential_value_default;
     use shannon_core::provider_resolver::llm_provider_id;
     use shannon_core::{ProviderHealth, ProviderHealthStatus};
-    use std::time::Duration;
 
     let connected = connected_provider_slugs();
     let providers = model_registry::available_providers();
@@ -373,7 +392,7 @@ fn handle_provider_health(repl: &mut Repl) -> Result<()> {
     let probes: Vec<ProviderHealth> = match repl.query_engine.as_ref() {
         Some(engine) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             repl.runtime
-                .block_on(engine.probe_all_health(Duration::from_secs(5)))
+                .block_on(engine.probe_all_health(HEALTH_PROBE_TIMEOUT))
         }))
         .unwrap_or_default(),
         None => Vec::new(),
@@ -550,15 +569,12 @@ fn connect_status(requires_auth: bool, connected: bool, has_key: bool) -> &'stat
 
 /// Slugs of providers that have a persisted profile in
 /// `~/.shannon/providers.toml` (i.e. `/connect` was run for them).
+///
+/// Thin delegate over [`shannon_core::provider_config_store::connected_slugs`]
+/// so the welcome status card and the `/connect` dashboard share one
+/// implementation (ADR-0008 Decision 3).
 fn connected_provider_slugs() -> std::collections::HashSet<String> {
-    shannon_core::provider_config_store::load(None)
-        .map(|pm| {
-            pm.profiles
-                .values()
-                .flat_map(|p| p.providers.iter().map(|pp| pp.id.clone()))
-                .collect()
-        })
-        .unwrap_or_default()
+    shannon_core::provider_config_store::connected_slugs()
 }
 
 /// No-arg `/connect` dashboard: list every provider with its connection status
@@ -778,15 +794,14 @@ pub(crate) fn apply_connect(
     repl.chat.add_message(ChatRole::System, lines.join("\n"));
 
     // 5. Spawn a non-blocking models.dev refresh so the picker (next step)
-    //    can show freshly discovered models. 5s timeout — if the user is
-    //    offline the static catalog remains authoritative and the picker
-    //    falls back to it transparently. Errors are swallowed by design.
+    //    can show freshly discovered models. CONNECT_REFRESH_TIMEOUT — if the
+    //    user is offline the static catalog remains authoritative and the
+    //    picker falls back to it transparently. Errors are swallowed by design.
     //    Explicit `drop` to satisfy clippy::let_underscore_future: the
     //    JoinHandle is intentionally discarded (we don't await or report).
-    std::mem::drop(repl.runtime.spawn(async {
-        use std::time::Duration;
+    std::mem::drop(repl.runtime.spawn(async move {
         let _ =
-            shannon_core::model_registry::dynamic::refresh_overlay_async(Duration::from_secs(5))
+            shannon_core::model_registry::dynamic::refresh_overlay_async(CONNECT_REFRESH_TIMEOUT)
                 .await;
     }));
 
@@ -1703,14 +1718,6 @@ fn handle_model_max_tokens(repl: &mut Repl, args: &str) -> Result<()> {
                 "invalid --max-tokens value '{raw_value}' (expected non-negative integer or 'clear'): {e}"
             )
         })?;
-        // A max-tokens ceiling of 0 would be indistinguishable from "unset"
-        // by the engine, so guard against it silently slipping through as a
-        // non-`clear` value.
-        if parsed == 0 {
-            return Err(
-                "0 is reserved for 'clear'; use 'clear' or omit --max-tokens to revert".into(),
-            );
-        }
         Some(parsed)
     };
 

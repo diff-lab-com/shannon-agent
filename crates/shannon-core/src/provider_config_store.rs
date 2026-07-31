@@ -138,6 +138,24 @@ pub fn load(path: Option<&Path>) -> Option<ProviderModelConfig> {
     }
 }
 
+/// Provider ids that have at least one persisted profile in
+/// `~/.shannon/providers.toml` (i.e. `/connect` or `/model --save` was run for
+/// them). Used by both the `/connect` dashboard and the welcome status card so
+/// the two views agree on which providers are "connected" (ADR-0008 Decision 3).
+///
+/// Returns an empty set when no file is present or it is unreadable, matching
+/// [`load`]'s graceful-degradation contract.
+pub fn connected_slugs() -> std::collections::HashSet<String> {
+    load(None)
+        .map(|pm| {
+            pm.profiles
+                .values()
+                .flat_map(|p| p.providers.iter().map(|pp| pp.id.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Atomically persist `cfg` to `path` (or [`default_path`]), creating parent
 /// directories and setting owner-only (`0600`) permissions. Returns the path
 /// written.
