@@ -895,15 +895,17 @@ pub(crate) fn apply_connect(
 /// (and thus its "connected" state) so it no longer appears as connected in
 /// the welcome card or `/connect` dashboard (ADR-0008 P1-4).
 ///
-/// Minimal version using the existing `ProviderConfigStore` API: removes the
-/// provider slot from the `"default"` model profile (clearing `active_target`
-/// if it pointed there), persists, and — when the disconnected provider was
-/// the active selection — switches to the next still-connected provider, or falls
-/// back to the unconfigured state if none remain. The on-disk credential is
-/// intentionally kept so a subsequent `/connect` is a one-step re-connect.
+/// Removes the provider slot from the `"default"` model profile (clearing
+/// `active_target` if it pointed there) and persists via the single write
+/// path — [`ProviderConfigService::disconnect`] (ADR-0008 P2-5 step 3). When
+/// the disconnected provider was the active selection, the REPL switches to
+/// the next still-connected provider the service names (deterministic: first
+/// remaining), or falls back to the unconfigured state if none remain. The
+/// on-disk credential is intentionally kept so a subsequent `/connect` is a
+/// one-step re-connect.
 pub(crate) fn handle_disconnect(repl: &mut Repl, args: &str) -> Result<()> {
-    use shannon_core::provider_config_store::ProviderConfigStore;
-    use shannon_core::provider_resolver::{llm_provider_from_slug, llm_provider_id};
+    use shannon_core::provider_config_service::ProviderConfigService;
+    use shannon_core::provider_resolver::llm_provider_from_slug;
 
     let name = args.trim();
     if name.is_empty() {
@@ -915,29 +917,25 @@ pub(crate) fn handle_disconnect(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     let provider = parse_provider_name(name)?;
-    let slug = llm_provider_id(&provider);
     let display = format!("{provider}");
 
-    // Remove the slot (idempotent — returns whether it was present). The store
-    // also clears `active_target` when it pointed at the removed slot, so the
-    // persisted config never references a missing provider.
-    let mut store = ProviderConfigStore::load_or_default();
-    let was_connected = store
-        .config()
-        .profiles
-        .get("default")
-        .map(|mp| mp.providers.iter().any(|p| p.id == slug))
-        .unwrap_or(false);
-    store.remove_profile(&slug);
-    if let Err(e) = store.save() {
-        super::set_error(
-            repl,
-            &t!("commands.connect.saving_error", error = &e.to_string()),
-        );
-        return Ok(());
-    }
+    // Remove the slot through the single write path. The service clears
+    // `active_target` when it pointed at the removed slot, so the persisted
+    // config never references a missing provider. Idempotent —
+    // `was_connected` reports whether there was a slot to remove.
+    let mut svc = ProviderConfigService::load();
+    let outcome = match svc.disconnect(&provider) {
+        Ok(o) => o,
+        Err(e) => {
+            super::set_error(
+                repl,
+                &t!("commands.connect.saving_error", error = &e.to_string()),
+            );
+            return Ok(());
+        }
+    };
 
-    if !was_connected {
+    if !outcome.was_connected {
         repl.chat.add_message(
             ChatRole::System,
             t!("commands.disconnect.not_connected", provider = &display).to_string(),
@@ -946,18 +944,19 @@ pub(crate) fn handle_disconnect(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     // If we just disconnected the active selection, switch to the next
-    // still-connected provider; otherwise just refresh the card. We pick the
-    // first remaining connected slug (deterministic) and resolve its default
+    // still-connected provider; otherwise just refresh the card. The service
+    // picks the first remaining slug (deterministic); we resolve its default
     // model through the single switch path so state, engine, and card stay in
-    // sync.
+    // sync. (Session concern — the candidate comes from the service, the
+    // engine switch stays in the REPL.)
     let was_active = repl.state.selected_provider.as_ref() == Some(&provider);
     let mut lines = vec![t!("commands.disconnect.done", provider = &display).to_string()];
     if was_active {
-        let next = shannon_core::provider_config_store::connected_slugs()
-            .into_iter()
-            .next()
-            .and_then(|s| llm_provider_from_slug(&s));
-        match next {
+        match outcome
+            .next_active
+            .as_deref()
+            .and_then(llm_provider_from_slug)
+        {
             Some(p) => {
                 let default_model = model_registry::merged_models_for_provider(p.clone())
                     .first()
