@@ -207,7 +207,7 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
             None => {
                 repl.chat.add_message(
                     ChatRole::System,
-                    "No provider selected. Run /connect <provider> <key> first.".to_string(),
+                    t!("commands.provider.no_selection").to_string(),
                 );
                 return Ok(());
             }
@@ -303,7 +303,7 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
         // so the three views agree on which providers are "connected"
         // (ADR-0008 P1-2 / Decision 3).
         let connected = connected_provider_slugs();
-        let mut lines = vec!["Available providers:".to_string()];
+        let mut lines = vec![t!("commands.provider.available").to_string()];
         for p in &providers {
             let slug = shannon_core::provider_resolver::llm_provider_id(p);
             let has_key = !p.resolve_api_key_from_env().is_empty();
@@ -319,7 +319,7 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
             lines.push(format!("  {p} — {status}{current}"));
         }
         lines.push(String::new());
-        lines.push("* = current | Use /provider <name> to switch".to_string());
+        lines.push(t!("commands.provider.legend").to_string());
         repl.chat.add_message(ChatRole::System, lines.join("\n"));
     } else {
         // Switch to specified provider.
@@ -337,16 +337,22 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
             Some(m) => {
                 repl.chat.add_message(
                     ChatRole::System,
-                    format!("Provider: {provider} | Model: {m}"),
+                    t!(
+                        "commands.provider.switched",
+                        provider = &provider.to_string(),
+                        model = &m
+                    )
+                    .to_string(),
                 );
             }
             None => {
                 repl.chat.add_message(
                     ChatRole::System,
-                    format!(
-                        "Provider set to {provider}. It has no built-in model list — use \
-                         `/model <provider>/<model-id>` to choose a model."
-                    ),
+                    t!(
+                        "commands.provider.switched_no_catalog",
+                        provider = &provider.to_string()
+                    )
+                    .to_string(),
                 );
             }
         }
@@ -619,9 +625,9 @@ fn show_connect_dashboard(repl: &mut Repl) {
 
     let connected = connected_provider_slugs();
     let mut lines = vec![
-        "Connect a provider — no env var needed.".to_string(),
+        t!("commands.connect.dashboard_header").to_string(),
         String::new(),
-        "Providers:".to_string(),
+        t!("commands.connect.dashboard_providers").to_string(),
     ];
     for p in model_registry::available_providers() {
         let slug = llm_provider_id(&p);
@@ -635,8 +641,8 @@ fn show_connect_dashboard(repl: &mut Repl) {
         lines.push(format!("  {p}{current} — {status}"));
     }
     lines.push(String::new());
-    lines.push("Usage: /connect <provider> <api-key>".to_string());
-    lines.push("detail: /help connect".to_string());
+    lines.push(t!("commands.connect.dashboard_usage").to_string());
+    lines.push(t!("commands.connect.dashboard_help").to_string());
     repl.chat.add_message(ChatRole::System, lines.join("\n"));
 }
 
@@ -741,20 +747,31 @@ pub(crate) fn apply_connect(
         match CredentialManager::new()
             .and_then(|mut m| m.store_or_update(Credential::new(&cp.service, &cp.service, new_key)))
         {
-            Ok(_) => lines.push(format!(
-                "✓ API key stored for '{display}' (service: {})",
-                cp.service
-            )),
+            Ok(_) => lines.push(
+                t!(
+                    "commands.connect.key_stored",
+                    provider = &display,
+                    service = &cp.service
+                )
+                .to_string(),
+            ),
             Err(e) => {
-                super::set_error(repl, &format!("storing credential: {e}"));
+                super::set_error(
+                    repl,
+                    &t!("commands.connect.storing_error", error = &e.to_string()),
+                );
                 return Ok(());
             }
         }
     } else if read_credential_value_default(&cp.service).is_some() {
-        lines.push(format!(
-            "• Reusing stored key for '{display}' (service: {})",
-            cp.service
-        ));
+        lines.push(
+            t!(
+                "commands.connect.reusing_key",
+                provider = &display,
+                service = &cp.service
+            )
+            .to_string(),
+        );
     }
     // No "no key" warning branch here: the no-key case is intercepted upstream
     // (guide_to_inline_connect) before apply_connect runs; no-auth providers
@@ -763,9 +780,18 @@ pub(crate) fn apply_connect(
     // 2. Persist the v2 profile (CredentialRef::Store) so the engine loads it
     //    on next launch — the durable, env-var-free contract.
     match provider_config_store::save(&cp.config, None) {
-        Ok(path) => lines.push(format!("✓ Profile saved: {}", path.display())),
+        Ok(path) => lines.push(
+            t!(
+                "commands.connect.profile_saved",
+                path = &path.display().to_string()
+            )
+            .to_string(),
+        ),
         Err(e) => {
-            super::set_error(repl, &format!("saving providers.toml: {e}"));
+            super::set_error(
+                repl,
+                &t!("commands.connect.saving_error", error = &e.to_string()),
+            );
             return Ok(());
         }
     }
@@ -796,24 +822,28 @@ pub(crate) fn apply_connect(
                 repl.runtime.block_on(engine.validate_credential(api_key))
             }));
             match probed {
-                Ok(Ok(())) => lines.push(format!(
-                    "✓ Credential verified — '{}' is reachable with this key.",
-                    cp.model_id
-                )),
+                Ok(Ok(())) => lines
+                    .push(t!("commands.connect.cred_verified", model = &cp.model_id).to_string()),
                 Ok(Err(shannon_engine::api::ApiError::AuthenticationFailed)) => {
-                    lines.push(format!(
-                        "✗ Authentication failed for '{display}'. The key was stored but the provider rejected it — check the key and run /connect again."
-                    ));
+                    lines.push(t!("commands.connect.auth_failed", provider = &display).to_string());
                     repl.chat.add_message(ChatRole::System, lines.join("\n"));
-                    super::set_error(repl, &format!("credential rejected by '{display}'"));
+                    super::set_error(
+                        repl,
+                        &t!("commands.connect.auth_failed", provider = &display),
+                    );
                     return Ok(());
                 }
-                Ok(Err(e)) => lines.push(format!(
-                    "⚠ Could not fully verify the credential for '{display}' ({e}). The key is stored; it may still work — try sending a message."
-                )),
-                Err(_) => lines.push(format!(
-                    "⚠ Credential probe failed for '{display}'. The key is stored; it may still work."
-                )),
+                Ok(Err(e)) => lines.push(
+                    t!(
+                        "commands.connect.verify_warning",
+                        provider = &display,
+                        error = &e.to_string()
+                    )
+                    .to_string(),
+                ),
+                Err(_) => {
+                    lines.push(t!("commands.connect.probe_failed", provider = &display).to_string())
+                }
             }
         }
     }
@@ -829,10 +859,14 @@ pub(crate) fn apply_connect(
         }
     }
 
-    lines.push(format!(
-        "✓ Switched to {} — model: {} (new credential active; no restart needed)",
-        cp.provider, cp.model_id
-    ));
+    lines.push(
+        t!(
+            "commands.connect.switched",
+            provider = &cp.provider.to_string(),
+            model = &cp.model_id
+        )
+        .to_string(),
+    );
     repl.chat.add_message(ChatRole::System, lines.join("\n"));
 
     // 6. Spawn a non-blocking models.dev refresh so the picker (next step)
@@ -875,9 +909,7 @@ pub(crate) fn handle_disconnect(repl: &mut Repl, args: &str) -> Result<()> {
     if name.is_empty() {
         repl.chat.add_message(
             ChatRole::System,
-            "Usage: /disconnect <provider>\nRemoves a provider's saved profile so it is no \
-             longer connected. Your stored API key is kept — re-run /connect to reconnect."
-                .to_string(),
+            t!("commands.disconnect.usage").to_string(),
         );
         return Ok(());
     }
@@ -898,14 +930,17 @@ pub(crate) fn handle_disconnect(repl: &mut Repl, args: &str) -> Result<()> {
         .unwrap_or(false);
     store.remove_profile(&slug);
     if let Err(e) = store.save() {
-        super::set_error(repl, &format!("saving providers.toml: {e}"));
+        super::set_error(
+            repl,
+            &t!("commands.connect.saving_error", error = &e.to_string()),
+        );
         return Ok(());
     }
 
     if !was_connected {
         repl.chat.add_message(
             ChatRole::System,
-            format!("'{display}' was not connected. Use /connect to connect it."),
+            t!("commands.disconnect.not_connected", provider = &display).to_string(),
         );
         return Ok(());
     }
@@ -916,7 +951,7 @@ pub(crate) fn handle_disconnect(repl: &mut Repl, args: &str) -> Result<()> {
     // model through the single switch path so state, engine, and card stay in
     // sync.
     let was_active = repl.state.selected_provider.as_ref() == Some(&provider);
-    let mut lines = vec![format!("✓ Disconnected '{display}'.")];
+    let mut lines = vec![t!("commands.disconnect.done", provider = &display).to_string()];
     if was_active {
         let next = shannon_core::provider_config_store::connected_slugs()
             .into_iter()
@@ -928,18 +963,19 @@ pub(crate) fn handle_disconnect(repl: &mut Repl, args: &str) -> Result<()> {
                     .first()
                     .map(|m| m.id.to_string());
                 let _ = apply_model_selection(repl, p.clone(), default_model.clone(), None, false)?;
-                lines.push(format!(
-                    "Switched active provider to {p} (model: {}).",
-                    default_model.unwrap_or_else(|| "—".to_string())
-                ));
+                lines.push(
+                    t!(
+                        "commands.disconnect.switched",
+                        provider = &p.to_string(),
+                        model = default_model.as_deref().unwrap_or("—")
+                    )
+                    .to_string(),
+                );
             }
             None => {
                 repl.state.selected_provider = None;
                 sync_active_to_chat(repl);
-                lines.push(
-                    "No connected providers remain — run /connect <provider> <key> to reconnect."
-                        .to_string(),
-                );
+                lines.push(t!("commands.disconnect.none_remain").to_string());
             }
         }
     } else {
