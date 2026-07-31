@@ -162,18 +162,29 @@ pub(crate) fn apply_model_selection(
     Ok(ctx_opt)
 }
 
+/// True when the first whitespace-delimited token of `args` is exactly `flag`
+/// or a `--flag=value` spelling of it.
+///
+/// Replaces the old `args.starts_with("--tier")` / `starts_with("--max-tokens")`
+/// dispatch, which mis-routed any token sharing the prefix (e.g. `--tierfoo`)
+/// into the wrong handler. The two flags share no prefix, so order no longer
+/// matters either (ADR-0008 P2-4).
+fn first_flag_is(args: &str, flag: &str) -> bool {
+    let Some(first) = args.split_whitespace().next() else {
+        return false;
+    };
+    first == flag || first.starts_with(&format!("{flag}="))
+}
+
 pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
     // /model --tier <name> [provider] [--save]
-    if args.starts_with("--tier") {
+    if first_flag_is(args, "--tier") {
         return handle_model_tier(repl, args);
     }
 
     // /model --max-tokens <N> [--save] — override the per-request max-tokens
     // ceiling for the active provider, optionally persisting to providers.toml.
-    // Order matters: the `--tier` check above would also match a `--max-tokens`
-    // string that happens to start with the same prefix, so we test
-    // `--max-tokens` first.
-    if args.starts_with("--max-tokens") {
+    if first_flag_is(args, "--max-tokens") {
         return handle_model_max_tokens(repl, args);
     }
 
@@ -311,20 +322,24 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
     if args.is_empty() {
         // List all providers with key status (honours SHANNON_*_PROVIDERS filter)
         let providers = model_registry::available_providers();
+        // Same connection set the /connect dashboard and the welcome card use,
+        // so the three views agree on which providers are "connected"
+        // (ADR-0008 P1-2 / Decision 3).
+        let connected = connected_provider_slugs();
         let mut lines = vec!["Available providers:".to_string()];
         for p in &providers {
+            let slug = shannon_core::provider_resolver::llm_provider_id(p);
             let has_key = !p.resolve_api_key_from_env().is_empty();
-            let key_status = if p.requires_auth() {
-                if has_key { "key OK" } else { "no key" }
-            } else {
-                "no auth"
-            };
+            // Unified vocabulary (was the divergent "key OK" / "no key" /
+            // "no auth" trio). A provider with a stored key but no persisted
+            // profile now reads "key stored" here too, matching /connect.
+            let status = connect_status(p.requires_auth(), connected.contains(&slug), has_key);
             let current = if repl.state.selected_provider.as_ref() == Some(p) {
                 " *"
             } else {
                 ""
             };
-            lines.push(format!("  {p} — {key_status}{current}"));
+            lines.push(format!("  {p} — {status}{current}"));
         }
         lines.push(String::new());
         lines.push("* = current | Use /provider <name> to switch".to_string());
@@ -548,23 +563,62 @@ pub(crate) fn parse_connect_args(args: &str) -> Option<ConnectArgs<'_>> {
     })
 }
 
-/// Connection status label for a provider in the `/connect` dashboard
-/// (ADR-0005 Phase 2). Pure — unit-tested below.
+/// Unified provider-connection vocabulary so `/connect` and `/provider` never
+/// disagree on wording (ADR-0008 P1-2).
 ///
-/// - `no auth`     provider needs no key (e.g. Ollama)
-/// - `✓ connected` profile persisted AND a key is stored → works on next launch
-/// - `key stored`  a key exists but `/connect` hasn't persisted a profile yet
-/// - `no key`      auth required, nothing stored
-fn connect_status(requires_auth: bool, connected: bool, has_key: bool) -> &'static str {
-    if !requires_auth {
-        "no auth"
-    } else if connected && has_key {
-        "✓ connected"
-    } else if has_key {
-        "key stored"
-    } else {
-        "no key"
+/// Replaces the two independent label sets that previously existed:
+/// - `/connect` dashboard: `no auth` / `✓ connected` / `key stored` / `no key`
+/// - `/provider`: `key OK` / `no key` / `no auth`
+///
+/// (The welcome status card uses a coarser binary `●`/`○` presence model keyed
+/// off `connected_slugs()` — unified separately in P2-2 — so it is intentionally
+/// not driven by this enum.)
+///
+/// The `key OK` vs `key stored` mismatch is the user-visible bug this fixes:
+/// both now render as the same enum variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProviderConnectionStatus {
+    /// Provider needs no key (e.g. Ollama).
+    NoAuth,
+    /// A profile is persisted AND a credential is stored → works on next launch.
+    Connected,
+    /// A credential exists but `/connect` hasn't persisted a profile yet.
+    KeyStored,
+    /// Auth required, nothing stored.
+    NoKey,
+}
+
+impl ProviderConnectionStatus {
+    /// Single decision point mapping the three underlying booleans to a status.
+    /// Pure — unit-tested below.
+    pub(crate) fn classify(requires_auth: bool, connected: bool, has_key: bool) -> Self {
+        if !requires_auth {
+            Self::NoAuth
+        } else if connected && has_key {
+            Self::Connected
+        } else if has_key {
+            Self::KeyStored
+        } else {
+            Self::NoKey
+        }
     }
+}
+
+impl std::fmt::Display for ProviderConnectionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoAuth => write!(f, "no auth"),
+            Self::Connected => write!(f, "✓ connected"),
+            Self::KeyStored => write!(f, "key stored"),
+            Self::NoKey => write!(f, "no key"),
+        }
+    }
+}
+
+/// Classify a provider's connection status for display. Thin delegate over
+/// [`ProviderConnectionStatus::classify`] kept for call-site readability.
+fn connect_status(requires_auth: bool, connected: bool, has_key: bool) -> ProviderConnectionStatus {
+    ProviderConnectionStatus::classify(requires_auth, connected, has_key)
 }
 
 /// Slugs of providers that have a persisted profile in
@@ -1979,6 +2033,35 @@ mod tests {
         assert!(parse_provider_name("unknown_provider").is_err());
     }
 
+    // ── first_flag_is (ADR-0008 P2-4, /model flag dispatch) ──────────────
+
+    #[test]
+    fn first_flag_is_matches_exact_and_equals_form() {
+        assert!(first_flag_is("--tier standard", "--tier"));
+        assert!(first_flag_is("--tier=standard", "--tier"));
+        assert!(first_flag_is("--max-tokens 8192", "--max-tokens"));
+        assert!(first_flag_is("--max-tokens=8192 --save", "--max-tokens"));
+    }
+
+    #[test]
+    fn first_flag_is_rejects_shared_prefix() {
+        // The bug P2-4 fixes: `starts_with("--tier")` used to route this into
+        // the tier handler.
+        assert!(!first_flag_is("--tierfoo", "--tier"));
+        assert!(!first_flag_is("--tierx standard", "--tier"));
+        // `--tier` is not a prefix of `--max-tokens` (the old comment claimed
+        // otherwise).
+        assert!(!first_flag_is("--max-tokens 8192", "--tier"));
+        assert!(!first_flag_is("--tier standard", "--max-tokens"));
+    }
+
+    #[test]
+    fn first_flag_is_empty_or_non_flag() {
+        assert!(!first_flag_is("", "--tier"));
+        assert!(!first_flag_is("sonnet", "--tier"));
+        assert!(!first_flag_is("refresh", "--tier"));
+    }
+
     // ── parse_connect_args (ADR-0005 Phase 4, /connect) ─────────────────
 
     #[test]
@@ -2022,31 +2105,43 @@ mod tests {
     #[test]
     fn connect_status_no_auth_provider() {
         // Ollama-style: never needs a key, regardless of connection/key state.
-        assert_eq!(connect_status(false, false, false), "no auth");
-        assert_eq!(connect_status(false, true, true), "no auth");
+        assert_eq!(connect_status(false, false, false).to_string(), "no auth");
+        assert_eq!(connect_status(false, true, true).to_string(), "no auth");
+        assert_eq!(
+            connect_status(false, false, false),
+            ProviderConnectionStatus::NoAuth
+        );
     }
 
     #[test]
     fn connect_status_authed_fully_connected() {
         // Profile persisted + key stored → fully wired.
-        assert_eq!(connect_status(true, true, true), "✓ connected");
+        assert_eq!(connect_status(true, true, true).to_string(), "✓ connected");
+        assert_eq!(
+            connect_status(true, true, true),
+            ProviderConnectionStatus::Connected
+        );
     }
 
     #[test]
     fn connect_status_key_but_no_profile() {
         // Key exists in the store but /connect hasn't persisted a profile.
-        assert_eq!(connect_status(true, false, true), "key stored");
+        assert_eq!(connect_status(true, false, true).to_string(), "key stored");
+        assert_eq!(
+            connect_status(true, false, true),
+            ProviderConnectionStatus::KeyStored
+        );
     }
 
     #[test]
     fn connect_status_profile_but_no_key() {
         // Stale profile with no key → treat as "no key" (not functional).
-        assert_eq!(connect_status(true, true, false), "no key");
+        assert_eq!(connect_status(true, true, false).to_string(), "no key");
     }
 
     #[test]
     fn connect_status_nothing_stored() {
-        assert_eq!(connect_status(true, false, false), "no key");
+        assert_eq!(connect_status(true, false, false).to_string(), "no key");
     }
 
     // ── should_prompt_for_key (ADR-0005 Phase 4, /connect wizard) ─────────
