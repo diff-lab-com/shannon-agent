@@ -513,7 +513,8 @@ fn show_connect_dashboard(repl: &mut Repl) {
         lines.push(format!("  {p}{current} — {status}"));
     }
     lines.push(String::new());
-    lines.push("Usage: /connect <provider> <api-key>   (detail: /help connect)".to_string());
+    lines.push("Usage: /connect <provider> <api-key>".to_string());
+    lines.push("detail: /help connect".to_string());
     repl.chat.add_message(ChatRole::System, lines.join("\n"));
 }
 
