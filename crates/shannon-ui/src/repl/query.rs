@@ -221,10 +221,20 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         query_engine.set_model(model.clone());
     }
 
-    // Resolve real context window for Ollama models before query starts
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    // Resolve real context window for Ollama models before query starts.
+    // A panic here is recovered (a stale context window beats a dead REPL) but
+    // logged at ERROR so the failure is diagnosable instead of silent
+    // (ADR-0008 P2-6; mirrors `apply_model_selection` in config.rs).
+    let pre_resolve_panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         repl.runtime.block_on(query_engine.pre_resolve_context());
     }));
+    if pre_resolve_panicked.is_err() {
+        tracing::error!(
+            model = ?repl.state.model,
+            provider = ?repl.state.selected_provider,
+            "pre_resolve_context panicked before query (recovered)"
+        );
+    }
     repl.state.context_window = query_engine.resolved_context_window();
 
     // Sync effort_level and focus_area from REPL state into the query engine

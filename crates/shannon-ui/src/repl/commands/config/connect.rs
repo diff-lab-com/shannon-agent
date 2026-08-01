@@ -377,6 +377,14 @@ fn validate_credential(
                     .to_string(),
                 ),
                 Err(_) => {
+                    // validate_credential panicked (not a normal auth error).
+                    // The user sees "probe_failed"; log the panic for devs (ADR-0008 P2-6).
+                    // (Bind to `prov_display` because `tracing::error!` puts `display`/`debug`
+                    // field helpers in scope, shadowing a bare `display` identifier.)
+                    let prov_display: &str = display;
+                    tracing::error!(
+                        "validate_credential panicked during /connect for provider {prov_display} (recovered)"
+                    );
                     lines.push(t!("commands.connect.probe_failed", provider = display).to_string())
                 }
             }

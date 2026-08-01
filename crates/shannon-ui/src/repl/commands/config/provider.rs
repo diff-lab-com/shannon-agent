@@ -111,11 +111,18 @@ fn handle_provider_health(repl: &mut Repl) -> Result<()> {
     //    Engines run inside catch_unwind so a panic in one provider's probe
     //    can never crash the REPL.
     let probes: Vec<ProviderHealth> = match repl.query_engine.as_ref() {
-        Some(engine) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Some(engine) => match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             repl.runtime
                 .block_on(engine.probe_all_health(HEALTH_PROBE_TIMEOUT))
-        }))
-        .unwrap_or_default(),
+        })) {
+            Ok(probes) => probes,
+            // A panic in one provider's probe must not crash the REPL; log it so
+            // the (now-missing) health data is diagnosable (ADR-0008 P2-6).
+            Err(_) => {
+                tracing::error!("probe_all_health panicked (recovered; health data unavailable)");
+                Vec::new()
+            }
+        },
         None => Vec::new(),
     };
 
