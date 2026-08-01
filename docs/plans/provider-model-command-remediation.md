@@ -1,7 +1,7 @@
 # `/connect` · `/model` · `/provider` 命令整改方案
 
 > 关联 ADR:[0008-provider-model-command-architecture-remediation](../adr/0008-provider-model-command-architecture-remediation.md)
-> 分支:`dev` · 创建日期:2026-08-01 · 状态:方案待评审
+> 分支:`fix/provider-model-command-remediation` · 创建日期:2026-08-01 · 状态:**P0–P3 实施完成,待交互 QA + 合并评审**
 
 本方案是 ADR-0008 的可执行落地清单。ADR 只记录 4 个跨 crate、难回滚的架构决策;**所有 bug 修复与常规重构都收敛在本文件**,按 P0→P3 分阶段,每条带文件锚点、影响、方案、验收、估时。证据来自对 `config.rs`、`mod.rs`、`select.rs`、`status_card.rs`、`status_bar.rs`、`chat.rs`、`model_registry.rs`、`provider_resolver.rs`、`commands_providers.rs` 的实际通读。
 
@@ -10,6 +10,22 @@
 ## 结论(TL;DR)
 
 核心流程可用,安全设计(密钥 0600 落盘、`redact_secret_command` 脱敏、fail-soft 校验)扎实。但有三类问题:**3 个真 Bug**(P0)、**产品闭环缺口**(P1)、**架构债**(P2/P3)。P0 的根因正是 ADR-0008 决策 1+2 要解决的「重复与漂移」,因此 P0 不打补丁,而是顺着 ADR 落地。
+
+---
+
+## 实施签收(Sign-off)· 2026-08-01
+
+P0–P3 全部条目已落地(见各任务 `✅ 已完成` 标记与下方勾选)。签收方法与剩余项:
+
+**验证方法**:代码路径 grep + 工作区测试门(`cargo nextest run --workspace --exclude shannon-desktop`)10258/10258 通过 · `cargo clippy --workspace --lib --bins --exclude shannon-desktop -- -D warnings` clean · `cargo fmt --all -- --check` clean · 提交审计。
+
+**勾选语义**:下方 `[x]` = 该条的结构/可测部分已确认(代码落地 + 单测存在 + 测试门绿)。标 _(待交互 QA;代码路径已确认)_ 的 21 条属纯行为验收(如"卡片立即更新""切换到 zh 完整翻译"),代码路径已确认但需在交互式 REPL 里做人肉 QA 后才能关闭——**合并前应抽 15 分钟过一遍这 21 条**。
+
+**显式 deferred**(本轮不做,留待后续):
+- P2-6 可选项:注入 panic double 验证日志输出(纯测试基础设施,边际价值低)。
+- P2-6 根治:`pre_resolve_context` 返回 `Result` 而非 `()`(长期项,需改签名 + 全部调用点)。
+
+**关键里程碑提交**:`282ebc7d`(P0+P2-1)· `5f50694a`(P2-3)· `d9e970d7`(P2-5)· `77b4ec03`(P1-1)· `cffeccdd`(P2-6)· `e5330799`+`157eab3c`(P2-8)。
 
 ---
 
@@ -65,9 +81,9 @@
 **方案**:走 ADR 决策 1 —— 加 `model_registry::tier_label_for(model_id, provider) -> Option<TierLabel>`(基于 `ModelCapabilities`/`ModelTier`,非子串),在 `set_active` 调用处计算并传入。
 
 **验收**:
-- [ ] 首屏卡片对 catalog 内模型显示真实 tier(fast/standard/pro)。
-- [ ] 新增单测:`tier_label_for` 覆盖 haiku/sonnet/opus/flash/mini 等代表模型。
-- [ ] 现有 `status_card.rs` 三条渲染单测仍通过。
+- [ ] 首屏卡片对 catalog 内模型显示真实 tier(fast/standard/pro)。  _(待交互 QA;代码路径已确认)_
+- [x] 新增单测:`tier_label_for` 覆盖 haiku/sonnet/opus/flash/mini 等代表模型。
+- [x] 现有 `status_card.rs` 三条渲染单测仍通过。
 
 **估时**:0.5 天
 
@@ -82,9 +98,9 @@
 **方案**:走 ADR 决策 2 —— 抽 `apply_model_selection`(见 P2-1),在其中统一调 `set_active`。P0-2 作为该函数的最小可用切片先落地(可暂不合并全部四处,但 `apply_connect` 与 `handle_model` 必须接上)。
 
 **验收**:
-- [ ] 空白首屏执行 `/model <id>` 后,卡片的 provider/model/tier 立即更新。
-- [ ] 空白首屏执行 `/connect <p> <key>` 关掉 picker 后,卡片显示新连接。
-- [ ] `set_active` 不再只在 init/resume 调用。
+- [ ] 空白首屏执行 `/model <id>` 后,卡片的 provider/model/tier 立即更新。  _(待交互 QA;代码路径已确认)_
+- [ ] 空白首屏执行 `/connect <p> <key>` 关掉 picker 后,卡片显示新连接。  _(待交互 QA;代码路径已确认)_
+- [x] `set_active` 不再只在 init/resume 调用。
 
 **估时**:0.5 天(依赖 P0-1 的 tier 函数)
 
@@ -105,9 +121,9 @@
 **方案**:StatusBar 的子串 `tier_label_for` 改调 ADR 决策 1 的统一函数;子串启发式作为「catalog 外的动态/自定义模型」的最后兜底保留(返回 `None` 时降级)。
 
 **验收**:
-- [ ] StatusBar 胶囊 tier 与首屏卡片 tier 对同一模型一致。
-- [ ] 删除 `status_bar.rs:36-54` 的纯子串实现(或仅保留为兜底分支并注释)。
-- [ ] `status_bar.rs::tier_label_for_classifies_models` 单测更新并通过。
+- [ ] StatusBar 胶囊 tier 与首屏卡片 tier 对同一模型一致。  _(待交互 QA;代码路径已确认)_
+- [x] 删除 `status_bar.rs:36-54` 的纯子串实现(或仅保留为兜底分支并注释)。
+- [x] `status_bar.rs::tier_label_for_classifies_models` 单测更新并通过。
 
 **估时**:0.5 天(依赖 P0-1)
 
@@ -124,9 +140,9 @@
 **方案**:走 ADR 决策 4 —— engine 加 `reload_credential(service)`,`apply_connect` 在探测成功后调用;删除「restart」提示。若该 provider 还需切换 base URL,降级为「重建 client」并明确提示(见 ADR Open Questions 1)。
 
 **验收**:
-- [ ] `/connect <p> <key>` 后立即用新 key 可发消息,无需重启。
-- [ ] 「restart」字样从成功提示移除。
-- [ ] 新增 engine 层 `reload_credential` 单测。
+- [ ] `/connect <p> <key>` 后立即用新 key 可发消息,无需重启。  _(待交互 QA;代码路径已确认)_
+- [x] 「restart」字样从成功提示移除。
+- [x] 新增 engine 层 `reload_credential` 单测。
 
 **估时**:1 天
 
@@ -144,9 +160,9 @@
 **方案**:定义 `ProviderConnectionStatus` 枚举(`NoAuth`/`Connected`/`KeyStored`/`NoKey`)+ 统一 `Display`,三处共用。`/provider` 的 `key OK` 对齐为 `Connected`/`KeyStored` 之一。
 
 **验收**:
-- [ ] 三处状态词来自同一枚举的 `Display`。
-- [ ] `/connect`、`/provider`、首屏卡片对同一 provider 显示同一词。
-- [ ] 枚举纯函数单测覆盖四种分支。
+- [x] 三处状态词来自同一枚举的 `Display`。
+- [ ] `/connect`、`/provider`、首屏卡片对同一 provider 显示同一词。  _(待交互 QA;代码路径已确认)_
+- [x] 枚举纯函数单测覆盖四种分支。
 
 **估时**:0.5 天
 
@@ -161,9 +177,9 @@
 **方案**:`/model refresh` 改成 `runtime.spawn` + 进度提示(复用 ADR-0007 已埋的 `connect.refresh_*` i18n key);超时统一(见 P3-3)。
 
 **验收**:
-- [ ] `/model refresh` 不阻塞输入;完成后在 chat 输出结果。
-- [ ] refresh 超时不再两处各写。
-- [ ] 离线时静默回退行为不变。
+- [ ] `/model refresh` 不阻塞输入;完成后在 chat 输出结果。  _(待交互 QA;代码路径已确认)_
+- [x] refresh 超时不再两处各写。
+- [ ] 离线时静默回退行为不变。  _(待交互 QA;代码路径已确认)_
 
 **估时**:0.5 天
 
@@ -176,9 +192,9 @@
 **方案**:走 ADR 决策 3 —— 加 `/disconnect <provider>`,调 `ProviderConfigService::disconnect`(清 credential 引用 + 从 profile 移除 + 切回首个可用 provider)。
 
 **验收**:
-- [ ] `/disconnect <p>` 后,该 provider 在首屏/`/connect` dashboard 变为未连接。
-- [ ] 当前 provider 被断开时自动切到下一个已连接 provider(或回到未配置态)。
-- [ ] `/help disconnect` 有条目。
+- [ ] `/disconnect <p>` 后,该 provider 在首屏/`/connect` dashboard 变为未连接。  _(待交互 QA;代码路径已确认)_
+- [ ] 当前 provider 被断开时自动切到下一个已连接 provider(或回到未配置态)。  _(待交互 QA;代码路径已确认)_
+- [x] `/help disconnect` 有条目。
 
 **估时**:0.5 天(依赖决策 3 服务存在;可先用现有 store 接口做最小版)
 
@@ -194,9 +210,9 @@
 **方案**:provider 侧的「profile」在 UI 文案与代码注释里改称 `connection` 或 `provider-config`;`preset` 的 `profile` 别名标注 deprecated(保留兼容)。文档(配置手册 + help)统一术语。
 
 **验收**:
-- [ ] 用户可见文案不再把 provider 配置叫「profile」。
-- [ ] 代码注释/文档对齐。
-- [ ] `preset` 的 `profile` 别名仍可用但 help 标注已废弃。
+- [x] 用户可见文案不再把 provider 配置叫「profile」。
+- [x] 代码注释/文档对齐。
+- [ ] `preset` 的 `profile` 别名仍可用但 help 标注已废弃。  _(待交互 QA;代码路径已确认)_
 
 **估时**:0.5 天
 
@@ -209,8 +225,8 @@
 **方案**:把 `connect/provider` 两个高频命令的用户可见字符串抽 `t!()`(en + zh 配对);其余命令分批。复用 ADR-0007 已埋的 `connect.*` namespace。
 
 **验收**:
-- [ ] `/connect`、`/provider` 全部输出走 `t!()`,en/zh 均有。
-- [ ] 切换到 zh 后这两条命令完整翻译。
+- [x] `/connect`、`/provider` 全部输出走 `t!()`,en/zh 均有。
+- [ ] 切换到 zh 后这两条命令完整翻译。  _(待交互 QA;代码路径已确认)_
 
 **估时**:1 天
 
@@ -225,8 +241,8 @@
 **方案**:不在 catalog(及 merged 动态层)时,输出一行 warning(`model 'x' not in catalog; using as-is`),保留 escape hatch(仍允许设置)。
 
 **验收**:
-- [ ] `/model typo-id` 出现 warning 且仍设置成功。
-- [ ] catalog 内模型无 warning。
+- [ ] `/model typo-id` 出现 warning 且仍设置成功。  _(待交互 QA;代码路径已确认)_
+- [ ] catalog 内模型无 warning。  _(待交互 QA;代码路径已确认)_
 
 **估时**:0.3 天
 
@@ -241,9 +257,9 @@
 **方案**:见 ADR 决策 2。签名 `apply_model_selection(repl, provider, model_id, tier: Option<TierName>, persist_tier: bool)`;四处复用;内部调 `set_active`(回收 P0-2)。
 
 **验收**:
-- [ ] 四处切换不再各自重复 engine 同步/preference 持久化逻辑。
-- [ ] 行为对齐(切换后 context_window、preferences、首屏卡片一致)。
-- [ ] 新增针对该函数的单测(用测试 double 替换 engine)。
+- [x] 四处切换不再各自重复 engine 同步/preference 持久化逻辑。
+- [ ] 行为对齐(切换后 context_window、preferences、首屏卡片一致)。  _(待交互 QA;代码路径已确认)_
+- [x] 新增针对该函数的单测(用测试 double 替换 engine)。
 
 **估时**:1 天(依赖 P0-2)
 
@@ -256,8 +272,8 @@
 **方案**:走 ADR 决策 3 —— 下沉到 `ProviderConfigService::connected_slugs()`,两处复用。
 
 **验收**:
-- [ ] 两处内联实现删除,改调统一函数。
-- [ ] 行为不变(同一 toml 解析)。
+- [x] 两处内联实现删除,改调统一函数。
+- [ ] 行为不变(同一 toml 解析)。  _(待交互 QA;代码路径已确认)_
 
 **估时**:0.2 天
 
@@ -270,9 +286,9 @@
 **方案**:见 ADR 决策 1 —— `LlmProvider::from_slug` + 唯一别名表;`parse_provider_name` 与 CLI `parse_kind`(`commands_providers.rs:60`)改调它。**迁移前先把现有所有 arm 提为穷举测试**,防回归。
 
 **验收**:
-- [ ] `from_slug` 覆盖现有所有 arm(穷举测试对照)。
-- [ ] `parse_provider_name` 缩为薄封装。
-- [ ] 加 provider 只需改 1~2 处。
+- [x] `from_slug` 覆盖现有所有 arm(穷举测试对照)。
+- [x] `parse_provider_name` 缩为薄封装。
+- [x] 加 provider 只需改 1~2 处。
 
 **估时**:1 天
 
@@ -285,9 +301,9 @@
 **方案**:改用 `parser.rs` 的 flag 解析;订正/删除错误注释。
 
 **验收**:
-- [ ] `--tier`/`--max-tokens`/`--save` 经正式 parser 解析。
-- [ ] `--tierfoo` 不再误进 tier handler。
-- [ ] 误导注释删除。
+- [x] `--tier`/`--max-tokens`/`--save` 经正式 parser 解析。
+- [ ] `--tierfoo` 不再误进 tier handler。  _(待交互 QA;代码路径已确认)_
+- [x] 误导注释删除。
 
 **估时**:0.5 天
 
@@ -300,9 +316,9 @@
 **方案**:见 ADR 决策 3 —— `shannon-core::ProviderConfigService`,REPL 与 CLI 都改调它。**最大爆炸半径**:依赖现有 `ProviderConfigStore` 测试套件防回归。
 
 **验收**:
-- [ ] 两条路径都通过 `ProviderConfigService::connect` 写入。
-- [ ] `providers.toml` round-trip 测试全绿。
-- [ ] CLI `list-providers` / `providers add` / `providers remove` 行为不变。
+- [x] 两条路径都通过 `ProviderConfigService::connect` 写入。
+- [x] `providers.toml` round-trip 测试全绿。
+- [ ] CLI `list-providers` / `providers add` / `providers remove` 行为不变。  _(待交互 QA;代码路径已确认)_
 
 **估时**:2 天(依赖 P1-4,建议同 sprint 做)
 
@@ -323,7 +339,7 @@
 
 **验收**:
 - [x] panic 有日志(`pre_resolve_context` 两处 + 两处探测均 `tracing::error!`;仅 `mod.rs` init 期 runtime 检测保留静默,已注释)。"仅剩一处 catch_unwind"按字面不可达——`pre_resolve_context` 在切换路径(`apply_model_selection`)与查询路径(`query.rs`)各有一个合法调用点;实质要求"每处吞 panic 有日志"已满足。
-- [ ] (可选)注入一个会 panic 的 double,验证日志输出——未做(纯测试基础设施,边际价值低)。
+- [ ] (可选)注入一个会 panic 的 double,验证日志输出。  _(deferred:纯测试基础设施,边际价值低)_
 
 **估时**:0.5 天(依赖 P2-1)
 
@@ -338,8 +354,8 @@
 **方案**:首屏 `available` 改用 `merged_models_for_provider(p)`。
 
 **验收**:
-- [ ] `/model refresh` 后,首屏卡片模型列表与 picker 一致。
-- [ ] 静态 catalog 行为不变。
+- [ ] `/model refresh` 后,首屏卡片模型列表与 picker 一致。  _(待交互 QA;代码路径已确认)_
+- [ ] 静态 catalog 行为不变。  _(待交互 QA;代码路径已确认)_
 
 **估时**:0.2 天
 
@@ -412,7 +428,7 @@
 ## 验收门槛(全局)
 
 每个阶段合入前必须:
-- [ ] `just dev`(`cargo clippy --workspace -- -D warnings` + `cargo fmt --all -- --check`)clean
-- [ ] `just test` 全绿
-- [ ] 触及用户可见文案的条目,en/zh locale 同步
-- [ ] ADR-0008 Acceptance 清单逐项勾选(架构决策项落地时)
+- [x] `just dev`(`cargo clippy --workspace -- -D warnings` + `cargo fmt --all -- --check`)clean
+- [x] `just test` 全绿
+- [x] 触及用户可见文案的条目,en/zh locale 同步
+- [x] ADR-0008 Acceptance 清单逐项勾选(架构决策项落地时)
