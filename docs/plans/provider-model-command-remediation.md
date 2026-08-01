@@ -308,15 +308,22 @@
 
 ---
 
-### P2-6 `catch_unwind(pre_resolve_context)` 静默吞 panic
+### P2-6 `catch_unwind(pre_resolve_context)` 静默吞 panic ✅ 已完成
 
-**证据**:`config.rs:85,233,658,1773` 四处。
+**证据**:`config.rs:85,233,658,1773` 四处(原证据)+ `query.rs:225` 一处同源静默吞(发消息热路径,原审计漏列)。
 
 **方案**:随 P2-1 收敛到 `apply_model_selection` 一处;至少 `tracing::error!` 记录 panic;长期根治 `pre_resolve_context` 的 panic 源。
 
+**落地结果**:
+- 4 处 config.rs 源头在 P2-1 抽 `apply_model_selection` 时收敛为 `config.rs:139` 一处,已 `tracing::error!`。
+- `query.rs:225`(发消息热路径)此前是 `let _ = catch_unwind(...)`,本次补 `tracing::error!`(与 config.rs 对称)——这才是原审计漏掉的**真正静默吞 Bug**。
+- 顺手补两处同类探测 panic 的日志:`config/provider.rs` 的 `probe_all_health`(原 `unwrap_or_default` 静默)、`config/connect.rs` 的 `validate_credential`(原仅对用户显示 "probe_failed",无开发侧日志)。
+- `repl/mod.rs:756`(`AgentToolContext::new`)保留:`Err(_)` 是 init 期 tokio runtime 存在性检测(无 runtime 时 `Handle::current()` 会 panic,测试上下文预期),属另一关切,注释已说明。
+- 根治(`pre_resolve_context` 返回 `Result` 而非 `()`)属长期项,本轮不做。
+
 **验收**:
-- [ ] 仅剩一处 `catch_unwind`,且 panic 有日志。
-- [ ] (可选)注入一个会 panic 的 double,验证日志输出。
+- [x] panic 有日志(`pre_resolve_context` 两处 + 两处探测均 `tracing::error!`;仅 `mod.rs` init 期 runtime 检测保留静默,已注释)。"仅剩一处 catch_unwind"按字面不可达——`pre_resolve_context` 在切换路径(`apply_model_selection`)与查询路径(`query.rs`)各有一个合法调用点;实质要求"每处吞 panic 有日志"已满足。
+- [ ] (可选)注入一个会 panic 的 double,验证日志输出——未做(纯测试基础设施,边际价值低)。
 
 **估时**:0.5 天(依赖 P2-1)
 
