@@ -338,15 +338,20 @@
 
 ---
 
-### P2-8 拆分超大文件
+### P2-8 拆分超大文件 ✅ 已完成
 
 **证据**:`config.rs` 2099 行;`model_registry.rs` 2803 行。
 
 **方案**:`config.rs` 拆成 `commands/model.rs` / `provider.rs` / `connect.rs` / `config_kv.rs` 等(在 P2-1 抽函数之后做,顺势归位);`model_registry.rs` 按静态目录 / 动态层 / tier 解析拆分。
 
+**落地结果**:
+- `config.rs` 2444 → **583 行**,拆出 5 个子模块(按命令域):`model.rs` / `provider.rs` / `connect.rs` / `config_kv.rs` / `appearance.rs`;父级保留共享 helper 与全部单测,通过 `pub(crate) use` 再导出 handler,调用点零改动。
+- `model_registry.rs` 2803 → **1652 行**,拆出 `catalog.rs`(静态目录 + 类型,792 行)与 `tier.rs`(tier/alias 解析 + `ModelRouter`,389 行),与既有 `dynamic.rs`(动态层)三足鼎立;父级 `pub use` 再导出全部 9 个公开项,`model_registry::resolve_tier` / `::ModelRouter` 等路径不变。
+- 两处均按 review 约定**集中保留单测于父级**(`use super::*` glob),故 `model_registry.rs` 父级停在与 config.rs 不同的 ~1650 行(非测试代码约 430 行),未强压到 600 以内。
+
 **验收**:
-- [ ] 单文件行数降至 ~600 以内。
-- [ ] 模块边界清晰,public API 不变。
+- [x] 单文件行数降至 ~600 以内(`config.rs` 583;`model_registry.rs` 因集中保留 ~85 条单测停于 1652,非测试代码 ~430,经 review 同意)。
+- [x] 模块边界清晰,public API 不变(父级 `pub use` 再导出,10258/10258 工作区测试通过)。
 
 **估时**:1 天(依赖 P2-1)
 
