@@ -19,7 +19,7 @@ P0–P3 全部条目已落地(见各任务 `✅ 已完成` 标记与下方勾选
 
 **验证方法**:代码路径 grep + 工作区测试门(`cargo nextest run --workspace --exclude shannon-desktop`)10258/10258 通过 · `cargo clippy --workspace --lib --bins --exclude shannon-desktop -- -D warnings` clean · `cargo fmt --all -- --check` clean · 提交审计。
 
-**勾选语义**:下方 `[x]` = 该条的结构/可测部分已确认(代码落地 + 单测存在 + 测试门绿)。标 _(待交互 QA;代码路径已确认)_ 的 21 条属纯行为验收(如"卡片立即更新""切换到 zh 完整翻译"),代码路径已确认但需在交互式 REPL 里做人肉 QA 后才能关闭——**合并前应抽 15 分钟过一遍这 21 条**。
+**勾选语义**:下方 `[x]` = 该条的结构/可测部分已确认(代码落地 + 单测存在 + 测试门绿)。标 _(待交互 QA;代码路径已确认)_ 的 **20 条**属纯行为验收(如"卡片立即更新""切换到 zh 完整翻译"),代码路径已确认但需在交互式 REPL 里做人肉 QA 后才能关闭——**合并前应抽 15 分钟过一遍这 20 条**(可执行清单见 [`adr-0008-qa-checklist.md`](./adr-0008-qa-checklist.md))。
 
 **显式 deferred**(本轮不做,留待后续):
 - P2-6 可选项:注入 panic double 验证日志输出(纯测试基础设施,边际价值低)。
