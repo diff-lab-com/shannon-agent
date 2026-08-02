@@ -422,6 +422,11 @@ mod tests {
         SessionGrants::with_read_only_defaults(tools)
     }
 
+    #[cfg(feature = "jira")]
+    fn fresh_jira_tools() -> Vec<Box<dyn ServerTool>> {
+        crate::jira::tools::as_server_tool(crate::jira::tools::all_tools_unauth())
+    }
+
     #[test]
     fn handle_initialize_returns_protocol_version() {
         let tools = fresh_tools();
@@ -548,5 +553,99 @@ mod tests {
         assert!(grants.check("github_list_issues", "read"));
         // Write tools are denied at startup.
         assert!(!grants.check("github_create_issue", "write"));
+    }
+
+    #[cfg(feature = "jira")]
+    #[test]
+    fn jira_tools_list_advertises_four_tools() {
+        let tools = fresh_jira_tools();
+        let grants = fresh_grants(&tools);
+        let resp = handle_line(
+            r#"{"jsonrpc":"2.0","id":"j1","method":"tools/list","params":{}}"#,
+            &tools,
+            &grants,
+        )
+        .expect("response");
+        let tool_list = resp.result.expect("result")["tools"]
+            .as_array()
+            .expect("array")
+            .clone();
+        let names: Vec<String> = tool_list
+            .into_iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "jira_search_issues",
+                "jira_get_issue",
+                "jira_create_issue",
+                "jira_transition",
+            ]
+        );
+    }
+
+    #[cfg(feature = "jira")]
+    #[test]
+    fn jira_read_tools_pre_granted_write_tools_denied() {
+        let tools = fresh_jira_tools();
+        let grants = fresh_grants(&tools);
+        // Read tools auto-granted by `with_read_only_defaults`.
+        assert!(grants.check("jira_search_issues", "read"));
+        assert!(grants.check("jira_get_issue", "read"));
+        // Write tools denied until host calls `tools/grant`.
+        assert!(!grants.check("jira_create_issue", "write"));
+        assert!(!grants.check("jira_transition", "write"));
+    }
+
+    #[cfg(feature = "jira")]
+    #[test]
+    fn jira_write_tool_without_grant_is_denied_even_if_args_permission_set() {
+        let tools = fresh_jira_tools();
+        let grants = fresh_grants(&tools);
+        let resp = handle_line(
+            r#"{"jsonrpc":"2.0","id":"j2","method":"tools/call","params":{"name":"jira_transition","arguments":{"key":"ENG-1","target_status":"Done","permission":"write"}}}"#,
+            &tools,
+            &grants,
+        )
+        .expect("response");
+        let result = resp.result.expect("result");
+        assert_eq!(result["isError"], serde_json::json!(true));
+        let text = result["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            text.contains("write scope not granted"),
+            "denial text should explain the missing grant; got: {text}"
+        );
+    }
+
+    #[cfg(feature = "jira")]
+    #[test]
+    fn jira_write_tool_succeeds_after_tools_grant() {
+        let tools = fresh_jira_tools();
+        let grants = fresh_grants(&tools);
+
+        let grant_resp = handle_line(
+            r#"{"jsonrpc":"2.0","id":"jg1","method":"tools/grant","params":{"name":"jira_transition","scope":"write"}}"#,
+            &tools,
+            &grants,
+        )
+        .expect("response");
+        assert_eq!(
+            grant_resp.result.expect("result")["granted"]["name"],
+            "jira_transition"
+        );
+
+        let resp = handle_line(
+            r#"{"jsonrpc":"2.0","id":"j3","method":"tools/call","params":{"name":"jira_transition","arguments":{"key":"ENG-1","target_status":"Done"}}}"#,
+            &tools,
+            &grants,
+        )
+        .expect("response");
+        let result = resp.result.expect("result");
+        let text = result["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            !text.contains("write scope not granted"),
+            "after grant, call must not be denied for missing scope; got: {text}"
+        );
     }
 }
