@@ -580,7 +580,10 @@ pub async fn configure(
             Ok(())
         }
         "clear_cache" => {
-            let mut messages = state.messages.lock().await;
+            // P0-4: clear the active session's message buffer instead of
+            // the (removed) `state.messages` field.
+            let session = state.registry.get_or_create_active();
+            let mut messages = session.messages.lock().await;
             messages.clear();
             Ok(())
         }

@@ -78,7 +78,7 @@ pub use bundled::{BundledSkillBuilder, BundledSkills, init_bundled_skills};
 pub use definition::{Skill, SkillContext, SkillId, SkillPermissions, SkillResult, SkillSource};
 pub use discovery::SkillDiscovery;
 pub use error::{SkillError, SkillResult as Result};
-pub use executor::SkillExecutor;
+pub use executor::{HookEmitter, NoopHookEmitter, SkillExecutor};
 pub use frontmatter::ParsedSkill;
 pub use registry::SkillRegistry;
 pub use template::SkillTemplate;

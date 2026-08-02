@@ -102,6 +102,11 @@ landlock = { version = "0.4", optional = true }
 # Cron expression parsing (5-field, Claude Code / Codex compatible)
 croner = "3.0"
 
+# Filesystem watcher for `.shannon.toml` (P1-2 ConfigChange hook).
+# v7 matches what shannon-ui uses for the SourceWatcher; we keep them
+# aligned to avoid two copies of differing notify ABI.
+notify = { version = "7", features = ["macos_kqueue"] }
+
 [features]
 default = []
 landlock = ["dep:landlock"]

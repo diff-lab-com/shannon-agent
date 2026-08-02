@@ -153,6 +153,9 @@ pub mod commands_sessions;
 pub mod commands_tasks;
 
 #[cfg(feature = "tauri")]
+pub mod session_registry;
+
+#[cfg(feature = "tauri")]
 pub mod commands_usage;
 
 #[cfg(feature = "tauri")]

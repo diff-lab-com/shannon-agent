@@ -45,6 +45,7 @@ pub mod bridge_service;
 pub mod checkpoint;
 pub mod config_migration;
 pub mod config_persist;
+pub mod config_watcher;
 pub mod diagnostics;
 pub mod extract_memories;
 pub mod git_operation_tracking;
