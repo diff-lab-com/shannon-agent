@@ -53,6 +53,10 @@ export interface QueryFailedPayload {
   error: string
 }
 
+export interface QueryCancelledPayload {
+  query_id: string
+}
+
 export interface PermissionRequest {
   tool: string
   input: unknown
