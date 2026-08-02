@@ -1,13 +1,13 @@
 import { useState, useRef, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { open } from '@tauri-apps/plugin-dialog'
-import { convertFileSrc } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useCatalog } from '@/context/CatalogContext'
 import { useVoice } from '@/hooks/useVoice'
 import { MicButton } from '@/components/voice/MicButton'
 import { VoiceOrb } from '@/components/voice/VoiceOrb'
+import AttachmentChip from '@/components/chat/AttachmentChip'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 
@@ -237,45 +237,11 @@ export default function ChatInput({
       <div className="flex flex-col">
         {attachedFiles.length > 0 && (
           <div className="flex flex-wrap items-center gap-xs px-md pt-md">
-            {attachedFiles.map((path, i) => {
-              const name = path.split(/[/\\]/).pop() || path
-              const isImage = isImageFile(path)
-              return (
-                <span
-                  key={i}
-                  className="inline-flex items-center gap-xs px-sm py-xs bg-primary/10 text-primary rounded-lg font-label-sm"
-                >
-                  {isImage ? (
-                    <img
-                      src={convertFileSrc(path)}
-                      alt={name}
-                      className="w-5 h-5 rounded object-cover shrink-0"
-                      loading="lazy"
-                    />
-                  ) : (
-                    <span className="material-symbols-outlined text-[14px]">description</span>
-                  )}
-                  {name}
-                  <button
-                    type="button"
-                    className="hover:text-error cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
-                    aria-label={t('chat.input.attach.remove')}
-                    onClick={() => {
-                      const newFiles = attachedFiles.filter((_, idx) => idx !== i)
-                      onAttach(newFiles)
-                    }}
-                  >
-                    <span className="material-symbols-outlined text-[14px]">close</span>
-                  </button>
-                </span>
-              )
-            })}
+            {attachedFiles.map((path, i) => (
+              <AttachmentChip key={path} path={path} onRemove={() => onAttach(attachedFiles.filter((_, idx) => idx !== i))} />
+            ))}
             {attachedFiles.length > 1 && (
-              <button
-                type="button"
-                className="text-xs text-on-surface-variant hover:text-error cursor-pointer underline ml-xs"
-                onClick={onDetachAll}
-              >
+              <button type="button" className="text-xs text-on-surface-variant hover:text-error cursor-pointer underline ml-xs" onClick={onDetachAll}>
                 {t('chat.input.attach.detachAll')}
               </button>
             )}
@@ -433,7 +399,7 @@ export default function ChatInput({
                 aria-label={t('chat.input.send.aria')}
                 className="bg-primary text-on-primary p-3 rounded-xl active:scale-95 hover:shadow-md hover:shadow-primary/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                 onClick={onSend}
-                disabled={!value.trim()}
+                disabled={!value.trim() && attachedFiles.length === 0}
               >
                 <span className="material-symbols-outlined icon-md">arrow_upward</span>
               </Button>
