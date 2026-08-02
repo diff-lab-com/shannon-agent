@@ -13,6 +13,12 @@ mod memory;
 mod session;
 mod web;
 
+// Re-export the single switch-path helper so the REPL init/resume paths
+// (repl/mod.rs) can refresh the first-screen StatusCard through the same
+// derivation used by every /connect, /model, /provider switch
+// (ADR-0008 Decision 1+2).
+pub(crate) use config::sync_active_to_chat;
+
 // Re-export public API
 #[allow(unused_imports)]
 pub(crate) use cost::extract_plan_steps;
@@ -330,6 +336,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         "init",
         "config",
         "connect",
+        "disconnect",
         "sessions",
         "resume",
         "history",
@@ -451,6 +458,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "init" => config::handle_init(repl)?,
             "config" => config::handle_config(repl, args)?,
             "connect" => config::handle_connect(repl, args)?,
+            "disconnect" => config::handle_disconnect(repl, args)?,
             "sessions" => session::handle_sessions(repl, args)?,
             "resume" => session::handle_resume(repl, args)?,
             "history" => session::handle_history(repl, args)?,

@@ -206,6 +206,29 @@ impl ConfigBuilder {
         self
     }
 
+    /// Start watching `.shannon.toml` and emit `HookEvent::ConfigChange`
+    /// whenever the file changes on disk (P1-2c).
+    ///
+    /// Returns `None` when the parent directory is missing or the platform's
+    /// filesystem watcher is unavailable (e.g. inside a sandbox); callers
+    /// must treat both cases as "no watcher" and continue normally.
+    ///
+    /// The reload itself is *not* performed here — `on_change` is the
+    /// hook-emit point only. Callers that want live reload should
+    /// re-invoke [`Self::load_local_toml`] from inside the callback.
+    pub fn watch_local_toml<F>(
+        &self,
+        on_change: F,
+    ) -> Option<crate::config_watcher::ConfigWatcher>
+    where
+        F: FnMut(crate::config_watcher::ConfigChange) + Send + 'static,
+    {
+        crate::config_watcher::ConfigWatcher::start(
+            std::path::PathBuf::from(".shannon.toml"),
+            on_change,
+        )
+    }
+
     /// Load the connected provider profile from `~/.shannon/providers.toml`
     /// (ADR-0005 Phase 4). The file is written by `/connect` and carries a
     /// `CredentialRef::Store` credential, so a connected provider activates on

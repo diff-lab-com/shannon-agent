@@ -24,6 +24,7 @@ use crate::commands_billing::iso_days_ago;
 use crate::config::{self, DesktopConfig};
 use crate::events::event_names;
 use crate::events::{self};
+use crate::session_registry::SessionRegistry;
 use tokio_util::sync::CancellationToken;
 
 /// Parse approval mode string into ApprovalMode enum
@@ -55,10 +56,12 @@ fn plugin_registry_dir() -> std::path::PathBuf {
 
 /// Shared application state accessible to all Tauri commands.
 pub struct AppState {
-    /// Current conversation messages for the active session.
-    pub(crate) messages: Arc<Mutex<Vec<ChatMessage>>>,
-    /// Whether a query is currently in progress.
-    pub(crate) querying: Arc<Mutex<bool>>,
+    /// Per-session state registry. Holds the active session's messages /
+    /// querying flag / cancellation token, plus the "focused" session
+    /// pointer (P0-4 / `query-coordinator-concurrency`). Spike scope: all
+    /// existing single-session command paths resolve the active session
+    /// via `registry.get_or_create_active()`.
+    pub(crate) registry: Arc<SessionRegistry>,
     /// LLM client config — used to build clients on demand. P1.2-B:
     /// this is the single source of truth for the active `model` /
     /// `provider`; the legacy `Arc<Mutex<String>>` mirrors were
@@ -92,12 +95,11 @@ pub struct AppState {
     pub(crate) desktop_config: Arc<RwLock<DesktopConfig>>,
     /// Pending permission requests (request_id -> sender).
     pub(crate) pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
-    /// Session metadata for session list.
+    /// Session metadata for session list. (P0-4: kept on AppState for
+    /// now; this is the *display* list (titles, message counts), not the
+    /// per-session query state. Migrating this into the registry is
+    /// deferred until the UI uses session keys end-to-end.)
     pub(crate) sessions: Arc<Mutex<Vec<SessionMeta>>>,
-    /// Cancellation token for the current query.
-    pub(crate) cancellation_token: Arc<Mutex<Option<CancellationToken>>>,
-    /// Currently active session ID.
-    pub(crate) current_session_id: Arc<Mutex<Option<String>>>,
     /// Background tasks.
     pub(crate) background_tasks: Arc<Mutex<Vec<BackgroundTaskMeta>>>,
     /// Skill registry for skill discovery and listing.
@@ -310,8 +312,7 @@ impl AppState {
             register_default_tools(&mut tool_registry).expect("Failed to register default tools");
 
         Self {
-            messages: Arc::new(Mutex::new(Vec::new())),
-            querying: Arc::new(Mutex::new(false)),
+            registry: Arc::new(SessionRegistry::new()),
             client_config: Arc::new(RwLock::new(client_config)),
             provider_store: Arc::new(tokio::sync::Mutex::new(provider_store)),
             tools: Arc::new(tool_registry),
@@ -323,8 +324,6 @@ impl AppState {
             desktop_config: Arc::new(RwLock::new(desktop_config)),
             pending_permissions: Arc::new(Mutex::new(HashMap::new())),
             sessions: Arc::new(Mutex::new(Vec::new())),
-            cancellation_token: Arc::new(Mutex::new(None)),
-            current_session_id: Arc::new(Mutex::new(None)),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
             skill_registry: Arc::new(SkillRegistry::new()),
             mcp_pool: Arc::new(McpProcessPool::new()),
@@ -410,6 +409,13 @@ impl AppState {
 }
 
 /// Send a user message and stream the AI response via Tauri events.
+///
+/// P0-4 spike scope: `messages`, `querying`, `cancellation_token` and the
+/// session ID are now sourced from the active session in `state.registry`
+/// instead of from `AppState` directly. The active session is materialised
+/// lazily on first call. The hard-rejection ("A query is already in
+/// progress") now fires per-session rather than globally — multi-session
+/// multiplexing is unlocked but not yet exercised by the UI.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn send_message(
@@ -418,9 +424,14 @@ pub async fn send_message(
     message: String,
     file_paths: Option<Vec<String>>,
 ) -> Result<SendMessageResponse, String> {
+    // P0-4: resolve the active session lazily. Falls through to creating
+    // one if the registry is empty (the "first call ever" case).
+    let active_session = state.registry.get_or_create_active();
+    let session_id = active_session.session_id;
+
     // Prevent concurrent queries — check and set in a single lock scope to avoid TOCTOU race
     {
-        let mut querying = state.querying.lock().await;
+        let mut querying = active_session.querying.lock().await;
         if *querying {
             return Err("A query is already in progress".into());
         }
@@ -430,7 +441,7 @@ pub async fn send_message(
     // Create cancellation token
     let cancel_token = CancellationToken::new();
     {
-        let mut token_guard = state.cancellation_token.lock().await;
+        let mut token_guard = active_session.cancellation_token.lock().await;
         *token_guard = Some(cancel_token.clone());
     }
 
@@ -480,7 +491,7 @@ pub async fn send_message(
     });
 
     {
-        let mut messages = state.messages.lock().await;
+        let mut messages = active_session.messages.lock().await;
         messages.push(ChatMessage {
             role: "user".into(),
             content: message.clone(),
@@ -511,12 +522,25 @@ pub async fn send_message(
 
     let engine = QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new());
 
+    // P0-4: stash the engine on the session so subsequent queries on the
+    // same session reuse the same `Arc<ToolRegistry>` / hook manager /
+    // triggered-routine registry instead of paying re-init cost. We
+    // `take()` first so the clone below doesn't double-init: if a second
+    // `send_message` races in (the per-session `querying` guard above
+    // already prevents that, but defence-in-depth), the second caller
+    // still gets a freshly built engine from this same code path.
+    let engine_for_session = engine.clone();
+    {
+        let mut slot = active_session.query_engine.lock().await;
+        *slot = Some(engine_for_session);
+    }
+
     // Create query context
     let model = state.client_config.read().await.model.clone();
     let message_for_skill_loop = message.clone();
     let context = QueryContext {
         query_id,
-        session_id: uuid::Uuid::new_v4(),
+        session_id,
         user_message: message,
         metadata: shannon_core::query_engine::QueryMetadata {
             timestamp: chrono::Utc::now(),
@@ -528,16 +552,15 @@ pub async fn send_message(
         },
     };
 
-    // Spawn the query in a background task, streaming events to frontend
-    let querying_flag = state.querying.clone();
-    let messages_arc = state.messages.clone();
+    // Spawn the query in a background task, streaming events to frontend.
+    // P0-4: per-session flags live on the `Arc<SessionState>` clone.
     let app = app_handle.clone();
     let cancel_token_clone = cancel_token.clone();
-    let current_session_id_arc = state.current_session_id.clone();
     let state_mgr_arc = state.state_manager.clone();
     let client_config_arc = state.client_config.clone();
     let usage_store_arc = state.usage_store.clone();
     let notifier_arc = state.notifier.clone();
+    let session_for_task = active_session.clone();
 
     let return_qid = qid_str.clone();
     tokio::spawn(async move {
@@ -674,9 +697,9 @@ pub async fn send_message(
                         );
                     }
                     QueryEvent::Completed { .. } => {
-                        // Save final assistant message
+                        // Save final assistant message into the per-session buffer.
                         {
-                            let mut messages = messages_arc.lock().await;
+                            let mut messages = session_for_task.messages.lock().await;
                             messages.push(ChatMessage {
                                 role: "assistant".into(),
                                 content: if final_content.is_empty() {
@@ -689,34 +712,29 @@ pub async fn send_message(
                             });
                         }
 
-                        // Auto-persist to StateManager
+                        // Auto-persist to StateManager using the per-session UUID.
                         {
-                            let session_id_opt = current_session_id_arc.lock().await.clone();
-                            if let Some(sid) = session_id_opt {
-                                let msgs = messages_arc.lock().await.clone();
-                                let model = client_config_arc.read().await.model.clone();
-                                if let Ok(session_uuid) = uuid::Uuid::parse_str(&sid) {
-                                    let core_msgs: Vec<shannon_engine::api::Message> = msgs
-                                        .iter()
-                                        .map(|m| shannon_engine::api::Message {
-                                            role: m.role.clone(),
-                                            content: shannon_engine::api::MessageContent::Text(
-                                                m.content.clone(),
-                                            ),
-                                        })
-                                        .collect();
-                                    let meta = shannon_engine::state::SessionPersistMetadata {
-                                        model,
-                                        turn_count: core_msgs.len() / 2,
-                                        ..Default::default()
-                                    };
-                                    let _ = state_mgr_arc.save_session(
-                                        &session_uuid,
-                                        &core_msgs,
-                                        &meta,
-                                    );
-                                }
-                            }
+                            let msgs = session_for_task.messages.lock().await.clone();
+                            let model = client_config_arc.read().await.model.clone();
+                            let core_msgs: Vec<shannon_engine::api::Message> = msgs
+                                .iter()
+                                .map(|m| shannon_engine::api::Message {
+                                    role: m.role.clone(),
+                                    content: shannon_engine::api::MessageContent::Text(
+                                        m.content.clone(),
+                                    ),
+                                })
+                                .collect();
+                            let meta = shannon_engine::state::SessionPersistMetadata {
+                                model,
+                                turn_count: core_msgs.len() / 2,
+                                ..Default::default()
+                            };
+                            let _ = state_mgr_arc.save_session(
+                                &session_for_task.session_id,
+                                &core_msgs,
+                                &meta,
+                            );
                         }
 
                         let _ = app.emit(
@@ -868,10 +886,14 @@ pub async fn send_message(
             }
         }
 
-        // Clear querying flag and cancellation token
+        // Clear per-session querying flag and cancellation token.
         {
-            let mut q = querying_flag.lock().await;
+            let mut q = session_for_task.querying.lock().await;
             *q = false;
+        }
+        {
+            let mut token_guard = session_for_task.cancellation_token.lock().await;
+            *token_guard = None;
         }
     });
 
@@ -1132,9 +1154,12 @@ mod tests {
     #[test]
     fn test_app_state_new() {
         let state = AppState::new();
-        let messages = state.messages.blocking_lock();
+        // P0-4: messages/querying moved into the active session in the
+        // registry. Lazily create one to verify the empty initial state.
+        let session = state.registry.get_or_create_active();
+        let messages = session.messages.blocking_lock();
         assert!(messages.is_empty());
-        assert!(!*state.querying.blocking_lock());
+        assert!(!*session.querying.blocking_lock());
         assert_eq!(state.notifier.handler_count(), 0);
     }
 
@@ -1234,23 +1259,25 @@ mod tests {
     #[tokio::test]
     async fn test_app_state_querying_toggle() {
         let state = AppState::new();
+        let session = state.registry.get_or_create_active();
         {
-            let mut q = state.querying.lock().await;
+            let mut q = session.querying.lock().await;
             *q = true;
         }
-        assert!(*state.querying.lock().await);
+        assert!(*session.querying.lock().await);
         {
-            let mut q = state.querying.lock().await;
+            let mut q = session.querying.lock().await;
             *q = false;
         }
-        assert!(!*state.querying.lock().await);
+        assert!(!*session.querying.lock().await);
     }
 
     #[tokio::test]
     async fn test_app_state_messages_push() {
         let state = AppState::new();
+        let session = state.registry.get_or_create_active();
         {
-            let mut msgs = state.messages.lock().await;
+            let mut msgs = session.messages.lock().await;
             msgs.push(ChatMessage {
                 role: "user".to_string(),
                 content: "hello".to_string(),
@@ -1264,7 +1291,7 @@ mod tests {
                 file_attachments: None,
             });
         }
-        let msgs = state.messages.lock().await;
+        let msgs = session.messages.lock().await;
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].role, "user");
         assert_eq!(msgs[1].content, "hi");

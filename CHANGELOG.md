@@ -29,6 +29,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ### Fixed
 
+- `/connect` no longer drops previously connected providers. The REPL connect path now writes `~/.shannon/providers.toml` through `ProviderConfigService::connect` (the same write path as `shannon providers add`), so `/connect A` then `/connect B` keeps both — previously the second `/connect` overwrote the file with a single-provider config and silently lost `A`. `/disconnect` still removes one provider; anyone who relied on `/connect` as "reset to one provider" can `/disconnect` the others.
 - Status card now renders the "available providers/models" list from `MODEL_CATALOG` and connected/disconnected markers from `~/.shannon/providers.toml` in real time (was a static placeholder).
 - `/model --tier <t> --save` tier override now survives a restart. `persist_model_to_providers_toml` writes `active_target` (provider + model id) via `ProviderConfigStore::set_active`, not just the tier name, so `resolve_active_target` reads back the chosen model on next launch. Verified by `store_set_active_survives_save_load_cycle`.
 

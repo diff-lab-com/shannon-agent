@@ -138,6 +138,24 @@ pub fn load(path: Option<&Path>) -> Option<ProviderModelConfig> {
     }
 }
 
+/// Provider ids that have at least one persisted profile in
+/// `~/.shannon/providers.toml` (i.e. `/connect` or `/model --save` was run for
+/// them). Used by both the `/connect` dashboard and the welcome status card so
+/// the two views agree on which providers are "connected" (ADR-0008 Decision 3).
+///
+/// Returns an empty set when no file is present or it is unreadable, matching
+/// [`load`]'s graceful-degradation contract.
+pub fn connected_slugs() -> std::collections::HashSet<String> {
+    load(None)
+        .map(|pm| {
+            pm.profiles
+                .values()
+                .flat_map(|p| p.providers.iter().map(|pp| pp.id.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Atomically persist `cfg` to `path` (or [`default_path`]), creating parent
 /// directories and setting owner-only (`0600`) permissions. Returns the path
 /// written.
@@ -154,6 +172,22 @@ pub fn load(path: Option<&Path>) -> Option<ProviderModelConfig> {
 /// take milliseconds, so contention is bounded; this matches the in-process
 /// `tokio::sync::Mutex` semantic on `AppState::provider_store` so callers
 /// transitioning from one to the other don't observe a behaviour change.
+///
+/// # When to call this
+///
+/// This is the **low-level atomic-write primitive** — it writes whatever
+/// `ProviderModelConfig` you hand it, wholesale. [`ProviderConfigStore::save`]
+/// and [`ProviderConfigStore::save_at`] delegate here, and the module tests
+/// exercise the flock + chmod behaviour through it directly.
+///
+/// **Command-layer callers must not call this directly.** REPL `/connect` +
+/// `/disconnect` and the CLI's `providers add` route through
+/// [`crate::provider_config_service::ProviderConfigService`] instead — the
+/// service owns the load → mutate → persist sequence as a single semantic
+/// write, so the two front-ends cannot diverge on the on-disk shape again
+/// (ADR-0008 Decision 3 / P2-5). Calling this free `save` with a freshly built
+/// single-provider config is the historical overwrite bug that dropped every
+/// other connected provider; the service's upsert replaced it.
 pub fn save(cfg: &ProviderModelConfig, path: Option<&Path>) -> io::Result<PathBuf> {
     let path = path
         .map(Path::to_path_buf)

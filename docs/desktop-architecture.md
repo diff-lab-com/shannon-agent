@@ -28,7 +28,7 @@
 │                   Shannon Desktop App                    │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐  │
-│  │           React 18 Frontend (WebView)              │  │
+│  │           React 19 Frontend (WebView)              │  │
 │  │                                                     │  │
 │  │  ┌──────────┐ ┌──────────┐ ┌────────────────────┐ │  │
 │  │  │ Chat     │ │ Agent    │ │ Settings           │ │  │
@@ -36,8 +36,8 @@
 │  │  └────┬─────┘ └────┬─────┘ └────────┬───────────┘ │  │
 │  │       │             │                │             │  │
 │  │  ┌────▼─────────────▼────────────────▼───────────┐ │  │
-│  │  │          Store Layer (React Runes)            │ │  │
-│  │  │  $state messages | agents | config | sessions  │ │  │
+│  │  │          Store Layer (AppContext)              │ │  │
+│  │  │  messages | agents | config | sessions         │ │  │
 │  │  └───────────────────┬───────────────────────────┘ │  │
 │  │                      │ listen() / invoke()         │  │
 │  └──────────────────────┼────────────────────────────┘  │
@@ -87,143 +87,185 @@
 
 ## 三、分层架构详解
 
-### Layer 1: Frontend (React 18 + TypeScript)
+### Layer 1: Frontend (React 19 + TypeScript)
 
 ```
 ui/
 ├── src/
-│   ├── app.html                     # Tauri 入口 HTML
-│   ├── app.css                      # Tailwind 全局样式
-│   ├── main.ts                      # 挂载 App + 初始化 Tauri listeners
+│   ├── index.html                   # Tauri 入口 HTML
+│   ├── App.tsx                      # 根组件: 布局 + 路由状态
+│   ├── main.tsx                     # 挂载 App + 初始化 Tauri listeners
 │   │
-│   ├── App.svelte                   # 根组件: 布局 + 路由状态
+│   ├── pages/                       # 路由页 (React.lazy)
+│   │   ├── ChatPage.tsx
+│   │   ├── SettingsPage.tsx
+│   │   ├── AgentsPage.tsx
+│   │   ├── TasksPage.tsx
+│   │   ├── ExtensionsPage.tsx
+│   │   └── WelcomePage.tsx
+│   │
+│   ├── context/
+│   │   └── AppContext.tsx           # 中心 store (useApp())
+│   │
+│   ├── hooks/                       # 见下方 hooks
+│   │   ├── useTauriEvent.ts
+│   │   ├── useNotification.ts
+│   │   ├── useKeyboardShortcuts.ts
+│   │   └── useTheme.ts
 │   │
 │   ├── lib/
-│   │   ├── stores/
-│   │   │   ├── messages.ts          # $state<Message[]> 消息列表
-│   │   │   ├── session.ts           # $state 当前会话
-│   │   │   ├── config.ts            # $state provider/model/apikey
-│   │   │   ├── agents.ts            # $state agent 状态
-│   │   │   └── ui.ts                # $state sidebar/settings 面板状态
-│   │   │
-│   │   ├── services/
-│   │   │   ├── tauri-events.ts      # listen() 封装, 事件→store 更新
-│   │   │   ├── tauri-commands.ts    # invoke() 封装, 类型安全
-│   │   │   └── markdown.ts          # marked + highlight.js 配置
-│   │   │
-│   │   ├── types/
-│   │   │   ├── messages.ts          # ChatMessage, ToolCall, Thinking
-│   │   │   ├── events.ts            # Tauri event payload 类型
-│   │   │   └── config.ts            # DesktopConfig, ProviderInfo
-│   │   │
-│   │   └── components/              # 见下方组件设计
-│   │       ├── chat/
-│   │       ├── tools/
-│   │       ├── agents/
-│   │       ├── settings/
-│   │       └── common/
+│   │   ├── tauri-api.ts             # 类型化 invoke() 封装
+│   │   ├── mock/                    # VITE_MOCK_MODE=1 时替换 invoke
+│   │   └── i18n/                    # react-intl v7 (en, zh-CN)
 │   │
-│   └── routes/                      # (可选) 多页面用
-│       └── +layout.svelte
+│   ├── components/                  # 见下方组件设计
+│   │   ├── chat/                    # ChatInput, MessageBubble, Markdown, Chart, StreamingResponse
+│   │   ├── artifact/                # ArtifactPanel, CodeBlock, Mermaid, Svg, Html, Document
+│   │   ├── editor/                  # CodeMirror 包装
+│   │   ├── skills/                  # 技能列表与详情
+│   │   ├── tasks/                   # 任务板
+│   │   ├── agents/                  # Agent 卡片
+│   │   ├── settings/                # 设置面板
+│   │   ├── extensions/              # MCP/Skill/Agent 扩展
+│   │   ├── memory/                  # 记忆库
+│   │   ├── voice/                   # 语音输入
+│   │   ├── routines/                # 触发式 / 定时任务
+│   │   ├── lsp/                     # LSP 诊断面板
+│   │   ├── opc/                     # OPC 指标
+│   │   ├── diff/                    # 文件 diff 视图
+│   │   ├── shared/                  # 通用组件
+│   │   ├── ui/                      # shadcn/ui 基元
+│   │   ├── ai-elements/             # assistant-ui 元素
+│   │   ├── self-improve/            # 自改进 hints
+│   │   ├── Sidebar.tsx
+│   │   ├── Header.tsx
+│   │   ├── Layout.tsx
+│   │   ├── CommandPalette.tsx
+│   │   ├── KeyboardShortcutsHelp.tsx
+│   │   ├── ErrorBoundary.tsx
+│   │   ├── SkeletonLoader.tsx
+│   │   └── WelcomeState.tsx
+│   │
+│   ├── types/
+│   │   └── index.ts                 # 后端 payload + 通用类型
+│   │
+│   ├── i18n/{en,zh-CN}.json
+│   ├── __tests__/                   # vitest + Testing Library
+│   └── styles.css                   # Tailwind 4 全局样式
 │
-├── static/
-│   └── fonts/                       # 本地字体 (避免 CSP 外部请求)
 ├── index.html
 ├── vite.config.ts
-├── svelte.config.js
 ├── tailwind.config.ts
 ├── tsconfig.json
+├── playwright.config.ts
+├── vitest.config.ts
 └── package.json
 ```
 
 #### 组件树
 
 ```
-App.svelte
-├── Sidebar.svelte                    # 会话列表 + 新建 + 搜索
-│   ├── SessionList.svelte
-│   └── SessionItem.svelte
+App.tsx
+├── Layout.tsx                         # 侧栏 + 头部外壳
+│   ├── Sidebar.tsx                    # 会话列表 + 新建 + 搜索
+│   └── Header.tsx                     # 顶部导航
 │
-├── MainPanel.svelte                  # 主内容区
-│   ├── ChatPanel.svelte              # 消息流
-│   │   ├── MessageBubble.svelte      # 单条消息
-│   │   │   ├── MarkdownContent.svelte     # markdown 渲染
-│   │   │   ├── CodeBlock.svelte           # 代码高亮 + 复制
-│   │   │   └── ThinkingBlock.svelte       # 思考过程折叠
-│   │   │
-│   │   ├── ToolCallBlock.svelte      # 工具调用展示
-│   │   │   ├── BashOutput.svelte          # bash 执行输出
-│   │   │   ├── FileDiff.svelte            # 文件编辑 diff 视图
-│   │   │   └── SearchResult.svelte        # grep/glob 结果
-│   │   │
-│   │   ├── ArtifactViewer.svelte     # iframe 沙盒渲染
-│   │   ├── PermissionDialog.svelte   # 工具执行权限确认
-│   │   └── StreamingIndicator.svelte # 打字动画 + 进度
+├── ChatPage.tsx                       # 主内容区
+│   ├── chat/MessageBubble.tsx         # 单条消息
+│   │   ├── chat/FootnoteMarkdown.tsx  # markdown 渲染
+│   │   ├── artifact/CodeBlock.tsx     # 代码高亮 + 复制
+│   │   └── chat/Chart.tsx             # 图表
 │   │
-│   └── InputBar.svelte              # 输入区域
-│       ├── TextInput.svelte              # 多行输入 + 快捷键
-│       ├── FileAttachment.svelte         # 文件拖放 + 附件
-│       └── ModelSelector.svelte          # 模型快速切换
+│   ├── artifact/ArtifactPanel.tsx     # HTML/SVG/Mermaid/Document 渲染
+│   │   ├── HtmlRenderer.tsx
+│   │   ├── SvgRenderer.tsx
+│   │   ├── MermaidRenderer.tsx
+│   │   └── DocumentRenderer.tsx
+│   │
+│   ├── chat/ChatInput.tsx             # 输入区域
+│   ├── chat/StreamingResponse.tsx     # 流式打字动画
+│   └── chat/ResearchReportModal.tsx   # 调研报告弹出
 │
-├── AgentPanel.svelte                 # Agent 编排 (Phase 2)
-│   ├── AgentCard.svelte
-│   ├── TaskBoard.svelte
-│   └── DiffReview.svelte
+├── AgentsPage.tsx                     # Agent 编排
+│   ├── self-improve/                  # 自改进 hints
+│   └── agents/                        # Agent 卡片
 │
-├── SettingsOverlay.svelte            # 设置面板
-│   ├── ProviderConfig.svelte
-│   ├── McpServers.svelte
-│   ├── PermissionRules.svelte
-│   └── AboutPanel.svelte
+├── TasksPage.tsx                      # 任务板
+│   └── tasks/                         # TaskBoard + DiffReview
 │
-└── StatusBar.svelte                  # 底部: provider/model/cost/status
+├── SettingsPage.tsx                   # 设置面板
+│   └── settings/                      # Provider/MCP/Permissions/About
+│
+├── ExtensionsPage.tsx
+│   └── extensions/                    # MCP/Skill/Agent 扩展市场
+│
+└── WelcomeState.tsx                   # 空状态 / 欢迎页
 ```
 
-#### Streaming 数据流 (React 18 Runes)
+#### Streaming 数据流 (React 19)
 
 ```typescript
-// stores/messages.ts
-export let messages = $state<Message[]>([]);
-export let isStreaming = $state(false);
-export let currentAssistantContent = $state('');
+// hooks/useTauriEvent.ts
+import { useEffect, useRef } from 'react';
+import { listen, type UnlistenFn, type EventCallback } from '@tauri-apps/api/event';
 
-// services/tauri-events.ts
-import { listen } from '@tauri-apps/api/event';
+export function useTauriEvent<T>(event: string, handler: EventCallback<T>) {
+  const handlerRef = useRef(handler);
+  handlerRef.current = handler;
 
-export function initEventListeners() {
-  listen('query:text', (e: QueryTextEvent) => {
-    // 找到最后一条 assistant 消息, append content
-    const last = messages.findLast(m => m.role === 'assistant' && m.streaming);
-    if (last) {
-      last.content += e.payload.content;  // $state 自动触发 UI 更新
-    }
-  });
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    listen<T>(event, (e) => {
+      if (!cancelled) handlerRef.current(e);
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [event]);
+}
 
-  listen('query:tool-start', (e: ToolStartEvent) => {
-    messages.push({
+// 在 AppContext 中挂载流式事件处理
+useTauriEvent<QueryTextEvent>('query:text', (e) => {
+  const last = messages.findLast((m) => m.role === 'assistant' && m.streaming);
+  if (last) {
+    last.content += e.payload.content;  // setState 内部触发 UI 更新
+  }
+});
+
+useTauriEvent<ToolStartEvent>('query:tool-start', (e) => {
+  setMessages((prev) => [
+    ...prev,
+    {
       role: 'tool',
       toolUseId: e.payload.tool_use_id,
       toolName: e.payload.tool_name,
       status: 'running',
       input: e.payload.tool_input,
-    });
-  });
+    },
+  ]);
+});
 
-  listen('query:tool-result', (e: ToolResultEvent) => {
-    const tool = messages.findLast(m => m.toolUseId === e.payload.tool_use_id);
-    if (tool) {
-      tool.status = e.payload.is_error ? 'error' : 'done';
-      tool.output = e.payload.result;
-    }
-  });
+useTauriEvent<ToolResultEvent>('query:tool-result', (e) => {
+  setMessages((prev) =>
+    prev.map((m) =>
+      m.toolUseId === e.payload.tool_use_id
+        ? { ...m, status: e.payload.is_error ? 'error' : 'done', output: e.payload.result }
+        : m,
+    ),
+  );
+});
 
-  listen('query:completed', () => {
-    isStreaming = false;
-  });
-}
+useTauriEvent('query:completed', () => setIsStreaming(false));
 ```
 
-**为什么 React 18 而不是 React**: `$state` 赋值即更新，不需要 `useState`/`useEffect`/`useRef`/`useCallback` 这套。Streaming 场景下，每次 `last.content += chunk` 自动 diff 更新 DOM，零心智负担。
+**技术选型**: React 19 搭配 `react-router-dom 7` 的 `React.lazy` 路由, 全局状态走 `AppContext`(一个 `useReducer` + `dispatch`), 流式更新通过 `useTauriEvent` hook 桥接 Tauri event 到 React state。`tailwindcss 4` + `motion` 提供样式与动画, `react-intl v7` 处理 i18n, `react-markdown` + `rehype-highlight` 渲染消息。
 
 ---
 
@@ -459,7 +501,7 @@ tauri::Builder::default()
 用户输入 "解释这个函数"
     │
     ▼
-InputBar.svelte → invoke("send_message", { message })
+ChatInput.tsx → invoke("send_message", { message })
     │
     ▼
 commands/chat.rs::send_message()
@@ -495,7 +537,7 @@ PermissionBridge::request(Bash { command: "rm -rf ..." })
     │  emit("permission:request", { request_id, tool, input })
     │
     ▼
-PermissionDialog.svelte 显示确认对话框
+PermissionDialog.tsx 显示确认对话框
     │  用户点击 [允许] / [拒绝]
     │
     ▼
@@ -521,7 +563,7 @@ commands/config_cmd.rs::switch_provider()
     │  4. emit("desktop:config-changed")
     │
     ▼
-StatusBar.svelte 更新显示 "OpenAI / gpt-4.1"
+StatusBar.tsx 更新显示 "OpenAI / gpt-4.1"
 ```
 
 ---
@@ -561,35 +603,28 @@ impl SessionManager {
 
 Claude Desktop 的 Artifact 是核心差异化功能。Shannon 的实现方案：
 
-```svelte
-<!-- ArtifactViewer.svelte -->
-<script lang="ts">
-  let { artifact } = $props();
-  // artifact.type: "react" | "html" | "svg" | "mermaid" | "code"
+```tsx
+// components/artifact/ArtifactPanel.tsx
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { HtmlRenderer } from './HtmlRenderer';
+import { SvgRenderer } from './SvgRenderer';
+import { MermaidRenderer } from './MermaidRenderer';
+import { DocumentRenderer } from './DocumentRenderer';
+import { CodeBlock } from './CodeBlock';
 
-  let srcdoc = $derived(buildSrcdoc(artifact));
+type Tab = 'preview' | 'code';
 
-  function buildSrcdoc(a) {
+export function ArtifactPanel() {
+  const [tab, setTab] = useState<Tab>('preview');
+  // artifact.type: 'html' | 'svg' | 'mermaid' | 'document' | 'code'
+  // 根据 type 选择对应 Renderer (HtmlRenderer / SvgRenderer / MermaidRenderer / DocumentRenderer)
+  // Panel 支持拖拽改宽度, localStorage 持久化 (shannon.artifact.panelWidth)
+
+  function buildDom(a: Artifact) {
     switch (a.type) {
-      case 'react':
-        return `<!DOCTYPE html>
-          <html><head>
-            <script type="importmap">
-              { "imports": {
-                  "react": "https://esm.sh/react@18",
-                  "react-dom": "https://esm.sh/react-dom@18/client"
-                }
-              }
-            </script>
-          </head><body><div id="root"></div>
-            <script type="module">
-              import React from 'react';
-              import { createRoot } from 'react-dom';
-              ${a.code}
-            </script>
-          </body></html>`;
-      case 'svg':
       case 'html':
+        return a.code;
+      case 'svg':
         return a.code;
       case 'mermaid':
         return `<!DOCTYPE html><html><head>
@@ -599,15 +634,17 @@ Claude Desktop 的 Artifact 是核心差异化功能。Shannon 的实现方案�
         </body></html>`;
     }
   }
-</script>
 
-<div class="artifact-container">
-  <div class="artifact-header">
-    <span>{artifact.title}</span>
-    <button onclick={() => copyToClipboard(artifact.code)}>Copy</button>
-  </div>
-  <iframe srcdoc={srcdoc} sandbox="allow-scripts" />
-</div>
+  return (
+    <div className="artifact-container">
+      <div className="artifact-header">
+        <span>{artifact.title}</span>
+        <button onClick={() => copyToClipboard(artifact.code)}>Copy</button>
+      </div>
+      <iframe srcDoc={buildDom(artifact)} sandbox="allow-scripts" />
+    </div>
+  );
+}
 ```
 
 **安全**: `sandbox="allow-scripts"` 限制 iframe 能力（无网络、无弹出、同源隔离）。
@@ -642,16 +679,16 @@ connect-src 'self' https://*.anthropic.com https://*.openai.com;
 
 | 组件 | 选型 | 理由 |
 |------|------|------|
-| 框架 | **React 18** | 最小 runtime (~3KB), runes 天然适合 streaming |
+| 框架 | **React 19** | 生态成熟, `useTransition` + `useOptimistic` 适合 streaming 增量更新 |
 | 语言 | **TypeScript** | 类型安全, invoke()/listen() 类型推导 |
 | 构建 | **Vite 6** | Tauri 官方推荐, HMR 快 |
 | 样式 | **Tailwind CSS 4** | utility-first, 主题系统用 CSS variables |
-| Markdown | **marked** + **highlight.js** | 轻量, 已在 MVP 验证 |
+| Markdown | **react-markdown** + **rehype-highlight** + **remark-gfm** | 与 Vite/React 19 集成简单, 已用 `rehype-sanitize` 兜底 XSS |
 | 图标 | **Lucide React** | 轻量图标库, tree-shakable |
-| 状态 | **React Runes** ($state/$derived) | 无需外部库, 流式数据天然响应 |
-| 测试 | **Vitest** + **@testing-library/svelte** | 单元 + 组件测试 |
+| 状态 | **React Context + useReducer** + **react-intl** | 全局 store + i18n, 流式数据靠 `useEffect` + `useState` |
+| 测试 | **Vitest** + **@testing-library/react** | 单元 + 组件测试 (jsdom) |
 
-**不选 React 的理由**: 对于 Chat UI 这个场景, React 的 useState/useEffect/useRef/useCallback 是过度工程。React 18 Runes 的 `let x = $state(); x += chunk` 直接触发更新, 更符合 streaming 的心智模型。
+**不选 Svelte 5 Runes / SolidJS 的理由**: React 19 已是桌面端事实标准,生态成熟(motion / react-intl / react-markdown / react-virtual / react-router),组件库与 Tauri 集成示例更完整。React 19 的 `useTransition` + `useOptimistic` 已足够处理 streaming chunk 的频繁更新, 心智模型与 ESLint/TS 静态检查匹配。
 
 ---
 
@@ -663,22 +700,22 @@ connect-src 'self' https://*.anthropic.com https://*.openai.com;
 
 ```
 Week 1-2: React 项目搭建 + 核心组件
-  - npm create svelte + Vite + Tailwind 配置
-  - ChatPanel + MessageBubble + InputBar
-  - MarkdownContent + CodeBlock (代码高亮 + 复制)
-  - StreamingIndicator (打字动画)
-  - StatusBar
+  - Vite + React 19 + Tailwind CSS 4 配置
+  - ChatPage + MessageBubble + ChatInput
+  - Markdown (react-markdown + rehype-highlight) + CodeBlock (代码高亮 + 复制)
+  - StreamingResponse (打字动画)
+  - StatusBar (provider/model/cost)
 
 Week 3-4: QueryEngine 集成完善
   - QueryCoordinator 服务层
-  - ToolCallBlock (bash 输出, 文件 diff)
+  - ToolCallDisplay (bash 输出, 文件 diff)
   - ThinkingBlock (思考过程折叠)
-  - ModelSelector 快速切换
+  - ChatInput 模型快速切换
   - 错误处理 + 重试
 
 Week 5-6: 桌面集成 + 打磨
   - 会话持久化 (SessionManager)
-  - SettingsOverlay 完整实现
+  - SettingsPage 完整实现
   - 系统托盘 (tauri-plugin-tray 替代)
   - 自动更新 (tauri-plugin-updater)
   - 跨平台测试 (macOS/Windows/Linux)
@@ -689,10 +726,10 @@ Week 5-6: 桌面集成 + 打磨
 ```
   - Sidebar 会话列表
   - PermissionBridge + PermissionDialog
-  - AgentPanel (Agent Dashboard)
-  - TaskBoard (Team 任务面板)
+  - AgentsPage (Agent Dashboard)
+  - TasksPage (Team 任务面板)
   - DiffReview (文件修改审查)
-  - McpManager (MCP server 管理 UI)
+  - extensions/ McpManager (MCP server 管理 UI)
   - 全局快捷键
   - 文件拖放输入
 ```
@@ -700,7 +737,7 @@ Week 5-6: 桌面集成 + 打磨
 ### Phase 3: 差异化功能 (8-12 周)
 
 ```
-  - ArtifactViewer (iframe 沙盒渲染)
+  - ArtifactPanel (iframe 沙盒渲染)
   - 后台 Agent (系统托盘 + 通知)
   - 插件/Skill 浏览器 UI
   - 语音输入 (Whisper API)
@@ -729,7 +766,7 @@ Week 5-6: 桌面集成 + 打磨
         │  shannon-cli    │    │ shannon-desktop  │
         │  (TUI/Headless) │    │ (Tauri v2)       │
         │                 │    │                  │
-        │  ratatui UI     │    │  React 18 UI     │
+        │  ratatui UI     │    │  React 19 UI     │
         │  REPL loop      │    │  WebView         │
         │  Terminal out   │    │  Tauri IPC       │
         └─────────────────┘    └──────────────────┘

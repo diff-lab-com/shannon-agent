@@ -65,37 +65,58 @@ pub fn resolve_active_target(pm: &ProviderModelConfig) -> Option<ResolvedTarget<
 /// `"zhipu"`, `"anthropic"`) back to its [`LlmProvider`] enum value. Returns
 /// `None` for unknown slugs — callers should fall back to
 /// [`resolve_provider`].
+///
+/// Thin delegate over [`llm_provider_from_slug`] (ADR-0008 Decision 1 / P2-3):
+/// profile ids are always canonical lower-case Debug names produced by
+/// [`llm_provider_id`], so the alias arms in `llm_provider_from_slug` never
+/// fire for a real profile id — the delegation is behaviour-preserving while
+/// collapsing three parallel provider-name tables into one.
 pub(crate) fn llm_provider_from_id(id: &str) -> Option<LlmProvider> {
+    llm_provider_from_slug(id)
+}
+
+/// The single source of truth for mapping a provider name slug (canonical or
+/// alias) to an [`LlmProvider`] (ADR-0008 Decision 1 / P2-3).
+///
+/// This is the union of every provider-name table that previously existed
+/// independently: the REPL's `parse_provider_name`, the config-loading
+/// `provider_str_to_llm`, and the strict `llm_provider_from_id`. Adding a new
+/// alias now means editing one match instead of three, and the exhaustive
+/// `from_slug_*` tests guard against drift.
+///
+/// Input is trimmed and lower-cased, so `"Anthropic"`, `"  anthropic  "`, and
+/// `"anthropic"` all resolve the same. Returns `None` for unknown names;
+/// callers decide whether to fall back to [`LlmProvider::from_base_url`] or
+/// surface an error.
+pub fn llm_provider_from_slug(slug: &str) -> Option<LlmProvider> {
     use LlmProvider::*;
-    // Single source of truth: every LlmProvider variant's Debug name (in
-    // snake/kebab form) is what `llm_provider_id` emits. We enumerate the
-    // recognised ones explicitly so a typo or a future-added variant
-    // resolves to `None` (and `resolve_provider`'s heuristics take over).
-    match id {
-        "anthropic" => Some(Anthropic),
-        "openai" => Some(OpenAI),
-        "ollama" => Some(Ollama),
-        "gemini" => Some(Gemini),
-        "azure" => Some(Azure),
-        "bedrock" => Some(Bedrock),
-        "mistral" => Some(Mistral),
-        "deepseek" => Some(DeepSeek),
+    match slug.trim().to_lowercase().as_str() {
+        "anthropic" | "claude" => Some(Anthropic),
+        "openai" | "gpt" | "chatgpt" => Some(OpenAI),
+        "ollama" | "local" => Some(Ollama),
+        "gemini" | "google" => Some(Gemini),
+        "azure" | "azure-openai" => Some(Azure),
+        "bedrock" | "aws" => Some(Bedrock),
+        "mistral" | "mistral-ai" => Some(Mistral),
+        "deepseek" | "ds" => Some(DeepSeek),
         "groq" => Some(Groq),
-        "together" => Some(Together),
+        "together" | "together-ai" => Some(Together),
         "openrouter" => Some(OpenRouter),
         "cohere" => Some(Cohere),
         "fireworks" => Some(Fireworks),
         "perplexity" => Some(Perplexity),
-        "xai" => Some(Xai),
+        "xai" | "grok" => Some(Xai),
         "ai21" => Some(Ai21),
-        "siliconflow" => Some(SiliconFlow),
-        "zhipu" => Some(Zhipu),
-        "zhipuinternational" => Some(ZhipuInternational),
-        "zhipucoding" => Some(ZhipuCoding),
-        "moonshot" => Some(Moonshot),
-        "minimax" => Some(Minimax),
-        "dashscope" => Some(DashScope),
-        "cloudflare" => Some(Cloudflare),
+        "siliconflow" | "sf" => Some(SiliconFlow),
+        "zhipu" | "zhipu-cn" | "glm" => Some(Zhipu),
+        "zhipuinternational" | "zhipu-international" | "zhipu-intl" | "glm-intl" => {
+            Some(ZhipuInternational)
+        }
+        "zhipucoding" | "zhipu-coding" | "zhipu-anthropic" => Some(ZhipuCoding),
+        "moonshot" | "kimi" => Some(Moonshot),
+        "minimax" | "mm" => Some(Minimax),
+        "dashscope" | "qwen" | "aliyun" => Some(DashScope),
+        "cloudflare" | "cf" => Some(Cloudflare),
         "replicate" => Some(Replicate),
         _ => None,
     }
@@ -353,85 +374,6 @@ pub fn synthesize_default_profile(
     })
 }
 
-/// A connected provider profile ready to persist (ADR-0005 Phase 4 `/connect`).
-///
-/// [`build_connect_profile`] produces this; the REPL handler writes the API key
-/// under [`service`] via [`crate::credential_manager`], saves [`config`] via
-/// [`crate::provider_config_store`], then applies [`provider`] + [`model_id`]
-/// to the running engine.
-///
-/// [`service`]: ConnectProfile::service
-/// [`config`]: ConnectProfile::config
-/// [`provider`]: ConnectProfile::provider
-/// [`model_id`]: ConnectProfile::model_id
-#[derive(Debug, Clone)]
-pub struct ConnectProfile {
-    /// The v2 config: a single-provider `"default"` profile whose credential
-    /// is [`CredentialRef::Store`] keyed at the provider id slug.
-    pub config: ProviderModelConfig,
-    /// Credential-store service name the profile's credential references
-    /// (== provider id slug). `/connect` writes the API key under this service.
-    pub service: String,
-    /// Concrete engine provider — for the live in-session switch.
-    pub provider: LlmProvider,
-    /// Active model id (catalog default when none was requested).
-    pub model_id: String,
-}
-
-/// Build a [`ConnectProfile`] for `/connect <provider>` (ADR-0005 Phase 4).
-///
-/// `provider` is the resolved engine provider (callers should use the REPL's
-/// alias-aware parser, e.g. `parse_provider_name`, before this). `model`
-/// defaults to the provider's first catalog model; `base_url_override`
-/// defaults to the provider's canonical base URL. The credential is
-/// [`CredentialRef::Store`] keyed at the provider id slug, so the connected
-/// provider survives restart with no environment variable — plaintext lives
-/// only in the credential store (decision A1).
-pub fn build_connect_profile(
-    provider: LlmProvider,
-    model: Option<&str>,
-    base_url_override: Option<&str>,
-) -> ConnectProfile {
-    let kind = llm_provider_to_kind(&provider);
-    let provider_id = llm_provider_id(&provider);
-    let base_url = base_url_override
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| provider.default_base_url().to_string());
-    let model_id = model
-        .map(|s| s.to_string())
-        .or_else(|| {
-            crate::model_registry::models_for_provider(provider.clone())
-                .first()
-                .map(|m| m.id.to_string())
-        })
-        .unwrap_or_else(|| "default".to_string());
-    let profile = ProviderProfile {
-        id: provider_id.clone(),
-        kind,
-        display_name: provider_id.clone(),
-        base_url,
-        models_url: None,
-        credential: CredentialRef::Store {
-            service: provider_id.clone(),
-        },
-        extra_headers: std::collections::HashMap::new(),
-        default_max_tokens: None,
-        fallback_models: Vec::new(),
-        quirks: Default::default(),
-        tiers: ProviderTiers::default(),
-    };
-    ConnectProfile {
-        config: ProviderModelConfig {
-            version: ProviderModelConfig::VERSION,
-            profiles: build_default_profiles_map(profile, &model_id),
-            gateway: Default::default(),
-        },
-        service: provider_id,
-        provider,
-        model_id,
-    }
-}
-
 /// Construct a single-provider Ollama profile at `http://localhost:11434`.
 fn ollama_default_profile(model_id: &str) -> ProviderModelConfig {
     use std::collections::HashMap;
@@ -487,38 +429,16 @@ fn build_default_profiles_map(
 /// Map an LlmProvider-name string to an [`LlmProvider`] enum value, falling
 /// back to the resolved `base_url` for unrecognized names. Mirrors the
 /// string→provider table that used to live in the v1 `From<ShannonConfig>` impl.
+///
+/// The name→variant arms now delegate to [`llm_provider_from_slug`] (the single
+/// alias table, ADR-0008 Decision 1); only the `base_url` fallback for truly
+/// unknown names remains here, since that is config-loading-specific behaviour.
 fn provider_str_to_llm(p: &str, base_url: Option<&str>) -> LlmProvider {
-    use LlmProvider::*;
-    match p.to_lowercase().as_str() {
-        "anthropic" => Anthropic,
-        "openai" => OpenAI,
-        "ollama" => Ollama,
-        "gemini" | "google" => Gemini,
-        "azure" | "azure-openai" => Azure,
-        "bedrock" | "aws" => Bedrock,
-        "mistral" | "mistral-ai" => Mistral,
-        "deepseek" => DeepSeek,
-        "groq" => Groq,
-        "together" | "together-ai" => Together,
-        "openrouter" => OpenRouter,
-        "cohere" => Cohere,
-        "fireworks" => Fireworks,
-        "perplexity" => Perplexity,
-        "xai" => Xai,
-        "ai21" => Ai21,
-        "siliconflow" => SiliconFlow,
-        "zhipu" | "zhipu-cn" => Zhipu,
-        "zhipu-international" | "zhipu-intl" => ZhipuInternational,
-        "zhipu-coding" | "zhipu-anthropic" => ZhipuCoding,
-        "moonshot" | "kimi" => Moonshot,
-        "minimax" => Minimax,
-        "dashscope" | "qwen" => DashScope,
-        "cloudflare" => Cloudflare,
-        "replicate" => Replicate,
-        _ => base_url
+    llm_provider_from_slug(p).unwrap_or_else(|| {
+        base_url
             .map(LlmProvider::from_base_url)
-            .unwrap_or(LlmProvider::Custom),
-    }
+            .unwrap_or(LlmProvider::Custom)
+    })
 }
 
 /// Coarse wire-protocol discriminator for a provider profile's `kind` field.
@@ -593,6 +513,112 @@ mod tests {
             profiles,
             gateway: Default::default(),
         }
+    }
+
+    // ── llm_provider_from_slug (ADR-0008 Decision 1 / P2-3) ──────────────
+    //
+    // Exhaustive guard over the single alias table. Every alias that previously
+    // lived in `parse_provider_name`, `provider_str_to_llm`, or
+    // `llm_provider_from_id` must resolve here, so a future edit can't silently
+    // drop a name and regress `/provider <alias>` or config loading.
+
+    #[test]
+    fn from_slug_round_trips_every_catalog_provider_slug() {
+        // Every canonical slug emitted by `llm_provider_id` for a catalog
+        // provider must round-trip through `from_slug`. Guards against a
+        // slug/parser rename drift. (`Custom` has no catalog presence and is
+        // intentionally a `None` — covered by `from_slug_returns_none_for_unknown_and_custom`.)
+        for p in crate::model_registry::all_providers() {
+            let slug = llm_provider_id(&p);
+            assert_eq!(
+                llm_provider_from_slug(&slug),
+                Some(p.clone()),
+                "canonical slug '{slug}' did not resolve to {p:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_slug_resolves_all_known_aliases() {
+        // The union of every alias arm from the three former tables.
+        let cases: &[(&str, LlmProvider)] = &[
+            ("anthropic", LlmProvider::Anthropic),
+            ("claude", LlmProvider::Anthropic),
+            ("openai", LlmProvider::OpenAI),
+            ("gpt", LlmProvider::OpenAI),
+            ("chatgpt", LlmProvider::OpenAI),
+            ("ollama", LlmProvider::Ollama),
+            ("local", LlmProvider::Ollama),
+            ("gemini", LlmProvider::Gemini),
+            ("google", LlmProvider::Gemini),
+            ("azure", LlmProvider::Azure),
+            ("azure-openai", LlmProvider::Azure),
+            ("bedrock", LlmProvider::Bedrock),
+            ("aws", LlmProvider::Bedrock),
+            ("mistral", LlmProvider::Mistral),
+            ("mistral-ai", LlmProvider::Mistral),
+            ("deepseek", LlmProvider::DeepSeek),
+            ("ds", LlmProvider::DeepSeek),
+            ("groq", LlmProvider::Groq),
+            ("together", LlmProvider::Together),
+            ("together-ai", LlmProvider::Together),
+            ("openrouter", LlmProvider::OpenRouter),
+            ("cohere", LlmProvider::Cohere),
+            ("fireworks", LlmProvider::Fireworks),
+            ("perplexity", LlmProvider::Perplexity),
+            ("xai", LlmProvider::Xai),
+            ("grok", LlmProvider::Xai),
+            ("ai21", LlmProvider::Ai21),
+            ("siliconflow", LlmProvider::SiliconFlow),
+            ("sf", LlmProvider::SiliconFlow),
+            ("zhipu", LlmProvider::Zhipu),
+            ("zhipu-cn", LlmProvider::Zhipu),
+            ("glm", LlmProvider::Zhipu),
+            ("zhipuinternational", LlmProvider::ZhipuInternational),
+            ("zhipu-international", LlmProvider::ZhipuInternational),
+            ("zhipu-intl", LlmProvider::ZhipuInternational),
+            ("glm-intl", LlmProvider::ZhipuInternational),
+            ("zhipucoding", LlmProvider::ZhipuCoding),
+            ("zhipu-coding", LlmProvider::ZhipuCoding),
+            ("zhipu-anthropic", LlmProvider::ZhipuCoding),
+            ("moonshot", LlmProvider::Moonshot),
+            ("kimi", LlmProvider::Moonshot),
+            ("minimax", LlmProvider::Minimax),
+            ("mm", LlmProvider::Minimax),
+            ("dashscope", LlmProvider::DashScope),
+            ("qwen", LlmProvider::DashScope),
+            ("aliyun", LlmProvider::DashScope),
+            ("cloudflare", LlmProvider::Cloudflare),
+            ("cf", LlmProvider::Cloudflare),
+            ("replicate", LlmProvider::Replicate),
+        ];
+        for (alias, expected) in cases {
+            assert_eq!(
+                llm_provider_from_slug(alias),
+                Some(expected.clone()),
+                "alias '{alias}' should resolve to {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_slug_is_case_insensitive_and_trim_tolerant() {
+        assert_eq!(
+            llm_provider_from_slug("Anthropic"),
+            Some(LlmProvider::Anthropic)
+        );
+        assert_eq!(
+            llm_provider_from_slug("  CLAUDE  "),
+            Some(LlmProvider::Anthropic)
+        );
+        assert_eq!(llm_provider_from_slug("Qwen"), Some(LlmProvider::DashScope));
+    }
+
+    #[test]
+    fn from_slug_returns_none_for_unknown_and_custom() {
+        assert!(llm_provider_from_slug("unknown-provider").is_none());
+        assert!(llm_provider_from_slug("custom").is_none());
+        assert!(llm_provider_from_slug("").is_none());
     }
 
     #[test]
@@ -829,115 +855,10 @@ mod tests {
         assert!(r.known);
     }
 
-    // ── build_connect_profile (ADR-0005 Phase 4, /connect) ─────────────
-
-    fn store_service_of(cp: &ConnectProfile) -> Option<&str> {
-        let p = cp.config.profiles.get("default")?;
-        match &p.providers[0].credential {
-            CredentialRef::Store { service } => Some(service.as_str()),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn build_connect_profile_anthropic_uses_store_and_catalog_default_model() {
-        let cp = build_connect_profile(LlmProvider::Anthropic, None, None);
-        assert_eq!(cp.provider, LlmProvider::Anthropic);
-        assert_eq!(cp.service, "anthropic");
-        // No model requested → the provider's first catalog model.
-        assert!(cp.model_id.starts_with("claude-"), "got {}", cp.model_id);
-        // Credential is a Store reference (A1: no plaintext in the profile),
-        // keyed at the provider id slug — and it matches `service`.
-        assert_eq!(store_service_of(&cp), Some("anthropic"));
-        // Active target points at the anthropic provider + chosen model.
-        let active = &cp.config.profiles.get("default").unwrap().active_target;
-        assert_eq!(active.provider_id, "anthropic");
-        assert_eq!(active.model_id, cp.model_id);
-    }
-
-    #[test]
-    fn build_connect_profile_respects_explicit_model() {
-        let cp = build_connect_profile(LlmProvider::OpenAI, Some("gpt-4o"), None);
-        assert_eq!(cp.provider, LlmProvider::OpenAI);
-        assert_eq!(cp.service, "openai");
-        assert_eq!(cp.model_id, "gpt-4o");
-        assert_eq!(store_service_of(&cp), Some("openai"));
-    }
-
-    #[test]
-    fn build_connect_profile_base_url_override_wins_over_default() {
-        let cp = build_connect_profile(
-            LlmProvider::Anthropic,
-            None,
-            Some("https://proxy.example.com"),
-        );
-        let profile = &cp.config.profiles["default"].providers[0];
-        assert_eq!(profile.base_url, "https://proxy.example.com");
-    }
-
-    #[test]
-    fn build_connect_profile_ollama_store_credential_and_default_url() {
-        // Ollama needs no auth, but the profile still carries a Store ref so
-        // the shape is uniform (the stored value is simply empty/unused).
-        let cp = build_connect_profile(LlmProvider::Ollama, Some("llama3"), None);
-        assert_eq!(cp.service, "ollama");
-        assert_eq!(cp.model_id, "llama3");
-        let profile = &cp.config.profiles["default"].providers[0];
-        assert_eq!(profile.base_url, "http://localhost:11434");
-        assert_eq!(store_service_of(&cp), Some("ollama"));
-    }
-
-    #[test]
-    fn build_connect_profile_persists_store_credential_round_trip() {
-        // The config /connect actually writes must round-trip through
-        // provider_config_store with the Store credential intact.
-        let cp = build_connect_profile(LlmProvider::Anthropic, None, None);
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("providers.toml");
-        crate::provider_config_store::save(&cp.config, Some(&path)).expect("save should succeed");
-        let loaded =
-            crate::provider_config_store::load(Some(&path)).expect("saved config should load back");
-        assert_eq!(loaded.version, cp.config.version);
-        let loaded_profile = loaded.profiles.get("default").expect("default profile");
-        // Decision A1: still a Store *reference* after a disk round trip — no
-        // plaintext leaked into the config file.
-        match &loaded_profile.providers[0].credential {
-            CredentialRef::Store { service } => assert_eq!(service, "anthropic"),
-            other => panic!("expected Store credential, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn connect_profile_providers_toml_trips_no_secret_scanner_matches() {
-        // A1 regression: the on-disk providers.toml carries only
-        // CredentialRef::Store references (service slugs), never plaintext
-        // keys. Confirm the gitleaks-derived SecretScanner finds nothing in
-        // the serialized artifact for every provider with a key-shaped rule.
-        use crate::team_memory_sync::SecretScanner;
-        let scanner = SecretScanner::new();
-        assert!(
-            !scanner.rule_ids().is_empty(),
-            "scanner must have default rules"
-        );
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        for provider in [
-            LlmProvider::Anthropic,
-            LlmProvider::OpenAI,
-            LlmProvider::DeepSeek,
-            LlmProvider::Zhipu,
-        ] {
-            let cp = build_connect_profile(provider.clone(), None, None);
-            let path = dir.path().join(format!("{}.toml", cp.service));
-            crate::provider_config_store::save(&cp.config, Some(&path))
-                .expect("save should succeed");
-            let matches = scanner
-                .scan_file(&path)
-                .expect("scan should read the saved file");
-            assert!(
-                matches.is_empty(),
-                "providers.toml for {provider:?} tripped the secret scanner: {matches:?}"
-            );
-        }
-    }
+    // ── /connect profile shape (ADR-0005 Phase 4) ─────────────────────
+    // The former `build_connect_profile` unit tests moved to
+    // `provider_config_service::tests` once `/connect` started routing through
+    // `ProviderConfigService::connect` (ADR-0008 P2-5 step 4): the service is
+    // now the only producer of the on-disk profile shape, so the shape + A1
+    // (no-plaintext) assertions live next to it.
 }

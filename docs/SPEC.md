@@ -126,7 +126,7 @@ shannon-code/
 ├── docs/
 │   └── SPEC.md                  # This document
 └── crates/
-    ├── shannon-core/             # Core engine (52 modules, ~49,000 lines)
+    ├── shannon-core/             # Core engine (52 modules, ~116,680 lines)
     │   └── src/
     │       ├── lib.rs           # Module declarations + re-exports
     │       ├── query_engine/    # Query orchestrator with streaming & compression
@@ -137,7 +137,7 @@ shannon-code/
     │       ├── credential_manager.rs  # Secure credential storage
     │       ├── updater.rs       # Auto-update via GitHub Releases
     │       └── ...              # 45 more modules
-    ├── shannon-tools/            # Tool implementations (25,338 lines)
+    ├── shannon-tools/            # Tool implementations (50,791 lines)
     │   └── src/
     │       ├── file/            # File operations (8 files)
     │       ├── system.rs        # Bash, Sleep, PowerShell
@@ -145,35 +145,37 @@ shannon-code/
     │       ├── web.rs           # WebFetch, WebSearch
     │       ├── lsp.rs           # LSP integration (4 tools)
     │       └── ...              # 20 more tool modules
-    ├── shannon-agents/           # Multi-agent system (6,580 lines)
+    ├── shannon-agents/           # Multi-agent system (31,006 lines)
     │   └── src/
     │       ├── coordinator.rs   # Team orchestration
     │       ├── teammate.rs      # Agent lifecycle
     │       ├── task_board.rs    # Shared task state
     │       └── ...
-    ├── shannon-ui/               # Terminal UI (5,981 lines)
+    ├── shannon-ui/               # Terminal UI (64,623 lines)
     │   └── src/
     │       ├── repl.rs          # Main REPL loop
     │       ├── vim.rs           # Vim keybindings
     │       ├── render.rs        # Markdown + syntax
     │       └── widgets/         # TUI components
-    ├── shannon-mcp/              # MCP protocol (2,269 lines)
+    ├── shannon-mcp/              # MCP protocol (20,786 lines)
     │   └── src/
     │       ├── protocol.rs      # JSON-RPC + MCP types
     │       ├── transport.rs     # stdio/SSE/HTTP/WebSocket
     │       └── ...
-    ├── shannon-commands/        # Slash commands (3,101 lines)
+    ├── shannon-commands/        # Slash commands (14,854 lines)
     │   └── src/
     │       ├── builtin/         # Built-in commands (commit, config, credentials, etc.)
     │       └── ...
-    ├── shannon-skills/          # Skill framework (2,286 lines)
+    ├── shannon-skills/          # Skill framework (7,552 lines)
     │   └── src/
     │       ├── definition.rs   # Skill types
     │       ├── loader.rs        # Disk loading
     │       └── ...
-    ├── shannon-types/            # Shared types (37 lines)
-    └── shannon-cli/              # CLI entry point
+    ├── shannon-types/            # Shared types (2,381 lines)
+    └── shannon-cli/              # CLI entry point (16,104 lines)
 ```
+
+> **Note**: line counts above are sourced from `find crates/*/src -name '*.rs' -exec wc -l {} +` measured against `crates/` only (the 9 core crates). The workspace also includes `shannon-codegen` (2,582 lines), `shannon-tool-interface` (572 lines), and `shannon-agent` (1,312 lines). For the canonical, machine-generated metrics file with CI-tracked counts, see [P0-3 metrics.md](./metrics.md) (planned).
 
 ### 2.3 Inter-Crate Dependency Graph
 
@@ -241,8 +243,9 @@ User Input (terminal)
 ### 3.1 shannon-core
 
 **Path**: `crates/shannon-core/`
-**Lines**: 46,789
+**Lines**: 116,680
 **Modules**: 52
+**Test Functions**: ~3,460
 **Test Files**: 52
 
 The core engine provides query processing, tool orchestration, security, state management, and all infrastructure services.
@@ -463,8 +466,9 @@ PostToolUse hooks → [AnalyticsHook → MemoryHook → CustomHooks]
 ### 3.2 shannon-tools
 
 **Path**: `crates/shannon-tools/`
-**Lines**: 25,338
+**Lines**: 50,791
 **Modules**: 28
+**Test Functions**: ~1,529
 **Test Files**: 20
 
 Concrete implementations of the `Tool` trait for all operations available to the AI assistant.
@@ -574,7 +578,8 @@ Concrete implementations of the `Tool` trait for all operations available to the
 ### 3.3 shannon-agents
 
 **Path**: `crates/shannon-agents/`
-**Lines**: 6,580
+**Lines**: 31,006
+**Test Functions**: ~897
 **Test Files**: 4
 
 Multi-agent coordination system for parallel task execution.
@@ -620,7 +625,8 @@ Shutdown
 ### 3.4 shannon-ui
 
 **Path**: `crates/shannon-ui/`
-**Lines**: 5,981
+**Lines**: 64,623
+**Test Functions**: ~1,421
 **Test Files**: 8
 
 Terminal user interface built with ratatui and crossterm.
@@ -641,7 +647,8 @@ Terminal user interface built with ratatui and crossterm.
 ### 3.5 shannon-mcp
 
 **Path**: `crates/shannon-mcp/`
-**Lines**: 2,269
+**Lines**: 20,786
+**Test Functions**: ~574
 **Test Files**: 4
 
 Complete implementation of the Model Context Protocol (MCP).
@@ -675,7 +682,8 @@ Complete implementation of the Model Context Protocol (MCP).
 ### 3.6 shannon-commands
 
 **Path**: `crates/shannon-commands/`
-**Lines**: 3,101
+**Lines**: 14,854
+**Test Functions**: ~384
 **Test Files**: 7
 
 Slash command system for extending Shannon with custom commands.
@@ -704,7 +712,6 @@ Slash command system for extending Shannon with custom commands.
 | `/commit` | Generate a git commit message and create commit. |
 | `/diff` | Show git diff with formatting options. |
 | `/help` | Display help information. |
-| `/pdf` | Generate PDF from project documentation. |
 | `/review-pr` | Review a pull request with AI analysis. |
 | `/status` | Show current session and system status. |
 
@@ -798,7 +805,8 @@ MCP server prompts are automatically registered as slash commands using the nami
 ### 3.7 shannon-skills
 
 **Path**: `crates/shannon-skills/`
-**Lines**: 2,286
+**Lines**: 7,552
+**Test Functions**: ~172
 **Test Files**: 8
 
 Extensible skill framework for defining reusable prompts and commands.
@@ -836,7 +844,8 @@ Skill content with {{argument}} placeholders...
 ### 3.8 shannon-types
 
 **Path**: `crates/shannon-types/`
-**Lines**: 37
+**Lines**: 2,381
+**Test Functions**: ~74
 
 Shared type definitions used across crates. Minimal crate to avoid circular dependencies.
 
@@ -845,7 +854,8 @@ Shared type definitions used across crates. Minimal crate to avoid circular depe
 ### 3.9 shannon-cli
 
 **Path**: `crates/shannon-cli/`
-**Lines**: 68
+**Lines**: 16,104
+**Test Functions**: ~442
 
 CLI entry point using `clap`.
 
@@ -1271,27 +1281,29 @@ let client = ClaudeClient::with_vcr(vcr);
 
 | Metric | Value |
 |--------|-------|
-| Total Lines of Code | ~94,000 |
-| Source Files (.rs) | ~120 |
-| Test Functions | 3,180 |
-| Workspace Crates | 9 |
-| Public Modules | 93 |
+| Total Lines of Code | ~329,876 (9 core crates, `crates/*/src`) |
+| Source Files (.rs) | ~688 |
+| Test Functions | ~8,953 |
+| Workspace Crates | 9 (+ 3 supporting: `shannon-codegen`, `shannon-tool-interface`, `shannon-agent`) |
+| Public Modules | ~93 |
 | Public Structs | ~200 |
 | Public Traits | ~15 |
+
+> **Note**: counts derived from `find crates/*/src -name '*.rs' -exec wc -l {} +` and `grep -rE '#\[(tokio::)?test\]' crates/`. For the canonical, CI-tracked baseline, see [P0-3 metrics.md](./metrics.md) (planned).
 
 ### 9.2 Per-Crate Breakdown
 
 | Crate | Lines | Key Modules |
 |-------|-------|-------------|
-| shannon-core | ~49,000 | 50 modules (query, tools, api, permissions, state, mcp, etc.) |
-| shannon-tools | 25,338 | 28 tool modules |
-| shannon-agents | 6,580 | coordinator, teammate, task_board |
-| shannon-ui | 5,981 | repl, vim, render, widgets |
-| shannon-commands | 3,101 | 11 builtin commands |
-| shannon-mcp | 2,269 | protocol, transport, client, auth |
-| shannon-skills | 2,286 | definition, loader, executor |
-| shannon-types | 37 | Shared type definitions |
-| shannon-cli | 83 | CLI entry point |
+| shannon-core | 116,680 | 52 modules (query, tools, api, permissions, state, mcp, etc.) |
+| shannon-tools | 50,791 | 28 tool modules |
+| shannon-agents | 31,006 | coordinator, teammate, task_board |
+| shannon-ui | 64,623 | repl, vim, render, widgets |
+| shannon-commands | 14,854 | 11 builtin commands |
+| shannon-mcp | 20,786 | protocol, transport, client, auth |
+| shannon-skills | 7,552 | definition, loader, executor |
+| shannon-types | 2,381 | Shared type definitions |
+| shannon-cli | 16,104 | CLI entry point |
 
 ### 9.3 Build Configuration
 

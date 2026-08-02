@@ -35,6 +35,12 @@ const BillingSettings = lazy(() => import('./components/settings/BillingSettings
 const NotificationsSettings = lazy(() => import('./components/settings/NotificationsSettings'));
 const ConnectionsSettings = lazy(() => import('./components/settings/ConnectionsSettings'));
 
+// P2-5a spike: dev-only test page for the assistant-ui runtime adapter.
+// Loaded here so `Chat.tsx` (production) and its component tree stay untouched.
+// Production routing never exposes this; gating happens at the route level
+// below via `import.meta.env.DEV`.
+const ChatV2Spike = lazy(() => import('./pages/ChatV2Spike'));
+
 function PageLoader() {
   return <div className="flex-1 flex items-center justify-center"><span className="material-symbols-outlined icon-xl text-primary animate-spin">progress_activity</span></div>;
 }
@@ -86,6 +92,13 @@ export default function App() {
                 <Route path="/quickfix" element={<QuickFix />} />
                 <Route path="/editor" element={<Editor />} />
                 <Route path="/memory" element={<Memory />} />
+                {/* P2-5a spike — dev-only; never shipped to production.
+                    Gates on Vite's `import.meta.env.DEV` (true under
+                    `pnpm dev`, false under `pnpm build`). Production builds
+                    drop the route entirely. */}
+                {import.meta.env.DEV && (
+                  <Route path="/chat-v2-spike" element={<ChatV2Spike />} />
+                )}
                 <Route path="/settings" element={<Settings />}>
                   <Route index element={<Navigate to="general" replace />} />
                   <Route path="general" element={<GeneralSettings />} />

@@ -3,7 +3,6 @@
 //! Core commands inspired by Claude Code:
 //! - /commit: Create git commits
 //! - /review-pr: Review pull requests
-//! - /pdf: Process PDF documents
 //! - /help: Show command help
 //! - /status: Show git status
 //! - /diff: Show git diff
@@ -32,7 +31,6 @@ mod lsp;
 mod mcp;
 mod memory;
 mod monitor;
-mod pdf;
 mod plan;
 mod preset;
 mod profile;
@@ -74,7 +72,6 @@ pub fn all_commands() -> Vec<Command> {
         plan::command(),
         monitor::command(),
         check::command(),
-        pdf::command(),
         issue::command(),
         help::command(),
         status::command(),
@@ -108,7 +105,6 @@ pub mod commands {
     pub use super::commit::command as commit_command;
     pub use super::diff::command as diff_command;
     pub use super::help::command as help_command;
-    pub use super::pdf::command as pdf_command;
     pub use super::review_pr::command as review_pr_command;
     pub use super::status::command as status_command;
 }
@@ -118,14 +114,6 @@ pub mod help_utils {
     pub use super::help::{
         CommandHelpEntry, HelpCategory, all_help_entries, categorize_commands, generate_help,
         get_command_help,
-    };
-}
-
-/// Re-export PDF types for external consumers
-pub mod pdf_types {
-    pub use super::pdf::{
-        ImageFormat, PdfContent, PdfImage, PdfMetadata, PdfOptions, PdfPage, PdfTable,
-        get_pdf_prompt,
     };
 }
 
@@ -271,7 +259,6 @@ mod tests {
         assert!(names.contains("status"));
         assert!(names.contains("diff"));
         assert!(names.contains("config"));
-        assert!(names.contains("pdf"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

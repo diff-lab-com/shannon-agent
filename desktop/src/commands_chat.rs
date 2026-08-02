@@ -12,12 +12,16 @@
 use crate::commands::{AppState, ChatMessage, ModelInfo, StatusResponse, ToolInfo};
 
 /// Get all conversation messages.
+///
+/// P0-4: reads from the active session in `state.registry` instead of the
+/// (removed) `state.messages` field.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn get_conversation(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {
-    let messages = state.messages.lock().await;
+    let session = state.registry.get_or_create_active();
+    let messages = session.messages.lock().await;
     Ok(messages.clone())
 }
 
@@ -160,8 +164,9 @@ pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<StatusRespo
     let model = cc.model.clone();
     let provider = cc.provider.to_string();
     drop(cc);
-    let querying = state.querying.lock().await;
-    let messages = state.messages.lock().await;
+    let session = state.registry.get_or_create_active();
+    let querying = session.querying.lock().await;
+    let messages = session.messages.lock().await;
     let working_dir = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| ".".into());
@@ -181,9 +186,12 @@ pub async fn cancel_query(
     state: tauri::State<'_, AppState>,
     _app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
+    // P0-4: cancel the active session's in-flight query.
+    let session = state.registry.get_or_create_active();
+
     // Take the cancellation token and cancel it
     let token_opt = {
-        let mut token_guard = state.cancellation_token.lock().await;
+        let mut token_guard = session.cancellation_token.lock().await;
         token_guard.take()
     };
 
@@ -193,7 +201,7 @@ pub async fn cancel_query(
 
     // Clear querying flag
     {
-        let mut querying = state.querying.lock().await;
+        let mut querying = session.querying.lock().await;
         *querying = false;
     }
 
