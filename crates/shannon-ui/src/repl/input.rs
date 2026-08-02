@@ -1994,7 +1994,7 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 let provider_name = provider
                     .as_ref()
                     .map(shannon_core::provider_resolver::llm_provider_id)
-                    .unwrap_or("current provider");
+                    .unwrap_or_else(|| "current provider".to_string());
                 repl.chat.add_message(
                     ChatRole::System,
                     format!(

@@ -808,8 +808,8 @@ mod tests {
 
     #[test]
     fn picker_empty_state_renders_provider_name_and_refresh_hint() {
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
         // Force a provider tab that has zero models so the empty-state branch
         // is exercised (P0-1 QA bug #1 + #2). Clear any pre-existing local
@@ -827,7 +827,7 @@ mod tests {
             })
             .expect("draw");
 
-        let rendered = format!("{:?}", terminal.backend().buffer);
+        let rendered = format!("{:?}", terminal.backend().buffer());
         // The empty-state message is now provider-aware (P0-1 QA bug #1) and
         // contains a refresh hint that is NOT Ollama-specific.
         assert!(
@@ -1233,9 +1233,16 @@ impl ModelPickerWidget {
 
         let dialog_width = 52u16.min(area.width.saturating_sub(4));
         let visible_count = MAX_VISIBLE_MODELS.min(self.models.len());
+        // When the model list is empty we render a 2-line empty-state message
+        // instead of the scrolled model rows. Provider tabs may also wrap onto
+        // many rows inside a narrow dialog (~19 providers in 52 cols => 7 rows),
+        // so reserve enough vertical room for the wrapped tabs + tier tabs +
+        // empty-state message (P0-1 QA bug #1).
+        let empty_state_lines: u16 = if self.models.is_empty() { 10 } else { 0 };
         // +3 title, +2 tab bar, +1 footer hint, +2 manual input line when active.
         let extra = if self.manual_mode { 2 } else { 0 };
-        let dialog_height = (visible_count as u16 + 6 + extra).min(area.height.saturating_sub(4));
+        let dialog_height = (visible_count as u16 + 6 + extra + empty_state_lines)
+            .min(area.height.saturating_sub(4));
 
         let x = (area.width.saturating_sub(dialog_width)) / 2;
         let y = (area.height.saturating_sub(dialog_height)) / 2;
