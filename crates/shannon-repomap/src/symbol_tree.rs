@@ -25,6 +25,11 @@ pub struct Span {
 /// Tree-sitter Rust has many more node kinds (e.g., `function_signature_item`,
 /// `macro_invocation`, `static_item`). We collapse them into the categories
 /// that map cleanly to "things a developer would point at in a symbol map".
+///
+/// `Class` and `Interface` are Phase B additions for TS / Python / Go; they
+/// fit cleanly into the same `SymbolNode` shape (one declaration, optional
+/// children for nested methods), so the budget / markdown layers don't need
+/// to special-case them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SymbolKind {
@@ -36,6 +41,12 @@ pub enum SymbolKind {
     Module,
     TypeAlias,
     Const,
+    /// TS `class_declaration` / `abstract_class_declaration`,
+    /// Python `class_definition`, Go `type_declaration` with `struct_type`.
+    Class,
+    /// TS `interface_declaration`,
+    /// Go `type_declaration` with `interface_type`.
+    Interface,
 }
 
 impl SymbolKind {
@@ -50,6 +61,8 @@ impl SymbolKind {
             SymbolKind::Module => "mod",
             SymbolKind::TypeAlias => "type",
             SymbolKind::Const => "const",
+            SymbolKind::Class => "class",
+            SymbolKind::Interface => "interface",
         }
     }
 }

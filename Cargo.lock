@@ -6225,9 +6225,13 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tracing",
  "tree-sitter",
+ "tree-sitter-go",
+ "tree-sitter-python",
  "tree-sitter-rust",
+ "tree-sitter-typescript",
  "walkdir",
 ]
 
