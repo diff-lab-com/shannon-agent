@@ -139,10 +139,13 @@ impl JiraClient {
             Some(CredentialKind::OAuth {
                 cloudid: Some(cid), ..
             }) => {
+                // Percent-encode the cloudid so a malicious or malformed
+                // credential cannot inject path/query segments.
+                let cid_enc = url_path_encode(&cid);
                 format!(
                     "{}/ex/jira/{}/rest/api/3",
                     self.base_url.trim_end_matches('/'),
-                    cid
+                    cid_enc
                 )
             }
             _ => format!("{}/rest/api/3", self.base_url.trim_end_matches('/')),
@@ -171,7 +174,8 @@ impl JiraClient {
     /// `GET /issue/{key}` — full issue body. Returns the raw JSON so the
     /// caller can pick fields; the schema is large and varies by project.
     pub async fn get_issue(&self, key: &str) -> Result<serde_json::Value, ApiError> {
-        let path = format!("/issue/{key}");
+        validate_issue_key(key)?;
+        let path = format!("/issue/{}", url_path_encode(key));
         let v: serde_json::Value = self.get_json(&path).await?;
         Ok(v)
     }
@@ -198,7 +202,8 @@ impl JiraClient {
 
     /// `GET /issue/{key}/transitions` — list available workflow transitions.
     pub async fn list_transitions(&self, key: &str) -> Result<Vec<Transition>, ApiError> {
-        let path = format!("/issue/{key}/transitions");
+        validate_issue_key(key)?;
+        let path = format!("/issue/{}/transitions", url_path_encode(key));
         let parsed: TransitionsResponse = self.get_json(&path).await?;
         Ok(parsed.transitions)
     }
@@ -206,6 +211,7 @@ impl JiraClient {
     /// `POST /issue/{key}/transitions` — move issue to a new status.
     /// Jira returns 204 No Content on success; we ignore the body.
     pub async fn transition(&self, key: &str, target_status: &str) -> Result<Issue, ApiError> {
+        validate_issue_key(key)?;
         let transitions = self.list_transitions(key).await?;
         let id = transitions
             .iter()
@@ -214,7 +220,7 @@ impl JiraClient {
             .ok_or_else(|| {
                 ApiError::Validation(format!("no transition named '{target_status}' for {key}"))
             })?;
-        let path = format!("/issue/{key}/transitions");
+        let path = format!("/issue/{}/transitions", url_path_encode(key));
         let payload = serde_json::json!({ "transition": { "id": id } });
         self.post_no_response(&path, &payload).await?;
         Ok(Issue {
@@ -455,6 +461,53 @@ fn url_encode(s: &str) -> String {
     out
 }
 
+/// Path-segment encoder. Same RFC 3986 unreserved set as `url_encode`,
+/// but reserved for path segments: forward slash is NOT allowed inside
+/// a single segment, so it is also percent-encoded.
+fn url_path_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// Validate a Jira issue key shape before splicing it into a URL path.
+/// Jira keys follow `<PROJECTKEY>-<NUMBER>` where PROJECTKEY is uppercase
+/// alphanumeric + underscore and NUMBER is digits. Anything else is
+/// either malformed or an injection attempt.
+fn validate_issue_key(key: &str) -> Result<(), ApiError> {
+    let mut parts = key.split('-');
+    let project = parts.next().unwrap_or("");
+    let number = parts.next().unwrap_or("");
+    if parts.next().is_some() {
+        return Err(ApiError::Validation(format!(
+            "invalid issue key '{key}': expected PROJECT-NUMBER"
+        )));
+    }
+    if project.is_empty()
+        || !project
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        || project.len() > 32
+    {
+        return Err(ApiError::Validation(format!(
+            "invalid issue key '{key}': bad project segment"
+        )));
+    }
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) || number.len() > 9 {
+        return Err(ApiError::Validation(format!(
+            "invalid issue key '{key}': bad number segment"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,5 +533,38 @@ mod tests {
         // JQL typically uses spaces, = and quotes; we must percent-encode
         // at least the space to keep the query string parseable.
         assert_eq!(url_encode("project = ENG"), "project%20%3D%20ENG");
+    }
+
+    #[test]
+    fn url_path_encode_blocks_segment_breakout() {
+        // A naive f-string concat would put `/admin` into the same
+        // segment. url_path_encode must percent-encode the slash so
+        // `get_json` cannot escape into an unrelated URL path.
+        assert_eq!(url_path_encode("ENG-1/../admin"), "ENG-1%2F..%2Fadmin");
+        assert_eq!(url_path_encode("ENG-1?x=y"), "ENG-1%3Fx%3Dy");
+        // Existing shape must round-trip.
+        assert_eq!(url_path_encode("ENG-1"), "ENG-1");
+    }
+
+    #[test]
+    fn validate_issue_key_accepts_well_formed_and_rejects_injection() {
+        // Well-formed
+        for k in ["ENG-1", "ABC_DEF-42", "X-999999999"] {
+            assert!(validate_issue_key(k).is_ok(), "{k} should be valid");
+        }
+        // Injection / malformed
+        for bad in [
+            "ENG-1/admin",
+            "ENG-1?x=y",
+            "../admin",
+            "eng-1",        // lowercase project
+            "ENG",          // no number
+            "ENG-",         // empty number
+            "ENG-1-2",      // extra segment
+            "ENG_$admin-1", // disallowed char
+            "",             // empty
+        ] {
+            assert!(validate_issue_key(bad).is_err(), "{bad} should be invalid");
+        }
     }
 }
