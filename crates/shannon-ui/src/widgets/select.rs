@@ -807,6 +807,48 @@ mod tests {
     }
 
     #[test]
+    fn picker_empty_state_renders_provider_name_and_refresh_hint() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        // Force a provider tab that has zero models so the empty-state branch
+        // is exercised (P0-1 QA bug #1 + #2). Clear any pre-existing local
+        // Ollama models via the test-only constructor.
+        let mut picker = ModelPickerWidget::new(None);
+        picker.local_models.clear();
+        picker.models.clear();
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test backend");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                picker.render(frame, area, &Theme::default());
+            })
+            .expect("draw");
+
+        let rendered = format!("{:?}", terminal.backend().buffer);
+        // The empty-state message is now provider-aware (P0-1 QA bug #1) and
+        // contains a refresh hint that is NOT Ollama-specific.
+        assert!(
+            rendered.contains("No models found for"),
+            "empty state should mention the provider: {rendered}"
+        );
+        assert!(
+            rendered.contains("/model refresh") || rendered.contains("SHANNON_ENABLED_PROVIDERS"),
+            "empty state should hint at /model refresh or env: {rendered}"
+        );
+        assert!(
+            !rendered.contains("ollama pull"),
+            "empty state must not mention ollama pull anymore: {rendered}"
+        );
+        assert!(
+            !rendered.contains("No local models detected"),
+            "old ollama-only empty state must be gone: {rendered}"
+        );
+    }
+
+    #[test]
     fn model_cost_label_honest_about_unknown() {
         use shannon_core::model_registry::{ModelCapabilities, ModelInfo};
         use shannon_engine::api::LlmProvider;
@@ -1277,13 +1319,13 @@ impl ModelPickerWidget {
         // ── Model list ──
         if self.models.is_empty() {
             lines.push(Line::from(Span::styled(
-                "  No local models detected",
+                format!("  No models found for {provider_name}"),
                 Style::default()
                     .fg(theme.text_dim)
                     .add_modifier(Modifier::ITALIC),
             )));
             lines.push(Line::from(Span::styled(
-                "  Install Ollama and run: ollama pull llama3",
+                "  Run /model refresh or check SHANNON_ENABLED_PROVIDERS",
                 Style::default().fg(theme.text_dim),
             )));
         } else {

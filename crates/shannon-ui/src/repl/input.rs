@@ -1978,31 +1978,49 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Enter => {
-            let model_id = repl
+            let (model_id, provider) = repl
                 .state
                 .model_picker
                 .as_ref()
-                .and_then(|mp| mp.selected_model().map(|m| m.id.to_string()));
-            repl.state.model_picker = None;
+                .map(|mp| {
+                    (
+                        mp.selected_model().map(|m| m.id.to_string()),
+                        mp.selected_model().map(|m| m.provider.clone()),
+                    )
+                })
+                .unwrap_or((None, None));
 
-            if let Some(id) = model_id {
-                repl.state.model = Some(id);
-                crate::repl::preferences::save_preferences(
-                    &crate::repl::preferences::Preferences {
-                        model: repl.state.model.clone(),
-                        provider: repl.state.selected_provider.clone(),
-                        theme: Some(repl.state.theme.name.to_string()),
-                    },
-                );
+            let Some(id) = model_id else {
+                let provider_name = provider
+                    .as_ref()
+                    .map(shannon_core::provider_resolver::llm_provider_id)
+                    .unwrap_or("current provider");
                 repl.chat.add_message(
                     ChatRole::System,
-                    t!(
-                        "commands.model.set",
-                        name = repl.state.model.as_deref().unwrap_or("")
-                    )
-                    .to_string(),
+                    format!(
+                        "No model selected for {provider_name} — run `/model refresh` or check provider config"
+                    ),
                 );
+                return Ok(());
+            };
+
+            repl.state.model_picker = None;
+            if let Some(provider) = provider {
+                crate::repl::commands::apply_model_selection(
+                    repl,
+                    provider,
+                    Some(id.clone()),
+                    None,
+                    false,
+                )?;
+            } else {
+                repl.state.model = Some(id.clone());
+                crate::repl::commands::sync_active_to_chat(repl);
             }
+            repl.chat.add_message(
+                ChatRole::System,
+                t!("commands.model.set", name = id).to_string(),
+            );
         }
         KeyCode::Esc => {
             repl.state.model_picker = None;
