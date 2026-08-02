@@ -216,10 +216,7 @@ impl ConfigBuilder {
     /// The reload itself is *not* performed here — `on_change` is the
     /// hook-emit point only. Callers that want live reload should
     /// re-invoke [`Self::load_local_toml`] from inside the callback.
-    pub fn watch_local_toml<F>(
-        &self,
-        on_change: F,
-    ) -> Option<crate::config_watcher::ConfigWatcher>
+    pub fn watch_local_toml<F>(&self, on_change: F) -> Option<crate::config_watcher::ConfigWatcher>
     where
         F: FnMut(crate::config_watcher::ConfigChange) + Send + 'static,
     {

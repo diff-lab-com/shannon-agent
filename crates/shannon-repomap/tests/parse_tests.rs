@@ -4,10 +4,10 @@
 //! they exercise the public API only — no `#[cfg(test)]` reach-around.
 
 use shannon_repomap::{
+    RepoMap,
     budget::trim_to_budget,
     parser::parse_rust_file,
     symbol_tree::{SymbolKind, SymbolMap},
-    RepoMap,
 };
 use std::path::PathBuf;
 

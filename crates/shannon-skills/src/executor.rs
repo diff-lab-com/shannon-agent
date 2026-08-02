@@ -160,10 +160,7 @@ impl SkillExecutor {
             };
             match serde_json::to_vec(&event) {
                 Ok(bytes) => {
-                    debug!(
-                        "Emitting UserPromptExpansion event ({} bytes)",
-                        bytes.len()
-                    );
+                    debug!("Emitting UserPromptExpansion event ({} bytes)", bytes.len());
                     emitter.emit(bytes);
                 }
                 Err(e) => {

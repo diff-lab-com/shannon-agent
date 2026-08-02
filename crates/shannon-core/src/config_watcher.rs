@@ -186,8 +186,8 @@ impl ConfigChange {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_into_hook_event_round_trip() {
@@ -212,13 +212,13 @@ mod tests {
     fn test_watch_nonexistent_parent_returns_none() {
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = counter.clone();
-        let result = ConfigWatcher::start(
-            "/no/such/dir/.shannon.toml",
-            move |_change| {
-                counter_clone.fetch_add(1, Ordering::SeqCst);
-            },
+        let result = ConfigWatcher::start("/no/such/dir/.shannon.toml", move |_change| {
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+        });
+        assert!(
+            result.is_none(),
+            "should not start when parent dir is missing"
         );
-        assert!(result.is_none(), "should not start when parent dir is missing");
         assert_eq!(counter.load(Ordering::SeqCst), 0);
     }
 
@@ -269,8 +269,15 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(200));
 
         let hits = counter.load(Ordering::SeqCst);
-        assert!(hits >= 1, "watcher should have fired at least once, got {hits}");
-        let last = last_change.lock().unwrap().clone().expect("change recorded");
+        assert!(
+            hits >= 1,
+            "watcher should have fired at least once, got {hits}"
+        );
+        let last = last_change
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("change recorded");
         assert!(
             last.change_type == "modified" || last.change_type == "created",
             "expected modified/created, got {:?}",
