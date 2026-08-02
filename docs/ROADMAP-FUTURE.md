@@ -57,11 +57,6 @@ Export conversations to markdown/JSON.
 - **Status**: Dead code exists in `crates/shannon-commands/src/builtin/export.rs`
 - **Effort**: Low
 
-### PDF Processing (`/pdf`)
-PDF text extraction, table extraction, OCR.
-- **Status**: Dead code exists in `crates/shannon-commands/src/builtin/pdf.rs`
-- **Effort**: High (external PDF library)
-
 ### Debug Instrumentation (`/debug`)
 Runtime log level switching, profiling.
 - **Status**: Dead code exists in `crates/shannon-commands/src/builtin/debug.rs`
@@ -114,7 +109,6 @@ The following modules have dead code that should be wired up:
 | `/diff` | `shannon-commands/src/builtin/diff.rs` | ChangeCategory, DiffAnalysis | P2 |
 | `/review_pr` | `shannon-commands/src/builtin/review_pr.rs` | ReviewSeverity, PRAnalysis | P2 |
 | `/export` | `shannon-commands/src/builtin/export.rs` | ExportFormat, export_to_markdown/json | P2 |
-| `/pdf` | `shannon-commands/src/builtin/pdf.rs` | PdfTable, ImageFormat | P2 |
 | `/debug` | `shannon-commands/src/builtin/debug.rs` | DebugCategory, LogLevel | P2 |
 | Agent Coordinator | `shannon-agents/src/coordinator.rs` | AgentTeam, task assignment | P3 |
 | Compact Strategies | `shannon-core/src/compact.rs` | All 5 strategies defined, not wired | P0 (item 3) |

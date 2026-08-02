@@ -29,9 +29,18 @@ Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` ha
 
 | Crate | Responsibility | Tests |
 |-------|---------------|-------|
-| `shannon-core` | API client, query engine, permissions, tools, state management | ~3370 |
-| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1089 |
-| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~1111 |
+| `shannon-core` | API client, query engine, permissions, tools, state management | ~3,460 |
+| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1,421 |
+| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~1,529 |
+| `shannon-commands` | Built-in commands (/help, /config, /commit, etc.) | ~384 |
+| `shannon-agents` | Multi-agent orchestration | ~897 |
+| `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~442 |
+| `shannon-skills` | Skill system (command templates) | ~172 |
+| `shannon-mcp` | MCP (Model Context Protocol) server integration | ~574 |
+| `shannon-types` | Shared types (re-exported by shannon-core) | ~74 |
+| `shannon-tool-interface` | Tool trait definitions | n/a |
+| `shannon-codegen` | Code generation utilities | n/a |
+| `shannon-agent` | Single agent runtime (binary crate) | n/a |
 
 ### First-Screen UX
 
@@ -43,15 +52,6 @@ The REPL first screen (when chat is empty) renders a `StatusCardWidget` above th
 The StatusBar shows a compact `[provider/model · tier]` pill that updates in real time.
 
 `/help` opens a modal overlay (does not pollute chat history); `/model --tier <name>` switches between tiers with `--save` persisting to `~/.shannon/providers.toml`.
-| `shannon-commands` | Built-in commands (/help, /config, /pdf, /commit, etc.) | ~335 |
-| `shannon-agents` | Multi-agent orchestration | ~471 |
-| `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~191 |
-| `shannon-skills` | Skill system (command templates) | ~171 |
-| `shannon-mcp` | MCP (Model Context Protocol) server integration | ~373 |
-| `shannon-types` | Shared types (re-exported by shannon-core) | ~22 |
-| `shannon-tool-interface` | Tool trait definitions | ~24 |
-| `shannon-codegen` | Code generation utilities | ~102 |
-| `shannon-agent` | Single agent runtime (binary crate) | ~65 |
 
 > **Note**: `shannon-desktop` is a **workspace member** at `desktop/` (crate name `shannon-desktop`),
 > not a separate repo. Its `Cargo.toml` depends on the engine crates via `<name>.workspace = true`
@@ -142,7 +142,7 @@ just replay
 
 ### Test Coverage
 
-~7889 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them. Performance benchmarks in `crates/shannon-*/benches/` run via `cargo bench`.
+See [metrics.md](./docs/metrics.md) for the canonical, CI-generated test count, line counts, and lint/audit status. Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them. Performance benchmarks in `crates/shannon-*/benches/` run via `cargo bench`. Regenerate with `bash scripts/gen-metrics.sh`.
 
 ## Competitor Feature Tiers
 
