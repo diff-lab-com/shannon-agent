@@ -66,6 +66,30 @@
 5. adapter 层: 线程 → session 映射 + 事件路由(避免串线)
 6. UI:未读指示、最后消息预览、活跃线程高亮
 
+#### P2-5b spike 已落地(commit: `feat(desktop): P2-5b per-session event queue + SessionsPanel spike`)
+- 后端 `desktop/src/session_registry.rs` 在 P0-4 的 `SessionRegistry` 基础上新增:
+  - `SessionEvent` 枚举(`Message`/`ToolStart`/`ToolResult`/`QueryText`/`Thinking`/`Usage`/`ToolProgress`/`Status`)
+  - `SessionEventStatus` 生命周期枚举(`Started`/`Cancelled`/`Completed`/`Failed(String)`)
+  - `SessionState.events_tx: UnboundedSender<SessionEvent>` + `events_rx: Mutex<Option<UnboundedReceiver<SessionEvent>>>`(单消费者 `take()` 模型)
+  - `try_send_event` / `take_event_receiver` 助手
+- `commands_chat::send_message` 的 `tokio::spawn` 任务内每条 `app.emit(...)` 现在 **同时** 推入 session 通道 —— 旧的全局 Tauri 发射继续工作,新通道是 in-process 旁路
+- `SessionEvent` **不** 触达前端;前端继续监听 `event_names::*`(序列化兼容性无变化)
+- 单元测试(session_registry.rs 内):
+  - 每 session 接收器单例化
+  - **per-session 事件隔离**:session A 的 `ToolStart` 不会出现在 session B 的接收器
+  - 并发 32 路 `get_or_create` 全部收敛到同一 `Arc`(channel + sender 也同一份)
+  - 接收器被 drop 后 `try_send_event` 不 panic
+- 前端 `desktop/ui/src/components/SessionsPanel/SessionsPanel.tsx`(spike 阶段):会话列表/新建/点击切换,排序按 `created_at` 倒序
+- `pnpm lint` + `pnpm test` 全绿(1198 tests pass)
+- `cargo check -p shannon-desktop --lib` 干净
+
+#### 下一轮该接的内容(本 spike 未做)
+- `SessionsPanel` 真正接入 `Chat.tsx`(目前组件存在但未挂载,避免 ChatV2Spike 双跑)
+- `SessionEvent` 消费者:任何 in-process listener —— 比如 thread switcher 切到非活动 session 时回放该 session 累积的事件
+- 未读指示(per-session `Event` 计数)、最后消息预览、活跃流高亮
+- fork(从指定 message 分叉出新线程)
+- 边界 + 背压:把 `unbounded_channel` 换成有界 + drop-oldest,防止单 session 拥塞所有缓冲
+
 #### 验收
 - [ ] ≥3 线程并行,各自独立流式输出不串线
 - [ ] fork 从指定消息分叉出新线程
