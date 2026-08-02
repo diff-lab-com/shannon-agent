@@ -89,6 +89,16 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 # ---- Testing ----
 proptest = "1"
 
+# ---- tree-sitter (repo map) ----
+# Pinned pair: tree-sitter 0.24 + tree-sitter-rust 0.23 (latest 0.23 line).
+# Both consume tree-sitter-language 0.1; tree-sitter-rust 0.23.x's tree-sitter
+# dep is dev-only. See docs/plans/repo-map.md for the version pin rationale.
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+
+# ---- File walking ----
+walkdir = "2.5"
+
 # ---- Proc-macro infra ----
 proc-macro2 = "1"
 quote = "1"
