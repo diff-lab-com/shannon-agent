@@ -90,11 +90,17 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 proptest = "1"
 
 # ---- tree-sitter (repo map) ----
-# Pinned pair: tree-sitter 0.24 + tree-sitter-rust 0.23 (latest 0.23 line).
-# Both consume tree-sitter-language 0.1; tree-sitter-rust 0.23.x's tree-sitter
-# dep is dev-only. See docs/plans/repo-map.md for the version pin rationale.
+# Pinned family: tree-sitter 0.24 + grammar crates on the 0.23.x line.
+# All grammar crates (rust/typescript/python/go) consume
+# tree-sitter-language 0.1, which is the FFI bridge that pairs with the
+# 0.24.x runtime. The grammar crates' own `tree-sitter` dep is dev-only.
+# 0.25.x grammars would require the aliyun mirror to refresh first; per
+# docs/plans/repo-map.md §tree-sitter-versions we hold the line at 0.23.x.
 tree-sitter = "0.24"
 tree-sitter-rust = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-go = "0.23"
 
 # ---- File walking ----
 walkdir = "2.5"
