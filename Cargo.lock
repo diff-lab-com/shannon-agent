@@ -5964,6 +5964,7 @@ dependencies = [
  "shannon-engine",
  "shannon-skills",
  "shannon-tools",
+ "shannon-types",
  "shannon-ui",
  "similar",
  "tempfile",
@@ -6038,6 +6039,7 @@ dependencies = [
  "dashmap",
  "dirs 5.0.1",
  "dotenvy",
+ "fs2",
  "futures",
  "globset",
  "hex",
@@ -6047,6 +6049,7 @@ dependencies = [
  "libc",
  "lsp-types",
  "mockito",
+ "notify",
  "once_cell",
  "proptest",
  "rand 0.8.7",
@@ -6086,6 +6089,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "criterion",
+ "dashmap",
  "dirs 5.0.1",
  "futures",
  "keyring",
@@ -6215,6 +6219,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "shannon-repomap"
+version = "0.7.1"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-go",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "walkdir",
+]
+
+[[package]]
 name = "shannon-skills"
 version = "0.7.1"
 dependencies = [
@@ -6229,6 +6250,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "shannon-engine",
  "shannon-types",
  "shell-words",
  "tempfile",
@@ -6309,6 +6331,7 @@ dependencies = [
  "serde_json",
  "shannon-stability-attr",
  "thiserror 2.0.18",
+ "toml 0.8.23",
  "uuid",
 ]
 
