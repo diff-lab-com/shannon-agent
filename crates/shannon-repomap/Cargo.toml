@@ -4,7 +4,7 @@ version.workspace = true
 license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Tree-sitter based repository symbol map for LLM context (P1-4 Phase A: Rust only)"
+description = "Tree-sitter based repository symbol map for LLM context (P1-4 Phase B: Rust + TS + Python + Go)"
 authors.workspace = true
 
 [dependencies]
@@ -12,7 +12,11 @@ authors.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-rust = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-go = { workspace = true }
 walkdir = { workspace = true }

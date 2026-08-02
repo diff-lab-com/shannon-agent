@@ -206,6 +206,24 @@ criterion = "0.5"         # benchmark(可选)
 
 ### Phase B — 多语言 + 增量优化(1–2w)
 
+> **tree-sitter-versions (Phase B 实施备注)**:实际钉版本在 Phase B 落地时
+> 与本计划 §3.2 示例块略有偏差,记录如下,供后续 Phase C / 升级时参考:
+>
+> - `tree-sitter = "0.24"`(workspace `Cargo.toml` 已是 0.24.7;§3.2
+>   示例块的 0.25 是早期草稿,aliyun 镜像未刷新 0.25.x 配套 grammar,
+>   0.25 升级推迟到镜像刷新后)。
+> - `tree-sitter-rust = "0.23.3"` `tree-sitter-typescript = "0.23.2"`
+>   `tree-sitter-python = "0.23.6"` `tree-sitter-go = "0.23.4"` — 全部 0.23.x
+>   末班线,统一消费 `tree-sitter-language = "0.1"` FFI bridge;这与
+>   `tree-sitter 0.24` runtime 配对,正是 Phase A 的 0.24/0.23 配对。
+> - `tree-sitter-typescript` 单 crate 内同时暴露 `LANGUAGE_TYPESCRIPT` 和
+>   `LANGUAGE_TSX`;Phase B 把 `.ts`/`.tsx` 都路由到 `LANGUAGE_TYPESCRIPT`
+>   (TSX 简化为按 TS 处理,JSX-aware 抽取留 Phase C),`.py`/`.pyi` 都路由
+>   到 `LANGUAGE`,`.go` 走 `LANGUAGE`。
+> - 未来升级到 0.25.x 配对时,需要先确认 aliyun 镜像已同步
+>   `tree-sitter 0.25` runtime + 对应 0.25.x grammar 套件,然后一次性
+>   bump 五个 dep;半套升级会出现 FFI 桥版本不匹配的运行时报错。
+
 #### Week 2 · 多语言 + 用户配置
 
 19. **加 tree-sitter-typescript + tree-sitter-python + tree-sitter-go**:

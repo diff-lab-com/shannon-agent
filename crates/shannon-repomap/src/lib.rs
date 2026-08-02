@@ -1,13 +1,14 @@
-//! # Shannon Repo Map (P1-4 Phase A)
+//! # Shannon Repo Map (P1-4 Phase B)
 //!
-//! Walk a Rust workspace, parse every `.rs` file with tree-sitter, and emit a
-//! structured symbol map small enough to inject into the LLM system prompt.
+//! Walk a source tree, parse every supported file with tree-sitter, and emit
+//! a structured symbol map small enough to inject into the LLM system
+//! prompt.
 //!
-//! Phase A scope (per `docs/plans/repo-map.md`):
-//!
-//! - Rust only. Other languages come in Phase B.
-//! - No incremental cache. Each `for_workspace` call re-parses from disk.
-//! - No `notify` watcher. Debounced file change invalidation is Phase B.
+//! Phase A (Rust only) shipped the foundation. Phase B extends the
+//! [`LanguageParser`] enum to cover TypeScript (`.ts`/`.tsx`), Python
+//! (`.py`/`.pyi`), and Go (`.go`); see `docs/plans/repo-map.md` §Phase B for
+//! the design and the plan's §tree-sitter-versions section for the version
+//! pin rationale.
 //!
 //! Typical usage:
 //!
@@ -15,10 +16,15 @@
 //! use shannon_repomap::RepoMap;
 //! use std::path::Path;
 //!
-//! let mut repo_map = RepoMap::for_workspace(Path::new("crates/shannon-types"))?;
-//! repo_map.trim_to_budget(2_000);
+//! // Mixed-language directory walk.
+//! let mut repo_map = RepoMap::from_dir(Path::new("."))?;
+//! repo_map.trim_to_budget(4_000);
 //! let md = repo_map.to_system_prompt_markdown();
 //! println!("{md}");
+//!
+//! // Or a single file with extension-based language detection.
+//! let mut single = RepoMap::from_path(Path::new("src/main.py"))?;
+//! let md = single.to_system_prompt_markdown();
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
@@ -26,6 +32,7 @@ pub mod budget;
 pub mod parser;
 pub mod symbol_tree;
 
+pub use parser::{LanguageParser, RepoMapError};
 pub use symbol_tree::{Span, SymbolKind, SymbolMap, SymbolNode};
 
 use anyhow::Result;
@@ -40,22 +47,35 @@ pub struct RepoMap {
 }
 
 impl RepoMap {
-    /// Walk `cwd`, parse every `.rs` file under it, and collect symbols.
+    /// Walk `cwd`, parse every supported file under it, and collect symbols.
+    ///
+    /// Phase A called this `for_workspace` and only handled `.rs`. Phase B
+    /// keeps the same name for backwards compatibility but expands the
+    /// extension filter to all languages in [`LanguageParser`].
     ///
     /// Files that fail to parse are skipped silently (with a `tracing::debug`
     /// log) rather than aborting the whole walk — a single broken file
     /// shouldn't blank out the whole repo map.
     pub fn for_workspace(cwd: &Path) -> Result<Self> {
+        Self::from_dir(cwd)
+    }
+
+    /// Walk `cwd` and parse every file whose extension maps to a supported
+    /// language. See [`LanguageParser::from_extension`] for the list.
+    pub fn from_dir(cwd: &Path) -> Result<Self> {
         let mut files = Vec::new();
         for entry in WalkDir::new(cwd).into_iter().filter_map(|e| e.ok()) {
             let path = entry.path();
             if !path.is_file() {
                 continue;
             }
-            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if LanguageParser::from_extension(ext).is_err() {
                 continue;
             }
-            match parser::parse_rust_file(path) {
+            match parser::parse_file(path) {
                 Ok(syms) => files.push((path.to_path_buf(), syms)),
                 Err(err) => {
                     tracing::debug!(
@@ -70,6 +90,26 @@ impl RepoMap {
             map: SymbolMap {
                 root: cwd.to_path_buf(),
                 files,
+            },
+        })
+    }
+
+    /// Parse a single file. The language is detected from the extension;
+    /// unknown extensions return [`RepoMapError::UnsupportedLanguage`].
+    pub fn from_path(path: &Path) -> std::result::Result<Self, RepoMapError> {
+        // Validate the extension up front so the user gets a clean error
+        // even before we open the file.
+        let _ = LanguageParser::from_path(path)?;
+        let syms = parser::parse_file(path)?;
+        let path_buf = path.to_path_buf();
+        let root = path_buf
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        Ok(Self {
+            map: SymbolMap {
+                root,
+                files: vec![(path_buf, syms)],
             },
         })
     }
@@ -91,12 +131,12 @@ impl RepoMap {
     /// ```text
     /// # Repo Map: <root>
     ///
-    /// ## <relative/path.rs>
+    /// ## <relative/path.ext>
     /// - **fn** `name(args) -> Ret` — at line 12
     ///   - **fn** `method(&self) -> ()` — at line 24
     /// - **struct** `Foo` — at line 30
     ///
-    /// ## <other/file.rs>
+    /// ## <other/file.ext>
     /// ...
     /// ```
     pub fn to_system_prompt_markdown(&self) -> String {
