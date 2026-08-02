@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 description = "SaaS MCP servers (GitHub first, then Slack/Jira/Notion/Linear) — P1-3"
 
+[features]
+default = ["slack"]
+slack = []
+
 [dependencies]
 shannon-mcp = { path = "../shannon-mcp" }
 shannon-types = { workspace = true }

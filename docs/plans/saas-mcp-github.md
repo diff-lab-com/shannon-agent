@@ -253,3 +253,50 @@
 ---
 
 *评审通过后,本计划进入执行。完成步骤 1–5 全部勾选后,同步出 `cr-2026-08-XX-saas-mcp-github.md` 变更报告 + 父计划 P1-3 进度更新。*
+
+---
+
+## 7a. DRY trigger notes (added after step 3 — Slack)
+
+After landing `crates/shannon-mcp-saas/src/slack/`, the following duplication
+exists across `github::tools` and `slack::tools` (each a YAGNI-shaped
+copy that would have to be repeated for every new SaaS):
+
+1. **Per-SaaS `McpTool` trait surface (8 methods)** — `name` /
+   `description` / `input_schema` / `is_*` / `required_permission` /
+   `execute`. ~12 lines of identical signature in each SaaS's
+   `tools.rs`.
+2. **`XxxServerTool(Box<dyn McpTool>)` adapter struct** —
+   `github::tools::GithubServerTool` and `slack::tools::SlackServerTool`
+   are mechanical forwarders. ~40 lines each.
+3. **`XxxError → McpError` blanket impls** — `From<ApiError>` /
+   `From<ToolError>`, plus the `require_string` / `require_write` /
+   `optional_*` arg-parsing helpers (`tools.rs`).
+4. **JSON-RPC dispatch loop** in `server.rs` is already trait-agnostic
+   (operates on `Box<dyn ServerTool>`), so it does **not** count as
+   duplication.
+
+### When to revisit
+
+- Trigger A (must): at step 5 (Linear, the 3rd SaaS) — at that point
+  the three `McpTool` trait duplicates are a clear pattern, the adapter
+  struct is clearly mechanical, and a single `trait McpTool` in
+  `shannon-mcp-saas::tool` (or in `shannon-mcp` itself) plus a single
+  blanket `impl<T: McpTool> ServerTool for T` would remove ~120 LoC.
+- Trigger B (optional): as soon as a non-Slack / non-GitHub API surfaces
+  a different error-mapping shape (Notion's per-block validation, Jira's
+  JQL-vs-state machine), the current `From<ApiError> for McpError` blanket
+  breaks down and we need a `McpTool::map_error` hook. Do not pre-build it.
+- Do **not** promote `server.rs` to `shannon-mcp` yet — the local
+  copy is 230 lines, and `shannon-mcp` is a client crate that doesn't
+  need a server loop; YAGNI holds.
+
+### Why this did not block step 3
+
+- The per-SaaS duplicates are ~50 LoC, comfortably below the DRY
+  threshold.
+- The adapter struct is the actual price of supporting
+  `Box<dyn McpTool>` per SaaS without `dyn-clone`; it would only
+  disappear if we adopted a `dyn-clone` dep and trait-object
+  `Clone`, which is a bigger refactor than the SaaS work.
+- The JSON-RPC loop is **already** shared.
