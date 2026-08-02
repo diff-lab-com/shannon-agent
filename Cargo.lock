@@ -6191,6 +6191,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "shannon-mcp-saas"
+version = "0.7.1"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "keyring",
+ "mockito",
+ "rand 0.8.7",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shannon-mcp",
+ "shannon-types",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "shannon-skills"
 version = "0.7.1"
 dependencies = [

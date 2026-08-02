@@ -1,4 +1,15 @@
 //! Slack MCP tool implementations.
+//!
+//! ## Permission gating
+//!
+//! Write tools (`slack_conversations_reply`, `slack_files_upload`,
+//! `slack_reactions_add`) require the host to call
+//! `tools/grant { name, scope: "write" }` before the `tools/call`
+//! arrives. The previous `args.permission` self-attested gate has been
+//! removed (the field is stripped at the JSON-RPC boundary in
+//! `server::handle_tools_call` and the real check lives in
+//! `server::SessionGrants`). The OAuth bot token remains the actual
+//! authority for upstream calls.
 
 use crate::slack::api::{ApiError, SlackClient};
 use async_trait::async_trait;
@@ -11,8 +22,6 @@ use thiserror::Error;
 pub enum ToolError {
     #[error("missing required argument: {0}")]
     MissingArg(&'static str),
-    #[error("permission required: write")]
-    PermissionRequired,
     #[error("invalid arguments: {0}")]
     InvalidArgs(String),
     #[error("upstream API error: {0}")]
@@ -26,9 +35,9 @@ impl From<ApiError> for ToolError {
 impl From<ToolError> for McpError {
     fn from(e: ToolError) -> Self {
         match e {
-            ToolError::MissingArg(_)
-            | ToolError::PermissionRequired
-            | ToolError::InvalidArgs(_) => McpError::InvalidRequest(e.to_string()),
+            ToolError::MissingArg(_) | ToolError::InvalidArgs(_) => {
+                McpError::InvalidRequest(e.to_string())
+            }
             ToolError::Api(_) => McpError::Server(e.to_string()),
         }
     }
@@ -75,11 +84,13 @@ fn optional_u32(args: &Value, key: &str) -> Option<u32> {
         .and_then(|v| u32::try_from(v).ok())
 }
 fn require_write(args: &Value) -> Result<(), ToolError> {
-    if args.get("permission").and_then(Value::as_str) == Some("write") {
-        Ok(())
-    } else {
-        Err(ToolError::PermissionRequired)
-    }
+    // UX hint only — the real gate is server::SessionGrants. The
+    // `permission` field is stripped before reaching the tool, so this
+    // is effectively a no-op. Kept for backwards compatibility with
+    // any host that still passes the field; will be removed in a
+    // future cleanup once the host-side migration is complete.
+    let _ = args;
+    Ok(())
 }
 
 pub fn all_tools(client: SharedClient) -> Vec<Box<dyn McpTool>> {
@@ -236,7 +247,7 @@ impl McpTool for ReplyTool {
         "Reply in a Slack thread."
     }
     fn input_schema(&self) -> Value {
-        json!({"type":"object","properties":{"channel":{"type":"string"},"thread_ts":{"type":"string"},"text":{"type":"string"},"permission":{"type":"string","enum":["write"]}},"required":["channel","thread_ts","text","permission"]})
+        json!({"type":"object","properties":{"channel":{"type":"string"},"thread_ts":{"type":"string"},"text":{"type":"string"}},"required":["channel","thread_ts","text"]})
     }
     fn required_permission(&self) -> &'static str {
         "write"
@@ -302,7 +313,7 @@ impl McpTool for UploadFileTool {
         "Upload a file to Slack."
     }
     fn input_schema(&self) -> Value {
-        json!({"type":"object","properties":{"channels":{"type":"string"},"content":{"type":"string"},"filename":{"type":"string"},"permission":{"type":"string","enum":["write"]}},"required":["channels","content","permission"]})
+        json!({"type":"object","properties":{"channels":{"type":"string"},"content":{"type":"string"},"filename":{"type":"string"}},"required":["channels","content"]})
     }
     fn required_permission(&self) -> &'static str {
         "write"
@@ -333,7 +344,7 @@ impl McpTool for AddReactionTool {
         "Add an emoji reaction to a Slack message."
     }
     fn input_schema(&self) -> Value {
-        json!({"type":"object","properties":{"channel":{"type":"string"},"timestamp":{"type":"string"},"name":{"type":"string"},"permission":{"type":"string","enum":["write"]}},"required":["channel","timestamp","name","permission"]})
+        json!({"type":"object","properties":{"channel":{"type":"string"},"timestamp":{"type":"string"},"name":{"type":"string"}},"required":["channel","timestamp","name"]})
     }
     fn required_permission(&self) -> &'static str {
         "write"

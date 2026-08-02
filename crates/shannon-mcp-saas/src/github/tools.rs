@@ -2,23 +2,25 @@
 //!
 //! Each tool:
 //! 1. Parses + validates the input JSON.
-//! 2. For *write* tools, asserts `args.permission == "write"` and
-//!    otherwise returns `McpError::PermissionRequired("write")`.
-//! 3. Calls the matching [`GitHubClient`] method, mapping
-//!    [`ApiError`] to MCP error codes (see the table at the bottom of
-//!    this file).
-//! 4. Returns a `serde_json::Value` shaped to match the GitHub REST
+//! 2. Calls the matching [`GitHubClient`] method, mapping
+//!    [`ApiError`] to MCP error codes.
+//! 3. Returns a `serde_json::Value` shaped to match the GitHub REST
 //!    response (the same shape the legacy stub returned, so existing
 //!    clients don't break).
 //!
 //! ## Permission gating
 //!
-//! Write tools (create_issue, comment, review_pr) require the caller
-//! to pass `"permission": "write"` in the arguments. The MCP host
-//! (Shannon's `PermissionRuleChecker`) is expected to inject that arg
-//! once the user has granted the write scope; we never accept it as
-//! proof of authorization on its own — the keyring/OAuth token in
-//! `GitHubClient` is the actual authority.
+//! Write tools (`create_issue`, `comment`, `review_pr`) require the host
+//! to have called `tools/grant { name, scope: "write" }` before the
+//! `tools/call` arrives. The previous gate read `args.permission`, which
+//! the LLM could forge; that field is now stripped at the JSON-RPC
+//! boundary (`server::handle_tools_call`) and the real capability check
+//! lives in `server::SessionGrants`. The OAuth/keyring token in
+//! `GitHubClient` remains the actual authority for upstream calls.
+//!
+//! These tool implementations therefore have **no write gate of their
+//! own** — they trust the server boundary. Do not reintroduce a
+//! self-attested permission check here.
 
 use std::sync::Arc;
 
@@ -49,17 +51,13 @@ fn empty_client() -> GitHubClient {
 // ---------------------------------------------------------------------------
 
 /// Wraps `ApiError` with the MCP error code so the stdio server can
-/// return a structured response. The variant strings show up in the
-/// error message for `PermissionRequired` so the client can prompt
-/// the user.
+/// return a structured response.
 #[derive(Debug, Error)]
 pub enum ToolError {
     #[error("invalid arguments: {0}")]
     InvalidArgs(String),
     #[error("missing required argument: {0}")]
     MissingArg(&'static str),
-    #[error("permission required: {0}")]
-    PermissionRequired(&'static str),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("upstream API error: {0}")]
@@ -79,15 +77,10 @@ impl From<ApiError> for ToolError {
 
 impl From<ToolError> for McpError {
     fn from(e: ToolError) -> Self {
-        // We use the `InvalidRequest` variant for shape errors and
-        // `Server` for everything else. PermissionRequired is a
-        // sub-class of `InvalidRequest` so it surfaces with the
-        // standard JSON-RPC `-32600` code; the user-facing message
-        // names the missing scope.
         match e {
-            ToolError::InvalidArgs(_)
-            | ToolError::MissingArg(_)
-            | ToolError::PermissionRequired(_) => McpError::InvalidRequest(e.to_string()),
+            ToolError::InvalidArgs(_) | ToolError::MissingArg(_) => {
+                McpError::InvalidRequest(e.to_string())
+            }
             other => McpError::Server(other.to_string()),
         }
     }
@@ -133,13 +126,14 @@ pub trait McpTool: Send + Sync {
 // Permission helpers
 // ---------------------------------------------------------------------------
 
-/// Returns `Ok(())` when the caller passed `"permission": "write"`,
-/// else `Err(ToolError::PermissionRequired("write"))`.
-fn require_write(args: &Value) -> Result<(), ToolError> {
-    match args.get("permission").and_then(|v| v.as_str()) {
-        Some("write") => Ok(()),
-        _ => Err(ToolError::PermissionRequired("write")),
-    }
+/// UX hint kept for backwards compatibility with hosts that still send an
+/// `args.permission` field (the field is stripped at the JSON-RPC boundary
+/// in `server::handle_tools_call`; see module docs for the rationale).
+/// Returns `Ok(())` unconditionally so removing the strip layer is safe —
+/// the real gate lives in `server::SessionGrants`.
+#[deprecated(note = "permission gating moved to server::SessionGrants")]
+fn check_write_hint(_args: &Value) -> Result<(), ToolError> {
+    Ok(())
 }
 
 fn require_string<'a>(args: &'a Value, key: &'static str) -> Result<&'a str, ToolError> {
@@ -388,7 +382,7 @@ impl McpTool for CreateIssueTool {
         "github_create_issue"
     }
     fn description(&self) -> &'static str {
-        "Create a new issue. Args: owner (string), repo (string), title (string), body (string, optional), labels (array<string>, optional), assignees (array<string>, optional), permission (string, required: must be \"write\")."
+        "Create a new issue. Args: owner (string), repo (string), title (string), body (string, optional), labels (array<string>, optional), assignees (array<string>, optional). The host must grant the \"write\" scope via tools/grant before invoking."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -399,10 +393,9 @@ impl McpTool for CreateIssueTool {
                 "title": { "type": "string" },
                 "body": { "type": "string" },
                 "labels": { "type": "array", "items": { "type": "string" } },
-                "assignees": { "type": "array", "items": { "type": "string" } },
-                "permission": { "type": "string", "enum": ["write"] }
+                "assignees": { "type": "array", "items": { "type": "string" } }
             },
-            "required": ["owner", "repo", "title", "permission"]
+            "required": ["owner", "repo", "title"]
         })
     }
     fn is_read_only(&self) -> bool {
@@ -412,7 +405,8 @@ impl McpTool for CreateIssueTool {
         "write"
     }
     async fn execute(&self, args: Value) -> Result<Value, McpError> {
-        require_write(&args)?;
+        #[allow(deprecated)]
+        check_write_hint(&args)?;
         let owner = require_string(&args, "owner")?;
         let repo = require_string(&args, "repo")?;
         let title = require_string(&args, "title")?;
@@ -448,7 +442,7 @@ impl McpTool for CommentTool {
         "github_comment"
     }
     fn description(&self) -> &'static str {
-        "Add a comment to an issue or PR. Args: owner (string), repo (string), number (u32), body (string), permission (string, required: must be \"write\")."
+        "Add a comment to an issue or PR. Args: owner (string), repo (string), number (u32), body (string). The host must grant the \"write\" scope via tools/grant before invoking."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -457,17 +451,17 @@ impl McpTool for CommentTool {
                 "owner": { "type": "string" },
                 "repo": { "type": "string" },
                 "number": { "type": "integer", "minimum": 1 },
-                "body": { "type": "string" },
-                "permission": { "type": "string", "enum": ["write"] }
+                "body": { "type": "string" }
             },
-            "required": ["owner", "repo", "number", "body", "permission"]
+            "required": ["owner", "repo", "number", "body"]
         })
     }
     fn required_permission(&self) -> &'static str {
         "write"
     }
     async fn execute(&self, args: Value) -> Result<Value, McpError> {
-        require_write(&args)?;
+        #[allow(deprecated)]
+        check_write_hint(&args)?;
         let owner = require_string(&args, "owner")?;
         let repo = require_string(&args, "repo")?;
         let number = require_u64(&args, "number")?;
@@ -543,7 +537,7 @@ impl McpTool for ReviewPrTool {
         "github_review_pr"
     }
     fn description(&self) -> &'static str {
-        "Submit a pull request review. Args: owner (string), repo (string), number (u32), event (string: APPROVE|REQUEST_CHANGES|COMMENT), body (string, optional), commit_id (string, optional), permission (string, required: must be \"write\")."
+        "Submit a pull request review. Args: owner (string), repo (string), number (u32), event (string: APPROVE|REQUEST_CHANGES|COMMENT), body (string, optional), commit_id (string, optional). The host must grant the \"write\" scope via tools/grant before invoking."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -554,17 +548,17 @@ impl McpTool for ReviewPrTool {
                 "number": { "type": "integer", "minimum": 1 },
                 "event": { "type": "string", "enum": ["APPROVE", "REQUEST_CHANGES", "COMMENT"] },
                 "body": { "type": "string" },
-                "commit_id": { "type": "string" },
-                "permission": { "type": "string", "enum": ["write"] }
+                "commit_id": { "type": "string" }
             },
-            "required": ["owner", "repo", "number", "event", "permission"]
+            "required": ["owner", "repo", "number", "event"]
         })
     }
     fn required_permission(&self) -> &'static str {
         "write"
     }
     async fn execute(&self, args: Value) -> Result<Value, McpError> {
-        require_write(&args)?;
+        #[allow(deprecated)]
+        check_write_hint(&args)?;
         let owner = require_string(&args, "owner")?;
         let repo = require_string(&args, "repo")?;
         let number = require_u64(&args, "number")?;

@@ -21,8 +21,12 @@ const ACCESS_TOKEN_URL: &str = "https://slack.com/api/oauth.v2.access";
 pub enum AuthError {
     #[error("no Slack token configured: set SLACK_BOT_TOKEN or complete OAuth")]
     NoToken,
-    #[error("OAuth state mismatch (possible CSRF); expected {expected}, got {actual}")]
-    StateMismatch { expected: String, actual: String },
+    // CSRF state validation — do NOT include the expected/actual values in this
+    // error or any tracing output. The expected state is a secret between the
+    // /authorize request and this callback server; logging it would let an
+    // attacker who can read our logs forge a valid callback.
+    #[error("OAuth state mismatch (possible CSRF)")]
+    StateMismatch,
     #[error("OAuth callback missing code")]
     MissingCode,
     #[error("OAuth exchange failed: {0}")]
@@ -92,6 +96,10 @@ impl OAuthFlow {
             if let Err(e) = run_callback_server(listener, tx, expected, id, secret).await {
                 tracing::error!(error = %e, "Slack OAuth callback failed");
             }
+            // Listener is dropped here, closing the socket. Prevents a slow
+            // port-scan from holding the loop open after the flow resolves.
+            // (No explicit `drop(listener)` — it's already moved into
+            // `run_callback_server` which owns its lifetime.)
         });
         Ok(Self {
             bind_addr,
@@ -167,63 +175,95 @@ async fn run_callback_server(
     client_id: String,
     client_secret: String,
 ) -> Result<(), AuthError> {
-    use tokio::io::AsyncReadExt;
-    let (mut stream, _) = listener.accept().await?;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let expected_state_bytes = expected_state.as_bytes().to_vec();
     let mut buf = [0u8; 8192];
-    let n = stream.read(&mut buf).await?;
-    let request = String::from_utf8_lossy(&buf[..n]);
-    let target = request
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .unwrap_or("");
-    let (route, query) = target.split_once('?').unwrap_or((target, ""));
-    if route != "/callback" {
-        send_400(&mut stream, "unexpected route").await?;
-        let _ = tx.send(Err(AuthError::MissingCode));
-        return Ok(());
-    }
-    let mut code = None;
-    let mut state = None;
-    for pair in query.split('&') {
-        if let Some((key, value)) = pair.split_once('=') {
-            match key {
-                "code" => code = Some(urlencoding(value)),
-                "state" => state = Some(urlencoding(value)),
-                _ => {}
+    loop {
+        let (mut stream, _) = listener.accept().await?;
+        let n = match stream.read(&mut buf).await {
+            Ok(n) => n,
+            Err(_) => {
+                // Connection died before sending any bytes — close silently.
+                let _ = stream.shutdown().await;
+                continue;
+            }
+        };
+        let request = String::from_utf8_lossy(&buf[..n]);
+        let target = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap_or("");
+        let (route, query) = target.split_once('?').unwrap_or((target, ""));
+        if route != "/callback" {
+            // Stray connection (browser preconnect, scanner, refresh of a stale
+            // tab, etc). Send 400 then keep listening — do NOT push Err on the
+            // channel, otherwise a single stray connection terminates the
+            // whole OAuth flow.
+            let _ = send_400(&mut stream, "unexpected route").await;
+            let _ = stream.shutdown().await;
+            continue;
+        }
+        let mut code = None;
+        let mut state = None;
+        for pair in query.split('&') {
+            if let Some((key, value)) = pair.split_once('=') {
+                match key {
+                    "code" => code = Some(urlencoding(value)),
+                    "state" => state = Some(urlencoding(value)),
+                    _ => {}
+                }
             }
         }
-    }
-    if state.as_deref() != Some(expected_state.as_str()) {
-        send_400(&mut stream, "state mismatch").await?;
-        let _ = tx.send(Err(AuthError::StateMismatch {
-            expected: expected_state,
-            actual: state.unwrap_or_default(),
-        }));
+        // Compare in constant time to avoid timing oracles on the CSRF state,
+        // and never log either side.
+        let state_ok = state
+            .as_deref()
+            .map(|s| constant_time_eq(s.as_bytes(), &expected_state_bytes))
+            .unwrap_or(false);
+        if !state_ok {
+            let _ = send_400(&mut stream, "state mismatch").await;
+            let _ = stream.shutdown().await;
+            // Channel is reserved for the *valid* request. Keep listening.
+            continue;
+        }
+        let code = match code {
+            Some(c) => c,
+            None => {
+                let _ = send_400(&mut stream, "missing code").await;
+                let _ = stream.shutdown().await;
+                continue;
+            }
+        };
+        let flow = OAuthFlow {
+            bind_addr: listener.local_addr()?,
+            state: expected_state.clone(),
+            receiver: None,
+            _server: tokio::spawn(async {}),
+        };
+        let result = flow.exchange_code(&client_id, &client_secret, &code).await;
+        if result.is_ok() {
+            let _ = send_html(&mut stream, "OAuth complete — you can close this tab.").await;
+        } else {
+            let _ = send_400(&mut stream, "exchange failed").await;
+        }
+        let _ = stream.shutdown().await;
+        // Single-use channel: first valid request wins, server exits.
+        let _ = tx.send(result);
         return Ok(());
     }
-    let code = match code {
-        Some(c) => c,
-        None => {
-            send_400(&mut stream, "missing code").await?;
-            let _ = tx.send(Err(AuthError::MissingCode));
-            return Ok(());
-        }
-    };
-    let flow = OAuthFlow {
-        bind_addr: listener.local_addr()?,
-        state: expected_state,
-        receiver: None,
-        _server: tokio::spawn(async {}),
-    };
-    let result = flow.exchange_code(&client_id, &client_secret, &code).await;
-    if result.is_ok() {
-        send_html(&mut stream, "OAuth complete — you can close this tab.").await?;
-    } else {
-        send_400(&mut stream, "exchange failed").await?;
+}
+
+/// Constant-time equality for two byte slices. Returns false if lengths differ.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
     }
-    let _ = tx.send(result);
-    Ok(())
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 async fn send_html<W: tokio::io::AsyncWrite + Unpin>(
     stream: &mut W,
