@@ -562,6 +562,18 @@ pub async fn send_message(
     let notifier_arc = state.notifier.clone();
     let session_for_task = active_session.clone();
 
+    // P2-5b: per-session in-process fan-out. Every event the loop
+    // emits to the Tauri wire is also pushed onto `session_for_task`'s
+    // mpsc channel so a future in-process consumer (the thread
+    // switcher being built in a follow-up iteration) can subscribe to
+    // *this session's* stream without conflating it with siblings.
+    // Best-effort — channel send errors are silently ignored (the
+    // Tauri wire + `messages` buffer still cover the user-visible path).
+    let session = session_for_task.clone();
+    let session_for_inproc = session.clone();
+    let route_event = move |evt: crate::session_registry::SessionEvent| {
+        session_for_inproc.try_send_event(evt);
+    };
     let return_qid = qid_str.clone();
     tokio::spawn(async move {
         let stream = engine.process_query(context, None).await;
@@ -585,6 +597,9 @@ pub async fn send_message(
                         query_id: qid_str.clone(),
                     },
                 );
+                route_event(crate::session_registry::SessionEvent::Status(
+                    crate::session_registry::SessionEventStatus::Cancelled,
+                ));
                 break;
             }
 
@@ -592,13 +607,14 @@ pub async fn send_message(
                 Ok(event) => match event {
                     QueryEvent::Text { content, .. } => {
                         final_content.push_str(&content);
-                        let _ = app.emit(
-                            event_names::QUERY_TEXT,
-                            events::QueryTextPayload {
-                                query_id: qid_str.clone(),
-                                content,
-                            },
-                        );
+                        let payload = events::QueryTextPayload {
+                            query_id: qid_str.clone(),
+                            content,
+                        };
+                        route_event(crate::session_registry::SessionEvent::QueryText(
+                            payload.clone(),
+                        ));
+                        let _ = app.emit(event_names::QUERY_TEXT, payload);
                     }
                     QueryEvent::ToolUseRequest {
                         tool_use_id,
@@ -608,15 +624,16 @@ pub async fn send_message(
                     } => {
                         tool_call_count += 1;
                         tool_names_used.insert(tool_name.clone());
-                        let _ = app.emit(
-                            event_names::QUERY_TOOL_START,
-                            events::ToolStartPayload {
-                                query_id: qid_str.clone(),
-                                tool_use_id,
-                                tool_name,
-                                tool_input,
-                            },
-                        );
+                        let payload = events::ToolStartPayload {
+                            query_id: qid_str.clone(),
+                            tool_use_id,
+                            tool_name,
+                            tool_input,
+                        };
+                        route_event(crate::session_registry::SessionEvent::ToolStart(
+                            payload.clone(),
+                        ));
+                        let _ = app.emit(event_names::QUERY_TOOL_START, payload);
                     }
                     QueryEvent::ToolUseResult {
                         tool_use_id,
@@ -625,16 +642,17 @@ pub async fn send_message(
                         is_error,
                         ..
                     } => {
-                        let _ = app.emit(
-                            event_names::QUERY_TOOL_RESULT,
-                            events::ToolResultPayload {
-                                query_id: qid_str.clone(),
-                                tool_use_id,
-                                tool_name,
-                                result,
-                                is_error,
-                            },
-                        );
+                        let payload = events::ToolResultPayload {
+                            query_id: qid_str.clone(),
+                            tool_use_id,
+                            tool_name,
+                            result,
+                            is_error,
+                        };
+                        route_event(crate::session_registry::SessionEvent::ToolResult(
+                            payload.clone(),
+                        ));
+                        let _ = app.emit(event_names::QUERY_TOOL_RESULT, payload);
                     }
                     QueryEvent::ToolProgress {
                         tool_use_id,
@@ -643,25 +661,27 @@ pub async fn send_message(
                         message: msg,
                         ..
                     } => {
-                        let _ = app.emit(
-                            event_names::QUERY_TOOL_PROGRESS,
-                            events::ToolProgressPayload {
-                                query_id: qid_str.clone(),
-                                tool_use_id,
-                                tool_name,
-                                progress,
-                                message: msg,
-                            },
-                        );
+                        let payload = events::ToolProgressPayload {
+                            query_id: qid_str.clone(),
+                            tool_use_id,
+                            tool_name,
+                            progress,
+                            message: msg,
+                        };
+                        route_event(crate::session_registry::SessionEvent::ToolProgress(
+                            payload.clone(),
+                        ));
+                        let _ = app.emit(event_names::QUERY_TOOL_PROGRESS, payload);
                     }
                     QueryEvent::Thinking { content, .. } => {
-                        let _ = app.emit(
-                            event_names::QUERY_THINKING,
-                            events::ThinkingPayload {
-                                query_id: qid_str.clone(),
-                                content,
-                            },
-                        );
+                        let payload = events::ThinkingPayload {
+                            query_id: qid_str.clone(),
+                            content,
+                        };
+                        route_event(crate::session_registry::SessionEvent::Thinking(
+                            payload.clone(),
+                        ));
+                        let _ = app.emit(event_names::QUERY_THINKING, payload);
                     }
                     QueryEvent::Usage {
                         input_tokens,
@@ -686,15 +706,16 @@ pub async fn send_message(
                             cache_read_tokens,
                             cost_usd,
                         ));
-                        let _ = app.emit(
-                            event_names::QUERY_USAGE,
-                            events::UsagePayload {
-                                query_id: qid_str.clone(),
-                                input_tokens,
-                                output_tokens,
-                                cost_usd,
-                            },
-                        );
+                        let payload = events::UsagePayload {
+                            query_id: qid_str.clone(),
+                            input_tokens,
+                            output_tokens,
+                            cost_usd,
+                        };
+                        route_event(crate::session_registry::SessionEvent::Usage(
+                            payload.clone(),
+                        ));
+                        let _ = app.emit(event_names::QUERY_USAGE, payload);
                     }
                     QueryEvent::Completed { .. } => {
                         // Save final assistant message into the per-session buffer.
@@ -743,6 +764,9 @@ pub async fn send_message(
                                 query_id: qid_str.clone(),
                             },
                         );
+                        route_event(crate::session_registry::SessionEvent::Status(
+                            crate::session_registry::SessionEventStatus::Completed,
+                        ));
                         crate::commands_notifications::fire_query_notification_logged(
                             &notifier_arc,
                             crate::commands_notifications::NotificationKind::Completed,
@@ -860,6 +884,9 @@ pub async fn send_message(
                                 error: error.clone(),
                             },
                         );
+                        route_event(crate::session_registry::SessionEvent::Status(
+                            crate::session_registry::SessionEventStatus::Failed(error.clone()),
+                        ));
                         crate::commands_notifications::fire_query_notification_logged(
                             &notifier_arc,
                             crate::commands_notifications::NotificationKind::Failed(error),
@@ -870,16 +897,20 @@ pub async fn send_message(
                     _ => {}
                 },
                 Err(e) => {
+                    let err_string = e.to_string();
                     let _ = app.emit(
                         event_names::QUERY_FAILED,
                         events::QueryFailedPayload {
                             query_id: qid_str.clone(),
-                            error: e.to_string(),
+                            error: err_string.clone(),
                         },
                     );
+                    route_event(crate::session_registry::SessionEvent::Status(
+                        crate::session_registry::SessionEventStatus::Failed(err_string.clone()),
+                    ));
                     crate::commands_notifications::fire_query_notification_logged(
                         &notifier_arc,
-                        crate::commands_notifications::NotificationKind::Failed(e.to_string()),
+                        crate::commands_notifications::NotificationKind::Failed(err_string),
                         "query_failed",
                     );
                 }
