@@ -4,13 +4,80 @@
 //! More file commands will move here in future extractions.
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+use base64::Engine;
 
 use crate::commands::AppState;
 use crate::commands_agents::resolve_working_dir;
 use crate::events::HunkAction;
 use crate::resolve_path_in_working_dir;
 
-/// Write text content to a file, creating parent directories as needed.
+const MAX_ATTACHMENT_SIZE: u64 = 25 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentPayload {
+    pub mime: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    pub name: String,
+    pub size: u64,
+}
+
+fn attachment_mime(path: &Path) -> String {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        "rs" => "text/x-rust",
+        "ts" => "text/typescript",
+        "tsx" => "text/typescript",
+        "js" => "text/javascript",
+        "jsx" => "text/javascript",
+        "py" => "text/x-python",
+        "json" => "application/json",
+        "yaml" | "yml" => "application/yaml",
+        "toml" => "application/toml",
+        _ => "application/octet-stream",
+    }.to_string()
+}
+
+/// Read one attachment for conversion into an assistant message content block.
+#[tauri::command]
+pub async fn read_attachment(path: String) -> Result<AttachmentPayload, String> {
+    let file_path = Path::new(&path);
+    let metadata = tokio::fs::metadata(file_path)
+        .await
+        .map_err(|e| format!("Cannot read attachment metadata: {e}"))?;
+    if !metadata.is_file() {
+        return Err("Attachment path is not a file".into());
+    }
+    if metadata.len() > MAX_ATTACHMENT_SIZE {
+        return Err(format!("Attachment exceeds the 25 MB limit: {}", file_path.display()));
+    }
+    let bytes = tokio::fs::read(file_path)
+        .await
+        .map_err(|e| format!("Cannot read attachment: {e}"))?;
+    let mime = attachment_mime(file_path);
+    let name = file_path.file_name().and_then(|n| n.to_str()).unwrap_or(&path).to_string();
+    let size = bytes.len() as u64;
+    if mime.starts_with("image/") {
+        Ok(AttachmentPayload { mime, base64: Some(base64::engine::general_purpose::STANDARD.encode(bytes)), text: None, name, size })
+    } else if mime == "application/pdf" {
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        Ok(AttachmentPayload { mime, base64: None, text: Some(text), name, size })
+    } else {
+        let text = String::from_utf8(bytes).map_err(|_| "Attachment is not valid UTF-8 text".to_string())?;
+        Ok(AttachmentPayload { mime, base64: None, text: Some(text), name, size })
+    }
+}
+
 #[tauri::command]
 pub async fn save_text_file(path: String, content: String) -> Result<(), String> {
     let target = std::path::Path::new(&path);
