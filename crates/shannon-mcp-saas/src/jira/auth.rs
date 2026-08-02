@@ -48,6 +48,8 @@ pub const KEYRING_SERVICE: &str = "shannon";
 pub const API_TOKEN_KEY: &str = "jira/api-token";
 /// Keyring account for the OAuth access/refresh blob.
 pub const OAUTH_TOKEN_KEY: &str = "jira/oauth";
+/// Keyring account for the OAuth refresh token (paired with `offline_access`).
+pub const REFRESH_TOKEN_KEY: &str = "jira/refresh-token";
 /// Keyring account for the OAuth cloud id (so we can address the
 /// tenant-specific REST endpoint without re-discovering every boot).
 pub const CLOUD_ID_KEY: &str = "jira/cloudid";
@@ -338,9 +340,11 @@ async fn resolve_cloudid(http: &reqwest::Client, access_token: &str) -> Result<S
         .ok_or_else(|| AuthError::Exchange("no accessible resources for token".into()))
 }
 
-/// Callback HTTP server. Identical pattern to `slack/auth.rs`:
+/// Callback HTTP server. Same hardened pattern as `slack/auth.rs`:
 /// constant-time state comparison, no `expected_state` logging,
-/// first valid request wins, channel reserved for the valid request.
+/// loop on `listener.accept()` so stray connections (browser preconnect,
+/// scanner, refresh of a stale tab) cannot DoS the OAuth flow. Channel
+/// is reserved for the *valid* request — first valid request wins.
 async fn run_callback_server(
     listener: tokio::net::TcpListener,
     tx: oneshot::Sender<Result<OAuthTokens, AuthError>>,
@@ -349,78 +353,88 @@ async fn run_callback_server(
     client_id: String,
     client_secret: String,
 ) -> Result<(), AuthError> {
-    use tokio::io::AsyncReadExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let (mut stream, _peer) = listener.accept().await?;
-    let mut buf = vec![0u8; 8192];
-    let n = stream.read(&mut buf).await?;
-    let req = String::from_utf8_lossy(&buf[..n]);
-    let first_line = req.lines().next().unwrap_or("");
-    let (path, _rest) = match first_line.split_once(' ') {
-        Some((m, rest)) => (m, rest),
-        None => {
-            let _ = send_400(&mut stream, "malformed request").await;
-            let _ = tx.send(Err(AuthError::MissingCode));
-            return Ok(());
+    let expected_state_bytes = expected_state.as_bytes().to_vec();
+    let mut buf = [0u8; 8192];
+    loop {
+        let (mut stream, _peer) = match listener.accept().await {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let n = match stream.read(&mut buf).await {
+            Ok(n) => n,
+            Err(_) => {
+                // Connection died before sending any bytes — close silently.
+                let _ = stream.shutdown().await;
+                continue;
+            }
+        };
+        let request = String::from_utf8_lossy(&buf[..n]);
+        let target = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap_or("");
+        let (route, query) = target.split_once('?').unwrap_or((target, ""));
+        if route != "/callback" {
+            // Stray connection. Send 400 then keep listening — do NOT
+            // push Err on the channel, otherwise a single stray connection
+            // terminates the whole OAuth flow.
+            let _ = send_400(&mut stream, "unexpected route").await;
+            let _ = stream.shutdown().await;
+            continue;
         }
-    };
-    let (route, query) = match path.split_once('?') {
-        Some((r, q)) => (r, q),
-        None => (path, ""),
-    };
-    if route != "/callback" {
-        let _ = send_400(&mut stream, "unexpected route").await;
-        let _ = tx.send(Err(AuthError::MissingCode));
-        return Ok(());
-    }
-    let mut code: Option<String> = None;
-    let mut state_param: Option<String> = None;
-    for pair in query.split('&') {
-        if let Some((k, v)) = pair.split_once('=') {
-            let v = url_decode(v);
-            match k {
-                "code" => code = Some(v),
-                "state" => state_param = Some(v),
-                _ => {}
+        let mut code: Option<String> = None;
+        let mut state_param: Option<String> = None;
+        for pair in query.split('&') {
+            if let Some((k, v)) = pair.split_once('=') {
+                let v = url_decode(v);
+                match k {
+                    "code" => code = Some(v),
+                    "state" => state_param = Some(v),
+                    _ => {}
+                }
             }
         }
-    }
-    let state_bytes = expected_state.as_bytes();
-    let state_ok = state_param
-        .as_deref()
-        .map(|s| constant_time_eq(s.as_bytes(), state_bytes))
-        .unwrap_or(false);
-    if !state_ok {
-        let _ = send_400(&mut stream, "state mismatch").await;
-        let _ = tx.send(Err(AuthError::StateMismatch));
-        return Ok(());
-    }
-    let code = match code {
-        Some(c) => c,
-        None => {
-            let _ = send_400(&mut stream, "missing code").await;
-            let _ = tx.send(Err(AuthError::MissingCode));
-            return Ok(());
+        // Constant-time comparison to avoid timing oracles on the CSRF state;
+        // never log either side.
+        let state_ok = state_param
+            .as_deref()
+            .map(|s| constant_time_eq(s.as_bytes(), &expected_state_bytes))
+            .unwrap_or(false);
+        if !state_ok {
+            let _ = send_400(&mut stream, "state mismatch").await;
+            let _ = stream.shutdown().await;
+            // Channel is reserved for the *valid* request. Keep listening.
+            continue;
         }
-    };
-    let flow = OAuthFlow {
-        bind_addr: listener.local_addr()?,
-        state: expected_state,
-        pkce,
-        receiver: None,
-        _server: tokio::spawn(async {}),
-    };
-    let result = flow.exchange_code(&client_id, &client_secret, &code).await;
-    match &result {
-        Ok(_) => {
+        let code = match code {
+            Some(c) => c,
+            None => {
+                let _ = send_400(&mut stream, "missing code").await;
+                let _ = stream.shutdown().await;
+                continue;
+            }
+        };
+        let flow = OAuthFlow {
+            bind_addr: listener.local_addr()?,
+            state: expected_state.clone(),
+            pkce: pkce.clone(),
+            receiver: None,
+            _server: tokio::spawn(async {}),
+        };
+        let result = flow.exchange_code(&client_id, &client_secret, &code).await;
+        if result.is_ok() {
             let _ = send_html(&mut stream, "OAuth complete — you can close this tab.").await;
-        }
-        Err(_) => {
+        } else {
             let _ = send_400(&mut stream, "exchange failed").await;
         }
+        let _ = stream.shutdown().await;
+        // Single-use channel: first valid request wins, server exits.
+        let _ = tx.send(result);
+        return Ok(());
     }
-    let _ = tx.send(result);
-    Ok(())
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -546,10 +560,18 @@ impl TokenProvider {
                 let oauth = keyring::Entry::new(KEYRING_SERVICE, OAUTH_TOKEN_KEY)
                     .map_err(|e| AuthError::Keyring(e.to_string()))?;
                 match oauth.get_password() {
-                    Ok(s) => Ok(CredentialKind::OAuth {
-                        access_token: s,
-                        cloudid: None,
-                    }),
+                    Ok(s) => {
+                        // Best-effort: also read cloudid so we can address
+                        // the tenant-specific REST endpoint without a fresh
+                        // accessible-resources round-trip.
+                        let cloudid = keyring::Entry::new(KEYRING_SERVICE, CLOUD_ID_KEY)
+                            .ok()
+                            .and_then(|e| e.get_password().ok());
+                        Ok(CredentialKind::OAuth {
+                            access_token: s,
+                            cloudid,
+                        })
+                    }
                     Err(keyring::Error::NoEntry) => Err(AuthError::NoToken),
                     Err(e) => Err(AuthError::Keyring(e.to_string())),
                 }
@@ -571,12 +593,21 @@ impl TokenProvider {
 
     /// Persist a set of OAuth tokens. Also stores the cloudid so the
     /// next process boot skips the accessible-resources round-trip.
+    /// Refresh token is persisted separately under `REFRESH_TOKEN_KEY`
+    /// when present — required by the `offline_access` scope we request.
     pub fn save_oauth(&self, tokens: &OAuthTokens) -> Result<(), AuthError> {
         let oauth = keyring::Entry::new(KEYRING_SERVICE, OAUTH_TOKEN_KEY)
             .map_err(|e| AuthError::Keyring(e.to_string()))?;
         oauth
             .set_password(tokens.access_token.expose())
             .map_err(|e| AuthError::Keyring(e.to_string()))?;
+        if let Some(refresh) = tokens.refresh_token.as_deref() {
+            let entry = keyring::Entry::new(KEYRING_SERVICE, REFRESH_TOKEN_KEY)
+                .map_err(|e| AuthError::Keyring(e.to_string()))?;
+            entry
+                .set_password(refresh)
+                .map_err(|e| AuthError::Keyring(e.to_string()))?;
+        }
         let cid = keyring::Entry::new(KEYRING_SERVICE, CLOUD_ID_KEY)
             .map_err(|e| AuthError::Keyring(e.to_string()))?;
         cid.set_password(&tokens.cloudid)
