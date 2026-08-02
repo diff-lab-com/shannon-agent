@@ -17,7 +17,7 @@ mod web;
 // (repl/mod.rs) can refresh the first-screen StatusCard through the same
 // derivation used by every /connect, /model, /provider switch
 // (ADR-0008 Decision 1+2).
-pub(crate) use config::sync_active_to_chat;
+pub(crate) use config::{apply_model_selection, sync_active_to_chat};
 
 // Re-export public API
 #[allow(unused_imports)]
