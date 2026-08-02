@@ -710,11 +710,7 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
         // any imported files) and report the total payload size in bytes.
         // Emit is best-effort and never blocks instruction loading — any
         // error from the hook system is logged at debug level and swallowed.
-        emit_instructions_loaded(
-            instruction_files.len(),
-            all_content.len(),
-            &all_files,
-        );
+        emit_instructions_loaded(instruction_files.len(), all_content.len(), &all_files);
 
         Some(ProjectInstructions {
             content: all_content,

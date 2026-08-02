@@ -636,9 +636,7 @@ impl ToolExecutionService {
                     let ev = match serde_json::from_slice::<HookEvent>(&bytes) {
                         Ok(ev) => ev,
                         Err(e) => {
-                            tracing::debug!(
-                                "InstructionsLoaded event JSON reparse failed: {e}"
-                            );
+                            tracing::debug!("InstructionsLoaded event JSON reparse failed: {e}");
                             return;
                         }
                     };
