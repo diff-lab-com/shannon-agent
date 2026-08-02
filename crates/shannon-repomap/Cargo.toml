@@ -1,0 +1,18 @@
+[package]
+name = "shannon-repomap"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Tree-sitter based repository symbol map for LLM context (P1-4 Phase A: Rust only)"
+authors.workspace = true
+
+[dependencies]
+# Workspace deps
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
+walkdir = { workspace = true }
