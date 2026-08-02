@@ -23,6 +23,7 @@ chrono = { workspace = true }
 
 # Local dependencies
 shannon-types = { path = "../shannon-types" }
+shannon-engine = { path = "../shannon-engine" }
 
 # Serialization
 serde_yaml = "0.9"

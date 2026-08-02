@@ -58,26 +58,9 @@ but not yet exercised by the application flow.
 
 ---
 
-## Phase 2: Document Processing (Priority: P2)
+## Phase 2: Debug & Developer Tools (Priority: P2)
 
-### 2.1 `/pdf` Command — PDF Processing
-**File**: `crates/shannon-commands/src/builtin/pdf.rs`
-**Dead code**: `ImageFormat` variants, `PdfTable` fields and methods,
-`PdfPage` extraction methods
-
-**Work needed**:
-- Implement `PdfTable::to_text()` for table extraction
-- Wire `ImageFormat` into image extraction pipeline
-- Add OCR integration for scanned PDFs
-- Implement page-range selection via `PdfPage` methods
-
-**Dependencies**: External `pdf` crate or similar PDF library
-
----
-
-## Phase 3: Debug & Developer Tools (Priority: P2)
-
-### 3.1 `/debug` Command — Debug Instrumentation
+### 2.1 `/debug` Command — Debug Instrumentation
 **File**: `crates/shannon-commands/src/builtin/debug.rs`
 **Dead code**: `DebugCategory` variants, `LogLevel` variants
 
@@ -137,8 +120,7 @@ not yet called from the application layer:
 | 1.1 diff | Medium | High | Low | 1st |
 | 1.2 review_pr | Medium | High | Low | 2nd |
 | 1.3 export | Low | Medium | Low | 3rd |
-| 2.1 pdf | High | Medium | Medium | 6th |
-| 3.1 debug | Low | Medium | Low | 4th |
+| 2.1 debug | Low | Medium | Low | 4th |
 | 4.1 coordinator | High | High | High | 7th |
 | 5.x core enhancements | Variable | Medium | Low | 5th |
 

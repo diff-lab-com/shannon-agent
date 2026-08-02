@@ -31,9 +31,29 @@ fn provider_short_name(provider: Option<&str>) -> &str {
 }
 
 /// Classify a model identifier into a human-friendly tier label
-/// ("fast" | "standard" | "pro"). The match is case-insensitive and
-/// substring-based, so partial IDs like "claude-haiku-4-5" still work.
+/// ("fast" | "standard" | "pro").
+///
+/// Catalog models go through the **authoritative** `tier_label_for_id`
+/// (driven by `ModelCapabilities`), so the status pill can never disagree
+/// with `/model --tier` or the first-screen StatusCard. Models outside the
+/// catalog (dynamic models.dev entries, user-entered ids) fall back to the
+/// substring heuristic so the pill still reads naturally — ADR-0008
+/// Decision 1 makes this the single source of truth; the substring match is
+/// now explicitly a last-resort fallback, not the primary classifier.
 fn tier_label_for(model_id: &str) -> &'static str {
+    use shannon_core::model_registry::{TierLabel, tier_label_for_id};
+    match tier_label_for_id(model_id) {
+        TierLabel::Fast => "fast",
+        TierLabel::Standard => "standard",
+        TierLabel::Pro => "pro",
+        TierLabel::Unknown => substring_tier_fallback(model_id),
+    }
+}
+
+/// Last-resort substring heuristic for models not in the catalog (dynamic
+/// models.dev entries or user-entered ids). Catalog models never reach here —
+/// `tier_label_for_id` resolves them first.
+fn substring_tier_fallback(model_id: &str) -> &'static str {
     let lower = model_id.to_lowercase();
     if lower.contains("haiku")
         || lower.contains("flash")

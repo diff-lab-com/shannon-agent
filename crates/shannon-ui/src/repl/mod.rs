@@ -381,15 +381,9 @@ impl Repl {
             session_recorder: None,
         };
 
-        // Wire provider/model/tier into chat welcome StatusCard.
-        repl.chat.set_active(
-            repl.state
-                .selected_provider
-                .as_ref()
-                .map(|p| format!("{p:?}").to_lowercase()),
-            repl.state.model.clone(),
-            None, // tier label resolved in Task 14
-        );
+        // Wire provider/model/tier into chat welcome StatusCard via the single
+        // derivation path (ADR-0008 Decision 1 — authoritative tier label).
+        commands::sync_active_to_chat(&mut repl);
 
         repl.sync_approval_mode_label();
         repl.state
@@ -1380,15 +1374,9 @@ impl Repl {
             session_recorder: None,
         };
 
-        // Wire provider/model/tier into chat welcome StatusCard.
-        repl.chat.set_active(
-            repl.state
-                .selected_provider
-                .as_ref()
-                .map(|p| format!("{p:?}").to_lowercase()),
-            repl.state.model.clone(),
-            None, // tier label resolved in Task 14
-        );
+        // Wire provider/model/tier into chat welcome StatusCard via the single
+        // derivation path (ADR-0008 Decision 1).
+        commands::sync_active_to_chat(&mut repl);
 
         // Pre-query Ollama model info so context_window is correct from the start
         if let Some(ref mut engine) = repl.query_engine {

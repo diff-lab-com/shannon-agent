@@ -332,6 +332,7 @@ pub struct ProviderHealth {
 }
 
 /// Main query engine orchestrator
+#[derive(Clone)]
 pub struct QueryEngine {
     pub(crate) client: LlmClient,
     pub(crate) tools: Arc<ToolRegistry>,
@@ -892,6 +893,30 @@ impl QueryEngine {
         cfg.timeout_seconds = 15;
         let probe = shannon_engine::api::LlmClient::new(cfg);
         probe.validate_connection().await
+    }
+
+    /// Hot-reload the running client's API key without a restart
+    /// (ADR-0008 Decision 4 / P1-1).
+    ///
+    /// `/connect <provider> <key>` stores the key and switches the engine to the
+    /// provider via [`set_model_for_provider`], which updates the client's
+    /// provider/model/base_url — but **not** its api_key (the client retains the
+    /// startup credential). This method rebuilds the client from the current
+    /// config (which already reflects the switched provider/base_url) with the
+    /// new key, so the very next query uses it. No restart, no "switch takes
+    /// effect on next launch".
+    ///
+    /// Mirrors [`validate_credential`]'s clone-and-rebuild dance; the only
+    /// difference is this method *replaces* `self.client` instead of probing a
+    /// throwaway. `api_key` is taken verbatim — callers resolve it from the
+    /// `/connect` arg or the credential store before calling.
+    ///
+    /// Ollama capability cache is dropped on rebuild (same as a provider
+    /// switch); it re-populates lazily on the next query.
+    pub fn reload_credential(&mut self, api_key: &str) {
+        let mut cfg = self.client.config().clone();
+        cfg.api_key = api_key.to_string();
+        self.client = shannon_engine::api::LlmClient::new(cfg);
     }
 
     /// Health-check the currently-active provider + model by sending a 1-token
@@ -4157,6 +4182,27 @@ mod tests {
         let state = StateManager::new();
         let config = QueryEngineConfig::default();
         QueryEngine::new(client, tools, permissions, state, config)
+    }
+
+    #[test]
+    fn reload_credential_swaps_api_key_without_touching_other_config() {
+        // ADR-0008 Decision 4 / P1-1: /connect must hot-swap the running
+        // client's key so the next query uses it — no restart. The rebuild
+        // preserves the rest of the config (provider/model/base_url already
+        // set by set_model_for_provider); only the key changes.
+        let mut engine = create_test_engine();
+        assert_eq!(engine.client().config().api_key, "test-key");
+        assert_eq!(engine.client().config().model, "test-model");
+        assert_eq!(engine.client().config().base_url, "http://localhost:11434");
+
+        engine.reload_credential("sk-freshly-connected");
+
+        let cfg = engine.client().config();
+        assert_eq!(cfg.api_key, "sk-freshly-connected");
+        // Unrelated fields preserved by the rebuild.
+        assert_eq!(cfg.model, "test-model");
+        assert_eq!(cfg.base_url, "http://localhost:11434");
+        assert_eq!(cfg.provider, LlmProvider::Ollama);
     }
 
     // ── ContextInjector Integration Tests ──────────────────────────────

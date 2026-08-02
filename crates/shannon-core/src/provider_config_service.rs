@@ -1,0 +1,685 @@
+//! `ProviderConfigService` — the single semantic write path for
+//! `~/.shannon/providers.toml` (ADR-0008 Decision 3 / P2-5).
+//!
+//! Both REPL commands (`/connect`, `/disconnect`) and the CLI
+//! (`shannon providers add`) route through this service so the two front-ends
+//! cannot diverge on the on-disk shape again. It is a thin layer *over*
+//! [`crate::provider_config_store::ProviderConfigStore`], which keeps its raw
+//! mutators for the desktop and tests.
+//!
+//! ## What changed and why
+//!
+//! The REPL's `/connect` used to build a fresh single-provider config and
+//! `save()` it — an **overwrite** that silently dropped every other connected
+//! provider (`/connect A` then `/connect B` lost `A`). The CLI's
+//! `providers add` already **upserted** (merge). `ProviderConfigService::connect`
+//! unifies both on the additive upsert, so the file's shape no longer depends
+//! on which front-end wrote it.
+//!
+//! ## Scope boundary
+//!
+//! The service owns the load → mutate → persist sequence for one user intent
+//! (connect / disconnect / set-active / set-tier / set-max-tokens). It does
+//! **not** own the API key (that stays in the credential store, decision A1)
+//! or the running engine (callers do `apply_model_selection` +
+//! `reload_credential`). Keeping persistence separate from session/runtime
+//! concerns is what lets `apply_connect` be split into step functions later
+//! (P3-4).
+
+use std::collections::HashSet;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use shannon_engine::api::LlmProvider;
+use shannon_types::provider_config::{CredentialRef, ProviderProfile, ProviderTiers, TierName};
+
+use crate::model_registry::models_for_provider;
+use crate::provider_config_store::ProviderConfigStore;
+use crate::provider_resolver::{llm_provider_from_slug, llm_provider_id, llm_provider_to_kind};
+
+/// Outcome of [`ProviderConfigService::connect`] — what the caller needs to
+/// drive the live session: switch the engine to `provider` / `model_id`,
+/// store the API key under `service`, and report `saved_path` to the user.
+#[derive(Debug, Clone)]
+pub struct ConnectedProvider {
+    /// The engine provider that was connected.
+    pub provider: LlmProvider,
+    /// Resolved active model id (catalog default when none requested).
+    pub model_id: String,
+    /// Credential-store service name the profile references (== provider slug).
+    pub service: String,
+    /// Where `providers.toml` was written.
+    pub saved_path: PathBuf,
+}
+
+/// Outcome of [`ProviderConfigService::disconnect`].
+#[derive(Debug, Clone)]
+pub struct DisconnectOutcome {
+    /// `true` when there was a matching slot to remove.
+    pub was_connected: bool,
+    /// When disconnecting cleared the active target, the slug of the next
+    /// still-connected provider to switch to (deterministic: first remaining).
+    /// `None` when the active target was untouched or no providers remain.
+    pub next_active: Option<String>,
+    /// Where `providers.toml` was written (`None` when nothing was removed).
+    pub saved_path: Option<PathBuf>,
+}
+
+/// The single semantic write path for `~/.shannon/providers.toml`.
+///
+/// Construct with [`ProviderConfigService::load`] for production (reads
+/// `~/.shannon/providers.toml`, starts empty when absent) or
+/// [`ProviderConfigService::load_at`] for tests. Every mutating method performs
+/// the load-mutate-persist sequence internally, so callers cannot forget the
+/// persist half.
+pub struct ProviderConfigService {
+    store: ProviderConfigStore,
+}
+
+impl ProviderConfigService {
+    /// Load `~/.shannon/providers.toml` (or start empty) and wrap it.
+    pub fn load() -> Self {
+        Self {
+            store: ProviderConfigStore::load_or_default(),
+        }
+    }
+
+    /// Load from (and later persist to) `path`. For hermetic tests — the
+    /// store pins this path so [`ProviderConfigService::connect`] and friends
+    /// never touch the user's real `~/.shannon/`.
+    pub fn load_at(path: &Path) -> Self {
+        Self {
+            store: ProviderConfigStore::load_or_default_at(path),
+        }
+    }
+
+    /// Wrap a store the caller already loaded. The service persists to the
+    /// store's pinned path. Lets a caller that already holds a
+    /// `ProviderConfigStore` route its write through the service without a
+    /// reload — the CLI's `run_providers_add` does this so the command layer
+    /// has exactly one write path (ADR-0008 P2-5 step 2).
+    pub fn from_store(store: ProviderConfigStore) -> Self {
+        Self { store }
+    }
+
+    /// Slugs currently connected — read from the in-memory config the service
+    /// holds (no extra disk read).
+    pub fn connected_slugs(&self) -> HashSet<String> {
+        self.store
+            .config()
+            .profiles
+            .get("default")
+            .map(|mp| mp.providers.iter().map(|p| p.id.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Connect (upsert) a provider. This is the additive replacement for the
+    /// REPL's former overwrite path — connecting a second provider no longer
+    /// drops the first (ADR-0008 P2-5 / Decision 3).
+    ///
+    /// `model` defaults to the provider's first catalog model; `base_url`
+    /// defaults to its canonical URL. `make_active` pins `active_target` at
+    /// the new provider (true for REPL `/connect`; the CLI maps `--set-active`
+    /// to it). When `false`, the caller's current selection is restored if it
+    /// resolves to a known catalog provider; an unknown/custom previous
+    /// selection is left on the new provider (rare, acceptable).
+    ///
+    /// Does NOT store the API key or touch the running engine — those are the
+    /// caller's session concerns.
+    pub fn connect(
+        &mut self,
+        provider: LlmProvider,
+        model: Option<&str>,
+        base_url: Option<&str>,
+        make_active: bool,
+    ) -> io::Result<ConnectedProvider> {
+        let provider_id = llm_provider_id(&provider);
+        let profile = build_profile_for_provider(&provider, base_url);
+        let model_id = model
+            .map(|s| s.to_string())
+            .or_else(|| {
+                models_for_provider(provider.clone())
+                    .first()
+                    .map(|m| m.id.to_string())
+            })
+            .unwrap_or_else(|| "default".to_string());
+
+        self.upsert_profile_with_active(profile, &model_id, make_active);
+
+        let saved_path = self.store.save()?;
+        Ok(ConnectedProvider {
+            provider,
+            model_id,
+            service: provider_id,
+            saved_path,
+        })
+    }
+
+    /// Insert or replace a fully-built [`ProviderProfile`] — the entry point
+    /// for callers that construct a profile from richer inputs than a single
+    /// [`LlmProvider`] (the CLI's `providers add` with `--kind openai-compatible`,
+    /// custom `--base-url`, `--extra-header`, …). Additive: other providers are
+    /// kept. `make_active` pins `active_target` at the new profile (`true`
+    /// preserves the CLI's current "the new provider becomes active" behavior);
+    /// `false` restores the prior selection. Persists to disk.
+    pub fn upsert(
+        &mut self,
+        profile: ProviderProfile,
+        model_id: &str,
+        make_active: bool,
+    ) -> io::Result<PathBuf> {
+        self.upsert_profile_with_active(profile, model_id, make_active);
+        self.store.save()
+    }
+
+    /// Upsert + `active_target` handling, without persisting. Shared by
+    /// [`Self::connect`] and [`Self::upsert`] so the make-active restore logic
+    /// lives in one place.
+    ///
+    /// `upsert_profile` always repoints `active_target` at the new id. For
+    /// `make_active = false` we snapshot the previous selection first and
+    /// restore it after (best-effort: a custom/unknown prior slug is left on
+    /// the new provider — rare, acceptable).
+    fn upsert_profile_with_active(
+        &mut self,
+        profile: ProviderProfile,
+        model_id: &str,
+        make_active: bool,
+    ) {
+        let prev_active = if make_active {
+            None
+        } else {
+            self.store
+                .config()
+                .profiles
+                .get("default")
+                .map(|mp| mp.active_target.clone())
+        };
+
+        self.store.upsert_profile(profile, model_id);
+
+        if !make_active {
+            if let Some(prev) = prev_active {
+                if !prev.provider_id.is_empty() {
+                    if let Some(prev_provider) = llm_provider_from_slug(&prev.provider_id) {
+                        self.store.set_active(&prev_provider, &prev.model_id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Disconnect (remove) a provider slot. Idempotent — returns
+    /// `was_connected = false` when there was nothing to remove. When the
+    /// removed slot was the active selection, [`DisconnectOutcome::next_active`]
+    /// names a remaining provider to switch to (the caller does the actual
+    /// engine switch — a session concern).
+    pub fn disconnect(&mut self, provider: &LlmProvider) -> io::Result<DisconnectOutcome> {
+        let slug = llm_provider_id(provider);
+        let default = self.store.config().profiles.get("default");
+        let was_connected = default
+            .map(|mp| mp.providers.iter().any(|p| p.id == slug))
+            .unwrap_or(false);
+        let was_active = default
+            .map(|mp| mp.active_target.provider_id == slug)
+            .unwrap_or(false);
+
+        if !was_connected {
+            return Ok(DisconnectOutcome {
+                was_connected: false,
+                next_active: None,
+                saved_path: None,
+            });
+        }
+
+        self.store.remove_profile(&slug);
+        let saved_path = self.store.save()?;
+
+        // `remove_profile` clears `active_target` when it pointed at the
+        // removed slot; offer the first remaining slug so the REPL can switch.
+        let next_active = if was_active {
+            self.store
+                .config()
+                .profiles
+                .get("default")
+                .and_then(|mp| mp.providers.first().map(|p| p.id.clone()))
+        } else {
+            None
+        };
+
+        Ok(DisconnectOutcome {
+            was_connected: true,
+            next_active,
+            saved_path: Some(saved_path),
+        })
+    }
+
+    /// Pin `active_target` at `provider` / `model` and persist.
+    pub fn set_active(&mut self, provider: &LlmProvider, model: &str) -> io::Result<PathBuf> {
+        self.store.set_active(provider, model);
+        self.store.save()
+    }
+
+    /// Set a per-tier model override on `provider` and persist.
+    pub fn set_tier(
+        &mut self,
+        provider: &LlmProvider,
+        tier: TierName,
+        model: &str,
+    ) -> io::Result<PathBuf> {
+        self.store.set_tier(provider, tier, model);
+        self.store.save()
+    }
+
+    /// Set or clear (`None`) the per-provider `default_max_tokens` and persist.
+    pub fn set_max_tokens(
+        &mut self,
+        provider: &LlmProvider,
+        max_tokens: Option<u32>,
+    ) -> io::Result<PathBuf> {
+        self.store.set_default_max_tokens(provider, max_tokens);
+        self.store.save()
+    }
+
+    /// Hand back the underlying store for callers that need raw access
+    /// (desktop low-level paths).
+    pub fn into_inner(self) -> ProviderConfigStore {
+        self.store
+    }
+}
+
+/// Build the [`ProviderProfile`] for a provider — the shared shape both
+/// `connect` and (until step 4) `build_connect_profile` produce. Field values
+/// mirror [`crate::provider_resolver::build_connect_profile`] exactly so the
+/// on-disk shape is identical whether a provider was added via `/connect` or
+/// `providers add` (ADR-0008 P2-5 test T5 guards against drift).
+fn build_profile_for_provider(
+    provider: &LlmProvider,
+    base_url_override: Option<&str>,
+) -> ProviderProfile {
+    let id = llm_provider_id(provider);
+    ProviderProfile {
+        id: id.clone(),
+        kind: llm_provider_to_kind(provider),
+        display_name: id.clone(),
+        base_url: base_url_override
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| provider.default_base_url().to_string()),
+        models_url: None,
+        credential: CredentialRef::Store {
+            service: id.clone(),
+        },
+        extra_headers: std::collections::HashMap::new(),
+        default_max_tokens: None,
+        fallback_models: Vec::new(),
+        quirks: Default::default(),
+        tiers: ProviderTiers::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Fresh service over a temp dir — never touches `~/.shannon/`.
+    fn service() -> (ProviderConfigService, TempDir) {
+        let dir = TempDir::new().expect("temp dir");
+        let svc = ProviderConfigService::load_at(&dir.path().join("providers.toml"));
+        (svc, dir)
+    }
+
+    #[test]
+    fn connect_then_connect_keeps_both_providers() {
+        // T1 — the bug fix. The old REPL overwrite path would have dropped
+        // Anthropic once OpenAI was connected.
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .unwrap();
+        let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+        let connected = svc.connected_slugs();
+        assert!(
+            connected.contains("anthropic"),
+            "anthropic must survive a second connect"
+        );
+        assert!(connected.contains("openai"), "openai must be connected");
+    }
+
+    #[test]
+    fn connect_then_disconnect_removes_only_that_provider() {
+        // T2.
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .unwrap();
+        let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+
+        let outcome = svc.disconnect(&LlmProvider::OpenAI).unwrap();
+        assert!(outcome.was_connected);
+        let connected = svc.connected_slugs();
+        assert!(connected.contains("anthropic"));
+        assert!(!connected.contains("openai"));
+    }
+
+    #[test]
+    fn disconnect_active_returns_next_active_slug() {
+        // T3 — disconnecting the active selection offers the remaining slug.
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .unwrap();
+        let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+
+        let outcome = svc.disconnect(&LlmProvider::OpenAI).unwrap();
+        // OpenAI was made active by the second connect; a remaining slug is offered.
+        assert_eq!(outcome.next_active.as_deref(), Some("anthropic"));
+    }
+
+    #[test]
+    fn connect_make_active_false_preserves_prior_selection() {
+        // T4 — the CLI --set-active=false path must not steal active_target.
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .unwrap();
+        let anthropic_active = svc
+            .store
+            .config()
+            .profiles
+            .get("default")
+            .unwrap()
+            .active_target
+            .provider_id
+            .clone();
+        assert_eq!(anthropic_active, "anthropic");
+
+        // Add OpenAI without making it active.
+        let _ = svc.connect(LlmProvider::OpenAI, None, None, false).unwrap();
+        let still_active = svc
+            .store
+            .config()
+            .profiles
+            .get("default")
+            .unwrap()
+            .active_target
+            .provider_id
+            .clone();
+        assert_eq!(
+            still_active, "anthropic",
+            "make_active=false must preserve the prior selection"
+        );
+        // But OpenAI is still present.
+        assert!(svc.connected_slugs().contains("openai"));
+    }
+
+    #[test]
+    fn disconnect_unknown_provider_is_idempotent_noop() {
+        let (mut svc, _dir) = service();
+        let outcome = svc.disconnect(&LlmProvider::OpenAI).unwrap();
+        assert!(!outcome.was_connected);
+        assert!(outcome.next_active.is_none());
+        assert!(outcome.saved_path.is_none());
+    }
+
+    #[test]
+    fn connect_writes_durable_rereadable_file() {
+        // T7 (config half): a connect round-trips through disk so a fresh
+        // load sees the provider as connected.
+        let (mut svc, dir) = service();
+        let path = dir.path().join("providers.toml");
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .unwrap();
+        drop(svc);
+
+        let reloaded = ProviderConfigService::load_at(&path);
+        assert!(reloaded.connected_slugs().contains("anthropic"));
+    }
+
+    #[test]
+    fn connect_persists_resolved_model_as_active_target() {
+        let (mut svc, _dir) = service();
+        let connected = svc
+            .connect(
+                LlmProvider::Anthropic,
+                Some("claude-sonnet-4-6"),
+                None,
+                true,
+            )
+            .unwrap();
+        assert_eq!(connected.model_id, "claude-sonnet-4-6");
+        let active = &svc
+            .store
+            .config()
+            .profiles
+            .get("default")
+            .unwrap()
+            .active_target;
+        assert_eq!(active.provider_id, "anthropic");
+        assert_eq!(active.model_id, "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn upsert_accepts_prebuilt_profile_and_keeps_existing_providers() {
+        // The CLI's `providers add` builds a richer profile than `connect`
+        // (custom kind, base url, headers) and hands it to `upsert`. This
+        // proves that path is additive — a prior connect survives — and that
+        // the make_active=true default pins the new profile (matching the
+        // CLI's historical "new provider becomes active" behavior).
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .unwrap();
+
+        let custom = ProviderProfile {
+            id: "my-gateway".into(),
+            kind: shannon_types::provider_config::ProviderKind::OpenAiCompatible,
+            display_name: "my-gateway".into(),
+            base_url: "https://gateway.example.com/v1".into(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: "my-gateway".into(),
+            },
+            extra_headers: std::collections::HashMap::from([("X-Foo".into(), "bar".into())]),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+        };
+        svc.upsert(custom, "gpt-4o", true).unwrap();
+
+        let connected = svc.connected_slugs();
+        assert!(connected.contains("anthropic"), "anthropic must survive");
+        assert!(connected.contains("my-gateway"), "custom provider added");
+
+        // make_active=true → new profile is the active target.
+        let active = &svc
+            .store
+            .config()
+            .profiles
+            .get("default")
+            .unwrap()
+            .active_target;
+        assert_eq!(active.provider_id, "my-gateway");
+        assert_eq!(active.model_id, "gpt-4o");
+    }
+
+    #[test]
+    fn upsert_make_active_false_preserves_prior_selection() {
+        // The CLI passes make_active=true today (behavior-compat), but the
+        // service exposes false so --set-active can be wired later. Guard the
+        // restore logic for the prebuilt-profile path too.
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(
+                LlmProvider::Anthropic,
+                Some("claude-sonnet-4-6"),
+                None,
+                true,
+            )
+            .unwrap();
+
+        let custom = ProviderProfile {
+            id: "openai".into(),
+            kind: shannon_types::provider_config::ProviderKind::OpenAi,
+            display_name: "openai".into(),
+            base_url: LlmProvider::OpenAI.default_base_url().to_string(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: "openai".into(),
+            },
+            extra_headers: std::collections::HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+        };
+        svc.upsert(custom, "gpt-4o", false).unwrap();
+
+        assert!(svc.connected_slugs().contains("openai"));
+        let active = &svc
+            .store
+            .config()
+            .profiles
+            .get("default")
+            .unwrap()
+            .active_target;
+        assert_eq!(
+            active.provider_id, "anthropic",
+            "make_active=false must preserve the prior selection"
+        );
+    }
+
+    // ── /connect profile shape (migrated from provider_resolver's
+    // build_connect_profile tests — ADR-0008 P2-5 step 4) ──────────────
+    //
+    // `ProviderConfigService::connect` is now the only producer of the on-disk
+    // profile shape, so the field-by-field shape + A1 (no-plaintext) checks
+    // live here next to it.
+
+    /// Find a connected provider's profile by slug from the service's
+    /// in-memory config (test helper).
+    fn profile_for<'a>(svc: &'a ProviderConfigService, slug: &str) -> &'a ProviderProfile {
+        svc.store
+            .config()
+            .profiles
+            .get("default")
+            .and_then(|mp| mp.providers.iter().find(|p| p.id == slug))
+            .unwrap_or_else(|| panic!("provider {slug} should be connected"))
+    }
+
+    #[test]
+    fn connect_anthropic_uses_store_credential_and_catalog_default_model() {
+        let (mut svc, _dir) = service();
+        let connected = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .unwrap();
+        assert_eq!(connected.provider, LlmProvider::Anthropic);
+        assert_eq!(connected.service, "anthropic");
+        // No model requested → the provider's first catalog model.
+        assert!(
+            connected.model_id.starts_with("claude-"),
+            "got {}",
+            connected.model_id
+        );
+        // Credential is a Store reference (A1: no plaintext), keyed at the slug.
+        let p = profile_for(&svc, "anthropic");
+        match &p.credential {
+            CredentialRef::Store { service } => assert_eq!(service, "anthropic"),
+            other => panic!("expected Store credential, got {other:?}"),
+        }
+        // Active target points at anthropic + the resolved model.
+        let active = &svc
+            .store
+            .config()
+            .profiles
+            .get("default")
+            .unwrap()
+            .active_target;
+        assert_eq!(active.provider_id, "anthropic");
+        assert_eq!(active.model_id, connected.model_id);
+    }
+
+    #[test]
+    fn connect_respects_explicit_model() {
+        let (mut svc, _dir) = service();
+        let connected = svc
+            .connect(LlmProvider::OpenAI, Some("gpt-4o"), None, true)
+            .unwrap();
+        assert_eq!(connected.provider, LlmProvider::OpenAI);
+        assert_eq!(connected.service, "openai");
+        assert_eq!(connected.model_id, "gpt-4o");
+    }
+
+    #[test]
+    fn connect_base_url_override_wins_over_default() {
+        let (mut svc, _dir) = service();
+        svc.connect(
+            LlmProvider::Anthropic,
+            None,
+            Some("https://proxy.example.com"),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            profile_for(&svc, "anthropic").base_url,
+            "https://proxy.example.com"
+        );
+    }
+
+    #[test]
+    fn connect_uses_provider_default_base_url_for_ollama() {
+        // Ollama needs no auth, but the profile still carries a Store ref so
+        // the shape is uniform (the stored value is simply empty/unused).
+        let (mut svc, _dir) = service();
+        let connected = svc
+            .connect(LlmProvider::Ollama, Some("llama3"), None, true)
+            .unwrap();
+        assert_eq!(connected.service, "ollama");
+        assert_eq!(connected.model_id, "llama3");
+        let p = profile_for(&svc, "ollama");
+        assert_eq!(p.base_url, "http://localhost:11434");
+        match &p.credential {
+            CredentialRef::Store { service } => assert_eq!(service, "ollama"),
+            other => panic!("expected Store credential, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn connect_providers_toml_trips_no_secret_scanner_matches() {
+        // A1 regression: the on-disk providers.toml written by the /connect
+        // path (now `ProviderConfigService::connect`) carries only
+        // CredentialRef::Store references (service slugs), never plaintext
+        // keys. The gitleaks-derived SecretScanner must find nothing for every
+        // provider with a key-shaped rule.
+        use crate::team_memory_sync::SecretScanner;
+        let scanner = SecretScanner::new();
+        assert!(
+            !scanner.rule_ids().is_empty(),
+            "scanner must have default rules"
+        );
+
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        for provider in [
+            LlmProvider::Anthropic,
+            LlmProvider::OpenAI,
+            LlmProvider::DeepSeek,
+            LlmProvider::Zhipu,
+        ] {
+            let path = dir
+                .path()
+                .join(format!("{}.toml", llm_provider_id(&provider)));
+            let mut svc = ProviderConfigService::load_at(&path);
+            svc.connect(provider.clone(), None, None, true).unwrap();
+            drop(svc);
+            let matches = scanner
+                .scan_file(&path)
+                .expect("scan should read the saved file");
+            assert!(
+                matches.is_empty(),
+                "providers.toml for {provider:?} tripped the secret scanner: {matches:?}"
+            );
+        }
+    }
+}
