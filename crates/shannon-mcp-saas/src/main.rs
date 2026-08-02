@@ -12,34 +12,37 @@ use std::process::ExitCode;
 
 use tracing_subscriber::EnvFilter;
 
+#[cfg(feature = "slack")]
+use shannon_mcp_saas::slack;
 use shannon_mcp_saas::{github, server};
 
 #[tokio::main]
 async fn main() -> ExitCode {
     init_tracing();
 
-    // argv[1] selects the SaaS. Only `github` is wired in this spike.
     let saas = std::env::args().nth(1).unwrap_or_default();
     match saas.as_str() {
         "github" | "" => {
-            // Proceed with GitHub tools.
+            let tools = github::tools::as_server_tool(github::tools::all_tools_unauth());
+            server::print_tool_listing(&tools);
+            if let Err(e) = server::run_stdio(&tools).await {
+                eprintln!("shannon-mcp-saas: stdio loop failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+        #[cfg(feature = "slack")]
+        "slack" => {
+            let tools = slack::tools::as_server_tool(slack::tools::all_tools_unauth());
+            server::print_tool_listing(&tools);
+            if let Err(e) = server::run_stdio(&tools).await {
+                eprintln!("shannon-mcp-saas: stdio loop failed: {e}");
+                return ExitCode::FAILURE;
+            }
         }
         other => {
-            eprintln!("shannon-mcp-saas: unknown SaaS '{other}' (supported: github)");
+            eprintln!("shannon-mcp-saas: unknown SaaS '{other}' (supported: github, slack)");
             return ExitCode::from(2);
         }
-    }
-
-    // Wire up a default unauthenticated tool set. Production callers
-    // (the future `serve` subcommand) will swap in an authenticated
-    // client after completing the OAuth flow.
-    let tools = github::tools::all_tools_unauth();
-
-    server::print_tool_listing(&tools);
-
-    if let Err(e) = server::run_stdio(&tools).await {
-        eprintln!("shannon-mcp-saas: stdio loop failed: {e}");
-        return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
 }

@@ -479,83 +479,19 @@ async fn unauthenticated_returns_401() {
 // 10. write-tool permission gating
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn create_issue_without_permission_returns_error() {
-    // No mockito needed: the permission check happens before any HTTP.
-    let tool = CreateIssueTool {
-        client: Arc::new(GitHubClient::new(
-            reqwest::Client::new(),
-            Some(Token::new("t".into())),
-        )),
-    };
-    let err = tool
-        .execute(json!({
-            "owner": "octocat",
-            "repo": "hello-world",
-            "title": "Bug"
-            // permission deliberately missing
-        }))
-        .await
-        .expect_err("expected permission error");
-    // McpError::InvalidRequest → code -32600. We assert on the
-    // human-readable message rather than the (private) field so the
-    // test stays robust to enum reshuffles.
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("permission"),
-        "expected permission message, got {msg}"
-    );
-    assert!(msg.contains("write"), "expected write scope, got {msg}");
-}
-
-#[tokio::test]
-async fn review_pr_without_permission_returns_error() {
-    let tool = ReviewPrTool {
-        client: Arc::new(GitHubClient::new(
-            reqwest::Client::new(),
-            Some(Token::new("t".into())),
-        )),
-    };
-    let err = tool
-        .execute(json!({
-            "owner": "octocat",
-            "repo": "hello-world",
-            "number": 1,
-            "event": "APPROVE"
-        }))
-        .await
-        .expect_err("expected permission error");
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("permission"),
-        "expected permission message, got {msg}"
-    );
-    assert!(msg.contains("write"), "expected write scope, got {msg}");
-}
-
-#[tokio::test]
-async fn comment_without_permission_returns_error() {
-    let tool = CommentTool {
-        client: Arc::new(GitHubClient::new(
-            reqwest::Client::new(),
-            Some(Token::new("t".into())),
-        )),
-    };
-    let err = tool
-        .execute(json!({
-            "owner": "octocat",
-            "repo": "hello-world",
-            "number": 1,
-            "body": "hello"
-        }))
-        .await
-        .expect_err("expected permission error");
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("permission"),
-        "expected permission message, got {msg}"
-    );
-}
+// Note: the previous `*_without_permission_returns_error` tests exercised
+// the self-attested `args.permission` gate, which has been removed (see the
+// module docs in `github/tools.rs`). Permission enforcement now lives in
+// `server::SessionGrants` and is exercised by the integration tests in
+// `server.rs`:
+//   * write_tool_without_grant_is_denied_even_if_args_permission_set
+//   * write_tool_succeeds_after_tools_grant
+//   * revoke_unsets_a_grant
+//   * read_only_defaults_pre_grant_read_tools
+//
+// The write tools themselves now trust the server boundary and will reach
+// the upstream HTTP layer (and fail there for the unauthenticated client
+// used in tests). That is the correct post-fix behavior.
 
 // ---------------------------------------------------------------------------
 // 11. all_tools() returns six McpTool trait objects with the right names

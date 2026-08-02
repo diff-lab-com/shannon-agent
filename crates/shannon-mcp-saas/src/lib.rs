@@ -8,3 +8,5 @@
 
 pub mod github;
 pub mod server;
+#[cfg(feature = "slack")]
+pub mod slack;
