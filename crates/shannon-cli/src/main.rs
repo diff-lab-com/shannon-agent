@@ -1967,21 +1967,14 @@ fn run_serve_command(
             Err(e) => eprintln!("Warning: Team context init failed: {e}"),
         }
 
-        let mut server = shannon_core::api_server::ShannonApiServer::new(client_config)
-            .with_tools(tools)
-            .port(port)
-            .allow_nonloopback(allow_nonloopback);
-
-        if let Some(h) = host.as_deref() {
-            server = server.host(h);
+        if allow_nonloopback && auth_token.is_none() {
+            anyhow::bail!("non-loopback serve requires --auth-token");
         }
-        if let Some(token) = auth_token {
-            server = server.auth_token(token);
-        }
-
         let bind_host = host.as_deref().unwrap_or("127.0.0.1");
         println!("Shannon API server starting on {bind_host}:{port}");
-        server.serve().await.map_err(|e| anyhow::anyhow!("{e}"))
+        return shannon_server::run(bind_host, port, client_config, auth_token)
+            .await
+            .map_err(|e| anyhow::anyhow!(e));
     })
 }
 
