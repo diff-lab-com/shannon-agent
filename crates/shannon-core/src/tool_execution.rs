@@ -612,7 +612,52 @@ impl ToolExecutionService {
     /// The hook manager is stored behind an `Arc<RwLock<...>>` so it can be
     /// shared with other components (e.g. the query engine) that also need to
     /// fire lifecycle events.
+    ///
+    /// As a side effect, this also wires the global instructions hook
+    /// emitter (P1-2) so the project-instructions loader can fire
+    /// `HookEvent::InstructionsLoaded` after merging CLAUDE.md / AGENTS.md /
+    /// `.claude/rules/*.md`. The emitter is a fire-and-forget closure that
+    /// serializes the event to JSON and dispatches it asynchronously through
+    /// the hook manager.
     pub fn set_hook_manager(&mut self, hook_manager: Arc<tokio::sync::RwLock<HookManager>>) {
+        // Install the global instructions emitter FIRST so any concurrent
+        // instruction load on a worker thread can pick it up immediately.
+        // The closure must not panic: errors inside the manager are swallowed.
+        let hm_for_emitter = Arc::clone(&hook_manager);
+        crate::project_instructions::install_instructions_emitter(Box::new(move |event| {
+            // Fire-and-forget: dispatch on the tokio runtime without blocking
+            // the caller. If we are not inside a runtime (e.g. in a unit test),
+            // fall back to a blocking call so the event still reaches the
+            // manager.
+            let hm = Arc::clone(&hm_for_emitter);
+            let bytes = event.to_json_bytes();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let ev = match serde_json::from_slice::<HookEvent>(&bytes) {
+                        Ok(ev) => ev,
+                        Err(e) => {
+                            tracing::debug!(
+                                "InstructionsLoaded event JSON reparse failed: {e}"
+                            );
+                            return;
+                        }
+                    };
+                    if let Err(e) = hm.read().await.run_hooks(&ev).await {
+                        tracing::debug!("InstructionsLoaded hook dispatch failed: {e}");
+                    }
+                });
+            } else {
+                // No runtime available; spin a fresh one. This only happens
+                // in unit tests that don't install a runtime, so we keep
+                // this path intentionally simple.
+                if let Ok(rt) = tokio::runtime::Runtime::new() {
+                    rt.block_on(async {
+                        let guard = hm.read().await;
+                        let _ = guard.run_hooks(&event).await;
+                    });
+                }
+            }
+        }));
         self.hook_manager = Some(hook_manager);
     }
 

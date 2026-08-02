@@ -317,7 +317,7 @@ pub fn export_to_markdown(session: &ExportSession, options: &ExportOptions) -> S
 }
 
 /// Export session to JSON
-pub fn export_to_json(session: &ExportSession, options: &ExportOptions) -> String {
+pub fn export_to_json(session: &ExportSession, options: &ExportOptions) -> JsonValue {
     let mut json_obj = serde_json::json!({
         "title": session.title,
         "started_at": session.started_at,
@@ -355,17 +355,33 @@ pub fn export_to_json(session: &ExportSession, options: &ExportOptions) -> Strin
 
     json_obj["messages"] = serde_json::json!(messages);
 
-    let json_str = serde_json::to_string_pretty(&json_obj).unwrap_or_default();
-
     if options.sanitize {
-        sanitize_content(
-            &json_str,
+        sanitize_json_value(
+            &mut json_obj,
             &dirs::home_dir()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default(),
-        )
+        );
+        json_obj
     } else {
-        json_str
+        json_obj
+    }
+}
+
+fn sanitize_json_value(value: &mut JsonValue, home_dir: &str) {
+    match value {
+        JsonValue::String(text) => *text = sanitize_content(text, home_dir),
+        JsonValue::Array(values) => {
+            for value in values {
+                sanitize_json_value(value, home_dir);
+            }
+        }
+        JsonValue::Object(map) => {
+            for value in map.values_mut() {
+                sanitize_json_value(value, home_dir);
+            }
+        }
+        JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) => {}
     }
 }
 
@@ -490,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn test_export_to_markdown() {
+    fn markdown_export_produces_headings() {
         let session = ExportSession {
             title: "Test Session".to_string(),
             started_at: 1_600_000_000,
@@ -527,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn test_export_to_json() {
+    fn json_export_produces_valid_json() {
         let session = ExportSession {
             title: "Test Session".to_string(),
             started_at: 1_600_000_000,
@@ -545,14 +561,12 @@ mod tests {
             },
         };
 
-        let options = ExportOptions::default();
-        let json = export_to_json(&session, &options);
+        let json = export_to_json(&session, &ExportOptions::default());
+        let serialized = serde_json::to_string(&json).expect("export should produce valid JSON");
+        let parsed: JsonValue = serde_json::from_str(&serialized).expect("JSON should parse");
 
-        assert!(json.contains("\"title\""));
-        assert!(json.contains("\"Test Session\""));
-        assert!(json.contains("\"messages\""));
-        assert!(json.contains("\"role\""));
-        assert!(json.contains("\"user\""));
+        assert_eq!(parsed["title"], "Test Session");
+        assert_eq!(parsed["messages"][0]["role"], "user");
     }
 
     #[test]

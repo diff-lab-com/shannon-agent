@@ -15,7 +15,7 @@ Arguments: {args}
 Categories:
 - Git & Version Control: commit, status, diff, review-pr, worktree
 - Code Review & Analysis: review-pr, diff
-- Files & Documents: pdf, export
+- Files & Documents: export
 - System & Configuration: config, debug, credentials
 - User Interface: search, clear, help, history
 
@@ -271,18 +271,6 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_examples(vec!["/review-pr", "/review-pr 123"])
             .with_when_to_use("To review code changes before merging")
             .with_related(vec!["commit", "diff"])
-        ),
-        "pdf" => Some(
-            CommandHelpEntry::new(
-                "pdf".to_string(),
-                "Extract and analyze content from PDF files".to_string(),
-                HelpCategory::Files,
-            )
-            .with_aliases(vec!["read-pdf", "analyze-pdf"])
-            .with_arg_hint("<file.pdf>")
-            .with_examples(vec!["/pdf document.pdf", "/pdf research.pdf --pages 1-5"])
-            .with_when_to_use("When you need to read or analyze PDF documents")
-            .with_related(vec![])
         ),
         "status" => Some(
             CommandHelpEntry::new(
@@ -615,7 +603,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_arg_hint("<file-path> [prompt]")
             .with_examples(vec!["/image screenshot.png", "/image diagram.png Explain this architecture", "/img ~/photos/error.jpg What went wrong?"])
             .with_when_to_use("Use to share a screenshot, diagram, or photo with the AI for visual analysis")
-            .with_related(vec!["pdf"])
+            .with_related(vec![])
         ),
         "mode" => Some(
             CommandHelpEntry::new(
@@ -1104,7 +1092,6 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
     [
         "commit",
         "review-pr",
-        "pdf",
         "status",
         "diff",
         "search",

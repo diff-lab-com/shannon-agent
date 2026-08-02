@@ -332,6 +332,7 @@ pub struct ProviderHealth {
 }
 
 /// Main query engine orchestrator
+#[derive(Clone)]
 pub struct QueryEngine {
     pub(crate) client: LlmClient,
     pub(crate) tools: Arc<ToolRegistry>,

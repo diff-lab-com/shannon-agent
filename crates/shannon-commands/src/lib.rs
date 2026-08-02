@@ -15,7 +15,7 @@
 // - **Registry**: Central command registration and lookup
 // - **Parser**: Argument parsing and validation
 // - **Executor**: Command execution with context
-// - **Built-in commands**: Core commands (commit, review-pr, pdf, etc.)
+// - **Built-in commands**: Core commands (commit, review-pr, etc.)
 //
 // ## Command Types
 //
@@ -83,11 +83,6 @@ pub mod image_utils {
 /// Re-export search utilities for REPL integration
 pub mod search_utils {
     pub use crate::builtin::search_utils::*;
-}
-
-/// Re-export PDF types and utilities for external consumers
-pub mod pdf_utils {
-    pub use crate::builtin::pdf_types::*;
 }
 
 /// Re-export debug utilities for REPL integration

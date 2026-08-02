@@ -99,8 +99,7 @@ mod export_tests {
     #[test]
     fn test_export_to_json() {
         let session = make_test_session();
-        let json_str = export_to_json(&session, &ExportOptions::default());
-        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let parsed = export_to_json(&session, &ExportOptions::default());
         assert_eq!(parsed["title"], "Shannon Session");
         assert!(parsed["messages"].is_array());
         assert_eq!(parsed["messages"].as_array().unwrap().len(), 2);
@@ -596,92 +595,6 @@ mod debug_tests {
         assert_eq!(format!("{}", LogLevel::Trace), "trace");
         assert_eq!(format!("{}", LogLevel::Info), "info");
         assert_eq!(format!("{}", LogLevel::Error), "error");
-    }
-}
-
-// ── PDF Utils Tests ──────────────────────────────────────────────
-
-mod pdf_tests {
-    use shannon_commands::pdf_utils::{
-        ImageFormat, PdfContent, PdfMetadata, PdfOptions, PdfPage, PdfTable, get_pdf_prompt,
-    };
-
-    #[test]
-    fn test_pdf_options_default() {
-        let opts = PdfOptions::default();
-        assert!(opts.pages.is_none());
-        assert!(!opts.extract_images);
-        assert!(!opts.use_ocr);
-        assert!(!opts.extract_tables);
-    }
-
-    #[test]
-    fn test_pdf_metadata_creation() {
-        let meta = PdfMetadata {
-            title: Some("Test PDF".to_string()),
-            author: Some("Test Author".to_string()),
-            page_count: 10,
-            ..Default::default()
-        };
-        assert_eq!(meta.title.as_deref(), Some("Test PDF"));
-        assert_eq!(meta.page_count, 10);
-    }
-
-    #[test]
-    fn test_pdf_content_from_ai_output() {
-        let ai_output = "### Document Metadata\n- **Title**: Test Document\n- **Pages**: 5\n\n### Key Findings\n- Finding one\n";
-        let content = PdfContent::from_ai_output("test.pdf", ai_output);
-        assert_eq!(content.source_path, "test.pdf");
-        assert_eq!(content.total_pages, 5);
-        assert_eq!(content.metadata.title.as_deref(), Some("Test Document"));
-    }
-
-    #[test]
-    fn test_pdf_page_creation() {
-        let page = PdfPage::new(1, "Hello world".to_string());
-        assert_eq!(page.number, 1);
-        assert_eq!(page.text, "Hello world");
-        assert!(page.images.is_empty());
-        assert!(page.tables.is_empty());
-    }
-
-    #[test]
-    fn test_pdf_image_format_properties() {
-        // ImageFormat does not derive Serialize/Deserialize,
-        // so test extension and from_extension instead.
-        assert_eq!(ImageFormat::Png.extension(), "png");
-        assert_eq!(ImageFormat::Jpeg.extension(), "jpg");
-        assert_eq!(ImageFormat::Tiff.extension(), "tiff");
-        assert_eq!(ImageFormat::Pnm.extension(), "pnm");
-        assert_eq!(ImageFormat::Pdf.extension(), "pdf");
-
-        assert_eq!(ImageFormat::from_extension("png"), Some(ImageFormat::Png));
-        assert_eq!(ImageFormat::from_extension("jpg"), Some(ImageFormat::Jpeg));
-        assert_eq!(ImageFormat::from_extension("tiff"), Some(ImageFormat::Tiff));
-    }
-
-    #[test]
-    fn test_pdf_table_creation() {
-        let table = PdfTable::new(
-            0,
-            1,
-            vec!["Name".to_string(), "Value".to_string()],
-            vec![
-                vec!["key1".to_string(), "val1".to_string()],
-                vec!["key2".to_string(), "val2".to_string()],
-            ],
-        );
-        assert_eq!(table.headers.len(), 2);
-        assert_eq!(table.rows.len(), 2);
-        assert_eq!(table.row_count(), 2);
-        assert_eq!(table.column_count(), 2);
-    }
-
-    #[test]
-    fn test_get_pdf_prompt_with_file() {
-        let opts = PdfOptions::default();
-        let prompt = get_pdf_prompt("test.pdf", &opts);
-        assert!(prompt.contains("test.pdf"));
     }
 }
 
