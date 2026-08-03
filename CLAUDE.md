@@ -29,15 +29,15 @@ Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` ha
 
 | Crate | Responsibility | Tests |
 |-------|---------------|-------|
-| `shannon-core` | API client, query engine, permissions, tools, state management | ~3,460 |
-| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1,421 |
-| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~1,529 |
-| `shannon-commands` | Built-in commands (/help, /config, /commit, etc.) | ~384 |
-| `shannon-agents` | Multi-agent orchestration | ~897 |
-| `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~442 |
-| `shannon-skills` | Skill system (command templates) | ~172 |
-| `shannon-mcp` | MCP (Model Context Protocol) server integration | ~574 |
-| `shannon-types` | Shared types (re-exported by shannon-core) | ~74 |
+| `shannon-core` | API client, query engine, permissions, tools, state management | [metrics.md](./docs/metrics.md) |
+| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | [metrics.md](./docs/metrics.md) |
+| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | [metrics.md](./docs/metrics.md) |
+| `shannon-commands` | Built-in commands (/help, /config, /commit, etc.) | [metrics.md](./docs/metrics.md) |
+| `shannon-agents` | Multi-agent orchestration | [metrics.md](./docs/metrics.md) |
+| `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | [metrics.md](./docs/metrics.md) |
+| `shannon-skills` | Skill system (command templates) | [metrics.md](./docs/metrics.md) |
+| `shannon-mcp` | MCP (Model Context Protocol) server integration | [metrics.md](./docs/metrics.md) |
+| `shannon-types` | Shared types (re-exported by shannon-core) | [metrics.md](./docs/metrics.md) |
 | `shannon-tool-interface` | Tool trait definitions | n/a |
 | `shannon-codegen` | Code generation utilities | n/a |
 | `shannon-agent` | Single agent runtime (binary crate) | n/a |

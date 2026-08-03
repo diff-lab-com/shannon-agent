@@ -5,19 +5,19 @@
 
 ## Snapshot
 
-- **Generated (UTC)**: `2026-08-02T08:02:05Z`
-- **Branch**: `fix/provider-model-command-remediation`
-- **Commit**: `839c2b92`
-- **Describe**: `v0.7.1-169-g839c2b92-dirty`
+- **Generated (UTC)**: `2026-08-03T08:54:14Z`
+- **Branch**: `feat/p0-3-metrics`
+- **Commit**: `dd50dd28`
+- **Describe**: `v0.7.1-199-gdd50dd28-dirty`
 
 ## Summary
 
 | metric | value |
 |---|---:|
-| Tests (nextest, runnable) | 10883 |
-| Tests (source `#[test]`/`#[tokio::test]` attrs) | 10779 |
-| Rust source files | 580 |
-| Rust LOC (code) | 397537 |
+| Tests (nextest, runnable) | 11093 |
+| Tests (source `#[test]`/`#[tokio::test]` attrs) | 10989 |
+| Rust source files | 605 |
+| Rust LOC (code) | 409510 |
 | `cargo clippy --workspace -- -D warnings` | pass |
 | `cargo deny check` | pass |
 
@@ -28,23 +28,24 @@ Counts below come from `cargo nextest list --workspace --message-format=json`
 
 | crate | tests | binaries |
 |---|---:|---:|
-| shannon-core | 3464 | 36 |
-| shannon-tools | 1529 | 11 |
-| shannon-ui | 1420 | 8 |
+| shannon-core | 3545 | 37 |
+| shannon-tools | 1538 | 11 |
+| shannon-ui | 1421 | 8 |
 | shannon-engine | 1132 | 3 |
 | shannon-agents | 897 | 10 |
 | shannon-mcp | 574 | 7 |
-| shannon-desktop | 553 | 4 |
+| shannon-desktop | 566 | 4 |
 | shannon-cli | 441 | 7 |
 | shannon-commands | 386 | 4 |
 | shannon-skills | 172 | 5 |
 | shannon-codegen | 100 | 4 |
+| shannon-mcp-saas | 92 | 2 |
 | shannon-types | 74 | 3 |
 | shannon-agent | 65 | 2 |
 | shannon-api-protocol | 37 | 3 |
+| shannon-repomap | 29 | 3 |
 | shannon-tool-interface | 24 | 1 |
-| shannon-mcp-saas | 8 | 2 |
-| shannon-repomap | 7 | 2 |
+| shannon-server | 0 | 1 |
 | shannon-stability-attr | 0 | 1 |
 
 ## Line counts
@@ -54,8 +55,8 @@ Legacy archives and vendored directories are excluded.
 
 | language | files | code |
 |---|---:|---:|
-| Rust (.rs) | 580 | 397537 |
-| TypeScript/TSX | 6131 | 4316 |
+| Rust (.rs) | 605 | 409510 |
+| TypeScript/TSX | 425 | 69535 |
 
 ## Lint / audit status
 
@@ -64,9 +65,9 @@ Legacy archives and vendored directories are excluded.
 - **Status**: pass
 
 ```text
-    Checking shannon-ui v0.7.1 (/home/ed/workspace/app/work/shannon/shannon-mono/crates/shannon-ui)
-    Checking shannon-cli v0.7.1 (/home/ed/workspace/app/work/shannon/shannon-mono/crates/shannon-cli)
-    Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 39.67s
+    Checking shannon-ui v0.7.1 (/home/ed/workspace/app/work/shannon/shannon-mono-p0-3/crates/shannon-ui)
+    Checking shannon-cli v0.7.1 (/home/ed/workspace/app/work/shannon/shannon-mono-p0-3/crates/shannon-cli)
+    Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 56.48s
 ```
 
 ### `cargo deny check`
