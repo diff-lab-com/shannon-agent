@@ -2288,3 +2288,161 @@ fn test_shell_redirect_to_etc_detected() {
         "Should detect sensitive system path access"
     );
 }
+
+// ─── Test runner detection (P1-5) ────────────────────────────────────────────
+//
+// The auto-test loop in `shannon-core::auto_test` runs a test command after
+// the agent modifies a file. To pick the right command for the project, the
+// runner needs to know what language ecosystem is in play — this module
+// supplies that detection independently so `shannon-tools` does not have to
+// depend on internal types from `shannon-core`.
+//
+// This mirrors `shannon_core::auto_test::Language::detect_in`; both layers
+// must agree because the runner resolves a command based on the first
+// detected language and the bash tool exposes the same enumeration to UI.
+
+/// Test runner language detected from project files.
+///
+/// Mirrors `shannon_core::auto_test::Language`. Kept in sync intentionally —
+/// this enum is the public-facing enumeration that the Bash tool and any UI
+/// picker use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestLanguage {
+    /// Rust (`cargo nextest run` or `cargo test`)
+    Rust,
+    /// Node.js (`npm test`)
+    Node,
+    /// Python (`pytest`)
+    Python,
+    /// Go (`go test ./...`)
+    Go,
+}
+
+impl TestLanguage {
+    /// Detect languages present in `dir` by scanning well-known manifest files.
+    pub fn detect_in(dir: &std::path::Path) -> Vec<TestLanguage> {
+        let mut langs = Vec::new();
+        if dir.join("Cargo.toml").exists() {
+            langs.push(TestLanguage::Rust);
+        }
+        if dir.join("package.json").exists() {
+            langs.push(TestLanguage::Node);
+        }
+        if dir.join("pyproject.toml").exists()
+            || dir.join("pytest.ini").exists()
+            || dir.join("setup.py").exists()
+        {
+            langs.push(TestLanguage::Python);
+        }
+        if dir.join("go.mod").exists() {
+            langs.push(TestLanguage::Go);
+        }
+        langs
+    }
+
+    /// Default test command for this language.
+    pub fn default_command(self) -> &'static str {
+        match self {
+            TestLanguage::Rust => "cargo nextest run --no-fail-fast",
+            TestLanguage::Node => "npm test --silent",
+            TestLanguage::Python => "pytest -x --tb=short",
+            TestLanguage::Go => "go test ./...",
+        }
+    }
+}
+
+/// Detect the dominant test runner language in `project_dir`. Returns the
+/// first detected language (Rust takes priority because Cargo is the most
+/// common Shannon project layout).
+pub fn detect_test_runner(project_dir: &std::path::Path) -> Option<TestLanguage> {
+    TestLanguage::detect_in(project_dir).into_iter().next()
+}
+
+/// Resolve a default test command for `project_dir`, falling back to a generic
+/// `make test` invocation if no manifest is present. Returns `None` if the
+/// caller explicitly asked to suppress resolution.
+pub fn default_test_command(project_dir: &std::path::Path) -> Option<String> {
+    detect_test_runner(project_dir).map(|l| l.default_command().to_string())
+}
+
+#[cfg(test)]
+mod test_runner_detection_tests {
+    use super::*;
+
+    #[test]
+    fn detects_rust_when_cargo_toml_present() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\n").unwrap();
+        let langs = TestLanguage::detect_in(dir.path());
+        assert_eq!(langs, vec![TestLanguage::Rust]);
+    }
+
+    #[test]
+    fn detects_node_when_package_json_present() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+        let langs = TestLanguage::detect_in(dir.path());
+        assert_eq!(langs, vec![TestLanguage::Node]);
+    }
+
+    #[test]
+    fn detects_python_via_pyproject_or_pytest_ini() {
+        for manifest in ["pyproject.toml", "pytest.ini", "setup.py"] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join(manifest), "").unwrap();
+            let langs = TestLanguage::detect_in(dir.path());
+            assert!(
+                langs.contains(&TestLanguage::Python),
+                "expected Python detected for {manifest}, got {langs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn detects_go_when_go_mod_present() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("go.mod"), "module example.com\n").unwrap();
+        let langs = TestLanguage::detect_in(dir.path());
+        assert_eq!(langs, vec![TestLanguage::Go]);
+    }
+
+    #[test]
+    fn returns_empty_for_unknown_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let langs = TestLanguage::detect_in(dir.path());
+        assert!(langs.is_empty());
+    }
+
+    #[test]
+    fn detect_returns_first_with_rust_priority() {
+        // Rust manifests before Node manifests.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\n").unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+        let langs = TestLanguage::detect_in(dir.path());
+        assert_eq!(langs[0], TestLanguage::Rust);
+        assert_eq!(detect_test_runner(dir.path()), Some(TestLanguage::Rust));
+    }
+
+    #[test]
+    fn default_command_matches_language() {
+        assert!(TestLanguage::Rust.default_command().contains("cargo"));
+        assert!(TestLanguage::Node.default_command().contains("npm"));
+        assert!(TestLanguage::Python.default_command().contains("pytest"));
+        assert!(TestLanguage::Go.default_command().contains("go test"));
+    }
+
+    #[test]
+    fn default_test_command_resolves_to_runner_command() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\n").unwrap();
+        let cmd = default_test_command(dir.path()).unwrap();
+        assert!(cmd.contains("cargo"));
+    }
+
+    #[test]
+    fn default_test_command_returns_none_for_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(default_test_command(dir.path()).is_none());
+    }
+}

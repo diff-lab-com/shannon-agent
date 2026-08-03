@@ -929,6 +929,7 @@ mod tests {
             repo_map_enabled: true,
             repo_map_budget_tokens: 2_000,
             repo_map_root: None,
+            auto_test: None,
         };
         assert_eq!(config.max_turns, 5);
         assert_eq!(config.max_budget_usd, Some(1.0));
@@ -1197,6 +1198,7 @@ mod tests {
             repo_map_enabled: true,
             repo_map_budget_tokens: 2_000,
             repo_map_root: None,
+            auto_test: None,
         };
         assert_eq!(config.max_turns, 1);
         assert_eq!(config.max_budget_usd, Some(0.01));
