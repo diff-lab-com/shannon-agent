@@ -43,6 +43,12 @@ use crate::memory::AutoDreamService;
 use crate::memory::MemoryStore;
 use crate::query_engine::context_injector::ContextInjector;
 use crate::query_engine::repo_map_injector::RepoMapInjector;
+// P2-1: multi-strategy compact facade. See `crate::compact` for the
+// selector-driven entry point. The existing `shannon_engine::compact`
+// path is preserved as the LLM-backed summarizer; the facade's token-based
+// strategy is what fires when no summarizer is available or when the
+// selector chooses the cheap path.
+use crate::compact as p2_compact;
 use crate::query_engine::streaming::ConversationState;
 use crate::query_engine::types::{
     ConversationStats, CostTracker, QueryContext, QueryEngineConfig, QueryError, QueryEvent,
@@ -1577,6 +1583,78 @@ impl QueryEngine {
                                 message: "Compaction skipped (too many failures), truncating old messages".to_string(),
                             });
                         } else {
+                            // P2-1 multi-strategy selector: choose between the
+                            // LLM-backed path (preserves high-fidelity summary)
+                            // and the cheaper token-based path (greedy drop-oldest)
+                            // based on the conversation profile. TokenDense or
+                            // small history -> token-based; otherwise the LLM
+                            // summarizer is preferred.
+                            let selector = p2_compact::default_selector();
+                            let decision = selector.recommend(&messages, effective_max_context);
+                            let wants_token_only =
+                                matches!(decision.strategy, p2_compact::Strategy::TokenBased);
+
+                            if wants_token_only {
+                                // Greedy drop-oldest — never blocks on an LLM
+                                // call. P2-1 contract: summary_path_or_local
+                                // guarantees a fallback even when the LLM is
+                                // unavailable.
+                                let p2_policy = p2_compact::Policy {
+                                    keep_recent: config.keep_recent_messages,
+                                    ..p2_compact::Policy::default()
+                                };
+                                let outcome = p2_compact::maybe_compact_with_policy(
+                                    &messages,
+                                    effective_max_context,
+                                    p2_policy,
+                                );
+                                let reduction = outcome.reduction_ratio();
+                                let compacted_vec = outcome.compacted.clone();
+                                let removed = messages.len() - compacted_vec.len();
+                                let original = outcome.original_tokens;
+                                let compacted_tok = outcome.compacted_tokens;
+                                if outcome.did_compact {
+                                    messages = compacted_vec;
+                                    send_event!(
+                                        tx,
+                                        QueryEvent::Progress {
+                                            query_id,
+                                            message: format!(
+                                                "Context compacted (token-based): {} → {} tokens ({:.0}% reduction, {} messages removed)",
+                                                original,
+                                                compacted_tok,
+                                                reduction * 100.0,
+                                                removed,
+                                            ),
+                                        }
+                                    );
+                                    // Re-inject critical context after compaction
+                                    // so the model retains project instructions.
+                                    let reinjection = context_injector
+                                        .as_ref()
+                                        .map(|ci| ci.reinjection_context())
+                                        .unwrap_or_default();
+                                    if !reinjection.is_empty() && !messages.is_empty() {
+                                        let ctx_msg = shannon_engine::api::Message {
+                                            role: "system".to_string(),
+                                            content: shannon_engine::api::MessageContent::Text(
+                                                format!(
+                                                    "[Re-injected context after compaction]\n\n{reinjection}"
+                                                ),
+                                            ),
+                                        };
+                                        messages.insert(0, ctx_msg);
+                                    }
+                                    compaction_failures = 0;
+                                } else {
+                                    // Selector said token-based but no progress
+                                    // possible (e.g. all-system messages) — count
+                                    // as failure so the circuit breaker engages.
+                                    compaction_failures += 1;
+                                }
+                                continue;
+                            }
+
                             match shannon_engine::compact::CompactEngine::with_llm_summarizer(
                                 client.clone(),
                             ) {
