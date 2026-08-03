@@ -1,0 +1,28 @@
+---
+source: crates/shannon-commands/tests/export_snapshot.rs
+expression: json
+---
+{
+  "format_version": "1.0",
+  "messages": [
+    {
+      "content": "hello world",
+      "role": "user",
+      "timestamp": 1700000010
+    },
+    {
+      "content": "hi!",
+      "role": "assistant",
+      "timestamp": 1700000020
+    }
+  ],
+  "metadata": {
+    "commands_run": 1,
+    "model": "test-model",
+    "tokens_used": 42,
+    "tools_invoked": 0,
+    "working_dir": "/tmp/fixture"
+  },
+  "started_at": 1700000000,
+  "title": "Snapshot fixture"
+}

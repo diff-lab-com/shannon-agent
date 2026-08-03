@@ -1,0 +1,6 @@
+---
+source: crates/shannon-core/tests/compact_selector_snapshot.rs
+expression: format(&outcome)
+---
+strategy: token_based
+reason:   token_dense

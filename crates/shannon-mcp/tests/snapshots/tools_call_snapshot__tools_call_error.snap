@@ -1,0 +1,17 @@
+---
+source: crates/shannon-mcp/tests/tools_call_snapshot.rs
+expression: message
+---
+{
+  "jsonrpc": "2.0",
+  "id": "call-002",
+  "result": {
+    "content": [
+      {
+        "text": "tool not found: echo_typo",
+        "type": "text"
+      }
+    ],
+    "isError": true
+  }
+}
