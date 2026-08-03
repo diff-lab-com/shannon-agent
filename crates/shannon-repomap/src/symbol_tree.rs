@@ -4,7 +4,7 @@
 //! a `Module` contains `Function`/`Struct`/`Enum`/etc. children, and an `Impl`
 //! contains the methods it declares.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Source span (zero-indexed lines/columns) for a symbol declaration.
@@ -12,7 +12,7 @@ use std::path::PathBuf;
 /// Coordinates follow tree-sitter's convention: `start_line` is the line where
 /// the declaration begins, `end_line` is the last line of the declaration
 /// (closing brace included for items that have one).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
     pub start_line: u32,
     pub start_col: u32,
@@ -30,7 +30,7 @@ pub struct Span {
 /// fit cleanly into the same `SymbolNode` shape (one declaration, optional
 /// children for nested methods), so the budget / markdown layers don't need
 /// to special-case them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SymbolKind {
     Function,
@@ -68,7 +68,7 @@ impl SymbolKind {
 }
 
 /// A single symbol declaration in a Rust source file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolNode {
     pub kind: SymbolKind,
     pub name: String,
@@ -98,7 +98,7 @@ impl SymbolNode {
 ///
 /// `root` is the directory that was walked; `files` are all discovered `.rs`
 /// files paired with their top-level symbol list (children included).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SymbolMap {
     pub root: PathBuf,
     pub files: Vec<(PathBuf, Vec<SymbolNode>)>,
