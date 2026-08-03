@@ -1,0 +1,31 @@
+---
+source: crates/shannon-commands/tests/export_snapshot.rs
+expression: md
+---
+# Shannon Session Export
+
+## Session Metadata
+
+- **Title:** Snapshot fixture
+- **Started:** 2023-11-14 22:13:20
+- **Model:** test-model
+- **Tokens:** 42
+- **Working Directory:** /tmp/fixture
+- **Commands Run:** 1
+- **Tools Invoked:** 0
+
+---
+
+## Conversation
+
+## User (2023-11-14 22:13:30)
+
+hello world
+
+---
+
+## Assistant (2023-11-14 22:13:40)
+
+hi!
+
+---

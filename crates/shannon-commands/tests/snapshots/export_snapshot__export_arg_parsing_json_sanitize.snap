@@ -1,0 +1,13 @@
+---
+source: crates/shannon-commands/tests/export_snapshot.rs
+expression: parsed
+---
+ExportOptions {
+    format: Json,
+    filename: Some(
+        "session.json",
+    ),
+    include_metadata: false,
+    include_timestamps: true,
+    sanitize: true,
+}

@@ -89,7 +89,7 @@ globset = "0.4"
 regex = "1"
 ignore = "0.4"
 proptest = { workspace = true }
-insta = "1.42"
+insta = { workspace = true }
 
 [[bench]]
 name = "tool_benchmarks"

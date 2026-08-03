@@ -88,6 +88,13 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 
 # ---- Testing ----
 proptest = "1"
+# P2-3 (improvement plan §P2-3): snapshot tests for chat rendering, command
+# output, MCP tool responses. Pinned to the 1.x line — the 2.x series drops
+# some macros used by our existing snapshots (assert_yaml_snapshot) and
+# forces a global review. The `json` feature pulls in serde_json so
+# `assert_json_snapshot!` is available; `yaml` is on by default.
+# See docs/plans/insta-workflow.md.
+insta = { version = "1.48", features = ["json"] }
 
 # ---- tree-sitter (repo map) ----
 # Pinned family: tree-sitter 0.24 + grammar crates on the 0.23.x line.
