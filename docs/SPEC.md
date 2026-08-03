@@ -126,7 +126,7 @@ shannon-code/
 ├── docs/
 │   └── SPEC.md                  # This document
 └── crates/
-    ├── shannon-core/             # Core engine (52 modules, ~116,680 lines)
+    ├── shannon-core/             # Core engine — see [metrics.md](./metrics.md) for current LOC
     │   └── src/
     │       ├── lib.rs           # Module declarations + re-exports
     │       ├── query_engine/    # Query orchestrator with streaming & compression
@@ -137,7 +137,7 @@ shannon-code/
     │       ├── credential_manager.rs  # Secure credential storage
     │       ├── updater.rs       # Auto-update via GitHub Releases
     │       └── ...              # 45 more modules
-    ├── shannon-tools/            # Tool implementations (50,791 lines)
+    ├── shannon-tools/            # Tool implementations — see [metrics.md](./metrics.md)
     │   └── src/
     │       ├── file/            # File operations (8 files)
     │       ├── system.rs        # Bash, Sleep, PowerShell
@@ -145,37 +145,37 @@ shannon-code/
     │       ├── web.rs           # WebFetch, WebSearch
     │       ├── lsp.rs           # LSP integration (4 tools)
     │       └── ...              # 20 more tool modules
-    ├── shannon-agents/           # Multi-agent system (31,006 lines)
+    ├── shannon-agents/           # Multi-agent system — see [metrics.md](./metrics.md)
     │   └── src/
     │       ├── coordinator.rs   # Team orchestration
     │       ├── teammate.rs      # Agent lifecycle
     │       ├── task_board.rs    # Shared task state
     │       └── ...
-    ├── shannon-ui/               # Terminal UI (64,623 lines)
+    ├── shannon-ui/               # Terminal UI — see [metrics.md](./metrics.md)
     │   └── src/
     │       ├── repl.rs          # Main REPL loop
     │       ├── vim.rs           # Vim keybindings
     │       ├── render.rs        # Markdown + syntax
     │       └── widgets/         # TUI components
-    ├── shannon-mcp/              # MCP protocol (20,786 lines)
+    ├── shannon-mcp/              # MCP protocol — see [metrics.md](./metrics.md)
     │   └── src/
     │       ├── protocol.rs      # JSON-RPC + MCP types
     │       ├── transport.rs     # stdio/SSE/HTTP/WebSocket
     │       └── ...
-    ├── shannon-commands/        # Slash commands (14,854 lines)
+    ├── shannon-commands/        # Slash commands — see [metrics.md](./metrics.md)
     │   └── src/
     │       ├── builtin/         # Built-in commands (commit, config, credentials, etc.)
     │       └── ...
-    ├── shannon-skills/          # Skill framework (7,552 lines)
+    ├── shannon-skills/          # Skill framework — see [metrics.md](./metrics.md)
     │   └── src/
     │       ├── definition.rs   # Skill types
     │       ├── loader.rs        # Disk loading
     │       └── ...
-    ├── shannon-types/            # Shared types (2,381 lines)
-    └── shannon-cli/              # CLI entry point (16,104 lines)
+    ├── shannon-types/            # Shared types — see [metrics.md](./metrics.md)
+    └── shannon-cli/              # CLI entry point — see [metrics.md](./metrics.md)
 ```
 
-> **Note**: line counts above are sourced from `find crates/*/src -name '*.rs' -exec wc -l {} +` measured against `crates/` only (the 9 core crates). The workspace also includes `shannon-codegen` (2,582 lines), `shannon-tool-interface` (572 lines), and `shannon-agent` (1,312 lines). For the canonical, machine-generated metrics file with CI-tracked counts, see [P0-3 metrics.md](./metrics.md) (planned).
+> **Note**: per-crate line counts are CI-tracked in [metrics.md](./metrics.md) (regenerate with `bash scripts/gen-metrics.sh`). Supporting crates (`shannon-codegen`, `shannon-tool-interface`, `shannon-agent`) are also covered by the same generator.
 
 ### 2.3 Inter-Crate Dependency Graph
 
@@ -1279,31 +1279,34 @@ let client = ClaudeClient::with_vcr(vcr);
 
 ### 9.1 Code Metrics
 
-| Metric | Value |
-|--------|-------|
-| Total Lines of Code | ~329,876 (9 core crates, `crates/*/src`) |
-| Source Files (.rs) | ~688 |
-| Test Functions | ~8,953 |
-| Workspace Crates | 9 (+ 3 supporting: `shannon-codegen`, `shannon-tool-interface`, `shannon-agent`) |
-| Public Modules | ~93 |
-| Public Structs | ~200 |
-| Public Traits | ~15 |
+The canonical, CI-tracked counts (total LOC, source files, test functions, per-crate breakdown) live in [metrics.md](./metrics.md). Regenerate with `bash scripts/gen-metrics.sh` — see that file for the current baseline.
 
-> **Note**: counts derived from `find crates/*/src -name '*.rs' -exec wc -l {} +` and `grep -rE '#\[(tokio::)?test\]' crates/`. For the canonical, CI-tracked baseline, see [P0-3 metrics.md](./metrics.md) (planned).
+| Metric | Source |
+|--------|--------|
+| Total Lines of Code | [metrics.md](./metrics.md) |
+| Source Files (.rs) | [metrics.md](./metrics.md) |
+| Test Functions (nextest) | [metrics.md](./metrics.md) |
+| Test Functions (source `#[test]` attrs) | [metrics.md](./metrics.md) |
+| Workspace Crates | 9 (+ 3 supporting: `shannon-codegen`, `shannon-tool-interface`, `shannon-agent`) |
+| Public Modules | see src tree |
+| Public Structs | see src tree |
+| Public Traits | see src tree |
 
 ### 9.2 Per-Crate Breakdown
 
-| Crate | Lines | Key Modules |
-|-------|-------|-------------|
-| shannon-core | 116,680 | 52 modules (query, tools, api, permissions, state, mcp, etc.) |
-| shannon-tools | 50,791 | 28 tool modules |
-| shannon-agents | 31,006 | coordinator, teammate, task_board |
-| shannon-ui | 64,623 | repl, vim, render, widgets |
-| shannon-commands | 14,854 | 11 builtin commands |
-| shannon-mcp | 20,786 | protocol, transport, client, auth |
-| shannon-skills | 7,552 | definition, loader, executor |
-| shannon-types | 2,381 | Shared type definitions |
-| shannon-cli | 16,104 | CLI entry point |
+Per-crate line counts are CI-tracked in [metrics.md](./metrics.md) (regenerate with `bash scripts/gen-metrics.sh`). Module / sub-system descriptions below are stable.
+
+| Crate | Key Modules |
+|-------|-------------|
+| shannon-core | see [metrics.md](./metrics.md) for current LOC; modules: query, tools, api, permissions, state, mcp, etc. |
+| shannon-tools | see [metrics.md](./metrics.md) for current LOC; modules: file, system, git, web, lsp |
+| shannon-agents | see [metrics.md](./metrics.md) for current LOC; modules: coordinator, teammate, task_board |
+| shannon-ui | see [metrics.md](./metrics.md) for current LOC; modules: repl, vim, render, widgets |
+| shannon-commands | see [metrics.md](./metrics.md) for current LOC; modules: 11 builtin commands |
+| shannon-mcp | see [metrics.md](./metrics.md) for current LOC; modules: protocol, transport, client, auth |
+| shannon-skills | see [metrics.md](./metrics.md) for current LOC; modules: definition, loader, executor |
+| shannon-types | see [metrics.md](./metrics.md) for current LOC; Shared type definitions |
+| shannon-cli | see [metrics.md](./metrics.md) for current LOC; CLI entry point |
 
 ### 9.3 Build Configuration
 
