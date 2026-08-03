@@ -968,6 +968,7 @@ fn test_query_engine_config_custom() {
         repo_map_enabled: true,
         repo_map_budget_tokens: 2_000,
         repo_map_root: None,
+        auto_test: None,
     };
     assert_eq!(config.max_turns, 5);
     assert_eq!(config.max_budget_usd, Some(1.0));
