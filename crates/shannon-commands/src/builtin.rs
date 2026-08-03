@@ -120,8 +120,10 @@ pub mod help_utils {
 /// Re-export export utilities for REPL integration
 pub mod export_utils {
     pub use super::export::{
-        ExportFormat, ExportMessage, ExportOptions, ExportSession, SessionMetadata, export_to_json,
-        export_to_markdown, generate_filename, parse_export_args, write_export,
+        ExportFormat, ExportMessage, ExportOptions, ExportSession, SessionMetadata,
+        export_session_from_store, export_session_from_transcript, export_to_json,
+        export_to_markdown, generate_filename, maybe_build_session_from_args, parse_export_args,
+        write_export,
     };
 }
 
@@ -144,7 +146,7 @@ pub mod status_utils {
 pub mod diff_utils {
     pub use super::diff::{
         CategorizedChange, ChangeCategory, DiffAnalysis, DiffAnalyzer, DiffOptions, DiffScope,
-        DiffStats, FileStats, build_diff_command, parse_diff_stat, run_diff_analysis,
+        DiffStats, FileStats, analyze_diff, build_diff_command, parse_diff_stat, run_diff_analysis,
     };
 }
 
@@ -158,8 +160,10 @@ pub mod search_utils {
 /// Re-export debug utilities for REPL integration
 pub mod debug_utils {
     pub use super::debug::{
-        DebugSubcommand, LogLevel, format_debug_help, format_log_response, format_profile_response,
+        DebugSubcommand, LogLevel, current_log_level, filter_internal_entries_below,
+        format_debug_help, format_log_response, format_profile_response, format_runtime_log_status,
         format_system_info, format_trace_response, parse_debug_subcommand, parse_log_level,
+        set_runtime_log_level, to_internal_log_level,
     };
 }
 
@@ -174,8 +178,8 @@ pub mod config_utils {
 /// Re-export PR review utilities for prompt generation and output formatting
 pub mod review_utils {
     pub use super::review_pr::{
-        Assessment, IssueSeverity, ReviewCategory, ReviewIssue, ReviewResult, get_review_prompt,
-        run_pr_analysis,
+        Assessment, IssueSeverity, ReviewCategory, ReviewIssue, ReviewResult, ReviewSuggestion,
+        get_review_prompt, run_pr_analysis,
     };
 }
 
