@@ -205,6 +205,8 @@ fn main() {
             commands_tasks::update_task,
             commands_files::get_file_tree,
             commands_files::get_working_dir_info,
+            commands_files::read_attachment,
+            commands_files::read_attachments,
             // Scheduled tasks, triage, history, triggered routines (Sprint 2)
             shannon_desktop::scheduled_commands::list_scheduled_tasks,
             shannon_desktop::scheduled_commands::create_scheduled_task,
