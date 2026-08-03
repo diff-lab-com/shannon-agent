@@ -1,5 +1,8 @@
 //! /debug command - Developer tools for debugging, logging, and profiling
 
+use std::str::FromStr;
+use std::sync::Mutex;
+
 use crate::command::{
     Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
 };
@@ -85,7 +88,7 @@ pub enum DebugSubcommand {
 }
 
 /// Log level configuration
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LogLevel {
     Trace,
     Debug,
@@ -104,6 +107,149 @@ impl std::fmt::Display for LogLevel {
             LogLevel::Error => write!(f, "error"),
         }
     }
+}
+
+impl FromStr for LogLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_log_level(s).ok_or_else(|| {
+            format!("Unknown log level: '{s}'. Expected: trace, debug, info, warn, error")
+        })
+    }
+}
+
+/// Map this command's [`LogLevel`] to `shannon_core::internal_logging::InternalLogLevel`.
+///
+/// The two enums intentionally have different surfaces:
+/// `LogLevel::Trace` has no direct match in `InternalLogLevel` (which only
+/// goes down to Debug), so we collapse Trace→Debug and Info stays at Info.
+/// This is intentional: the runtime `tracing_subscriber` honours Trace via
+/// `RUST_LOG` while `InternalLogger` only filters at Debug+.
+pub fn to_internal_log_level(level: LogLevel) -> shannon_core::internal_logging::InternalLogLevel {
+    use shannon_core::internal_logging::InternalLogLevel;
+    match level {
+        LogLevel::Trace | LogLevel::Debug => InternalLogLevel::Debug,
+        LogLevel::Info => InternalLogLevel::Info,
+        LogLevel::Warn => InternalLogLevel::Warn,
+        LogLevel::Error => InternalLogLevel::Error,
+    }
+}
+
+/// Filter an `InternalLogger` to entries at or above the given threshold.
+pub fn filter_internal_entries_below(
+    entries: &[shannon_core::internal_logging::InternalLogEntry],
+    threshold: LogLevel,
+) -> Vec<shannon_core::internal_logging::InternalLogEntry> {
+    let min_internal = to_internal_log_level(threshold);
+    let min_rank = rank(min_internal);
+    entries
+        .iter()
+        .filter(|e| rank(level_from_string(&e.level)) >= min_rank)
+        .cloned()
+        .collect()
+}
+
+fn level_from_string(s: &str) -> shannon_core::internal_logging::InternalLogLevel {
+    use shannon_core::internal_logging::InternalLogLevel;
+    match s {
+        "DEBUG" => InternalLogLevel::Debug,
+        "INFO" => InternalLogLevel::Info,
+        "WARN" => InternalLogLevel::Warn,
+        "ERROR" => InternalLogLevel::Error,
+        _ => InternalLogLevel::Info,
+    }
+}
+
+fn rank(level: shannon_core::internal_logging::InternalLogLevel) -> u8 {
+    use shannon_core::internal_logging::InternalLogLevel;
+    match level {
+        InternalLogLevel::Debug => 0,
+        InternalLogLevel::Info => 1,
+        InternalLogLevel::Warn => 2,
+        InternalLogLevel::Error => 3,
+    }
+}
+
+/// Process-wide runtime log-level override.
+///
+/// P1-1 step 5 requires `/debug log <level>` to flip an in-process flag,
+/// without forcing a restart. This state lives behind a Mutex so the
+/// REPL/setter can mutate while the logger/pollers read concurrently.
+///
+/// Callers should use the [`current_log_level`] accessor (or the
+/// [`set_runtime_log_level`] setter) rather than touching the static
+/// directly.
+static RUNTIME_LOG_LEVEL: Mutex<Option<LogLevel>> = Mutex::new(None);
+
+/// Override the process-global log level at runtime.
+///
+/// Returns the previous level (or `None` if none was set). On platforms
+/// using `tracing_subscriber::EnvFilter`, the `RUST_LOG` env var supplies
+/// the actual filter — this helper only records the intent so
+/// downstream consumers can read it back via [`current_log_level`].
+pub fn set_runtime_log_level(level: Option<LogLevel>) -> Option<LogLevel> {
+    let mut guard = RUNTIME_LOG_LEVEL.lock().expect("log-level mutex poisoned");
+    let prev = *guard;
+    *guard = level;
+    prev
+}
+
+/// Return the current runtime log level override.
+///
+/// Resolution order:
+///   1. Explicit override set via [`set_runtime_log_level`].
+///   2. The `SHANNON_LOG_LEVEL` env var (parsed case-insensitively).
+///   3. `RUST_LOG` (normal tracing convention) — used as a hint.
+///   4. Default [`LogLevel::Info`].
+pub fn current_log_level() -> LogLevel {
+    if let Ok(guard) = RUNTIME_LOG_LEVEL.lock() {
+        if let Some(level) = *guard {
+            return level;
+        }
+    }
+
+    if let Ok(s) = std::env::var("SHANNON_LOG_LEVEL") {
+        if let Some(level) = parse_log_level(&s) {
+            return level;
+        }
+    }
+    if let Ok(s) = std::env::var("RUST_LOG") {
+        // RUST_LOG is a directive; parse its loosest level spec.
+        let first = s.split(',').next().unwrap_or("").trim();
+        if first.contains("trace") {
+            return LogLevel::Trace;
+        }
+        if first.contains("debug") {
+            return LogLevel::Debug;
+        }
+        if first.contains("warn") || first.contains("warning") {
+            return LogLevel::Warn;
+        }
+        if first.contains("error") {
+            return LogLevel::Error;
+        }
+    }
+    LogLevel::Info
+}
+
+/// Pretty-print the active log level for `/debug log` output.
+pub fn format_runtime_log_status() -> String {
+    let level = current_log_level();
+    let source = if std::env::var("SHANNON_LOG_LEVEL").is_ok() {
+        "env:SHANNON_LOG_LEVEL"
+    } else if std::env::var("RUST_LOG").is_ok() {
+        "env:RUST_LOG"
+    } else if RUNTIME_LOG_LEVEL
+        .lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false)
+    {
+        "runtime override"
+    } else {
+        "default"
+    };
+    format!("Log level: {level} (source: {source})")
 }
 
 /// Parse debug subcommand from argument
@@ -152,8 +298,14 @@ pub fn format_debug_help() -> String {
 /// Format log level response
 pub fn format_log_response(level: Option<LogLevel>) -> String {
     match level {
-        Some(lvl) => format!("Log level set to: {lvl}"),
-        None => "Invalid log level. Use: trace, debug, info, warn, error".to_string(),
+        Some(lvl) => {
+            set_runtime_log_level(Some(lvl));
+            format_runtime_log_status()
+        }
+        None => {
+            // No level argument — show current state.
+            format_runtime_log_status()
+        }
     }
 }
 
@@ -254,11 +406,16 @@ mod tests {
 
     #[test]
     fn test_format_log_response() {
+        let prev = set_runtime_log_level(None);
         let valid = format_log_response(Some(LogLevel::Debug));
-        assert!(valid.contains("debug"));
+        assert!(valid.contains("debug"), "{valid}");
 
-        let invalid = format_log_response(None);
-        assert!(invalid.contains("Invalid"));
+        // `format_log_response(None)` now reports current runtime state
+        // rather than printing an "Invalid level" message — this is the
+        // P1-1 behavior so /debug log with no argument is a status query.
+        let status = format_log_response(None);
+        assert!(status.starts_with("Log level:"), "{status}");
+        set_runtime_log_level(prev);
     }
 
     #[test]
@@ -275,5 +432,138 @@ mod tests {
         let info = format_system_info();
         assert!(info.contains("OS:"));
         assert!(info.contains("Arch:"));
+    }
+
+    // ── P1-1 Connector Tests ────────────────────────────────────────
+
+    #[test]
+    fn log_level_ord_orders_severity_descending() {
+        // We rank with smaller value = more verbose for the rank() helper,
+        // but the public LogLevel ordering should treat Trace as the most
+        // verbose (smallest) and Error as the most aggressive filter.
+        assert!(LogLevel::Trace < LogLevel::Debug);
+        assert!(LogLevel::Debug < LogLevel::Info);
+        assert!(LogLevel::Info < LogLevel::Warn);
+        assert!(LogLevel::Warn < LogLevel::Error);
+    }
+
+    #[test]
+    fn log_level_fromstr_rejects_unknown() {
+        let err = LogLevel::from_str("verbose").unwrap_err();
+        assert!(err.contains("Unknown log level"));
+        assert!(err.contains("verbose"));
+
+        // Aliases are accepted via FromStr -> parse
+        for (raw, expected) in [
+            ("trace", LogLevel::Trace),
+            ("DEBUG", LogLevel::Debug),
+            ("Info", LogLevel::Info),
+            ("warn", LogLevel::Warn),
+            ("warning", LogLevel::Warn),
+            ("error", LogLevel::Error),
+        ] {
+            assert_eq!(LogLevel::from_str(raw).unwrap(), expected, "input={raw}");
+        }
+    }
+
+    #[test]
+    fn to_internal_log_level_collapses_trace_into_debug() {
+        use shannon_core::internal_logging::InternalLogLevel;
+        assert_eq!(
+            to_internal_log_level(LogLevel::Trace),
+            InternalLogLevel::Debug
+        );
+        assert_eq!(
+            to_internal_log_level(LogLevel::Debug),
+            InternalLogLevel::Debug
+        );
+        assert_eq!(
+            to_internal_log_level(LogLevel::Info),
+            InternalLogLevel::Info
+        );
+        assert_eq!(
+            to_internal_log_level(LogLevel::Warn),
+            InternalLogLevel::Warn
+        );
+        assert_eq!(
+            to_internal_log_level(LogLevel::Error),
+            InternalLogLevel::Error
+        );
+    }
+
+    #[test]
+    fn filter_internal_entries_below_drops_lower_levels() {
+        use shannon_core::internal_logging::InternalLogEntry;
+        let entries = vec![
+            InternalLogEntry::new(
+                shannon_core::internal_logging::InternalLogLevel::Debug,
+                "comp",
+                "d1",
+            ),
+            InternalLogEntry::new(
+                shannon_core::internal_logging::InternalLogLevel::Info,
+                "comp",
+                "i1",
+            ),
+            InternalLogEntry::new(
+                shannon_core::internal_logging::InternalLogLevel::Warn,
+                "comp",
+                "w1",
+            ),
+            InternalLogEntry::new(
+                shannon_core::internal_logging::InternalLogLevel::Error,
+                "comp",
+                "e1",
+            ),
+        ];
+        let warn_or_higher = filter_internal_entries_below(&entries, LogLevel::Warn);
+        assert_eq!(warn_or_higher.len(), 2, "Warn+Error survive Warn threshold");
+        for e in &warn_or_higher {
+            assert!(matches!(e.level.as_str(), "WARN" | "ERROR"));
+        }
+        let error_only = filter_internal_entries_below(&entries, LogLevel::Error);
+        assert_eq!(error_only.len(), 1);
+        assert_eq!(error_only[0].level, "ERROR");
+    }
+
+    #[test]
+    fn runtime_log_level_override_round_trips() {
+        // Snapshot before asserting: this avoids cross-test state leak.
+        let initial = current_log_level();
+        set_runtime_log_level(Some(LogLevel::Error));
+        assert_eq!(current_log_level(), LogLevel::Error);
+        let prev2 = set_runtime_log_level(Some(LogLevel::Trace));
+        assert_eq!(current_log_level(), LogLevel::Trace);
+        assert_eq!(prev2, Some(LogLevel::Error));
+        // Restore so we don't change behaviour for downstream tests.
+        set_runtime_log_level(Some(initial));
+        assert_eq!(current_log_level(), initial);
+    }
+
+    #[test]
+    fn format_log_response_records_runtime_override() {
+        let prev = set_runtime_log_level(None);
+        let resp = format_log_response(Some(LogLevel::Debug));
+        assert!(resp.contains("debug"), "{resp}");
+        assert!(resp.contains("Log level"), "{resp}");
+        set_runtime_log_level(prev);
+    }
+
+    #[test]
+    fn format_log_response_without_args_reports_current_state() {
+        let prev = set_runtime_log_level(Some(LogLevel::Warn));
+        let resp = format_log_response(None);
+        assert!(resp.contains("warn"), "{resp}");
+        set_runtime_log_level(prev);
+    }
+
+    #[test]
+    fn format_runtime_log_status_includes_source_label() {
+        let prev = set_runtime_log_level(None);
+        // No envs set (test runner doesn't force them), nothing in override:
+        let s = format_runtime_log_status();
+        assert!(s.starts_with("Log level:"));
+        assert!(s.contains("source:"));
+        set_runtime_log_level(prev);
     }
 }

@@ -1,5 +1,9 @@
 //! /review-pr command - Review pull requests
 
+use std::str::FromStr;
+
+use serde_json::Value as JsonValue;
+
 use crate::command::{
     Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
 };
@@ -185,8 +189,43 @@ pub fn get_review_prompt(pr_number: Option<&str>) -> String {
         "No PR number provided - will list open PRs".to_string()
     };
 
-    format!("{REVIEW_PROMPT}\n\n{pr_info}")
+    format!("{REVIEW_PROMPT}\n\n{pr_info}\n\n{REVIEW_PROMPT_SCHEMA_FRAGMENT}")
 }
+
+/// Structured-output JSON schema appended to every `/review-pr` prompt.
+///
+/// The model is asked to emit each issue as a JSON object with these fields:
+/// `category` ∈ Correctness|Style|Performance|Security|Testing|Documentation,
+/// `severity` ∈ CRITICAL|HIGH|MEDIUM|LOW|INFO,
+/// `location` (optional file:line), `description`, `suggestion`.
+/// This becomes [`ReviewSuggestion`] parsed by `ReviewResult::suggestions_as_json`.
+pub const REVIEW_PROMPT_SCHEMA_FRAGMENT: &str = r##"
+## Structured Output
+
+In addition to the human-readable markdown report above, emit a single JSON
+block at the very end of your reply, fenced with ```json. The block must
+contain a top-level object with a `"suggestions"` array. One JSON object per
+issue, with this exact shape:
+
+```json
+{
+  "suggestions": [
+    {
+      "category": "Security",
+      "severity": "HIGH",
+      "location": "src/db.rs:42",
+      "description": "User input flows into raw SQL",
+      "suggestion": "Use a parameterized query or the ORM escape"
+    }
+  ]
+}
+```
+
+Allowed values for `category`: Code Correctness, Style & Conventions,
+Performance, Security, Test Coverage, Documentation.
+Allowed values for `severity`: CRITICAL, HIGH, MEDIUM, LOW, INFO.
+If there are no issues, emit `{"suggestions": []}`.
+"##;
 
 /// Review category
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,6 +270,32 @@ impl ReviewCategory {
             ReviewCategory::Security => "🔒",
             ReviewCategory::Testing => "🧪",
             ReviewCategory::Documentation => "📝",
+        }
+    }
+}
+
+impl FromStr for ReviewCategory {
+    type Err = String;
+
+    /// Parse a category from a human-friendly keyword (case-insensitive).
+    ///
+    /// Accepts both the lowercase identifier (`correctness`, `style`,
+    /// `performance`, `security`, `testing`, `documentation`) and aliases
+    /// such as `correct`/`bug`, `style`/`format`, `perf`/`speed`,
+    /// `sec`/`vuln`, `test`/`tests`/`coverage`, `doc`/`docs`/`docs-broken`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let norm = s.to_lowercase();
+        match norm.as_str() {
+            "correctness" | "correct" | "bug" | "bugs" | "logic" => Ok(ReviewCategory::Correctness),
+            "style" | "format" | "naming" | "fmt" => Ok(ReviewCategory::Style),
+            "performance" | "perf" | "speed" | "perf-issue" => Ok(ReviewCategory::Performance),
+            "security" | "sec" | "vuln" | "vulnerability" => Ok(ReviewCategory::Security),
+            "testing" | "test" | "tests" | "coverage" => Ok(ReviewCategory::Testing),
+            "documentation" | "doc" | "docs" => Ok(ReviewCategory::Documentation),
+            _ => Err(format!(
+                "Unknown review category: '{s}'. Expected one of: correctness, style, \
+                 performance, security, testing, documentation"
+            )),
         }
     }
 }
@@ -315,6 +380,76 @@ impl IssueSeverity {
             IssueSeverity::Info => "ℹ️",
         }
     }
+
+    /// Parse a severity keyword (case-insensitive). Returns `Err` for unknown
+    /// input so callers can surface a clear "invalid severity" message rather
+    /// than silently defaulting.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "critical" | "crit" => Some(IssueSeverity::Critical),
+            "high" => Some(IssueSeverity::High),
+            "medium" | "med" => Some(IssueSeverity::Medium),
+            "low" => Some(IssueSeverity::Low),
+            "info" => Some(IssueSeverity::Info),
+            _ => None,
+        }
+    }
+}
+
+impl FromStr for IssueSeverity {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or_else(|| {
+            format!("Unknown severity: '{s}'. Expected one of: critical, high, medium, low, info")
+        })
+    }
+}
+
+/// A structured suggestion row intended for LLM-driven review output.
+///
+/// `ReviewSuggestion` is the **named structured-output type** the P1-1 plan
+/// wires to the LLM prompt: each suggestion is a single JSON row the model
+/// emits per issue, so downstream tooling can parse them deterministically
+/// rather than scraping the markdown report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewSuggestion {
+    pub category: ReviewCategory,
+    pub severity: IssueSeverity,
+    /// Path:line or other location hint (free-form, may be `None`).
+    pub location: Option<String>,
+    /// One-sentence description of the problem.
+    pub description: String,
+    /// One-sentence suggestion for how to fix it.
+    pub suggestion: String,
+}
+
+impl ReviewSuggestion {
+    /// Build a suggestion from an existing [`ReviewIssue`], if it carries a
+    /// `suggestion` payload. Returns `None` for issues without a concrete fix.
+    pub fn from_issue(issue: &ReviewIssue) -> Option<Self> {
+        issue.suggestion.as_ref().map(|s| Self {
+            category: issue.category,
+            severity: issue.severity,
+            location: issue.location.clone(),
+            description: issue.description.clone(),
+            suggestion: s.clone(),
+        })
+    }
+
+    /// Render this suggestion as a single JSON object.
+    pub fn to_json(&self) -> JsonValue {
+        let mut obj = serde_json::json!({
+            "category": self.category.display_name(),
+            "severity": self.severity.display_name(),
+            "description": self.description,
+            "suggestion": self.suggestion,
+        });
+        if let Some(loc) = &self.location {
+            obj["location"] = serde_json::json!(loc);
+        }
+        obj
+    }
 }
 
 /// Structured review result
@@ -371,6 +506,53 @@ impl ReviewResult {
             .iter()
             .filter(|i| i.category == category)
             .count()
+    }
+
+    /// Filter out issues below a severity threshold (i.e., keep only issues
+    /// whose severity is `<= threshold`). Returns a new [`ReviewResult`] that
+    /// preserves the overview, positives, and assessment but only the
+    /// matching issues.
+    ///
+    /// Note: because the enum ordering puts `Critical < High < Medium < Low <
+    /// Info` (least to most permissive), "at or above the given severity" is
+    /// `<= threshold`. To drop everything below `High`, pass `High`.
+    pub fn filter_by_severity(&self, threshold: IssueSeverity) -> ReviewResult {
+        let mut new_result = ReviewResult {
+            pr_number: self.pr_number.clone(),
+            overview: self.overview.clone(),
+            issues: self
+                .issues
+                .iter()
+                .filter(|i| i.severity <= threshold)
+                .cloned()
+                .collect(),
+            positives: self.positives.clone(),
+            overall_assessment: self.overall_assessment,
+        };
+        // Recompute assessment: if we hid a critical/high issue, demote.
+        if new_result.issues.is_empty()
+            && !self.issues.is_empty()
+            && matches!(
+                self.overall_assessment,
+                Assessment::Approve | Assessment::ApproveWithSuggestions
+            )
+        {
+            new_result.overall_assessment = Assessment::ApproveWithSuggestions;
+        }
+        new_result
+    }
+
+    /// Collect structured suggestions (one per issue that carries a
+    /// suggestion) as a JSON array. This is the wire-format the P1-1
+    /// structured-output LLM prompt produces.
+    pub fn suggestions_as_json(&self) -> JsonValue {
+        let items: Vec<JsonValue> = self
+            .issues
+            .iter()
+            .filter_map(ReviewSuggestion::from_issue)
+            .map(|s| s.to_json())
+            .collect();
+        JsonValue::Array(items)
     }
 
     /// Format the review result as a markdown report
@@ -668,5 +850,192 @@ mod tests {
         assert!(md.contains("Approve"));
         assert!(!md.contains("## Issues"));
         assert!(md.contains("Positives"));
+    }
+
+    // ── FromStr & Suggestion Wiring Tests ────────────────────────────────
+
+    #[test]
+    fn review_category_from_str_recognises_all() {
+        for s in [
+            "correctness",
+            "Correctness",
+            "CORRECTNESS",
+            "bug",
+            "bugs",
+            "style",
+            "format",
+            "naming",
+            "performance",
+            "perf",
+            "speed",
+            "security",
+            "sec",
+            "vuln",
+            "testing",
+            "test",
+            "tests",
+            "coverage",
+            "documentation",
+            "doc",
+            "docs",
+        ] {
+            assert!(
+                ReviewCategory::from_str(s).is_ok(),
+                "should parse category from '{s}'"
+            );
+        }
+    }
+
+    #[test]
+    fn review_category_from_str_rejects_unknown() {
+        let err = ReviewCategory::from_str("nope").unwrap_err();
+        assert!(err.contains("Unknown review category"));
+        assert!(err.contains("nope"));
+        assert!(err.contains("correctness"));
+    }
+
+    #[test]
+    fn issue_severity_from_str_happy_path() {
+        assert_eq!(
+            IssueSeverity::from_str("critical").unwrap(),
+            IssueSeverity::Critical
+        );
+        assert_eq!(
+            IssueSeverity::from_str("HIGH").unwrap(),
+            IssueSeverity::High
+        );
+        assert_eq!(
+            IssueSeverity::from_str("Medium").unwrap(),
+            IssueSeverity::Medium
+        );
+        assert_eq!(IssueSeverity::from_str("low").unwrap(), IssueSeverity::Low);
+        assert_eq!(
+            IssueSeverity::from_str("INFO").unwrap(),
+            IssueSeverity::Info
+        );
+        // Aliases:
+        assert_eq!(
+            IssueSeverity::from_str("crit").unwrap(),
+            IssueSeverity::Critical
+        );
+        assert_eq!(
+            IssueSeverity::from_str("med").unwrap(),
+            IssueSeverity::Medium
+        );
+    }
+
+    #[test]
+    fn issue_severity_from_str_rejects_unknown() {
+        let err = IssueSeverity::from_str("emergency").unwrap_err();
+        assert!(err.contains("Unknown severity"));
+        assert!(err.contains("emergency"));
+    }
+
+    #[test]
+    fn review_suggestion_from_issue_requires_suggestion_field() {
+        let issue_with = ReviewIssue::new(
+            ReviewCategory::Security,
+            IssueSeverity::Critical,
+            "Hardcoded secret".to_string(),
+        )
+        .with_suggestion("Move to env var".to_string())
+        .with_location("src/auth.rs:1".to_string());
+        let issue_without = ReviewIssue::new(
+            ReviewCategory::Correctness,
+            IssueSeverity::Medium,
+            "Off-by-one".to_string(),
+        );
+
+        assert!(ReviewSuggestion::from_issue(&issue_with).is_some());
+        assert!(ReviewSuggestion::from_issue(&issue_without).is_none());
+    }
+
+    #[test]
+    fn review_suggestion_json_shape() {
+        let s = ReviewSuggestion {
+            category: ReviewCategory::Performance,
+            severity: IssueSeverity::High,
+            location: Some("src/loop.rs:42".to_string()),
+            description: "Quadratic loop".to_string(),
+            suggestion: "Use a HashMap".to_string(),
+        };
+        let json = s.to_json();
+        assert_eq!(json["category"], "Performance");
+        assert_eq!(json["severity"], "HIGH");
+        assert_eq!(json["location"], "src/loop.rs:42");
+        assert_eq!(json["description"], "Quadratic loop");
+        assert_eq!(json["suggestion"], "Use a HashMap");
+
+        // location absent → key absent
+        let s = ReviewSuggestion {
+            category: ReviewCategory::Style,
+            severity: IssueSeverity::Low,
+            location: None,
+            description: "d".to_string(),
+            suggestion: "s".to_string(),
+        };
+        let json = s.to_json();
+        assert!(json.get("location").is_none());
+    }
+
+    #[test]
+    fn review_result_filter_by_severity_keeps_critical_and_high() {
+        let result = ReviewResult::new("OV".to_string(), Assessment::ApproveWithSuggestions)
+            .with_issue(ReviewIssue::new(
+                ReviewCategory::Security,
+                IssueSeverity::Critical,
+                "CVE".to_string(),
+            ))
+            .with_issue(ReviewIssue::new(
+                ReviewCategory::Style,
+                IssueSeverity::Medium,
+                "Fmt".to_string(),
+            ))
+            .with_issue(ReviewIssue::new(
+                ReviewCategory::Style,
+                IssueSeverity::Info,
+                "Nit".to_string(),
+            ));
+
+        let filtered = result.filter_by_severity(IssueSeverity::High);
+        assert_eq!(filtered.issues.len(), 1, "only Critical kept");
+        assert_eq!(filtered.issues[0].severity, IssueSeverity::Critical);
+        assert_eq!(filtered.overview, "OV");
+
+        let filtered_none = result.filter_by_severity(IssueSeverity::Critical);
+        assert_eq!(filtered_none.issues.len(), 1);
+    }
+
+    #[test]
+    fn review_result_suggestions_as_json_groups_by_issue() {
+        let result = ReviewResult::new("x".to_string(), Assessment::Approve)
+            .with_issue(
+                ReviewIssue::new(
+                    ReviewCategory::Style,
+                    IssueSeverity::Low,
+                    "missing doc".to_string(),
+                )
+                .with_suggestion("add ///".to_string()),
+            )
+            .with_issue(ReviewIssue::new(
+                ReviewCategory::Correctness,
+                IssueSeverity::Medium,
+                "bug".to_string(),
+            ));
+
+        let json = result.suggestions_as_json();
+        let arr = json.as_array().expect("should be array");
+        assert_eq!(arr.len(), 1, "issue without suggestion is skipped");
+        assert_eq!(arr[0]["category"], "Style & Conventions");
+        assert_eq!(arr[0]["suggestion"], "add ///");
+    }
+
+    #[test]
+    fn review_prompt_includes_structured_schema_fragment() {
+        let prompt = get_review_prompt(Some("42"));
+        assert!(prompt.contains("```json"));
+        assert!(prompt.contains("\"suggestions\""));
+        assert!(prompt.contains("category"));
+        assert!(prompt.contains("severity"));
     }
 }

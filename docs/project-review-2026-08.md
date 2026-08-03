@@ -74,17 +74,22 @@ Shannon 是一个**架构成熟、工程扎实**的开源 Rust AI agent monorepo
 
 [ROADMAP.md](./ROADMAP.md) + [ROADMAP-FUTURE.md](./ROADMAP-FUTURE.md) 列出多个"已注册可达但内部 dead code"的模块:
 
-| 模块 | 文件 | Dead 内容 |
-|---|---|---|
-| `/diff` | `shannon-commands/src/builtin/diff.rs` | ChangeCategory 变体、DiffAnalysis 方法、DiffPattern |
-| `/review_pr` | `shannon-commands/src/builtin/review_pr.rs` | ReviewSeverity、ReviewCategory、PRAnalysis |
-| `/export` | `shannon-commands/src/builtin/export.rs` | ExportFormat、export_to_markdown/json |
-| `/pdf` | `shannon-commands/src/builtin/pdf.rs` | PdfTable、ImageFormat |
-| `/debug` | `shannon-commands/src/builtin/debug.rs` | DebugCategory、LogLevel |
-| Coordinator | `shannon-agents/src/coordinator.rs` | AgentTeam、任务分配方法 |
-| Compact | `shannon-core/src/compact.rs` | 5 种策略只用了默认 |
-| Doctor | `shannon-core/src/doctor.rs` | DoctorError 变体 |
-| UI Adapter | `shannon-core/src/ui_adapter.rs` | UiAdapter trait |
+| 模块 | 文件 | Dead 内容 | 状态 |
+|---|---|---|---|
+| `/diff` | `shannon-commands/src/builtin/diff.rs` | ChangeCategory 变体、DiffAnalysis 方法、DiffPattern | **接通 (P1-1)** |
+| `/review_pr` | `shannon-commands/src/builtin/review_pr.rs` | ReviewSeverity、ReviewCategory、PRAnalysis | **接通 (P1-1)** |
+| `/export` | `shannon-commands/src/builtin/export.rs` | ExportFormat、export_to_markdown/json | **接通 (P1-1)** |
+| `/pdf` | `shannon-commands/src/builtin/pdf.rs` | PdfTable、ImageFormat | **删除 (P1-1)** |
+| `/debug` | `shannon-commands/src/builtin/debug.rs` | DebugCategory、LogLevel | **接通 (P1-1)** |
+| Coordinator | `shannon-agents/src/coordinator.rs` | AgentTeam、任务分配方法 | 仍未处理 |
+| Compact | `shannon-core/src/compact.rs` | 5 种策略只用了默认 | 仍未处理 |
+| Doctor | `shannon-core/src/doctor.rs` | DoctorError 变体 | 仍未处理 |
+| UI Adapter | `shannon-core/src/ui_adapter.rs` | UiAdapter trait | 仍未处理 |
+
+**P1-1 (2026-08-03)** 处理了用户授权的 4 接通 + 1 删除:
+`/diff`、`/review_pr`、`/export`、`/debug` 全部接通并加单测;
+`/pdf` 命令文件、注册、ROADMAP-FUTURE 条目一并清理。
+未授权(coordinator/compact/doctor/ui_adapter)按计划 §P1 排期处理。
 
 外加 `CLAUDE.md` "Gotchas" 承认:**61 个 `#[allow(dead_code)]`** 注解,虽有 `// KEEP:` 注释分类,但仍是"半成品模块"的信号。
 
