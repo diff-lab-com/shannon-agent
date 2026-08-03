@@ -120,6 +120,8 @@ pub mod testing;
 pub mod i18n;
 pub mod triggered_routines;
 
+pub mod auto_test;
+
 // Re-export key types for convenience
 pub use ai_limits::{AiLimitType, AiLimitsTracker, AiUsageRecord, LimitStatus};
 pub use analytics::{

@@ -924,6 +924,7 @@ mod tests {
             fast_model: None,
             plan_model: None,
             max_parallel_tools: 10,
+            auto_test: None,
         };
         assert_eq!(config.max_turns, 5);
         assert_eq!(config.max_budget_usd, Some(1.0));
@@ -1189,6 +1190,7 @@ mod tests {
             fast_model: None,
             plan_model: None,
             max_parallel_tools: 10,
+            auto_test: None,
         };
         assert_eq!(config.max_turns, 1);
         assert_eq!(config.max_budget_usd, Some(0.01));

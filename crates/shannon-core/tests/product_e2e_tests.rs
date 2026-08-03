@@ -965,6 +965,7 @@ fn test_query_engine_config_custom() {
         fast_model: None,
         plan_model: None,
         max_parallel_tools: 10,
+        auto_test: None,
     };
     assert_eq!(config.max_turns, 5);
     assert_eq!(config.max_budget_usd, Some(1.0));
