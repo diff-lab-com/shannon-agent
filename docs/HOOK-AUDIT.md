@@ -15,9 +15,11 @@ lists **30** events. **28 events are shared**; the remaining 2 in each
 direction are differentiators.
 
 Audit headline: the roadmap's "Shannon has 32 hook events; Claude Code
-has ~18" claim was outdated. Both systems are now at parity in count,
-but Shannon has 5 **dead events** (defined but never emitted in
-production code) that should be either wired or removed.
+has ~18" claim was outdated. Both systems are now at parity in count.
+After the P1-2 pass (commit `b2b28f9b`), Shannon has **2 dead events**
+(`Elicitation`, `ElicitationResult`) that should be either wired or
+removed; the other 3 previously-dead events are now emitted (see
+[Dead events](#dead-events-production-emit-gaps) below).
 
 ---
 
@@ -37,7 +39,7 @@ semantics.
 | `PermissionRequest` | ✓ | ✓ | Identical |
 | `PermissionDenied` | ✓ | ✓ | Identical |
 | `UserPromptSubmit` | ✓ | ✓ | Identical |
-| `UserPromptExpansion` | ⚠️ dead | ✓ | Defined but never emitted |
+| `UserPromptExpansion` | ✓ | ✓ | Wired in `shannon-skills` executor after template substitution (P1-2a, b2b28f9b) |
 | `SessionStart` | ✓ | ✓ | Identical |
 | `SessionEnd` | ✓ | ✓ | Identical |
 | `Stop` | ✓ | ✓ | Identical |
@@ -49,8 +51,8 @@ semantics.
 | `PostCompact` | ✓ | ✓ | Identical |
 | `FileChanged` | ✓ | ✓ | Identical |
 | `CwdChanged` | ✓ | ✓ | Identical |
-| `ConfigChange` | ⚠️ dead | ✓ | Defined but never emitted |
-| `InstructionsLoaded` | ⚠️ dead | ✓ | Defined but never emitted |
+| `ConfigChange` | ✓ | ✓ | Wired via `shannon-core::config_watcher` (notify v7, parent-dir watch, atomic-replace safe) (P1-2c, b2b28f9b) |
+| `InstructionsLoaded` | ✓ | ✓ | Wired in `shannon-core::project_instructions` after CLAUDE.md + rules merge (P1-2b, b2b28f9b) |
 | `WorktreeCreate` | ✓ | ✓ | Identical |
 | `WorktreeRemove` | ✓ | ✓ | Identical |
 | `Elicitation` | ⚠️ dead | ✓ | Defined but never emitted |
@@ -77,22 +79,16 @@ semantics.
 
 ## Dead events (production-emit gaps)
 
-These five events are defined in `HookEventType` and have `HookEvent`
-variants but **no production code path emits them** (verified by
-`grep -rhoE 'HookEvent::[A-Z][a-zA-Z]+'` across all production source).
+After the P1-2 pass landed in commit `b2b28f9b`, three of the five
+previously-dead events are now wired:
 
-| Event | Where it should fire | Effort to wire |
-|-------|---------------------|----------------|
-| `UserPromptExpansion` | `shannon-skills` and `shannon-commands` after command template expansion (`$ARGUMENTS`, `$FILE_PATH`, etc. resolved) | Low (~1h) — single emit point in the template expander |
-| `ConfigChange` | `shannon-core::config::Config` reload path when `.shannon.toml` changes on disk | Medium (~3h) — needs file watcher + reload trigger |
-| `InstructionsLoaded` | `shannon-core::instructions::InstructionsLoader` after CLAUDE.md / `.claude/rules/*.md` are parsed and merged | Low (~1h) — already loaded, just emit |
-| `Elicitation` | `shannon-mcp::process_pool` when an MCP server sends `elicitation/create` | Medium (~4h) — MCP elicitation flow needs UI bridge |
-| `ElicitationResult` | Same flow, after user responds | Same as above |
-
-**Recommendation:** wire `UserPromptExpansion`, `InstructionsLoaded`,
-`ConfigChange` in this audit pass (low effort, no new infra). Track
-`Elicitation` / `ElicitationResult` as a follow-up since they require
-the MCP elicitation UI bridge which doesn't exist yet.
+| Event | Status | Emit location |
+|-------|--------|----------------|
+| `UserPromptExpansion` | ✓ wired | `crates/shannon-skills/src/executor.rs::emit_user_prompt_expansion` — fires after `substitute_arguments` + `substitute_named_arguments` + `substitute_variables` resolve `$ARGUMENTS`, `${0}`, `${CLAUDE_SESSION_ID}`, etc. Optional `HookEmitter` trait; serializes the event to JSON and hands it to the attached emitter (default: `NoopHookEmitter`). |
+| `InstructionsLoaded` | ✓ wired | `crates/shannon-core/src/project_instructions.rs::emit_instructions_loaded` — fires after the CLAUDE.md / AGENTS.md / `.claude/rules/*.md` merge completes. Routed through a global `OnceLock` so `project_instructions` does not need a hard dep on `shannon-engine`; `ToolExecutionContext::install_instructions_emitter` registers the actual hook manager. |
+| `ConfigChange` | ✓ wired | `crates/shannon-core/src/config_watcher.rs::ConfigWatcher` — wraps `notify::RecommendedWatcher` and watches the *parent directory* (not the file) so atomic-replace (rename / unlink + create) edits still surface. `ConfigWatcher::start(path, callback)` returns `None` on missing parent or notify failure (sandboxed CI), and `ConfigChange::into_hook_event()` converts the detection into `HookEvent::ConfigChange`. Reachable from the call site as `unified_config.watch_local_toml(callback)`. |
+| `Elicitation` | ⚠️ still dead | `shannon-mcp::process_pool` when an MCP server sends `elicitation/create` — needs the MCP UI bridge (out of scope for P1-2) |
+| `ElicitationResult` | ⚠️ still dead | Same flow, after user responds |
 
 ---
 
@@ -138,9 +134,9 @@ extend the fixture or the test will fail.
 - [x] Identify Shannon-only events (`TeamTaskCreated/Completed`)
 - [x] Identify dead events (5 listed above)
 - [x] Add fixture test exercising all 30 variants
-- [ ] Wire `UserPromptExpansion` in `shannon-skills` template expander (follow-up)
-- [ ] Wire `InstructionsLoaded` in `shannon-core` instruction loader (follow-up)
-- [ ] Wire `ConfigChange` in config reload path (follow-up)
+- [x] Wire `UserPromptExpansion` in `shannon-skills` template expander (P1-2a, b2b28f9b)
+- [x] Wire `InstructionsLoaded` in `shannon-core` instruction loader (P1-2b, b2b28f9b)
+- [x] Wire `ConfigChange` in config reload path via `notify` v7 watcher (P1-2c, b2b28f9b)
 - [ ] Evaluate `Setup` event for Shannon's `--prompt` mode (follow-up)
 - [ ] Defer `MessageDisplay` — needs rendering refactor
 - [ ] Defer `Elicitation`/`ElicitationResult` — needs MCP UI bridge
