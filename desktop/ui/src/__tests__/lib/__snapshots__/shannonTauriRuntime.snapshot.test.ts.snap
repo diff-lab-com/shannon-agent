@@ -1,0 +1,53 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`P2-5a runtime adapter — initial state shape (snapshot) > discriminated ShannonStreamEvent union is stable > shannonStreamEvent.kinds 1`] = `
+[
+  "cancelled",
+  "completed",
+  "failed",
+  "text",
+  "thinking",
+  "tool-progress",
+  "tool-result",
+  "tool-start",
+  "usage",
+]
+`;
+
+exports[`P2-5a runtime adapter — initial state shape (snapshot) > exposes the expected ExternalStoreAdapter keys > shannonTauriAdapter.keys 1`] = `
+[
+  "messages",
+  "onCancel",
+  "onDelete",
+  "onEdit",
+  "onNew",
+  "onReload",
+  "setMessages",
+]
+`;
+
+exports[`P2-5a runtime adapter — initial state shape (snapshot) > produces the expected default mock messages > mockMessages.shape 1`] = `
+[
+  {
+    "id": "mock-1",
+    "parts": [
+      "text",
+    ],
+    "role": "user",
+  },
+  {
+    "id": "mock-2",
+    "parts": [
+      "text",
+    ],
+    "role": "assistant",
+  },
+  {
+    "id": "mock-3",
+    "parts": [
+      "tool-call",
+    ],
+    "role": "assistant",
+  },
+]
+`;
