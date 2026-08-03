@@ -648,4 +648,117 @@ mod tests {
             "after grant, call must not be denied for missing scope; got: {text}"
         );
     }
+
+    // ---------------------------------------------------------------------------
+    // Slack — mirrors the Jira block above. Slack is always available
+    // in the dev build (it's part of the default feature set), but we
+    // still gate the tests on `feature = "slack"` so the `--no-default-features`
+    // build doesn't trip on the slack module being absent.
+    // ---------------------------------------------------------------------------
+
+    #[cfg(feature = "slack")]
+    fn fresh_slack_tools() -> Vec<Box<dyn ServerTool>> {
+        crate::slack::tools::as_server_tool(crate::slack::tools::all_tools_unauth())
+    }
+
+    #[cfg(feature = "slack")]
+    #[test]
+    fn slack_tools_list_advertises_six_tools() {
+        let tools = fresh_slack_tools();
+        let grants = fresh_grants(&tools);
+        let resp = handle_line(
+            r#"{"jsonrpc":"2.0","id":"sl1","method":"tools/list","params":{}}"#,
+            &tools,
+            &grants,
+        )
+        .expect("response");
+        let tool_list = resp.result.expect("result")["tools"]
+            .as_array()
+            .expect("array")
+            .clone();
+        let names: Vec<String> = tool_list
+            .into_iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "slack_post_message",
+                "slack_search_messages",
+                "slack_read_channel",
+                "slack_thread_reply",
+                "slack_list_channels",
+                "slack_get_user_info",
+            ]
+        );
+    }
+
+    #[cfg(feature = "slack")]
+    #[test]
+    fn slack_read_tools_pre_granted_write_tools_denied() {
+        let tools = fresh_slack_tools();
+        let grants = fresh_grants(&tools);
+        // Read tools auto-granted by `with_read_only_defaults`.
+        assert!(grants.check("slack_search_messages", "read"));
+        assert!(grants.check("slack_read_channel", "read"));
+        assert!(grants.check("slack_list_channels", "read"));
+        assert!(grants.check("slack_get_user_info", "read"));
+        // Write tools denied until host calls `tools/grant`.
+        assert!(!grants.check("slack_post_message", "write"));
+        assert!(!grants.check("slack_thread_reply", "write"));
+    }
+
+    #[cfg(feature = "slack")]
+    #[test]
+    fn slack_write_tool_without_grant_is_denied_even_if_args_permission_set() {
+        let tools = fresh_slack_tools();
+        let grants = fresh_grants(&tools);
+        let resp = handle_line(
+            r#"{"jsonrpc":"2.0","id":"sl2","method":"tools/call","params":{"name":"slack_post_message","arguments":{"channel":"C1","text":"hi","permission":"write"}}}"#,
+            &tools,
+            &grants,
+        )
+        .expect("response");
+        let result = resp.result.expect("result");
+        assert_eq!(result["isError"], serde_json::json!(true));
+        let text = result["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            text.contains("write scope not granted"),
+            "denial text should explain the missing grant; got: {text}"
+        );
+    }
+
+    #[cfg(feature = "slack")]
+    #[test]
+    fn slack_write_tool_succeeds_after_tools_grant() {
+        let tools = fresh_slack_tools();
+        let grants = fresh_grants(&tools);
+
+        let grant_resp = handle_line(
+            r#"{"jsonrpc":"2.0","id":"slg1","method":"tools/grant","params":{"name":"slack_post_message","scope":"write"}}"#,
+            &tools,
+            &grants,
+        )
+        .expect("response");
+        assert_eq!(
+            grant_resp.result.expect("result")["granted"]["name"],
+            "slack_post_message"
+        );
+
+        // After grant, the call no longer fails for missing scope.
+        // It will still error upstream (no real Slack token) but the
+        // denial message must not appear.
+        let resp = handle_line(
+            r#"{"jsonrpc":"2.0","id":"sl3","method":"tools/call","params":{"name":"slack_post_message","arguments":{"channel":"C1","text":"hi"}}}"#,
+            &tools,
+            &grants,
+        )
+        .expect("response");
+        let result = resp.result.expect("result");
+        let text = result["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            !text.contains("write scope not granted"),
+            "after grant, call must not be denied for missing scope; got: {text}"
+        );
+    }
 }
