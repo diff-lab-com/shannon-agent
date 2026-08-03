@@ -6062,6 +6062,7 @@ dependencies = [
  "sha2",
  "shannon-api-protocol",
  "shannon-engine",
+ "shannon-repomap",
  "shannon-tool-interface",
  "shannon-types",
  "sys-locale",
@@ -6223,6 +6224,9 @@ name = "shannon-repomap"
 version = "0.7.1"
 dependencies = [
  "anyhow",
+ "bincode",
+ "dirs 5.0.1",
+ "notify",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

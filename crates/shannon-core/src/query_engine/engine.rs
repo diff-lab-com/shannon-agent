@@ -42,6 +42,7 @@
 use crate::memory::AutoDreamService;
 use crate::memory::MemoryStore;
 use crate::query_engine::context_injector::ContextInjector;
+use crate::query_engine::repo_map_injector::RepoMapInjector;
 use crate::query_engine::streaming::ConversationState;
 use crate::query_engine::types::{
     ConversationStats, CostTracker, QueryContext, QueryEngineConfig, QueryError, QueryEvent,
@@ -352,6 +353,9 @@ pub struct QueryEngine {
         Arc<tokio::sync::RwLock<crate::triggered_routines::TriggeredRoutineRegistry>>,
     /// Context injector for project instructions and preference memory.
     pub(crate) context_injector: Option<Arc<ContextInjector>>,
+    /// P1-4 repo map injector. Lazily built; consumed by the system-prompt
+    /// assembly path when [`QueryEngineConfig::repo_map_enabled`] is true.
+    pub(crate) repo_map_injector: RepoMapInjector,
     /// Shared flag set by `PlanManager` (in `shannon-tools`) to signal that
     /// plan mode is active. When `true`, the engine blocks write tools before
     /// the permission check.
@@ -499,6 +503,10 @@ impl QueryEngine {
         let session_id = Uuid::new_v4();
         let effective_max_context_tokens =
             Self::resolve_max_context_tokens(client.model(), config.max_context_tokens);
+        let repo_map_injector = RepoMapInjector::new(
+            config.repo_map_root.as_deref(),
+            config.repo_map_budget_tokens,
+        );
         Self {
             client,
             tools: Arc::new(tools),
@@ -514,6 +522,7 @@ impl QueryEngine {
                 crate::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
             )),
             context_injector: None,
+            repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
             checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
                 &session_id.to_string(),
@@ -551,12 +560,17 @@ impl QueryEngine {
             client.model(),
             None, // defaults have no user override
         );
+        let defaults = QueryEngineConfig::default();
+        let repo_map_injector = RepoMapInjector::new(
+            defaults.repo_map_root.as_deref(),
+            defaults.repo_map_budget_tokens,
+        );
         Self {
             client,
             tools,
             permissions: Arc::new(RwLock::new(permissions)),
             state: Arc::new(state),
-            config: QueryEngineConfig::default(),
+            config: defaults,
             conversation: ConversationState::default(),
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
             memory: None,
@@ -566,6 +580,7 @@ impl QueryEngine {
                 crate::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
             )),
             context_injector: None,
+            repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
             checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
                 &session_id.to_string(),
@@ -592,6 +607,10 @@ impl QueryEngine {
         let model = client.model().to_string();
         let effective_max_context_tokens =
             Self::resolve_max_context_tokens(client.model(), config.max_context_tokens);
+        let repo_map_injector = RepoMapInjector::new(
+            config.repo_map_root.as_deref(),
+            config.repo_map_budget_tokens,
+        );
         Self {
             client,
             tools: Arc::new(tools),
@@ -607,6 +626,7 @@ impl QueryEngine {
                 crate::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
             )),
             context_injector: None,
+            repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
             checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
                 &session_id.to_string(),
@@ -1194,6 +1214,23 @@ impl QueryEngine {
         if let Some(ref injector) = self.context_injector {
             let extra_blocks = injector.build_system_blocks(use_cache);
             system_blocks.extend(extra_blocks);
+        }
+
+        // Inject the project repo map (P1-4) — a per-project, budget-trimmed
+        // symbol overview rendered as markdown. Best-effort: a None return
+        // (parse / walk failure) means we skip silently. We use `cached`
+        // because the repo map is stable across turns within a session —
+        // changing only when source files change, which we invalidate via
+        // `notify_file_changed`.
+        if config.repo_map_enabled {
+            if let Some(repo_map_md) = self.repo_map_injector.build() {
+                let block = if use_cache {
+                    SystemContentBlock::cached(repo_map_md)
+                } else {
+                    SystemContentBlock::text(repo_map_md)
+                };
+                system_blocks.push(block);
+            }
         }
 
         // Inject browser control instructions when browser MCP tools are present
