@@ -1,0 +1,17 @@
+---
+source: crates/shannon-mcp/tests/tools_call_snapshot.rs
+expression: message
+---
+{
+  "jsonrpc": "2.0",
+  "id": "call-001",
+  "result": {
+    "content": [
+      {
+        "text": "hello, world",
+        "type": "text"
+      }
+    ],
+    "isError": false
+  }
+}

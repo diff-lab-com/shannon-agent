@@ -210,3 +210,39 @@ jobs:
           feature-group: default-features
           exclude: shannon-engine,shannon-stability-attr,shannon-api-protocol,shannon-desktop
           verbose: true
+
+  insta:
+    # P2-3 (improvement plan §P2-3): snapshot discipline. Runs the workspace
+    # nextest suite (which exercises every insta snapshot test) and then
+    # fails if any `.snap.new` files are left over. The `.snap.new` files
+    # are what `insta::assert_snapshot!` writes when an assertion fails —
+    # leaving them in the tree means a contributor shipped a snapshot
+    # change without explicitly accepting it. See docs/plans/insta-workflow.md.
+    name: Insta Snapshots
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Run workspace tests (exercises snapshot tests)
+        # Arch-invariants tests are guarded by `cargo test` integration
+        # discovery; running nextest covers the same set in addition to
+        # the bin/lib unit tests, so a single invocation is enough.
+        run: cargo nextest run --workspace --config-file .config/nextest.toml
+      - name: Reject pending snapshots
+        # If any `.snap.new` file exists, the snapshot test recorded a
+        # diff the contributor did not accept. Fail the build so the PR
+        # cannot merge until the snapshot is reviewed and accepted
+        # locally (see docs/plans/insta-workflow.md).
+        run: |
+          if find . -path ./target -prune -o -name '*.snap.new' -print | grep -q .; then
+            echo "Pending insta snapshots detected — review with 'cargo insta review':"
+            find . -path ./target -prune -o -name '*.snap.new' -print
+            exit 1
+          fi

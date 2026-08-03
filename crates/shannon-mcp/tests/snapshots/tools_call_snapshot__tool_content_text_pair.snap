@@ -1,0 +1,16 @@
+---
+source: crates/shannon-mcp/tests/tools_call_snapshot.rs
+expression: value
+---
+{
+  "content": [
+    {
+      "text": "first line",
+      "type": "text"
+    },
+    {
+      "text": "second line",
+      "type": "text"
+    }
+  ]
+}
