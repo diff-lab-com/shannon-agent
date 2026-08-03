@@ -27,7 +27,7 @@ import {
   type UsagePayload,
   type McpServerInfo,
 } from '@/types'
-import { ChatContext, useChat, type ChatContextValue } from './ChatContext'
+import { ChatProvider, useChat, type ChatContextValue } from './ChatContext'
 import { SessionContext, useSessions, type SessionContextValue } from './SessionContext'
 import { CatalogContext, useCatalog, type CatalogContextValue } from './CatalogContext'
 
@@ -324,9 +324,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   return (
     <CatalogContext.Provider value={catalogValue}>
       <SessionContext.Provider value={sessionValue}>
-        <ChatContext.Provider value={chatValue}>
+        <ChatProvider value={chatValue}>
           {children}
-        </ChatContext.Provider>
+        </ChatProvider>
       </SessionContext.Provider>
     </CatalogContext.Provider>
   )
