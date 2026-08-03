@@ -38,6 +38,7 @@ tempfile = "3.15"
 futures-util = { workspace = true }
 tokio-test = "0.4"
 criterion = "0.5"
+insta = { workspace = true }
 
 [[bench]]
 name = "protocol_benchmarks"

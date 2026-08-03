@@ -385,14 +385,18 @@ fn sanitize_json_value(value: &mut JsonValue, home_dir: &str) {
     }
 }
 
-/// Format a Unix timestamp as readable string
+/// Format a Unix timestamp as a UTC `YYYY-MM-DD HH:MM:SS` string.
+///
+/// Unix epochs are timezone-agnostic, so the exported markdown uses UTC
+/// to keep session snapshots stable regardless of the reader's local
+/// timezone — critical for the `/export` insta snapshots, which must
+/// produce byte-identical output in CI (`TZ=UTC`) and on developer
+/// machines (`TZ=America/Los_Angeles`, etc.).
 fn format_timestamp(secs: u64) -> String {
-    use chrono::{DateTime, Local, Utc};
+    use chrono::{DateTime, Utc};
 
     let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0).unwrap_or_default();
-    let local: DateTime<Local> = dt.into();
-
-    local.format("%Y-%m-%d %H:%M:%S").to_string()
+    dt.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 /// Write export to file

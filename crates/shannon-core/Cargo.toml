@@ -121,7 +121,7 @@ landlock = ["dep:landlock"]
 tokio-test = "0.4"
 criterion = "0.5"
 tower = "0.5"
-insta = "1.42"
+insta = { workspace = true }
 proptest = { workspace = true }
 
 [[bench]]
