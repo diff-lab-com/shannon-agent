@@ -34,6 +34,12 @@ shannon-api-protocol = { path = "../shannon-api-protocol" }
 # Engine (extracted modules — api/, testing/record_replay)
 shannon-engine = { path = "../shannon-engine" }
 
+# Repo map (P1-4): tree-sitter based symbol map injected into the system
+# prompt. Always built — the integration is gated by a config toggle on
+# the engine side, but the binary is small and depends on the same tree-
+# sitter grammars already pulled in by shannon-repomap itself.
+shannon-repomap = { path = "../shannon-repomap" }
+
 # HTTP client for Claude API
 reqwest = { workspace = true }
 

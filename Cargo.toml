@@ -105,6 +105,12 @@ tree-sitter-go = "0.23"
 # ---- File walking ----
 walkdir = "2.5"
 
+# ---- File watcher (used by shannon-repomap incremental update) ----
+notify = "7"
+
+# ---- Binary cache for the repo map ----
+bincode = "1"
+
 # ---- Proc-macro infra ----
 proc-macro2 = "1"
 quote = "1"

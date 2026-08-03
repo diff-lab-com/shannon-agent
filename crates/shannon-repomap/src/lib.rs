@@ -1,4 +1,4 @@
-//! # Shannon Repo Map (P1-4 Phase B)
+//! # Shannon Repo Map (P1-4 Phase B + incremental update)
 //!
 //! Walk a source tree, parse every supported file with tree-sitter, and emit
 //! a structured symbol map small enough to inject into the LLM system
@@ -10,13 +10,23 @@
 //! the design and the plan's §tree-sitter-versions section for the version
 //! pin rationale.
 //!
+//! Phase C (this update) adds:
+//!
+//! - [`RepoMapCache`] — a persistent, incrementally updatable symbol cache
+//!   keyed by the project root. Replaces the "re-walk the world" path with
+//!   per-file updates that don't touch sibling files.
+//! - [`RepoMapWatcher`] — a thin `notify` wrapper that turns filesystem
+//!   events into [`WatcherEvent`]s the cache can consume.
+//! - [`RepoMapCache::pack`] — a one-shot "trim to budget and render markdown"
+//!   helper used by the query engine when building the system prompt.
+//!
 //! Typical usage:
 //!
 //! ```no_run
-//! use shannon_repomap::RepoMap;
+//! use shannon_repomap::{RepoMap, RepoMapCache, RepoMapWatcher};
 //! use std::path::Path;
 //!
-//! // Mixed-language directory walk.
+//! // Mixed-language directory walk (one-shot).
 //! let mut repo_map = RepoMap::from_dir(Path::new("."))?;
 //! repo_map.trim_to_budget(4_000);
 //! let md = repo_map.to_system_prompt_markdown();
@@ -27,13 +37,36 @@
 //! let md = single.to_system_prompt_markdown();
 //! # Ok::<(), anyhow::Error>(())
 //! ```
+//!
+//! ```no_run
+//! # use shannon_repomap::{RepoMapCache, RepoMapWatcher};
+//! # use std::path::Path;
+//! // Incremental: load the disk cache (or full-walk on cold start) and keep
+//! // it up to date via filesystem events.
+//! let mut cache = RepoMapCache::new(Path::new("."))?;
+//! let _watcher = RepoMapWatcher::start(
+//!     Path::new("."),
+//!     move |evt| {
+//!         let mut cache = cache.clone();
+//!         let path = evt.path.clone();
+//!         // Best-effort: ignore errors so a single broken file can't kill
+//!         // the watcher loop.
+//!         let _ = cache.update_file(&path);
+//!     },
+//! )?;
+//! # Ok::<(), anyhow::Error>(())
+//! ```
 
 pub mod budget;
+pub mod cache;
 pub mod parser;
 pub mod symbol_tree;
+pub mod watcher;
 
+pub use cache::{CacheError, RepoMapCache};
 pub use parser::{LanguageParser, RepoMapError};
 pub use symbol_tree::{Span, SymbolKind, SymbolMap, SymbolNode};
+pub use watcher::{RepoMapWatcher, WatcherEvent, WatcherEventKind};
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
