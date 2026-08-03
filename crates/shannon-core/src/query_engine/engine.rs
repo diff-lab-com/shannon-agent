@@ -1368,6 +1368,12 @@ impl QueryEngine {
             const DENIAL_SOFT_LIMIT: u32 = 3; // inject warning to LLM
             const DENIAL_HARD_LIMIT: u32 = 5; // abort the agent loop
 
+            // Auto-test loop state (P1-5). Initialized lazily inside the loop body
+            // because `AutoLoopState` is only needed when `config.auto_test` is `Some`.
+            // We keep the struct default-constructible so this declaration is cheap.
+            let mut auto_test_state: crate::auto_test::AntiLoopState =
+                crate::auto_test::AntiLoopState::new();
+
             loop {
                 if turn >= config.max_turns {
                     let total_cost = CostTracker::calculate_cost(
@@ -2794,6 +2800,28 @@ impl QueryEngine {
                                                     }
                                                 }
 
+                                                // Auto-test loop (P1-5): when enabled, after a
+                                                // successful file-modifying tool, run the
+                                                // configured test command. On failure, inject
+                                                // the failure into the next LLM context so the
+                                                // model can fix the code. Anti-loop guards
+                                                // (max_iterations / total_timeout / no_progress)
+                                                // cap iteration. Only triggered by Edit/Write —
+                                                // we don't auto-test after Read/Grep/Bash.
+                                                if file_edits_made {
+                                                    if let Some(auto_cfg) = config.auto_test.clone()
+                                                    {
+                                                        maybe_run_auto_test(
+                                                            &auto_cfg,
+                                                            &mut auto_test_state,
+                                                            &mut tool_results,
+                                                            &tx,
+                                                            query_id,
+                                                        )
+                                                        .await;
+                                                    }
+                                                }
+
                                                 // Soft-limit warning: inject a message telling the model to stop retrying
                                                 if (DENIAL_SOFT_LIMIT..DENIAL_HARD_LIMIT)
                                                     .contains(&consecutive_denials)
@@ -3786,6 +3814,86 @@ fn save_conversation_to_disk(
     state
         .save_session(&session_id, messages, &metadata)
         .map_err(|e| e.to_string())
+}
+
+// ─── Auto-test loop (P1-5) ──────────────────────────────────────────────────
+//
+// Wired into the main agent loop: after a successful file-modifying tool
+// (`Edit`/`Write`) the engine invokes `maybe_run_auto_test` to run the
+// configured test command and, on failure, inject the result into the next
+// LLM context so the model can fix the code.
+
+/// Run one auto-test iteration if appropriate.
+///
+/// Called after each successful file-modifying tool. Pushes a
+/// [`ToolResultEntry`] into `tool_results` describing what happened so the
+/// next API call sees it. Returns `()`; loop-state lives in `auto_test_state`.
+async fn maybe_run_auto_test(
+    cfg: &crate::auto_test::AutoTestConfig,
+    state: &mut crate::auto_test::AntiLoopState,
+    tool_results: &mut Vec<ToolResultEntry>,
+    tx: &mpsc::UnboundedSender<Result<QueryEvent, QueryError>>,
+    query_id: Uuid,
+) {
+    // Emit a progress event so the UI shows the auto-test is running.
+    send_event!(
+        tx,
+        QueryEvent::Progress {
+            query_id,
+            message: format!(
+                "auto-test: running configured test command (iteration {})",
+                state.iterations + 1
+            ),
+        }
+    );
+
+    let project_dir = crate::auto_test::project_dir();
+    let outcome = match crate::auto_test::run_auto_test(cfg, &project_dir).await {
+        Some(o) => o,
+        None => {
+            // No command could be resolved — silently skip. The user hasn't
+            // configured a project that auto-detection can map to a test runner.
+            return;
+        }
+    };
+
+    let decision = state.record(cfg, &outcome);
+
+    // Build a synthetic tool-result so the next API call sees it. We use a
+    // synthetic tool_use_id — these entries don't correspond to a real tool
+    // invocation but `user(tool_result)` is the only way to push text into
+    // the model's context mid-loop.
+    let description = outcome.describe();
+    let entry = ToolResultEntry {
+        tool_use_id: format!("auto_test_iter_{}", state.iterations),
+        content: description,
+        is_error: !outcome.is_passed(),
+        metadata: Default::default(),
+    };
+    tool_results.push(entry);
+
+    // Emit a structured progress event with the outcome so the UI can show
+    // pass/fail badges without parsing the description string.
+    send_event!(
+        tx,
+        QueryEvent::Progress {
+            query_id,
+            message: format!(
+                "auto-test: {} ({} iter, reason: {})",
+                match &outcome {
+                    crate::auto_test::TestOutcome::Passed => "passed",
+                    crate::auto_test::TestOutcome::Failed { .. } => "failed",
+                    crate::auto_test::TestOutcome::TimedOut => "timed out",
+                    crate::auto_test::TestOutcome::SpawnError(_) => "spawn error",
+                },
+                state.iterations,
+                match &decision {
+                    crate::auto_test::LoopDecision::Continue => "continue",
+                    crate::auto_test::LoopDecision::Stop(r) => r.as_str(),
+                }
+            ),
+        }
+    );
 }
 
 #[cfg(test)]

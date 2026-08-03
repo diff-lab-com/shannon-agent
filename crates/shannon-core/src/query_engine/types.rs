@@ -680,6 +680,13 @@ pub struct QueryEngineConfig {
     /// If set, complex queries are routed to this model while execution
     /// uses the primary model. Supports aliases: "opus", "sonnet".
     pub plan_model: Option<String>,
+    /// Optional auto-test loop config (P1-5). When `Some`, after a successful
+    /// file-modifying tool (`Edit`/`Write`) the engine runs the configured
+    /// test command, parses the result, and — on failure — injects the
+    /// failure into the next LLM context so the model can fix the code.
+    /// Anti-loop guards (`max_iterations`, `total_timeout_secs`,
+    /// `no_progress_strikes`) cap the iteration count.
+    pub auto_test: Option<crate::auto_test::AutoTestConfig>,
 }
 
 impl Default for QueryEngineConfig {
@@ -730,6 +737,7 @@ impl Default for QueryEngineConfig {
             focus_area: None,
             fast_model: None,
             plan_model: None,
+            auto_test: None,
         }
     }
 }
