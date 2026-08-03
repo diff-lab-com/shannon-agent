@@ -14,6 +14,30 @@ use crate::events::HunkAction;
 use crate::resolve_path_in_working_dir;
 
 const MAX_ATTACHMENT_SIZE: u64 = 25 * 1024 * 1024;
+const MAX_ATTACHMENT_COUNT: usize = 10;
+
+/// Best-effort PDF text extraction. We intentionally avoid pulling in a
+/// heavy PDF crate; the approach is to shell out to `pdftotext` (poppler)
+/// if installed, otherwise fall back to the raw UTF-8 decode. This keeps
+/// the dependency surface flat while still giving real content for the
+/// common case where poppler is available on the user's PATH.
+async fn extract_pdf_text_best_effort(path: &Path) -> String {
+    use std::process::Command;
+
+    let path_str = path.to_string_lossy().into_owned();
+    let output = Command::new("pdftotext").arg(&path_str).arg("-").output();
+    if let Ok(out) = output {
+        if out.status.success() {
+            return String::from_utf8_lossy(&out.stdout).into_owned();
+        }
+    }
+
+    // Fallback: best-effort UTF-8 decode of the raw bytes.
+    tokio::fs::read(path)
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachmentPayload {
@@ -27,7 +51,13 @@ pub struct AttachmentPayload {
 }
 
 fn attachment_mime(path: &Path) -> String {
-    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "webp" => "image/webp",
@@ -45,7 +75,8 @@ fn attachment_mime(path: &Path) -> String {
         "yaml" | "yml" => "application/yaml",
         "toml" => "application/toml",
         _ => "application/octet-stream",
-    }.to_string()
+    }
+    .to_string()
 }
 
 /// Read one attachment for conversion into an assistant message content block.
@@ -59,23 +90,65 @@ pub async fn read_attachment(path: String) -> Result<AttachmentPayload, String> 
         return Err("Attachment path is not a file".into());
     }
     if metadata.len() > MAX_ATTACHMENT_SIZE {
-        return Err(format!("Attachment exceeds the 25 MB limit: {}", file_path.display()));
+        return Err(format!(
+            "Attachment exceeds the 25 MB limit: {}",
+            file_path.display()
+        ));
     }
     let bytes = tokio::fs::read(file_path)
         .await
         .map_err(|e| format!("Cannot read attachment: {e}"))?;
     let mime = attachment_mime(file_path);
-    let name = file_path.file_name().and_then(|n| n.to_str()).unwrap_or(&path).to_string();
+    let name = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&path)
+        .to_string();
     let size = bytes.len() as u64;
     if mime.starts_with("image/") {
-        Ok(AttachmentPayload { mime, base64: Some(base64::engine::general_purpose::STANDARD.encode(bytes)), text: None, name, size })
+        Ok(AttachmentPayload {
+            mime,
+            base64: Some(base64::engine::general_purpose::STANDARD.encode(bytes)),
+            text: None,
+            name,
+            size,
+        })
     } else if mime == "application/pdf" {
-        let text = String::from_utf8_lossy(&bytes).to_string();
-        Ok(AttachmentPayload { mime, base64: None, text: Some(text), name, size })
+        let text = extract_pdf_text_best_effort(file_path).await;
+        Ok(AttachmentPayload {
+            mime,
+            base64: None,
+            text: Some(text),
+            name,
+            size,
+        })
     } else {
-        let text = String::from_utf8(bytes).map_err(|_| "Attachment is not valid UTF-8 text".to_string())?;
-        Ok(AttachmentPayload { mime, base64: None, text: Some(text), name, size })
+        let text = String::from_utf8(bytes)
+            .map_err(|_| "Attachment is not valid UTF-8 text".to_string())?;
+        Ok(AttachmentPayload {
+            mime,
+            base64: None,
+            text: Some(text),
+            name,
+            size,
+        })
     }
+}
+
+/// Batch variant used by the UI: read multiple paths in sequence and enforce
+/// the per-message `MAX_ATTACHMENT_COUNT` cap before any I/O happens.
+#[tauri::command]
+pub async fn read_attachments(paths: Vec<String>) -> Result<Vec<AttachmentPayload>, String> {
+    if paths.len() > MAX_ATTACHMENT_COUNT {
+        return Err(format!(
+            "Cannot attach more than {MAX_ATTACHMENT_COUNT} files at once"
+        ));
+    }
+    let mut out = Vec::with_capacity(paths.len());
+    for p in paths {
+        out.push(read_attachment(p).await?);
+    }
+    Ok(out)
 }
 
 #[tauri::command]
@@ -368,6 +441,123 @@ pub async fn get_working_dir_info() -> Result<WorkingDirInfo, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("shannon-attachment-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.push(name);
+        dir
+    }
+
+    #[tokio::test]
+    async fn image_attachment_returns_base64_with_image_mime() {
+        let png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let path = temp_path("pixel.png");
+        std::fs::write(&path, &png).unwrap();
+
+        let payload = read_attachment(path.to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        assert_eq!(payload.mime, "image/png");
+        assert_eq!(payload.name, "pixel.png");
+        assert_eq!(payload.size, png.len() as u64);
+        assert!(payload.text.is_none());
+        let b64 = payload.base64.expect("image payload must carry base64");
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&b64)
+                .unwrap(),
+            png
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn text_attachment_returns_text_block() {
+        let path = temp_path("note.md");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(b"# Hello\nworld").unwrap();
+        let payload = read_attachment(path.to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        assert_eq!(payload.mime, "text/markdown");
+        assert_eq!(payload.text.as_deref(), Some("# Hello\nworld"));
+        assert!(payload.base64.is_none());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn text_attachment_rejects_non_utf8() {
+        let path = temp_path("binary.md");
+        std::fs::write(&path, [0xFF, 0xFE, 0xFD, 0xFC]).unwrap();
+        let err = read_attachment(path.to_string_lossy().into_owned())
+            .await
+            .unwrap_err();
+        assert!(err.contains("UTF-8"), "got {err}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn pdf_attachment_returns_text_without_panicking() {
+        let path = temp_path("doc.pdf");
+        std::fs::write(&path, b"%PDF-1.4 placeholder not a real pdf").unwrap();
+        let payload = read_attachment(path.to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        assert_eq!(payload.mime, "application/pdf");
+        assert!(payload.base64.is_none());
+        assert!(payload.text.is_some());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn rejects_files_over_25_mb() {
+        let path = temp_path("huge.bin");
+        let f = std::fs::File::create(&path).unwrap();
+        f.set_len(MAX_ATTACHMENT_SIZE + 1).unwrap();
+        let err = read_attachment(path.to_string_lossy().into_owned())
+            .await
+            .unwrap_err();
+        assert!(err.contains("25 MB"), "expected limit error, got {err}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn rejects_more_than_ten_attachments() {
+        let paths: Vec<String> = (0..11).map(|i| format!("/nope/{i}")).collect();
+        let err = read_attachments(paths).await.unwrap_err();
+        assert!(err.contains("10"), "expected count limit, got {err}");
+    }
+
+    #[tokio::test]
+    async fn rejects_directory() {
+        let path = temp_path("");
+        std::fs::create_dir_all(&path).unwrap();
+        let err = read_attachment(path.to_string_lossy().into_owned())
+            .await
+            .unwrap_err();
+        assert!(err.contains("not a file"));
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn attachment_mime_guess_table() {
+        assert_eq!(attachment_mime(Path::new("a.png")), "image/png");
+        assert_eq!(attachment_mime(Path::new("a.JPG")), "image/jpeg");
+        assert_eq!(attachment_mime(Path::new("a.webp")), "image/webp");
+        assert_eq!(attachment_mime(Path::new("a.GIF")), "image/gif");
+        assert_eq!(attachment_mime(Path::new("a.pdf")), "application/pdf");
+        assert_eq!(attachment_mime(Path::new("a.md")), "text/markdown");
+        assert_eq!(attachment_mime(Path::new("a.rs")), "text/x-rust");
+        assert_eq!(attachment_mime(Path::new("a.ts")), "text/typescript");
+        assert_eq!(attachment_mime(Path::new("a.py")), "text/x-python");
+        assert_eq!(attachment_mime(Path::new("a.json")), "application/json");
+        assert_eq!(attachment_mime(Path::new("a.toml")), "application/toml");
+        assert_eq!(attachment_mime(Path::new("a.yaml")), "application/yaml");
+        assert_eq!(attachment_mime(Path::new("a")), "application/octet-stream");
+    }
 
     #[test]
     fn file_diff_round_trips_through_serde() {
