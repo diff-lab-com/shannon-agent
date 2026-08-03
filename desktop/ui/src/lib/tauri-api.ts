@@ -52,6 +52,12 @@ export async function readAttachment(path: string): Promise<AttachmentPayload> {
   return invoke('read_attachment', { path })
 }
 
+export async function readAttachments(paths: string[]): Promise<AttachmentPayload[]> {
+  return invoke('read_attachments', { paths })
+}
+
+export const MAX_ATTACHMENT_COUNT = 10
+
 export interface AttachmentPayload {
   mime: string
   base64?: string

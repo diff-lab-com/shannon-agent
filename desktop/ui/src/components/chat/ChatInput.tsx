@@ -13,12 +13,6 @@ import { toastError } from '@/lib/errorToast'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 
-function isImageFile(path: string): boolean {
-  const dot = path.lastIndexOf('.')
-  if (dot < 0) return false
-  return IMAGE_EXTENSIONS.has(path.slice(dot + 1).toLowerCase())
-}
-
 interface ChatInputProps {
   value: string
   onChange: (value: string) => void
@@ -109,6 +103,19 @@ export default function ChatInput({
     setIsDragging(false)
   }
 
+  const mergePaths = (paths: string[]) => {
+    const merged = [...new Set([...attachedFiles, ...paths])]
+    if (merged.length > api.MAX_ATTACHMENT_COUNT) {
+      const tooMany = intl.formatMessage(
+        { id: 'chat.input.attach.tooMany' },
+        { max: api.MAX_ATTACHMENT_COUNT },
+      )
+      toastError(t('chat.input.attach.failed'), tooMany)
+      return
+    }
+    onAttach(merged)
+  }
+
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
@@ -125,7 +132,7 @@ export default function ChatInput({
     }
 
     if (paths.length > 0) {
-      onAttach(paths)
+      mergePaths(paths)
     }
   }
 
@@ -151,7 +158,7 @@ export default function ChatInput({
       })
       if (!selected) return
       const paths = (Array.isArray(selected) ? selected : [selected]) as string[]
-      if (paths.length > 0) onAttach(paths)
+      if (paths.length > 0) mergePaths(paths)
     } catch (err) {
       toastError(t('chat.input.attach.failed'), err)
     }
