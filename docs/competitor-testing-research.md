@@ -12,7 +12,7 @@
 |------|-------------------|-------------|-----------|---------|
 | 语言 | TypeScript | TypeScript (闭源) | Rust | Rust |
 | 测试框架 | Vitest | 无传统测试 | cargo-nextest | cargo-nextest |
-| 测试规模 | 2000-3000 | 未知 | 500+ | 9181 |
+| 测试规模 | 2000-3000 | 未知 | 500+ | [metrics.md](./metrics.md) |
 | HTTP Mock | fakeFetch | 无 (dogfooding) | Wiremock | mockito |
 | Record/Replay | 无 | 无 | 无 | 有 (JSONL) |
 | 快照测试 | 无 | 无 | insta | 无 |
@@ -254,16 +254,16 @@ fn test_tool_call_format() {
 
 | Crate | 测试数 | 类型 |
 |-------|--------|------|
-| shannon-core | ~3370 | 单元 + 集成 |
-| shannon-ui | ~1089 | 单元 + widget 测试 |
-| shannon-tools | ~1111 | 单元 + 工具集成 |
-| shannon-commands | ~335 | 命令测试 |
-| shannon-agents | ~471 | agent 协调 |
-| shannon-cli | ~191 | CLI E2E + record/replay |
-| shannon-skills | ~171 | skill 执行 |
-| shannon-mcp | ~373 | MCP 协议 |
-| 其他 | ~270 | 类型、codegen 等 |
-| **总计** | **~9181** | |
+| shannon-core | [metrics.md](./metrics.md) | 单元 + 集成 |
+| shannon-ui | [metrics.md](./metrics.md) | 单元 + widget 测试 |
+| shannon-tools | [metrics.md](./metrics.md) | 单元 + 工具集成 |
+| shannon-commands | [metrics.md](./metrics.md) | 命令测试 |
+| shannon-agents | [metrics.md](./metrics.md) | agent 协调 |
+| shannon-cli | [metrics.md](./metrics.md) | CLI E2E + record/replay |
+| shannon-skills | [metrics.md](./metrics.md) | skill 执行 |
+| shannon-mcp | [metrics.md](./metrics.md) | MCP 协议 |
+| 其他 | [metrics.md](./metrics.md) | 类型、codegen 等 |
+| **总计** | **[metrics.md](./metrics.md)** | |
 
 ### 5.2 Shannon 独有优势
 
@@ -474,7 +474,7 @@ async fn record_task_session_resume() {
 
 ## 8. 总结
 
-Shannon 的测试体系 (9181 测试) 在数量上已超过竞品。核心差距不在测试数量，而在:
+Shannon 的测试体系 (see [metrics.md](./metrics.md) for current count) 在数量上已超过竞品。核心差距不在测试数量，而在:
 
 1. **测试质量验证**: 缺少变异测试，无法确认测试真正捕获了 bug
 2. **架构保障**: 缺少不变量测试，架构约束依赖人工 review
