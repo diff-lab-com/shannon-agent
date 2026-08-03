@@ -21,6 +21,19 @@ P0–P3 全部条目已落地(见各任务 `✅ 已完成` 标记与下方勾选
 
 **勾选语义**:下方 `[x]` = 该条的结构/可测部分已确认(代码落地 + 单测存在 + 测试门绿)。标 _(待交互 QA;代码路径已确认)_ 的 **20 条**属纯行为验收(如"卡片立即更新""切换到 zh 完整翻译"),代码路径已确认但需在交互式 REPL 里做人肉 QA 后才能关闭——**合并前应抽 15 分钟过一遍这 20 条**(可执行清单见 [`adr-0008-qa-checklist.md`](./adr-0008-qa-checklist.md))。
 
+### QA 过堂结果(2026-08-03,P0-1)
+
+| Block | 条目 | 状态 | 备注 |
+|-------|------|------|------|
+| A | A1 / A2 / A3 / A4 / A5 / A6 / A7 / A8 / A9 / A10 / A11 / A12 | 12/12 `[human-blocked]` | TUI 肉眼 / 凭证;代码路径已由对应单测覆盖(A1/A2/A5/A6/A9/A11 在 `scripts/adr-0008-qa.sh` PASS) |
+| B | B1 / B2 / B3 / B4 | 4/4 `[human-blocked]` | 需真实 key + 联网;TUI 实时性由 B3 单测覆盖 |
+| C | C1 | 1/1 `[human-blocked]` | 需手动断网;解析路径由 `parse_rejects_garbage` 覆盖 |
+| D | D1 / D2 | **2/2 `[x]` auto PASS** | 5 项 CLI 子用例 + TOML round-trip 全绿(脚本 D1.1–D1.5 + D2) |
+
+**自动化结果**:`bash scripts/adr-0008-qa.sh` → `pass=15  fail=0  skip=0`(Block D 全部 + Block A/B/C 7 个可由单测代理的子项 + 工作区大扫除)。
+
+**剩余待人工**:Block A 与 Block B/C 的 17 条需要 TTY + 肉眼 / 凭证 / 手动断网;本机人不在线时跑不了,合并到 main 后由首次发布前的人补做。
+
 **显式 deferred**(本轮不做,留待后续):
 - P2-6 可选项:注入 panic double 验证日志输出(纯测试基础设施,边际价值低)。
 - P2-6 根治:`pre_resolve_context` 返回 `Result` 而非 `()`(长期项,需改签名 + 全部调用点)。
