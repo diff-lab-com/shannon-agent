@@ -213,4 +213,8 @@ vi.mock('@/lib/tauri-api', () => ({
   transcribeAudio: vi.fn().mockResolvedValue({ text: 'mock transcript' }),
   getSttConfig: vi.fn().mockResolvedValue(null),
   saveSttConfig: vi.fn().mockResolvedValue(undefined),
+  // P2-5c — attachment uploads. Default: empty payloads, sane cap.
+  readAttachment: vi.fn().mockResolvedValue({ mime: 'application/octet-stream', name: '', size: 0 }),
+  readAttachments: vi.fn().mockResolvedValue([]),
+  MAX_ATTACHMENT_COUNT: 10,
 }))
