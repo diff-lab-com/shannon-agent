@@ -12,6 +12,8 @@ use std::process::ExitCode;
 
 use tracing_subscriber::EnvFilter;
 
+#[cfg(feature = "jira")]
+use shannon_mcp_saas::jira;
 #[cfg(feature = "slack")]
 use shannon_mcp_saas::slack;
 use shannon_mcp_saas::{github, server};
@@ -39,8 +41,18 @@ async fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         }
+        #[cfg(feature = "jira")]
+        "jira" => {
+            let tools = jira::tools::as_server_tool(jira::tools::all_tools_unauth());
+            server::print_tool_listing(&tools);
+            if let Err(e) = server::run_stdio(&tools).await {
+                eprintln!("shannon-mcp-saas: stdio loop failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+        #[allow(unreachable_patterns)]
         other => {
-            eprintln!("shannon-mcp-saas: unknown SaaS '{other}' (supported: github, slack)");
+            eprintln!("shannon-mcp-saas: unknown SaaS '{other}' (supported: github, slack, jira)");
             return ExitCode::from(2);
         }
     }

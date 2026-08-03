@@ -7,6 +7,8 @@
 //! `auth.rs` / `api.rs` / `tools.rs` / `tests.rs` shape.
 
 pub mod github;
+#[cfg(feature = "jira")]
+pub mod jira;
 pub mod server;
 #[cfg(feature = "slack")]
 pub mod slack;
