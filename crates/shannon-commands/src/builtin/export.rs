@@ -5,6 +5,189 @@ use crate::command::{
 };
 use serde_json::Value as JsonValue;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// session_transcript → ExportSession adapter (P1-1 §step 2)
+//
+// The persistent [shannon_core::session_transcript] module already stores
+// transcript entries as JSONL under `~/.shannon/transcripts/<sid>.jsonl`.
+// This adapter converts a sequence of `TranscriptEntry` items into the
+// in-memory `ExportSession` shape consumed by `export_to_markdown` /
+// `export_to_json`, so `/export <session-id>` can pull real history instead
+// of relying solely on the LLM to scrape the conversation.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Convert a [`shannon_core::session_transcript::TranscriptRole`] into the
+/// lowercase role string used by [`ExportMessage`].
+fn transcript_role_to_string(
+    role: shannon_core::session_transcript::TranscriptRole,
+) -> &'static str {
+    use shannon_core::session_transcript::TranscriptRole;
+    match role {
+        TranscriptRole::User => "user",
+        TranscriptRole::Assistant => "assistant",
+        TranscriptRole::System => "system",
+        TranscriptRole::Tool => "tool",
+    }
+}
+
+/// Convert a [`chrono::DateTime<Utc>`] to a Unix-seconds timestamp that fits
+/// the [`ExportMessage::timestamp`] / [`ExportSession::started_at`] shape.
+fn datetime_to_unix_secs(dt: &chrono::DateTime<chrono::Utc>) -> u64 {
+    dt.timestamp().max(0) as u64
+}
+
+/// Build an [`ExportSession`] from an ordered list of transcript entries.
+///
+/// `title` is supplied by the caller (typically the CLI flag or generated
+/// from `session_id`). `working_dir` and `model` are best-effort: if the
+/// caller has no value, the empty string is used.
+pub fn export_session_from_transcript(
+    title: impl Into<String>,
+    entries: &[shannon_core::session_transcript::TranscriptEntry],
+    working_dir: impl Into<String>,
+    model: impl Into<String>,
+) -> ExportSession {
+    let working_dir = working_dir.into();
+    let model = model.into();
+    let messages: Vec<ExportMessage> = entries
+        .iter()
+        .map(|e| ExportMessage {
+            role: transcript_role_to_string(e.role).to_string(),
+            content: e.content.clone(),
+            timestamp: Some(datetime_to_unix_secs(&e.timestamp)),
+        })
+        .collect();
+
+    let started_at = entries
+        .first()
+        .map(|e| datetime_to_unix_secs(&e.timestamp))
+        .unwrap_or(0);
+
+    let total_chars: usize = entries.iter().map(|e| e.content.len()).sum();
+    let commands_run = entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.role,
+                shannon_core::session_transcript::TranscriptRole::User
+            )
+        })
+        .count();
+    let tools_invoked: usize = entries.iter().map(|e| e.tool_calls.len()).sum();
+
+    ExportSession {
+        title: title.into(),
+        started_at,
+        messages,
+        metadata: SessionMetadata {
+            model,
+            tokens_used: total_chars / 4, // crude char/4 estimate — not authoritative
+            working_dir,
+            commands_run,
+            tools_invoked,
+        },
+    }
+}
+
+/// Read a session from the default transcript store (`~/.shannon/transcripts/`),
+/// build an [`ExportSession`], and return it. Returns an error string if the
+/// store cannot be opened or the session cannot be found.
+pub fn export_session_from_store(
+    session_id: &str,
+    title: impl Into<String>,
+    working_dir: impl Into<String>,
+    model: impl Into<String>,
+) -> Result<ExportSession, String> {
+    use shannon_core::session_transcript::TranscriptStore;
+
+    let store = TranscriptStore::new().map_err(|e| format!("transcript store: {e}"))?;
+    let entries = store
+        .get_session(session_id)
+        .map_err(|e| format!("transcript session '{session_id}': {e}"))?;
+    Ok(export_session_from_transcript(
+        title,
+        &entries,
+        working_dir,
+        model,
+    ))
+}
+
+/// Parse the `/export` arguments and, if the user passed a session ID
+/// (positional first arg, named `--session <id>`, or `--from-transcript <id>`),
+/// pull the transcript and build an [`ExportSession`]. Otherwise returns
+/// `Ok(None)` to signal "no transcript input — handler should fall back to
+/// the LLM-driven export path".
+///
+/// Currently this is an opt-in adapter: REPL integration that wants live
+/// session export wires this in; the LLM prompt path remains in place so
+/// the model can still synthesise an export when no transcript is supplied.
+pub fn maybe_build_session_from_args(args: &str) -> Result<Option<ExportSession>, String> {
+    let options = parse_export_args(args)?;
+
+    let session_id = extract_session_id_arg(args);
+    if let Some(session_id) = session_id {
+        // Title = session_id is the deterministic fallback; user can override via /export
+        // prompt later.
+        let session = export_session_from_store(&session_id, session_id.clone(), "", "")?;
+        // Honour the sanitisation flag from parsed options.
+        let _ = options.sanitize; // currently applied inside to_*_export; here we just
+        // acknowledge it.  Future: pipe through a sanitisation pass
+        // before handing to the formatter.
+        return Ok(Some(session));
+    }
+    Ok(None)
+}
+
+/// Look for `<session_id>` / `--session <id>` / `--from-transcript <id>` in
+/// the raw argument string. Returns the first match.
+fn extract_session_id_arg(args: &str) -> Option<String> {
+    let tokens: Vec<&str> = args.split_whitespace().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        match tokens[i] {
+            "--session" | "--from-transcript" => {
+                if let Some(id) = tokens.get(i + 1) {
+                    return Some((*id).to_string());
+                }
+            }
+            t if t.starts_with("--session=") => {
+                let id = &t["--session=".len()..];
+                if !id.is_empty() {
+                    return Some(id.to_string());
+                }
+            }
+            t if t.starts_with("--from-transcript=") => {
+                let id = &t["--from-transcript=".len()..];
+                if !id.is_empty() {
+                    return Some(id.to_string());
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    // Bare first arg that doesn't match any flag prefix and isn't a known
+    // format flag may also be a session ID. Reject obviously non-ID tokens.
+    for t in &tokens {
+        let lower = t.to_lowercase();
+        if matches!(lower.as_str(), "md" | "markdown" | "json" | "") {
+            continue;
+        }
+        if t.starts_with('-') {
+            continue;
+        }
+        if lower.contains("--no") || lower == "--sanitize" || lower == "--help" {
+            continue;
+        }
+        if lower.ends_with(".md") || lower.ends_with(".json") {
+            // Treat as filename, not session id
+            continue;
+        }
+        return Some((*t).to_string());
+    }
+    None
+}
+
 /// Prompt template for the /export command.
 ///
 /// Instructs the AI to format the conversation for export using the
@@ -583,5 +766,107 @@ mod tests {
         let content = "File at /home/user/project/src/main.rs";
         let sanitized = sanitize_content(content, "/home/user");
         assert_eq!(sanitized, "File at ~/project/src/main.rs");
+    }
+
+    // ── Transcript → ExportSession Adapter Tests (P1-1 §step 2) ────────
+
+    fn entry(
+        role: shannon_core::session_transcript::TranscriptRole,
+        content: &str,
+        ts_secs: i64,
+    ) -> shannon_core::session_transcript::TranscriptEntry {
+        use chrono::TimeZone;
+        let timestamp = chrono::Utc.timestamp_opt(ts_secs, 0).single().unwrap();
+        shannon_core::session_transcript::TranscriptEntry::with_timestamp(
+            role,
+            content.to_string(),
+            "sess-1".to_string(),
+            timestamp,
+        )
+    }
+
+    #[test]
+    fn export_session_from_transcript_maps_roles_and_timestamps() {
+        use shannon_core::session_transcript::TranscriptRole;
+        let entries = vec![
+            entry(TranscriptRole::User, "hi", 1_700_000_000),
+            entry(TranscriptRole::Assistant, "hello", 1_700_000_010),
+            entry(TranscriptRole::Tool, "ok", 1_700_000_020),
+        ];
+        let session = export_session_from_transcript("S1", &entries, "/tmp", "claude");
+        assert_eq!(session.title, "S1");
+        assert_eq!(session.started_at, 1_700_000_000);
+        assert_eq!(session.messages.len(), 3);
+        assert_eq!(session.messages[0].role, "user");
+        assert_eq!(session.messages[1].role, "assistant");
+        assert_eq!(session.messages[2].role, "tool");
+        assert_eq!(session.messages[1].content, "hello");
+        assert_eq!(session.messages[0].timestamp, Some(1_700_000_000));
+        assert_eq!(session.metadata.working_dir, "/tmp");
+        assert_eq!(session.metadata.model, "claude");
+        assert_eq!(session.metadata.commands_run, 1, "user entries");
+        assert_eq!(session.metadata.tools_invoked, 0);
+    }
+
+    #[test]
+    fn export_session_from_transcript_counts_tool_calls() {
+        use shannon_core::session_transcript::{ToolCallRecord, TranscriptRole};
+        let mut e = entry(TranscriptRole::Assistant, "running tools", 1_700_000_000);
+        e = e.with_tool_call(ToolCallRecord {
+            name: "bash".to_string(),
+            input: serde_json::json!({"cmd": "ls"}),
+            success: true,
+            duration_ms: Some(12),
+        });
+        e = e.with_tool_call(ToolCallRecord {
+            name: "read".to_string(),
+            input: serde_json::json!({"path": "x.rs"}),
+            success: true,
+            duration_ms: Some(5),
+        });
+        let session = export_session_from_transcript("S2", &[e], "/tmp", "claude");
+        assert_eq!(session.metadata.tools_invoked, 2);
+        assert!(session.metadata.tokens_used > 0);
+    }
+
+    #[test]
+    fn export_session_from_transcript_empty_yields_zero_started_at() {
+        let session = export_session_from_transcript("Empty", &[], "/tmp", "claude");
+        assert_eq!(session.messages.len(), 0);
+        assert_eq!(session.started_at, 0);
+        assert_eq!(session.metadata.commands_run, 0);
+        assert_eq!(session.metadata.tools_invoked, 0);
+    }
+
+    #[test]
+    fn maybe_build_session_no_args_returns_none() {
+        let result = maybe_build_session_from_args("").unwrap();
+        assert!(result.is_none(), "no session id → no auto-pull");
+    }
+
+    #[test]
+    fn maybe_build_session_format_only_returns_none() {
+        // Pure format/filename args should never trigger a transcript pull.
+        let result = maybe_build_session_from_args("md notes.md").unwrap();
+        assert!(result.is_none());
+        let result = maybe_build_session_from_args("json").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn export_session_from_store_missing_session_returns_err() {
+        // Random session id; no transcript file exists.
+        let result = export_session_from_store(
+            "definitely-not-a-real-session-id-12345",
+            "MISSING",
+            "/tmp",
+            "claude",
+        );
+        // Either an Err (transcript store lookup failed) or an Ok(empty)
+        // is acceptable — what matters is no panic.
+        match result {
+            Ok(s) => assert_eq!(s.messages.len(), 0),
+            Err(e) => assert!(e.contains("transcript")),
+        }
     }
 }
