@@ -680,6 +680,17 @@ pub struct QueryEngineConfig {
     /// If set, complex queries are routed to this model while execution
     /// uses the primary model. Supports aliases: "opus", "sonnet".
     pub plan_model: Option<String>,
+    /// When true, inject a project-wide symbol map (P1-4) into the system
+    /// prompt under a clearly labelled section. Defaults to `true` because
+    /// the map is generated on-demand with a token budget cap and
+    /// degrades gracefully when parsing fails.
+    pub repo_map_enabled: bool,
+    /// Token budget for the repo map injection. Defaults to 2,000 tokens,
+    /// which fits comfortably alongside the rest of the system prompt.
+    pub repo_map_budget_tokens: usize,
+    /// Optional override for the repo map root. Defaults to the current
+    /// working directory when the engine is asked to inject.
+    pub repo_map_root: Option<std::path::PathBuf>,
 }
 
 impl Default for QueryEngineConfig {
@@ -730,6 +741,9 @@ impl Default for QueryEngineConfig {
             focus_area: None,
             fast_model: None,
             plan_model: None,
+            repo_map_enabled: true,
+            repo_map_budget_tokens: 2_000,
+            repo_map_root: None,
         }
     }
 }
