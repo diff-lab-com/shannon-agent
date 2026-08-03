@@ -100,7 +100,7 @@ pub struct ResponseMetadata {
 /// we can probe `ok:false` without forcing every data type to be lenient.
 /// They're declared here for documentation purposes only.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // KEEP: documentation helper struct — fields probed on raw JSON elsewhere
 struct ApiEnvelope<T> {
     ok: bool,
     #[serde(flatten)]
