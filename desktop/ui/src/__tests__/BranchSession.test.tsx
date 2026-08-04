@@ -63,17 +63,12 @@ describe('Branch Session feature', () => {
     ctx.switchSession = vi.fn().mockResolvedValue(undefined)
   })
 
-  it('renders branch button on user messages', () => {
+  it('renders branch button on every message', () => {
+    // P2-5d: branch-from-anywhere is the polished behaviour; matches
+    // Claude / ChatGPT where any message can fork the conversation.
     renderChat()
     const branchButtons = screen.getAllByLabelText(/Branch from this message/i)
-    expect(branchButtons).toHaveLength(2)
-  })
-
-  it('does not render branch button on assistant messages', () => {
-    renderChat()
-    const branchButtons = screen.getAllByLabelText(/Branch from this message/i)
-    // Only user messages should have branch buttons
-    expect(branchButtons).toHaveLength(2)
+    expect(branchButtons).toHaveLength(3) // user / assistant / user
   })
 
   it('invokes branchSession with correct args when branch button is clicked', async () => {
@@ -155,8 +150,10 @@ describe('Branch Session feature', () => {
       expect(branchSessionSpy).toHaveBeenLastCalledWith('session-1', 0)
     })
 
-    // Click second user message (index 2, since it's the third message overall)
-    fireEvent.click(branchButtons[1])
+    // Click the LAST branch button — the third overall message
+    // (P2-5d every message gets a branch button; user / assistant / user).
+    const last = branchButtons[branchButtons.length - 1]
+    fireEvent.click(last)
     dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: /^Branch$/i }))
     await waitFor(() => {

@@ -159,6 +159,42 @@ describe('ChatInput', () => {
     expect(onSend).not.toHaveBeenCalled()
   })
 
+  // P2-5d additions — Ctrl/Cmd+Enter also sends (matches Claude.ai + the
+  // task spec which asks for "Ctrl+Enter to send (configurable)").
+  it('sends on Ctrl+Enter', () => {
+    const onSend = vi.fn()
+    renderChatInput({ value: 'a', onSend })
+    const ta = screen.getByPlaceholderText('Ask Shannon anything...')
+    fireEvent.keyDown(ta, { key: 'Enter', code: 'Enter', ctrlKey: true })
+    expect(onSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('exposes a region landmark for the composer (role=region)', () => {
+    const { container } = renderChatInput()
+    expect(container.querySelector('[role="region"]')).not.toBeNull()
+  })
+
+  it('does not show a character counter for short inputs', () => {
+    const { container } = renderChatInput({ value: 'short' })
+    // Counter element is only rendered above the threshold.
+    expect(container.querySelector('[role="status"][aria-live="polite"]')).toBeNull()
+  })
+
+  it('shows a character counter once the input grows past the threshold', () => {
+    const big = 'a'.repeat(2100)
+    const { container } = renderChatInput({ value: big })
+    const counter = container.querySelector('[role="status"][aria-live="polite"]')
+    expect(counter).not.toBeNull()
+    expect(counter?.textContent).toMatch(/2,100|2100/)
+  })
+
+  it('promotes the counter to error color past the soft-warn threshold', () => {
+    const huge = 'a'.repeat(9000)
+    const { container } = renderChatInput({ value: huge })
+    const counter = container.querySelector('[role="status"]')
+    expect(counter?.className).toMatch(/text-error/)
+  })
+
   it('calls onOpenQuickFix when Quick Fix button is clicked', () => {
     const onOpenQuickFix = vi.fn()
     renderChatInput({ onOpenQuickFix })

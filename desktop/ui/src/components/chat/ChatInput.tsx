@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import { open } from '@tauri-apps/plugin-dialog'
 import { Button } from '@/components/ui/button'
@@ -12,6 +12,14 @@ import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
+
+/* Char-count thresholds.
+ *   showAt — start showing the live counter
+ *   softWarnAt — visually promote (orange/yellow) without blocking
+ * Beyond softWarn the counter is just a louder warning; the user can
+ * still hit send. Hard limits should go through the Rust backend. */
+const CHAR_SHOW_AT = 2000
+const CHAR_SOFT_WARN_AT = 8000
 
 interface ChatInputProps {
   value: string
@@ -137,7 +145,12 @@ export default function ChatInput({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Enter -> send; Shift/Ctrl+Enter -> newline. Matches VS Code's
+    // Ctrl+Enter convention; preserves the legacy Enter-to-send UX.
+    if (e.key === 'Enter' && !e.shiftKey && !(e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      onSend()
+    } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
       e.preventDefault()
       onSend()
     }
@@ -184,11 +197,32 @@ export default function ChatInput({
         e.preventDefault()
         void handlePlanToggle()
       }
+      // `/` focuses the composer (when not already typing in an input)
+      if (e.key === '/' && !isQuerying && document.activeElement?.tagName !== 'TEXTAREA') {
+        e.preventDefault()
+        textareaRef.current?.focus()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planModeActive])
+
+  /* Auto-resize — grows to ~6 lines, then scrolls. Resets to 1 row on
+   * blank input. Done in layout effect so the DOM is updated before
+   * the browser paints (no flash). */
+  const autosizeTextarea = useCallback(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    const maxPx = 200
+    const next = Math.min(el.scrollHeight, maxPx)
+    el.style.height = `${Math.max(next, 24)}px`
+  }, [])
+
+  useLayoutEffect(() => {
+    autosizeTextarea()
+  }, [value, autosizeTextarea])
 
   const modeOptions = [
     { value: 'readonly', label: t('chat.input.mode.readonly'), icon: 'lock', color: 'border-green-500/50' },
@@ -200,12 +234,19 @@ export default function ChatInput({
 
   const selectedMode = modeOptions.find(m => m.value === currentMode) || modeOptions[2]
 
+  /* Char count UI */
+  const charCount = value.length
+  const showCharCount = charCount >= CHAR_SHOW_AT
+  const isOverSoftWarn = charCount >= CHAR_SOFT_WARN_AT
+
   return (
     <div
       className={`relative group transition-all ${isDragging ? 'ring-2 ring-primary/50 rounded-2xl' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      role="region"
+      aria-label={t('chat.input.ariaLabel')}
     >
       {isDragging && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm pointer-events-none">
@@ -392,6 +433,16 @@ export default function ChatInput({
               onStart={() => void voice.startRecording()}
               onStop={() => void voice.stopRecording()}
             />
+
+            {showCharCount && (
+              <span
+                role="status"
+                aria-live="polite"
+                className={`font-mono text-label-xs tabular-nums px-xs ${isOverSoftWarn ? 'text-error' : 'text-on-surface-variant/70'}`}
+              >
+                {charCount.toLocaleString()}
+              </span>
+            )}
 
             {isQuerying ? (
               <Button
