@@ -168,11 +168,15 @@ describe('Chat page', () => {
     expect(screen.getByText('Streaming response...')).toBeInTheDocument()
   })
 
-  it('renders thinking text when present', () => {
+  it('renders thinking text inside the collapsible Reasoning block when present', () => {
     resetCtx()
     ctx.thinkingText = 'Thinking about this...'
     renderChat()
-    expect(screen.getByText(/Thinking about this/)).toBeInTheDocument()
+    // P2-5d — thinking now lives inside a collapsible "Reasoning"
+    // block (aria-expanded toggle). The button is always rendered.
+    const toggle = screen.getByRole('button', { name: /thinking/i })
+    expect(toggle).toBeInTheDocument()
+    expect(toggle).toHaveAttribute('aria-expanded')
   })
 
   it('renders usage section when usage data present', () => {
