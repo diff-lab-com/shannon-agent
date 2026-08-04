@@ -267,9 +267,12 @@ pub async fn download_model<R: tauri::Runtime>(
     // saturate the Tauri event bus.
     const EMIT_EVERY_BYTES: u64 = 256 * 1024;
 
-    let mut file = tokio::fs::File::create(&partial_path)
-        .await
-        .map_err(|e| format!("STT_DOWNLOAD_FAILED: create {}: {e}", partial_path.display()))?;
+    let mut file = tokio::fs::File::create(&partial_path).await.map_err(|e| {
+        format!(
+            "STT_DOWNLOAD_FAILED: create {}: {e}",
+            partial_path.display()
+        )
+    })?;
     let mut stream = resp.bytes_stream();
     let mut downloaded: u64 = 0;
     let mut last_emit_at: u64 = 0;
@@ -284,7 +287,8 @@ pub async fn download_model<R: tauri::Runtime>(
             .map_err(|e| format!("STT_DOWNLOAD_FAILED: write: {e}"))?;
         hasher.update(&chunk);
         downloaded = downloaded.saturating_add(chunk.len() as u64);
-        if downloaded.saturating_sub(last_emit_at) >= EMIT_EVERY_BYTES || total == Some(downloaded) {
+        if downloaded.saturating_sub(last_emit_at) >= EMIT_EVERY_BYTES || total == Some(downloaded)
+        {
             last_emit_at = downloaded;
             emit_progress(
                 app,
@@ -292,7 +296,9 @@ pub async fn download_model<R: tauri::Runtime>(
                     model: model.slug().to_string(),
                     bytes: Some(downloaded),
                     total,
-                    progress: total.map(|t| (downloaded as f32 / t as f32).min(1.0)).unwrap_or(0.0),
+                    progress: total
+                        .map(|t| (downloaded as f32 / t as f32).min(1.0))
+                        .unwrap_or(0.0),
                     done: false,
                     error: None,
                 },
@@ -338,7 +344,10 @@ pub async fn delete_model(model: WhisperModel) -> Result<bool, String> {
     match tokio::fs::remove_file(&path).await {
         Ok(()) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(format!("STT_DOWNLOAD_FAILED: delete {}: {e}", path.display())),
+        Err(e) => Err(format!(
+            "STT_DOWNLOAD_FAILED: delete {}: {e}",
+            path.display()
+        )),
     }
 }
 
@@ -358,8 +367,8 @@ fn emit_progress<R: tauri::Runtime>(
 /// matches `expected`.
 fn verify_sha256(path: &Path, expected: &str) -> Result<bool, String> {
     use std::io::Read;
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("sha256 open {}: {e}", path.display()))?;
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("sha256 open {}: {e}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
@@ -421,7 +430,11 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         sorted.dedup();
-        assert_eq!(names.len(), sorted.len(), "duplicate filename in WhisperModel");
+        assert_eq!(
+            names.len(),
+            sorted.len(),
+            "duplicate filename in WhisperModel"
+        );
     }
 
     #[test]
@@ -441,7 +454,11 @@ mod tests {
         // the `slug()` output.
         for m in WhisperModel::ALL {
             let json = serde_json::to_string(m).unwrap();
-            assert_eq!(json, format!("\"{}\"", m.slug()), "wire shape drift for {m:?}");
+            assert_eq!(
+                json,
+                format!("\"{}\"", m.slug()),
+                "wire shape drift for {m:?}"
+            );
             let back: WhisperModel = serde_json::from_str(&json).unwrap();
             assert_eq!(back, *m);
         }
@@ -462,16 +479,20 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("empty.bin");
         std::fs::write(&p, b"").unwrap();
-        assert!(verify_sha256(
-            &p,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        )
-        .unwrap());
-        assert!(!verify_sha256(
-            &p,
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        )
-        .unwrap());
+        assert!(
+            verify_sha256(
+                &p,
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            )
+            .unwrap()
+        );
+        assert!(
+            !verify_sha256(
+                &p,
+                "0000000000000000000000000000000000000000000000000000000000000000"
+            )
+            .unwrap()
+        );
     }
 
     /// `list_available_models` against an empty models dir returns

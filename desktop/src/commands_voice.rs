@@ -419,7 +419,10 @@ pub async fn transcribe_audio_local(
     model: Option<String>,
     language: Option<String>,
 ) -> Result<TranscriptionResult, String> {
-    commands_voice_local_impl::transcribe_audio_local_impl(state, app_handle, audio_path, model, language).await
+    commands_voice_local_impl::transcribe_audio_local_impl(
+        state, app_handle, audio_path, model, language,
+    )
+    .await
 }
 
 #[cfg(all(feature = "voice-local", feature = "tauri"))]
@@ -467,11 +470,7 @@ pub async fn transcribe_audio_local_base64(
         ));
     }
     let result = commands_voice_local_impl::transcribe_audio_local_impl(
-        state,
-        app_handle,
-        path,
-        model,
-        language,
+        state, app_handle, path, model, language,
     )
     .await;
     // The `transcribe_audio_local_impl` helper already removes
@@ -490,7 +489,7 @@ mod commands_voice_local_impl {
 
     use super::TranscriptionResult;
     use crate::commands_voice_models::{
-        download_model as download_model_impl, model_path, WhisperModel,
+        WhisperModel, download_model as download_model_impl, model_path,
     };
     use crate::config::VoiceLocalConfig;
 
@@ -559,7 +558,9 @@ mod commands_voice_local_impl {
             (32, hound::SampleFormat::Float) => {
                 let raw: Result<Vec<f32>, _> = reader.into_samples::<f32>().collect();
                 let raw = raw.map_err(|e| TranscriptionLocalError::AudioInvalid(e.to_string()))?;
-                raw.chunks(channels).map(|c| c.iter().sum::<f32>() / channels as f32).collect()
+                raw.chunks(channels)
+                    .map(|c| c.iter().sum::<f32>() / channels as f32)
+                    .collect()
             }
             (32, hound::SampleFormat::Int) => {
                 let raw: Result<Vec<i32>, _> = reader.into_samples::<i32>().collect();
@@ -574,7 +575,7 @@ mod commands_voice_local_impl {
             (other_bits, other_fmt) => {
                 return Err(TranscriptionLocalError::AudioInvalid(format!(
                     "unsupported WAV format: bits={other_bits} fmt={other_fmt:?}"
-                )))
+                )));
             }
         };
 
@@ -611,7 +612,11 @@ mod commands_voice_local_impl {
         state: &tauri::State<'_, crate::commands::AppState>,
         model_arg: Option<String>,
     ) -> Result<WhisperModel, TranscriptionLocalError> {
-        if let Some(slug) = model_arg.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(slug) = model_arg
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             let m = WhisperModel::from_slug(slug)
                 .ok_or_else(|| TranscriptionLocalError::LanguageUnsupported(slug.to_string()))?;
             if !is_present(m) {
@@ -657,9 +662,7 @@ mod commands_voice_local_impl {
             dc.voice_local.clone()
         };
         if !cfg.enabled {
-            return Err(
-                "STT_NOT_CONFIGURED: enable local voice in Settings → Voice".to_string(),
-            );
+            return Err("STT_NOT_CONFIGURED: enable local voice in Settings → Voice".to_string());
         }
 
         // 1. Pick a model.
@@ -694,8 +697,8 @@ mod commands_voice_local_impl {
         // expensive (loads + validates the model file), so we
         // construct it once per call. A future cache lives in
         // AppState; out of scope for P2-5e.
-        let path = model_path(chosen)
-            .map_err(|e| TranscriptionLocalError::ModelLoading(e).to_wire())?;
+        let path =
+            model_path(chosen).map_err(|e| TranscriptionLocalError::ModelLoading(e).to_wire())?;
         let path_str = path
             .to_str()
             .ok_or_else(|| TranscriptionLocalError::ModelLoading("non-UTF8 model path".into()))
@@ -717,11 +720,7 @@ mod commands_voice_local_impl {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        if let Some(lang) = language
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(lang) = language.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             params.set_language(Some(lang));
         }
 
@@ -747,8 +746,9 @@ mod commands_voice_local_impl {
         }
         let text = text.trim().to_string();
         if text.is_empty() {
-            return Err(TranscriptionLocalError::InferenceFailed("empty transcript".into())
-                .to_wire());
+            return Err(
+                TranscriptionLocalError::InferenceFailed("empty transcript".into()).to_wire(),
+            );
         }
 
         // Best-effort: clean up the temp file the frontend
