@@ -345,6 +345,10 @@ export interface DesktopConfig {
   skill_loop_min_tool_calls?: number
   skill_detection_enabled?: boolean
   stt?: SttConfig
+  /** P2-5e local-only STT (whisper-rs). Independent of `stt`
+   *  so a user can keep a cloud key for fallback while local
+   *  is the primary. */
+  voice_local?: import('@/lib/tauri-api').VoiceLocalConfig
 }
 
 export interface SttConfig {

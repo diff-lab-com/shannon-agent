@@ -191,6 +191,31 @@ pub struct ConfigUpdatedPayload {
     pub value: String,
 }
 
+/// Voice model download progress (P2-5e local STT).
+///
+/// Emitted on the `voice:model-download-progress` channel as the local
+/// whisper-rs model is streamed from HuggingFace to
+/// `~/.shannon/models/whisper/`. `progress` is in `[0.0, 1.0]`; `done`
+/// is `true` exactly once at the end (success OR failure — `error`
+/// disambiguates). The frontend subscribes to drive the progress bar
+/// in the Voice settings card.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceModelDownloadProgressPayload {
+    /// Model slug: `tiny.en` | `base` | `small`.
+    pub model: String,
+    /// Bytes downloaded / total bytes (when known). `None` until the
+    /// server has returned `Content-Length`.
+    pub bytes: Option<u64>,
+    pub total: Option<u64>,
+    /// Normalised `[0.0, 1.0]` progress. `1.0` when `done == true`.
+    pub progress: f32,
+    /// `true` exactly once per download — last event of the stream.
+    pub done: bool,
+    /// Set when the download failed (e.g. sha256 mismatch, network).
+    /// `progress` will be `< 1.0`.
+    pub error: Option<String>,
+}
+
 /// Hunk action for applying diffs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HunkAction {
@@ -284,6 +309,9 @@ pub mod event_names {
     pub const TASK_STEP: &str = "task:step";
     pub const TASK_RETRY: &str = "task:retry";
     pub const SKILL_PROPOSAL_AVAILABLE: &str = "skill-proposal-available";
+    /// P2-5e local STT — progress events for whisper-rs model downloads.
+    /// Subscribe in the frontend to drive the Settings → Voice download bar.
+    pub const VOICE_MODEL_DOWNLOAD_PROGRESS: &str = "voice:model-download-progress";
 }
 
 #[cfg(test)]
