@@ -761,4 +761,107 @@ mod tests {
             "after grant, call must not be denied for missing scope; got: {text}"
         );
     }
+
+    // ---------------------------------------------------------------------------
+    // Linear — mirrors the Slack block above.
+    // ---------------------------------------------------------------------------
+
+    #[cfg(feature = "linear")]
+    fn fresh_linear_tools() -> Vec<Box<dyn ServerTool>> {
+        crate::linear::tools::as_server_tool(crate::linear::tools::all_tools_unauth())
+    }
+
+    #[cfg(feature = "linear")]
+    #[test]
+    fn linear_tools_list_advertises_five_tools() {
+        let tools = fresh_linear_tools();
+        let grants = fresh_grants(&tools);
+        let resp = handle_line(
+            r#"{"jsonrpc":"2.0","id":"ln1","method":"tools/list","params":{}}"#,
+            &tools,
+            &grants,
+        )
+        .expect("response");
+        let tool_list = resp.result.expect("result")["tools"]
+            .as_array()
+            .expect("array")
+            .clone();
+        let names: Vec<String> = tool_list
+            .into_iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "linear_list_issues",
+                "linear_get_issue",
+                "linear_create_issue",
+                "linear_update_status",
+                "linear_list_teams",
+            ]
+        );
+    }
+
+    #[cfg(feature = "linear")]
+    #[test]
+    fn linear_read_tools_pre_granted_write_tools_denied() {
+        let tools = fresh_linear_tools();
+        let grants = fresh_grants(&tools);
+        assert!(grants.check("linear_list_issues", "read"));
+        assert!(grants.check("linear_get_issue", "read"));
+        assert!(grants.check("linear_list_teams", "read"));
+        assert!(!grants.check("linear_create_issue", "write"));
+        assert!(!grants.check("linear_update_status", "write"));
+    }
+
+    #[cfg(feature = "linear")]
+    #[test]
+    fn linear_write_tool_without_grant_is_denied_even_if_args_permission_set() {
+        let tools = fresh_linear_tools();
+        let grants = fresh_grants(&tools);
+        let resp = handle_line(
+            r#"{"jsonrpc":"2.0","id":"ln2","method":"tools/call","params":{"name":"linear_create_issue","arguments":{"title":"x","team_id":"t","permission":"write"}}}"#,
+            &tools,
+            &grants,
+        )
+        .expect("response");
+        let result = resp.result.expect("result");
+        assert_eq!(result["isError"], serde_json::json!(true));
+        let text = result["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            text.contains("write scope not granted"),
+            "denial text should explain the missing grant; got: {text}"
+        );
+    }
+
+    #[cfg(feature = "linear")]
+    #[test]
+    fn linear_write_tool_succeeds_after_tools_grant() {
+        let tools = fresh_linear_tools();
+        let grants = fresh_grants(&tools);
+
+        let grant_resp = handle_line(
+            r#"{"jsonrpc":"2.0","id":"lng1","method":"tools/grant","params":{"name":"linear_update_status","scope":"write"}}"#,
+            &tools,
+            &grants,
+        )
+        .expect("response");
+        assert_eq!(
+            grant_resp.result.expect("result")["granted"]["name"],
+            "linear_update_status"
+        );
+
+        let resp = handle_line(
+            r#"{"jsonrpc":"2.0","id":"ln3","method":"tools/call","params":{"name":"linear_update_status","arguments":{"issue_id":"i-1","state_id":"s-1"}}}"#,
+            &tools,
+            &grants,
+        )
+        .expect("response");
+        let result = resp.result.expect("result");
+        let text = result["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            !text.contains("write scope not granted"),
+            "after grant, call must not be denied for missing scope; got: {text}"
+        );
+    }
 }
