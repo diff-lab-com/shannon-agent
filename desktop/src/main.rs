@@ -111,6 +111,7 @@ fn main() {
             // command; stub returns STT_FEATURE_DISABLED without the
             // `voice-local` feature so the wire shape is stable)
             commands_voice::transcribe_audio_local,
+            commands_voice::transcribe_audio_local_base64,
             commands_voice::get_voice_local_config,
             commands_voice::save_voice_local_config,
             // P2-5e — whisper model catalog (always compiled; the

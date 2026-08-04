@@ -1418,3 +1418,95 @@ export async function saveSttConfig(sttConfig: SttConfig): Promise<void> {
   await invoke('save_stt_config', { sttConfig })
 }
 
+// --- P2-5e: local whisper-rs STT (offline / privacy) ---
+
+/** Wire shape for `get_voice_local_config` / `save_voice_local_config`.
+ *  Mirrors the Rust `VoiceLocalConfig` struct. */
+export interface VoiceLocalConfig {
+  enabled: boolean
+  /** Model slug: `tiny.en` | `base` | `small`. `null` ⇒ auto-pick
+   *  the smallest downloaded model at call time. */
+  model: string | null
+  /** BCP-47 language hint for whisper-rs. `null` ⇒ auto-detect. */
+  language: string | null
+  /** When true (default), a missing model is auto-downloaded on
+   *  first use. When false, the user must download explicitly
+   *  from Settings → Voice. */
+  auto_download: boolean
+}
+
+/** Catalog entry from `list_whisper_models`. */
+export interface WhisperModelInfo {
+  model: string
+  filename: string
+  approx_size_mb: number
+  downloaded: boolean
+  verified: boolean
+  size_bytes: number | null
+}
+
+export async function getVoiceLocalConfig(): Promise<VoiceLocalConfig> {
+  return invoke('get_voice_local_config')
+}
+
+export async function saveVoiceLocalConfig(
+  voiceLocal: VoiceLocalConfig,
+): Promise<void> {
+  await invoke('save_voice_local_config', { voiceLocal })
+}
+
+export async function listWhisperModels(): Promise<WhisperModelInfo[]> {
+  return invoke('list_whisper_models')
+}
+
+/** Start (or restart) a model download. Resolves to the final
+ *  on-disk path; throws `STT_DOWNLOAD_FAILED: ...` on failure.
+ *  Subscribe to the `voice:model-download-progress` Tauri event
+ *  for live progress updates. */
+export async function downloadWhisperModel(
+  model: string,
+): Promise<string> {
+  return invoke('download_whisper_model', { model })
+}
+
+/** Delete a downloaded model. `true` if the file was present,
+ *  `false` if it wasn't there. */
+export async function deleteWhisperModel(model: string): Promise<boolean> {
+  return invoke('delete_whisper_model', { model })
+}
+
+/** Transcribe a WAV file at the given path with the local
+ *  whisper-rs model. Throws `STT_*:` on failure (mapped to typed
+ *  toast codes by the caller). Path-based; tests + power users
+ *  can write the file themselves via the desktop's `fs` plugin. */
+export async function transcribeAudioLocal(
+  audioPath: string,
+  model: string | null,
+  language?: string | null,
+): Promise<TranscriptionResult> {
+  return invoke('transcribe_audio_local', {
+    audioPath,
+    model,
+    language: language ?? null,
+  })
+}
+
+/** Same as the cloud `transcribeAudio` — takes a base64 audio
+ *  blob + mime. The Rust side writes the bytes to a temp file
+ *  (only `audio/wav` is supported by the local path) and runs
+ *  inference locally. This is what the `localProvider` actually
+ *  invokes. */
+export async function transcribeAudioLocalBase64(
+  audioBase64: string,
+  mimeType: string,
+  model: string | null,
+  language?: string | null,
+): Promise<TranscriptionResult> {
+  return invoke('transcribe_audio_local_base64', {
+    audioBase64,
+    mimeType,
+    model,
+    language: language ?? null,
+  })
+}
+

@@ -7,6 +7,74 @@ All notable changes to Shannon Desktop are documented here. Entries are grouped 
 Everything below landed on `dev` after the v0.3.8 (Models P2) release and
 ships together in the next tagged release.
 
+### Voice input — local speech-to-text (D4 Phase 2, P2-5e)
+
+Branch `feat/p2-5e-voice-local`. Closes the long-standing "Phase 2
+(local `whisper.cpp` sidecar, offline) remains a later deliverable"
+note from D4. Audio now stays on-device when the user opts into
+the local provider — no network egress, no third-party STT, no
+secret round-trip. The cloud path is unchanged and remains the
+default; the local path lives behind a Cargo feature so the C++
+toolchain is a build-time decision, not a runtime one.
+
+- **Backend (Rust)**
+  - **New `voice-local` Cargo feature** in `desktop/Cargo.toml` —
+    pulls in `whisper-rs` 0.13 (whisper.cpp 1.5.x via its own
+    `build.rs`) and `hound` 3 (WAV decoder). The default build
+    doesn't compile either dep — the existing cloud STT path is
+    unaffected. Rebuild with `cargo build -p shannon-desktop
+    --features voice-local` to opt in.
+  - **New `commands_voice_models.rs`** — `WhisperModel` enum
+    (`tiny.en` / `base` / `small`, `#[non_exhaustive]`), the
+    model catalog, `list_available_models`, `download_model`
+    (reqwest streaming + sha256 verification + progress events
+    on `voice:model-download-progress`), `delete_model`. Storage
+    is `~/.shannon/models/whisper/<filename>.bin`.
+  - **`transcribe_audio_local` Tauri command** — picks (or
+    downloads) the model, decodes WAV via hound, resamples to
+    16 kHz mono PCM f32, runs whisper-rs inference, returns the
+    concatenated transcript. New typed `STT_*` error prefixes
+    (`STT_MODEL_NOT_FOUND`, `STT_MODEL_LOADING`,
+    `STT_AUDIO_INVALID`, `STT_INFERENCE_FAILED`,
+    `STT_LANGUAGE_UNSUPPORTED`, `STT_FEATURE_DISABLED`,
+    `STT_NOT_CONFIGURED`) the frontend maps to toasts.
+  - **`VoiceLocalConfig` on `DesktopConfig`** —
+    `enabled` / `model` / `language` / `auto_download`. Persisted
+    via new `get_voice_local_config` / `save_voice_local_config`
+    commands.
+  - **`voice:model-download-progress` event** added to
+    `shannon-types::events` as the canonical wire shape.
+  - **9 new unit tests** covering the catalog (slug/filename
+    uniqueness, serde round-trip), sha256 hex helper, model list
+    against an empty dir, delete-missing semantics.
+- **Frontend (React)**
+  - **`localProvider`** in `lib/voice/` — captures audio via the
+    same MediaRecorder path as the cloud provider, base64-encodes
+    the recording, and invokes `transcribe_audio_local_base64`
+    (the Rust side writes the bytes to a temp WAV and runs
+    inference). Model + language are forwarded from
+    `voice_local.*` settings.
+  - **`useVoice(provider: 'cloud' | 'local', local: {...})`** —
+    `ChatInput` now reads `config.voice_local.enabled` and
+    switches providers on the fly. Existing cloud behaviour is
+    unchanged for users who don't enable the local path.
+  - **`<VoiceLocalSettings />` card** in Advanced Settings
+    (under the existing cloud STT card) — provider toggle,
+    per-model download / delete with live progress bar, model
+    picker, BCP-47 language hint, auto-download switch. Wired
+    through `tauri-api.ts` (`listWhisperModels`,
+    `downloadWhisperModel`, `deleteWhisperModel`, etc.) and the
+    `voice:model-download-progress` event.
+  - **i18n**: 27 new `settings.voiceLocal.*` keys (en + zh-CN,
+    parity-checked).
+  - **5 new tests** in `voice-local-provider.test.ts` covering
+    the MediaRecorder → `transcribeAudioLocalBase64` round-trip
+    and `STT_MODEL_NOT_FOUND` / `STT_INFERENCE_FAILED` /
+    `STT_AUDIO_INVALID` error mapping. **2 new tests** in
+    `voice-providers.test.ts` for the factory's `'local'` branch.
+- **Docs**: `docs/integrations/voice-local.md` (design spec) +
+  the CHANGELOG entry you're reading now.
+
 ### Notifications — Phase 2 + Phase 3
 
 - **P2 do-not-disturb / quiet hours** (#78, `s2/notifications-p2-dnd`): a
@@ -216,8 +284,9 @@ Chromium it also ships audio to a third party for recognition) — with cloud
 speech-to-text via an OpenAI-compatible Whisper endpoint (Groq / OpenAI /
 custom). Audio is captured in the webview and transcribed by a new Rust
 command, so **API keys stay server-side** (no browser CORS, no secret in the
-webview). Phase 2 (local `whisper.cpp` sidecar, offline) remains a later
-opt-in and is not touched here.
+webview). The local `whisper.cpp` sidecar was originally deferred to
+"Phase 2"; it shipped in P2-5e — see the "Voice input — local speech-to-text
+(D4 Phase 2, P2-5e)" entry in the Unreleased section above.
 
 #### Backend (Rust)
 - **New `commands_voice.rs`** — `transcribe_audio` (multipart upload + bearer

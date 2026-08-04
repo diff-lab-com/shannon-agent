@@ -5,6 +5,9 @@
  * touching call sites. The current concrete providers are:
  *  - `remote`: cloud Whisper STT. Captures audio via MediaRecorder and sends
  *    it to the Rust `transcribe_audio` command (Groq / OpenAI / custom).
+ *  - `local`: local-only whisper-rs STT (P2-5e). Captures audio via
+ *    MediaRecorder, writes it to a temp WAV, and invokes the Rust
+ *    `transcribe_audio_local` command. Audio never leaves the device.
  *  - `stub`: deterministic fallback for environments without MediaRecorder
  *    (jsdom tests, headless webviews). Emits a fixed transcript on stop().
  *
@@ -13,13 +16,26 @@
  * (Chromium on Linux/macOS), which made it an unreliable default.
  */
 
-export type VoiceProviderKind = 'stub' | 'remote'
+export type VoiceProviderKind = 'stub' | 'remote' | 'local'
 
 export interface VoiceProviderConfig {
   /** Which provider implementation to use. */
   kind: VoiceProviderKind
   /** BCP-47 language code hint (currently unused — cloud STT auto-detects). */
   lang?: string
+  /**
+   * Local-provider options. Populated by the factory when
+   * `kind === 'local'` so the per-call site (`useVoice`) doesn't
+   * have to plumb model + language through. Ignored for the
+   * `remote` and `stub` providers.
+   */
+  local?: {
+    /** Model slug for `transcribe_audio_local`. `null` ⇒ backend
+     *  picks the smallest downloaded model. */
+    model: string | null
+    /** BCP-47 hint forwarded to whisper-rs. `null` ⇒ auto-detect. */
+    language?: string | null
+  }
 }
 
 export interface VoiceInterimResult {

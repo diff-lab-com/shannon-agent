@@ -391,6 +391,25 @@ pub async fn transcribe_audio_local(
     )
 }
 
+/// Same shape as the cloud `transcribe_audio` — takes a base64
+/// string + mime. The Rust side writes the bytes to a temp file
+/// (so whisper-rs can read with hound) and runs inference. The
+/// path-based `transcribe_audio_local` above is for tests and
+/// power users who want to manage the temp file themselves.
+#[cfg(not(all(feature = "voice-local", feature = "tauri")))]
+#[tauri::command]
+pub async fn transcribe_audio_local_base64(
+    _audio_base64: String,
+    _mime_type: String,
+    _model: Option<String>,
+    _language: Option<String>,
+) -> Result<TranscriptionResult, String> {
+    Err(
+        "STT_FEATURE_DISABLED: local voice requires a rebuild with `--features voice-local`"
+            .to_string(),
+    )
+}
+
 #[cfg(all(feature = "voice-local", feature = "tauri"))]
 #[tauri::command]
 pub async fn transcribe_audio_local(
@@ -401,6 +420,65 @@ pub async fn transcribe_audio_local(
     language: Option<String>,
 ) -> Result<TranscriptionResult, String> {
     commands_voice_local_impl::transcribe_audio_local_impl(state, app_handle, audio_path, model, language).await
+}
+
+#[cfg(all(feature = "voice-local", feature = "tauri"))]
+#[tauri::command]
+pub async fn transcribe_audio_local_base64(
+    state: tauri::State<'_, crate::commands::AppState>,
+    app_handle: tauri::AppHandle,
+    audio_base64: String,
+    mime_type: String,
+    model: Option<String>,
+    language: Option<String>,
+) -> Result<TranscriptionResult, String> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(audio_base64.as_bytes())
+        .map_err(|e| format!("STT_AUDIO_INVALID: bad base64: {e}"))?;
+    if bytes.is_empty() {
+        return Err("STT_AUDIO_INVALID: empty audio".to_string());
+    }
+    // Write the bytes to a temp file in the system temp dir. The
+    // path is deterministic (timestamp + nanos) so concurrent
+    // recordings don't clobber each other. whisper-rs reads from
+    // disk via hound; we delete the file at the end of the
+    // inference call (best-effort).
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!(
+        "shannon-voice-{}-{}.wav",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    if let Err(e) = std::fs::write(&path, &bytes) {
+        return Err(format!("STT_AUDIO_INVALID: could not write temp wav: {e}"));
+    }
+    // The mime_type tells the inference path which decoder to
+    // try. Only `audio/wav` is currently supported by the
+    // local path; anything else returns STT_AUDIO_INVALID
+    // rather than silently failing on a mis-decoded file.
+    if !mime_type.to_ascii_lowercase().contains("wav") {
+        let _ = std::fs::remove_file(&path);
+        return Err(format!(
+            "STT_AUDIO_INVALID: local path only accepts audio/wav (got {mime_type})"
+        ));
+    }
+    let result = commands_voice_local_impl::transcribe_audio_local_impl(
+        state,
+        app_handle,
+        path,
+        model,
+        language,
+    )
+    .await;
+    // The `transcribe_audio_local_impl` helper already removes
+    // the temp file on success; on failure the file may linger
+    // until the OS cleans up tmp. Either way, no leak across
+    // processes (different pid component in the filename).
+    result
 }
 
 #[cfg(all(feature = "voice-local", feature = "tauri"))]
