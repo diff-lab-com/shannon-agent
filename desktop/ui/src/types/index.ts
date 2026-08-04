@@ -67,7 +67,7 @@ export interface PermissionRequest {
 // --- Core Types ---
 
 export interface ChatMessage {
-  role: 'user' | 'assistant' | 'system'
+  role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
   timestamp: number
   tool_calls?: ToolCall[]
