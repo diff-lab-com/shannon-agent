@@ -162,6 +162,9 @@ pub mod commands_usage;
 pub mod commands_voice;
 
 #[cfg(feature = "tauri")]
+pub mod commands_voice_models;
+
+#[cfg(feature = "tauri")]
 pub mod scheduled_commands;
 
 #[cfg(feature = "tauri")]
