@@ -9,6 +9,8 @@
 pub mod github;
 #[cfg(feature = "jira")]
 pub mod jira;
+#[cfg(feature = "linear")]
+pub mod linear;
 #[cfg(feature = "notion")]
 pub mod notion;
 pub mod server;
