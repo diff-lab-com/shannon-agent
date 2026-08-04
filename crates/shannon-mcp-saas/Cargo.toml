@@ -10,6 +10,7 @@ description = "SaaS MCP servers (GitHub first, then Slack/Jira/Notion/Linear) â€
 default = ["slack", "jira"]
 slack = []
 jira = []
+linear = []
 
 [dependencies]
 shannon-mcp = { path = "../shannon-mcp" }
