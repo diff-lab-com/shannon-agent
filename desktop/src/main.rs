@@ -27,6 +27,7 @@ fn main() {
     use shannon_desktop::commands_tasks;
     use shannon_desktop::commands_usage;
     use shannon_desktop::commands_voice;
+    use shannon_desktop::commands_voice_models;
     use shannon_desktop::engine_discovery;
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
     use shannon_desktop::extensions_commands;
@@ -106,6 +107,17 @@ fn main() {
             commands_voice::transcribe_audio,
             commands_voice::get_stt_config,
             commands_voice::save_stt_config,
+            // P2-5e — local whisper-rs speech-to-text (feature-gated
+            // command; stub returns STT_FEATURE_DISABLED without the
+            // `voice-local` feature so the wire shape is stable)
+            commands_voice::transcribe_audio_local,
+            commands_voice::get_voice_local_config,
+            commands_voice::save_voice_local_config,
+            // P2-5e — whisper model catalog (always compiled; the
+            // catalog is reachable from a cloud-only build too)
+            commands_voice_models::list_whisper_models,
+            commands_voice_models::download_whisper_model,
+            commands_voice_models::delete_whisper_model,
             commands_sessions::new_session,
             commands_sessions::list_sessions,
             commands_sessions::search_sessions,
