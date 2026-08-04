@@ -1,0 +1,84 @@
+# Offline-build vendor artifact.
+#
+# Runs `cargo vendor` against the workspace Cargo.lock and uploads the
+# result as a workflow artifact. CI itself does NOT use vendored
+# deps (we want crates.io fetches for advisory monitoring), but
+# operators in air-gapped / `CARGO_NET_OFFLINE=true` environments
+# can download the artifact and rebuild with `cargo build
+# --offline` exactly as CI would. Pair with the companion
+# `.cargo/config.toml` snippet documented in `docs/ci-gates.md`.
+#
+# Trigger:
+#   - workflow_dispatch:   on-demand for operators (run from Actions tab)
+#   - push to main / dev:  re-bake the artifact on every merge to a
+#                          protected branch so the latest CARGO.lock
+#                          is always available without waiting for a
+#                          human trigger.
+#
+# Retention: 30 days is enough for a fresh checkout to land on a
+# stale environment; bumping CARGO.lock invalidates the artifact
+# automatically via its keying hash.
+
+name: vendor
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - '.github/workflows/vendor.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  # One vendor run per branch at a time; cancel stale runs because
+  # only the latest CARGO.lock matters and the artifact is
+  # deterministic from it.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  vendor:
+    name: cargo vendor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      # `cargo vendor` needs a populated registry index; one quick
+      # metadata fetch is enough to populate it, then vendor reads
+      # from the local copy. `--locked` ensures we are pinning to
+      # exactly what CARGO.lock says, not a later resolver view.
+      - name: Fetch crate metadata
+        run: cargo fetch --locked
+      - name: Run cargo vendor
+        # `--versioned-sources` is the modern default that injects
+        # `<crate>-<version>/` segments into paths so multiple
+        # versions of the same crate coexist cleanly. It's the
+        # cargo-recommended setting since 1.37.
+        run: cargo vendor --versioned-sources --locked vendor/
+      - name: Tar + upload
+        # A single .tar.gz is easier to extract on Windows / macOS
+        # desktops than the directory tree artifact format. The
+        # artifact is also keyed by short SHA so stale downloads
+        # from older runs are obvious by filename.
+        run: |
+          SHORT_SHA="${GITHUB_SHA::12}"
+          ART="shannon-vendor-${SHORT_SHA}.tar.gz"
+          tar -C vendor -czf "$ART" .
+          echo "vendor artifact: $ART ($(du -h "$ART" | cut -f1))"
+          echo "vendor_sha=$ART" >> "$GITHUB_OUTPUT"
+        id: pack
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cargo-vendor
+          path: shannon-vendor-*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
