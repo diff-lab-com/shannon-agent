@@ -286,6 +286,201 @@ impl ProviderConfigService {
     pub fn into_inner(self) -> ProviderConfigStore {
         self.store
     }
+
+    /// Acquire an exclusive `flock` on the underlying `providers.toml`
+    /// and return a [`LockedService`] that mutates + persists **without**
+    /// re-acquiring the lock. The flock is released when the
+    /// `LockedService` is dropped.
+    ///
+    /// This is the **only** public entry point that exposes the
+    /// cross-process flock. The bare `connect` / `upsert` /
+    /// `disconnect` / `set_active` / `set_tier` / `set_max_tokens`
+    /// methods all acquire the flock internally and would deadlock
+    /// (Linux: hang, macOS: `EDEADLK`) if called after `lock()` until
+    /// the returned guard is dropped.
+    ///
+    /// **Lock-ordering contract (P2-2 S1-1)**: when also holding a
+    /// process-internal mutex on the `ProviderConfigStore` (the
+    /// desktop's `AppState::provider_store: Arc<Mutex<...>>`), acquire
+    /// that mutex **first**, then call `lock()`. Reverse order
+    /// deadlocks against the in-process mutex.
+    pub fn lock(&mut self) -> io::Result<LockedService<'_>> {
+        let path = self
+            .store
+            .last_path()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "cannot determine providers.toml path (no home directory)",
+                )
+            })?
+            .to_path_buf();
+        let flock = crate::provider_config_store::acquire_exclusive_lock(&path)?;
+        Ok(LockedService {
+            svc: self,
+            _flock: flock,
+        })
+    }
+}
+
+/// RAII handle returned by [`ProviderConfigService::lock`]. Mutates the
+/// service's in-memory state and persists via [`Self::save_locked`]
+/// (which does **not** re-acquire the flock — the caller already holds
+/// it). Drop releases the flock.
+///
+/// Mirrors `tokio::sync::MutexGuard` / `std::sync::MutexGuard` shape
+/// so call-sites read like nested guards:
+/// ```ignore
+/// let mut svc = ...;
+/// let mut locked = svc.lock()?;
+/// locked.upsert(...)?;
+/// locked.save_locked()?;
+/// # locked drops -> flock released
+/// ```
+pub struct LockedService<'a> {
+    svc: &'a mut ProviderConfigService,
+    /// RAII: `File::drop` calls `close(2)` which releases the OS
+    /// `flock(LOCK_EX)` on Linux. `fs2` `File` does not auto-unlock
+    /// on its own `Drop` impl — the OS-level close is what frees the
+    /// lock, which is what we want for panic safety.
+    _flock: std::fs::File,
+}
+
+impl<'a> LockedService<'a> {
+    /// Borrow the underlying service for read-only access. The flock
+    /// is held for the lifetime of this `LockedService`.
+    pub fn service(&self) -> &ProviderConfigService {
+        self.svc
+    }
+
+    /// Mutably borrow the underlying service. Use the mutating
+    /// **non-persisting** helpers like
+    /// [`ProviderConfigService::upsert_profile_with_active`] and then
+    /// call [`Self::save_locked`] to commit, or use the convenience
+    /// methods below which combine mutate + persist.
+    pub fn service_mut(&mut self) -> &mut ProviderConfigService {
+        self.svc
+    }
+
+    /// Connect (upsert) a provider and persist. The flock is held
+    /// throughout — no second acquire. Additive: other connected
+    /// providers are kept (ADR-0008 P2-5 Decision 3).
+    pub fn connect(
+        &mut self,
+        provider: LlmProvider,
+        model: Option<&str>,
+        base_url: Option<&str>,
+        make_active: bool,
+    ) -> io::Result<ConnectedProvider> {
+        let provider_id = llm_provider_id(&provider);
+        let profile = build_profile_for_provider(&provider, base_url);
+        let model_id = model
+            .map(|s| s.to_string())
+            .or_else(|| {
+                models_for_provider(provider.clone())
+                    .first()
+                    .map(|m| m.id.to_string())
+            })
+            .unwrap_or_else(|| "default".to_string());
+
+        self.svc
+            .upsert_profile_with_active(profile, &model_id, make_active);
+        let saved_path = self.svc.store.save_locked()?;
+        Ok(ConnectedProvider {
+            provider,
+            model_id,
+            service: provider_id,
+            saved_path,
+        })
+    }
+
+    /// Upsert a fully-built [`ProviderProfile`] and persist.
+    /// `make_active` semantics match [`ProviderConfigService::upsert`].
+    pub fn upsert(
+        &mut self,
+        profile: ProviderProfile,
+        model_id: &str,
+        make_active: bool,
+    ) -> io::Result<PathBuf> {
+        self.svc
+            .upsert_profile_with_active(profile, model_id, make_active);
+        self.svc.store.save_locked()
+    }
+
+    /// Disconnect (remove) a provider and persist. Idempotent.
+    pub fn disconnect(&mut self, provider: &LlmProvider) -> io::Result<DisconnectOutcome> {
+        let slug = llm_provider_id(provider);
+        let default = self.svc.store.config().profiles.get("default");
+        let was_connected = default
+            .map(|mp| mp.providers.iter().any(|p| p.id == slug))
+            .unwrap_or(false);
+        let was_active = default
+            .map(|mp| mp.active_target.provider_id == slug)
+            .unwrap_or(false);
+
+        if !was_connected {
+            return Ok(DisconnectOutcome {
+                was_connected: false,
+                next_active: None,
+                saved_path: None,
+            });
+        }
+
+        self.svc.store.remove_profile(&slug);
+        let saved_path = self.svc.store.save_locked()?;
+
+        let next_active = if was_active {
+            self.svc
+                .store
+                .config()
+                .profiles
+                .get("default")
+                .and_then(|mp| mp.providers.first().map(|p| p.id.clone()))
+        } else {
+            None
+        };
+
+        Ok(DisconnectOutcome {
+            was_connected: true,
+            next_active,
+            saved_path: Some(saved_path),
+        })
+    }
+
+    /// Pin `active_target` at `provider` / `model` and persist.
+    pub fn set_active(&mut self, provider: &LlmProvider, model: &str) -> io::Result<PathBuf> {
+        self.svc.store.set_active(provider, model);
+        self.svc.store.save_locked()
+    }
+
+    /// Set a per-tier model override on `provider` and persist.
+    pub fn set_tier(
+        &mut self,
+        provider: &LlmProvider,
+        tier: TierName,
+        model: &str,
+    ) -> io::Result<PathBuf> {
+        self.svc.store.set_tier(provider, tier, model);
+        self.svc.store.save_locked()
+    }
+
+    /// Set or clear the per-provider `default_max_tokens` and persist.
+    pub fn set_max_tokens(
+        &mut self,
+        provider: &LlmProvider,
+        max_tokens: Option<u32>,
+    ) -> io::Result<PathBuf> {
+        self.svc.store.set_default_max_tokens(provider, max_tokens);
+        self.svc.store.save_locked()
+    }
+
+    /// Persist whatever is in the in-memory config to disk. **The
+    /// caller MUST hold the flock** (typically via
+    /// [`ProviderConfigService::lock`]). For the no-flock version, use
+    /// [`ProviderConfigService::save`].
+    pub fn save_locked(&mut self) -> io::Result<PathBuf> {
+        self.svc.store.save_locked()
+    }
 }
 
 /// Build the [`ProviderProfile`] for a provider — the shared shape both
@@ -681,5 +876,141 @@ mod tests {
                 "providers.toml for {provider:?} tripped the secret scanner: {matches:?}"
             );
         }
+    }
+
+    // ===== P2-2 S1-1: LockedService (RAII) =====
+
+    /// L1: `lock()` returns a usable `LockedService`; mutating through
+    /// it persists without re-acquiring the flock.
+    #[test]
+    fn locked_connect_upserts_and_persists() {
+        let (mut svc, dir) = service();
+        {
+            let mut locked = svc.lock().expect("lock");
+            let _out = locked
+                .connect(LlmProvider::Anthropic, None, None, true)
+                .expect("connect through LockedService");
+            // locked is still alive here; no second acquire.
+        }
+        // Re-read the on-disk file from the temp dir.
+        let on_disk = std::fs::read_to_string(dir.path().join("providers.toml"))
+            .expect("providers.toml must exist after LockedService drop");
+        assert!(
+            on_disk.contains("anthropic"),
+            "anthropic must persist: {on_disk}"
+        );
+    }
+
+    /// L2: `LockedService::disconnect` is the additive inverse of
+    /// `connect` — it removes only the named provider.
+    #[test]
+    fn locked_disconnect_removes_only_target() {
+        let (mut svc, _dir) = service();
+        {
+            let mut locked = svc.lock().expect("lock");
+            locked
+                .connect(LlmProvider::Anthropic, None, None, true)
+                .unwrap();
+            locked
+                .connect(LlmProvider::OpenAI, None, None, true)
+                .unwrap();
+        }
+        {
+            let mut locked = svc.lock().expect("lock again");
+            let outcome = locked.disconnect(&LlmProvider::OpenAI).unwrap();
+            assert!(outcome.was_connected);
+        }
+        // Now drop locked; reopen to verify shape.
+        let on_disk = std::fs::read_to_string(_dir.path().join("providers.toml")).unwrap();
+        assert!(
+            on_disk.contains("anthropic"),
+            "anthropic survives: {on_disk}"
+        );
+        assert!(
+            !on_disk.contains("\"id\" = \"openai\""),
+            "openai removed: {on_disk}"
+        );
+    }
+
+    /// L3: `lock()` fails fast (no panic, no hang) when the service
+    /// has no `last_path` — i.e. the in-memory store was constructed
+    /// via `from_config` without a subsequent save.
+    #[test]
+    fn lock_without_path_errors() {
+        use crate::provider_config_store::ProviderConfigStore;
+        // from_config pins no path; lock() must error before acquiring anything.
+        let mut svc = ProviderConfigService::from_store(ProviderConfigStore::default());
+        match svc.lock() {
+            Ok(_) => panic!("lock without last_path must error"),
+            Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::NotFound, "got: {e:?}"),
+        }
+    }
+
+    /// L4: After `lock()` returns, calling a non-RAII mutating method
+    /// on the same service (`connect` / `disconnect` / `upsert` / ...)
+    /// would try to acquire the flock again. The Linux `flock(2)`
+    /// semantics deadlock the calling thread (the guard holds the
+    /// same `flock(LOCK_EX)` on the same lockfile).
+    ///
+    /// We DO NOT assert "deadlock" — that's a hang. We assert the
+    /// **call shape**: with a held `LockedService`, the bare mutators
+    /// are still callable from the same thread (they go through the
+    /// store's `save()` which re-acquires the flock on the same fd
+    /// and is documented to deadlock on Linux / EDEADLK on macOS).
+    /// This test exists to pin the contract; the run-time
+    /// `concurrent_lock_does_not_starve_others` test below is the
+    /// E2E that exercises the actual lock interaction.
+    #[test]
+    #[ignore = "would deadlock on Linux; run manually with `cargo test -- --ignored`"]
+    fn nested_lock_attempt_deadlocks_as_documented() {
+        let (mut svc, _dir) = service();
+        let _outer = svc.lock().expect("outer lock");
+        // Intentionally call the bare mutator while outer is still alive.
+        // This will hang (Linux) or return EDEADLK (macOS) on the
+        // `acquire_exclusive_lock` inside `self.store.save()`. The test
+        // is `#[ignore]`d; running it manually confirms the documented
+        // behavior and is the canary for any future refactor that
+        // accidentally allows nested locks.
+        let _ = svc.disconnect(&LlmProvider::Anthropic);
+        panic!("should not reach here if the lock behavior is correct");
+    }
+
+    /// L5: two threads racing on the same service+path each
+    /// acquire-release cleanly. The RAII guard must release the flock
+    /// when dropped so a second thread can proceed.
+    #[test]
+    fn concurrent_lock_serializes_without_starvation() {
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+
+        let (mut svc, dir) = service();
+        // Seed one provider so subsequent calls have something to do.
+        svc.connect(LlmProvider::Anthropic, None, None, true)
+            .unwrap();
+
+        let svc = Arc::new(Mutex::new(svc));
+        let dir_path = dir.path().join("providers.toml");
+        let mut handles = Vec::new();
+
+        for i in 0..8u32 {
+            let svc = Arc::clone(&svc);
+            let target = match i % 2 {
+                0 => LlmProvider::OpenAI,
+                _ => LlmProvider::Anthropic,
+            };
+            handles.push(thread::spawn(move || {
+                let mut svc = svc.lock().expect("svc mutex");
+                let mut locked = svc.lock().expect("flock");
+                locked.connect(target, None, None, false).expect("connect");
+            }));
+        }
+        for h in handles {
+            h.join().expect("thread must not deadlock");
+        }
+
+        let on_disk = std::fs::read_to_string(&dir_path).expect("file written");
+        // At least one OpenAI + the seeded Anthropic must be present.
+        assert!(on_disk.contains("anthropic"));
+        assert!(on_disk.contains("openai"));
     }
 }
