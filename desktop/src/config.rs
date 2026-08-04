@@ -45,6 +45,12 @@ pub struct DesktopConfig {
     /// Speech-to-text (voice input) provider config (D4 cloud STT).
     #[serde(default)]
     pub stt: Option<SttConfig>,
+    /// Local-only STT config (P2-5e whisper-rs). Independent of the cloud
+    /// `stt` config so the user can keep a cloud key for fallback while
+    /// the local provider is the primary. `enabled = false` is the
+    /// default — cloud is still the path most users land on first.
+    #[serde(default)]
+    pub voice_local: VoiceLocalConfig,
     /// Skill loop evaluation enabled (default: false).
     #[serde(default)]
     pub skill_loop_enabled: bool,
@@ -476,6 +482,47 @@ pub struct SttConfig {
     pub model: Option<String>,
 }
 
+/// Local-only STT config (P2-5e). Drives the `transcribe_audio_local` Tauri
+/// command and the Settings → Voice local-provider card. The local provider
+/// is opt-in and lives behind the `voice-local` Cargo feature at compile
+/// time; this struct is always present in the config so the Settings UI
+/// can render the card (disabled) on builds that don't have whisper-rs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceLocalConfig {
+    /// Master switch. When `true` and the user picks `local` in
+    /// `useVoice`, recordings go through `transcribe_audio_local`
+    /// instead of the cloud command. Default: `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Model slug. One of `tiny.en` | `base` | `small`. `None` means
+    /// "use the smallest available downloaded model" — the command
+    /// picks at call time so adding a downloaded model automatically
+    /// upgrades the active model.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// BCP-47 language hint passed to whisper-rs (`en`, `zh`, `auto`,
+    /// etc.). `None` ⇒ auto-detect.
+    #[serde(default)]
+    pub language: Option<String>,
+    /// When `true` (default), a missing model is auto-downloaded on
+    /// first use. When `false`, the command returns
+    /// `STT_MODEL_NOT_FOUND` and the UI prompts the user to download
+    /// from Settings → Voice.
+    #[serde(default = "default_true")]
+    pub auto_download: bool,
+}
+
+impl Default for VoiceLocalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: None,
+            language: None,
+            auto_download: true,
+        }
+    }
+}
+
 impl Default for DesktopConfig {
     fn default() -> Self {
         Self {
@@ -503,6 +550,7 @@ impl Default for DesktopConfig {
             notifications_on_completed: default_true(),
             notifications_on_failed: default_true(),
             stt: None,
+            voice_local: VoiceLocalConfig::default(),
             gateway: GatewayDesktopConfig::default(),
             enabled_providers: None,
         }

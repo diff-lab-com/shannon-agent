@@ -221,8 +221,24 @@ vi.mock('@/lib/tauri-api', () => ({
   markTriageRead: vi.fn().mockResolvedValue(undefined),
   archiveTriageItem: vi.fn().mockResolvedValue(undefined),
   transcribeAudio: vi.fn().mockResolvedValue({ text: 'mock transcript' }),
+  // P2-5e — local voice (whisper-rs). Default: returns the same
+  // mock transcript as the cloud path so existing tests don't
+  // regress; per-test `vi.mocked(...)` overrides cover the
+  // STT_* error codes (model-not-found, inference-failed, …).
+  transcribeAudioLocal: vi.fn().mockResolvedValue({ text: 'mock transcript' }),
+  transcribeAudioLocalBase64: vi.fn().mockResolvedValue({ text: 'mock transcript' }),
   getSttConfig: vi.fn().mockResolvedValue(null),
   saveSttConfig: vi.fn().mockResolvedValue(undefined),
+  getVoiceLocalConfig: vi.fn().mockResolvedValue({
+    enabled: false,
+    model: null,
+    language: null,
+    auto_download: true,
+  }),
+  saveVoiceLocalConfig: vi.fn().mockResolvedValue(undefined),
+  listWhisperModels: vi.fn().mockResolvedValue([]),
+  downloadWhisperModel: vi.fn().mockResolvedValue('/tmp/dummy'),
+  deleteWhisperModel: vi.fn().mockResolvedValue(false),
   // P2-5c — attachment uploads. Default: empty payloads, sane cap.
   readAttachment: vi.fn().mockResolvedValue({ mime: 'application/octet-stream', name: '', size: 0 }),
   readAttachments: vi.fn().mockResolvedValue([]),

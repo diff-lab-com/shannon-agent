@@ -96,6 +96,30 @@ describe('createVoiceProvider', () => {
       teardown()
     }
   })
+
+  // P2-5e: the local provider has the same MediaRecorder-based
+  // capture path as the remote one, so the factory uses the same
+  // support gate. We assert the kind routes correctly without
+  // exercising the actual whisper-rs round-trip (the Rust
+  // integration test for that lives in the desktop crate).
+  it('returns the local provider when MediaRecorder is available', () => {
+    const { teardown } = installMediaRecorder()
+    try {
+      const p = createVoiceProvider({
+        kind: 'local',
+        local: { model: 'base', language: 'en' },
+      })
+      expect(p.kind).toBe('local')
+      expect(p.isSupported()).toBe(true)
+    } finally {
+      teardown()
+    }
+  })
+
+  it('falls back to stub when local is unsupported (no MediaRecorder)', () => {
+    const p = createVoiceProvider({ kind: 'local' })
+    expect(p.kind).toBe('stub')
+  })
 })
 
 describe('stub provider', () => {

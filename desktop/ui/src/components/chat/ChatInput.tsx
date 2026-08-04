@@ -64,6 +64,16 @@ export default function ChatInput({
       onChange(merged)
     },
     onError: (msg) => toastError(t('voice.error.title'), msg),
+    // P2-5e: prefer the local provider when the user has enabled
+    // it in Settings → Voice. The cloud provider is the fallback
+    // (the default) so existing users see no change.
+    provider: config?.voice_local?.enabled ? 'local' : 'cloud',
+    local: config?.voice_local
+      ? {
+          model: config.voice_local.model,
+          language: config.voice_local.language,
+        }
+      : undefined,
   })
 
   const handleChangeWorkingDir = async () => {
