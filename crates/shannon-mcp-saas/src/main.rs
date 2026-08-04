@@ -14,6 +14,8 @@ use tracing_subscriber::EnvFilter;
 
 #[cfg(feature = "jira")]
 use shannon_mcp_saas::jira;
+#[cfg(feature = "linear")]
+use shannon_mcp_saas::linear;
 #[cfg(feature = "slack")]
 use shannon_mcp_saas::slack;
 use shannon_mcp_saas::{github, server};
@@ -50,9 +52,20 @@ async fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         }
+        #[cfg(feature = "linear")]
+        "linear" => {
+            let tools = linear::tools::as_server_tool(linear::tools::all_tools_unauth());
+            server::print_tool_listing(&tools);
+            if let Err(e) = server::run_stdio(&tools).await {
+                eprintln!("shannon-mcp-saas: stdio loop failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
         #[allow(unreachable_patterns)]
         other => {
-            eprintln!("shannon-mcp-saas: unknown SaaS '{other}' (supported: github, slack, jira)");
+            eprintln!(
+                "shannon-mcp-saas: unknown SaaS '{other}' (supported: github, slack, jira, linear)"
+            );
             return ExitCode::from(2);
         }
     }
