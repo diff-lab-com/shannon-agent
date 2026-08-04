@@ -42,7 +42,10 @@ describe('StreamingResponse', () => {
         onViewDiff={vi.fn()}
       />,
     )
-    expect(screen.getByText('Considering options')).toBeInTheDocument()
+    // Reasoning is a collapsible. The header is always visible; the
+    // body is collapsed by default. Use the header label localized
+    // value via the "Thinking" alias that the intl mock supplies.
+    expect(screen.getByText('Thinking')).toBeInTheDocument()
   })
 
   it('omits thinking block when thinkingText is empty', () => {
@@ -54,7 +57,8 @@ describe('StreamingResponse', () => {
         onViewDiff={vi.fn()}
       />,
     )
-    expect(container.querySelector('.uppercase')).toBeNull()
+    // No collapsible wrapper when there's nothing to think about.
+    expect(container.querySelector('[data-reasoning]')).toBeNull()
   })
 
   it('renders active tool calls', () => {
@@ -79,5 +83,46 @@ describe('StreamingResponse', () => {
       />,
     )
     expect(container.querySelector('[aria-live="polite"]')).not.toBeNull()
+  })
+
+  // P2-5d — typing cursor + jump-to-bottom + role=log
+  it('renders a typing cursor when streamingText is non-empty', () => {
+    const { container } = render(
+      <StreamingResponse
+        streamingText="partial answer"
+        thinkingText=""
+        activeToolCalls={[]}
+        onViewDiff={vi.fn()}
+      />,
+    )
+    const cursor = container.querySelector('.streaming-cursor')
+    expect(cursor).not.toBeNull()
+    expect(cursor?.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('renders the role=log list for message history conformance', () => {
+    const { container } = render(
+      <StreamingResponse
+        streamingText="x"
+        thinkingText=""
+        activeToolCalls={[]}
+        onViewDiff={vi.fn()}
+      />,
+    )
+    expect(container.querySelector('[role="log"]')).not.toBeNull()
+  })
+
+  it('hides the jump-to-bottom button by default', () => {
+    const { container } = render(
+      <StreamingResponse
+        streamingText="x"
+        thinkingText=""
+        activeToolCalls={[]}
+        onViewDiff={vi.fn()}
+      />,
+    )
+    // The button should only be rendered when scrolled away; in jsdom
+    // we never get a real scroll, so it's hidden by default.
+    expect(container.querySelector('button[aria-label*="Jump" i]')).toBeNull()
   })
 })

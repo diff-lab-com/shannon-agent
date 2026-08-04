@@ -1,0 +1,176 @@
+/* Shannon desktop — design tokens (canonical reference).
+ *
+ * This file is the single source of truth for token names. The actual
+ * token VALUES still live in `src/index.css` under the `@theme { ... }`
+ * block (Tailwind v4 syntax — Tailwind compiles those declarations into
+ * real CSS custom properties + utility classes).
+ *
+ * Why split the file like this?
+ *   1. Tailwind v4 requires `@theme {}` to live in a `.css` file imported
+ *      with `@import "tailwindcss"` — it can't be imported from JS.
+ *   2. We still want a discoverable, single-page inventory of every
+ *      token a developer can reach for. That's what this file is.
+ *   3. If a future Tailwind migration changes `@theme` placement, the
+ *      "what tokens exist" answer remains this README-style file.
+ *
+ * Each section below maps to a block in `@theme {}` (or `:root`) in
+ * `index.css`. When adding a new token:
+ *   1. Add the declaration to the matching `@theme { ... }` block in
+ *      `index.css` (or create a new block).
+ *   2. Document it here with one line describing the intent.
+ *   3. Use it via the conventional utility (Tailwind auto-generates
+ *      `bg-{name}`, `text-{name}`, etc.) or `style={{ color: 'var(--color-…)' }}`.
+ *
+ * Color values themselves come from the Material 3 color roles (light)
+ * + a curated set of dark themes (`tokyo-night`, `catppuccin`, `nord`,
+ * `ember`, `slate`, `solarized`, `dracula`, `gruvbox`). Tailwind v4
+ * handles switching via the `@custom-variant dark` rule at the top of
+ * `index.css`.
+ */
+
+:root {
+  /* ───── Color (light, default) ───────────────────────────────── */
+  --color-primary: #6b38d4;             /* Brand purple — primary actions, focus ring */
+  --color-on-primary: #ffffff;          /* Text on primary background */
+  --color-primary-container: #8455ef;   /* Tinted primary — chips, avatar bg (assistant) */
+  --color-on-primary-container: #fffbff;
+  --color-primary-fixed: #e9ddff;       /* User message bubble */
+  --color-on-primary-fixed: #23005c;
+  --color-primary-fixed-dim: #d0bcff;
+  --color-on-primary-fixed-variant: #5516be;
+
+  --color-secondary: #0051d5;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #316bf3;
+  --color-on-secondary-container: #fefcff;
+
+  --color-tertiary: #855000;            /* Warning / amber accent */
+  --color-on-tertiary: #ffffff;
+  --color-tertiary-container: #a76500;
+  --color-on-tertiary-container: #fffbff;
+  --color-tertiary-fixed: #ffdcbb;
+  --color-tertiary-fixed-dim: #ffb869;
+
+  --color-error: #ba1a1a;
+  --color-error-container: #ffdad6;
+  --color-on-error: #ffffff;
+  --color-on-error-container: #93000a;
+
+  --color-surface: #f7f9fb;             /* Default page surface */
+  --color-surface-dim: #d8dadc;
+  --color-surface-bright: #f7f9fb;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f2f4f6;
+  --color-surface-container: #eceef0;
+  --color-surface-container-high: #e6e8ea;
+  --color-surface-container-highest: #e0e3e5;
+
+  --color-on-surface: #191c1e;
+  --color-on-surface-variant: #494454;
+  --color-inverse-surface: #2d3133;
+  --color-inverse-on-surface: #eff1f3;
+  --color-outline: #7b7486;
+  --color-outline-variant: #cbc3d7;
+
+  --color-background: #f7f9fb;
+  --color-on-background: #191c1e;
+
+  /* ───── Spacing (4-pixel scale) ──────────────────────────────── */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-gutter: 24px;     /* App-level horizontal padding */
+  --spacing-sidebar-width: 280px;
+  --spacing-max-content-width: 1200px;
+
+  /* ───── Typography ───────────────────────────────────────────── */
+  --font-body-sm: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-body-md: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-body-lg: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-label-sm: "Geist Variable", ui-monospace, SFMono-Regular, monospace;
+  --font-label-md: "Geist Variable", ui-monospace, SFMono-Regular, monospace;
+  --font-headline-sm: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-headline-md: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-headline-lg: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display-lg: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+
+  --text-label-xs: 11px;
+  --text-label-sm: 12px;
+  --text-label-md: 14px;
+  --text-body-sm: 14px;
+  --text-body-md: 16px;
+  --text-body-lg: 18px;
+  --text-headline-sm: 20px;
+  --text-headline-md: 24px;
+  --text-headline-lg: 32px;
+  --text-display-lg: 48px;
+
+  /* ───── Radius (geometric) ───────────────────────────────────── */
+  --radius-sm: calc(var(--radius) * 0.6);   /* 6px */
+  --radius-md: calc(var(--radius) * 0.8);   /* 8px */
+  --radius-lg: var(--radius);               /* 10px default */
+  --radius-xl: calc(var(--radius) * 1.4);   /* 14px */
+  --radius-2xl: calc(var(--radius) * 1.8);  /* 18px — message bubbles */
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius: 0.625rem;                       /* 10px — base unit */
+
+  /* ───── Shadow / elevation ───────────────────────────────────── */
+  --shadow-e1: 0 1px 2px 0 rgb(0 0 0 / 0.05);                   /* Focus ring halo */
+  --shadow-e2: 0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --shadow-e3: 0 10px 15px -3px rgb(0 0 0 / 0.10), 0 4px 6px -4px rgb(0 0 0 / 0.05);
+  --shadow-e4: 0 20px 25px -5px rgb(0 0 0 / 0.12), 0 8px 10px -6px rgb(0 0 0 / 0.05);
+  --shadow-e5: 0 25px 50px -12px rgb(0 0 0 / 0.25);            /* Modals */
+
+  /* ───── Animation durations ──────────────────────────────────── */
+  --duration-fast: 100ms;        /* Hover state changes */
+  --duration-normal: 160ms;      /* Default transition */
+  --duration-slow: 240ms;        /* Panel slides */
+  --duration-slower: 400ms;      /* Page transitions */
+
+  /* ───── Z-index scale ────────────────────────────────────────── */
+  /* Use sparingly. Most layout should NOT need z-index.        */
+  --z-base: 0;
+  --z-dropdown: 10;
+  --z-sticky: 20;
+  --z-header: 30;
+  --z-overlay: 40;
+  --z-modal: 50;
+  --z-popover: 60;
+  --z-toast: 70;
+  --z-tooltip: 80;
+}
+
+/* Inline icon sizing — short Tailwind utility helpers */
+.material-symbols-outlined.icon-xs { font-size: 14px; }
+.material-symbols-outlined.icon-sm { font-size: 16px; }
+.material-symbols-outlined.icon-md { font-size: 20px; }
+.material-symbols-outlined.icon-lg { font-size: 24px; }
+.material-symbols-outlined.icon-xl { font-size: 32px; }
+
+/* Reduce-motion — kill non-essential animations */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ───── Shared animation keyframes (used in tokens.css so they're
+ *       trivially overridable per theme) ───── */
+
+/* Typing cursor — a slim block that blinks. Used by StreamingResponse.
+ * Matches Claude Desktop's "blinking caret" feel. */
+.streaming-cursor {
+  animation: cursor-blink 1.1s steps(2, end) infinite;
+}
+@keyframes cursor-blink {
+  0%, 50%   { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+

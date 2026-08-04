@@ -41,6 +41,44 @@ function isImagePath(path: string): boolean {
   return ext != null && IMAGE_EXTENSIONS.has(ext)
 }
 
+/* ─────── Header — avatar + role + timestamp ─────── */
+
+function MessageHeader({
+  role,
+  timestamp,
+  isBranch,
+}: {
+  role: 'user' | 'assistant' | 'tool'
+  timestamp?: number
+  isBranch?: boolean
+}) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+  const label =
+    role === 'user' ? t('chat.message.header.user')
+      : role === 'tool' ? t('chat.message.header.tool')
+      : t('chat.message.header.assistant')
+  const time = timestamp ? new Date(timestamp).toLocaleTimeString(intl.locale, { hour: '2-digit', minute: '2-digit' }) : ''
+  return (
+    <div className="flex items-center gap-xs text-label-xs text-on-surface-variant/70 mb-xs" aria-hidden="true">
+      <span className="font-label-xs uppercase tracking-wide font-medium">{label}</span>
+      {isBranch && (
+        <>
+          <span aria-hidden="true">·</span>
+          <span className="material-symbols-outlined text-[12px]">fork_right</span>
+          <span>{t('chat.message.branch')}</span>
+        </>
+      )}
+      {time && (
+        <>
+          <span aria-hidden="true">·</span>
+          <time dateTime={new Date(timestamp!).toISOString()} className="font-mono">{time}</time>
+        </>
+      )}
+    </div>
+  )
+}
+
 function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -172,12 +210,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
       <>
       <Message from="user" className="flex justify-end">
         <MessageContent className="max-w-[80%]">
-          {isBranch && (
-            <div className="flex items-center gap-xs mb-xs justify-end">
-              <span className="material-symbols-outlined text-[14px] text-on-surface-variant/50">fork_right</span>
-              <span className="font-label-sm text-on-surface-variant/50">{t('chat.message.branch')}</span>
-            </div>
-          )}
+          <MessageHeader role="user" timestamp={message.timestamp} isBranch={isBranch} />
           {hasAttachments && (
             <div className="flex flex-wrap gap-xs mb-xs justify-end">
               {message.file_attachments!.map((att, i) => (
@@ -188,7 +221,14 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
           <div className="bg-primary-fixed text-on-primary-fixed px-lg py-md rounded-2xl rounded-tr-none shadow-sm">
             <p className="font-body-md whitespace-pre-wrap">{message.content}</p>
           </div>
-          <ActionToolbar className="gap-sm mt-xs justify-end">
+          <ActionToolbar className="gap-sm mt-xs justify-end opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            <Button
+              aria-label={t('chat.message.copy.aria')}
+              onClick={handleCopy}
+              className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            >
+              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">content_copy</span>
+            </Button>
             <Button
               aria-label={t('chat.message.branch.aria')}
               onClick={handleBranch}
@@ -217,10 +257,16 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   )
 }
 
+  /* Assistant + Tool variants — share most of the chrome; tool messages
+   * get a slightly muted style and don't carry the like / regen /
+   * report buttons (those actions only make sense for assistant text). */
+  const isTool = message.role === 'tool'
+
   return (
-    <Message from="assistant" className="flex gap-md max-w-[90%]">
-      <MessageAvatar from="assistant" />
+    <Message from={isTool ? 'system' : 'assistant'} className="flex gap-md max-w-[90%] group">
+      <MessageAvatar from="assistant" icon={isTool ? 'build' : 'smart_toy'} />
       <MessageContent className="space-y-md flex-1">
+        <MessageHeader role={isTool ? 'tool' : 'assistant'} timestamp={message.timestamp} />
         <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-sm">
           <ResponseStream className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
             <FootnoteMarkdown>{message.content}</FootnoteMarkdown>
@@ -271,16 +317,31 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
             </div>
           )}
         </div>
-        <ActionToolbar>
-          <Button aria-label={t('chat.message.like.aria')} aria-pressed={liked} onClick={() => setLiked(!liked)} className={`flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${liked ? 'text-primary' : 'text-on-surface-variant'}`}>
-            <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{liked ? 'thumb_up' : 'thumb_up_off_alt'}</span>
-          </Button>
+        <ActionToolbar className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
           <Button aria-label={t('chat.message.copy.aria')} onClick={handleCopy} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">content_copy</span>
           </Button>
-          <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
-            <span className="material-symbols-outlined text-[18px]" aria-hidden="true">refresh</span>
-          </Button>
+          {!isTool && (
+            <>
+              <Button aria-label={t('chat.message.like.aria')} aria-pressed={liked} onClick={() => setLiked(!liked)} className={`flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${liked ? 'text-primary' : 'text-on-surface-variant'}`}>
+                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{liked ? 'thumb_up' : 'thumb_up_off_alt'}</span>
+              </Button>
+              <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
+                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">refresh</span>
+              </Button>
+              <Button
+                aria-label={t('chat.message.branch.aria')}
+                onClick={handleBranch}
+                disabled={isBranching || !currentSessionId}
+                className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                title={t('chat.message.branch.button')}
+              >
+                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                  {isBranching ? 'hourglass_empty' : 'fork_right'}
+                </span>
+              </Button>
+            </>
+          )}
           {hasReport && (
             <Button
               aria-label={t('chat.message.report.aria')}
@@ -342,7 +403,7 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
             {t('chat.message.diff')}
           </button>
         )}
-        <span className="material-symbols-outlined icon-sm text-on-surface-variant">{expanded ? 'expand_less' : 'expand_more'}</span>
+        <span className="material-symbols-outlined icon-sm text-on-surface-variant" aria-hidden="true">{expanded ? 'expand_less' : 'expand_more'}</span>
       </ToolHeader>
       {expanded && (
         <ToolContent>
