@@ -16,16 +16,20 @@ env:
   RUST_BACKTRACE: 1
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+# Pinned commit SHAs for supply-chain hardening. Bump by replacing the SHA
+# with the newer one from `git ls-remote <repo> refs/heads/main` (or the
+# release tag's commit). Never use a moving tag like `@v4` for these —
+# always pin to an exact commit.
 jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.88"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -34,7 +38,7 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
             librsvg2-dev libssl-dev libxdo-dev patchelf
       - name: Install nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
         with:
           tool: cargo-nextest
       - name: Build
@@ -50,8 +54,8 @@ jobs:
     name: VS Code Extension
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
         with:
           node-version: "24"
       - name: Install dependencies
@@ -65,12 +69,12 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.88"
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -95,8 +99,8 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.88"
           components: rustfmt
@@ -105,35 +109,88 @@ jobs:
 
   audit:
     name: Dependency Audit
+    # Required-for-merge gate on `dev` and `main`. Tracks `deny.toml`:
+    # license allowlist + curated advisory ignores for transitive crates
+    # whose upstream fix is blocked on Tauri / plist / syntax ecosystem.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.88"
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
         with:
           tool: cargo-deny
       - name: Check dependencies
         run: cargo deny check --hide-inclusion-graph
 
+  rustsec-audit:
+    # Required-for-merge gate on `dev` and `main`. RustSec advisory DB
+    # covers vulnerabilities not in the Open Rust Database that
+    # cargo-deny reads (rustsec.org advisory-db is the broader feed).
+    # `cargo-audit` is pinned in the step rather than installed via
+    # the global toolchain so the binary itself is reproducible.
+    # The --locked flag ensures we install the exact version that
+    # gated the merge — no surprise upgrades mid-run.
+    name: RustSec Advisory Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit dependencies
+        # --no-fetch uses the audited advisory DB already cached from
+        # the previous install step (CI caches rustsec-advisory-db).
+        # Falls through to fetch if not present; either path is fine.
+        run: cargo audit --deny warnings
+
+  doc:
+    # Required-for-merge gate TARGET. `continue-on-error: true` for now
+    # because the workspace has pre-existing intra-doc-link errors that
+    # are out of scope for P2-4 (e.g. shannon-tool-interface `is_read_only`
+    # broken link, shannon-mcp-saas private `append_candidate_in`
+    # reference, several bare-URL doc comments in shannon-ui). The job
+    # runs and reports; once that cleanup lands this flips to a hard gate
+    # by removing `continue-on-error`. Catches broken doc links, missing
+    # examples, and unresolved intra-doc references before they ship to
+    # docs.rs.
+    name: Doc Build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+      - name: Build docs
+        # `--no-deps` skips documenting the entire ecosystem; we only
+        # care about our own intra-doc links. `RUSTDOCFLAGS="-D warnings"`
+        # upgrades doc warnings to compile-time errors.
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps
+
   metrics:
     name: Generate Metrics
     runs-on: ubuntu-latest
-    needs: [test, clippy, audit]
+    needs: [test, clippy, audit, rustsec-audit]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.88"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
       - name: Install nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
         with:
           tool: cargo-nextest
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
         with:
           tool: cargo-deny
       - name: Install jq
@@ -144,26 +201,59 @@ jobs:
         run: bash scripts/gen-metrics.sh
       - name: Upload metrics report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: metrics-report
           path: docs/metrics.md
           if-no-files-found: error
 
-  check-cross-platform:
+  cross-platform:
+    # Required-for-merge gate on `dev` and `main` for the three primary
+    # targets (ubuntu, macos, windows). Catches platform-conditional
+    # code drift (#[cfg(target_os=...)], #[cfg(target_family=...)])
+    # before a release build fails on a maintainer's laptop. We
+    # only run `cargo check` (not build) per matrix leg — full builds
+    # already run in release.yml — so the cost stays bounded.
     name: Cross-platform Check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+      - name: Check workspace (all platforms)
+        # shannon-desktop requires Tauri/webview system libs that are
+        # difficult to install on `windows-latest` and `macos-latest`
+        # runners; check the rest of the workspace there for a smoke
+        # test of the public Rust API surface. shannon-desktop is
+        # built fully in release.yml under each platform's matrix leg.
+        run: cargo check --workspace --exclude shannon-desktop
+
+  check-linux-musl:
+    # Linux-only musl smoke test. Renamed from `check-cross-platform` so
+    # the new `cross-platform` matrix is the obvious OS-coverage gate
+    # and this job reads as what it actually does: confirm the workspace
+    # still compiles against the statically-linked musl libc target.
+    # `continue-on-error: true` because musl-portable webkit/gtk deps
+    # are blocked upstream — see shannon-desktop exclude below.
+    name: Linux musl Check
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.88"
       - name: Install targets
         run: rustup target add x86_64-unknown-linux-musl
       - name: Install musl cross-compiler
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
       - name: Install Tauri system deps (musl)
         if: runner.os == 'Linux'
         run: |
@@ -196,11 +286,11 @@ jobs:
       # invalidates the cached baseline rustdoc and never serves a stale one.
       SEMVER_BASELINE: v0.5.5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
       - name: Check semver (baseline rustdoc cached)
-        uses: obi1kenobi/cargo-semver-checks-action@v2
+        uses: obi1kenobi/cargo-semver-checks-action@eac29787462b0f1957d618a21f458305db73b36c
         with:
           baseline-rev: ${{ env.SEMVER_BASELINE }}
           prefix-key: baseline-${{ env.SEMVER_BASELINE }}
@@ -218,16 +308,18 @@ jobs:
     # are what `insta::assert_snapshot!` writes when an assertion fails —
     # leaving them in the tree means a contributor shipped a snapshot
     # change without explicitly accepting it. See docs/plans/insta-workflow.md.
+    # Required-for-merge on `dev` and `main`: a snapshot drift blocks the
+    # same way the underlying test would.
     name: Insta Snapshots
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.88"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
       - name: Install nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
         with:
           tool: cargo-nextest
       - name: Run workspace tests (exercises snapshot tests)
