@@ -97,24 +97,48 @@ ui/
 │   ├── main.tsx                     # 挂载 App + 初始化 Tauri listeners
 │   │
 │   ├── pages/                       # 路由页 (React.lazy)
-│   │   ├── ChatPage.tsx
-│   │   ├── SettingsPage.tsx
-│   │   ├── AgentsPage.tsx
-│   │   ├── TasksPage.tsx
-│   │   ├── ExtensionsPage.tsx
-│   │   └── WelcomePage.tsx
+│   │   ├── Chat.tsx                 # 主 chat 页(自带 ChatInput/MessageBubble)
+│   │   ├── ChatV2Spike.tsx          # assistant-ui runtime adapter spike(P2-5a)
+│   │   ├── Editor.tsx               # 内嵌代码编辑
+│   │   ├── Extensions.tsx           # MCP / Skill / Agent 扩展管理
+│   │   ├── Memory.tsx               # 记忆库视图
+│   │   ├── OPC.tsx / OPCTask.tsx    # OPC 指标与任务视图
+│   │   ├── QuickFix.tsx             # 一键修复(LSP 诊断聚合)
+│   │   ├── Settings.tsx             # 设置面板
+│   │   ├── Tasks.tsx                # 任务板
+│   │   ├── Triage.tsx               # 工单/消息分流
+│   │   ├── Usage.tsx                # token/费用统计
+│   │   └── Welcome.tsx              # 首次启动欢迎向导
 │   │
 │   ├── context/
-│   │   └── AppContext.tsx           # 中心 store (useApp())
+│   │   ├── AppContext.tsx           # 中心 store (useApp())
+│   │   ├── CatalogContext.tsx       # 模型/Provider 目录(搜索/过滤)
+│   │   ├── ChatContext.tsx          # chat 状态(P2-5a 切换 runtime 用)
+│   │   ├── SessionContext.tsx       # 当前 session 信息
+│   │   └── ThemeContext.tsx         # 主题/外观
 │   │
 │   ├── hooks/                       # 见下方 hooks
 │   │   ├── useTauriEvent.ts
+│   │   ├── useTauriEventValidated.ts  # 带 schema 校验的事件订阅
 │   │   ├── useNotification.ts
 │   │   ├── useKeyboardShortcuts.ts
-│   │   └── useTheme.ts
+│   │   ├── useDiffKeyboard.ts        # diff 视图专用快捷键
+│   │   ├── useTheme.ts
+│   │   ├── useModalFocus.ts          # 模态焦点陷阱(a11y)
+│   │   ├── usePagedVisible.ts        # 分页可见性
+│   │   ├── usePendingSkillCandidates.ts
+│   │   ├── useTaskStreaming.ts       # 任务流式输出
+│   │   ├── useVoice.ts               # 语音输入 hook
+│   │   └── scheduled-tasks.ts        # 定时/触发式任务
 │   │
 │   ├── lib/
 │   │   ├── tauri-api.ts             # 类型化 invoke() 封装
+│   │   ├── featureFlag.ts           # 客户端特性开关(对接 window.__SHANNON_*__)
+│   │   ├── diff-highlight.ts        # diff 语法高亮
+│   │   ├── diff-merge.ts            # 三路合并工具
+│   │   ├── errorToast.ts            # 统一错误 toast
+│   │   ├── hljs.ts                  # 代码高亮语言注册
+│   │   ├── nl-cron.ts               # 自然语言 → cron
 │   │   ├── mock/                    # VITE_MOCK_MODE=1 时替换 invoke
 │   │   └── i18n/                    # react-intl v7 (en, zh-CN)
 │   │
@@ -124,7 +148,6 @@ ui/
 │   │   ├── editor/                  # CodeMirror 包装
 │   │   ├── skills/                  # 技能列表与详情
 │   │   ├── tasks/                   # 任务板
-│   │   ├── agents/                  # Agent 卡片
 │   │   ├── settings/                # 设置面板
 │   │   ├── extensions/              # MCP/Skill/Agent 扩展
 │   │   ├── memory/                  # 记忆库
@@ -137,6 +160,7 @@ ui/
 │   │   ├── ui/                      # shadcn/ui 基元
 │   │   ├── ai-elements/             # assistant-ui 元素
 │   │   ├── self-improve/            # 自改进 hints
+│   │   ├── SessionsPanel/           # 多线程侧栏(P2-5b)
 │   │   ├── Sidebar.tsx
 │   │   ├── Header.tsx
 │   │   ├── Layout.tsx
