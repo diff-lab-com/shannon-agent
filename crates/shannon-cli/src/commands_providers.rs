@@ -31,7 +31,7 @@ use shannon_types::provider_config::{CredentialRef, ProviderKind, ProviderProfil
 
 /// Canonical tier names accepted by `--tier`. Aliases are rejected.
 /// Doc-only: the runtime validator is [`validate_canonical_tier`].
-#[allow(dead_code)]
+#[allow(dead_code)] // KEEP: doc-only reference for accepted tier names; runtime validation lives in `validate_canonical_tier`.
 const CANONICAL_TIERS: &[&str] = &["fast", "standard", "pro"];
 
 /// Default `LlmProvider::default_base_url()` per known `ProviderKind`. Used
@@ -654,7 +654,7 @@ pub fn parse_kind_cli(s: &str) -> Result<ProviderKind> {
 /// Public wrapper around [`validate_canonical_tier`]; exposed for the
 /// unit tests (clap-parseable validation flows already call the inner
 /// helper via [`run_providers_add`]).
-#[allow(dead_code)]
+#[allow(dead_code)] // KEEP: thin public wrapper over `validate_canonical_tier`, retained for unit-test coverage of the CLI-facing validation surface.
 pub fn validate_tier_cli(s: &str) -> Result<&'static str> {
     validate_canonical_tier(s)
 }

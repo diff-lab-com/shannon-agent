@@ -217,8 +217,6 @@ fn dead_code_allow_keep_markers() {
         // opportunistically; this list shrinks as cleanup lands. Paths
         // are crate-relative (no leading `crates/<name>/`).
         "src/bin/gen_ts.rs:66",
-        "src/commands_providers.rs:33",
-        "src/commands_providers.rs:621",
         "src/builtin/memory.rs:134",
         "src/builtin/memory.rs:144",
         "src/builtin/memory.rs:152",
