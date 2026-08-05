@@ -52,11 +52,16 @@ pub struct ConnectedProvider {
     pub saved_path: PathBuf,
 }
 
-/// Outcome of [`ProviderConfigService::disconnect`].
+/// Outcome of [`ProviderConfigService::disconnect`] /
+/// [`ProviderConfigService::disconnect_by_slug`].
 #[derive(Debug, Clone)]
 pub struct DisconnectOutcome {
     /// `true` when there was a matching slot to remove.
     pub was_connected: bool,
+    /// `true` when the removed slot was the active target. Lets callers
+    /// distinguish "removed a non-active provider" from "removed the active
+    /// provider and none remain" — both have `next_active: None`.
+    pub was_active: bool,
     /// When disconnecting cleared the active target, the slug of the next
     /// still-connected provider to switch to (deterministic: first remaining).
     /// `None` when the active target was untouched or no providers remain.
@@ -214,8 +219,42 @@ impl ProviderConfigService {
     /// removed slot was the active selection, [`DisconnectOutcome::next_active`]
     /// names a remaining provider to switch to (the caller does the actual
     /// engine switch — a session concern).
+    /// Disconnect (remove) a provider identified by its canonical engine
+    /// slug. Delegates to [`Self::disconnect_by_slug`] after resolving the
+    /// slug via [`llm_provider_id`]. Idempotent.
+    ///
+    /// Prefer this in REPL/`/disconnect` flows that start from a resolved
+    /// [`LlmProvider`]; use [`Self::disconnect_by_slug`] when the caller only
+    /// has the raw stored id string (e.g. the CLI's `providers remove <ID>`,
+    /// where `<ID>` may be a custom slug like `glm` that does not round-trip
+    /// through [`llm_provider_id`]).
     pub fn disconnect(&mut self, provider: &LlmProvider) -> io::Result<DisconnectOutcome> {
-        let slug = llm_provider_id(provider);
+        self.disconnect_by_slug(&llm_provider_id(provider))
+    }
+
+    /// Disconnect (remove) a provider identified by its **raw stored id**
+    /// (the `ProviderProfile.id` string in `providers.toml`). This is the
+    /// string-based entry point for callers — the CLI's `providers remove
+    /// <ID>` — that know the stored id directly and must not canonicalize it
+    /// (a user who ran `providers add glm` stored `id = "glm"`, which
+    /// [`llm_provider_id`] would otherwise map back to `"zhipu"` and miss).
+    /// Idempotent: removing an unknown slug returns `was_connected: false`
+    /// and writes nothing. Persists to disk.
+    pub fn disconnect_by_slug(&mut self, slug: &str) -> io::Result<DisconnectOutcome> {
+        let mut outcome = self.disconnect_by_slug_unpersisted(slug);
+        if outcome.was_connected {
+            outcome.saved_path = Some(self.store.save()?);
+        }
+        Ok(outcome)
+    }
+
+    /// Lookup + in-memory remove + `next_active` computation, **without
+    /// persisting**. Shared by [`Self::disconnect_by_slug`] (which follows
+    /// with `save()`) and [`LockedService::disconnect_by_slug`] (which
+    /// follows with `save_locked()` because the caller already holds the
+    /// flock). Centralizes the disconnect semantics so the two persist
+    /// strategies cannot drift.
+    fn disconnect_by_slug_unpersisted(&mut self, slug: &str) -> DisconnectOutcome {
         let default = self.store.config().profiles.get("default");
         let was_connected = default
             .map(|mp| mp.providers.iter().any(|p| p.id == slug))
@@ -225,18 +264,19 @@ impl ProviderConfigService {
             .unwrap_or(false);
 
         if !was_connected {
-            return Ok(DisconnectOutcome {
+            return DisconnectOutcome {
                 was_connected: false,
+                was_active: false,
                 next_active: None,
                 saved_path: None,
-            });
+            };
         }
 
-        self.store.remove_profile(&slug);
-        let saved_path = self.store.save()?;
+        self.store.remove_profile(slug);
 
         // `remove_profile` clears `active_target` when it pointed at the
-        // removed slot; offer the first remaining slug so the REPL can switch.
+        // removed slot; offer the first remaining slug so the REPL/CLI can
+        // switch deterministically.
         let next_active = if was_active {
             self.store
                 .config()
@@ -247,11 +287,12 @@ impl ProviderConfigService {
             None
         };
 
-        Ok(DisconnectOutcome {
+        DisconnectOutcome {
             was_connected: true,
+            was_active,
             next_active,
-            saved_path: Some(saved_path),
-        })
+            saved_path: None,
+        }
     }
 
     /// Pin `active_target` at `provider` / `model` and persist.
@@ -407,44 +448,22 @@ impl<'a> LockedService<'a> {
         self.svc.store.save_locked()
     }
 
-    /// Disconnect (remove) a provider and persist. Idempotent.
+    /// Disconnect (remove) a provider and persist via `save_locked` (the
+    /// flock is already held by this guard). Delegates to
+    /// [`ProviderConfigService::disconnect_by_slug`] semantics. Idempotent.
     pub fn disconnect(&mut self, provider: &LlmProvider) -> io::Result<DisconnectOutcome> {
-        let slug = llm_provider_id(provider);
-        let default = self.svc.store.config().profiles.get("default");
-        let was_connected = default
-            .map(|mp| mp.providers.iter().any(|p| p.id == slug))
-            .unwrap_or(false);
-        let was_active = default
-            .map(|mp| mp.active_target.provider_id == slug)
-            .unwrap_or(false);
+        self.disconnect_by_slug(&llm_provider_id(provider))
+    }
 
-        if !was_connected {
-            return Ok(DisconnectOutcome {
-                was_connected: false,
-                next_active: None,
-                saved_path: None,
-            });
+    /// Disconnect by raw stored id (the CLI `providers remove <ID>` path),
+    /// persisting via `save_locked`. See
+    /// [`ProviderConfigService::disconnect_by_slug`] for the slug semantics.
+    pub fn disconnect_by_slug(&mut self, slug: &str) -> io::Result<DisconnectOutcome> {
+        let mut outcome = self.svc.disconnect_by_slug_unpersisted(slug);
+        if outcome.was_connected {
+            outcome.saved_path = Some(self.svc.store.save_locked()?);
         }
-
-        self.svc.store.remove_profile(&slug);
-        let saved_path = self.svc.store.save_locked()?;
-
-        let next_active = if was_active {
-            self.svc
-                .store
-                .config()
-                .profiles
-                .get("default")
-                .and_then(|mp| mp.providers.first().map(|p| p.id.clone()))
-        } else {
-            None
-        };
-
-        Ok(DisconnectOutcome {
-            was_connected: true,
-            next_active,
-            saved_path: Some(saved_path),
-        })
+        Ok(outcome)
     }
 
     /// Pin `active_target` at `provider` / `model` and persist.
@@ -613,8 +632,93 @@ mod tests {
         let (mut svc, _dir) = service();
         let outcome = svc.disconnect(&LlmProvider::OpenAI).unwrap();
         assert!(!outcome.was_connected);
+        assert!(!outcome.was_active);
         assert!(outcome.next_active.is_none());
         assert!(outcome.saved_path.is_none());
+    }
+
+    #[test]
+    fn disconnect_by_slug_matches_raw_stored_id() {
+        // The CLI `providers remove <ID>` path: <ID> is the raw stored id,
+        // which for a custom provider added via `upsert` may be any string
+        // (e.g. "my-gateway") that does not round-trip through
+        // `llm_provider_id`. `disconnect_by_slug` must match it directly.
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .unwrap();
+        let custom = ProviderProfile {
+            id: "my-gateway".into(),
+            kind: shannon_types::provider_config::ProviderKind::OpenAiCompatible,
+            display_name: "my-gateway".into(),
+            base_url: "https://gateway.example.com/v1".into(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: "my-gateway".into(),
+            },
+            extra_headers: std::collections::HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+        };
+        svc.upsert(custom, "gpt-4o", true).unwrap();
+        // `my-gateway` became active (make_active=true); disconnecting it by
+        // raw slug must report was_active and offer anthropic as next.
+        let outcome = svc.disconnect_by_slug("my-gateway").unwrap();
+        assert!(outcome.was_connected, "custom slug must match");
+        assert!(outcome.was_active, "custom slug was the active target");
+        assert_eq!(outcome.next_active.as_deref(), Some("anthropic"));
+        let connected = svc.connected_slugs();
+        assert!(!connected.contains("my-gateway"));
+        assert!(connected.contains("anthropic"));
+    }
+
+    #[test]
+    fn disconnect_by_slug_canonical_matches_disconnect_provider() {
+        // disconnect_by_slug(llm_provider_id(X)) must equal disconnect(&X):
+        // the provider-based path delegates to the slug-based path.
+        let (mut svc_a, _dir_a) = service();
+        let (mut svc_b, _dir_b) = service();
+        for svc in [&mut svc_a, &mut svc_b] {
+            let _ = svc
+                .connect(LlmProvider::Anthropic, None, None, true)
+                .unwrap();
+            let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+        }
+        let by_provider = svc_a.disconnect(&LlmProvider::OpenAI).unwrap();
+        let by_slug = svc_b
+            .disconnect_by_slug(&llm_provider_id(&LlmProvider::OpenAI))
+            .unwrap();
+        assert_eq!(by_provider.was_connected, by_slug.was_connected);
+        assert_eq!(by_provider.was_active, by_slug.was_active);
+        assert_eq!(by_provider.next_active, by_slug.next_active);
+    }
+
+    #[test]
+    fn disconnect_by_slug_unknown_is_idempotent_noop() {
+        let (mut svc, _dir) = service();
+        let outcome = svc.disconnect_by_slug("does-not-exist").unwrap();
+        assert!(!outcome.was_connected);
+        assert!(!outcome.was_active);
+        assert!(outcome.next_active.is_none());
+        assert!(outcome.saved_path.is_none());
+    }
+
+    #[test]
+    fn disconnect_non_active_reports_was_active_false() {
+        // Removing a non-active provider: was_active must be false so callers
+        // can skip the "no other provider remains" warning.
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .unwrap();
+        let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+        // Anthropic is NOT active (OpenAI took active). Removing anthropic:
+        let outcome = svc.disconnect(&LlmProvider::Anthropic).unwrap();
+        assert!(outcome.was_connected);
+        assert!(!outcome.was_active, "anthropic was not the active target");
+        assert!(outcome.next_active.is_none(), "active target untouched");
     }
 
     #[test]

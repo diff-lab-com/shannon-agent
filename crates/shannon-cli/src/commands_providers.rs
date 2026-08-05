@@ -16,8 +16,9 @@
 //! uses canonical keys (the schema does not have an `auto` key, and the
 //! aliases exist only as user-input sugar in `/model`).
 //!
-//! All public entry points return [`anyhow::Result`] and write only via
-//! [`ProviderConfigStore`] — no direct file I/O, no separate types.
+//! All public entry points return [`anyhow::Result`] and write through
+//! [`ProviderConfigService`] — the single semantic write path shared with the
+//! REPL's `/connect` (ADR-0008 P2-5). No direct file I/O, no separate types.
 
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -559,10 +560,13 @@ pub struct RemoveProviderArgs {
     pub id: String,
 }
 
-/// Run `shannon providers remove <ID>`.
-///
 /// Validate and apply the remove. Returns whether the removed slot was the
 /// active target. **Does not persist** — that's the caller's job.
+///
+/// Test-only seam for asserting store-level `remove_profile` behavior without
+/// disk I/O. The production path [`run_providers_remove`] routes through
+/// [`ProviderConfigService::disconnect_by_slug`] instead (ADR-0008 P2-5).
+#[cfg(test)]
 pub fn apply_provider_remove(
     store: &mut ProviderConfigStore,
     args: &RemoveProviderArgs,
@@ -583,28 +587,60 @@ pub fn apply_provider_remove(
     Ok(was_active)
 }
 
-/// Removes the provider slot (engine behaviour: when the active profile is
-/// removed, `active_target` is cleared by [`ProviderConfigStore::remove_profile`]).
-/// Returns the boolean "was this the active target?" — surfaced as a
-/// stderr warning so the user knows to pick a different provider.
+/// Removes the provider slot by routing through the single semantic write
+/// path — [`ProviderConfigService::disconnect_by_slug`] (ADR-0008 P2-5).
+///
+/// `<ID>` is the raw stored id (`ProviderProfile.id`), which may be a custom
+/// slug like `glm` that does not round-trip through `LlmProvider` →
+/// [`ProviderConfigService::disconnect`] (that method canonicalizes `glm` →
+/// `zhipu` and would miss). `disconnect_by_slug` matches the raw string
+/// directly.
+///
+/// Prints the outcome: which file was written, and — when the removed slot
+/// was the active target — the next still-connected provider the engine will
+/// fall back to (or a synthesis-mode warning when none remain).
 pub fn run_providers_remove(
     store: &mut ProviderConfigStore,
     args: &RemoveProviderArgs,
-) -> Result<bool> {
+) -> Result<()> {
     let id = args.id.trim();
     if id.is_empty() {
         bail!("provider id cannot be empty");
     }
 
-    let was_active = apply_provider_remove(store, args)?;
-
-    let saved_path = store
-        .save()
+    // Hand the already-loaded store to the service so the write goes through
+    // the one semantic path. `mem::take` lets us move the store into the
+    // service and recover it afterward without a clone — same pattern as
+    // `run_providers_add`.
+    let mut svc = ProviderConfigService::from_store(std::mem::take(store));
+    let outcome = svc
+        .disconnect_by_slug(id)
         .with_context(|| "failed to persist providers.toml")?;
+    *store = svc.into_inner();
 
-    println!("Removed provider {id}");
-    println!("  Persisted to: {}", saved_path.display());
-    Ok(was_active)
+    if !outcome.was_connected {
+        // Idempotent: unknown id is a no-op (historical behavior), but surface
+        // it so the user knows the remove did not match anything.
+        println!("Provider {id} was not found in providers.toml (no change)");
+        return Ok(());
+    }
+
+    if let Some(path) = &outcome.saved_path {
+        println!("Removed provider {id}");
+        println!("  Persisted to: {}", path.display());
+    }
+    if outcome.was_active {
+        match &outcome.next_active {
+            Some(next) => println!("  Active target switched to: {next}"),
+            None => eprintln!(
+                "warning: removed provider was the active target; \
+                 no other connected provider remains, so the engine will \
+                 fall back to synthesis on the next request. \
+                 Run `shannon list-providers` to confirm."
+            ),
+        }
+    }
+    Ok(())
 }
 
 // ── Pure helpers exposed for tests ──────────────────────────────────────
