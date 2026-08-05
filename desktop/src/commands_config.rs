@@ -74,6 +74,9 @@ async fn land_profile_in_engine_store(
             .lock()
             .map_err(|e| format!("could not lock providers.toml: {e}"))?;
         locked
+            .reload_locked()
+            .map_err(|e| format!("could not reload providers.toml: {e}"))?;
+        locked
             .upsert(profile, model_id, true)
             .map_err(|e| format!("could not persist to providers.toml: {e}"))?;
     }
@@ -194,6 +197,9 @@ async fn remove_profile_from_engine_store(
             .lock()
             .map_err(|e| format!("could not lock providers.toml: {e}"))?;
         locked
+            .reload_locked()
+            .map_err(|e| format!("could not reload providers.toml: {e}"))?;
+        locked
             .disconnect_by_slug(profile_id)
             .map_err(|e| format!("could not persist to providers.toml: {e}"))?;
     }
@@ -258,6 +264,9 @@ pub async fn configure(
                     let mut locked = svc
                         .lock()
                         .map_err(|e| format!("could not lock providers.toml: {e}"))?;
+                    locked
+                        .reload_locked()
+                        .map_err(|e| format!("could not reload providers.toml: {e}"))?;
                     locked
                         .set_active(&provider, &new_model_id)
                         .map_err(|e| format!("could not persist providers.toml: {e}"))?;
@@ -353,6 +362,9 @@ pub async fn configure(
                     let mut locked = svc
                         .lock()
                         .map_err(|e| format!("could not lock providers.toml: {e}"))?;
+                    locked
+                        .reload_locked()
+                        .map_err(|e| format!("could not reload providers.toml: {e}"))?;
                     // make_active = true matches the prior
                     // `upsert_profile` side effect of pinning the
                     // active target; the profile being rewritten is
@@ -401,6 +413,9 @@ pub async fn configure(
                     let mut locked = svc
                         .lock()
                         .map_err(|e| format!("could not lock providers.toml: {e}"))?;
+                    locked
+                        .reload_locked()
+                        .map_err(|e| format!("could not reload providers.toml: {e}"))?;
                     locked
                         .set_active(&provider, &model_id)
                         .map_err(|e| format!("could not persist providers.toml: {e}"))?;

@@ -107,6 +107,14 @@ impl ProviderConfigService {
         Self { store }
     }
 
+    /// Borrow the underlying store for read-only access. Callers inside a
+    /// [`LockedService`] critical section use this to read the post-reload
+    /// state — the desktop's `configure()` arms identify the active
+    /// provider on the freshest committed snapshot this way.
+    pub fn store(&self) -> &ProviderConfigStore {
+        &self.store
+    }
+
     /// Slugs currently connected — read from the in-memory config the service
     /// holds (no extra disk read).
     pub fn connected_slugs(&self) -> HashSet<String> {
@@ -138,26 +146,9 @@ impl ProviderConfigService {
         base_url: Option<&str>,
         make_active: bool,
     ) -> io::Result<ConnectedProvider> {
-        let provider_id = llm_provider_id(&provider);
-        let profile = build_profile_for_provider(&provider, base_url);
-        let model_id = model
-            .map(|s| s.to_string())
-            .or_else(|| {
-                models_for_provider(provider.clone())
-                    .first()
-                    .map(|m| m.id.to_string())
-            })
-            .unwrap_or_else(|| "default".to_string());
-
-        self.upsert_profile_with_active(profile, &model_id, make_active);
-
-        let saved_path = self.store.save()?;
-        Ok(ConnectedProvider {
-            provider,
-            model_id,
-            service: provider_id,
-            saved_path,
-        })
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.connect(provider, model, base_url, make_active)
     }
 
     /// Insert or replace a fully-built [`ProviderProfile`] — the entry point
@@ -173,8 +164,9 @@ impl ProviderConfigService {
         model_id: &str,
         make_active: bool,
     ) -> io::Result<PathBuf> {
-        self.upsert_profile_with_active(profile, model_id, make_active);
-        self.store.save()
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.upsert(profile, model_id, make_active)
     }
 
     /// Upsert + `active_target` handling, without persisting. Shared by
@@ -229,7 +221,9 @@ impl ProviderConfigService {
     /// where `<ID>` may be a custom slug like `glm` that does not round-trip
     /// through [`llm_provider_id`]).
     pub fn disconnect(&mut self, provider: &LlmProvider) -> io::Result<DisconnectOutcome> {
-        self.disconnect_by_slug(&llm_provider_id(provider))
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.disconnect(provider)
     }
 
     /// Disconnect (remove) a provider identified by its **raw stored id**
@@ -241,19 +235,17 @@ impl ProviderConfigService {
     /// Idempotent: removing an unknown slug returns `was_connected: false`
     /// and writes nothing. Persists to disk.
     pub fn disconnect_by_slug(&mut self, slug: &str) -> io::Result<DisconnectOutcome> {
-        let mut outcome = self.disconnect_by_slug_unpersisted(slug);
-        if outcome.was_connected {
-            outcome.saved_path = Some(self.store.save()?);
-        }
-        Ok(outcome)
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.disconnect_by_slug(slug)
     }
 
     /// Lookup + in-memory remove + `next_active` computation, **without
-    /// persisting**. Shared by [`Self::disconnect_by_slug`] (which follows
-    /// with `save()`) and [`LockedService::disconnect_by_slug`] (which
+    /// persisting**. Used by [`LockedService::disconnect_by_slug`] (which
     /// follows with `save_locked()` because the caller already holds the
-    /// flock). Centralizes the disconnect semantics so the two persist
-    /// strategies cannot drift.
+    /// flock). The bare [`Self::disconnect_by_slug`] delegates to that
+    /// locked path (lock → reload → here → `save_locked`), so the
+    /// disconnect semantics live in one place.
     fn disconnect_by_slug_unpersisted(&mut self, slug: &str) -> DisconnectOutcome {
         let default = self.store.config().profiles.get("default");
         let was_connected = default
@@ -297,8 +289,9 @@ impl ProviderConfigService {
 
     /// Pin `active_target` at `provider` / `model` and persist.
     pub fn set_active(&mut self, provider: &LlmProvider, model: &str) -> io::Result<PathBuf> {
-        self.store.set_active(provider, model);
-        self.store.save()
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.set_active(provider, model)
     }
 
     /// Set a per-tier model override on `provider` and persist.
@@ -308,8 +301,9 @@ impl ProviderConfigService {
         tier: TierName,
         model: &str,
     ) -> io::Result<PathBuf> {
-        self.store.set_tier(provider, tier, model);
-        self.store.save()
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.set_tier(provider, tier, model)
     }
 
     /// Set or clear (`None`) the per-provider `default_max_tokens` and persist.
@@ -318,8 +312,9 @@ impl ProviderConfigService {
         provider: &LlmProvider,
         max_tokens: Option<u32>,
     ) -> io::Result<PathBuf> {
-        self.store.set_default_max_tokens(provider, max_tokens);
-        self.store.save()
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.set_max_tokens(provider, max_tokens)
     }
 
     /// Hand back the underlying store for callers that need raw access
@@ -334,11 +329,13 @@ impl ProviderConfigService {
     /// `LockedService` is dropped.
     ///
     /// This is the **only** public entry point that exposes the
-    /// cross-process flock. The bare `connect` / `upsert` /
-    /// `disconnect` / `set_active` / `set_tier` / `set_max_tokens`
-    /// methods all acquire the flock internally and would deadlock
-    /// (Linux: hang, macOS: `EDEADLK`) if called after `lock()` until
-    /// the returned guard is dropped.
+    /// cross-process flock directly. The bare `connect` / `upsert` /
+    /// `disconnect` / `disconnect_by_slug` / `set_active` / `set_tier` /
+    /// `set_max_tokens` methods all route through this (lock → reload →
+    /// mutate → `save_locked`), so they would deadlock (Linux: hang,
+    /// macOS: `EDEADLK`) if called after `lock()` until the returned
+    /// guard is dropped — use the [`LockedService`] equivalents inside a
+    /// held lock.
     ///
     /// **Lock-ordering contract (P2-2 S1-1)**: when also holding a
     /// process-internal mutex on the `ProviderConfigStore` (the
@@ -401,6 +398,21 @@ impl<'a> LockedService<'a> {
     /// methods below which combine mutate + persist.
     pub fn service_mut(&mut self) -> &mut ProviderConfigService {
         self.svc
+    }
+
+    /// Re-read `providers.toml` from disk into the in-memory store,
+    /// applying any committed writes from other processes / front-ends.
+    /// The caller already holds the flock via this guard, so the on-disk
+    /// state is consistent. Call immediately after
+    /// [`ProviderConfigService::lock`] (before mutating) so the
+    /// subsequent mutate + save composes on the freshest committed state
+    /// — the fix for the load-then-lock stale-read window that would
+    /// otherwise lose updates across processes.
+    ///
+    /// Always returns `Ok`; see [`ProviderConfigStore::reload_locked`]
+    /// for the graceful-degradation contract.
+    pub fn reload_locked(&mut self) -> io::Result<()> {
+        self.svc.store.reload_locked()
     }
 
     /// Connect (upsert) a provider and persist. The flock is held

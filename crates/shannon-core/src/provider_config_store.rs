@@ -345,6 +345,38 @@ impl ProviderConfigStore {
         self.last_path.as_deref()
     }
 
+    /// Re-read `providers.toml` from the pinned
+    /// [`last_path`](Self::last_path) into this store, replacing the
+    /// in-memory config. **The caller MUST already hold the flock** on
+    /// that path (or be the sole writer) — this deliberately skips
+    /// re-locking because `flock(2)` is not reentrant across distinct
+    /// fds on the same inode (see [`Self::load_or_default_at`]).
+    ///
+    /// This is the read-side half of lock-then-reload: call it inside a
+    /// [`ProviderConfigService::lock`] critical section (before mutating)
+    /// so the subsequent mutate + save composes on the freshest committed
+    /// state. Without it, a `ProviderConfigStore` loaded before acquiring
+    /// the flock holds a snapshot that may be older than another
+    /// process's committed write, and saving would clobber that write
+    /// (lost update).
+    ///
+    /// Graceful: when no path is pinned, or the file is absent /
+    /// unreadable, the in-memory config is left untouched (no worse than
+    /// not reloading). Always returns `Ok` — a transient read failure
+    /// surfaces as "kept the prior snapshot", which composes safely with
+    /// the caller's mutate + save.
+    pub fn reload_locked(&mut self) -> io::Result<()> {
+        if let Some(path) = &self.last_path {
+            // `load` returns None for both "absent" and "parse error";
+            // either way we keep the in-memory snapshot rather than
+            // clobbering it with an empty config.
+            if let Some(cfg) = load(Some(path)) {
+                self.config = cfg;
+            }
+        }
+        Ok(())
+    }
+
     /// Get-or-create the profile for the given provider, mutating the
     /// `"default"` [`shannon_types::provider_config::ModelProfile`] in place.
     ///
