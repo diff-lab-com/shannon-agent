@@ -60,16 +60,50 @@ fn connection_to_profile(
 /// store is moved out of the guard for the R-M-W round-trip and
 /// restored on completion so concurrent desktop commands can't clobber
 /// each other or a concurrent `shannon providers add` CLI invocation.
+/// Hold the process-internal `AppState::provider_store` mutex, move the
+/// store into a temporary [`ProviderConfigService`], run `f` on it, and
+/// **always** restore the store into the guard — even when `f` returns
+/// `Err` — so a failed write cannot leave the in-process snapshot empty
+/// for the rest of the session.
+///
+/// `f` receives `&mut ProviderConfigService` and is expected to do the
+/// `lock → reload_locked → mutate → save_locked` R-M-W (the lock-then-
+/// reload sequence that prevents cross-process lost updates); this
+/// helper owns only the mutex hold and the take/restore. `f` may also
+/// read via `svc.store()` before locking (e.g. to resolve the active
+/// provider within the same critical section, as `configure('model')`
+/// does).
+///
+/// **Lock ordering (ADR-0008 / P2-2 S1-1)**: this acquires the
+/// process-internal `provider_store` mutex first; `f` then acquires the
+/// cross-process `flock` via `ProviderConfigService::lock`. Mutex-then-
+/// flock is the contract on `lock` — reverse order deadlocks against
+/// the in-process mutex. Concurrent desktop commands serialize on the
+/// mutex; a concurrent `shannon providers add` CLI invocation serializes
+/// on the flock and reloads its committed state inside the lock.
+async fn with_engine_store<R, F>(state: &tauri::State<'_, AppState>, f: F) -> Result<R, String>
+where
+    F: FnOnce(&mut ProviderConfigService) -> Result<R, String>,
+{
+    let mut guard = state.provider_store.lock().await;
+    let store = std::mem::take(&mut *guard);
+    let mut svc = ProviderConfigService::from_store(store);
+    let result = f(&mut svc);
+    // Unconditional restore: even on Err the guard gets the (post-reload,
+    // possibly post-mutation) in-memory snapshot rather than the empty
+    // default left by `mem::take`. The on-disk file is the source of
+    // truth and the next writer re-reads it via `reload_locked`.
+    *guard = svc.into_inner();
+    result
+}
+
 async fn land_profile_in_engine_store(
     state: &tauri::State<'_, AppState>,
     conn: &ProviderConnection,
     model_id: &str,
 ) -> Result<(), String> {
     let profile = connection_to_profile(conn);
-    let mut guard = state.provider_store.lock().await;
-    let store = std::mem::take(&mut *guard);
-    let mut svc = ProviderConfigService::from_store(store);
-    {
+    with_engine_store(state, |svc| {
         let mut locked = svc
             .lock()
             .map_err(|e| format!("could not lock providers.toml: {e}"))?;
@@ -78,10 +112,10 @@ async fn land_profile_in_engine_store(
             .map_err(|e| format!("could not reload providers.toml: {e}"))?;
         locked
             .upsert(profile, model_id, true)
-            .map_err(|e| format!("could not persist to providers.toml: {e}"))?;
-    }
-    *guard = svc.into_inner();
-    Ok(())
+            .map_err(|e| format!("could not persist to providers.toml: {e}"))
+            .map(|_| ())
+    })
+    .await
 }
 
 /// Look up the active provider's id and kind in the engine
@@ -189,10 +223,7 @@ async fn remove_profile_from_engine_store(
     state: &tauri::State<'_, AppState>,
     profile_id: &str,
 ) -> Result<(), String> {
-    let mut guard = state.provider_store.lock().await;
-    let store = std::mem::take(&mut *guard);
-    let mut svc = ProviderConfigService::from_store(store);
-    {
+    with_engine_store(state, |svc| {
         let mut locked = svc
             .lock()
             .map_err(|e| format!("could not lock providers.toml: {e}"))?;
@@ -201,10 +232,10 @@ async fn remove_profile_from_engine_store(
             .map_err(|e| format!("could not reload providers.toml: {e}"))?;
         locked
             .disconnect_by_slug(profile_id)
-            .map_err(|e| format!("could not persist to providers.toml: {e}"))?;
-    }
-    *guard = svc.into_inner();
-    Ok(())
+            .map_err(|e| format!("could not persist to providers.toml: {e}"))
+            .map(|_| ())
+    })
+    .await
 }
 
 /// Configuration update payload.
@@ -242,38 +273,26 @@ pub async fn configure(
             // (`send_message`, `get_status`, etc.) sees the new model
             // on the next read.
             let new_model_id = update.value.clone();
-            let kind_str = {
-                let mut guard = state.provider_store.lock().await;
-                let (_, kind_str) = active_provider_id_and_kind(&guard).ok_or_else(|| {
+            let kind_str = with_engine_store(&state, |svc| {
+                let (_, kind_str) = active_provider_id_and_kind(svc.store()).ok_or_else(|| {
                     "configure('model'): no active provider — add one in Settings → Models first"
                         .to_string()
                 })?;
                 let provider = llm_provider_for_active_mirror(&kind_str).ok_or_else(|| {
                     format!("configure('model'): unsupported active kind `{kind_str}`")
                 })?;
-                // Route through ProviderConfigService (ADR-0008 P2-5
-                // Decision 3 single write path). This also closes a
-                // latent gap: the old bare `store.save()` held the
-                // in-process mutex but no cross-process flock, so a
-                // concurrent CLI write could tear the file. `svc.lock()`
-                // acquires the flock; mutex-then-flock ordering is the
-                // contract documented on `ProviderConfigService::lock`.
-                let store = std::mem::take(&mut *guard);
-                let mut svc = ProviderConfigService::from_store(store);
-                {
-                    let mut locked = svc
-                        .lock()
-                        .map_err(|e| format!("could not lock providers.toml: {e}"))?;
-                    locked
-                        .reload_locked()
-                        .map_err(|e| format!("could not reload providers.toml: {e}"))?;
-                    locked
-                        .set_active(&provider, &new_model_id)
-                        .map_err(|e| format!("could not persist providers.toml: {e}"))?;
-                }
-                *guard = svc.into_inner();
-                kind_str
-            };
+                let mut locked = svc
+                    .lock()
+                    .map_err(|e| format!("could not lock providers.toml: {e}"))?;
+                locked
+                    .reload_locked()
+                    .map_err(|e| format!("could not reload providers.toml: {e}"))?;
+                locked
+                    .set_active(&provider, &new_model_id)
+                    .map_err(|e| format!("could not persist providers.toml: {e}"))?;
+                Ok(kind_str)
+            })
+            .await?;
             rebuild_client_config_from_store(&state).await?;
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
@@ -354,27 +373,21 @@ pub async fn configure(
                 (active_id, model_id, profile)
             };
             profile.base_url = new_url.clone();
-            {
-                let mut guard = state.provider_store.lock().await;
-                let store = std::mem::take(&mut *guard);
-                let mut svc = ProviderConfigService::from_store(store);
-                {
-                    let mut locked = svc
-                        .lock()
-                        .map_err(|e| format!("could not lock providers.toml: {e}"))?;
-                    locked
-                        .reload_locked()
-                        .map_err(|e| format!("could not reload providers.toml: {e}"))?;
-                    // make_active = true matches the prior
-                    // `upsert_profile` side effect of pinning the
-                    // active target; the profile being rewritten is
-                    // already the active one anyway.
-                    locked
-                        .upsert(profile, &model_id, true)
-                        .map_err(|e| format!("could not persist providers.toml: {e}"))?;
-                }
-                *guard = svc.into_inner();
-            }
+            with_engine_store(&state, |svc| {
+                let mut locked = svc
+                    .lock()
+                    .map_err(|e| format!("could not lock providers.toml: {e}"))?;
+                locked
+                    .reload_locked()
+                    .map_err(|e| format!("could not reload providers.toml: {e}"))?;
+                // make_active = true matches the prior `upsert_profile`
+                // side effect of pinning the active target; the profile
+                // being rewritten is already the active one anyway.
+                locked
+                    .upsert(profile, &model_id, true)
+                    .map_err(|e| format!("could not persist providers.toml: {e}"))
+            })
+            .await?;
             rebuild_client_config_from_store(&state).await?;
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
@@ -405,23 +418,18 @@ pub async fn configure(
             };
             let provider = llm_provider_for_active_mirror(&kind_str)
                 .ok_or_else(|| format!("configure('provider'): unsupported kind `{kind_str}`"))?;
-            {
-                let mut guard = state.provider_store.lock().await;
-                let store = std::mem::take(&mut *guard);
-                let mut svc = ProviderConfigService::from_store(store);
-                {
-                    let mut locked = svc
-                        .lock()
-                        .map_err(|e| format!("could not lock providers.toml: {e}"))?;
-                    locked
-                        .reload_locked()
-                        .map_err(|e| format!("could not reload providers.toml: {e}"))?;
-                    locked
-                        .set_active(&provider, &model_id)
-                        .map_err(|e| format!("could not persist providers.toml: {e}"))?;
-                }
-                *guard = svc.into_inner();
-            }
+            with_engine_store(&state, |svc| {
+                let mut locked = svc
+                    .lock()
+                    .map_err(|e| format!("could not lock providers.toml: {e}"))?;
+                locked
+                    .reload_locked()
+                    .map_err(|e| format!("could not reload providers.toml: {e}"))?;
+                locked
+                    .set_active(&provider, &model_id)
+                    .map_err(|e| format!("could not persist providers.toml: {e}"))
+            })
+            .await?;
             rebuild_client_config_from_store(&state).await?;
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
