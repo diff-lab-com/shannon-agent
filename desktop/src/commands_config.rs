@@ -2316,4 +2316,52 @@ mod tests {
         assert_eq!(provider_kind_slug(&K::Deepseek), "deepseek");
         assert_eq!(provider_kind_slug(&K::Gemini), "gemini");
     }
+
+    // ── C1: read path is single-sourced from the engine store ──────────
+    //
+    // `providers_file_from_store` is the entire read side of
+    // `list_providers`. Its signature takes only `&ProviderConfigStore`
+    // — there is no `providers.json` parameter, so the legacy
+    // write-through cache CANNOT influence the UI's provider list or
+    // active id. These tests pin that property: if someone later
+    // threads a providers.json handle into the read path, the signature
+    // change breaks these tests (and the contract on `list_providers`).
+
+    #[test]
+    fn providers_file_from_store_reports_active_id_from_engine_store() {
+        let store = store_with_single_anthropic_profile("anthropic-main", "claude-opus-4-8");
+        let file = providers_file_from_store(&store);
+        assert_eq!(
+            file.active_provider_id.as_deref(),
+            Some("anthropic-main"),
+            "active_provider_id must come from the engine store's active_target, \
+             not from ~/.shannon/desktop/providers.json",
+        );
+        assert_eq!(file.providers.len(), 1);
+        assert_eq!(file.providers[0].id, "anthropic-main");
+    }
+
+    #[test]
+    fn providers_file_from_store_returns_none_when_no_active_target() {
+        let store = shannon_core::provider_config_store::ProviderConfigStore::default();
+        let file = providers_file_from_store(&store);
+        assert!(
+            file.active_provider_id.is_none(),
+            "an empty engine store must surface no active provider — the legacy \
+             providers.json must not fill in a stale id",
+        );
+        assert!(file.providers.is_empty());
+    }
+
+    #[test]
+    fn providers_file_from_store_reflects_active_profile_removal() {
+        let mut store = store_with_single_anthropic_profile("anthropic-main", "claude-opus-4-8");
+        store.remove_profile("anthropic-main");
+        let file = providers_file_from_store(&store);
+        assert!(
+            file.active_provider_id.is_none(),
+            "removing the active profile must clear the surfaced active id on read",
+        );
+        assert!(file.providers.is_empty());
+    }
 }
