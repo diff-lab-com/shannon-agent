@@ -1093,35 +1093,17 @@ mod tests {
         }
     }
 
-    /// L4: After `lock()` returns, calling a non-RAII mutating method
-    /// on the same service (`connect` / `disconnect` / `upsert` / ...)
-    /// would try to acquire the flock again. The Linux `flock(2)`
-    /// semantics deadlock the calling thread (the guard holds the
-    /// same `flock(LOCK_EX)` on the same lockfile).
+    /// L4 (hazard, documented on `lock()`): the bare mutators route
+    /// through `lock()` themselves, so calling one while a
+    /// [`LockedService`] guard is alive re-enters the flock and
+    /// deadlocks (Linux: hang; macOS: `EDEADLK`). There is no
+    /// non-hanging assertion to make here, and a `#[ignore]`d test
+    /// that never runs in CI provides no regression protection — the
+    /// hazard is pinned by the `lock()` docstring and the bare-method
+    /// routing is covered by the E2E tests in
+    /// `tests/provider_cross_process_consistency.rs`. Use the
+    /// `LockedService` equivalents inside a held lock.
     ///
-    /// We DO NOT assert "deadlock" — that's a hang. We assert the
-    /// **call shape**: with a held `LockedService`, the bare mutators
-    /// are still callable from the same thread (they go through the
-    /// store's `save()` which re-acquires the flock on the same fd
-    /// and is documented to deadlock on Linux / EDEADLK on macOS).
-    /// This test exists to pin the contract; the run-time
-    /// `concurrent_lock_does_not_starve_others` test below is the
-    /// E2E that exercises the actual lock interaction.
-    #[test]
-    #[ignore = "would deadlock on Linux; run manually with `cargo test -- --ignored`"]
-    fn nested_lock_attempt_deadlocks_as_documented() {
-        let (mut svc, _dir) = service();
-        let _outer = svc.lock().expect("outer lock");
-        // Intentionally call the bare mutator while outer is still alive.
-        // This will hang (Linux) or return EDEADLK (macOS) on the
-        // `acquire_exclusive_lock` inside `self.store.save()`. The test
-        // is `#[ignore]`d; running it manually confirms the documented
-        // behavior and is the canary for any future refactor that
-        // accidentally allows nested locks.
-        let _ = svc.disconnect(&LlmProvider::Anthropic);
-        panic!("should not reach here if the lock behavior is correct");
-    }
-
     /// L5: two threads racing on the same service+path each
     /// acquire-release cleanly. The RAII guard must release the flock
     /// when dropped so a second thread can proceed.
