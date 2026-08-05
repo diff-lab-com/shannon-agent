@@ -1,11 +1,41 @@
 //! `ProviderConfigService` — the single semantic write path for
 //! `~/.shannon/providers.toml` (ADR-0008 Decision 3 / P2-5).
 //!
-//! Both REPL commands (`/connect`, `/disconnect`) and the CLI
-//! (`shannon providers add`) route through this service so the two front-ends
-//! cannot diverge on the on-disk shape again. It is a thin layer *over*
-//! [`crate::provider_config_store::ProviderConfigStore`], which keeps its raw
-//! mutators for the desktop and tests.
+//! All three front-ends — the REPL (`/connect`, `/disconnect`,
+//! `/model --save`), the CLI (`shannon providers add` / `remove`), and
+//! the desktop (`configure()`) — route writes through this service so
+//! they cannot diverge on the on-disk shape or clobber each other.
+//!
+//! ## Concurrency model (P2-2 S1-1 / S1-4)
+//!
+//! Two locks guard every write:
+//! 1. **In-process** — `tokio::sync::Mutex<ProviderConfigStore>` in the
+//!    desktop's `AppState` (the CLI and REPL are single-writer per
+//!    invocation, so they skip this layer).
+//! 2. **Cross-process** — `flock(LOCK_EX)` on a `<providers.toml>.lock`
+//!    sidecar, acquired by [`ProviderConfigService::lock`].
+//!
+//! The desktop takes them in that order (mutex → flock); reverse order
+//! deadlocks. `lock` returns a [`LockedService`] RAII guard that
+//! releases the flock on drop.
+//!
+//! **Lock-then-reload (the lost-update fix).** A snapshot read at
+//! construction time goes stale if another writer commits before this
+//! service acquires the flock, so every write does
+//! `lock → reload_locked → mutate → save_locked` — re-reading inside the
+//! flock so each writer composes on the freshest committed state rather
+//! than overwriting it. The seven bare methods (`connect` / `upsert` /
+//! `disconnect` / `disconnect_by_slug` / `set_active` / `set_tier` /
+//! `set_max_tokens`) bake this sequence in, so single-mutation callers
+//! need no explicit locking; batched or custom read-modify-write (the
+//! desktop's `configure()` arms) calls `lock` +
+//! [`LockedService::reload_locked`] directly. The property is pinned by
+//! `tests/provider_cross_process_consistency.rs`.
+//!
+//! [`crate::provider_config_store::ProviderConfigStore`] keeps its raw
+//! mutators as the implementation layer the service composes over;
+//! production code reaches them through the service (or a
+//! `LockedService`), not directly.
 //!
 //! ## What changed and why
 //!
@@ -18,8 +48,9 @@
 //!
 //! ## Scope boundary
 //!
-//! The service owns the load → mutate → persist sequence for one user intent
-//! (connect / disconnect / set-active / set-tier / set-max-tokens). It does
+//! The service owns the lock → reload → mutate → persist sequence for one
+//! user intent (connect / disconnect / set-active / set-tier /
+//! set-max-tokens). It does
 //! **not** own the API key (that stays in the credential store, decision A1)
 //! or the running engine (callers do `apply_model_selection` +
 //! `reload_credential`). Keeping persistence separate from session/runtime
