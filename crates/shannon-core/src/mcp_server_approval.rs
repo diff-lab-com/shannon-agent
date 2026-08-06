@@ -530,7 +530,7 @@ impl McpApprovalManager {
         std::fs::write(path, json)
     }
 
-    /// Load approval state from a file previously written by [`save_to_file`].
+    /// Load approval state from a file previously written by `save_to_file`.
     ///
     /// Merges the file's state into the current manager. Returns `Ok(())` if
     /// the file doesn't exist (no previously saved state).

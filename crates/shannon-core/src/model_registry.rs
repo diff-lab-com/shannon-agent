@@ -10,7 +10,7 @@
 use shannon_engine::api::LlmProvider;
 
 /// Dynamic (models.dev) catalog layer — live models fetched on `/model
-/// refresh`, cached offline, merged additively over [`MODEL_CATALOG`].
+/// refresh`, cached offline, merged additively over `MODEL_CATALOG`.
 pub mod dynamic;
 
 // ── Submodules (ADR-0008 P2-8 — split oversized model_registry.rs) ──
@@ -54,7 +54,7 @@ pub fn merge_static_and_dynamic(provider: LlmProvider, dynamic: &[ModelInfo]) ->
 }
 
 /// Models for a provider from the **merged** catalog: the static
-/// [`MODEL_CATALOG`] augmented by the models.dev dynamic overlay (Phase D).
+/// `MODEL_CATALOG` augmented by the models.dev dynamic overlay (Phase D).
 ///
 /// Lazily seeds the overlay from the on-disk cache on first use — never
 /// touching the network — so this is safe to call offline and in CI. Static
@@ -143,7 +143,7 @@ pub fn available_providers() -> Vec<LlmProvider> {
 /// "no restriction"). `SHANNON_ENABLED_PROVIDERS` takes precedence — when
 /// both are set, the disable list is applied within the enable set.
 ///
-/// Pure (reads env via [`parse_provider_slugs_env`] only); unit-tested
+/// Pure (reads env via `parse_provider_slugs_env` only); unit-tested
 /// below.
 pub fn env_provider_allowlist() -> Option<Vec<String>> {
     let enabled = parse_provider_slugs_env("SHANNON_ENABLED_PROVIDERS");

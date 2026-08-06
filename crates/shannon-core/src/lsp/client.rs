@@ -472,7 +472,7 @@ impl LspClient {
 
     /// Open a document in the server's workspace via `textDocument/didOpen`.
     /// Most servers publish diagnostics asynchronously shortly after this
-    /// notification — follow up with [`collect_diagnostics`] to drain them.
+    /// notification — follow up with `collect_diagnostics` to drain them.
     pub async fn did_open(&mut self, uri: &Url, language_id: &str, content: &str) -> LspResult<()> {
         let params = json!({
             "textDocument": {

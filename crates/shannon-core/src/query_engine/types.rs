@@ -224,7 +224,7 @@ const DEFAULT_PRICING_FALLBACK: ModelPricing = ModelPricing {
 /// Lazily-built pricing table: merge the canonical catalog with runtime overrides.
 static PRICING_TABLE: Lazy<HashMap<String, ModelPricing>> = Lazy::new(build_pricing_table);
 
-/// Seed pricing entries from the canonical [`MODEL_CATALOG`].
+/// Seed pricing entries from the canonical `MODEL_CATALOG`.
 ///
 /// Each model contributes its canonical `id` plus every alias, so both exact
 /// and substring lookups resolve to the curated catalog price. This makes the
@@ -339,7 +339,7 @@ fn find_pricing(model: &str) -> Option<&ModelPricing> {
     None
 }
 
-/// Like [`find_pricing`] but owned and public, for display code that must
+/// Like `find_pricing` but owned and public, for display code that must
 /// distinguish a *known* price (catalog/override) from an *estimate*
 /// (dynamic/custom models with no pricing entry).
 ///

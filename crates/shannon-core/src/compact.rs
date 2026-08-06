@@ -30,7 +30,7 @@
 //! [`Selector::recommend`] inspects the candidate message list and decides
 //! which strategy is appropriate. The heuristics:
 //!
-//! 1. **Below threshold** → return [`SelectorOutcome::NoOp`].
+//! 1. **Below threshold** → return `SelectorOutcome::NoOp`.
 //! 2. **High token density, low message count** →
 //!    [`Strategy::TokenBased`] (cheap, lossless on system + recent).
 //! 3. **High message count or code-heavy tail** →

@@ -13,8 +13,8 @@ use std::path::PathBuf;
 /// P1.2-B (ADR-0005): the legacy singular `provider` / `api_key` /
 /// `base_url` / `model` fields were removed — the engine
 /// `ProviderConfigStore` is now the single source of truth for those
-/// values (see [`crate::commands::AppState::provider_store`] and
-/// [`crate::commands::AppState::build_client_config`]). Persisted
+/// values (see `crate::commands::AppState::provider_store` and
+/// `crate::commands::AppState::build_client_config`). Persisted
 /// `desktop/config.json` from older installs may still carry them, but
 /// they are silently ignored on load (no field to deserialize into) and
 /// never written back out.

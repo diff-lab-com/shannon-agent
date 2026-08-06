@@ -45,11 +45,11 @@ pub struct UsageStore {
 }
 
 /// Once the on-disk ledger exceeds this size it is trimmed to
-/// [`KEEP_RECORDS`]. Sized so a low-volume desktop rotates rarely.
+/// `KEEP_RECORDS`. Sized so a low-volume desktop rotates rarely.
 const ROTATE_AT_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Records retained after a rotation (the most recent ones). Their typical
-/// on-disk size sits well below [`ROTATE_AT_BYTES`], giving hysteresis so
+/// on-disk size sits well below `ROTATE_AT_BYTES`, giving hysteresis so
 /// rotation does not fire on every append.
 const KEEP_RECORDS: usize = 30_000;
 
@@ -104,8 +104,8 @@ impl UsageStore {
             .collect()
     }
 
-    /// Trim the ledger to the most recent [`KEEP_RECORDS`] entries once it
-    /// exceeds [`ROTATE_AT_BYTES`]. Idempotent and a no-op below the
+    /// Trim the ledger to the most recent `KEEP_RECORDS` entries once it
+    /// exceeds `ROTATE_AT_BYTES`. Idempotent and a no-op below the
     /// threshold. Best-effort by contract: callers (append) ignore the
     /// result so rotation can never break a successful append. The rewrite
     /// is atomic (temp file + rename in the same directory); a single-process
@@ -313,7 +313,7 @@ const SCHEDULED_LABEL: &str = "Scheduled tasks";
 /// Map a scheduled-routine run onto a usage record. Scheduled runs track a
 /// single lump `token_usage` (no input/output/cache split) and no
 /// model/provider, so the lump is counted under `input_tokens` and both
-/// attribution fields fall back to [`SCHEDULED_LABEL`]. Runs that tracked
+/// attribution fields fall back to `SCHEDULED_LABEL`. Runs that tracked
 /// neither cost nor tokens (e.g. never reached the accounting point) are
 /// dropped.
 fn scheduled_run_to_record(run: &ScheduledRun) -> Option<UsageRecord> {
@@ -337,7 +337,7 @@ fn scheduled_run_to_record(run: &ScheduledRun) -> Option<UsageRecord> {
 /// `days` is clamped to `[1, 365]`; records older than the window are
 /// excluded. Scheduled-routine spend (engine-side — the desktop never sees
 /// its Usage events) is merged in from the scheduled-runs store under
-/// [`SCHEDULED_LABEL`]. Stateless beyond the on-disk stores (paths are
+/// `SCHEDULED_LABEL`. Stateless beyond the on-disk stores (paths are
 /// fixed), so it mirrors the billing commands rather than taking `AppState`.
 #[tauri::command]
 pub async fn get_usage_stats(days: u32) -> Result<UsageStats, String> {

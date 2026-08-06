@@ -2,7 +2,7 @@
 //!
 //! Mirrors the `slack/` and `jira/` layouts. Linear uses GraphQL +
 //! personal API keys (no OAuth); the auth surface is correspondingly
-//! thin (just a [`TokenProvider`]). See:
+//! thin (just a `TokenProvider`). See:
 //!
 //! - [`auth`] — Token + keyring + env var fallback.
 //! - [`api`]  — GraphQL client with retry/backoff.

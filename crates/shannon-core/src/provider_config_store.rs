@@ -72,13 +72,13 @@ fn lockfile_for(path: &Path) -> PathBuf {
 /// the same lockfile inode — opening the lockfile twice and calling
 /// `lock_exclusive` on each fd deadlocks. This matters for callers that
 /// wrap a R-M-W section in an outer `acquire_exclusive_lock` and then
-/// invoke the lock-aware helpers ([`load`], [`save`], [`load_or_default`],
+/// invoke the lock-aware helpers ([`load`], [`save`], `load_or_default`,
 /// [`ProviderConfigStore::save`]). They MUST use the no-lock variants
 /// inside the critical section:
 /// - For reads: [`ProviderConfigStore::load_or_default_at`] (a wrapper
 ///   around `load` that trusts the caller holds the flock).
 /// - For writes: [`ProviderConfigStore::save_locked`] or
-///   [`save_locked`].
+///   `save_locked`.
 ///
 /// The desktop's `land_profile_in_engine_store` /
 /// `remove_profile_from_engine_store` follow this contract — see their
@@ -408,9 +408,9 @@ impl ProviderConfigStore {
 
     /// Set the active provider + model on the `"default"` profile. The engine
     /// read-back ([`crate::provider_resolver::resolve_active_target`]) reads
-    /// `active_target` — **not** the per-tier overrides written by [`set_tier`]
+    /// `active_target` — **not** the per-tier overrides written by `set_tier`
     /// — so calling this is what makes a `/model --tier ... --save` choice
-    /// actually survive a restart (ADR-0005 Phase 4). Reuses [`ensure_provider`]
+    /// actually survive a restart (ADR-0005 Phase 4). Reuses `ensure_provider`
     /// so `active_target.provider_id` always points at a real entry in
     /// `providers`.
     pub fn set_active(&mut self, provider: &LlmProvider, model_id: &str) -> &mut Self {
@@ -429,8 +429,8 @@ impl ProviderConfigStore {
     /// `default_max_tokens` fallback chain). Pass `None` to clear the
     /// override and revert to the catalog default.
     ///
-    /// Mirrors the chainability of [`set_tier`] / [`set_active`], and uses
-    /// [`ensure_provider`] so the slot exists before writing — same defense
+    /// Mirrors the chainability of `set_tier` / `set_active`, and uses
+    /// `ensure_provider` so the slot exists before writing — same defense
     /// against a missing profile as the other mutators. The REPL `/model
     /// --max-tokens <N> --save` path uses this so a one-shot override survives
     /// restarts (ADR-0005 P4.13 parity with `/model --tier --save`).
@@ -449,7 +449,7 @@ impl ProviderConfigStore {
     /// this to land managed connections (e.g. two distinct
     /// `openai-compatible` endpoints like `glm` and `kimi`) without
     /// collapsing them to the engine's `OpenAI` slot — unlike
-    /// [`ensure_provider`], which derives a fixed id from `&LlmProvider`
+    /// `ensure_provider`, which derives a fixed id from `&LlmProvider`
     /// and so cannot distinguish between two `openai-compatible`
     /// connections.
     ///
