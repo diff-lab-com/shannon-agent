@@ -314,8 +314,11 @@ jobs:
     # cargo-semver-checks enforces this by default.
     #  - baseline-rev (a git tag) replaces the default crates.io lookup because
     #    the `shannon-cli` crate name is squatted on crates.io.
-    #  - The v0.8.0 baseline contains all workspace crates, so the seven-crate
-    #    exclude list (crates absent from the earlier v0.5.5 baseline) is retired.
+    #  - The v0.8.0 baseline contains all workspace crates, retiring the earlier
+    #    six-crate exclude (crates absent from the v0.5.5 baseline). shannon-desktop
+    #    stays excluded: it is a Tauri binary whose rustdoc needs GTK/WebKit system
+    #    deps this job does not install, and its public API is not consumed
+    #    externally (application crate, not a library).
     env:
       # Bump this when cutting a new baseline release. It feeds both
       # `baseline-rev` and the cache `prefix-key`, so a baseline bump always
@@ -338,6 +341,7 @@ jobs:
           # cargo-semver-checks (>=0.48) requires (rustc >=1.91 for its rustdoc
           # format). The repo-wide 1.88 pin is intentionally not used here.
           feature-group: default-features
+          exclude: shannon-desktop
           verbose: true
 
   insta:
