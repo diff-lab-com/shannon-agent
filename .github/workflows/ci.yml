@@ -143,9 +143,13 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Audit dependencies
-        # --no-fetch uses the audited advisory DB already cached from
-        # the previous install step (CI caches rustsec-advisory-db).
-        # Falls through to fetch if not present; either path is fine.
+        # The ignore list lives in `.cargo/audit.toml` (cargo-audit 0.22+
+        # discovers project config there, NOT at the repo root — moving it
+        # back silently re-enables every suppressed advisory). It mirrors
+        # `deny.toml`'s `[advisories].ignore`; keep the two in sync.
+        # `--deny warnings` escalates unsound/unmaintained informational
+        # advisories to errors; the ignored IDs are each vetted as
+        # non-exploitable + ecosystem-blocked (see audit.toml rationale).
         run: cargo audit --deny warnings
 
   doc:
