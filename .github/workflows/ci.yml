@@ -298,9 +298,12 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
             librsvg2-dev libssl-dev libxdo-dev patchelf
       # shannon-desktop depends on Tauri/webkit2gtk-4.1 which is not musl-portable.
-      # Cross-compile the remaining workspace against musl as a smoke test.
+      # shannon-mcp-saas depends on keyring → libdbus-sys, whose C build
+      # cannot cross-compile to musl without a musl-linked libdbus (not
+      # packaged on ubuntu). Cross-compile the remaining workspace as a
+      # smoke test.
       - name: Check Linux x86_64 musl
-        run: cargo check --workspace --exclude shannon-desktop --target x86_64-unknown-linux-musl
+        run: cargo check --workspace --exclude shannon-desktop --exclude shannon-mcp-saas --target x86_64-unknown-linux-musl
 
   semver-check:
     name: Semver Check
@@ -312,10 +315,10 @@ jobs:
     #    merges never wait on it.
     #  - baseline-rev (a git tag) replaces the default crates.io lookup because
     #    the `shannon-cli` crate name is squatted on crates.io.
-    #  - `shannon-api-protocol` and `shannon-mcp-saas` are excluded because
-    #    they were introduced after the v0.5.5 baseline tag and so cannot be
-    #    checked against that baseline; bumping the baseline tag will
-    #    re-include them.
+    #  - `shannon-api-protocol`, `shannon-mcp-saas`, and `shannon-repomap`
+    #    are excluded because they were introduced after the v0.5.5 baseline
+    #    tag and so cannot be checked against that baseline; bumping the
+    #    baseline tag will re-include them.
     continue-on-error: true
     env:
       # Bump this when cutting a new baseline release. It feeds both
@@ -339,7 +342,7 @@ jobs:
           # cargo-semver-checks (>=0.48) requires (rustc >=1.91 for its rustdoc
           # format). The repo-wide 1.88 pin is intentionally not used here.
           feature-group: default-features
-          exclude: shannon-engine,shannon-stability-attr,shannon-api-protocol,shannon-desktop,shannon-mcp-saas
+          exclude: shannon-engine,shannon-stability-attr,shannon-api-protocol,shannon-desktop,shannon-mcp-saas,shannon-repomap
           verbose: true
 
   insta:
