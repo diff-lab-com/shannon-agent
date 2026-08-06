@@ -198,6 +198,21 @@ jobs:
         with:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+      - name: Install Tauri + libdbus system deps
+        if: runner.os == 'Linux'
+        # `cargo test --workspace --no-run` (next step) compiles every
+        # workspace member, including shannon-desktop (Tauri → needs
+        # webkit2gtk/gtk headers) and shannon-mcp-saas (keyring →
+        # libdbus-sys → needs libdbus-1-dev). This step mirrors the
+        # system-deps install in the test/clippy/doc jobs; without it the
+        # metrics job cannot compile and the required check stays red.
+        # The job was previously skipped (its `needs:` were failing), so
+        # this gap only surfaced once RustSec Audit went green.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libxdo-dev patchelf libdbus-1-dev
       - name: Install nextest
         uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
         with:
