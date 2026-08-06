@@ -9,6 +9,7 @@ use crate::commands::AppState;
 use crate::config::{self, DesktopConfig, ProviderConnection, ProvidersFile};
 use crate::events;
 use crate::events::event_names;
+use shannon_core::provider_config_service::ProviderConfigService;
 use shannon_types::provider_config::ProviderTiers;
 
 /// Resolve a desktop kind slug to the engine's canonical default base
@@ -41,48 +42,80 @@ fn connection_to_profile(
 
 /// Land a managed connection in the engine's
 /// `~/.shannon/providers.toml` via
-/// `ProviderConfigStore::upsert_profile + save`. The desktop's
-/// `providers.json` cache is the read-side fan-out for the UI; the
-/// engine store is the source of truth for the runtime path.
+/// `ProviderConfigService::upsert`. The desktop's `providers.json`
+/// cache is the read-side fan-out for the UI; the engine store is the
+/// source of truth for the runtime path.
 ///
-/// `upsert_profile` sets `active_target.{provider_id, model_id}` on
-/// the `"default"` model profile as a side effect, so this single
-/// helper covers both the `save_provider` and `set_active_provider`
-/// desktop flows — there is no separate "activate" call against the
-/// engine store.
+/// `upsert(make_active = true)` pins
+/// `active_target.{provider_id, model_id}` on the `"default"` model
+/// profile as a side effect, so this single helper covers both the
+/// `save_provider` and `set_active_provider` desktop flows — there is
+/// no separate "activate" call against the engine store.
 ///
-/// Holds `AppState::provider_store` for the full R-M-W sequence so
-/// concurrent desktop commands (e.g. two `save_provider` calls in
-/// flight) can't clobber each other. The lock is released before the
-/// function returns.
+/// All writes route through [`ProviderConfigService`] (ADR-0008 P2-5
+/// Decision 3 single write path). Lock ordering: the process-internal
+/// `AppState::provider_store` mutex is acquired first, then the
+/// cross-process `flock` via [`ProviderConfigService::lock`] (the
+/// contract documented on that method — reverse order deadlocks). The
+/// store is moved out of the guard for the R-M-W round-trip and
+/// restored on completion so concurrent desktop commands can't clobber
+/// each other or a concurrent `shannon providers add` CLI invocation.
+/// Hold the process-internal `AppState::provider_store` mutex, move the
+/// store into a temporary [`ProviderConfigService`], run `f` on it, and
+/// **always** restore the store into the guard — even when `f` returns
+/// `Err` — so a failed write cannot leave the in-process snapshot empty
+/// for the rest of the session.
 ///
-/// Cross-process safety (ADR-0005 P3.6): also acquires an exclusive
-/// `flock` on `<providers.toml>.lock` for the same R-M-W critical
-/// section, so a concurrent `shannon providers add` CLI invocation
-/// can't tear the file between our load and our save. The inner
-/// [`ProviderConfigStore::save_locked`] is used to avoid double-locking
-/// — the outer flock is held for the whole section, and `save` would
-/// attempt to acquire the same fd (Linux: deadlock, macOS: EDEADLK).
+/// `f` receives `&mut ProviderConfigService` and is expected to do the
+/// `lock → reload_locked → mutate → save_locked` R-M-W (the lock-then-
+/// reload sequence that prevents cross-process lost updates); this
+/// helper owns only the mutex hold and the take/restore. `f` may also
+/// read via `svc.store()` before locking (e.g. to resolve the active
+/// provider within the same critical section, as `configure('model')`
+/// does).
+///
+/// **Lock ordering (ADR-0008 / P2-2 S1-1)**: this acquires the
+/// process-internal `provider_store` mutex first; `f` then acquires the
+/// cross-process `flock` via `ProviderConfigService::lock`. Mutex-then-
+/// flock is the contract on `lock` — reverse order deadlocks against
+/// the in-process mutex. Concurrent desktop commands serialize on the
+/// mutex; a concurrent `shannon providers add` CLI invocation serializes
+/// on the flock and reloads its committed state inside the lock.
+async fn with_engine_store<R, F>(state: &tauri::State<'_, AppState>, f: F) -> Result<R, String>
+where
+    F: FnOnce(&mut ProviderConfigService) -> Result<R, String>,
+{
+    let mut guard = state.provider_store.lock().await;
+    let store = std::mem::take(&mut *guard);
+    let mut svc = ProviderConfigService::from_store(store);
+    let result = f(&mut svc);
+    // Unconditional restore: even on Err the guard gets the (post-reload,
+    // possibly post-mutation) in-memory snapshot rather than the empty
+    // default left by `mem::take`. The on-disk file is the source of
+    // truth and the next writer re-reads it via `reload_locked`.
+    *guard = svc.into_inner();
+    result
+}
+
 async fn land_profile_in_engine_store(
     state: &tauri::State<'_, AppState>,
     conn: &ProviderConnection,
     model_id: &str,
 ) -> Result<(), String> {
     let profile = connection_to_profile(conn);
-    let mut store = state.provider_store.lock().await;
-    let path = store.last_path().ok_or_else(|| {
-        // No home dir → no lockfile → can't safely flock. Surface as a
-        // save error rather than panic; same contract as the underlying
-        // I/O failure modes.
-        "cannot determine providers.toml path (no home directory)".to_string()
-    })?;
-    let _flock = shannon_core::provider_config_store::acquire_exclusive_lock(path)
-        .map_err(|e| format!("could not lock providers.toml: {e}"))?;
-    store.upsert_profile(profile, model_id);
-    store
-        .save_locked()
-        .map_err(|e| format!("could not persist to providers.toml: {e}"))?;
-    Ok(())
+    with_engine_store(state, |svc| {
+        let mut locked = svc
+            .lock()
+            .map_err(|e| format!("could not lock providers.toml: {e}"))?;
+        locked
+            .reload_locked()
+            .map_err(|e| format!("could not reload providers.toml: {e}"))?;
+        locked
+            .upsert(profile, model_id, true)
+            .map_err(|e| format!("could not persist to providers.toml: {e}"))
+            .map(|_| ())
+    })
+    .await
 }
 
 /// Look up the active provider's id and kind in the engine
@@ -177,29 +210,32 @@ async fn rebuild_client_config_from_store(
 }
 
 /// Remove a managed connection from the engine's `providers.toml`
-/// via `ProviderConfigStore::remove_profile + save`. If the removed
+/// via `ProviderConfigService::disconnect_by_slug`. If the removed
 /// slot was the active target, the engine clears
 /// `active_target.{provider_id, model_id}` to empty — the resolver
-/// falls back to synthesis on the next request.
+/// falls back to synthesis on the next request. Idempotent: removing
+/// an unknown id writes nothing.
 ///
-/// Cross-process safety (ADR-0005 P3.6): wraps the R-M-W section in an
-/// exclusive `flock` on `<providers.toml>.lock` (see
-/// [`land_profile_in_engine_store`] for the rationale).
+/// All writes route through [`ProviderConfigService`] (ADR-0008 P2-5
+/// Decision 3 single write path). Same mutex-then-flock ordering as
+/// [`land_profile_in_engine_store`].
 async fn remove_profile_from_engine_store(
     state: &tauri::State<'_, AppState>,
     profile_id: &str,
 ) -> Result<(), String> {
-    let mut store = state.provider_store.lock().await;
-    let path = store
-        .last_path()
-        .ok_or_else(|| "cannot determine providers.toml path (no home directory)".to_string())?;
-    let _flock = shannon_core::provider_config_store::acquire_exclusive_lock(path)
-        .map_err(|e| format!("could not lock providers.toml: {e}"))?;
-    store.remove_profile(profile_id);
-    store
-        .save_locked()
-        .map_err(|e| format!("could not persist to providers.toml: {e}"))?;
-    Ok(())
+    with_engine_store(state, |svc| {
+        let mut locked = svc
+            .lock()
+            .map_err(|e| format!("could not lock providers.toml: {e}"))?;
+        locked
+            .reload_locked()
+            .map_err(|e| format!("could not reload providers.toml: {e}"))?;
+        locked
+            .disconnect_by_slug(profile_id)
+            .map_err(|e| format!("could not persist to providers.toml: {e}"))
+            .map(|_| ())
+    })
+    .await
 }
 
 /// Configuration update payload.
@@ -237,21 +273,26 @@ pub async fn configure(
             // (`send_message`, `get_status`, etc.) sees the new model
             // on the next read.
             let new_model_id = update.value.clone();
-            let kind_str = {
-                let mut store = state.provider_store.lock().await;
-                let (_, kind_str) = active_provider_id_and_kind(&store).ok_or_else(|| {
+            let kind_str = with_engine_store(&state, |svc| {
+                let (_, kind_str) = active_provider_id_and_kind(svc.store()).ok_or_else(|| {
                     "configure('model'): no active provider — add one in Settings → Models first"
                         .to_string()
                 })?;
                 let provider = llm_provider_for_active_mirror(&kind_str).ok_or_else(|| {
                     format!("configure('model'): unsupported active kind `{kind_str}`")
                 })?;
-                store.set_active(&provider, &new_model_id);
-                store
-                    .save()
+                let mut locked = svc
+                    .lock()
+                    .map_err(|e| format!("could not lock providers.toml: {e}"))?;
+                locked
+                    .reload_locked()
+                    .map_err(|e| format!("could not reload providers.toml: {e}"))?;
+                locked
+                    .set_active(&provider, &new_model_id)
                     .map_err(|e| format!("could not persist providers.toml: {e}"))?;
-                kind_str
-            };
+                Ok(kind_str)
+            })
+            .await?;
             rebuild_client_config_from_store(&state).await?;
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
@@ -332,13 +373,21 @@ pub async fn configure(
                 (active_id, model_id, profile)
             };
             profile.base_url = new_url.clone();
-            {
-                let mut store = state.provider_store.lock().await;
-                store.upsert_profile(profile, &model_id);
-                store
-                    .save()
-                    .map_err(|e| format!("could not persist providers.toml: {e}"))?;
-            }
+            with_engine_store(&state, |svc| {
+                let mut locked = svc
+                    .lock()
+                    .map_err(|e| format!("could not lock providers.toml: {e}"))?;
+                locked
+                    .reload_locked()
+                    .map_err(|e| format!("could not reload providers.toml: {e}"))?;
+                // make_active = true matches the prior `upsert_profile`
+                // side effect of pinning the active target; the profile
+                // being rewritten is already the active one anyway.
+                locked
+                    .upsert(profile, &model_id, true)
+                    .map_err(|e| format!("could not persist providers.toml: {e}"))
+            })
+            .await?;
             rebuild_client_config_from_store(&state).await?;
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
@@ -369,13 +418,18 @@ pub async fn configure(
             };
             let provider = llm_provider_for_active_mirror(&kind_str)
                 .ok_or_else(|| format!("configure('provider'): unsupported kind `{kind_str}`"))?;
-            {
-                let mut store = state.provider_store.lock().await;
-                store.set_active(&provider, &model_id);
-                store
-                    .save()
-                    .map_err(|e| format!("could not persist providers.toml: {e}"))?;
-            }
+            with_engine_store(&state, |svc| {
+                let mut locked = svc
+                    .lock()
+                    .map_err(|e| format!("could not lock providers.toml: {e}"))?;
+                locked
+                    .reload_locked()
+                    .map_err(|e| format!("could not reload providers.toml: {e}"))?;
+                locked
+                    .set_active(&provider, &model_id)
+                    .map_err(|e| format!("could not persist providers.toml: {e}"))
+            })
+            .await?;
             rebuild_client_config_from_store(&state).await?;
             let _ = app_handle.emit(
                 event_names::CONFIG_UPDATED,
@@ -2269,5 +2323,53 @@ mod tests {
         assert_eq!(provider_kind_slug(&K::Ollama), "ollama");
         assert_eq!(provider_kind_slug(&K::Deepseek), "deepseek");
         assert_eq!(provider_kind_slug(&K::Gemini), "gemini");
+    }
+
+    // ── C1: read path is single-sourced from the engine store ──────────
+    //
+    // `providers_file_from_store` is the entire read side of
+    // `list_providers`. Its signature takes only `&ProviderConfigStore`
+    // — there is no `providers.json` parameter, so the legacy
+    // write-through cache CANNOT influence the UI's provider list or
+    // active id. These tests pin that property: if someone later
+    // threads a providers.json handle into the read path, the signature
+    // change breaks these tests (and the contract on `list_providers`).
+
+    #[test]
+    fn providers_file_from_store_reports_active_id_from_engine_store() {
+        let store = store_with_single_anthropic_profile("anthropic-main", "claude-opus-4-8");
+        let file = providers_file_from_store(&store);
+        assert_eq!(
+            file.active_provider_id.as_deref(),
+            Some("anthropic-main"),
+            "active_provider_id must come from the engine store's active_target, \
+             not from ~/.shannon/desktop/providers.json",
+        );
+        assert_eq!(file.providers.len(), 1);
+        assert_eq!(file.providers[0].id, "anthropic-main");
+    }
+
+    #[test]
+    fn providers_file_from_store_returns_none_when_no_active_target() {
+        let store = shannon_core::provider_config_store::ProviderConfigStore::default();
+        let file = providers_file_from_store(&store);
+        assert!(
+            file.active_provider_id.is_none(),
+            "an empty engine store must surface no active provider — the legacy \
+             providers.json must not fill in a stale id",
+        );
+        assert!(file.providers.is_empty());
+    }
+
+    #[test]
+    fn providers_file_from_store_reflects_active_profile_removal() {
+        let mut store = store_with_single_anthropic_profile("anthropic-main", "claude-opus-4-8");
+        store.remove_profile("anthropic-main");
+        let file = providers_file_from_store(&store);
+        assert!(
+            file.active_provider_id.is_none(),
+            "removing the active profile must clear the surfaced active id on read",
+        );
+        assert!(file.providers.is_empty());
     }
 }

@@ -212,20 +212,13 @@ fn handle_model_max_tokens(repl: &mut Repl, args: &str) -> Result<()> {
 /// does not depend on `repl.state` to apply the value — the engine reads it
 /// on the next request from disk.
 fn persist_max_tokens_to_providers_toml(provider: &LlmProvider, next: Option<u32>) -> Result<()> {
-    use shannon_core::provider_config_store::ProviderConfigStore;
+    use shannon_core::provider_config_service::ProviderConfigService;
 
-    let mut store = ProviderConfigStore::load_or_default();
-    store
-        .set_default_max_tokens(provider, next)
-        .save()
-        .map_err(|e| {
-            format!(
-                "failed to persist default_max_tokens to providers.toml: {e} \
-                 (provider={}, next={:?})",
-                format!("{provider:?}").to_lowercase(),
-                next,
-            )
-        })?;
+    // Route through the single write path (ADR-0008 P2-5) shared with
+    // `/connect` and the CLI's `providers add`.
+    let mut svc = ProviderConfigService::load();
+    svc.set_max_tokens(provider, next)
+        .map_err(|e| format!("failed to persist default_max_tokens to providers.toml: {e}"))?;
     Ok(())
 }
 

@@ -3451,20 +3451,9 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 let remove_args = commands_providers::RemoveProviderArgs { id: id.clone() };
                 let mut store =
                     shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
-                match commands_providers::run_providers_remove(&mut store, &remove_args) {
-                    Ok(was_active) => {
-                        if was_active {
-                            eprintln!(
-                                "warning: removed provider was the active target; \
-                                 engine will fall back to synthesis on the next request. \
-                                 Run `shannon list-providers` to confirm."
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("providers remove failed: {e:?}");
-                        std::process::exit(1);
-                    }
+                if let Err(e) = commands_providers::run_providers_remove(&mut store, &remove_args) {
+                    eprintln!("providers remove failed: {e:?}");
+                    std::process::exit(1);
                 }
             }
         },

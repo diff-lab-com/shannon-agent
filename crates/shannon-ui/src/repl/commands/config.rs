@@ -301,26 +301,21 @@ fn persist_model_to_providers_toml(
     model_id: &str,
     tier: TierName,
 ) -> Result<()> {
-    use shannon_core::provider_config_store::ProviderConfigStore;
+    use shannon_core::provider_config_service::ProviderConfigService;
 
     if matches!(tier, TierName::Auto) {
         return Err("auto must be resolved to a concrete tier before persisting".into());
     }
 
-    let mut store = ProviderConfigStore::load_or_default();
-    store
-        .set_tier(provider, tier, model_id)
-        .set_active(provider, model_id)
-        .save()
-        .map_err(|e| {
-            format!(
-                "failed to persist tier override to providers.toml: {e} \
-                 (provider={}, tier={}, model_id={})",
-                format!("{provider:?}").to_lowercase(),
-                tier.canonical(),
-                model_id,
-            )
-        })?;
+    // Route through the single write path (ADR-0008 P2-5) shared with
+    // `/connect` and the CLI's `providers add`. The service holds one
+    // in-memory store, so the second call's save writes both the tier pin
+    // and the active target.
+    let mut svc = ProviderConfigService::load();
+    svc.set_tier(provider, tier, model_id)
+        .map_err(|e| format!("failed to persist tier override to providers.toml: {e}"))?;
+    svc.set_active(provider, model_id)
+        .map_err(|e| format!("failed to persist active target to providers.toml: {e}"))?;
     Ok(())
 }
 
