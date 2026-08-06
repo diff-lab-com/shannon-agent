@@ -5,7 +5,7 @@
 //! `~/.shannon/cache/litellm-prices.json` with a 24h TTL. This prices
 //! **dynamic/custom models** that are absent from the curated catalog so the
 //! model picker and cost estimates show real numbers instead of the blind
-//! `$3/$15` [`super::types`] fallback.
+//! `$3/$15` `super::types` fallback.
 //!
 //! The layer is **strictly below** the curated sources: catalog ids/aliases,
 //! `DEFAULT_PRICING`, and file/env overrides all win first (see
@@ -86,7 +86,7 @@ struct LitellmEntry {
 ///
 /// Entries missing either cost (the `sample_spec` sentinel, provider-only
 /// rows, …) are dropped. Per-token costs are scaled to per-million-token to
-/// match Shannon's [`ModelPricing`] units. Negative or non-finite costs are
+/// match Shannon's `ModelPricing` units. Negative or non-finite costs are
 /// rejected (a corrupted feed must not bypass budget limits).
 pub fn parse_litellm(payload: &str) -> Result<HashMap<String, ModelPricing>, LitellmPricingError> {
     let raw: HashMap<String, LitellmEntry> =

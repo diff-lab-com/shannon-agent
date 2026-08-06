@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::GatewayDesktopConfig;
 
 /// Tauri event emitted when the supervised gateway process exits for any
-/// reason (crash, clean exit, or explicit `stop()`). Payload: [`ExitedPayload`].
+/// reason (crash, clean exit, or explicit `stop()`). Payload: `ExitedPayload`.
 pub const GATEWAY_EXITED_EVENT: &str = "shannon:gateway-exited";
 
 /// Snapshot of the supervisor + child state, surfaced to the UI.

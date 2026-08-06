@@ -147,7 +147,7 @@ impl IndexBuilder {
 
     /// Build an index from a directory and write it to a file.
     ///
-    /// Convenience method combining [`build_from_dir`] and [`write_index`].
+    /// Convenience method combining `build_from_dir` and `write_index`.
     pub async fn build_and_write(plugins_dir: &Path, output_path: &Path) -> PluginResult<()> {
         let entries = Self::build_from_dir(plugins_dir).await?;
         Self::write_index(&entries, output_path).await

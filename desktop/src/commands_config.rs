@@ -1254,7 +1254,7 @@ fn remove_provider(mut file: ProvidersFile, id: &str) -> Result<ProvidersFile, S
 /// The wire shape is unchanged: a [`ProvidersFile`] with
 /// `active_provider_id` + `providers: Vec<ProviderConnection>`. Each
 /// `ProviderProfile` is mapped to a [`ProviderConnection`] via
-/// [`config::from_provider_profile`].
+/// `config::from_provider_profile`.
 ///
 /// `list_providers` MUST NOT:
 /// - Call `land_profile_in_engine_store` or `save` (this is a read-only

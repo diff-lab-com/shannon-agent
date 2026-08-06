@@ -10,9 +10,9 @@
 //! - [`TranscriptEntry`]: A single conversation turn
 //! - [`TranscriptRole`]: Discriminator for user / assistant / system / tool
 //! - [`TranscriptStore`]: Disk-backed JSONL storage
-//! - [`TranscriptSearch`]: Full-text search across sessions
+//! - `TranscriptSearch`: Full-text search across sessions
 //! - [`TranscriptQuery`]: Filtered query builder
-//! - [`TranscriptStats`]: Per-session and global statistics
+//! - `TranscriptStats`: Per-session and global statistics
 //!
 //! ## Usage
 //!

@@ -544,7 +544,7 @@ impl RoutineManager {
     /// - **Skips routines blocked by pending dependencies (C4)**, recording
     ///   the blocker IDs in `last_error` instead of firing.
     ///
-    /// Callers must call [`ScheduledRunsStore::update`] with the `run_id` to
+    /// Callers must call `ScheduledRunsStore::update` with the `run_id` to
     /// transition the run to `Succeeded` / `Failed` after executing the prompt.
     pub fn drain_due_with_history(
         &mut self,

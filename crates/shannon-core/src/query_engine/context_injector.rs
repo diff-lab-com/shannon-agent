@@ -14,7 +14,7 @@ use std::sync::RwLock;
 
 /// Encapsulates project-memory injection logic.
 ///
-/// Holds the [`PreferenceMemoryManager`] and [`InstructionWatcher`] so they can
+/// Holds the `PreferenceMemoryManager` and `InstructionWatcher` so they can
 /// be shared across multiple query cycles and re-injected after compaction.
 pub struct ContextInjector {
     /// The project working directory (used for fallback instruction loading).
@@ -46,8 +46,8 @@ impl ContextInjector {
 
     /// Return the project instructions as a formatted string.
     ///
-    /// Checks for hot-reload via [`InstructionWatcher`] first, falling back to
-    /// [`load_full_context`] if the watcher has no cached content.
+    /// Checks for hot-reload via `InstructionWatcher` first, falling back to
+    /// `load_full_context` if the watcher has no cached content.
     pub fn project_instructions_text(&self) -> Option<String> {
         // Try hot-reload first
         {
@@ -83,7 +83,7 @@ impl ContextInjector {
     ///
     /// This combines project instructions, preference memory, MEMORY.md index,
     /// and .claude/rules into a single string that is passed to
-    /// [`CompactEngine::compact_tiered`] so it can be re-anchored at the start
+    /// `CompactEngine::compact_tiered` so it can be re-anchored at the start
     /// of the compacted message list.
     pub fn reinjection_context(&self) -> String {
         let mut parts: Vec<String> = Vec::new();

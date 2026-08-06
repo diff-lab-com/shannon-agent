@@ -1146,7 +1146,7 @@ impl Theme {
     }
 
     /// Auto-detect theme based on terminal background color.
-    /// Respects NO_COLOR (https://no-color.org/) and TERM=dumb.
+    /// Respects NO_COLOR (<https://no-color.org/>) and TERM=dumb.
     pub fn detect() -> Self {
         if should_disable_color() {
             return Self::no_color();

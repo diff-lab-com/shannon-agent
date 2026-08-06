@@ -1,8 +1,8 @@
 //! Notion data source fetcher.
 //!
 //! Queries Notion pages/databases via the REST API:
-//! - POST https://api.notion.com/v1/databases/{database_id}/query
-//! - GET https://api.notion.com/v1/pages/{id} (fallback if no database configured)
+//! - POST `https://api.notion.com/v1/databases/{database_id}/query`
+//! - GET `https://api.notion.com/v1/pages/{id}` (fallback if no database configured)
 //!
 //! Auth: Bearer <integration_token> + Notion-Version: 2022-06-28
 

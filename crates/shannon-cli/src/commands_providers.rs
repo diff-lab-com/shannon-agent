@@ -478,7 +478,7 @@ fn build_profile(args: &AddProviderArgs) -> Result<(ProviderProfile, String)> {
 
 /// Validate args and build the profile + resolved credential service name +
 /// resolved model id. Pure (no store mutation, no disk I/O) so the unit tests
-/// stay hermetic. Shared by the test seam [`apply_provider_add`] and the
+/// stay hermetic. Shared by the test seam `apply_provider_add` and the
 /// production path [`run_providers_add`] (which persists via
 /// [`ProviderConfigService`]).
 fn build_and_validate(args: &AddProviderArgs) -> Result<(ProviderProfile, String, String)> {

@@ -12,7 +12,7 @@
 //! - [`ConsolidationGuard`]: RAII guard that tracks consolidation duration
 //! - [`ConsolidationPrompt`]: Builds prompts for AI-assisted memory consolidation
 //! - [`ConsolidationConfig`]: Configuration for consolidation behavior
-//! - [`ConsolidationResult`]: Result statistics from a consolidation pass
+//! - `ConsolidationResult`: Result statistics from a consolidation pass
 
 use crate::memory::{MemoryCategory, MemoryEntry};
 use chrono::{DateTime, Duration, Utc};
