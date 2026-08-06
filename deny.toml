@@ -49,6 +49,11 @@ ignore = [
     # in `tauri` stack. Evaluate when Tauri 3 lands.
     "RUSTSEC-2025-0080", "RUSTSEC-2025-0081",
     "RUSTSEC-2025-0098", "RUSTSEC-2025-0100",
+    # memmap2 0.8.0 — unchecked pointer offset (unsound). Transitive via
+    # Tauri / notify / image ecosystem; not exploitable in our usage.
+    # See audit.toml for the full rationale. Kept in sync per the
+    # one-policy-two-jobs rule.
+    "RUSTSEC-2026-0186",
 ]
 
 [licenses]

@@ -47,4 +47,13 @@ ignore = [
     # Evaluate when Tauri 3 lands.
     "RUSTSEC-2025-0080", "RUSTSEC-2025-0081",
     "RUSTSEC-2025-0098", "RUSTSEC-2025-0100",
+    # memmap2 0.8.0 — unchecked pointer offset (unsound). Transitive via
+    # the Tauri / notify / image ecosystem; no attacker-controlled size or
+    # offset drives the mmap regions in our usage (build-time assets,
+    # notification icons, file-watch internals). `cargo audit --deny
+    # warnings` escalates `unsound` to an error; `cargo deny` already
+    # treats it as a non-fatal warning. Upgrade blocked on the parent
+    # crates pinning memmap2 >= 0.9. Re-evaluate when the ecosystem lifts
+    # the floor.
+    "RUSTSEC-2026-0186",
 ]
