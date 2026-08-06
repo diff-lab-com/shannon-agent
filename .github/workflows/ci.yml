@@ -308,33 +308,29 @@ jobs:
   semver-check:
     name: Semver Check
     runs-on: ubuntu-latest
-    # Pre-1.0: semver is advisory, not gating.
-    #  - continue-on-error: breaking changes are routine before 1.0 and must not
-    #    turn the CI run red; the job still reports its result for visibility.
-    #  - this job is intentionally NOT a branch-protection required check, so
-    #    merges never wait on it.
+    # Semver is a required gate (flipped from advisory in the v0.8.0 cycle).
+    # Previously advisory because breaking changes are routine before 1.0 — they
+    # remain allowed as long as the minor version bumps (0.8.x -> 0.9.0);
+    # cargo-semver-checks enforces this by default.
     #  - baseline-rev (a git tag) replaces the default crates.io lookup because
     #    the `shannon-cli` crate name is squatted on crates.io.
-    #  - The seven crates introduced after the v0.5.5 baseline tag
-    #    (`shannon-api-protocol`, `shannon-desktop`, `shannon-engine`,
-    #    `shannon-mcp-saas`, `shannon-repomap`, `shannon-server`,
-    #    `shannon-stability-attr`) are excluded because they cannot be
-    #    checked against a baseline that predates them (baseline rustdoc
-    #    generation crashes with `no package table`). Bumping the baseline
-    #    tag to a release that contains them re-includes them.
-    continue-on-error: true
+    #  - The v0.8.0 baseline contains all workspace crates, retiring the earlier
+    #    six-crate exclude (crates absent from the v0.5.5 baseline). shannon-desktop
+    #    stays excluded: it is a Tauri binary whose rustdoc needs GTK/WebKit system
+    #    deps this job does not install, and its public API is not consumed
+    #    externally (application crate, not a library).
     env:
       # Bump this when cutting a new baseline release. It feeds both
       # `baseline-rev` and the cache `prefix-key`, so a baseline bump always
       # invalidates the cached baseline rustdoc and never serves a stale one.
-      SEMVER_BASELINE: v0.5.5
+      SEMVER_BASELINE: v0.8.0
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
       - name: Install libdbus headers
-        # shannon-mcp-saas (not excluded below) → keyring → libdbus-sys
-        # needs pkg-config + libdbus-1-dev at build time.
+        # shannon-mcp-saas → keyring → libdbus-sys needs pkg-config +
+        # libdbus-1-dev at build time (also needed for the baseline rustdoc).
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev
       - name: Check semver (baseline rustdoc cached)
         uses: obi1kenobi/cargo-semver-checks-action@eac29787462b0f1957d618a21f458305db73b36c
@@ -345,7 +341,7 @@ jobs:
           # cargo-semver-checks (>=0.48) requires (rustc >=1.91 for its rustdoc
           # format). The repo-wide 1.88 pin is intentionally not used here.
           feature-group: default-features
-          exclude: shannon-api-protocol,shannon-desktop,shannon-engine,shannon-mcp-saas,shannon-repomap,shannon-server,shannon-stability-attr
+          exclude: shannon-desktop
           verbose: true
 
   insta:
