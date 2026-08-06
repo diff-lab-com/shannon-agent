@@ -1296,14 +1296,13 @@ fn remove_provider(mut file: ProvidersFile, id: &str) -> Result<ProvidersFile, S
 
 /// List all managed providers, masking API keys.
 ///
-/// ADR-0005 Phase 2 / task 5: this command is now read-only against the
+/// ADR-0005 Phase 2 / task 5: this command is read-only against the
 /// engine's `~/.shannon/providers.toml` via
 /// [`shannon_core::provider_config_store::ProviderConfigStore`].
-/// `~/.shannon/desktop/providers.json` is no longer consulted on the read
-/// path — it remains as a write-through cache maintained by
-/// `save_provider` / `delete_provider` for legacy UI surfaces, but the
-/// engine store is the single source of truth (ADR-0005 / Phase 2 task
-/// 4 + 5 + P1.1).
+/// `~/.shannon/desktop/providers.json` is no longer consulted or written
+/// by any desktop command — C2 removed the legacy dual-write, so the
+/// engine store is the single source of truth on both read and write
+/// paths (ADR-0005 / Phase 2 task 4 + 5 + P1.1 + C2).
 ///
 /// The wire shape is unchanged: a [`ProvidersFile`] with
 /// `active_provider_id` + `providers: Vec<ProviderConnection>`. Each
@@ -1314,8 +1313,8 @@ fn remove_provider(mut file: ProvidersFile, id: &str) -> Result<ProvidersFile, S
 /// - Call `land_profile_in_engine_store` or `save` (this is a read-only
 ///   command).
 /// - Read or write `~/.shannon/desktop/providers.json` (the engine
-///   store is the only authority; the legacy file is write-through
-///   cache, not read source).
+///   store is the only authority; the legacy file is touched solely by
+///   the one-shot startup migration, which lifts then deletes it).
 /// - Materialize a real api_key. The wire type's `api_key` is
 ///   `skip_serializing`; `from_provider_profile` leaves it `None`.
 ///
@@ -1386,15 +1385,33 @@ fn providers_file_from_store(
     }
 }
 
+/// Read the current [`ProvidersFile`] snapshot from the engine
+/// `ProviderConfigStore`. This is the single read source for the
+/// `save_provider` / `delete_provider` / `set_active_provider` R-M-W
+/// sequences.
+///
+/// C2 (ADR-0008 Decision 3, read-side follow-up): the legacy
+/// `~/.shannon/desktop/providers.json` is no longer touched on the write
+/// path. It was a dual-write cache whose contents were never read back
+/// (`list_providers` reads the engine store exclusively); the one-shot
+/// startup migration deletes it and nothing in the write path recreates
+/// it. Reading the engine store here keeps the R-M-W working against the
+/// same source of truth that the runtime and the CLI see.
+async fn providers_file_from_state(state: &tauri::State<'_, AppState>) -> ProvidersFile {
+    let store = state.provider_store.lock().await;
+    providers_file_from_store(&store)
+}
+
 /// Insert or update a managed provider. Returns the updated (masked) file.
 ///
 /// New keys (non-empty, non-`"***"`) are routed into the credential store
-/// (`~/.shannon/credentials/<id>.json`); the on-disk `providers.json` never
-/// carries plaintext anymore (A1 — config never carries plaintext secrets).
-/// The connection is also landed in the engine's
-/// `~/.shannon/providers.toml` via `ProviderConfigStore::upsert_profile`
-/// so the runtime path sees the same shape as the REPL's `/connect`
-/// (ADR-0005 Phase 2 / task 4).
+/// (`~/.shannon/credentials/<id>.json`); the engine's
+/// `~/.shannon/providers.toml` never carries plaintext (A1 — config never
+/// carries plaintext secrets). The connection is landed in the engine
+/// store via `ProviderConfigStore::upsert_profile` so the runtime path
+/// sees the same shape as the REPL's `/connect` (ADR-0005 Phase 2 /
+/// task 4). C2: `providers.json` is no longer written — the engine store
+/// is the single source of truth.
 #[tauri::command]
 pub async fn save_provider(
     state: tauri::State<'_, AppState>,
@@ -1405,7 +1422,7 @@ pub async fn save_provider(
         return Err(format!("unknown provider kind: {}", input.provider_kind));
     }
     let base_url = resolve_base_url(&input.base_url)?;
-    let mut file = config::load_providers();
+    let mut file = providers_file_from_state(&state).await;
 
     let (target_id, target_label) = if let Some(id) = input.id.as_deref() {
         let conn = file
@@ -1444,21 +1461,19 @@ pub async fn save_provider(
     };
 
     // Route any newly-supplied plaintext key into the credential store
-    // before persisting `providers.json`. The credential store and the
-    // config file are committed separately so a credential-store failure
-    // surfaces as a save error rather than a silently half-configured
-    // provider.
+    // before landing the profile in the engine store. The credential
+    // store and the engine store are committed separately so a
+    // credential-store failure surfaces as a save error rather than a
+    // silently half-configured provider.
     store_provider_key(&target_id, &target_label, input.api_key.as_deref())?;
 
-    config::save_providers(&file)?;
-
-    // Mirror the saved connection into the engine's providers.toml so
-    // the runtime path reads the same shape as the UI. The model_id
-    // we hand the engine is the user-supplied default for this
-    // connection (or "default" when the user didn't pick one). For
-    // managed openai-compatible connections (glm / kimi / etc.) this
-    // uses the desktop's slug ("glm") as the profile id, which
-    // `upsert_profile` preserves verbatim — no OpenAI-collapse.
+    // Land the connection in the engine's providers.toml so the runtime
+    // path reads the same shape as the UI. The model_id we hand the
+    // engine is the user-supplied default for this connection (or
+    // "default" when the user didn't pick one). For managed
+    // openai-compatible connections (glm / kimi / etc.) this uses the
+    // desktop's slug ("glm") as the profile id, which `upsert_profile`
+    // preserves verbatim — no OpenAI-collapse.
     let updated_conn = file
         .providers
         .iter()
@@ -1475,18 +1490,18 @@ pub async fn save_provider(
     Ok(mask_providers(file))
 }
 
-/// Delete a managed provider by id. Clears `active_provider_id` if it pointed
-/// at the deleted entry. Returns the updated (masked) file. Also removes
-/// the slot from the engine's `providers.toml` so a stale connection
-/// cannot survive a desktop restart.
+/// Delete a managed provider by id. Returns the updated (masked) file.
+/// Removes the slot from the engine's `providers.toml` (the single source
+/// of truth) so a stale connection cannot survive a desktop restart.
+/// C2: `providers.json` is no longer written — the snapshot read from the
+/// engine store is the only R-M-W source.
 #[tauri::command]
 pub async fn delete_provider(
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<ProvidersFile, String> {
-    let file = remove_provider(config::load_providers(), &id)?;
-    config::save_providers(&file)?;
+    let file = remove_provider(providers_file_from_state(&state).await, &id)?;
     remove_profile_from_engine_store(&state, &id).await?;
     emit_providers_changed(&app_handle, &file);
     Ok(mask_providers(file))
@@ -1510,7 +1525,7 @@ pub async fn set_active_provider(
     app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<(), String> {
-    let mut file = config::load_providers();
+    let file = providers_file_from_state(&state).await;
     let conn = file
         .providers
         .iter()
@@ -1550,9 +1565,9 @@ pub async fn set_active_provider(
         *c = client_config;
     }
 
-    file.active_provider_id = Some(id.clone());
-    config::save_providers(&file)?;
-
+    // C2: no providers.json write — the engine store's `active_target`
+    // (set by `land_profile_in_engine_store` above) is the single source
+    // of truth for the active provider.
     let _ = app_handle.emit(
         event_names::CONFIG_UPDATED,
         events::ConfigUpdatedPayload {
