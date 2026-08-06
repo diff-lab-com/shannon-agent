@@ -635,18 +635,6 @@ pub fn load_providers() -> ProvidersFile {
     }
 }
 
-/// Save managed providers to disk.
-pub fn save_providers(file: &ProvidersFile) -> Result<(), String> {
-    let path = providers_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let content = serde_json::to_string_pretty(file).map_err(|e| e.to_string())?;
-    std::fs::write(&path, content).map_err(|e| e.to_string())?;
-    crate::file_permissions::restrict_to_owner(&path);
-    Ok(())
-}
-
 /// One-shot migration: lift entries from
 /// `~/.shannon/desktop/providers.json` into the engine's
 /// `~/.shannon/providers.toml` (built as a `ProviderModelConfig`) and
@@ -664,9 +652,12 @@ pub fn save_providers(file: &ProvidersFile) -> Result<(), String> {
 ///   doesn't bail the whole migration on one bad row).
 ///
 /// Called from `AppState::new()` on first launch after this code
-/// lands. Legacy installs heal themselves; the desktop's UI continues
-/// to read from `providers.json` (the existing list_providers flow
-/// rebuilds it via save_provider when needed).
+/// lands. Legacy installs heal themselves. After C2, no desktop command
+/// writes `providers.json` — `list_providers` reads the engine store
+/// exclusively, and the write commands (`save_provider` /
+/// `delete_provider` / `set_active_provider`) R-M-W against it directly.
+/// This migration is the only code that ever reads the legacy file; it
+/// lifts then deletes it, and nothing recreates it.
 pub fn migrate_providers_to_toml() -> Option<shannon_types::provider_config::ProviderModelConfig> {
     let path = providers_path();
     if !path.exists() {
