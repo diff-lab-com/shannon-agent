@@ -194,7 +194,7 @@ impl RepoMapCache {
     ///
     /// The budget is enforced on per-symbol tokens (signatures + recursive
     /// children). Markdown rendering adds small per-file headers and a
-    /// top-level "# Repo Map: <root>" line — those are structural and not
+    /// top-level "# Repo Map: \<root\>" line — those are structural and not
     /// counted against the budget. Callers that need a hard cap on the
     /// rendered output should set the budget ~80% of their actual ceiling.
     pub fn pack(&mut self, budget_tokens: usize) -> String {

@@ -1,7 +1,7 @@
 //! Linear data source fetcher.
 //!
 //! Queries Linear issues via the GraphQL API:
-//! POST https://api.linear.app/graphql with GraphQL query
+//! POST <https://api.linear.app/graphql> with GraphQL query
 //! Auth: Authorization: <api_key> (no Bearer prefix)
 
 use super::{DataSourceError, DataSourceFetcher, DataSourceItem, DataSourceResult};

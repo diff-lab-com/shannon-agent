@@ -140,7 +140,7 @@ pub trait Tool: Send + Sync {
 
     /// Whether this tool invocation is safe to run concurrently with other tools.
     ///
-    /// Defaults to the value of [`is_read_only`] since read-only tools are
+    /// Defaults to the value of `is_read_only` since read-only tools are
     /// generally concurrency-safe. Override for tools that are write-operations
     /// but still safe to parallelize (e.g. writing to independent files).
     fn is_concurrency_safe(&self) -> bool {

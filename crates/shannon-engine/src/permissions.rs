@@ -83,17 +83,17 @@ pub enum PermissionChoice {
 /// Approval policy mode controlling how tool execution is authorized.
 ///
 /// Compatible with Claude Code's permission modes:
-/// - `default`  → [`Suggest`]:            ask for each new tool use
-/// - `plan`     → [`Plan`]:               plan first, ask before execution
-/// - `auto`     → [`AutoEdit`]:           auto-accept file ops, ask for bash
-/// - `bypassPermissions` → [`BypassPermissions`]: skip all checks
-/// - `dontAsk`  → [`DontAsk`]:            accept everything without prompting
+/// - `default`  → `Suggest`:            ask for each new tool use
+/// - `plan`     → `Plan`:               plan first, ask before execution
+/// - `auto`     → `AutoEdit`:           auto-accept file ops, ask for bash
+/// - `bypassPermissions` → `BypassPermissions`: skip all checks
+/// - `dontAsk`  → `DontAsk`:            accept everything without prompting
 ///
 /// Shannon extensions:
-/// - `full-auto` → [`FullAuto`]:  auto-approve everything except critical
-/// - `readonly`  → [`Readonly`]:  only allow read operations
-/// - `auto`      → [`Auto`]:      background safety classifier auto-approves low-risk operations
-/// - `plan-ro`   → [`PlanReadonly`]: read-only analysis mode, no tool execution allowed
+/// - `full-auto` → `FullAuto`:  auto-approve everything except critical
+/// - `readonly`  → `Readonly`:  only allow read operations
+/// - `auto`      → `Auto`:      background safety classifier auto-approves low-risk operations
+/// - `plan-ro`   → `PlanReadonly`: read-only analysis mode, no tool execution allowed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ApprovalMode {
     /// Ask for confirmation on every tool execution.
@@ -462,7 +462,7 @@ impl PermissionRuleChecker {
     /// This is the engine-level constructor that avoids coupling to the
     /// `settings::PermissionRules` type (which remains in `shannon-core`).
     /// Callers in `shannon-core` can use the
-    /// [`PermissionRuleCheckerExt::from_rules`] extension trait method which
+    /// `PermissionRuleCheckerExt::from_rules` extension trait method which
     /// bridges from `settings::PermissionRules` for backward compatibility.
     pub fn from_rule_strings(deny: &[String], ask: &[String], allow: &[String]) -> Self {
         Self {

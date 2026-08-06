@@ -1,9 +1,9 @@
 //! GitHub Issues data source fetcher.
 //!
 //! Queries issues/PRs via the GitHub REST API:
-//! GET https://api.github.com/repos/{owner}/{repo}/issues?state=open&per_page=50
+//! GET `https://api.github.com/repos/{owner}/{repo}/issues?state=open&per_page=50`
 //! If no default_repo, hit /user/issues instead.
-//! Auth: Bearer <token> + Accept: application/vnd.github+json + User-Agent: shannon-desktop
+//! Auth: Bearer `<token>` + Accept: application/vnd.github+json + User-Agent: shannon-desktop
 
 use super::{DataSourceError, DataSourceFetcher, DataSourceItem, DataSourceResult};
 use async_trait::async_trait;

@@ -739,7 +739,7 @@ impl Default for DiffAnalyzer {
 /// [`DiffAnalysis::commit_summary`], or any downstream consumer.
 ///
 /// This is the canonical "wire `DiffPattern` regexes to diff parsing" entry
-/// point P1-1 asks for — it guarantees the regex constants in [`patterns`]
+/// point P1-1 asks for — it guarantees the regex constants in `patterns`
 /// are exercised every time the analyzer runs, rather than being
 /// separately compiled by callers.
 pub fn analyze_diff(diff_output: &str) -> DiffAnalysis {

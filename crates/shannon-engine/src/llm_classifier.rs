@@ -1,6 +1,6 @@
 //! LLM-based permission classification layer
 //!
-//! Wraps the rule-based [`PermissionClassifier`](super::permission_classifier::PermissionClassifier)
+//! Wraps the rule-based [`PermissionClassifier`]
 //! with an async LLM fallback for ambiguous cases. Implements the 4-tier precedence
 //! model from Claude Code:
 //!

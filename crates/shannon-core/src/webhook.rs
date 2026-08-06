@@ -172,7 +172,7 @@ impl Default for WebhookConfig {
 
 /// A running webhook receiver server.
 ///
-/// Call [`WebhookReceiver::events()`] to get a stream of incoming events.
+/// Call `WebhookReceiver::events()` to get a stream of incoming events.
 pub struct WebhookReceiver {
     config: WebhookConfig,
     tx: mpsc::UnboundedSender<WebhookEvent>,

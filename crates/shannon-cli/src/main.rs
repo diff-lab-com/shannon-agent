@@ -413,7 +413,7 @@ struct Cli {
     #[arg(short = 'r', long, value_name = "UUID", num_args = 0..=1)]
     resume: Option<String>,
 
-    /// Resume a specific session by UUID (explicit alternative to --resume <UUID>).
+    /// Resume a specific session by UUID (explicit alternative to --resume `<UUID>`).
     /// Example: shannon --resume-id 550e8400-e29b-41d4-a716-446655440000
     #[arg(long = "resume-id", value_name = "UUID")]
     resume_id: Option<String>,
@@ -836,7 +836,7 @@ fn should_enable_tools(provider: shannon_engine::api::LlmProvider) -> bool {
 /// The CLI temporarily injects the resolved api-key value into the
 /// `SHANNON_API_KEY` env var so `resolve_credential` can pick it up. This is
 /// restored before returning. **N2 will replace this with proper secrets.env
-/// plumbing** via [`crate::config_migration::persist_secrets`] —
+/// plumbing** via `crate::config_migration::persist_secrets` —
 /// pre-N1 the same `unsafe std::env` pattern was used by
 /// `apply_env_overrides`, so this preserves A1 and the same overall behaviour.
 fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {

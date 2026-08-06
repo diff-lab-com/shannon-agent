@@ -40,6 +40,9 @@ ignore = [
     "RUSTSEC-2024-0414", "RUSTSEC-2024-0415", "RUSTSEC-2024-0416",
     "RUSTSEC-2024-0417", "RUSTSEC-2024-0418", "RUSTSEC-2024-0419",
     "RUSTSEC-2024-0420",
+    # glib 0.18.5 VariantStrIter unsound — same gtk-rs/GTK3 family.
+    # See audit.toml for the full rationale.
+    "RUSTSEC-2024-0429",
     # `instant` is unmaintained — transitive via `tokio` test deps.
     "RUSTSEC-2024-0370",
     # `serial` is unmaintained — transitive via test fixtures.
@@ -49,6 +52,21 @@ ignore = [
     # in `tauri` stack. Evaluate when Tauri 3 lands.
     "RUSTSEC-2025-0080", "RUSTSEC-2025-0081",
     "RUSTSEC-2025-0098", "RUSTSEC-2025-0100",
+    # memmap2 0.8.0 — unchecked pointer offset (unsound). Transitive via
+    # Tauri / notify / image ecosystem; not exploitable in our usage.
+    # See audit.toml for the full rationale. Kept in sync per the
+    # one-policy-two-jobs rule.
+    "RUSTSEC-2026-0186",
+    # event-listener 5.4.1 — `!Send` tags cross thread boundaries via
+    # StackSlot (unsound). Transitive via zbus → notify-rust →
+    # tauri-plugin-notification → shannon-desktop. Not exploitable: the
+    # Tauri notification path does not share these slots across threads.
+    # See audit.toml for the full rationale.
+    "RUSTSEC-2026-0221",
+    # lru 0.12.5 — IterMut violates Stacked Borrows (unsound). Transitive
+    # via ratatui → shannon-ui. Not exploitable: shannon-ui never calls
+    # LruCache::iter_mut(). See audit.toml for the full rationale.
+    "RUSTSEC-2026-0002",
 ]
 
 [licenses]

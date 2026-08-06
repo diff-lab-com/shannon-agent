@@ -359,7 +359,7 @@ impl SkillRegistry {
     /// Load only metadata from a SKILL.md file and register it.
     ///
     /// The full body content is not read from disk, making this much cheaper
-    /// for initial discovery. Use [`get_full_skill`] later to load the body
+    /// for initial discovery. Use `get_full_skill` later to load the body
     /// on demand.
     pub fn load_metadata_only(&self, path: &Path) -> SkillResult<SkillMetadata> {
         let metadata = loader_load_metadata_only(path)?;
@@ -434,10 +434,10 @@ impl SkillRegistry {
     /// Checks the in-memory cache first. If the skill was registered via
     /// metadata-only loading, reads the complete file from disk, caches
     /// the result, and returns it. If the skill was already fully loaded
-    /// (via [`register`] or [`load_from_file`]), returns it directly.
+    /// (via `register` or `load_from_file`), returns it directly.
     ///
     /// Also registers the fully-loaded skill in the main `skills` map so
-    /// that subsequent [`get`] / [`get_by_name`] calls return the complete
+    /// that subsequent `get` / `get_by_name` calls return the complete
     /// skill.
     pub fn get_full_skill(&self, name_or_id: &str) -> SkillResult<SkillFull> {
         // Try to resolve to an ID first
@@ -530,7 +530,7 @@ impl SkillRegistry {
     /// Load a complete skill from disk by its ID.
     ///
     /// Convenience wrapper that looks up the file path from metadata and
-    /// delegates to [`get_full_skill`].
+    /// delegates to `get_full_skill`.
     pub fn load_full_skill(&self, id: &str) -> SkillResult<SkillFull> {
         self.get_full_skill(id)
     }
@@ -608,7 +608,7 @@ impl SkillRegistry {
 
     /// Format available skills as a concise block for LLM context injection.
     ///
-    /// Uses [`DEFAULT_SKILL_TOKEN_BUDGET`] as the default budget.
+    /// Uses `DEFAULT_SKILL_TOKEN_BUDGET` as the default budget.
     pub fn format_skills_for_llm(&self) -> String {
         self.format_skills_for_llm_with_budget(Self::DEFAULT_SKILL_TOKEN_BUDGET)
     }
@@ -637,7 +637,7 @@ impl SkillRegistry {
     /// Load and register skills from a directory (backward compatible).
     ///
     /// This loads full skills. For progressive loading, use
-    /// [`load_metadata_from_directory`] instead.
+    /// `load_metadata_from_directory` instead.
     pub fn load_from_directory(&self, dir: &Path, source: &SkillSource) -> SkillResult<Vec<Skill>> {
         let skills = load_skills_from_directory(dir, source.clone())?;
         for skill in &skills {
@@ -648,7 +648,7 @@ impl SkillRegistry {
 
     /// Invalidate the full-skill cache for a given skill ID.
     ///
-    /// The next call to [`get_full_skill`] will re-read from disk.
+    /// The next call to `get_full_skill` will re-read from disk.
     pub fn invalidate_cache(&self, id: &SkillId) -> SkillResult<()> {
         let mut inner = self
             .inner

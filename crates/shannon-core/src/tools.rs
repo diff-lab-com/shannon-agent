@@ -151,7 +151,7 @@ pub struct ToolRegistry {
     cache_ttl_secs: u64,
     /// Schema cache: (version, JSON schema Value). Invalidated on register/unregister.
     schema_cache: std::sync::RwLock<Option<(u64, Value)>>,
-    /// Tool definitions cache: (version, Vec<ToolDefinition>). Invalidated on register/unregister.
+    /// Tool definitions cache: (version, `Vec<ToolDefinition>`). Invalidated on register/unregister.
     defs_cache: std::sync::RwLock<Option<(u64, Vec<shannon_engine::api::ToolDefinition>)>>,
     /// Version counter for cache invalidation.
     version: std::sync::atomic::AtomicU64,

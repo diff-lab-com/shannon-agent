@@ -395,7 +395,7 @@ impl QueryEngine {
             .unwrap_or(crate::model_registry::FALLBACK_CONTEXT_WINDOW)
     }
 
-    /// Like [`resolved_context_window`] but returns `None` when the context
+    /// Like `resolved_context_window` but returns `None` when the context
     /// window is genuinely unknown (no user override, no live Ollama `num_ctx`,
     /// and the model absent from both the static catalog and the models.dev
     /// overlay). User-facing labels render "unknown" for `None` instead of the
@@ -707,7 +707,7 @@ impl QueryEngine {
     /// Set the shared plan-mode flag so the engine can block write tools when
     /// plan mode is active.
     ///
-    /// The flag is typically obtained from [`PlanManager::plan_mode_flag()`] in
+    /// The flag is typically obtained from `PlanManager::plan_mode_flag()` in
     /// `shannon-tools` and cloned into the engine before the first query.
     pub fn with_plan_mode_active(mut self, flag: Arc<RwLock<bool>>) -> Self {
         self.plan_mode_active = flag;
@@ -925,14 +925,14 @@ impl QueryEngine {
     /// (ADR-0008 Decision 4 / P1-1).
     ///
     /// `/connect <provider> <key>` stores the key and switches the engine to the
-    /// provider via [`set_model_for_provider`], which updates the client's
+    /// provider via `set_model_for_provider`, which updates the client's
     /// provider/model/base_url — but **not** its api_key (the client retains the
     /// startup credential). This method rebuilds the client from the current
     /// config (which already reflects the switched provider/base_url) with the
     /// new key, so the very next query uses it. No restart, no "switch takes
     /// effect on next launch".
     ///
-    /// Mirrors [`validate_credential`]'s clone-and-rebuild dance; the only
+    /// Mirrors `validate_credential`'s clone-and-rebuild dance; the only
     /// difference is this method *replaces* `self.client` instead of probing a
     /// throwaway. `api_key` is taken verbatim — callers resolve it from the
     /// `/connect` arg or the credential store before calling.
@@ -951,7 +951,7 @@ impl QueryEngine {
     ///
     /// Does not mutate the running client. Used by `/provider health`. For
     /// probing an *alternate* key (e.g. during `/connect`), use
-    /// [`validate_credential`] instead.
+    /// `validate_credential` instead.
     pub async fn probe_active_health(&self) -> Result<(), shannon_engine::api::ApiError> {
         let mut cfg = self.client.config().clone();
         cfg.max_tokens = 1;

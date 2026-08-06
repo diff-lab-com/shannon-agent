@@ -310,7 +310,14 @@ mod tests {
         assert!(matches!(verdict, BudgetVerdict::Allow { .. }));
         if let Some(state) = enforcer.snapshot("t1") {
             assert_eq!(state.spent_usd, 0.0);
-            assert_eq!(state.month_start, midnight_utc(2026, 7));
+            // `roll_over` pins `month_start` to the current UTC month
+            // via the same `first_of_this_month_utc()` the production
+            // code uses. Asserting against that helper — rather than a
+            // hardcoded `(year, month)` — keeps the test correct on any
+            // day of any month. The previous hardcoded
+            // `midnight_utc(2026, 7)` silently broke on Aug 1 2026 and
+            // would break again on every month boundary.
+            assert_eq!(state.month_start, first_of_this_month_utc());
         } else {
             panic!("state missing after roll-over");
         }
