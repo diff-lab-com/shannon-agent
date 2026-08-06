@@ -149,13 +149,15 @@ jobs:
         run: cargo audit --deny warnings
 
   doc:
-    # Required-for-merge gate TARGET. `continue-on-error: true` for now
-    # because the workspace has pre-existing intra-doc-link errors that
-    # are out of scope for P2-4 (e.g. shannon-tool-interface `is_read_only`
-    # broken link, shannon-mcp-saas private `append_candidate_in`
-    # reference, several bare-URL doc comments in shannon-ui). The job
-    # runs and reports; once that cleanup lands this flips to a hard gate
-    # by removing `continue-on-error`. Catches broken doc links, missing
+    # Required-for-merge gate TARGET. The workspace's pre-existing
+    # intra-doc-link errors (~96 across 11 crates: broken links, private-
+    # item refs, bare URLs, unclosed HTML tags, redundant explicit targets)
+    # were fixed in the P2-4 CI cleanup, so this job now passes clean.
+    # `continue-on-error: true` is intentionally kept for one more cycle:
+    # `cargo doc` is not run locally by most contributors, so a newly-
+    # introduced doc-link error could surprise a PR author. Flip to a hard
+    # gate (remove `continue-on-error` + add to branch-protection required
+    # checks) once the team confirms. Catches broken doc links, missing
     # examples, and unresolved intra-doc references before they ship to
     # docs.rs.
     name: Doc Build

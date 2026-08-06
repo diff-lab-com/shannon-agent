@@ -3,7 +3,7 @@
 //! Trait that abstracts UI operations so the core engine does not directly
 //! depend on any particular UI layer (terminal, web, etc.).
 //!
-//! The core engine communicates results through [`QueryEvent`] streams and
+//! The core engine communicates results through `QueryEvent` streams and
 //! permission channels. Downstream consumers (REPL, web UI, test harnesses)
 //! implement [`UiAdapter`] to render those events and collect user input.
 
@@ -148,7 +148,7 @@ impl DisplayMessage {
 ///
 /// # Design note
 ///
-/// The core engine primarily communicates through the [`QueryEvent`](crate::query_engine::QueryEvent)
+/// The core engine primarily communicates through the `QueryEvent`(crate::query_engine::QueryEvent)
 /// stream returned by [`QueryEngine::process_query`](crate::query_engine::QueryEngine).
 /// That stream already carries text, tool-use notifications, progress, and
 /// usage events.  The `UiAdapter` trait therefore covers the *remaining*

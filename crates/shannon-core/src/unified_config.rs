@@ -14,7 +14,7 @@
 //! (`model`/`provider`/`api_key`/`base_url`/`[providers.*]`) have been
 //! removed under the no-compat policy (shannon-code/desktop were unreleased —
 //! see [[no-public-release-no-compat]]). Configuration previously set on the
-//! flat fields is now expressed as a default [`ProviderProfile`] inside
+//! flat fields is now expressed as a default `ProviderProfile` inside
 //! `provider_model`, synthesized from CLI/TOML/env inputs by
 //! [`crate::provider_resolver::synthesize_default_profile`]. Credentials are
 //! A1-strict: only [`CredentialRef::Env`](shannon_types::provider_config::CredentialRef::Env)
@@ -66,7 +66,7 @@ pub struct ShannonConfig {
     /// User-defined conversation presets from config files.
     #[serde(default)]
     pub presets: Option<HashMap<String, PresetEntry>>,
-    /// Permission profile name: "strict", "balanced", "permissive", or "custom:<name>".
+    /// Permission profile name: "strict", "balanced", "permissive", or "custom:\<name\>".
     #[serde(default)]
     pub permission_profile: Option<String>,
     /// `[notifications]` section for system-level notification behavior.
@@ -130,7 +130,7 @@ impl ShannonConfig {
         }
     }
 
-    /// Parse the `permission_profile` field into a [`PermissionProfile`].
+    /// Parse the `permission_profile` field into a `PermissionProfile`.
     ///
     /// Returns `None` if the field is unset or contains an unrecognised value.
     pub fn resolve_permission_profile(
@@ -145,7 +145,7 @@ impl ShannonConfig {
     ///
     /// N1/C-fields: the v1 flat `api_key`/`[providers.*]` fields are gone.
     /// If the v2 active target resolves to the same provider, its
-    /// [`CredentialRef`](shannon_types::provider_config::CredentialRef) is
+    /// `CredentialRef`(shannon_types::provider_config::CredentialRef) is
     /// consulted (decision A1: env-only for now). Otherwise the provider's
     /// own env chain is consulted.
     pub fn resolve_api_key_for_provider(&self, provider: &LlmProvider) -> String {
@@ -495,11 +495,11 @@ impl From<ShannonConfig> for shannon_engine::api::LlmClientConfig {
     }
 }
 
-/// N1: build a [`LlmClientConfig`] from a resolved v2 active target (the v2
+/// N1: build a `LlmClientConfig` from a resolved v2 active target (the v2
 /// path). The active profile drives provider identity, base_url, model and
 /// credential; the flat v1 fields are consulted only for behavioural overrides
 /// (`max_tokens`, `timeout`). Credentials are resolved strictly per A1 — only
-/// the profile's own [`CredentialRef`] is consulted.
+/// the profile's own `CredentialRef` is consulted.
 ///
 /// `pub` so the desktop shell's `AppState::build_client_config` (and any other
 /// downstream crate that has a `ShannonConfig` + resolved active target) can

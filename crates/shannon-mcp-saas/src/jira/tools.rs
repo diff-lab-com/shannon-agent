@@ -12,7 +12,7 @@
 //! scope: "write" }` before the `tools/call` arrives. The previous
 //! self-attested `args.permission` check (which an LLM could forge)
 //! is gone — that field is stripped at the JSON-RPC boundary in
-//! [`crate::server::handle_tools_call`] and the real capability check
+//! `crate::server::handle_tools_call` and the real capability check
 //! lives in [`crate::server::SessionGrants`]. These tool
 //! implementations therefore do **not** re-attest write scope.
 

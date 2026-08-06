@@ -358,7 +358,7 @@ impl MemoryExtractor {
     /// 4. Persists each memory as a file and adds it to the store.
     /// 5. Updates the extraction cursor.
     ///
-    /// If extraction should not run (per [`should_extract`]), returns a
+    /// If extraction should not run (per `should_extract`), returns a
     /// `skipped` result.
     pub fn extract(
         &self,

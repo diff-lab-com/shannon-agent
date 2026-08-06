@@ -211,7 +211,7 @@ impl LlmSummarizer {
     /// Create a new LLM summarizer wrapping the given client.
     ///
     /// Each call to `summarize` / `micro_summarize` will create a temporary
-    /// tokio runtime. Prefer [`with_handle`] when a runtime is already available.
+    /// tokio runtime. Prefer `with_handle` when a runtime is already available.
     pub fn new(client: crate::api::LlmClient) -> Self {
         Self {
             client,

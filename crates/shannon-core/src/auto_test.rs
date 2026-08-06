@@ -28,7 +28,7 @@
 //!
 //! ## Failure parsing
 //!
-//! [`TestResult::failure_summary`] returns the lines most likely to be relevant to the LLM
+//! `TestResult::failure_summary` returns the lines most likely to be relevant to the LLM
 //! — the last N lines of combined stderr/stdout, with ANSI escapes stripped.
 
 use serde::{Deserialize, Serialize};

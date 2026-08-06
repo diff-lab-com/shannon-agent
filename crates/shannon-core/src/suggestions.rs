@@ -133,7 +133,7 @@ impl SuggestionContext {
 pub struct SuggestionRule {
     /// Unique identifier.
     pub id: String,
-    /// Regex pattern matched against [`SuggestionContext::match_text`].
+    /// Regex pattern matched against `SuggestionContext::match_text`.
     pub pattern: String,
     /// Category for suggestions produced by this rule.
     pub category: SuggestionCategory,
@@ -223,7 +223,7 @@ impl SuggestionEngine {
     /// Generate suggestions for the given context, filtered by available tools.
     ///
     /// The returned vector is sorted by descending priority and capped at
-    /// [`MAX_SUGGESTIONS`] entries.
+    /// `MAX_SUGGESTIONS` entries.
     pub fn suggest(
         &self,
         context: &SuggestionContext,

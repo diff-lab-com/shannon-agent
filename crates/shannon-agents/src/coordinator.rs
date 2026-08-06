@@ -2253,7 +2253,7 @@ impl AgentCoordinator {
     /// Add a teammate to a team from a custom agent definition.
     ///
     /// Converts the `CustomAgentDef` to a `TeammateConfig` and delegates
-    /// to [`add_teammate`]. If the agent definition specifies worktree
+    /// to `add_teammate`. If the agent definition specifies worktree
     /// isolation, the worktree is created automatically.
     pub async fn add_agent_from_def(
         &self,
@@ -2267,7 +2267,7 @@ impl AgentCoordinator {
     /// Discover and cache agent definitions from `.claude/agents/` directories.
     ///
     /// Call this once during initialization. Discovered definitions can then
-    /// be looked up by name via [`get_custom_agent`].
+    /// be looked up by name via `get_custom_agent`.
     pub async fn discover_custom_agents(&mut self) -> Result<(), AgentError> {
         let loader = CustomAgentLoader::new();
         let agents = loader

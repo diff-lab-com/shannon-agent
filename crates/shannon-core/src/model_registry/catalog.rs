@@ -117,7 +117,7 @@ impl ModelInfo {
 // ── Built-in catalog ──────────────────────────────────────────────
 
 /// Static catalog of well-known models. Ollama models are appended at
-/// runtime by [`detect_local_models`].
+/// runtime by `detect_local_models`.
 pub static MODEL_CATALOG: &[ModelInfo] = &[
     // ── Anthropic ──────────────────────────────────────────────
     ModelInfo {

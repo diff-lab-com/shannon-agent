@@ -11,7 +11,7 @@
 //! ## Decision A1 — no secrets here
 //! Only a fixed allowlist of non-secret flat keys is writable
 //! ([`WRITABLE_KEYS`]). API keys and other secrets are refused at the single
-//! chokepoint [`writable_key_kind`]: they belong in the credential store
+//! chokepoint `writable_key_kind`: they belong in the credential store
 //! (`~/.shannon/credentials/<service>.json`, written by `/connect` /
 //! `/credentials`), never in a config file. Reset is safe for any key — it only
 //! deletes.

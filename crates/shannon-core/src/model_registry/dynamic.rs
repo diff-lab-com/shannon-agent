@@ -1,6 +1,6 @@
 //! # Dynamic model catalog (models.dev)
 //!
-//! Phase D (ADR-0005): augments the built-in [`super::MODEL_CATALOG`] with
+//! Phase D (ADR-0005): augments the built-in `super::MODEL_CATALOG` with
 //! live model data fetched from <https://models.dev/models.json>. The dynamic
 //! layer is **strictly additive and offline-safe**:
 //!

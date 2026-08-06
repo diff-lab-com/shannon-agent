@@ -152,7 +152,7 @@ pub fn resolve_provider(kind: &ProviderKind, base_url: &str) -> LlmProvider {
 /// - `Env { var }` → `std::env::var(var)`, empty string on unset.
 /// - `Store { service }` → reads `~/.shannon/credentials/<service>.json`
 ///   (ADR-0005 Phase 1). Empty when absent — callers like
-///   [`resolve_api_key_for_provider`] then fall back to the provider's env
+///   `resolve_api_key_for_provider` then fall back to the provider's env
 ///   chain, so a missing store entry degrades gracefully to env.
 /// - `InlineLegacy { masked }` → the transition-only value, as-is.
 /// - `Keyring` / `Ephemeral` → empty here (opportunistic / session-injected; #9).

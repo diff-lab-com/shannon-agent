@@ -272,8 +272,8 @@ impl SessionRegistry {
     /// Create a new session with a freshly-generated UUID, insert it into
     /// the registry, and mark it as the active session. Returns the key.
     ///
-    /// Unlike [`get_or_create`], this *always* allocates a new entry —
-    /// duplicates are not deduplicated. Use [`new_with_id`] if the UUID
+    /// Unlike `get_or_create`, this *always* allocates a new entry —
+    /// duplicates are not deduplicated. Use `new_with_id` if the UUID
     /// is already known (e.g. loaded from StateManager).
     pub fn create(&self) -> SessionKey {
         let key = SessionKey::new();
@@ -285,7 +285,7 @@ impl SessionRegistry {
     /// Insert a session with a specific UUID (no-op if it already exists).
     /// Returns `true` if a new entry was created, `false` if the key was
     /// already present. After insertion the session is *not* automatically
-    /// marked active — call [`set_active`] separately.
+    /// marked active — call `set_active` separately.
     pub fn insert(&self, session_id: Uuid) -> bool {
         let key = SessionKey(session_id);
         let created = !self.sessions.contains_key(&key);
@@ -368,7 +368,7 @@ impl SessionRegistry {
     }
 
     /// Promote `key` to the active session. The session must already
-    /// exist (call [`get_or_create`] first if not).
+    /// exist (call `get_or_create` first if not).
     pub fn set_active(&self, key: SessionKey) {
         if let Ok(mut guard) = self.active_session.try_lock() {
             *guard = Some(key);

@@ -29,7 +29,7 @@ impl SkillWatcher {
     /// Create a new watcher for the given skill directories.
     ///
     /// Performs an initial scan so that the first call to
-    /// [`check_and_reload`] will not report files that already existed.
+    /// `check_and_reload` will not report files that already existed.
     pub fn new(watch_dirs: Vec<PathBuf>) -> Self {
         let mut watcher = Self {
             watch_dirs,

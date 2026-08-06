@@ -1037,7 +1037,7 @@ impl McpServerRegistry {
         self.load_from_default_paths_with_base(std::path::PathBuf::from("."))
     }
 
-    /// Same as [`load_from_default_paths`] but with an explicit project base directory.
+    /// Same as `load_from_default_paths` but with an explicit project base directory.
     pub fn load_from_default_paths_with_base(&mut self, base: std::path::PathBuf) -> usize {
         let mut count = 0usize;
         let home = dirs::home_dir();

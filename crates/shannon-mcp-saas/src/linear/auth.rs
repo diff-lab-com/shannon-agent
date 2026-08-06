@@ -17,7 +17,7 @@
 //! - account: `linear-token` — the raw `lin_api_…` string
 //!
 //! `Token` redacts in `Debug` and supports the shared `set_token` /
-//! `current_token` async surface used by [`LinearClient`] (see
+//! `current_token` async surface used by `LinearClient` (see
 //! `linear/api.rs`).
 
 use thiserror::Error;

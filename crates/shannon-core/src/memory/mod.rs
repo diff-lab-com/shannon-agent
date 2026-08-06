@@ -8,8 +8,8 @@
 //! Memories are stored as JSON files under `~/.shannon/memories/`, one file per
 //! project (keyed by a hash of the project path).
 //!
-//! - [`MemoryStore`](store::MemoryStore): CRUD + search + persistence for memory entries
-//! - [`AutoDreamService`](auto_dream::AutoDreamService): Pattern-based extraction of memories from conversations
+//! - [`MemoryStore`]: CRUD + search + persistence for memory entries
+//! - [`AutoDreamService`]: Pattern-based extraction of memories from conversations
 //!
 //! ## Memory Categories
 //!

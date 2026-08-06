@@ -1,10 +1,10 @@
 //! D3 Data source fetchers — HTTP implementations for Notion/Linear/GitHub/Jira.
 //!
 //! Each fetcher implements the `DataSourceFetcher` trait, which takes a
-//! config map (already loaded from ~/.shannon/data-sources/<slug>.toml) and
+//! config map (already loaded from `~/.shannon/data-sources/<slug>.toml`) and
 //! a query string, then returns normalized `DataSourceResult`. The
 //! `dispatch` function routes based on the `kind` field from the TOML's
-//! [data_source] section.
+//! `[data_source]` section.
 
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -70,7 +70,7 @@ pub enum DataSourceError {
 pub trait DataSourceFetcher: Send + Sync {
     /// Fetch items from the data source.
     ///
-    /// `config` contains the adapter-specific fields from the TOML [config] section.
+    /// `config` contains the adapter-specific fields from the TOML `[config]` section.
     /// `query` is a user-supplied search string (implementation-specific interpretation).
     async fn fetch(
         &self,
