@@ -9,6 +9,7 @@ use crate::commands::AppState;
 use crate::config::{self, DesktopConfig, ProviderConnection, ProvidersFile};
 use crate::events;
 use crate::events::event_names;
+use crate::provider_read_snapshot::ProviderReadSnapshot;
 use shannon_core::provider_config_service::ProviderConfigService;
 use shannon_types::provider_config::ProviderTiers;
 
@@ -313,24 +314,21 @@ pub async fn configure(
             // time so no in-memory cache update is needed.
             let new_key = update.value.clone();
             let (active_id, label) = {
-                let store = state.provider_store.lock().await;
-                let pf = store.config().profiles.get("default").ok_or_else(|| {
-                    "configure('api_key'): no providers configured — add one first".to_string()
-                })?;
-                let active_id = pf.active_target.provider_id.clone();
-                if active_id.is_empty() {
+                // ADR-0009: read through the typed snapshot instead of
+                // hand-navigating `profiles.get("default")` under the lock.
+                let snapshot = ProviderReadSnapshot::capture(&state.provider_store).await;
+                if snapshot.providers.is_empty() {
                     return Err(
-                        "configure('api_key'): no active provider — add one in Settings → Models first"
-                            .to_string(),
+                        "configure('api_key'): no providers configured — add one first".to_string(),
                     );
                 }
-                let profile = pf
-                    .providers
-                    .iter()
-                    .find(|p| p.id == active_id)
-                    .ok_or_else(|| {
-                        format!("configure('api_key'): active provider `{active_id}` not in store")
-                    })?;
+                let active_id = snapshot.active_provider_id.clone().ok_or_else(|| {
+                    "configure('api_key'): no active provider — add one in Settings → Models first"
+                        .to_string()
+                })?;
+                let profile = snapshot.active_profile().ok_or_else(|| {
+                    format!("configure('api_key'): active provider `{active_id}` not in store")
+                })?;
                 (active_id, profile.display_name.clone())
             };
             store_provider_key(&active_id, &label, Some(&new_key))?;
@@ -350,22 +348,19 @@ pub async fn configure(
             // default_max_tokens, extra_headers, quirks).
             let new_url = validate_base_url(&update.value)?;
             let (active_id, model_id, mut profile) = {
-                let store = state.provider_store.lock().await;
-                let pf =
-                    store.config().profiles.get("default").ok_or_else(|| {
-                        "configure('base_url'): no providers configured".to_string()
-                    })?;
-                let active_id = pf.active_target.provider_id.clone();
-                if active_id.is_empty() {
-                    return Err(
-                        "configure('base_url'): no active provider — add one first".to_string()
-                    );
+                // ADR-0009: read through the typed snapshot — the active
+                // provider id, model id, and profile all come from one
+                // short-lived lock.
+                let snapshot = ProviderReadSnapshot::capture(&state.provider_store).await;
+                if snapshot.providers.is_empty() {
+                    return Err("configure('base_url'): no providers configured".to_string());
                 }
-                let model_id = pf.active_target.model_id.clone();
-                let profile = pf
-                    .providers
-                    .iter()
-                    .find(|p| p.id == active_id)
+                let active_id = snapshot.active_provider_id.clone().ok_or_else(|| {
+                    "configure('base_url'): no active provider — add one first".to_string()
+                })?;
+                let model_id = snapshot.active_model_id.clone().unwrap_or_default();
+                let profile = snapshot
+                    .active_profile()
                     .ok_or_else(|| {
                         format!("configure('base_url'): active provider `{active_id}` not in store")
                     })?
@@ -961,8 +956,10 @@ pub async fn test_all_providers(
     use shannon_engine::api::probe::probe_provider_endpoint;
 
     let connections: Vec<ProviderConnection> = {
-        let store = state.provider_store.lock().await;
-        providers_file_from_store(&store).providers
+        // ADR-0009: snapshot-then-release so the network probes below
+        // never hold the provider-store mutex.
+        let snapshot = ProviderReadSnapshot::capture(&state.provider_store).await;
+        snapshot.to_providers_file().providers
     };
 
     let timeout = std::time::Duration::from_secs(6);
@@ -1327,8 +1324,11 @@ fn remove_provider(mut file: ProvidersFile, id: &str) -> Result<ProvidersFile, S
 /// hear about.
 #[tauri::command]
 pub async fn list_providers(state: tauri::State<'_, AppState>) -> Result<ProvidersFile, String> {
-    let store = state.provider_store.lock().await;
-    let file = providers_file_from_store(&store);
+    // ADR-0009: read through the typed snapshot — one lock, one
+    // projection, immediate release.
+    let file = ProviderReadSnapshot::capture(&state.provider_store)
+        .await
+        .to_providers_file();
     // Corrupted-state guard: the engine store is empty (after Phase 2
     // task 4's one-shot migration ran) but a legacy `providers.json`
     // still exists on disk. Don't silently re-migrate; surface the
@@ -1341,48 +1341,6 @@ pub async fn list_providers(state: tauri::State<'_, AppState>) -> Result<Provide
         );
     }
     Ok(file)
-}
-
-/// Pure helper that builds the wire-side [`ProvidersFile`] by reading
-/// from the engine [`shannon_core::provider_config_store::ProviderConfigStore`].
-/// The store's `"default"` model profile is the single provider list
-/// `list_providers` reports. `active_target.provider_id` is the
-/// `active_provider_id` the UI uses to highlight the current
-/// selection.
-///
-/// Extracted from [`list_providers`] so the read-side mapping is
-/// unit-testable without a Tauri runtime.
-fn providers_file_from_store(
-    store: &shannon_core::provider_config_store::ProviderConfigStore,
-) -> ProvidersFile {
-    let cfg = store.config();
-    // The engine model is `profiles: HashMap<String, ModelProfile>`;
-    // only the canonical "default" profile holds user-managed
-    // connections on the desktop. Auxiliary / gateway routing profiles
-    // are out of scope for this command.
-    let default_profile = match cfg.profiles.get("default") {
-        Some(p) => p,
-        None => {
-            return ProvidersFile::default();
-        }
-    };
-
-    let active_provider_id = if default_profile.active_target.provider_id.is_empty() {
-        None
-    } else {
-        Some(default_profile.active_target.provider_id.clone())
-    };
-
-    let providers: Vec<ProviderConnection> = default_profile
-        .providers
-        .iter()
-        .map(|p| config::from_provider_profile(&p.id, p))
-        .collect();
-
-    ProvidersFile {
-        active_provider_id,
-        providers,
-    }
 }
 
 /// Read the current [`ProvidersFile`] snapshot from the engine
@@ -1398,8 +1356,11 @@ fn providers_file_from_store(
 /// it. Reading the engine store here keeps the R-M-W working against the
 /// same source of truth that the runtime and the CLI see.
 async fn providers_file_from_state(state: &tauri::State<'_, AppState>) -> ProvidersFile {
-    let store = state.provider_store.lock().await;
-    providers_file_from_store(&store)
+    // ADR-0009: snapshot-then-release; the R-M-W callers below take the
+    // write-path `ProviderConfigService` lock separately.
+    ProviderReadSnapshot::capture(&state.provider_store)
+        .await
+        .to_providers_file()
 }
 
 /// Insert or update a managed provider. Returns the updated (masked) file.
@@ -2093,7 +2054,7 @@ mod tests {
         // No upsert → `"default"` profile slot has zero providers.
         // The wire file must be `{ active: None, providers: [] }`.
         let store = shannon_core::provider_config_store::ProviderConfigStore::default();
-        let file = providers_file_from_store(&store);
+        let file = ProviderReadSnapshot::from_store(&store).to_providers_file();
         assert!(file.active_provider_id.is_none());
         assert!(file.providers.is_empty());
     }
@@ -2112,7 +2073,7 @@ mod tests {
             "claude-sonnet-4-20250514",
         );
 
-        let file = providers_file_from_store(&store);
+        let file = ProviderReadSnapshot::from_store(&store).to_providers_file();
         assert_eq!(file.providers.len(), 1);
         let conn = &file.providers[0];
         assert_eq!(conn.id, "anthropic-main");
@@ -2151,7 +2112,7 @@ mod tests {
             "glm-flash",
         );
 
-        let file = providers_file_from_store(&store);
+        let file = ProviderReadSnapshot::from_store(&store).to_providers_file();
         assert_eq!(file.providers.len(), 2, "two profiles in the store");
         assert_eq!(
             file.active_provider_id.as_deref(),
@@ -2176,7 +2137,7 @@ mod tests {
             "claude-sonnet-4-20250514",
         );
 
-        let file = providers_file_from_store(&store);
+        let file = ProviderReadSnapshot::from_store(&store).to_providers_file();
         assert!(file.providers[0].api_key.is_none());
 
         let json = serde_json::to_string(&file).expect("wire file serializes");
@@ -2222,7 +2183,7 @@ mod tests {
         };
         store.upsert_profile(profile, "claude-sonnet-4-20250514");
 
-        let file = providers_file_from_store(&store);
+        let file = ProviderReadSnapshot::from_store(&store).to_providers_file();
         let conn = &file.providers[0];
         assert_eq!(conn.extra_headers, extra_headers);
         assert_eq!(conn.default_max_tokens, Some(2048));
@@ -2342,8 +2303,8 @@ mod tests {
 
     // ── C1: read path is single-sourced from the engine store ──────────
     //
-    // `providers_file_from_store` is the entire read side of
-    // `list_providers`. Its signature takes only `&ProviderConfigStore`
+    // ADR-0009: `ProviderReadSnapshot::from_store` is the entire read side
+    // of `list_providers`. Its signature takes only `&ProviderConfigStore`
     // — there is no `providers.json` parameter, so the legacy
     // write-through cache CANNOT influence the UI's provider list or
     // active id. These tests pin that property: if someone later
@@ -2351,9 +2312,9 @@ mod tests {
     // change breaks these tests (and the contract on `list_providers`).
 
     #[test]
-    fn providers_file_from_store_reports_active_id_from_engine_store() {
+    fn snapshot_reports_active_id_from_engine_store() {
         let store = store_with_single_anthropic_profile("anthropic-main", "claude-opus-4-8");
-        let file = providers_file_from_store(&store);
+        let file = ProviderReadSnapshot::from_store(&store).to_providers_file();
         assert_eq!(
             file.active_provider_id.as_deref(),
             Some("anthropic-main"),
@@ -2365,9 +2326,9 @@ mod tests {
     }
 
     #[test]
-    fn providers_file_from_store_returns_none_when_no_active_target() {
+    fn snapshot_returns_none_when_no_active_target() {
         let store = shannon_core::provider_config_store::ProviderConfigStore::default();
-        let file = providers_file_from_store(&store);
+        let file = ProviderReadSnapshot::from_store(&store).to_providers_file();
         assert!(
             file.active_provider_id.is_none(),
             "an empty engine store must surface no active provider — the legacy \
@@ -2377,10 +2338,10 @@ mod tests {
     }
 
     #[test]
-    fn providers_file_from_store_reflects_active_profile_removal() {
+    fn snapshot_reflects_active_profile_removal() {
         let mut store = store_with_single_anthropic_profile("anthropic-main", "claude-opus-4-8");
         store.remove_profile("anthropic-main");
-        let file = providers_file_from_store(&store);
+        let file = ProviderReadSnapshot::from_store(&store).to_providers_file();
         assert!(
             file.active_provider_id.is_none(),
             "removing the active profile must clear the surfaced active id on read",
