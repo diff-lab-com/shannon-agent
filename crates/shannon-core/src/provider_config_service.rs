@@ -423,9 +423,8 @@ impl<'a> LockedService<'a> {
     }
 
     /// Mutably borrow the underlying service. Use the mutating
-    /// **non-persisting** helpers like
-    /// [`ProviderConfigService::upsert_profile_with_active`] and then
-    /// call [`Self::save_locked`] to commit, or use the convenience
+    /// **non-persisting** helpers like `upsert_profile_with_active` and
+    /// then call [`Self::save_locked`] to commit, or use the convenience
     /// methods below which combine mutate + persist.
     pub fn service_mut(&mut self) -> &mut ProviderConfigService {
         self.svc
@@ -538,8 +537,7 @@ impl<'a> LockedService<'a> {
 
     /// Persist whatever is in the in-memory config to disk. **The
     /// caller MUST hold the flock** (typically via
-    /// [`ProviderConfigService::lock`]). For the no-flock version, use
-    /// [`ProviderConfigService::save`].
+    /// [`ProviderConfigService::lock`]); this does not re-acquire it.
     pub fn save_locked(&mut self) -> io::Result<PathBuf> {
         self.svc.store.save_locked()
     }

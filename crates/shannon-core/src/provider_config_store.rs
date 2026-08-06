@@ -353,7 +353,7 @@ impl ProviderConfigStore {
     /// fds on the same inode (see [`Self::load_or_default_at`]).
     ///
     /// This is the read-side half of lock-then-reload: call it inside a
-    /// [`ProviderConfigService::lock`] critical section (before mutating)
+    /// `ProviderConfigService::lock` critical section (before mutating)
     /// so the subsequent mutate + save composes on the freshest committed
     /// state. Without it, a `ProviderConfigStore` loaded before acquiring
     /// the flock holds a snapshot that may be older than another
