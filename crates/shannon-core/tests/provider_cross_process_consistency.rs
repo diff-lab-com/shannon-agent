@@ -168,3 +168,174 @@ fn locked_service_drop_releases_the_flock() {
     // Re-acquire must succeed at once: no lingering lock, no deadlock.
     let _again = svc.lock().expect("second lock after drop");
 }
+
+// ────────────────────────────────────────────────────────────────────
+// §C3 — CLI ↔ desktop surface parity matrix (ADR-0009 companion)
+// ────────────────────────────────────────────────────────────────────
+//
+// The S1-4 tests above pin cross-writer *consistency* — N same-kind
+// writers compose. This section pins **surface parity**: the CLI's bare
+// `ProviderConfigService` write path (what `shannon providers …` and the
+// REPL `/connect` drive) and the desktop's `LockedService` R-M-W path
+// (what Tauri's `configure()` arms drive) produce **byte-identical
+// on-disk state** for the same logical operation.
+//
+// Today both surfaces share one core mutation (`upsert_profile_with_active`,
+// `disconnect_by_slug_unpersisted`, `ProviderConfigStore::set_active`), so
+// parity is structural — the bare methods are literally `lock → reload →
+// locked.<op>`. These tests guard against a future refactor that diverges
+// the two compositions. See `docs/spikes/p2-2-c3-cli-desktop-parity-matrix.md`
+// (rows 1-3 write parity + row 6 mixed-surface stress).
+
+/// Assert two `providers.toml` files hold structurally identical state.
+/// Used by every §C3 row to detect CLI↔desktop surface divergence.
+fn assert_disk_state_eq(a: &std::path::Path, b: &std::path::Path) {
+    let ca = ProviderConfigStore::load_or_default_at(a).config().clone();
+    let cb = ProviderConfigStore::load_or_default_at(b).config().clone();
+    assert_eq!(
+        ca, cb,
+        "CLI vs desktop surface divergence:\n  cli(a)     = {ca:#?}\n  desktop(b) = {cb:#?}"
+    );
+}
+
+/// Row 1 — upsert (add provider). The CLI's bare `upsert` and the
+/// desktop's `lock → reload_locked → LockedService::upsert` must persist
+/// the same profile to the same on-disk shape.
+#[test]
+fn c3_upsert_cli_surface_matches_desktop_locked_surface() {
+    let dir = TempDir::new().expect("temp dir");
+    let cli_path = dir.path().join("cli.toml");
+    let desk_path = dir.path().join("desk.toml");
+    let profile = profile_for(0);
+
+    // CLI surface: bare upsert (internally lock → reload → mutate → save).
+    ProviderConfigService::load_at(&cli_path)
+        .upsert(profile.clone(), "model-0", true)
+        .expect("cli bare upsert");
+
+    // Desktop surface: the explicit LockedService R-M-W that configure() arms use.
+    {
+        let mut svc = ProviderConfigService::load_at(&desk_path);
+        let mut locked = svc.lock().expect("desktop lock");
+        locked.reload_locked().expect("desktop reload");
+        locked
+            .upsert(profile.clone(), "model-0", true)
+            .expect("desktop locked upsert");
+    }
+
+    assert_disk_state_eq(&cli_path, &desk_path);
+    assert_eq!(count_profiles(&cli_path), 1);
+}
+
+/// Row 2 — disconnect (remove provider). After removing the same slot via
+/// each surface, both files must agree (profile absent, active cleared).
+#[test]
+fn c3_disconnect_cli_surface_matches_desktop_locked_surface() {
+    let dir = TempDir::new().expect("temp dir");
+    let cli_path = dir.path().join("cli.toml");
+    let desk_path = dir.path().join("desk.toml");
+    let profile = profile_for(0);
+    let slug = profile.id.clone();
+
+    // Seed both files identically (seeding isn't under test — one surface for both).
+    ProviderConfigService::load_at(&cli_path)
+        .upsert(profile.clone(), "model-0", true)
+        .expect("seed cli");
+    ProviderConfigService::load_at(&desk_path)
+        .upsert(profile.clone(), "model-0", true)
+        .expect("seed desk");
+
+    // CLI surface remove.
+    ProviderConfigService::load_at(&cli_path)
+        .disconnect_by_slug(&slug)
+        .expect("cli disconnect");
+    // Desktop surface remove.
+    {
+        let mut svc = ProviderConfigService::load_at(&desk_path);
+        let mut locked = svc.lock().expect("desktop lock");
+        locked.reload_locked().expect("desktop reload");
+        locked
+            .disconnect_by_slug(&slug)
+            .expect("desktop disconnect");
+    }
+
+    assert_disk_state_eq(&cli_path, &desk_path);
+    assert_eq!(count_profiles(&cli_path), 0);
+    assert_eq!(count_profiles(&desk_path), 0);
+}
+
+/// Row 3 — set_active. Both surfaces must repoint `active_target` at the
+/// same provider/model, leaving every other field untouched.
+#[test]
+fn c3_set_active_cli_surface_matches_desktop_locked_surface() {
+    use shannon_core::LlmProvider;
+    let dir = TempDir::new().expect("temp dir");
+    let cli_path = dir.path().join("cli.toml");
+    let desk_path = dir.path().join("desk.toml");
+
+    // Seed both with two providers. The second connect (OpenAI) wins active,
+    // so set_active(Anthropic) below actually moves the target — making the
+    // parity assertion meaningful rather than a no-op.
+    for path in [&cli_path, &desk_path] {
+        let mut svc = ProviderConfigService::load_at(path);
+        svc.connect(LlmProvider::Anthropic, None, None, true)
+            .expect("seed anthropic");
+        svc.connect(LlmProvider::OpenAI, None, None, true)
+            .expect("seed openai");
+    }
+
+    // CLI surface: set active back to Anthropic.
+    ProviderConfigService::load_at(&cli_path)
+        .set_active(&LlmProvider::Anthropic, "claude-opus-4-8")
+        .expect("cli set_active");
+    // Desktop surface: same, via LockedService.
+    {
+        let mut svc = ProviderConfigService::load_at(&desk_path);
+        let mut locked = svc.lock().expect("desktop lock");
+        locked.reload_locked().expect("desktop reload");
+        locked
+            .set_active(&LlmProvider::Anthropic, "claude-opus-4-8")
+            .expect("desktop set_active");
+    }
+
+    assert_disk_state_eq(&cli_path, &desk_path);
+}
+
+/// Row 6 — mixed-surface stress. Generalises `concurrent_writers_do_not_lose_updates`:
+/// writers split across the bare-CLI and desktop-LockedService patterns must
+/// all land on the shared file, proving the two surfaces compose under
+/// contention (not just that each composes with itself).
+#[test]
+fn c3_mixed_surface_writers_do_not_lose_updates() {
+    let dir = TempDir::new().expect("temp dir");
+    let path = dir.path().join("providers.toml");
+    const N: usize = 8;
+
+    std::thread::scope(|s| {
+        for i in 0..N {
+            let path_ref = &path;
+            s.spawn(move || {
+                let mut svc = ProviderConfigService::load_at(path_ref);
+                if i % 2 == 0 {
+                    // Even writers — CLI bare surface.
+                    svc.upsert(profile_for(i), &format!("model-{i}"), true)
+                        .expect("cli bare upsert");
+                } else {
+                    // Odd writers — desktop LockedService surface.
+                    let mut locked = svc.lock().expect("desktop lock");
+                    locked.reload_locked().expect("desktop reload");
+                    locked
+                        .upsert(profile_for(i), &format!("model-{i}"), true)
+                        .expect("desktop locked upsert");
+                }
+            });
+        }
+    });
+
+    assert_eq!(
+        count_profiles(&path),
+        N,
+        "mixed-surface lost update: expected {N} providers after {N} \
+         writers split across CLI + desktop surfaces"
+    );
+}
