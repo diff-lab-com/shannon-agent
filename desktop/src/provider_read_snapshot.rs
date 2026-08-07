@@ -218,6 +218,105 @@ mod tests {
         assert_eq!(file.providers[0].api_key, None);
     }
 
+    /// Row 5 (C3-b) — read-view parity. The desktop's
+    /// `ProviderReadSnapshot::to_providers_file()` and the CLI's
+    /// `ProviderConfigStore::config()` read the SAME store, so the desktop
+    /// wire projection must faithfully reproduce the CLI's view: matching
+    /// active id, a 1:1 provider vec (id + base_url), and no api_key on the
+    /// wire. This is the ADR-0009 read-facade acceptance gate promoted to a
+    /// multi-provider cross-surface check (the single-provider shape is
+    /// pinned by `to_providers_file_round_trips_wire_shape` above).
+    #[test]
+    fn read_view_cli_vs_desktop_match() {
+        let mut store = ProviderConfigStore::default();
+        // Two providers of different kinds — the projection must keep both
+        // distinct (no OpenAI collapse of the compatible slot) and preserve
+        // each base_url.
+        let anthropic = ProviderProfile {
+            id: "anthropic-main".into(),
+            kind: ProviderKind::Anthropic,
+            display_name: "Anthropic".into(),
+            base_url: "https://api.anthropic.com".into(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: "anthropic-main".into(),
+            },
+            extra_headers: std::collections::HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+        };
+        let glm = ProviderProfile {
+            id: "glm".into(),
+            kind: ProviderKind::OpenAiCompatible,
+            display_name: "GLM".into(),
+            base_url: "https://open.bigmodel.cn/api/paas/v4".into(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: "glm".into(),
+            },
+            extra_headers: std::collections::HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+        };
+        store.upsert_profile(anthropic, "claude-opus-4-8");
+        store.upsert_profile(glm, "glm-4.6"); // last upsert → active
+
+        // CLI side: the source-of-truth config both surfaces read from.
+        let cli_default = store
+            .config()
+            .profiles
+            .get("default")
+            .expect("default profile")
+            .clone();
+        // Desktop side: the read facade's wire projection.
+        let file = ProviderReadSnapshot::from_store(&store).to_providers_file();
+
+        // Active target agrees across the two surfaces.
+        assert_eq!(
+            file.active_provider_id.as_deref(),
+            Some(cli_default.active_target.provider_id.as_str()),
+            "active provider id diverges between CLI config and desktop wire",
+        );
+        // Provider vec agrees on count.
+        assert_eq!(
+            file.providers.len(),
+            cli_default.providers.len(),
+            "provider count diverges between CLI config and desktop wire",
+        );
+
+        // Each desktop wire entry maps 1:1 to a CLI config provider by id,
+        // with matching base_url and no api_key serialised.
+        for conn in &file.providers {
+            let cli_p = cli_default
+                .providers
+                .iter()
+                .find(|p| p.id == conn.id)
+                .unwrap_or_else(|| panic!("desktop wire id `{}` missing from CLI config", conn.id));
+            assert_eq!(
+                conn.base_url.as_deref(),
+                Some(cli_p.base_url.as_str()),
+                "base_url diverges for `{}`",
+                conn.id
+            );
+            assert_eq!(
+                conn.api_key, None,
+                "api_key must never serialize onto the wire for `{}`",
+                conn.id
+            );
+        }
+
+        // Both providers survived the projection (no OpenAI collapse).
+        let wire_ids: Vec<&str> = file.providers.iter().map(|p| p.id.as_str()).collect();
+        assert!(
+            wire_ids.contains(&"anthropic-main") && wire_ids.contains(&"glm"),
+            "expected both providers on the wire, got {wire_ids:?}"
+        );
+    }
+
     #[test]
     fn snapshot_is_send_and_cloneable() {
         // Decision 2 contract: the snapshot is owned + Send so it can be
