@@ -301,6 +301,114 @@ fn c3_set_active_cli_surface_matches_desktop_locked_surface() {
     assert_disk_state_eq(&cli_path, &desk_path);
 }
 
+/// Row 4 — update field (re-arm). The REPL `/connect` re-arm and the
+/// desktop `configure('base_url')` / `configure('api_key')` arms both
+/// re-upsert the **same provider id** with a changed field. The two
+/// surfaces must persist the same updated profile, with every non-edited
+/// field (display_name, extra_headers, tiers) carried forward identically,
+/// and must not create a duplicate slot.
+///
+/// Credential-key updates — the `configure('api_key')` arm writing
+/// `~/.shannon/credentials/<id>.json` via `CredentialManager` — are a
+/// desktop Tauri-command concern outside `ProviderConfigService::upsert`
+/// (which only touches `providers.toml`). They are covered by the desktop
+/// `configure` tests and the C3-d real-binary smoke; this row pins the
+/// `providers.toml` field-preservation parity, matching the scope of the
+/// other in-process rows.
+#[test]
+fn c3_update_field_cli_surface_matches_desktop_locked_surface() {
+    let dir = TempDir::new().expect("temp dir");
+    let cli_path = dir.path().join("cli.toml");
+    let desk_path = dir.path().join("desk.toml");
+
+    // A profile with several fields populated so a re-arm that only changes
+    // base_url/model can be checked for non-edited-field preservation.
+    let mut seed = profile_for(0);
+    seed.display_name = "writer zero".into();
+    let mut extra = HashMap::new();
+    extra.insert("X-Team".into(), "alpha".into());
+    seed.extra_headers = extra;
+    seed.tiers = ProviderTiers {
+        fast: Some("fast-0".into()),
+        standard: Some("std-0".into()),
+        pro: Some("pro-0".into()),
+    };
+
+    // Seed both files identically (seeding isn't under test).
+    for path in [&cli_path, &desk_path] {
+        ProviderConfigService::load_at(path)
+            .upsert(seed.clone(), "model-0", true)
+            .expect("seed");
+    }
+
+    // Re-arm: same id, changed base_url + model. The caller (REPL `/connect`
+    // re-arm or desktop `configure('base_url')`) rebuilds the profile from
+    // the existing one, editing only the targeted field, so display_name /
+    // extra_headers / tiers are carried forward unchanged.
+    let mut updated = seed.clone();
+    updated.base_url = "https://example-0-updated.invalid/v1".into();
+    let updated_model = "model-0-v2";
+
+    // CLI surface re-arm (bare upsert).
+    ProviderConfigService::load_at(&cli_path)
+        .upsert(updated.clone(), updated_model, true)
+        .expect("cli re-arm upsert");
+    // Desktop surface re-arm via LockedService.
+    {
+        let mut svc = ProviderConfigService::load_at(&desk_path);
+        let mut locked = svc.lock().expect("desktop lock");
+        locked.reload_locked().expect("desktop reload");
+        locked
+            .upsert(updated.clone(), updated_model, true)
+            .expect("desktop re-arm upsert");
+    }
+
+    assert_disk_state_eq(&cli_path, &desk_path);
+
+    // The changed field landed and non-edited fields survived on BOTH surfaces.
+    for (label, path) in [("cli", &cli_path), ("desktop", &desk_path)] {
+        let cfg = ProviderConfigStore::load_or_default_at(path)
+            .config()
+            .clone();
+        let default = cfg
+            .profiles
+            .get("default")
+            .unwrap_or_else(|| panic!("default profile present on {label}"));
+        let provider = default
+            .providers
+            .iter()
+            .find(|p| p.id == "writer-0")
+            .unwrap_or_else(|| panic!("writer-0 present on {label}"));
+        assert_eq!(
+            provider.base_url, "https://example-0-updated.invalid/v1",
+            "changed base_url landed on {label}"
+        );
+        assert_eq!(
+            provider.display_name, "writer zero",
+            "non-edited display_name preserved on {label}"
+        );
+        assert_eq!(
+            provider.extra_headers.get("X-Team").map(String::as_str),
+            Some("alpha"),
+            "non-edited extra_headers preserved on {label}"
+        );
+        assert_eq!(
+            provider.tiers.fast.as_deref(),
+            Some("fast-0"),
+            "non-edited tiers preserved on {label}"
+        );
+        assert_eq!(
+            default.active_target.model_id, updated_model,
+            "active model updated on {label}"
+        );
+        assert_eq!(
+            default.providers.len(),
+            1,
+            "re-arm must not create a duplicate slot on {label}"
+        );
+    }
+}
+
 /// Row 6 — mixed-surface stress. Generalises `concurrent_writers_do_not_lose_updates`:
 /// writers split across the bare-CLI and desktop-LockedService patterns must
 /// all land on the shared file, proving the two surfaces compose under
