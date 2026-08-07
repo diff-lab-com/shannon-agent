@@ -1,0 +1,125 @@
+# Auto-regenerate docs/metrics.md and open a PR if it changed.
+#
+# Restores the auto-update that the deleted `.github/workflows/metrics.yml`
+# intended but could not perform — that workflow tried to commit directly to
+# `dev` on every CI run, and branch protection (GH006) rejected the push every
+# time. This workflow opens a PR instead, so the update flows through normal
+# review. No PAT required: the default `GITHUB_TOKEN` can push to the
+# (unprotected) `chore/metrics-update` branch and open the PR.
+#
+# ⚠️  Activation gate. `schedule` and `workflow_dispatch` events ONLY run from
+# the repo's DEFAULT branch (`main`). This file lands on `dev` first (per the
+# dev→main branch model); the cron + manual dispatch become active once it
+# propagates to `main` via the normal release flow, or immediately if
+# cherry-picked to `main`.
+#
+# ⚠️  Bot-PR CI gap. PRs opened by `GITHUB_TOKEN` do not re-trigger workflows
+# (GitHub prevents loops), so ci.yml will NOT run on the auto-opened PR. The
+# diff is a regenerated metrics snapshot (test/line/clippy/deny counts); a
+# reviewer sanity-checks it before merge. Direct-push-to-dev automation (which
+# would run CI) needs a PAT or GitHub App — a repo-owner action tracked in
+# docs/tech-debt.md.
+
+name: Metrics Update
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, Monday 03:00 UTC — low-noise cadence versus the old per-run commit.
+    - cron: "0 3 * * 1"
+
+# The default GITHUB_TOKEN can't push to protected `dev`, but it CAN push to
+# the throwaway `chore/metrics-update` branch and open a PR off it.
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: metrics-update
+  # Don't cancel a scheduled run mid-flight if a manual dispatch overlaps.
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  update-metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          # Generate the active branch's metrics, not main's snapshot.
+          ref: dev
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+
+      - name: Install Tauri + libdbus system deps
+        if: runner.os == 'Linux'
+        # Mirrors ci.yml's `metrics` job: `cargo test --workspace --no-run`
+        # compiles shannon-desktop (Tauri → webkit2gtk/gtk headers) and
+        # shannon-mcp-saas (keyring → libdbus-sys → libdbus-1-dev).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libxdo-dev patchelf libdbus-1-dev
+
+      - name: Install nextest
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-nextest
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-deny
+
+      - name: Install jq (gen-metrics.sh dependency)
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Compile tests (required for nextest list)
+        run: cargo test --workspace --no-run
+
+      - name: Generate docs/metrics.md
+        run: bash scripts/gen-metrics.sh
+
+      - name: Open PR if metrics changed
+        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e
+        with:
+          base: dev
+          branch: chore/metrics-update
+          # `delete-branch: true` removes chore/metrics-update after merge.
+          delete-branch: true
+          commit-message: |
+            docs(metrics): regenerate docs/metrics.md
+
+            Automated refresh via the metrics-update workflow (weekly cron +
+            manual dispatch). Replaces the deleted metrics.yml auto-commit,
+            which branch protection blocked on every run.
+          title: "docs(metrics): regenerate docs/metrics.md"
+          body: |
+            Automated regeneration of `docs/metrics.md` by the
+            `metrics-update` workflow.
+
+            ## Context
+            - Replaces the deleted `.github/workflows/metrics.yml`, which
+              tried to push directly to `dev` and was rejected by branch
+              protection (GH006) on every run.
+            - Opens a PR (this one) instead — no PAT required.
+            - `ci.yml`'s `Generate Metrics` job remains the per-PR source of
+              truth; this PR just refreshes the *committed* snapshot.
+
+            ## Review
+            The diff should be limited to `docs/metrics.md` count cells
+            (tests / lines / clippy / deny). Sanity-check the numbers, then
+            squash-merge.
+
+            ## Notes
+            - CI (ci.yml) does **not** run on this PR — it was opened by
+              `GITHUB_TOKEN`, which doesn't re-trigger workflows.
+            - The cron + manual dispatch activate once this workflow file
+              reaches `main` (the default branch).
+          # No labels: the repo currently defines none (avoids the
+          # "label not found" failure that PR #43 hit).

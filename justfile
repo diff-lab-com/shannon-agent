@@ -117,6 +117,16 @@ deny:
 ci: fmt lint deny gen-protocol test
     @echo "✅ all gates green"
 
+# ---------- Metrics (docs/metrics.md) ----------
+
+# Regenerate docs/metrics.md (test/line/clippy/deny counts). Needs cargo-nextest.
+# CI regenerates this as an artifact on every run (ci.yml `Generate Metrics`);
+# this recipe refreshes the *committed* snapshot locally — e.g. before a
+# test-count-changing PR or a release. See .github/workflows/metrics-update.yml
+# for the (opt-in) automated weekly refresh.
+metrics:
+    bash scripts/gen-metrics.sh
+
 # ── Recording / Replay (ADR 0003, Phase 1 本地 harness) ──
 #
 # 录制需要:SHANNON_API_KEY + 网络访问 provider + 选定 model
