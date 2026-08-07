@@ -5,6 +5,11 @@
 
 # Cargo 锁定文件（可选，根据团队习惯决定是否提交）
 # Cargo.lock
+# desktop/ is a workspace MEMBER (no [workspace] of its own); the root
+# Cargo.lock is authoritative. A stale desktop/Cargo.lock (pre-unification,
+# last at shannon-core 0.5.5) was tracked by accident — ignore it so it
+# stays gone.
+/desktop/Cargo.lock
 
 # IDE 和编辑器
 .idea/

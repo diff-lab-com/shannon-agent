@@ -12,6 +12,7 @@ pub mod events;
 pub mod extensions;
 pub mod file_permissions;
 pub mod mcp;
+pub mod provider_read_snapshot;
 pub mod routine_templates;
 
 /// Resolve `path` relative to `working_dir` (or use it as-is if absolute),

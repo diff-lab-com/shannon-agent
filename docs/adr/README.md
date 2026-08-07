@@ -70,7 +70,7 @@ Things deferred to future work.
 | [0006](0006-no-assistant-ui-chat-ui-migration.md) | Do Not Migrate Shannon Desktop Chat UI to assistant-ui | Accepted | 2026-07-31 |
 | [0007](0007-connect-auto-opens-model-picker.md) | `/connect` Auto-Opens the Model Picker + Background models.dev Refresh | Accepted | 2026-07-31 |
 | [0008](0008-provider-model-command-architecture-remediation.md) | Provider/Model Command Architecture Remediation | Proposed | 2026-08-01 |
-| [0009](0009-provider-store-read-facade.md) | Provider Store Read Facade (desktop read-path consolidation) | Proposed | 2026-08-06 |
+| [0009](0009-provider-store-read-facade.md) | Provider Store Read Facade (desktop read-path consolidation) | Accepted | 2026-08-06 |
 
 ## Numbering
 

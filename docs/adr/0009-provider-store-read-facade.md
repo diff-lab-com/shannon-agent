@@ -1,6 +1,6 @@
 # ADR 0009 — Provider Store Read Facade (desktop read-path consolidation)
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-08-06
 **Theme**: Consolidate the desktop's scattered `provider_store` read path
 into a single typed read facade — the read-side complement to ADR-0008
@@ -303,13 +303,24 @@ noted there).
 
 ## Acceptance
 
-This ADR is **Proposed**. It becomes **Accepted** when:
+This ADR is **Accepted** (2026-08-07). The implementation lands
+`ProviderReadSnapshot` (`desktop/src/provider_read_snapshot.rs`) and
+migrates the read path through it:
 
-- The user signs off on Decisions 1–3 (in particular, the two-phase wire
-  retirement in Decision 3).
-- An implementation PR opens against `dev` introducing
-  `ProviderReadSnapshot` and migrating `list_providers` + at least the
-  active-provider read path through it, with the other call sites either
-  migrated or tracked in the companion plan.
-- `list_providers` still returns the identical wire shape (golden test /
-  insta snapshot unchanged), proving Decision 3's "no wire change" claim.
+- `list_providers` + `providers_file_from_state` → `capture().to_providers_file()`
+- `configure('api_key')` / `configure('base_url')` active-provider reads →
+  `capture()` + `active_profile()`
+- `test_all_providers` → `capture().to_providers_file().providers`
+- The free function `providers_file_from_store` is retired (its contract
+  lives on in `ProviderReadSnapshot::from_store` + `to_providers_file`,
+  and the renamed `snapshot_*` tests).
+
+The remaining read sites (`rebuild_client_config_from_store`,
+`configure('provider')`'s `find_provider_by_kind`, the
+`AppState::build_client_config` guards) pass the whole store to engine
+helpers rather than hand-navigating the `"default"` profile, so they are
+out of scope for this ADR and tracked in the companion plan.
+
+`list_providers` returns the identical wire shape — the five
+`list_providers_*` tests pass unchanged, proving Decision 3's "no wire
+change" claim.

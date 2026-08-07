@@ -33,6 +33,65 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 - Status card now renders the "available providers/models" list from `MODEL_CATALOG` and connected/disconnected markers from `~/.shannon/providers.toml` in real time (was a static placeholder).
 - `/model --tier <t> --save` tier override now survives a restart. `persist_model_to_providers_toml` writes `active_target` (provider + model id) via `ProviderConfigStore::set_active`, not just the tier name, so `resolve_active_target` reads back the chosen model on next launch. Verified by `store_set_active_survives_save_load_cycle`.
 
+## v0.8.0 (2026-08-06) — provider write/read consolidation, local voice, CI gates
+
+> Note: between v0.5.5 and this entry the CHANGELOG fell behind the unified-version releases (v0.6.x / v0.7.x). Entries below are reconstructed from `git log` per tag; the `[Unreleased]` block above accumulated across the same window and has not yet been redistributed into per-version sections.
+
+### Features
+
+- **Single write path for `providers.toml` (P2-2 Wave 6, PR #34).** Every write across CLI / REPL / Desktop flows through `ProviderConfigService`'s RAII `flock` + lock-then-reload read-modify-write (ADR-0008 Decision 3). Eliminates the concurrent-write clobber hazard on `save_provider` / `set_active_provider` / `delete_provider`.
+- **Provider Store Read Facade (ADR-0009, accepted).** `ProviderReadSnapshot` consolidates the desktop's scattered `provider_store` read sites into one typed snapshot, built under one short-lived lock and released before any further `.await` — the read-side complement to the write-path `ProviderConfigService`.
+- **Local voice (P2-5e).** On-device speech-to-text via `whisper-rs` backend + desktop frontend.
+- **Chat polish (P2-5d).** Design tokens, `MessageBubble` refactor, Markdown rendering, Composer redesign, accessibility pass.
+- **MCP integrations.** Notion MCP (P1-3c) and Linear MCP (P1-3d).
+
+### Changed
+
+- **C2 — drop `providers.json` dual-write (PR #37).** `save_provider` / `delete_provider` / `set_active_provider` R-M-W against the engine store only; the legacy `~/.shannon/desktop/providers.json` write-through cache is retired.
+- **Semver gate required (S1-6/B1/B2, PR #40).** `cargo-semver-checks` flipped from advisory (`continue-on-error`) to a required merge gate; baseline `v0.8.0`. Pre-1.0 breaking changes still allowed as long as the minor bumps.
+
+### Fixed
+
+- CI: install Tauri + libdbus system deps in the metrics job; relocate `audit.toml` to `.cargo/` (cargo-audit 0.22+ discovers project config there, not at repo root); exclude `shannon-mcp-saas` from musl (keyring→libdbus-sys not musl-portable) and `shannon-desktop` from semver (Tauri GTK/WebKit rustdoc deps the job can't install); fix ~96 workspace intra-doc-link lint errors across 11 crates; strengthen Rust gates (P2-4: doc build, rustsec-audit, cross-platform matrix).
+
+## v0.7.1 (2026-07-21) — gateway supervisor, engine discovery
+
+### Features
+
+- **Gateway supervisor prefers OS-managed service.** When `gateway.managed` is on, the desktop first tries an OS-managed `shannon-gateway` service before spawning its own subprocess.
+- **Engine discovery — reuse existing api_server on :33420.** The desktop detects and reuses an already-running engine instead of starting a duplicate.
+
+### Fixed
+
+- Service probe hardened (per-platform service name, deterministic timeout + test).
+- Windows: gateway built + installed via `install.ps1`; post-install hint block expanded to 5 steps.
+- Surfaced the `shannon-code` → `shannon` rename in the desktop window title + docs.
+
+## v0.7.0 (2026-07-19) — unified release & install story
+
+### Features
+
+- **Hermes-modeled unified release/install story.** One tag ships CLI + desktop + gateway together; `cargo-dist` + `tauri-action` + `gh release` pipeline.
+- Windows bundler switched MSI → NSIS; added a Windows icon.
+- Repository hygiene: Dependabot config, CODEOWNERS, issue templates, CONTRIBUTING.
+
+### Fixed
+
+- Release pipeline: `gh release edit --draft=false` (not softprops), `shasum -a 256` for the CLI checksum (macOS has no `sha256sum`), justfile release-prep echo, internal dep-pin + desktop version bumps with the workspace.
+
+## v0.6.0 (2026-07-17) — OSS metadata, monorepo cleanup, CI hardening
+
+### Features
+
+- **OSS metadata + monorepo cleanup (phase6).** LICENSE, README polish, and the top-level restructure pairing `docs/archive/legacy-archives/` (markdown) with `legacy-archives/` (code + config) for pre-unification artifacts.
+- **Desktop + gateway matrix release workflow.** Per-OS matrix (`cargo-dist` + `tauri-action`), upload-artifact scoping.
+
+### Fixed
+
+- CI hardening (F1-F7): Tauri apt deps, semver baseline, Node 24, serial tests; `shannon-desktop` excluded from semver + musl.
+- Serialized flaky tests (`roll_over_resets_spend` date test, MCP config isolation) with `#[serial]`.
+- Desktop release pipeline H-fix series: aarch64 cross-compile, Tauri deps for cargo-dist Linux, musl→gnu targets, bundle path globbing, YAML indent.
+
 ## v0.5.5 (2026-06-17) — notifications next phase (T-series + C9)
 
 ### Features
