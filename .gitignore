@@ -127,6 +127,8 @@ lcov.info
 .cache/
 vendor/
 .serena/
+# 本地 rustup 工具链配置/下载缓存（非项目产物）
+.rustup/
 claudedocs/
 # Legacy archives from the consolidation of shannon-code, shannon-desktop,
 # shannon-gateway (2026-07). Two paired directories (see INDEX.md in each):
