@@ -443,18 +443,19 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    fn temp_path(name: &str) -> std::path::PathBuf {
-        let mut dir = std::env::temp_dir();
-        dir.push(format!("shannon-attachment-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.push(name);
-        dir
-    }
+    // Each disk-touching test gets its own TempDir so a sibling's cleanup
+    // can never remove a file this test still needs. The old shared
+    // `/tmp/shannon-attachment-test-{pid}/` dir (keyed by process id, hence
+    // shared across all parallel test threads) let `rejects_directory`'s
+    // `remove_dir_all` race with concurrent writers, producing an
+    // ordering-dependent flake under single-process `cargo test` that never
+    // reproduced under nextest (process-isolated) or in CI.
 
     #[tokio::test]
     async fn image_attachment_returns_base64_with_image_mime() {
         let png = b"\x89PNG\r\n\x1a\n".to_vec();
-        let path = temp_path("pixel.png");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("pixel.png");
         std::fs::write(&path, &png).unwrap();
 
         let payload = read_attachment(path.to_string_lossy().into_owned())
@@ -471,12 +472,12 @@ mod tests {
                 .unwrap(),
             png
         );
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn text_attachment_returns_text_block() {
-        let path = temp_path("note.md");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("note.md");
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(b"# Hello\nworld").unwrap();
         let payload = read_attachment(path.to_string_lossy().into_owned())
@@ -485,23 +486,23 @@ mod tests {
         assert_eq!(payload.mime, "text/markdown");
         assert_eq!(payload.text.as_deref(), Some("# Hello\nworld"));
         assert!(payload.base64.is_none());
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn text_attachment_rejects_non_utf8() {
-        let path = temp_path("binary.md");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("binary.md");
         std::fs::write(&path, [0xFF, 0xFE, 0xFD, 0xFC]).unwrap();
         let err = read_attachment(path.to_string_lossy().into_owned())
             .await
             .unwrap_err();
         assert!(err.contains("UTF-8"), "got {err}");
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn pdf_attachment_returns_text_without_panicking() {
-        let path = temp_path("doc.pdf");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("doc.pdf");
         std::fs::write(&path, b"%PDF-1.4 placeholder not a real pdf").unwrap();
         let payload = read_attachment(path.to_string_lossy().into_owned())
             .await
@@ -509,19 +510,18 @@ mod tests {
         assert_eq!(payload.mime, "application/pdf");
         assert!(payload.base64.is_none());
         assert!(payload.text.is_some());
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn rejects_files_over_25_mb() {
-        let path = temp_path("huge.bin");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("huge.bin");
         let f = std::fs::File::create(&path).unwrap();
         f.set_len(MAX_ATTACHMENT_SIZE + 1).unwrap();
         let err = read_attachment(path.to_string_lossy().into_owned())
             .await
             .unwrap_err();
         assert!(err.contains("25 MB"), "expected limit error, got {err}");
-        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
@@ -533,13 +533,15 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_directory() {
-        let path = temp_path("");
+        // A fresh subdirectory inside an isolated tempdir — never the
+        // tempdir root, so cleanup can't race with sibling tests.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("a-directory");
         std::fs::create_dir_all(&path).unwrap();
         let err = read_attachment(path.to_string_lossy().into_owned())
             .await
             .unwrap_err();
         assert!(err.contains("not a file"));
-        let _ = std::fs::remove_dir_all(&path);
     }
 
     #[test]
