@@ -818,6 +818,52 @@ fn default_base_url_for_kind(kind: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    /// RAII guard that points `HOME` at an isolated tempdir for the duration
+    /// of a test. Every desktop + engine config path (`~/.shannon/...`) then
+    /// resolves under the tempdir, so disk-touching tests never mutate the
+    /// real user home and don't race on a shared `providers.json`.
+    ///
+    /// `HOME` is process-global, so a static mutex serializes all
+    /// `IsolatedHome` instances — the same lesson the extensions installers
+    /// learned after a lock-guarded env override raced with unrelated
+    /// `dirs::home_dir()` readers (see `extensions/agent_installers.rs`).
+    struct IsolatedHome {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        old_home: Option<std::ffi::OsString>,
+        _tmp: tempfile::TempDir,
+    }
+
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    impl IsolatedHome {
+        fn new() -> Self {
+            let guard = HOME_LOCK.lock().expect("HOME_LOCK poisoned");
+            let tmp = tempfile::tempdir().expect("tempdir for isolated HOME");
+            let old_home = std::env::var_os("HOME");
+            // SAFETY: `HOME_LOCK` is held for the entire lifetime of this
+            // guard (including drop), so no other thread reads or writes HOME
+            // concurrently.
+            unsafe { std::env::set_var("HOME", tmp.path()) };
+            Self {
+                _guard: guard,
+                old_home,
+                _tmp: tmp,
+            }
+        }
+    }
+
+    impl Drop for IsolatedHome {
+        fn drop(&mut self) {
+            // SAFETY: `_guard` is still held while `drop` runs.
+            unsafe {
+                match &self.old_home {
+                    Some(h) => std::env::set_var("HOME", h),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_default_config() {
         let config = DesktopConfig::default();
@@ -1190,25 +1236,21 @@ mod tests {
         std::fs::write(&path, serde_json::to_string_pretty(file).unwrap()).unwrap();
     }
 
-    fn cleanup_legacy_providers_file() {
-        let path = providers_path();
-        let _ = std::fs::remove_file(&path);
-    }
-
     #[test]
     fn migrate_returns_none_when_legacy_file_absent() {
         // The migration is a one-shot heal — when there's nothing to
         // migrate, return None so the caller falls through to
-        // load_or_default (which reads the engine store).
-        cleanup_legacy_providers_file();
+        // load_or_default (which reads the engine store). Isolated HOME so
+        // a sibling test's seeded file can't make this spuriously Some.
+        let _home = IsolatedHome::new();
         assert!(migrate_providers_to_toml().is_none());
     }
 
     #[test]
     fn migrate_returns_none_when_legacy_file_empty() {
+        let _home = IsolatedHome::new();
         seed_legacy_providers_file(&ProvidersFile::default());
         assert!(migrate_providers_to_toml().is_none());
-        cleanup_legacy_providers_file();
     }
 
     #[test]
@@ -1356,12 +1398,14 @@ mod tests {
 
     #[test]
     fn migrate_lifts_and_removes_legacy_file_end_to_end() {
-        // The full-disk round-trip: seed a legacy file, run the
-        // I/O wrapper, verify the file was removed AND the model
-        // was produced. This one is the only test that touches
-        // the user's home dir — run it after the pure-helper
-        // tests so a missing providers.json in the test env
-        // doesn't cascade.
+        // Full-disk round-trip under an isolated HOME: seed a legacy file,
+        // run the I/O wrapper, verify the model was produced AND the legacy
+        // file was removed. With a fresh tempdir the engine store is empty,
+        // so migration always runs — the previous `match None` skip branch
+        // masked an ordering flake where a sibling test's
+        // `cleanup_legacy_providers_file()` deleted this test's shared file
+        // mid-run.
+        let _home = IsolatedHome::new();
         let file = ProvidersFile {
             active_provider_id: Some("anthropic-main".into()),
             providers: vec![ProviderConnection {
@@ -1377,21 +1421,10 @@ mod tests {
         };
         seed_legacy_providers_file(&file);
 
-        // If the engine store already has providers (a previous
-        // test run left state), the wrapper returns None — that's
-        // the idempotence guarantee. Skip the assertions in that
-        // case; the pure-helper tests above cover the data shape.
-        match migrate_providers_to_toml() {
-            Some(pm) => {
-                let default = pm.profiles.get("default").expect("default model profile");
-                assert_eq!(default.providers[0].id, "anthropic-main");
-            }
-            None => {
-                // Engine store already had data — legacy file is
-                // still cleaned up so the next run is consistent.
-            }
-        }
-        // The legacy file is removed in both branches.
+        let pm = migrate_providers_to_toml().expect("fresh home → migration runs");
+        let default = pm.profiles.get("default").expect("default model profile");
+        assert_eq!(default.providers[0].id, "anthropic-main");
+        // The legacy file is removed after migration.
         assert!(!providers_path().exists());
     }
 
