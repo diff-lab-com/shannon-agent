@@ -50,6 +50,7 @@ Wave 4(08-04 → 08-07)把 provider 读写收敛、parity 矩阵、semver 强制
 ### W6-1 · P2-8 VS Code 扩展(2–3w,编码赛道最后一块)
 
 - **现状**:spike 完成([spikes/p2-8-vscode.md](../spikes/p2-8-vscode.md) + `pres1-validation`);legacy 源在 `legacy-archives/shannon-code/editors/vscode/`(9 命令 + NDJSON 架构)。
+- **详细方案**:[w6-1-p2-8-vscode-extension.md](./w6-1-p2-8-vscode-extension.md)
 - **文件锚点**:迁移到 `extensions/vscode/`;通信改用 P2-7 HTTP API(`crates/shannon-core/src/api_server.rs`,`3ed22799`),弃用 NDJSON 子进程。
 - **实施步骤**:
   1. 迁移 legacy 扩展骨架到 `extensions/vscode/`,换通信层为 HTTP(`shannon serve` 的 v1 session API)。
@@ -61,6 +62,7 @@ Wave 4(08-04 → 08-07)把 provider 读写收敛、parity 矩阵、semver 强制
 ### W6-2 · P2-6 auto-commit + Undo / 快照(1–1.5w)
 
 - **现状**:未做;先要梳理现有 PostToolUse auto-commit hook 行为(见 [tech-debt.md](../tech-debt.md) TD-5、memory `auto-commit-hook-splits-edits`)。
+- **详细方案**:[w6-2-p2-6-auto-commit-undo.md](./w6-2-p2-6-auto-commit-undo.md)
 - **文件锚点**:`scripts/hooks/`(现有 hook);新增 `crates/shannon-core/src/snapshot.rs`(文件级快照)或扩展 `session_transcript`。
 - **实施步骤**:
   1. **梳理**:记录现有 hook 何时触发、生成什么 commit message、为何拆分多文件。
@@ -73,6 +75,7 @@ Wave 4(08-04 → 08-07)把 provider 读写收敛、parity 矩阵、semver 强制
 ### W6-3 · P2-2 STABILITY deprecation 收尾(3–5d)
 
 - **现状**:读写路径 + C3 parity 全闭环;剩余"legacy 路径 deprecation 标注 + CLI/桌面 provider/credential 逐项行为对齐"的收尾。
+- **详细方案**:[w6-3-p2-2-deprecation-tail.md](./w6-3-p2-2-deprecation-tail.md)
 - **文件锚点**:`crates/shannon-core/src/provider.rs`、`desktop/src/commands_config.rs`、`desktop/src/provider_read_snapshot.rs`、[STABILITY.md](../STABILITY.md)。
 - **实施步骤**:
   1. 审计 `ProviderConnection` wire type 的残留消费方(为 TD-4 Phase 2 retire 做铺垫)。
