@@ -47,9 +47,9 @@ Wave 4(08-04 → 08-07)把 provider 读写收敛、parity 矩阵、semver 强制
 
 ## 2. Wave 6 — 功能收尾(2–4w)
 
-### W6-1 · P2-8 VS Code 扩展(2–3w,编码赛道最后一块)
+### W6-1 · P2-8 VS Code 扩展(2–3w,编码赛道最后一块) ⏸️ 暂缓
 
-- **现状**:spike 完成([spikes/p2-8-vscode.md](../spikes/p2-8-vscode.md) + `pres1-validation`);legacy 源在 `legacy-archives/shannon-code/editors/vscode/`(9 命令 + NDJSON 架构)。
+- **现状**:⏸️ **DEFERRED(2026-08-08,用户决策)**。spike 完成([spikes/p2-8-vscode.md](../spikes/p2-8-vscode.md) + `pres1-validation`);legacy 源在 `legacy-archives/shannon-code/editors/vscode/`(9 命令 + NDJSON 架构)。方案保留,重启条件见 [w6-1](./w6-1-p2-8-vscode-extension.md)。
 - **详细方案**:[w6-1-p2-8-vscode-extension.md](./w6-1-p2-8-vscode-extension.md)
 - **文件锚点**:迁移到 `extensions/vscode/`;通信改用 P2-7 HTTP API(`crates/shannon-core/src/api_server.rs`,`3ed22799`),弃用 NDJSON 子进程。
 - **实施步骤**:
@@ -110,7 +110,7 @@ Wave 4(08-04 → 08-07)把 provider 读写收敛、parity 矩阵、semver 强制
 ```
 W5(对齐,独立)── 解除"文档撒谎"
 
-W6-1 P2-8 VS Code ── 依赖 P2-7 ✅
+W6-1 P2-8 VS Code ── ⏸️ 暂缓(2026-08-08);依赖 P2-7 ✅ 已满足,随时可重启
 W6-2 P2-6 auto-commit/Undo ── 独立(先梳理 hook)
 W6-3 P2-2 deprecation 收尾 ── 独立 ── 为 TD-4 Phase 2 铺垫
 
@@ -118,7 +118,7 @@ W7-1 P3-7 沙盒 ── 评审驱动,独立
 W7-2 P3-1 artifact ── 依赖 P2-5d ✅
 ```
 
-**关键路径**:W5(对齐)→ W6-1(VS Code,IDE 入口闭环)→ W7-1(沙盒,安全护城河)。
+**关键路径**(P2-8 暂缓后):W5(对齐)→ W6-3(deprecation 收尾)→ W6-2(auto-commit/Undo)→ W7-1(沙盒,安全护城河)。
 **可并行**:W6-2 / W6-3 / W7-2 互不阻塞,可分配给不同 worktree / agent。
 
 ---
@@ -129,12 +129,12 @@ W7-2 P3-1 artifact ── 依赖 P2-5d ✅
 |---|---|---|---|---|
 | 1 | W5-1/2/3 文档收敛 | 0.5–1d | 🔴 高 | 大部分已做,补 metrics 刷新即可 |
 | 2 | W6-3 P2-2 deprecation 收尾 | 3–5d | 🟡 中 | 低风险,清 trust 债,为 TD-4 铺垫 |
-| 3 | W6-1 P2-8 VS Code | 2–3w | 🟡 中 | 编码赛道最后一块,IDE 入口 |
+| 3 | W6-1 P2-8 VS Code | 2–3w | ⏸️ 暂缓 | 2026-08-08 用户决策;spike+方案就绪,可重启 |
 | 4 | W6-2 P2-6 auto-commit/Undo | 1–1.5w | 🟡 中 | 先梳理 hook,再做 squash + Undo |
 | 5 | W7-2 P3-1 artifact | 2w | 🟢 稳 | 依赖已满足,可提前 |
 | 6 | W7-1 P3-7 沙盒 | 4–6w | 🟢 稳 | 评审驱动,长期 |
 
-**总估时**:W5(1d)+ W6(4–5w)+ W7(6–8w),分批推进,W5 立即、W6 本月、W7 评审后。
+**总估时**(P2-8 暂缓):W5(1d)+ W6(≈2w,仅 W6-3 + W6-2)+ W7(6–8w);P2-8 另计 2–3w 待重启。
 
 ---
 

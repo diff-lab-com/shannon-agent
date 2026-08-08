@@ -2,7 +2,9 @@
 
 > **Track**: Wave 6
 > **Date**: 2026-08-08
-> **Status**: Proposed(spike 已完成,待 S1 实施)
+> **Status**: ⏸️ **DEFERRED(2026-08-08,用户决策)** — VS Code 扩展暂缓。spike 与本方案保留,随时可重启。
+> **重启条件**:① 编码赛道 IDE 入口成为下一优先级;② P2-7 HTTP API 经更多消费方验证稳定。
+> (原定:Proposed,spike 已完成,待 S1 实施)
 > **Estimate**: 2–3w · **Priority**: 🟡 中
 > **Dependencies**: P2-7 HTTP API ✅(`3ed22799`)
 > **Parent**: [wave-5-followup.md](./wave-5-followup.md) §2 W6-1 · **Spike**: [spikes/p2-8-vscode.md](../spikes/p2-8-vscode.md)

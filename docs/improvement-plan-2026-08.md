@@ -31,7 +31,7 @@
 
 | v3 候选 | 状态 | 文档 |
 |---|---|---|
-| **P2-8** VS Code 扩展 | 🔬 spike 完,待 S1 实施(依赖 P2-7 ✅) | [spikes/p2-8-vscode.md](./spikes/p2-8-vscode.md) + `pres1-validation` |
+| **P2-8** VS Code 扩展 | ⏸️ **暂缓**(2026-08-08 用户决策);spike 完,方案就绪,随时可重启 | [spikes/p2-8-vscode.md](./spikes/p2-8-vscode.md) + [plans/w6-1-p2-8-vscode-extension.md](./plans/w6-1-p2-8-vscode-extension.md) |
 | **P3-7** 沙盒执行 | 🔬 S0 完,待评审 → D2 | [spikes/p3-7-sandbox-s0.md](./spikes/p3-7-sandbox-s0.md) |
 
 ### ❓ v3 / project-review 标为债,实际已清偿(核实 2026-08-08)
@@ -46,12 +46,12 @@
 ```
 Wave 1(收敛)  ██████████ 7/7  ≈ 100%  (P0-2 补齐)
 Wave 2(补短)  ██████████ 9/9  ≈ 100%  (P1-3 全量)
-Wave 3(扩张)  ████████░░ 7/8  ≈ 88%   (仅 P2-8 待实施)
+Wave 3(扩张)  ████████░░ 7/8  ≈ 88%   (P2-8 暂缓,用户决策)
 ──────────────────────────────────────
 合计          █████████░ 23/24 ≈ 96%
 ```
 
-**剩余第 24 项 = P2-8 VS Code 扩展**(spike 已就绪)。P2-6(auto-commit + Undo)是 v3 之后新增的工程体验项,未计入上表分母。
+**P2-8 VS Code 扩展暂缓**(2026-08-08 用户决策;spike + 方案就绪,见 [plans/w6-1-p2-8-vscode-extension.md](./plans/w6-1-p2-8-vscode-extension.md)),Wave 3 主动停在 7/8。P2-6(auto-commit + Undo)是 v3 之后新增的工程体验项,未计入上表分母。
 
 ### 🔜 下批规划
 
