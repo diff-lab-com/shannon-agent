@@ -177,6 +177,15 @@ pub struct McpServerConfig {
 /// `~/.shannon/desktop/providers.json` cache purely as a read-side fan-out
 /// for the UI list — `providers.toml` is the source of truth on disk.
 ///
+/// **Planned retirement** (ADR-0009 Phase 2 / tech-debt TD-4): this wire
+/// type will be removed once consumers migrate to `ProviderProfile`. It is
+/// an internal desktop type — not on any `shannon-*` public stable surface
+/// — so retirement is by direct replacement + deletion, not the
+/// `#[deprecated]` cycle (marking it now would flood the build with ~67
+/// warnings while it is still in use). See `docs/STABILITY.md`
+/// §Planned deprecations and
+/// `docs/plans/w6-3-provider-connection-inventory.md`.
+///
 /// The fields beyond `id`/`label`/`provider_kind`/`base_url`/`model` are the
 /// v2 `ProviderProfile` schema (ADR-0005 Phase 2 / task 4). The desktop
 /// extends the engine's per-profile knobs so users can configure custom
