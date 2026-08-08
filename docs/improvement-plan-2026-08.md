@@ -9,6 +9,56 @@
 
 ---
 
+## ⚡ v4 增量更新(2026-08-08):Wave 4 候选实际落地状态
+
+> v3(08-03)的 §8「Wave 4 评审请求」列出 8 项候选;截至 08-08,**6 项已合入 `dev`,2 项进入 spike 阶段**。下表覆盖 v3 各节(§0.5 / §5 / §9)的实际状态;各节原文保留作历史快照,不再逐行改写。
+
+### ✅ 本周合入 dev(08-04 → 08-07)
+
+| v3 候选 | 状态 | 证据 |
+|---|---|---|
+| **P0-2** 文档校对 | ✅ | `5aec9a08`;`grep "React 18" docs/desktop-architecture.md` 已无结果 |
+| **P1-3c** Notion MCP | ✅ | `2417d5b2` → P1-3 **全量 5/5** |
+| **P1-3d** Linear MCP | ✅ | `019ca037` |
+| **P2-4** CI Rust 门禁 | ✅(剩 `-D warnings` required 一公里,见 [tech-debt](./tech-debt.md)) | `2bf92611`(doc build / rustsec-audit / cross-platform matrix) |
+| **P2-5d** Chat 整体美化 | ✅ | `135b288d` → P2-5 **全量** |
+| **P2-5e** 本地语音 | ✅ | `d983f527` `4946c768`(whisper-rs) |
+| **P2-2** ADR-0005 Phase 2 读写收敛 | ✅ | #34 Wave 6 + ADR-0009 read facade(#41)+ C2 dual-write drop(#37)+ **C3 parity 全 6 行**(#42 / #46 / #49) |
+| (附带)semver required | ✅ | #40(S1-6/B1/B2,baseline v0.8.0) |
+| (附带)**v0.8.0 发布** | ✅ | `f1f84e14` |
+
+### 🔬 进入 spike,未实施
+
+| v3 候选 | 状态 | 文档 |
+|---|---|---|
+| **P2-8** VS Code 扩展 | 🔬 spike 完,待 S1 实施(依赖 P2-7 ✅) | [spikes/p2-8-vscode.md](./spikes/p2-8-vscode.md) + `pres1-validation` |
+| **P3-7** 沙盒执行 | 🔬 S0 完,待评审 → D2 | [spikes/p3-7-sandbox-s0.md](./spikes/p3-7-sandbox-s0.md) |
+
+### ❓ v3 / project-review 标为债,实际已清偿(核实 2026-08-08)
+
+[project-review-2026-08.md](./project-review-2026-08.md) §2.1 / §2.3 把下列标为 dead code / 半成品,经核实**已清理**:
+
+- **Compact 多策略**(§2.3):`crates/shannon-core/src/compact.rs` 中 `Strategy::TokenBased` / `SummaryBased` 均按决策动态选用(`strategy: decision.strategy` @ 521 行),非只用默认。P2-1 实接通。
+- **coordinator / compact / doctor / ui_adapter**(§2.1):四个文件 **0 个 `allow(dead_code)`**,已无 dead code 沉淀。
+
+### 📊 进度仪表盘刷新(2026-08-08)
+
+```
+Wave 1(收敛)  ██████████ 7/7  ≈ 100%  (P0-2 补齐)
+Wave 2(补短)  ██████████ 9/9  ≈ 100%  (P1-3 全量)
+Wave 3(扩张)  ████████░░ 7/8  ≈ 88%   (仅 P2-8 待实施)
+──────────────────────────────────────
+合计          █████████░ 23/24 ≈ 96%
+```
+
+**剩余第 24 项 = P2-8 VS Code 扩展**(spike 已就绪)。P2-6(auto-commit + Undo)是 v3 之后新增的工程体验项,未计入上表分母。
+
+### 🔜 下批规划
+
+见 [plans/wave-5-followup.md](./plans/wave-5-followup.md):Wave 5(文档/度量收敛)、Wave 6(功能收尾:P2-8 / P2-6 / P2-2 deprecation)、Wave 7(P3-7 沙盒 / P3-1 artifact)。
+
+---
+
 ## 0. 战略主线(沿用 v2,双赛道)
 
 > **"先收敛、再补短、后扩张"** —— 两条产品线,一套引擎,分线补短。
