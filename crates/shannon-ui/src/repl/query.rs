@@ -21,6 +21,36 @@ fn animated_dots(_elapsed: std::time::Duration) -> &'static str {
     "···"
 }
 
+/// W6-2 B.2: record a post-turn content snapshot for each file modified or created
+/// during the turn, so `/rewind code/both <n>` can restore files via `FileHistoryManager`
+/// (content snapshots) instead of git.
+///
+/// No-op when file history is disabled (`SHANNON_FILE_HISTORY=0`). Files that cannot
+/// be read (deleted this turn, binary, missing) are skipped. Snapshots are keyed by the
+/// path string exactly as the turn-tracker reports it, so the rewind lookup (which reads
+/// the same strings from `TurnCheckpoint.files_changed`) matches.
+fn capture_turn_snapshots(files: &[String], turn_index: usize) {
+    let Some(config) = shannon_tools::FileHistoryConfig::from_env() else {
+        return;
+    };
+    let mut manager = shannon_tools::FileHistoryManager::new(config);
+    let cwd = std::env::current_dir().unwrap_or_default();
+    for file in files {
+        let key = std::path::Path::new(file);
+        // Resolve a relative path against the process cwd so we can read the bytes;
+        // the snapshot KEY stays the raw turn-tracker string for lookup consistency.
+        let fs_path = if key.is_absolute() {
+            std::path::PathBuf::from(file)
+        } else {
+            cwd.join(file)
+        };
+        let Ok(content) = std::fs::read_to_string(&fs_path) else {
+            continue;
+        };
+        let _ = manager.record_turn_snapshot(key, &content, turn_index);
+    }
+}
+
 /// Wrap a single line to fit within `max_width` columns, breaking at char boundaries.
 /// Returns a list of lines, each prefixed with `indent`.
 fn wrap_line(line: &str, max_width: usize, indent: &str) -> Vec<String> {
@@ -1373,6 +1403,10 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 repl.diff_data.record_turn_diff(turn);
             }
             repl.current_turn += 1;
+
+            // W6-2 B.2: capture per-turn content snapshots so `/rewind code/both <n>`
+            // can restore files via FileHistoryManager (content snapshots, not git).
+            capture_turn_snapshots(&turn_files, repl.current_turn - 1);
 
             // Record per-turn checkpoint with file change tracking
             let prompt_preview = if unicode_width::UnicodeWidthStr::width(input) > 80 {

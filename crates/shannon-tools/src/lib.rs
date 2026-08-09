@@ -91,7 +91,7 @@ pub use file::diff_renderer::{
 };
 pub use file::history::{
     DiffHunk, FileDiff, FileHistory, FileHistoryConfig, FileHistoryError, FileHistoryManager,
-    FileOperation as FileHistoryOperation, FileSnapshot,
+    FileOperation as FileHistoryOperation, FileSnapshot, RewindAction,
 };
 pub use file::sandbox::{PathSandbox, SandboxConfig as PathSandboxConfig, SandboxError};
 pub use file::sandbox_adapter::{

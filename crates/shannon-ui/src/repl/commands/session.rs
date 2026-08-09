@@ -4,7 +4,7 @@ use crate::{Result, widgets::ChatRole};
 
 use super::super::Repl;
 
-use shannon_tools::{FileHistoryConfig, FileHistoryManager, FileSnapshot};
+use shannon_tools::{FileHistoryConfig, FileHistoryManager, FileSnapshot, RewindAction};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn handle_sessions(repl: &mut Repl, _args: &str) -> Result<()> {
@@ -565,6 +565,87 @@ fn run_file_rewind(repl: &mut Repl, raw_path: &str, skip_confirm: bool) -> Resul
     Ok(())
 }
 
+/// W6-2 B.2: revert working-tree files to their state at the end of the turn recorded
+/// at checkpoint list position `index`, using `FileHistoryManager` content snapshots
+/// (no git). `index` is a list position (as shown by `/rewind history`); the actual
+/// `turn_index` is resolved from that entry since the two can diverge across file-less
+/// turns. Returns a human-readable summary, or an error.
+fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, String> {
+    let checkpoints = repl.checkpoint_manager.list_checkpoints();
+    let target = checkpoints.get(index).ok_or_else(|| {
+        format!(
+            "Invalid checkpoint [{index}]. Available: 0..{}",
+            checkpoints.len().saturating_sub(1)
+        )
+    })?;
+    let target_turn = target.turn_index;
+
+    // Files touched in any turn AFTER the target are the only ones that may differ
+    // from the end-of-target state.
+    let mut files_after: Vec<String> = Vec::new();
+    for tc in &checkpoints {
+        if tc.turn_index > target_turn {
+            for f in &tc.files_changed {
+                if !files_after.contains(f) {
+                    files_after.push(f.clone());
+                }
+            }
+        }
+    }
+
+    let Some(config) = FileHistoryConfig::from_env() else {
+        return Err(
+            "File history is disabled (SHANNON_FILE_HISTORY=0); cannot rewind code.".into(),
+        );
+    };
+    let mut manager = FileHistoryManager::new(config);
+    let cwd = std::env::current_dir().unwrap_or_default();
+
+    let mut restored: Vec<String> = Vec::new();
+    let mut deleted: Vec<String> = Vec::new();
+
+    for file in &files_after {
+        let key = Path::new(file);
+        let fs_path = if key.is_absolute() {
+            PathBuf::from(file)
+        } else {
+            cwd.join(file)
+        };
+        match manager
+            .rewind_file_to_turn(key, target_turn)
+            .map_err(|e| e.to_string())?
+        {
+            RewindAction::Restore(content) => {
+                if std::fs::write(&fs_path, content).is_ok() {
+                    restored.push(file.clone());
+                }
+            }
+            RewindAction::Delete => {
+                if std::fs::remove_file(&fs_path).is_ok() {
+                    deleted.push(file.clone());
+                }
+            }
+            RewindAction::NoChange => {}
+        }
+    }
+
+    let mut summary = format!("Reverted code to turn {target_turn}.");
+    if restored.is_empty() && deleted.is_empty() {
+        summary.push_str(" No files needed reverting (no recorded changes after this turn).");
+    } else {
+        if !restored.is_empty() {
+            summary.push_str(&format!("\nRestored: {}", restored.join(", ")));
+        }
+        if !deleted.is_empty() {
+            summary.push_str(&format!(
+                "\nDeleted (created after this turn): {}",
+                deleted.join(", ")
+            ));
+        }
+    }
+    Ok(summary)
+}
+
 pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
     match parse_rewind_intent(args) {
         RewindIntent::History => {
@@ -617,23 +698,9 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
             repl.chat.add_message(ChatRole::System, msg);
         }
 
-        RewindIntent::Code(index) => match repl
-            .checkpoint_manager
-            .revert_to(index, shannon_core::RestoreMode::CodeOnly)
-        {
-            Ok(tc) => {
-                let files = if tc.files_changed.is_empty() {
-                    "no files".to_string()
-                } else {
-                    tc.files_changed.join(", ")
-                };
-                repl.chat.add_message(
-                    ChatRole::System,
-                    format!(
-                        "Reverted code to checkpoint [{}] (turn {}).\nFiles affected: {}",
-                        index, tc.turn_index, files
-                    ),
-                );
+        RewindIntent::Code(index) => match run_code_rewind(repl, index) {
+            Ok(summary) => {
+                repl.chat.add_message(ChatRole::System, summary);
             }
             Err(e) => {
                 repl.chat
@@ -641,43 +708,34 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
             }
         },
 
-        RewindIntent::Both(index) => match repl
-            .checkpoint_manager
-            .revert_to(index, shannon_core::RestoreMode::CodeAndConversation)
-        {
-            Ok(tc) => {
-                // Remove the "/rewind both" command message
-                repl.chat.pop_last();
-                // Calculate turns to rewind from conversation
-                let turns_to_rewind = repl
-                    .checkpoint_manager
-                    .list_checkpoints()
-                    .len()
-                    .saturating_sub(index);
-                if turns_to_rewind > 0 {
-                    repl.chat.rewind(turns_to_rewind);
-                    if let Some(ref mut engine) = repl.query_engine {
-                        engine.rewind_conversation(turns_to_rewind);
-                    }
+        RewindIntent::Both(index) => {
+            // Revert code via content snapshots first; conversation rewind is independent.
+            let code_result = run_code_rewind(repl, index);
+
+            // Remove the "/rewind both" command message + rewind the conversation.
+            repl.chat.pop_last();
+            let turns_to_rewind = repl
+                .checkpoint_manager
+                .list_checkpoints()
+                .len()
+                .saturating_sub(index);
+            if turns_to_rewind > 0 {
+                repl.chat.rewind(turns_to_rewind);
+                if let Some(ref mut engine) = repl.query_engine {
+                    engine.rewind_conversation(turns_to_rewind);
                 }
-                let files = if tc.files_changed.is_empty() {
-                    "no files".to_string()
-                } else {
-                    tc.files_changed.join(", ")
-                };
-                repl.chat.add_message(
-                    ChatRole::System,
-                    format!(
-                        "Rewound to checkpoint [{}] (turn {}): reverted code + conversation.\nFiles: {}",
-                        index, tc.turn_index, files
-                    ),
-                );
             }
-            Err(e) => {
-                repl.chat
-                    .add_message(ChatRole::System, format!("Rewind failed: {e}"));
-            }
-        },
+
+            let msg = match code_result {
+                Ok(summary) => format!(
+                    "Rewound to checkpoint [{index}]: reverted code + conversation.\n{summary}"
+                ),
+                Err(e) => {
+                    format!("Rewound conversation to checkpoint [{index}]; code revert failed: {e}")
+                }
+            };
+            repl.chat.add_message(ChatRole::System, msg);
+        }
 
         RewindIntent::Conversation(turns) => {
             if turns == 0 {

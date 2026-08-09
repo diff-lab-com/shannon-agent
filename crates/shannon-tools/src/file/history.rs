@@ -134,6 +134,10 @@ pub struct FileSnapshot {
     pub line_count: usize,
     /// SHA-256 hash of the content for deduplication.
     pub hash: String,
+    /// Conversation turn this snapshot was captured at (W6-2 B.2 turn-based rewind).
+    /// `None` for ordinary per-edit snapshots not tied to a turn boundary.
+    #[serde(default)]
+    pub turn_index: Option<usize>,
 }
 
 impl FileSnapshot {
@@ -149,6 +153,7 @@ impl FileSnapshot {
             operation,
             line_count,
             hash,
+            turn_index: None,
         }
     }
 
@@ -169,6 +174,7 @@ impl FileSnapshot {
             operation,
             line_count,
             hash,
+            turn_index: None,
         }
     }
 
@@ -432,6 +438,19 @@ pub struct FileHistoryManager {
     cache_loaded: bool,
 }
 
+/// Action that [`FileHistoryManager::rewind_file_to_turn`] prescribes for a file
+/// when rewinding code to a given turn (W6-2 B.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RewindAction {
+    /// Restore the file to this content.
+    Restore(String),
+    /// The file's earliest turn-tagged snapshot is newer than the target turn, so it
+    /// did not exist at the target — delete it.
+    Delete,
+    /// No turn-tagged history for this file — leave it untouched.
+    NoChange,
+}
+
 impl FileHistoryManager {
     /// Create a new FileHistoryManager with the given configuration.
     pub fn new(config: FileHistoryConfig) -> Self {
@@ -647,6 +666,85 @@ impl FileHistoryManager {
         let _ = self.record_snapshot(file_path, &snapshot.content, FileOperation::Edit);
 
         Ok(snapshot.content.clone())
+    }
+
+    /// Record a turn-boundary snapshot capturing the file's content at the end of a
+    /// conversation turn (W6-2 B.2). Tagged with `turn_index` so [`rewind_file_to_turn`]
+    /// can locate it. Content-deduplicated like ordinary snapshots.
+    ///
+    /// [`rewind_file_to_turn`]: FileHistoryManager::rewind_file_to_turn
+    pub fn record_turn_snapshot(
+        &mut self,
+        file_path: &Path,
+        content: &str,
+        turn_index: usize,
+    ) -> Result<FileSnapshot, FileHistoryError> {
+        self.ensure_cache_loaded()?;
+        self.check_storage_quota()?;
+
+        let mut snapshot = FileSnapshot::new(
+            file_path.to_path_buf(),
+            content.to_string(),
+            FileOperation::Edit,
+        );
+        snapshot.turn_index = Some(turn_index);
+
+        let history = self
+            .cache
+            .entry(file_path.to_path_buf())
+            .or_insert_with(|| {
+                FileHistory::new(file_path.to_path_buf(), self.max_history_per_file)
+            });
+
+        if let Some(recorded) = history.add_snapshot(snapshot.clone()) {
+            self.save_snapshot(&recorded)?;
+            self.save_index()?;
+            Ok(recorded)
+        } else {
+            Err(FileHistoryError::Diff(
+                "Snapshot deduplicated: content matches the latest snapshot".to_string(),
+            ))
+        }
+    }
+
+    /// Determine how to restore `file_path` to its state at the end of `turn_index`.
+    ///
+    /// Among the file's **turn-tagged** snapshots, picks the one with the largest
+    /// `turn_index <= turn_index` and prescribes a [`RewindAction::Restore`] to its
+    /// content. If every turn-tagged snapshot is newer than the target (the file was
+    /// first created after that turn), prescribes [`RewindAction::Delete`]. If the
+    /// file has no turn-tagged snapshots at all, prescribes [`RewindAction::NoChange`].
+    ///
+    /// This only *decides* the action; the caller writes to disk so it can confirm
+    /// before overwriting uncommitted work.
+    pub fn rewind_file_to_turn(
+        &mut self,
+        file_path: &Path,
+        turn_index: usize,
+    ) -> Result<RewindAction, FileHistoryError> {
+        self.ensure_cache_loaded()?;
+
+        let history = match self.cache.get(file_path) {
+            Some(h) => h,
+            None => return Ok(RewindAction::NoChange),
+        };
+
+        let target = history
+            .snapshots
+            .iter()
+            .filter(|s| s.turn_index.is_some_and(|t| t <= turn_index))
+            .max_by_key(|s| s.turn_index);
+
+        match target {
+            Some(s) => Ok(RewindAction::Restore(s.content.clone())),
+            None => {
+                if history.snapshots.iter().any(|s| s.turn_index.is_some()) {
+                    Ok(RewindAction::Delete)
+                } else {
+                    Ok(RewindAction::NoChange)
+                }
+            }
+        }
     }
 
     /// List all tracked files.
@@ -1462,6 +1560,78 @@ mod tests {
         // History should now have 3 entries (original, modified, rollback)
         let history = manager.get_history(path).unwrap();
         assert_eq!(history.len(), 3);
+    }
+
+    #[test]
+    fn test_record_turn_snapshot_tags_turn_index() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_turn_tag.rs");
+
+        let recorded = manager.record_turn_snapshot(path, "v1", 3).unwrap();
+        assert_eq!(recorded.turn_index, Some(3));
+
+        // The tagged snapshot is retrievable and carries the tag.
+        let history = manager.get_history(path).unwrap();
+        assert!(history.snapshots.iter().any(|s| s.turn_index == Some(3)));
+    }
+
+    #[test]
+    fn test_rewind_file_to_turn_restores_earlier_version() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_turn_rewind.rs");
+
+        // Simulate per-turn captures across turns 1, 2, 3.
+        manager.record_turn_snapshot(path, "turn1", 1).unwrap();
+        manager.record_turn_snapshot(path, "turn2", 2).unwrap();
+        manager.record_turn_snapshot(path, "turn3", 3).unwrap();
+
+        // Rewind to turn 2 → restore turn-2 content.
+        assert_eq!(
+            manager.rewind_file_to_turn(path, 2).unwrap(),
+            RewindAction::Restore("turn2".to_string())
+        );
+        // Rewind to turn 3 (latest) → restore turn-3 content.
+        assert_eq!(
+            manager.rewind_file_to_turn(path, 3).unwrap(),
+            RewindAction::Restore("turn3".to_string())
+        );
+    }
+
+    #[test]
+    fn test_rewind_file_to_turn_deletes_future_created_file() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_turn_delete.rs");
+
+        // File first appears at turn 5 (no earlier history).
+        manager.record_turn_snapshot(path, "created", 5).unwrap();
+
+        // Rewinding to turn 3 (before it existed) → Delete.
+        assert_eq!(
+            manager.rewind_file_to_turn(path, 3).unwrap(),
+            RewindAction::Delete
+        );
+    }
+
+    #[test]
+    fn test_rewind_file_to_turn_no_change_for_untracked() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_turn_nochg.rs");
+
+        // No snapshots at all → NoChange.
+        assert_eq!(
+            manager.rewind_file_to_turn(path, 2).unwrap(),
+            RewindAction::NoChange
+        );
+
+        // Only an UNTAGGED (per-edit) snapshot: still NoChange, since turn rewind
+        // only considers turn-tagged snapshots.
+        manager
+            .record_snapshot(path, "edit", FileOperation::Edit)
+            .unwrap();
+        assert_eq!(
+            manager.rewind_file_to_turn(path, 2).unwrap(),
+            RewindAction::NoChange
+        );
     }
 
     #[test]

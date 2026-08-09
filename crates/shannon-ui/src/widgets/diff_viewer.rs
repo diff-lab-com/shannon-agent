@@ -120,7 +120,7 @@ impl DiffViewerWidget {
         self.diff_cache.insert(path.to_string(), lines);
     }
 
-    /// Load raw diff text directly (e.g., from a preview_revert) into a virtual "file" entry.
+    /// Load raw diff text directly into a virtual "file" entry.
     pub fn load_raw_diff(&mut self, diff_text: &str) {
         let key = "__undo_preview__".to_string();
         if self.diff_cache.contains_key(&key) {

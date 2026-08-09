@@ -148,10 +148,12 @@ A.1 增量(自包含在 `history.rs`):
 | A.3 | `lib.rs` register fn 注入 manager(2 个 project-scoped fn;`register_default_tools` no-sandbox 不接,避免测试污染 HOME) | ~0.5d | ✅ `2dad59ac` |
 | A.4 | config(开关 / history dir / TTL);默认开,可禁用 | ~0.5d | ✅ `c83f761d` |
 | B.1 | **命令统一 + per-file 回退**:`/undo` / `/checkpoint` 收敛为 `/rewind` 别名(同一 `handle_rewind`,Claude-Code-aligned 机制);`/rewind <path>` 经 `FileHistoryManager.rollback()` + 写盘做 per-file 内容快照回退(覆盖前确认 / `--yes` 跳过);help 元数据 + 8 个单测;`code`/`both` 多文件模式本阶段仍走 git-checkpoint(过渡态) | ~2d | ✅ 本次 |
-| B.2 | turn-boundary 多文件回退 manifest(`FileHistoryManager` 增 `checkpoints.json`,timestamp-based,复用 `TurnCheckpoint`);`code`/`both` 模式从 git-checkpoint 迁到内容快照;停掉 `engine.rs:2758` 每次 Edit/Write/Bash 的 auto-commit;`checkpoint.rs` 模块保留作库原语(供 `AutoCommitTool` 等)但与 `/rewind` 解耦 | ~1.5-2d | 待开始 |
+| B.2 | **turn-tagged 内容快照回退**:`FileHistoryManager` 增 `record_turn_snapshot` / `rewind_file_to_turn`(按 `turn_index` 标记的内容快照,非独立 manifest);`query.rs` 在 turn 边界捕获 post-turn 快照;`/rewind code\|both <n>` 经 `run_code_rewind` 回退到目标 turn 的文件内容(Restore / Delete / NoChange);**停掉** `engine.rs` 每次 Edit/Write/Bash 的 git auto-checkpoint + `tool_execution.rs` 死路径;**gut** `checkpoint.rs`(删 `create_checkpoint` / `revert_to` / `undo_last` / `preview_revert` / `RestoreMode` / `RevertPreview` / `FileChangePreview` + 配套集成测试;保留 `TurnCheckpoint` / `record_turn` / `list_checkpoints` / `discard_last` + 持久化,驱动 `/rewind <n>` 会话回退 + history 列表) | ~1.5d | ✅ 本次 |
 | C | auto-commit —— **DEFERRED**(见下) | — | ⏸️ |
 
-> **B.1 设计决策(2026-08-09)**:经调研 + 用户确认,采纳 Claude-Code-aligned 方案 —— canonical 命令 `/rewind`(`/undo`、`/checkpoint` 为别名,行为完全一致);per-file 回退基于 `FileHistoryManager` 内容快照(非 git);`checkpoint.rs`(git-checkpoint)模块**保留**为库原语供其它场景(`AutoCommitTool` 等),但不再驱动 `/rewind`(B.2 完成 `code`/`both` 迁移后即完全解耦)。详见记忆 `existing-undo-is-destructive-git-reset`。
+> **B.1 设计决策(2026-08-09)**:经调研 + 用户确认,采纳 Claude-Code-aligned 方案 —— canonical 命令 `/rewind`(`/undo`、`/checkpoint` 为别名,行为完全一致);per-file 回退基于 `FileHistoryManager` 内容快照(非 git)。详见记忆 `existing-undo-is-destructive-git-reset`。
+
+> **B.2 设计决策(2026-08-09)**:实施时核实,B.1 笔记里"保留 `checkpoint.rs` 作库原语(供 `AutoCommitTool` 等)"的前提**不成立** —— `AutoCommitTool` 并未使用 `CheckpointManager`,且 engine 侧两个 `CheckpointManager` 实例本就断连(REPL 的 `new()` 记录合成空哈希 checkpoint,`code`/`both` 回退早已失效)。故采纳 **gut** 方案:删除 git-commit / git-reset 原语,`/rewind code\|both` 改由 `FileHistoryManager` 的 turn-tagged 内容快照驱动(post-turn 捕获,`turn_index` 与 `record_turn` 对齐,经 `list_checkpoints()[index].turn_index` 解析列表位置≠turn_index 的偏差)。`checkpoint.rs` 保留会话级 turn 元数据(非 git),供 `/rewind <n>` 会话回退 + history 列表。
 
 ### A.4 配置开关(env vars,默认开)
 

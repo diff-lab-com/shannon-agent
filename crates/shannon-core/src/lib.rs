@@ -137,9 +137,7 @@ pub use bridge_service::{
     BridgeConfig, BridgeError, BridgeService, BridgeSession, BridgeStatus, MessageDirection,
     SessionMessage,
 };
-pub use checkpoint::{
-    Checkpoint, CheckpointManager, FileChangePreview, RestoreMode, RevertPreview, TurnCheckpoint,
-};
+pub use checkpoint::{Checkpoint, CheckpointManager, TurnCheckpoint};
 pub use config_migration::{SecretBinding, default_secrets_path, persist_secrets};
 pub use diagnostics::{
     DiagnosticCategory, DiagnosticEvent, DiagnosticLevel, DiagnosticSummary, DiagnosticTracker,
