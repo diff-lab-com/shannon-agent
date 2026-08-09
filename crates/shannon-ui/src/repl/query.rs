@@ -1437,8 +1437,6 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 );
             } else if files_touched > 0 {
                 let synthetic_cp = shannon_core::Checkpoint {
-                    hash: String::new(),
-                    short_hash: String::new(),
                     description: format!("turn {}", repl.current_turn),
                     timestamp: chrono::Utc::now().timestamp(),
                 };

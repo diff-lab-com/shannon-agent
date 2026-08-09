@@ -2335,13 +2335,8 @@ fn test_repl_undo_in_help() {
 }
 
 #[test]
-fn test_repl_checkpoint_manager_enabled() {
+fn test_repl_checkpoint_manager_starts_empty() {
     let repl = Repl::new().unwrap();
-    // Running in a git repo, so should be enabled
-    assert!(
-        repl.checkpoint_manager.is_enabled(),
-        "checkpoint manager should be enabled in git repo"
-    );
     assert!(
         repl.checkpoint_manager.is_empty(),
         "should start with no checkpoints"

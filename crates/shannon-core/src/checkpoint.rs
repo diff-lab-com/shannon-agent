@@ -11,7 +11,6 @@
 use shannon_types::recover_lock;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 /// Log a non-critical error instead of silently swallowing it.
@@ -29,17 +28,9 @@ const MAX_CHECKPOINTS: usize = 50;
 /// Maximum age in days before auto-cleanup removes checkpoint files.
 const CHECKPOINT_MAX_AGE_DAYS: i64 = 30;
 
-/// A single checkpoint representing a point-in-time snapshot.
-///
-/// After the git-checkpoint removal, `hash`/`short_hash` carry synthetic
-/// values (often empty) — they are retained for the persisted JSON schema and
-/// the history-list UI, not for git operations.
+/// Lightweight per-turn metadata recorded for `/rewind` and the history list.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Checkpoint {
-    /// Commit hash (synthetic / empty after the git-checkpoint removal).
-    pub hash: String,
-    /// Short hash (first 7 chars).
-    pub short_hash: String,
     /// Description of what triggered this checkpoint.
     pub description: String,
     /// Timestamp (seconds since epoch).
@@ -63,7 +54,6 @@ pub struct TurnCheckpoint {
 #[derive(Debug, Clone)]
 pub struct CheckpointManager {
     checkpoints: Arc<Mutex<Vec<TurnCheckpoint>>>,
-    enabled: bool,
     session_id: String,
     storage_dir: PathBuf,
 }
@@ -76,7 +66,6 @@ impl CheckpointManager {
             .unwrap_or_else(|| PathBuf::from(".shannon/checkpoints"));
         Self {
             checkpoints: Arc::new(Mutex::new(Vec::new())),
-            enabled: Self::is_git_repo(),
             session_id: String::new(),
             storage_dir,
         }
@@ -89,7 +78,6 @@ impl CheckpointManager {
             .unwrap_or_else(|| PathBuf::from(".shannon/checkpoints"));
         let mgr = Self {
             checkpoints: Arc::new(Mutex::new(Vec::new())),
-            enabled: Self::is_git_repo(),
             session_id: session_id.to_string(),
             storage_dir,
         };
@@ -105,20 +93,6 @@ impl CheckpointManager {
             self.load_from_disk(),
             "failed to load checkpoints from disk"
         );
-    }
-
-    /// Check if the current directory is inside a git repo.
-    fn is_git_repo() -> bool {
-        Command::new("git")
-            .args(["rev-parse", "--is-inside-work-tree"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
-    /// Whether the manager was constructed inside a git repo.
-    pub fn is_enabled(&self) -> bool {
-        self.enabled
     }
 
     /// Record a per-turn checkpoint with file change tracking.
@@ -295,10 +269,16 @@ impl Default for CheckpointManager {
 mod tests {
     use super::*;
 
+    fn cp(description: &str, timestamp: i64) -> Checkpoint {
+        Checkpoint {
+            description: description.to_string(),
+            timestamp,
+        }
+    }
+
     #[test]
     fn test_checkpoint_manager_new() {
         let mgr = CheckpointManager::new();
-        assert!(mgr.is_enabled());
         assert!(mgr.is_empty());
     }
 
@@ -333,12 +313,7 @@ mod tests {
     fn test_turn_checkpoint_serialization() {
         let tc = TurnCheckpoint {
             turn_index: 0,
-            checkpoint: Checkpoint {
-                hash: "abc123def456".to_string(),
-                short_hash: "abc123d".to_string(),
-                description: "test checkpoint".to_string(),
-                timestamp: 1234567890,
-            },
+            checkpoint: cp("test checkpoint", 1234567890),
             files_changed: vec!["src/main.rs".to_string(), "lib.rs".to_string()],
             prompt_preview: Some("fix the bug".to_string()),
         };
@@ -359,7 +334,6 @@ mod tests {
     #[test]
     fn test_for_session_constructor() {
         let mgr = CheckpointManager::for_session("test-session-123");
-        assert!(mgr.is_enabled());
         assert!(mgr.is_empty());
     }
 
@@ -374,15 +348,9 @@ mod tests {
     #[test]
     fn test_record_turn_stores_checkpoint() {
         let mgr = CheckpointManager::new();
-        let cp = Checkpoint {
-            hash: "deadbeef1234567890".to_string(),
-            short_hash: "deadbee".to_string(),
-            description: "before edit".to_string(),
-            timestamp: 1700000000,
-        };
         mgr.record_turn(
             0,
-            cp,
+            cp("before edit", 1700000000),
             vec!["src/main.rs".to_string()],
             Some("fix bug".to_string()),
         );
@@ -398,13 +366,12 @@ mod tests {
     fn test_record_turn_truncates_at_max() {
         let mgr = CheckpointManager::new();
         for i in 0..MAX_CHECKPOINTS + 5 {
-            let cp = Checkpoint {
-                hash: format!("hash{i:020}"),
-                short_hash: format!("hash{i:07}"),
-                description: format!("turn {i}"),
-                timestamp: 1700000000 + i as i64,
-            };
-            mgr.record_turn(i, cp, vec![], None);
+            mgr.record_turn(
+                i,
+                cp(&format!("turn {i}"), 1700000000 + i as i64),
+                vec![],
+                None,
+            );
         }
         assert_eq!(mgr.len(), MAX_CHECKPOINTS);
     }
@@ -412,13 +379,7 @@ mod tests {
     #[test]
     fn test_discard_last_with_data() {
         let mgr = CheckpointManager::new();
-        let cp = Checkpoint {
-            hash: "aaa111bbb222".to_string(),
-            short_hash: "aaa111b".to_string(),
-            description: "test".to_string(),
-            timestamp: 1700000000,
-        };
-        mgr.record_turn(0, cp, vec!["a.rs".to_string()], None);
+        mgr.record_turn(0, cp("test", 1700000000), vec!["a.rs".to_string()], None);
         assert_eq!(mgr.len(), 1);
 
         let discarded = mgr.discard_last().unwrap();
@@ -428,33 +389,20 @@ mod tests {
 
     #[test]
     fn test_checkpoint_serialization_roundtrip() {
-        let cp = Checkpoint {
-            hash: "a1b2c3d4e5f6".to_string(),
-            short_hash: "a1b2c3d".to_string(),
-            description: "before write".to_string(),
-            timestamp: 1700000000,
-        };
-        let json = serde_json::to_string(&cp).unwrap();
+        let original = cp("before write", 1700000000);
+        let json = serde_json::to_string(&original).unwrap();
         let back: Checkpoint = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.hash, cp.hash);
-        assert_eq!(back.short_hash, cp.short_hash);
-        assert_eq!(back.description, cp.description);
-        assert_eq!(back.timestamp, cp.timestamp);
+        assert_eq!(back.description, original.description);
+        assert_eq!(back.timestamp, original.timestamp);
     }
 
     #[test]
     fn test_multiple_turns_ordering() {
         let mgr = CheckpointManager::new();
         for i in 0..3 {
-            let cp = Checkpoint {
-                hash: format!("h{i:016}"),
-                short_hash: format!("h{i:07}"),
-                description: format!("turn {i}"),
-                timestamp: 1700000000 + i as i64,
-            };
             mgr.record_turn(
                 i,
-                cp,
+                cp(&format!("turn {i}"), 1700000000 + i as i64),
                 vec![format!("file{i}.rs")],
                 Some(format!("prompt {i}")),
             );
