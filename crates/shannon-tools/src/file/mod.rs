@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 pub mod diff_renderer;
 pub mod edit;
@@ -60,6 +61,30 @@ async fn validate_write_path(sandbox: &PathSandbox, path: &str) -> ToolResult<Pa
         .validate_for_write(Path::new(path))
         .await
         .map_err(|e| ToolError::InvalidInput(format!("Path sandbox: {e}")))
+}
+
+/// Best-effort pre-modify snapshot for file-level `/undo` (W6-2).
+///
+/// No-op when `history` is `None` (the default — tools without an attached
+/// manager behave identically to pre-W6-2). A missing or unreadable file
+/// (e.g. new-file creation) is skipped: undo of creation is a command-layer
+/// concern, not the snapshot layer's. Any error is swallowed so snapshotting
+/// can never block the actual write/edit — the snapshot is strictly best-effort.
+fn snapshot_for_undo(history: &Option<Arc<Mutex<history::FileHistoryManager>>>, file_path: &str) {
+    let Some(history) = history else {
+        return;
+    };
+    // Only existing, readable text files carry restorable pre-modify state.
+    let Ok(old_content) = std::fs::read_to_string(file_path) else {
+        return;
+    };
+    if let Ok(mut mgr) = history.lock() {
+        let _ = mgr.record_snapshot(
+            Path::new(file_path),
+            &old_content,
+            history::FileOperation::Edit,
+        );
+    }
 }
 
 /// Read tool implementation
@@ -141,6 +166,9 @@ impl Tool for ReadTool {
 pub struct WriteTool {
     description: String,
     sandbox: PathSandbox,
+    /// Optional shared file-history manager for file-level `/undo` (W6-2).
+    /// `None` (default) records no snapshots — identical to pre-W6-2 behavior.
+    history: Option<Arc<Mutex<history::FileHistoryManager>>>,
 }
 
 impl Default for WriteTool {
@@ -154,6 +182,7 @@ impl WriteTool {
         Self {
             description: "Write content to a file, overwriting if it exists".to_string(),
             sandbox: PathSandbox::new(),
+            history: None,
         }
     }
 
@@ -162,7 +191,15 @@ impl WriteTool {
         Self {
             description: "Write content to a file, overwriting if it exists".to_string(),
             sandbox,
+            history: None,
         }
+    }
+
+    /// Attach a shared file-history manager so each write snapshots the
+    /// pre-modify content (enables file-level `/undo`). Unset = no snapshots.
+    pub fn with_history(mut self, history: Arc<Mutex<history::FileHistoryManager>>) -> Self {
+        self.history = Some(history);
+        self
     }
 }
 
@@ -201,6 +238,7 @@ impl Tool for WriteTool {
         let mut input = write_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
+        snapshot_for_undo(&self.history, &input.file_path);
         write::execute(input).await
     }
 }
@@ -209,6 +247,8 @@ impl Tool for WriteTool {
 pub struct EditTool {
     description: String,
     sandbox: PathSandbox,
+    /// Optional shared file-history manager for file-level `/undo` (W6-2).
+    history: Option<Arc<Mutex<history::FileHistoryManager>>>,
 }
 
 impl Default for EditTool {
@@ -222,6 +262,7 @@ impl EditTool {
         Self {
             description: "Perform exact string replacements in files".to_string(),
             sandbox: PathSandbox::new(),
+            history: None,
         }
     }
 
@@ -230,7 +271,15 @@ impl EditTool {
         Self {
             description: "Perform exact string replacements in files".to_string(),
             sandbox,
+            history: None,
         }
+    }
+
+    /// Attach a shared file-history manager so each edit snapshots the
+    /// pre-modify content (enables file-level `/undo`). Unset = no snapshots.
+    pub fn with_history(mut self, history: Arc<Mutex<history::FileHistoryManager>>) -> Self {
+        self.history = Some(history);
+        self
     }
 }
 
@@ -277,6 +326,7 @@ impl Tool for EditTool {
         let mut input = edit_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
+        snapshot_for_undo(&self.history, &input.file_path);
         edit::execute(input).await
     }
 }
@@ -285,6 +335,8 @@ impl Tool for EditTool {
 pub struct MultiEditTool {
     description: String,
     sandbox: PathSandbox,
+    /// Optional shared file-history manager for file-level `/undo` (W6-2).
+    history: Option<Arc<Mutex<history::FileHistoryManager>>>,
 }
 
 impl Default for MultiEditTool {
@@ -300,6 +352,7 @@ impl MultiEditTool {
                 "Apply multiple file edits atomically — all edits succeed or none are applied"
                     .to_string(),
             sandbox: PathSandbox::new(),
+            history: None,
         }
     }
 
@@ -309,7 +362,15 @@ impl MultiEditTool {
                 "Apply multiple file edits atomically — all edits succeed or none are applied"
                     .to_string(),
             sandbox,
+            history: None,
         }
+    }
+
+    /// Attach a shared file-history manager so each edited file is snapshotted
+    /// before the atomic apply (enables file-level `/undo`). Unset = no snapshots.
+    pub fn with_history(mut self, history: Arc<Mutex<history::FileHistoryManager>>) -> Self {
+        self.history = Some(history);
+        self
     }
 }
 
@@ -365,6 +426,16 @@ impl Tool for MultiEditTool {
         for op in &mut multi_input.edits {
             let canonical = validate_path(&self.sandbox, &op.file_path).await?;
             op.file_path = canonical.to_string_lossy().to_string();
+        }
+
+        // Snapshot each distinct file once before the atomic apply, so the
+        // pre-modify state of every touched file is recoverable via `/undo` (W6-2).
+        let mut snapshotted: Vec<String> = Vec::new();
+        for op in &multi_input.edits {
+            if !snapshotted.contains(&op.file_path) {
+                snapshotted.push(op.file_path.clone());
+                snapshot_for_undo(&self.history, &op.file_path);
+            }
         }
 
         multiedit::execute(multi_input).await
@@ -757,5 +828,111 @@ mod tests {
 
         let content = std::fs::read_to_string(&existing).unwrap();
         assert_eq!(content, "new content");
+    }
+
+    // ── W6-2 file-history snapshot wiring ─────────────────────────────
+
+    /// Build a fresh history manager backed by a throwaway temp dir.
+    fn history_manager() -> Arc<Mutex<history::FileHistoryManager>> {
+        Arc::new(Mutex::new(history::FileHistoryManager::new_temp().unwrap()))
+    }
+
+    /// Sandbox scoped to a single temp dir (matches the existing write tests).
+    fn sandbox_for(dir: &Path) -> PathSandbox {
+        PathSandbox::with_config(crate::file::sandbox::SandboxConfig {
+            allowed_roots: vec![dir.to_path_buf()],
+            denied_patterns: vec![],
+            strict_mode: true,
+        })
+    }
+
+    #[tokio::test]
+    async fn write_tool_snapshots_pre_modify_content() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "old content").unwrap();
+
+        let history = history_manager();
+        let tool = WriteTool::with_sandbox(sandbox_for(dir.path())).with_history(history.clone());
+
+        let input = serde_json::json!({
+            "file_path": path.to_string_lossy(),
+            "content": "new content"
+        });
+        tool.execute(input).await.unwrap();
+
+        let mut mgr = history.lock().unwrap();
+        let h = mgr.get_history(&path).unwrap();
+        assert_eq!(h.len(), 1);
+        assert_eq!(h.snapshots[0].content, "old content");
+    }
+
+    #[tokio::test]
+    async fn edit_tool_snapshots_pre_modify_content() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("b.txt");
+        std::fs::write(&path, "foo bar baz").unwrap();
+
+        let history = history_manager();
+        let tool = EditTool::with_sandbox(sandbox_for(dir.path())).with_history(history.clone());
+
+        let input = serde_json::json!({
+            "file_path": path.to_string_lossy(),
+            "old_string": "bar",
+            "new_string": "qux"
+        });
+        tool.execute(input).await.unwrap();
+
+        let mut mgr = history.lock().unwrap();
+        let h = mgr.get_history(&path).unwrap();
+        assert_eq!(h.len(), 1);
+        assert_eq!(h.snapshots[0].content, "foo bar baz");
+    }
+
+    #[tokio::test]
+    async fn multiedit_tool_snapshots_each_distinct_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path_a = dir.path().join("a.txt");
+        let path_b = dir.path().join("b.txt");
+        std::fs::write(&path_a, "alpha-1 alpha-2").unwrap();
+        std::fs::write(&path_b, "beta").unwrap();
+
+        let history = history_manager();
+        let tool =
+            MultiEditTool::with_sandbox(sandbox_for(dir.path())).with_history(history.clone());
+
+        // Two edits target a.txt, one targets b.txt → snapshot each file once.
+        let input = serde_json::json!({
+            "edits": [
+                { "file_path": path_a.to_string_lossy(), "old_string": "alpha-1", "new_string": "ALPHA1" },
+                { "file_path": path_a.to_string_lossy(), "old_string": "alpha-2", "new_string": "ALPHA2" },
+                { "file_path": path_b.to_string_lossy(), "old_string": "beta", "new_string": "BETA" }
+            ]
+        });
+        tool.execute(input).await.unwrap();
+
+        let mut mgr = history.lock().unwrap();
+        let ha = mgr.get_history(&path_a).unwrap();
+        assert_eq!(ha.len(), 1, "a.txt snapshotted once despite two edits");
+        assert_eq!(ha.snapshots[0].content, "alpha-1 alpha-2");
+        let hb = mgr.get_history(&path_b).unwrap();
+        assert_eq!(hb.len(), 1);
+        assert_eq!(hb.snapshots[0].content, "beta");
+    }
+
+    #[tokio::test]
+    async fn write_tool_without_history_records_nothing() {
+        // No with_history() → manager absent; write still succeeds, no panic.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("c.txt");
+        std::fs::write(&path, "orig").unwrap();
+
+        let tool = WriteTool::with_sandbox(sandbox_for(dir.path()));
+        let input = serde_json::json!({
+            "file_path": path.to_string_lossy(),
+            "content": "changed"
+        });
+        tool.execute(input).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "changed");
     }
 }

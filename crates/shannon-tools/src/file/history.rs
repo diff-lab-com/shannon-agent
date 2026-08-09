@@ -704,7 +704,9 @@ impl FileHistoryManager {
         // On overflow (impossibly large TTL) fall back to a zero offset, which
         // makes nothing expire — a safe no-op.
         let offset = chrono::Duration::from_std(ttl).unwrap_or_else(|_| chrono::Duration::zero());
-        let cutoff = Utc::now().checked_sub_signed(offset).unwrap_or_else(Utc::now);
+        let cutoff = Utc::now()
+            .checked_sub_signed(offset)
+            .unwrap_or_else(Utc::now);
         self.cleanup_expired_before(cutoff)
     }
 
