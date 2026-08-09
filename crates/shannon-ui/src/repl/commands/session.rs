@@ -1724,4 +1724,67 @@ mod rewind_tests {
         let err = apply_code_rewind(&cps, 0, &mut mgr, std::path::Path::new(".")).unwrap_err();
         assert!(err.contains("Invalid checkpoint"));
     }
+
+    // --- capture → rewind, real production functions end-to-end -------------
+    //
+    // Drives the actual REPL capture helper (`capture_turn_snapshots_with`,
+    // invoked at the turn boundary in query.rs) through the actual rewind core
+    // (`apply_code_rewind`), sharing one on-disk history manager. No env, no
+    // TUI, no hand-built snapshots — this is the closest automated check to
+    // the real `/rewind code <n>` flow.
+
+    #[test]
+    fn capture_then_apply_code_rewind_end_to_end() {
+        use crate::repl::query::capture_turn_snapshots_with;
+
+        //   turn 0: edit a.txt (content "v0")
+        //   turn 1: edit a.txt ("v1") + create b.txt ("b1")
+        // Rewind to turn 0 → a.txt restored to "v0", b.txt deleted.
+        let (tmp, mut mgr) = mgr_in_tmp();
+        let cwd = tmp.path();
+        let a = cwd.join("a.txt");
+        let b = cwd.join("b.txt");
+        let a_s = a.to_string_lossy().to_string();
+        let b_s = b.to_string_lossy().to_string();
+
+        // turn 0: write a.txt, then capture its post-turn state.
+        std::fs::write(&a, "v0\n").unwrap();
+        capture_turn_snapshots_with(&mut mgr, &[a_s.clone()], 0);
+
+        // turn 1: mutate a.txt + create b.txt, then capture both.
+        std::fs::write(&a, "v1\n").unwrap();
+        std::fs::write(&b, "b1\n").unwrap();
+        capture_turn_snapshots_with(&mut mgr, &[a_s.clone(), b_s.clone()], 1);
+
+        // Checkpoints as the REPL's CheckpointManager.record_turn would produce.
+        let cps = vec![
+            shannon_core::TurnCheckpoint {
+                turn_index: 0,
+                checkpoint: shannon_core::Checkpoint {
+                    description: "turn 0".into(),
+                    timestamp: 0,
+                },
+                files_changed: vec![a_s.clone()],
+                prompt_preview: None,
+            },
+            shannon_core::TurnCheckpoint {
+                turn_index: 1,
+                checkpoint: shannon_core::Checkpoint {
+                    description: "turn 1".into(),
+                    timestamp: 1,
+                },
+                files_changed: vec![a_s.clone(), b_s.clone()],
+                prompt_preview: None,
+            },
+        ];
+
+        let outcome = apply_code_rewind(&cps, 0, &mut mgr, cwd).unwrap();
+        assert_eq!(outcome.target_turn, 0);
+        assert!(outcome.restored.contains(&a_s));
+        assert!(outcome.deleted.contains(&b_s));
+
+        // Disk reflects the rewind through the real capture+rewind pipeline.
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "v0\n");
+        assert!(!b.exists());
+    }
 }

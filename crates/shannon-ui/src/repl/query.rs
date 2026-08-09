@@ -25,15 +25,15 @@ fn animated_dots(_elapsed: std::time::Duration) -> &'static str {
 /// during the turn, so `/rewind code/both <n>` can restore files via `FileHistoryManager`
 /// (content snapshots) instead of git.
 ///
-/// No-op when file history is disabled (`SHANNON_FILE_HISTORY=0`). Files that cannot
-/// be read (deleted this turn, binary, missing) are skipped. Snapshots are keyed by the
-/// path string exactly as the turn-tracker reports it, so the rewind lookup (which reads
-/// the same strings from `TurnCheckpoint.files_changed`) matches.
-fn capture_turn_snapshots(files: &[String], turn_index: usize) {
-    let Some(config) = shannon_tools::FileHistoryConfig::from_env() else {
-        return;
-    };
-    let mut manager = shannon_tools::FileHistoryManager::new(config);
+/// Files that cannot be read (deleted this turn, binary, missing) are skipped.
+/// Snapshots are keyed by the path string exactly as the turn-tracker reports it,
+/// so the rewind lookup (which reads the same strings from `TurnCheckpoint.files_changed`)
+/// matches.
+pub(crate) fn capture_turn_snapshots_with(
+    manager: &mut shannon_tools::FileHistoryManager,
+    files: &[String],
+    turn_index: usize,
+) {
     let cwd = std::env::current_dir().unwrap_or_default();
     for file in files {
         let key = std::path::Path::new(file);
@@ -49,6 +49,17 @@ fn capture_turn_snapshots(files: &[String], turn_index: usize) {
         };
         let _ = manager.record_turn_snapshot(key, &content, turn_index);
     }
+}
+
+/// Capture post-turn snapshots using a manager built from
+/// `FileHistoryConfig::from_env()`. No-op when file history is disabled
+/// (`SHANNON_FILE_HISTORY=0`); see [`capture_turn_snapshots_with`].
+fn capture_turn_snapshots(files: &[String], turn_index: usize) {
+    let Some(config) = shannon_tools::FileHistoryConfig::from_env() else {
+        return;
+    };
+    let mut manager = shannon_tools::FileHistoryManager::new(config);
+    capture_turn_snapshots_with(&mut manager, files, turn_index);
 }
 
 /// Wrap a single line to fit within `max_width` columns, breaking at char boundaries.
