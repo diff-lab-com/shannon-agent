@@ -2,10 +2,12 @@
 
 > **Track**: Wave 6
 > **Date**: 2026-08-08
-> **Status**: Proposed
+> **Status**: ✅ Done(2026-08-09,PR #52;范围调整见下方注记)
 > **Estimate**: 1–1.5w · **Priority**: 🟡 中
 > **Dependencies**: 无(先梳理现有 hook)
 > **Parent**: [wave-5-followup.md](./wave-5-followup.md) §2 W6-2 · **Related**: [tech-debt.md](../tech-debt.md) TD-5
+
+> **执行结果(2026-08-09,PR #52)**:Phase A(文件级快照)+ Phase B(统一 `/rewind` 于内容快照 + gut `checkpoint.rs` 的 git 原语)已完成。**Phase C(PostToolUse auto-commit + 批量窗口)DROPPED** —— 理由见 [w6-2-hook-analysis.md](./w6-2-hook-analysis.md) §C(TD-5 改由现有 `AutoCommitTool` + 手动 `/commit` 承接)。原计划 §3.1/§3.2 的 auto-commit 部分未实施;本文档保留为历史方案,实际执行记录以 `w6-2-hook-analysis.md` 为准。
 
 ---
 

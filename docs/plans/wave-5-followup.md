@@ -61,7 +61,7 @@ Wave 4(08-04 → 08-07)把 provider 读写收敛、parity 矩阵、semver 强制
 
 ### W6-2 · P2-6 auto-commit + Undo / 快照(1–1.5w)
 
-- **现状**:未做;先要梳理现有 PostToolUse auto-commit hook 行为(见 [tech-debt.md](../tech-debt.md) TD-5、memory `auto-commit-hook-splits-edits`)。
+- **现状**:✅ **Done(2026-08-09,PR #52)**。Phase A(文件级快照)+ Phase B(统一 `/rewind` 于内容快照 + gut `checkpoint.rs`)完成;**Phase C(auto-commit)DROPPED**(见 [w6-2-hook-analysis.md](./w6-2-hook-analysis.md) §C,TD-5 改由 `AutoCommitTool` + `/commit` 承接)。
 - **详细方案**:[w6-2-p2-6-auto-commit-undo.md](./w6-2-p2-6-auto-commit-undo.md)
 - **文件锚点**:`scripts/hooks/`(现有 hook);新增 `crates/shannon-core/src/snapshot.rs`(文件级快照)或扩展 `session_transcript`。
 - **实施步骤**:
@@ -74,7 +74,7 @@ Wave 4(08-04 → 08-07)把 provider 读写收敛、parity 矩阵、semver 强制
 
 ### W6-3 · P2-2 STABILITY deprecation 收尾(3–5d)
 
-- **现状**:读写路径 + C3 parity 全闭环;剩余"legacy 路径 deprecation 标注 + CLI/桌面 provider/credential 逐项行为对齐"的收尾。
+- **现状**:✅ **Done(2026-08-09,PR #51)**。inventory + parity diff(6/6 对齐)+ STABILITY 同步完成;`#[deprecated]` 改走 [TD-4](../tech-debt.md) 直接删除(避免 flood ~67 warnings)。
 - **详细方案**:[w6-3-p2-2-deprecation-tail.md](./w6-3-p2-2-deprecation-tail.md)
 - **文件锚点**:`crates/shannon-core/src/provider.rs`、`desktop/src/commands_config.rs`、`desktop/src/provider_read_snapshot.rs`、[STABILITY.md](../STABILITY.md)。
 - **实施步骤**:
@@ -111,14 +111,14 @@ Wave 4(08-04 → 08-07)把 provider 读写收敛、parity 矩阵、semver 强制
 W5(对齐,独立)── 解除"文档撒谎"
 
 W6-1 P2-8 VS Code ── ⏸️ 暂缓(2026-08-08);依赖 P2-7 ✅ 已满足,随时可重启
-W6-2 P2-6 auto-commit/Undo ── 独立(先梳理 hook)
-W6-3 P2-2 deprecation 收尾 ── 独立 ── 为 TD-4 Phase 2 铺垫
+W6-2 P2-6 auto-commit/Undo ── ✅ done(#52;Phase C auto-commit dropped)
+W6-3 P2-2 deprecation 收尾 ── ✅ done(#51)── TD-4 inventory 已铺垫
 
 W7-1 P3-7 沙盒 ── 评审驱动,独立
 W7-2 P3-1 artifact ── 依赖 P2-5d ✅
 ```
 
-**关键路径**(P2-8 暂缓后):W5(对齐)→ W6-3(deprecation 收尾)→ W6-2(auto-commit/Undo)→ W7-1(沙盒,安全护城河)。
+**关键路径**(W6-2/W6-3 已合,W6-1 暂缓):剩余 W7-1(沙盒,安全护城河)→ W7-2(artifact);W6-1(VS Code)待重启决策。
 **可并行**:W6-2 / W6-3 / W7-2 互不阻塞,可分配给不同 worktree / agent。
 
 ---
@@ -128,9 +128,9 @@ W7-2 P3-1 artifact ── 依赖 P2-5d ✅
 | 顺序 | Task | 估时 | 优先级 | 备注 |
 |---|---|---|---|---|
 | 1 | W5-1/2/3 文档收敛 | 0.5–1d | 🔴 高 | 大部分已做,补 metrics 刷新即可 |
-| 2 | W6-3 P2-2 deprecation 收尾 | 3–5d | 🟡 中 | 低风险,清 trust 债,为 TD-4 铺垫 |
+| 2 | W6-3 P2-2 deprecation 收尾 | 3–5d | ✅ done | PR #51;inventory/parity/STABILITY;`#[deprecated]`→TD-4 |
 | 3 | W6-1 P2-8 VS Code | 2–3w | ⏸️ 暂缓 | 2026-08-08 用户决策;spike+方案就绪,可重启 |
-| 4 | W6-2 P2-6 auto-commit/Undo | 1–1.5w | 🟡 中 | 先梳理 hook,再做 squash + Undo |
+| 4 | W6-2 P2-6 auto-commit/Undo | 1–1.5w | ✅ done | PR #52;快照 + 统一 `/rewind`;Phase C auto-commit dropped |
 | 5 | W7-2 P3-1 artifact | 2w | 🟢 稳 | 依赖已满足,可提前 |
 | 6 | W7-1 P3-7 沙盒 | 4–6w | 🟢 稳 | 评审驱动,长期 |
 
@@ -161,4 +161,4 @@ W7-2 P3-1 artifact ── 依赖 P2-5d ✅
 
 ---
 
-*本规划由 2026-08-08 全量状态盘点驱动;所有状态对应 `dev` tip `c90adf82` 与已合并 PR(#34/#36/#37/#38/#40/#41/#42/#45/#46/#47/#49)。*
+*本规划由 2026-08-08 全量状态盘点驱动;W6-2/W6-3 完成态于 2026-08-09 更新(PR #51/#52)。当前 `dev` tip `a9f62ffe`。*
