@@ -44,16 +44,32 @@ pub(crate) fn capture_turn_snapshots_with(
         } else {
             cwd.join(file)
         };
+        // Bound memory the same way the per-edit path does: skip oversized,
+        // missing, or non-UTF-8 files rather than reading them fully in.
+        let Ok(meta) = std::fs::metadata(&fs_path) else {
+            continue;
+        };
+        if meta.len() > shannon_tools::file::MAX_SNAPSHOT_BYTES {
+            continue;
+        }
         let Ok(content) = std::fs::read_to_string(&fs_path) else {
             continue;
         };
-        let _ = manager.record_turn_snapshot(key, &content, turn_index);
+        if let Err(e) = manager.record_turn_snapshot(key, &content, turn_index) {
+            tracing::debug!("turn snapshot skipped for {fs_path:?}: {e}");
+        }
     }
 }
 
 /// Capture post-turn snapshots using a manager built from
 /// `FileHistoryConfig::from_env()`. No-op when file history is disabled
 /// (`SHANNON_FILE_HISTORY=0`); see [`capture_turn_snapshots_with`].
+///
+/// This manager is intentionally a SEPARATE instance from the one the
+/// Write/Edit tools hold: both persist to the same on-disk `history_dir`, and
+/// `run_code_rewind` always builds its own fresh manager that re-reads the
+/// complete on-disk index, so the cross-instance in-memory cache divergence is
+/// benign (no data is lost).
 fn capture_turn_snapshots(files: &[String], turn_index: usize) {
     let Some(config) = shannon_tools::FileHistoryConfig::from_env() else {
         return;

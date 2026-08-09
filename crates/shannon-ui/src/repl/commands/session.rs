@@ -578,6 +578,8 @@ struct CodeRewindOutcome {
     target_turn: usize,
     restored: Vec<String>,
     deleted: Vec<String>,
+    /// Files whose restore/delete I/O failed (permissions, disk full, …).
+    failed: Vec<String>,
 }
 
 /// Core code-rewind logic, factored out so it is unit-testable without env or
@@ -615,6 +617,7 @@ fn apply_code_rewind(
 
     let mut restored: Vec<String> = Vec::new();
     let mut deleted: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
 
     for file in &files_after {
         let key = Path::new(file);
@@ -627,16 +630,20 @@ fn apply_code_rewind(
             .rewind_file_to_turn(key, target_turn)
             .map_err(|e| e.to_string())?
         {
-            RewindAction::Restore(content) => {
-                if std::fs::write(&fs_path, content).is_ok() {
-                    restored.push(file.clone());
+            RewindAction::Restore(content) => match std::fs::write(&fs_path, content) {
+                Ok(()) => restored.push(file.clone()),
+                Err(e) => {
+                    tracing::warn!("rewind: failed to restore {fs_path:?}: {e}");
+                    failed.push(file.clone());
                 }
-            }
-            RewindAction::Delete => {
-                if std::fs::remove_file(&fs_path).is_ok() {
-                    deleted.push(file.clone());
+            },
+            RewindAction::Delete => match std::fs::remove_file(&fs_path) {
+                Ok(()) => deleted.push(file.clone()),
+                Err(e) => {
+                    tracing::warn!("rewind: failed to delete {fs_path:?}: {e}");
+                    failed.push(file.clone());
                 }
-            }
+            },
             RewindAction::NoChange => {}
         }
     }
@@ -645,6 +652,7 @@ fn apply_code_rewind(
         target_turn,
         restored,
         deleted,
+        failed,
     })
 }
 
@@ -660,7 +668,7 @@ fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, Str
     let outcome = apply_code_rewind(&checkpoints, index, &mut manager, &cwd)?;
 
     let mut summary = format!("Reverted code to turn {}.", outcome.target_turn);
-    if outcome.restored.is_empty() && outcome.deleted.is_empty() {
+    if outcome.restored.is_empty() && outcome.deleted.is_empty() && outcome.failed.is_empty() {
         summary.push_str(" No files needed reverting (no recorded changes after this turn).");
     } else {
         if !outcome.restored.is_empty() {
@@ -670,6 +678,12 @@ fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, Str
             summary.push_str(&format!(
                 "\nDeleted (created after this turn): {}",
                 outcome.deleted.join(", ")
+            ));
+        }
+        if !outcome.failed.is_empty() {
+            summary.push_str(&format!(
+                "\nFailed to revert (I/O error; see logs): {}",
+                outcome.failed.join(", ")
             ));
         }
     }
@@ -1689,6 +1703,53 @@ mod rewind_tests {
         // Disk reflects the rewind: `a.txt` back to "v0", `b.txt` gone.
         assert_eq!(std::fs::read_to_string(&a).unwrap(), "v0\n");
         assert!(!b.exists());
+    }
+
+    #[test]
+    fn apply_code_rewind_surfaces_failed_restore() {
+        // When the restore I/O fails (here: the target's parent dir is gone),
+        // the file is reported in `failed` rather than silently dropped, so a
+        // failed rewind is visible instead of looking like a no-op.
+        let (tmp, mut mgr) = mgr_in_tmp();
+        let cwd = tmp.path();
+        let subdir = cwd.join("subdir");
+        std::fs::create_dir(&subdir).unwrap();
+        let a = subdir.join("a.txt");
+        let a_s = a.to_string_lossy().to_string();
+
+        // turn 0: a.txt = "v0"; turn 1: a.txt = "v1".
+        mgr.record_turn_snapshot(&a, "v0\n", 0).unwrap();
+        mgr.record_turn_snapshot(&a, "v1\n", 1).unwrap();
+        std::fs::write(&a, "v1\n").unwrap();
+
+        // Remove the parent dir so the restore write fails (ENOENT).
+        std::fs::remove_dir_all(&subdir).unwrap();
+
+        let cps = vec![
+            shannon_core::TurnCheckpoint {
+                turn_index: 0,
+                checkpoint: shannon_core::Checkpoint {
+                    description: "turn 0".into(),
+                    timestamp: 0,
+                },
+                files_changed: vec![a_s.clone()],
+                prompt_preview: None,
+            },
+            shannon_core::TurnCheckpoint {
+                turn_index: 1,
+                checkpoint: shannon_core::Checkpoint {
+                    description: "turn 1".into(),
+                    timestamp: 1,
+                },
+                files_changed: vec![a_s.clone()],
+                prompt_preview: None,
+            },
+        ];
+
+        let outcome = apply_code_rewind(&cps, 0, &mut mgr, cwd).unwrap();
+        assert_eq!(outcome.target_turn, 0);
+        assert!(outcome.restored.is_empty());
+        assert!(outcome.failed.contains(&a_s));
     }
 
     #[test]

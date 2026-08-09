@@ -70,6 +70,15 @@ async fn validate_write_path(sandbox: &PathSandbox, path: &str) -> ToolResult<Pa
 /// (e.g. new-file creation) is skipped: undo of creation is a command-layer
 /// concern, not the snapshot layer's. Any error is swallowed so snapshotting
 /// can never block the actual write/edit — the snapshot is strictly best-effort.
+/// Upper bound on a single file snapshot's size. Pre-filters oversized files
+/// before reading them into memory — the history manager's storage-quota check
+/// only runs *after* content is in memory. 10 MB covers typical source files;
+/// large data/minified files are poor undo targets anyway. Shared by the
+/// per-edit (`snapshot_for_undo`) and per-turn (`capture_turn_snapshots_with`)
+/// capture paths. A benign TOCTOU exists between the stat and the read — the
+/// cap is a best-effort guard, not a hard guarantee.
+pub const MAX_SNAPSHOT_BYTES: u64 = 10 * 1024 * 1024;
+
 fn snapshot_for_undo(history: &Option<Arc<Mutex<history::FileHistoryManager>>>, file_path: &str) {
     let Some(history) = history else {
         return;
@@ -79,7 +88,6 @@ fn snapshot_for_undo(history: &Option<Arc<Mutex<history::FileHistoryManager>>>, 
     // here. 10 MB covers typical source files; large data/minified files are
     // poor undo targets anyway. A benign TOCTOU exists between this stat and
     // the read — the cap is a best-effort guard, not a hard guarantee.
-    const MAX_SNAPSHOT_BYTES: u64 = 10 * 1024 * 1024;
     let Ok(meta) = std::fs::metadata(file_path) else {
         return;
     };

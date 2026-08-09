@@ -149,7 +149,7 @@ A.1 增量(自包含在 `history.rs`):
 | A.4 | config(开关 / history dir / TTL);默认开,可禁用 | ~0.5d | ✅ `c83f761d` |
 | B.1 | **命令统一 + per-file 回退**:`/undo` / `/checkpoint` 收敛为 `/rewind` 别名(同一 `handle_rewind`,Claude-Code-aligned 机制);`/rewind <path>` 经 `FileHistoryManager.rollback()` + 写盘做 per-file 内容快照回退(覆盖前确认 / `--yes` 跳过);help 元数据 + 8 个单测;`code`/`both` 多文件模式本阶段仍走 git-checkpoint(过渡态) | ~2d | ✅ 本次 |
 | B.2 | **turn-tagged 内容快照回退**:`FileHistoryManager` 增 `record_turn_snapshot` / `rewind_file_to_turn`(按 `turn_index` 标记的内容快照,非独立 manifest);`query.rs` 在 turn 边界捕获 post-turn 快照;`/rewind code\|both <n>` 经 `run_code_rewind` 回退到目标 turn 的文件内容(Restore / Delete / NoChange);**停掉** `engine.rs` 每次 Edit/Write/Bash 的 git auto-checkpoint + `tool_execution.rs` 死路径;**gut** `checkpoint.rs`(删 `create_checkpoint` / `revert_to` / `undo_last` / `preview_revert` / `RestoreMode` / `RevertPreview` / `FileChangePreview` + 配套集成测试;保留 `TurnCheckpoint` / `record_turn` / `list_checkpoints` / `discard_last` + 持久化,驱动 `/rewind <n>` 会话回退 + history 列表) | ~1.5d | ✅ 本次 |
-| C | auto-commit —— **DEFERRED**(见下) | — | ⏸️ |
+| C | auto-commit —— **DROPPED**(2026-08-10,见下) | — | ❌ |
 
 > **B.1 设计决策(2026-08-09)**:经调研 + 用户确认,采纳 Claude-Code-aligned 方案 —— canonical 命令 `/rewind`(`/undo`、`/checkpoint` 为别名,行为完全一致);per-file 回退基于 `FileHistoryManager` 内容快照(非 git)。详见记忆 `existing-undo-is-destructive-git-reset`。
 
@@ -167,7 +167,9 @@ A.1 增量(自包含在 `history.rs`):
 
 未设/不可解析 → 保持默认。TOML 层接入(从 `.shannon.toml` `[file_history]` 读)留待后续(非 A.4 范围)。
 
-### C(auto-commit)为何 defer
+### C(auto-commit)为何不做(原列 defer;2026-08-10 确认 drop)
+
+> **2026-08-10 决定:正式 drop**(非 defer)。下述理由均成立,无重启计划。若未来确有"PostToolUse 自动提交 + 批量窗口"需求,优先增强现有 `/commit`(见 §4 替代项),而非新建自动 hook。
 
 1. **解决不了原始痛点**:TD-5 的 dev-workflow hook 是 Claude Code harness hook(§1.4),Shannon-engine auto-commit 是另一套系统。
 2. **Tool 已存在**:`AutoCommitTool`(`lib.rs:495`)已提供 LLM 主动调用的 commit 能力;"PostToolUse 自动 + 批量窗口"是增量语义,需求未明。
