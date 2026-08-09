@@ -5,6 +5,14 @@
 
 ---
 
+> **状态更新(2026-08-08)**:本文件生成于 2026-04-12,下方多数 P1/P2 项**已实现**,仅保留作历史。当前实际状态以 [improvement-plan-2026-08.md](./improvement-plan-2026-08.md) §v4 + [CHANGELOG.md](../CHANGELOG.md) 为准。
+>
+> **已实现**(勿再当 future):Repo Map · tree-sitter(P1-4 `69797143`)、Auto-test Loop(P1-5 `3a00b207`)、`/export` · `/debug` · `/diff` · `/review_pr`(P1-1 `448061e5`)、HTTP API Server `shannon serve`(P2-7 `3ed22799`)、Voice Input · whisper-rs(P2-5e `d983f527`)、Notion / Linear MCP(P1-3c/d)。
+>
+> **仍 future**:VS Code 扩展完善(spike done,[spikes/p2-8-vscode.md](./spikes/p2-8-vscode.md))、Architect 模式、Auto-commit + Undo(P2-6)、Cross-surface / Cloud / Agent SDK / Skills marketplace(P3)。
+
+---
+
 ## P1 - High-Value Gaps (Future)
 
 ### Auto-commit with Contextual Messages

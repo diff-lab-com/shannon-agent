@@ -5,19 +5,19 @@
 
 ## Snapshot
 
-- **Generated (UTC)**: `2026-08-03T08:54:14Z`
-- **Branch**: `feat/p0-3-metrics`
-- **Commit**: `dd50dd28`
-- **Describe**: `v0.7.1-199-gdd50dd28-dirty`
+- **Generated (UTC)**: `2026-08-08T04:03:59Z`
+- **Branch**: `dev`
+- **Commit**: `c90adf82`
+- **Describe**: `v0.8.0-11-gc90adf82`
 
 ## Summary
 
 | metric | value |
 |---|---:|
-| Tests (nextest, runnable) | 11093 |
-| Tests (source `#[test]`/`#[tokio::test]` attrs) | 10989 |
-| Rust source files | 605 |
-| Rust LOC (code) | 409510 |
+| Tests (nextest, runnable) | 11273 |
+| Tests (source `#[test]`/`#[tokio::test]` attrs) | 11171 |
+| Rust source files | 624 |
+| Rust LOC (code) | 418458 |
 | `cargo clippy --workspace -- -D warnings` | pass |
 | `cargo deny check` | pass |
 
@@ -28,18 +28,18 @@ Counts below come from `cargo nextest list --workspace --message-format=json`
 
 | crate | tests | binaries |
 |---|---:|---:|
-| shannon-core | 3545 | 37 |
+| shannon-core | 3571 | 40 |
 | shannon-tools | 1538 | 11 |
 | shannon-ui | 1421 | 8 |
 | shannon-engine | 1132 | 3 |
 | shannon-agents | 897 | 10 |
-| shannon-mcp | 574 | 7 |
-| shannon-desktop | 566 | 4 |
-| shannon-cli | 441 | 7 |
-| shannon-commands | 386 | 4 |
+| shannon-desktop | 588 | 4 |
+| shannon-mcp | 578 | 9 |
+| shannon-cli | 443 | 8 |
+| shannon-commands | 419 | 5 |
+| shannon-mcp-saas | 185 | 2 |
 | shannon-skills | 172 | 5 |
 | shannon-codegen | 100 | 4 |
-| shannon-mcp-saas | 92 | 2 |
 | shannon-types | 74 | 3 |
 | shannon-agent | 65 | 2 |
 | shannon-api-protocol | 37 | 3 |
@@ -55,8 +55,8 @@ Legacy archives and vendored directories are excluded.
 
 | language | files | code |
 |---|---:|---:|
-| Rust (.rs) | 605 | 409510 |
-| TypeScript/TSX | 425 | 69535 |
+| Rust (.rs) | 624 | 418458 |
+| TypeScript/TSX | 6151 | 4556 |
 
 ## Lint / audit status
 
@@ -65,9 +65,9 @@ Legacy archives and vendored directories are excluded.
 - **Status**: pass
 
 ```text
-    Checking shannon-ui v0.7.1 (/home/ed/workspace/app/work/shannon/shannon-mono-p0-3/crates/shannon-ui)
-    Checking shannon-cli v0.7.1 (/home/ed/workspace/app/work/shannon/shannon-mono-p0-3/crates/shannon-cli)
-    Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 56.48s
+    Checking shannon-ui v0.8.0 (/home/ed/workspace/app/work/shannon/shannon-mono/crates/shannon-ui)
+    Checking shannon-cli v0.8.0 (/home/ed/workspace/app/work/shannon/shannon-mono/crates/shannon-cli)
+    Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 40.54s
 ```
 
 ### `cargo deny check`
@@ -75,7 +75,7 @@ Legacy archives and vendored directories are excluded.
 - **Status**: pass
 
 ```text
-    │ ╰───────────────────────────────────────────────────────────────┘ lock entries
+   │      ━━━━━━━━━━━━━━━━━ no crate matched advisory criteria
 
 advisories ok, bans ok, licenses ok, sources ok
 ```
