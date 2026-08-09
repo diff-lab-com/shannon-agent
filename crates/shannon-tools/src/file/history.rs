@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -329,6 +330,12 @@ pub struct FileHistoryConfig {
     pub max_history_per_file: usize,
     /// Maximum total history storage in MB.
     pub max_total_history_mb: usize,
+    /// Time-to-live for snapshots, in whole seconds. Snapshots older than
+    /// this become cleanup-eligible. `None` disables time-based expiry (only
+    /// the per-file count limit and storage quota apply). Default: 7 days
+    /// (604_800). Stored as seconds because `std::time::Duration` does not
+    /// implement `Serialize`/`Deserialize`.
+    pub ttl: Option<u64>,
 }
 
 impl Default for FileHistoryConfig {
@@ -342,6 +349,8 @@ impl Default for FileHistoryConfig {
             history_dir,
             max_history_per_file: 50,
             max_total_history_mb: 100,
+            // 7 days in seconds (604_800). Snapshots older than this expire.
+            ttl: Some(7 * 24 * 60 * 60),
         }
     }
 }
@@ -364,6 +373,9 @@ pub struct FileHistoryManager {
     history_dir: PathBuf,
     max_history_per_file: usize,
     max_total_history_mb: usize,
+    /// Time-to-live; snapshots older than this are cleanup-eligible.
+    /// `None` disables time-based expiry.
+    ttl: Option<Duration>,
     /// In-memory cache of file histories.
     cache: HashMap<PathBuf, FileHistory>,
     /// Whether the cache has been loaded from disk.
@@ -377,6 +389,7 @@ impl FileHistoryManager {
             history_dir: config.history_dir,
             max_history_per_file: config.max_history_per_file,
             max_total_history_mb: config.max_total_history_mb,
+            ttl: config.ttl.map(Duration::from_secs),
             cache: HashMap::new(),
             cache_loaded: false,
         };
@@ -395,6 +408,7 @@ impl FileHistoryManager {
             history_dir: temp_path,
             max_history_per_file: 10,
             max_total_history_mb: 10,
+            ttl: Some(7 * 24 * 60 * 60),
         };
         Ok(Self::new(config))
     }
@@ -631,6 +645,67 @@ impl FileHistoryManager {
         }
 
         Ok(removed)
+    }
+
+    /// Remove all snapshots strictly older than `cutoff`.
+    ///
+    /// Returns the number of snapshots removed. This is the deterministic,
+    /// testable core of time-based expiry; [`FileHistoryManager::cleanup_expired`]
+    /// wraps it with the configured TTL. Note this is **not** called
+    /// automatically from `record_snapshot` (to keep the write path fast); it
+    /// is meant to be invoked periodically — e.g. on session start or when
+    /// `/undo` runs.
+    pub fn cleanup_expired_before(
+        &mut self,
+        cutoff: DateTime<Utc>,
+    ) -> Result<usize, FileHistoryError> {
+        self.ensure_cache_loaded()?;
+
+        let mut removed = 0usize;
+        let mut to_delete: Vec<(PathBuf, String)> = Vec::new();
+
+        for (file_path, history) in &mut self.cache {
+            let expired: Vec<String> = history
+                .snapshots
+                .iter()
+                .filter(|s| s.timestamp < cutoff)
+                .map(|s| s.id.clone())
+                .collect();
+            for id in &expired {
+                to_delete.push((file_path.clone(), id.clone()));
+            }
+            history.snapshots.retain(|s| s.timestamp >= cutoff);
+            removed += expired.len();
+        }
+
+        for (file_path, snapshot_id) in &to_delete {
+            let snapshot_path = self.file_dir(file_path).join(format!("{snapshot_id}.json"));
+            if let Err(e) = std::fs::remove_file(&snapshot_path) {
+                tracing::debug!("Failed to remove expired snapshot: {e}");
+            }
+        }
+
+        if removed > 0 {
+            self.save_index()?;
+        }
+
+        Ok(removed)
+    }
+
+    /// Remove snapshots older than the configured TTL.
+    ///
+    /// Returns the number removed. Returns `Ok(0)` when TTL is `None`.
+    pub fn cleanup_expired(&mut self) -> Result<usize, FileHistoryError> {
+        self.ensure_cache_loaded()?;
+        let Some(ttl) = self.ttl else {
+            return Ok(0);
+        };
+        // chrono::Duration is calendar-based; convert from std::time::Duration.
+        // On overflow (impossibly large TTL) fall back to a zero offset, which
+        // makes nothing expire — a safe no-op.
+        let offset = chrono::Duration::from_std(ttl).unwrap_or_else(|_| chrono::Duration::zero());
+        let cutoff = Utc::now().checked_sub_signed(offset).unwrap_or_else(Utc::now);
+        self.cleanup_expired_before(cutoff)
     }
 
     /// Check total storage usage against the quota.
@@ -1387,6 +1462,7 @@ mod tests {
             history_dir: temp_dir.path().to_path_buf(),
             max_history_per_file: 10,
             max_total_history_mb: 10,
+            ttl: Some(7 * 24 * 60 * 60),
         };
 
         let path = Path::new("/tmp/test_persist.rs");
@@ -1415,6 +1491,94 @@ mod tests {
         let config = FileHistoryConfig::default();
         assert_eq!(config.max_history_per_file, 50);
         assert_eq!(config.max_total_history_mb, 100);
+        assert_eq!(
+            config.ttl,
+            Some(7 * 24 * 60 * 60),
+            "default TTL should be 7 days in seconds (604_800)"
+        );
+    }
+
+    // ---- TTL / cleanup_expired tests --------------------------------------
+
+    #[test]
+    fn test_cleanup_expired_before_removes_old_snapshots() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_ttl.rs");
+
+        manager
+            .record_snapshot(path, "v1", FileOperation::Create)
+            .unwrap();
+
+        // Backdate the recorded snapshot to well before the cutoff.
+        let ancient = Utc::now() - chrono::Duration::days(30);
+        for history in manager.cache.values_mut() {
+            for snap in &mut history.snapshots {
+                snap.timestamp = ancient;
+            }
+        }
+
+        // Cutoff = now; the backdated snapshot is strictly older → removed.
+        let removed = manager.cleanup_expired_before(Utc::now()).unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(manager.get_history(path).unwrap().len(), 0);
+
+        // Idempotent: nothing left to remove.
+        assert_eq!(manager.cleanup_expired_before(Utc::now()).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_cleanup_expired_ttl_none_is_noop() {
+        let config = FileHistoryConfig {
+            history_dir: tempfile::tempdir().unwrap().keep(),
+            max_history_per_file: 10,
+            max_total_history_mb: 10,
+            ttl: None,
+        };
+        let mut manager = FileHistoryManager::new(config);
+        let path = Path::new("/tmp/test_ttl_none.rs");
+        manager
+            .record_snapshot(path, "v1", FileOperation::Create)
+            .unwrap();
+
+        // ttl = None → cleanup_expired removes nothing.
+        assert_eq!(manager.cleanup_expired().unwrap(), 0);
+        assert_eq!(manager.get_history(path).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_cleanup_expired_removes_only_aged_snapshots() {
+        // ttl = 1 hour. A backdated (1-day-old) snapshot expires; a freshly
+        // recorded one (within the hour) is kept. The 1-hour margin avoids
+        // real-time flakiness on loaded machines.
+        let config = FileHistoryConfig {
+            history_dir: tempfile::tempdir().unwrap().keep(),
+            max_history_per_file: 10,
+            max_total_history_mb: 10,
+            ttl: Some(3600),
+        };
+        let mut manager = FileHistoryManager::new(config);
+        let path = Path::new("/tmp/test_ttl_aged.rs");
+
+        manager
+            .record_snapshot(path, "v1", FileOperation::Create)
+            .unwrap();
+        // Backdate v1 by one day.
+        let ancient = Utc::now() - chrono::Duration::days(1);
+        for history in manager.cache.values_mut() {
+            for snap in &mut history.snapshots {
+                snap.timestamp = ancient;
+            }
+        }
+        // Record a fresh v2 (timestamp ≈ now, within the 1h TTL).
+        manager
+            .record_snapshot(path, "v2", FileOperation::Edit)
+            .unwrap();
+
+        let removed = manager.cleanup_expired().unwrap();
+        assert_eq!(removed, 1, "only the backdated v1 should be removed");
+        let history = manager.get_history(path).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.snapshots[0].content, "v2");
     }
 
     // ---- FileHistoryError tests -------------------------------------------
