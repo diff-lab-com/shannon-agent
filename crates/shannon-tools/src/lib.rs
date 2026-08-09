@@ -320,23 +320,22 @@ pub fn register_default_tools_with_project_dir(
     });
 
     // ── File-history snapshots (shared manager for file-level `/undo`; W6-2) ──
-    // Default config persists to ~/.shannon/file_history/. The manager is shared
-    // across Write/Edit/MultiEdit so `/undo` can reach every pre-modify state.
-    // A.4 makes history dir / TTL / enable configurable; default-on here.
-    let history = std::sync::Arc::new(std::sync::Mutex::new(FileHistoryManager::new(
-        FileHistoryConfig::default(),
-    )));
+    // `from_env` honors SHANNON_FILE_HISTORY (disable), _DIR, _TTL overrides;
+    // default-on with ~/.shannon/file_history + 7-day TTL. `None` = disabled,
+    // in which case tools register without a manager (pre-W6-2 behavior).
+    let history = FileHistoryConfig::from_env()
+        .map(|cfg| std::sync::Arc::new(std::sync::Mutex::new(FileHistoryManager::new(cfg))));
 
     // ── File operations (project-scoped sandbox) ───────────────────────
     registry.register(Box::new(ReadTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(
-        WriteTool::with_sandbox(sandbox.clone()).with_history(history.clone()),
+        WriteTool::with_sandbox(sandbox.clone()).with_history_opt(history.clone()),
     ))?;
     registry.register(Box::new(
-        EditTool::with_sandbox(sandbox.clone()).with_history(history.clone()),
+        EditTool::with_sandbox(sandbox.clone()).with_history_opt(history.clone()),
     ))?;
     registry.register(Box::new(
-        MultiEditTool::with_sandbox(sandbox.clone()).with_history(history.clone()),
+        MultiEditTool::with_sandbox(sandbox.clone()).with_history_opt(history.clone()),
     ))?;
     registry.register(Box::new(GlobTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(GrepTool::with_sandbox(sandbox)))?;
@@ -484,23 +483,22 @@ pub fn register_default_tools_with_project_dir_ex(
     });
 
     // ── File-history snapshots (shared manager for file-level `/undo`; W6-2) ──
-    // Default config persists to ~/.shannon/file_history/. The manager is shared
-    // across Write/Edit/MultiEdit so `/undo` can reach every pre-modify state.
-    // A.4 makes history dir / TTL / enable configurable; default-on here.
-    let history = std::sync::Arc::new(std::sync::Mutex::new(FileHistoryManager::new(
-        FileHistoryConfig::default(),
-    )));
+    // `from_env` honors SHANNON_FILE_HISTORY (disable), _DIR, _TTL overrides;
+    // default-on with ~/.shannon/file_history + 7-day TTL. `None` = disabled,
+    // in which case tools register without a manager (pre-W6-2 behavior).
+    let history = FileHistoryConfig::from_env()
+        .map(|cfg| std::sync::Arc::new(std::sync::Mutex::new(FileHistoryManager::new(cfg))));
 
     // ── File operations (project-scoped sandbox) ───────────────────────
     registry.register(Box::new(ReadTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(
-        WriteTool::with_sandbox(sandbox.clone()).with_history(history.clone()),
+        WriteTool::with_sandbox(sandbox.clone()).with_history_opt(history.clone()),
     ))?;
     registry.register(Box::new(
-        EditTool::with_sandbox(sandbox.clone()).with_history(history.clone()),
+        EditTool::with_sandbox(sandbox.clone()).with_history_opt(history.clone()),
     ))?;
     registry.register(Box::new(
-        MultiEditTool::with_sandbox(sandbox.clone()).with_history(history.clone()),
+        MultiEditTool::with_sandbox(sandbox.clone()).with_history_opt(history.clone()),
     ))?;
     registry.register(Box::new(GlobTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(GrepTool::with_sandbox(sandbox)))?;

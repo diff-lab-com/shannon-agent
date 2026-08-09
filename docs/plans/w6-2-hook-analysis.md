@@ -143,12 +143,24 @@ A.1 增量(自包含在 `history.rs`):
 
 | 阶段 | 内容 | 估时 | 状态 |
 |---|---|---|---|
-| A.1 | `history.rs` 加 time-based TTL + 测试 | ~0.5d | 待开始 |
-| A.2 | Write/Edit/MultiEdit 加 `history` 字段 + `with_history()` + `execute()` pre-modify 快照 + 测试 | ~1.5d | 待开始 |
-| A.3 | `lib.rs` register fn 注入 manager(3 个 register fn + agent.rs) | ~0.5d | 待开始 |
-| A.4 | config(开关 / history dir / TTL);默认开,可禁用 | ~0.5d | 待开始 |
+| A.1 | `history.rs` 加 time-based TTL + 测试 | ~0.5d | ✅ `9a9d3ac3` |
+| A.2 | Write/Edit/MultiEdit 加 `history` 字段 + `with_history()` + `execute()` pre-modify 快照 + 测试 | ~1.5d | ✅ `ba2a01f6` |
+| A.3 | `lib.rs` register fn 注入 manager(2 个 project-scoped fn;`register_default_tools` no-sandbox 不接,避免测试污染 HOME) | ~0.5d | ✅ `2dad59ac` |
+| A.4 | config(开关 / history dir / TTL);默认开,可禁用 | ~0.5d | ✅ 本次 |
 | B | `/undo` 命令(`builtin/undo.rs`)over `rollback()` + 覆盖前确认 + `/rewind` 区分 | ~1d | 待开始 |
 | C | auto-commit —— **DEFERRED**(见下) | — | ⏸️ |
+
+### A.4 配置开关(env vars,默认开)
+
+`FileHistoryConfig::from_env()` 在 register 时读取,遵循 CLAUDE.md 的 `SHANNON_*` 约定(同 `web.rs` 先例):
+
+| 环境变量 | 作用 | 默认 |
+|---|---|---|
+| `SHANNON_FILE_HISTORY` | `0`/`false`/`off`/`no` 关闭快照(tools 不挂 manager = pre-W6-2 行为) | 开启 |
+| `SHANNON_FILE_HISTORY_DIR` | 覆盖 history 目录 | `~/.shannon/file_history` |
+| `SHANNON_FILE_HISTORY_TTL` | 覆盖 TTL(秒);`0` = 关闭时间过期(仅 count + quota) | `604_800`(7d) |
+
+未设/不可解析 → 保持默认。TOML 层接入(从 `.shannon.toml` `[file_history]` 读)留待后续(非 A.4 范围)。
 
 ### C(auto-commit)为何 defer
 

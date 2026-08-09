@@ -355,6 +355,56 @@ impl Default for FileHistoryConfig {
     }
 }
 
+impl FileHistoryConfig {
+    /// Build config from `SHANNON_FILE_HISTORY*` env overrides (W6-2 A.4),
+    /// falling back to [`FileHistoryConfig::default`]. Returns `None` only
+    /// when history is explicitly disabled.
+    ///
+    /// Recognized env vars (consistent with the documented `SHANNON_*` config
+    /// layer; see `web.rs` for precedent):
+    /// - `SHANNON_FILE_HISTORY` — `0`/`false`/`off`/`no` disables history
+    ///   entirely (tools register without a manager = pre-W6-2 behavior).
+    ///   Unset or any other value keeps it enabled (default-on).
+    /// - `SHANNON_FILE_HISTORY_DIR` — overrides `history_dir`.
+    /// - `SHANNON_FILE_HISTORY_TTL` — overrides `ttl`, in whole seconds.
+    ///   `0` disables time-based expiry (`ttl = None`); count + quota still apply.
+    ///
+    /// Unset or unparseable values keep the default.
+    pub fn from_env() -> Option<Self> {
+        Self::from_env_vars(
+            std::env::var("SHANNON_FILE_HISTORY").ok(),
+            std::env::var("SHANNON_FILE_HISTORY_DIR").ok(),
+            std::env::var("SHANNON_FILE_HISTORY_TTL").ok(),
+        )
+    }
+
+    /// Pure core of [`from_env`](Self::from_env): accepts the raw env values so
+    /// it can be unit-tested without mutating process-global environment state.
+    pub(crate) fn from_env_vars(
+        enabled: Option<String>,
+        dir: Option<String>,
+        ttl: Option<String>,
+    ) -> Option<Self> {
+        if matches!(enabled.as_deref(), Some("0" | "false" | "off" | "no")) {
+            return None;
+        }
+        let mut cfg = Self::default();
+        if let Some(dir) = dir {
+            let dir = dir.trim();
+            if !dir.is_empty() {
+                cfg.history_dir = PathBuf::from(dir);
+            }
+        }
+        if let Some(ttl) = ttl {
+            if let Ok(secs) = ttl.trim().parse::<u64>() {
+                // 0 → no time-based expiry (None); positive N → Some(N) seconds.
+                cfg.ttl = (secs > 0).then_some(secs);
+            }
+        }
+        Some(cfg)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // FileHistoryManager
 // ---------------------------------------------------------------------------
@@ -1595,5 +1645,70 @@ mod tests {
             snapshot_id: "abc".to_string(),
         };
         assert!(err.to_string().contains("abc"));
+    }
+
+    // ---- from_env / from_env_vars (W6-2 A.4) ----------------------------
+
+    #[test]
+    fn from_env_vars_default_enabled() {
+        // No disable flag → Some(config with default values).
+        let cfg = FileHistoryConfig::from_env_vars(None, None, None).unwrap();
+        assert_eq!(cfg.ttl, Some(7 * 24 * 60 * 60));
+        assert_eq!(cfg.max_history_per_file, 50);
+    }
+
+    #[test]
+    fn from_env_vars_disabled_by_flag() {
+        for v in ["0", "false", "off", "no"] {
+            assert!(
+                FileHistoryConfig::from_env_vars(Some(v.to_string()), None, None).is_none(),
+                "SHANNON_FILE_HISTORY={v} must disable"
+            );
+        }
+    }
+
+    #[test]
+    fn from_env_vars_truthy_or_unknown_keeps_enabled() {
+        // "1"/"true"/"on"/"yes" and unknown/empty values do NOT disable.
+        for v in ["1", "true", "on", "yes", "enabled", "maybe", ""] {
+            assert!(
+                FileHistoryConfig::from_env_vars(Some(v.to_string()), None, None).is_some(),
+                "SHANNON_FILE_HISTORY={v:?} must not disable"
+            );
+        }
+    }
+
+    #[test]
+    fn from_env_vars_dir_override() {
+        let cfg =
+            FileHistoryConfig::from_env_vars(None, Some("/tmp/shannon_hist_xyz".to_string()), None)
+                .unwrap();
+        assert_eq!(cfg.history_dir, PathBuf::from("/tmp/shannon_hist_xyz"));
+    }
+
+    #[test]
+    fn from_env_vars_dir_override_ignores_whitespace_only() {
+        let cfg = FileHistoryConfig::from_env_vars(None, Some("   ".to_string()), None).unwrap();
+        // Whitespace-only dir keeps the default rather than wiping it.
+        assert!(cfg.history_dir.ends_with("file_history"));
+    }
+
+    #[test]
+    fn from_env_vars_ttl_override() {
+        let cfg = FileHistoryConfig::from_env_vars(None, None, Some("3600".to_string())).unwrap();
+        assert_eq!(cfg.ttl, Some(3600));
+    }
+
+    #[test]
+    fn from_env_vars_ttl_zero_means_no_expiry() {
+        let cfg = FileHistoryConfig::from_env_vars(None, None, Some("0".to_string())).unwrap();
+        assert_eq!(cfg.ttl, None, "TTL=0 disables time-based expiry");
+    }
+
+    #[test]
+    fn from_env_vars_ttl_unparseable_keeps_default() {
+        let cfg =
+            FileHistoryConfig::from_env_vars(None, None, Some("not-a-number".to_string())).unwrap();
+        assert_eq!(cfg.ttl, Some(7 * 24 * 60 * 60));
     }
 }

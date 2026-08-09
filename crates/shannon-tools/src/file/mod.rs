@@ -213,6 +213,16 @@ impl WriteTool {
         self.history = Some(history);
         self
     }
+
+    /// Like [`with_history`](Self::with_history) but accepts `None`, letting the
+    /// registration layer pass through a disabled config unchanged.
+    pub fn with_history_opt(
+        mut self,
+        history: Option<Arc<Mutex<history::FileHistoryManager>>>,
+    ) -> Self {
+        self.history = history;
+        self
+    }
 }
 
 #[async_trait]
@@ -291,6 +301,16 @@ impl EditTool {
     /// pre-modify content (enables file-level `/undo`). Unset = no snapshots.
     pub fn with_history(mut self, history: Arc<Mutex<history::FileHistoryManager>>) -> Self {
         self.history = Some(history);
+        self
+    }
+
+    /// Like [`with_history`](Self::with_history) but accepts `None`, letting the
+    /// registration layer pass through a disabled config unchanged.
+    pub fn with_history_opt(
+        mut self,
+        history: Option<Arc<Mutex<history::FileHistoryManager>>>,
+    ) -> Self {
+        self.history = history;
         self
     }
 }
@@ -382,6 +402,16 @@ impl MultiEditTool {
     /// before the atomic apply (enables file-level `/undo`). Unset = no snapshots.
     pub fn with_history(mut self, history: Arc<Mutex<history::FileHistoryManager>>) -> Self {
         self.history = Some(history);
+        self
+    }
+
+    /// Like [`with_history`](Self::with_history) but accepts `None`, letting the
+    /// registration layer pass through a disabled config unchanged.
+    pub fn with_history_opt(
+        mut self,
+        history: Option<Arc<Mutex<history::FileHistoryManager>>>,
+    ) -> Self {
+        self.history = history;
         self
     }
 }
