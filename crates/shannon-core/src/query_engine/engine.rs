@@ -366,8 +366,6 @@ pub struct QueryEngine {
     /// plan mode is active. When `true`, the engine blocks write tools before
     /// the permission check.
     pub(crate) plan_mode_active: Arc<RwLock<bool>>,
-    /// Git-based checkpoint manager for undo/revert support before file-modifying tools.
-    pub(crate) checkpoint_manager: crate::checkpoint::CheckpointManager,
     /// Effective maximum context tokens — resolved from user config > Ollama num_ctx > model registry.
     pub(crate) effective_max_context_tokens: usize,
     /// Custom permission profiles loaded from `.shannon/profiles/*.toml` and `.claude/profiles/*.toml`.
@@ -530,9 +528,6 @@ impl QueryEngine {
             context_injector: None,
             repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
-            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
-                &session_id.to_string(),
-            ),
             effective_max_context_tokens,
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
@@ -588,9 +583,6 @@ impl QueryEngine {
             context_injector: None,
             repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
-            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
-                &session_id.to_string(),
-            ),
             effective_max_context_tokens,
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
@@ -634,9 +626,6 @@ impl QueryEngine {
             context_injector: None,
             repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
-            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
-                &session_id.to_string(),
-            ),
             effective_max_context_tokens,
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
@@ -1133,7 +1122,6 @@ impl QueryEngine {
         let triggered_routines = self.triggered_routines.clone();
         let context_injector = self.context_injector.clone();
         let plan_mode_active = self.plan_mode_active.clone();
-        let checkpoint_manager = self.checkpoint_manager.clone();
         let effective_max_context_tokens = self.effective_max_context_tokens;
 
         // Search for relevant memories to augment the system prompt
@@ -2756,17 +2744,6 @@ impl QueryEngine {
                                                                 effective_input,
                                                             )) => {
                                                                 // Execute write tools sequentially (one at a time)
-                                                                // Create a checkpoint before file-modifying tools for undo support
-                                                                if matches!(
-                                                                    tool_name.as_str(),
-                                                                    "Edit" | "Write" | "Bash"
-                                                                ) && checkpoint_manager
-                                                                    .is_enabled()
-                                                                {
-                                                                    if let Err(e) = checkpoint_manager.create_checkpoint(&tool_name, &format!("Before {tool_name} tool execution")) {
-                                                                        tracing::debug!("Checkpoint creation skipped: {e}");
-                                                                    }
-                                                                }
                                                                 // Emit progress: tool started
                                                                 send_event!(
                                                                     tx,

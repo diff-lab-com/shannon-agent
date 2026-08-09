@@ -1,17 +1,16 @@
-//! Checkpoint system for undo/revert operations (Claude Code compatible).
+//! Per-turn checkpoint tracking for `/rewind` conversation rewind and the
+//! history list.
 //!
-//! Creates lightweight git commits before file-modifying tool executions
-//! and tracks per-turn file changes. Supports persistent checkpoint storage
-//! and four restore modes:
-//! - Restore code and conversation
-//! - Restore conversation only
-//! - Restore code only
-//! - Summarize from here (compact messages from that point)
+//! NOTE: this module no longer creates git commits or runs `git reset`.
+//! Code-level rewind (`/rewind code|both <n>`) is driven by content snapshots
+//! in `FileHistoryManager` (shannon-tools), captured per turn in
+//! `shannon-ui/src/repl/query.rs`. What remains here is lightweight per-turn
+//! metadata (optionally persisted to disk) that powers `/rewind <n>`
+//! conversation rewind and the checkpoint history list.
 
 use shannon_types::recover_lock;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 /// Log a non-critical error instead of silently swallowing it.
@@ -29,25 +28,21 @@ const MAX_CHECKPOINTS: usize = 50;
 /// Maximum age in days before auto-cleanup removes checkpoint files.
 const CHECKPOINT_MAX_AGE_DAYS: i64 = 30;
 
-/// A single checkpoint representing a point-in-time snapshot.
+/// Lightweight per-turn metadata recorded for `/rewind` and the history list.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Checkpoint {
-    /// Git commit hash.
-    pub hash: String,
-    /// Short hash (first 7 chars).
-    pub short_hash: String,
     /// Description of what triggered this checkpoint.
     pub description: String,
     /// Timestamp (seconds since epoch).
     pub timestamp: i64,
 }
 
-/// A per-turn checkpoint that ties git state to conversation context.
+/// A per-turn checkpoint that ties recorded state to conversation context.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TurnCheckpoint {
     /// Index of the conversation turn (0-based).
     pub turn_index: usize,
-    /// Git checkpoint at the start of this turn.
+    /// Checkpoint recorded at the start of this turn.
     pub checkpoint: Checkpoint,
     /// Files modified during this turn (relative paths).
     pub files_changed: Vec<String>,
@@ -55,39 +50,10 @@ pub struct TurnCheckpoint {
     pub prompt_preview: Option<String>,
 }
 
-/// Restore mode for rewind operations (Claude Code compatible).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RestoreMode {
-    /// Revert both code changes and conversation history.
-    CodeAndConversation,
-    /// Only rewind conversation history, keep current code.
-    ConversationOnly,
-    /// Only revert file changes, keep conversation.
-    CodeOnly,
-}
-
-/// Summary of a single file's changes between a checkpoint and HEAD.
-#[derive(Debug, Clone)]
-pub struct FileChangePreview {
-    pub path: String,
-    pub additions: usize,
-    pub deletions: usize,
-}
-
-/// Preview of what reverting to a checkpoint would change.
-#[derive(Debug, Clone)]
-pub struct RevertPreview {
-    pub checkpoint: TurnCheckpoint,
-    pub files_changed: Vec<FileChangePreview>,
-    pub diff_stats: String,
-    pub full_diff: String,
-}
-
-/// Manages git-based checkpoints with per-turn tracking and persistence.
+/// Manages per-turn checkpoint metadata with optional disk persistence.
 #[derive(Debug, Clone)]
 pub struct CheckpointManager {
     checkpoints: Arc<Mutex<Vec<TurnCheckpoint>>>,
-    enabled: bool,
     session_id: String,
     storage_dir: PathBuf,
 }
@@ -100,7 +66,6 @@ impl CheckpointManager {
             .unwrap_or_else(|| PathBuf::from(".shannon/checkpoints"));
         Self {
             checkpoints: Arc::new(Mutex::new(Vec::new())),
-            enabled: Self::is_git_repo(),
             session_id: String::new(),
             storage_dir,
         }
@@ -113,7 +78,6 @@ impl CheckpointManager {
             .unwrap_or_else(|| PathBuf::from(".shannon/checkpoints"));
         let mgr = Self {
             checkpoints: Arc::new(Mutex::new(Vec::new())),
-            enabled: Self::is_git_repo(),
             session_id: session_id.to_string(),
             storage_dir,
         };
@@ -129,82 +93,6 @@ impl CheckpointManager {
             self.load_from_disk(),
             "failed to load checkpoints from disk"
         );
-    }
-
-    /// Check if the current directory is inside a git repo.
-    fn is_git_repo() -> bool {
-        Command::new("git")
-            .args(["rev-parse", "--is-inside-work-tree"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
-    /// Whether checkpointing is available (requires a git repo).
-    pub fn is_enabled(&self) -> bool {
-        self.enabled
-    }
-
-    /// Create a checkpoint before a tool execution.
-    pub fn create_checkpoint(
-        &self,
-        tool_name: &str,
-        description: &str,
-    ) -> Result<Checkpoint, String> {
-        if !self.enabled {
-            return Err("Not in a git repository — checkpoints unavailable".to_string());
-        }
-
-        let has_changes = {
-            let output = Command::new("git")
-                .args(["status", "--porcelain"])
-                .output()
-                .map_err(|e| format!("Failed to check git status: {e}"))?;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            !stdout.trim().is_empty()
-        };
-
-        if !has_changes {
-            let hash = Self::get_head_hash()?;
-            let cp = Checkpoint {
-                short_hash: hash[..7.min(hash.len())].to_string(),
-                hash: hash.clone(),
-                description: format!("pre-{tool_name}: {description} (no changes)"),
-                timestamp: chrono::Utc::now().timestamp(),
-            };
-            return Ok(cp);
-        }
-
-        let stage_output = Command::new("git")
-            .args(["add", "-A"])
-            .output()
-            .map_err(|e| format!("Failed to stage changes: {e}"))?;
-        if !stage_output.status.success() {
-            return Err("Failed to stage changes for checkpoint".to_string());
-        }
-
-        let commit_msg = format!("shannon: checkpoint before {tool_name}\n\n{description}");
-        let commit_output = Command::new("git")
-            .args(["commit", "-m", &commit_msg, "--no-gpg-sign"])
-            .output()
-            .map_err(|e| format!("Failed to create checkpoint commit: {e}"))?;
-
-        if !commit_output.status.success() {
-            let stderr = String::from_utf8_lossy(&commit_output.stderr);
-            if !stderr.contains("nothing to commit") {
-                return Err(format!("Checkpoint commit failed: {stderr}"));
-            }
-        }
-
-        let hash = Self::get_head_hash()?;
-        let cp = Checkpoint {
-            short_hash: hash[..7.min(hash.len())].to_string(),
-            hash: hash.clone(),
-            description: format!("pre-{tool_name}: {description}"),
-            timestamp: chrono::Utc::now().timestamp(),
-        };
-
-        Ok(cp)
     }
 
     /// Record a per-turn checkpoint with file change tracking.
@@ -235,142 +123,9 @@ impl CheckpointManager {
 
         log_err!(self.save_to_disk(), "failed to save checkpoints after push");
     }
+
     pub fn list_checkpoints(&self) -> Vec<TurnCheckpoint> {
         recover_lock(self.checkpoints.lock()).clone()
-    }
-
-    /// List legacy checkpoints (git-only, without turn info).
-    pub fn list_legacy_checkpoints(&self) -> Vec<Checkpoint> {
-        recover_lock(self.checkpoints.lock())
-            .iter()
-            .map(|tc| tc.checkpoint.clone())
-            .collect()
-    }
-
-    /// Preview what reverting to a checkpoint would change (no side effects).
-    pub fn preview_revert(&self, index: usize) -> Result<RevertPreview, String> {
-        let tc = {
-            let checkpoints = recover_lock(self.checkpoints.lock());
-            if index >= checkpoints.len() {
-                return Err(format!(
-                    "Invalid checkpoint index {index}. Available: 0..{}",
-                    checkpoints.len().saturating_sub(1)
-                ));
-            }
-            checkpoints[index].clone()
-        };
-
-        let hash = &tc.checkpoint.hash;
-
-        // Get stat summary
-        let stat_output = Command::new("git")
-            .args(["diff", "--stat", hash, "HEAD"])
-            .output()
-            .map_err(|e| format!("Failed to get diff stats: {e}"))?;
-        if !stat_output.status.success() {
-            return Err("Failed to compute diff stats".to_string());
-        }
-        let stat_str = String::from_utf8_lossy(&stat_output.stdout).to_string();
-
-        // Parse per-file stats from lines like " src/main.rs | 5 +++--"
-        let mut files_changed = Vec::new();
-        for line in stat_str.lines() {
-            let parts: Vec<&str> = line.split('|').collect();
-            if parts.len() == 2 {
-                let path = parts[0].trim().to_string();
-                if path.is_empty()
-                    || path.contains("file changed")
-                    || path.contains("files changed")
-                {
-                    continue;
-                }
-                let nums: Vec<&str> = parts[1].split_whitespace().collect();
-                let additions = nums
-                    .first()
-                    .and_then(|n| n.parse::<usize>().ok())
-                    .unwrap_or(0);
-                let deletions = nums
-                    .get(1)
-                    .and_then(|n| n.parse::<usize>().ok())
-                    .unwrap_or(0);
-                files_changed.push(FileChangePreview {
-                    path,
-                    additions,
-                    deletions,
-                });
-            }
-        }
-
-        // Extract summary line like "5 files changed, 20 insertions(+), 10 deletions(-)"
-        let diff_stats = stat_str
-            .lines()
-            .last()
-            .map(|l| l.trim().to_string())
-            .unwrap_or_default();
-
-        // Get full diff
-        let diff_output = Command::new("git")
-            .args(["diff", hash, "HEAD"])
-            .output()
-            .map_err(|e| format!("Failed to get diff: {e}"))?;
-        let full_diff = String::from_utf8_lossy(&diff_output.stdout).to_string();
-
-        Ok(RevertPreview {
-            checkpoint: tc,
-            files_changed,
-            diff_stats,
-            full_diff,
-        })
-    }
-
-    /// Revert to a specific turn checkpoint by index.
-    pub fn revert_to(&self, index: usize, mode: RestoreMode) -> Result<TurnCheckpoint, String> {
-        if !self.enabled && mode != RestoreMode::ConversationOnly {
-            return Err("Not in a git repository".to_string());
-        }
-
-        let tc = {
-            let checkpoints = recover_lock(self.checkpoints.lock());
-            if index >= checkpoints.len() {
-                return Err(format!(
-                    "Invalid checkpoint index {index}. Available: 0..{}",
-                    checkpoints.len().saturating_sub(1)
-                ));
-            }
-            checkpoints[index].clone()
-        };
-
-        // Revert code if needed
-        if mode == RestoreMode::CodeAndConversation || mode == RestoreMode::CodeOnly {
-            let output = Command::new("git")
-                .args(["reset", "--hard", &tc.checkpoint.hash])
-                .output()
-                .map_err(|e| format!("Failed to reset: {e}"))?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!("Revert failed: {stderr}"));
-            }
-        }
-
-        // Remove checkpoints after the reverted one
-        recover_lock(self.checkpoints.lock()).truncate(index + 1);
-        log_err!(
-            self.save_to_disk(),
-            "failed to save checkpoints after revert"
-        );
-
-        Ok(tc)
-    }
-
-    /// Revert the most recent checkpoint (convenience method).
-    pub fn undo_last(&self) -> Result<Checkpoint, String> {
-        let count = recover_lock(self.checkpoints.lock()).len();
-        if count == 0 {
-            return Err("No checkpoints to undo".to_string());
-        }
-        let tc = self.revert_to(count - 1, RestoreMode::CodeAndConversation)?;
-        Ok(tc.checkpoint)
     }
 
     /// Pop (discard) the most recent checkpoint without reverting.
@@ -501,17 +256,6 @@ impl CheckpointManager {
 
         Ok(removed)
     }
-
-    fn get_head_hash() -> Result<String, String> {
-        let output = Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .map_err(|e| format!("Failed to get HEAD: {e}"))?;
-        if !output.status.success() {
-            return Err("Failed to get current commit hash".to_string());
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    }
 }
 
 impl Default for CheckpointManager {
@@ -525,10 +269,16 @@ impl Default for CheckpointManager {
 mod tests {
     use super::*;
 
+    fn cp(description: &str, timestamp: i64) -> Checkpoint {
+        Checkpoint {
+            description: description.to_string(),
+            timestamp,
+        }
+    }
+
     #[test]
     fn test_checkpoint_manager_new() {
         let mgr = CheckpointManager::new();
-        assert!(mgr.is_enabled());
         assert!(mgr.is_empty());
     }
 
@@ -544,22 +294,6 @@ mod tests {
         let mgr = CheckpointManager::new();
         assert_eq!(mgr.len(), 0);
         assert!(mgr.is_empty());
-    }
-
-    #[test]
-    fn test_checkpoint_manager_undo_empty() {
-        let mgr = CheckpointManager::new();
-        let result = mgr.undo_last();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("No checkpoints"));
-    }
-
-    #[test]
-    fn test_checkpoint_manager_revert_invalid_index() {
-        let mgr = CheckpointManager::new();
-        let result = mgr.revert_to(0, RestoreMode::CodeAndConversation);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid checkpoint index"));
     }
 
     #[test]
@@ -579,12 +313,7 @@ mod tests {
     fn test_turn_checkpoint_serialization() {
         let tc = TurnCheckpoint {
             turn_index: 0,
-            checkpoint: Checkpoint {
-                hash: "abc123def456".to_string(),
-                short_hash: "abc123d".to_string(),
-                description: "test checkpoint".to_string(),
-                timestamp: 1234567890,
-            },
+            checkpoint: cp("test checkpoint", 1234567890),
             files_changed: vec!["src/main.rs".to_string(), "lib.rs".to_string()],
             prompt_preview: Some("fix the bug".to_string()),
         };
@@ -597,16 +326,6 @@ mod tests {
     }
 
     #[test]
-    fn test_restore_modes() {
-        // Just verify the enum variants exist and are distinct
-        assert_ne!(
-            RestoreMode::CodeAndConversation,
-            RestoreMode::ConversationOnly
-        );
-        assert_ne!(RestoreMode::CodeOnly, RestoreMode::ConversationOnly);
-    }
-
-    #[test]
     fn test_default_trait() {
         let mgr = CheckpointManager::default();
         assert!(mgr.is_empty());
@@ -615,7 +334,6 @@ mod tests {
     #[test]
     fn test_for_session_constructor() {
         let mgr = CheckpointManager::for_session("test-session-123");
-        assert!(mgr.is_enabled());
         assert!(mgr.is_empty());
     }
 
@@ -630,15 +348,9 @@ mod tests {
     #[test]
     fn test_record_turn_stores_checkpoint() {
         let mgr = CheckpointManager::new();
-        let cp = Checkpoint {
-            hash: "deadbeef1234567890".to_string(),
-            short_hash: "deadbee".to_string(),
-            description: "before edit".to_string(),
-            timestamp: 1700000000,
-        };
         mgr.record_turn(
             0,
-            cp,
+            cp("before edit", 1700000000),
             vec!["src/main.rs".to_string()],
             Some("fix bug".to_string()),
         );
@@ -654,13 +366,12 @@ mod tests {
     fn test_record_turn_truncates_at_max() {
         let mgr = CheckpointManager::new();
         for i in 0..MAX_CHECKPOINTS + 5 {
-            let cp = Checkpoint {
-                hash: format!("hash{i:020}"),
-                short_hash: format!("hash{i:07}"),
-                description: format!("turn {i}"),
-                timestamp: 1700000000 + i as i64,
-            };
-            mgr.record_turn(i, cp, vec![], None);
+            mgr.record_turn(
+                i,
+                cp(&format!("turn {i}"), 1700000000 + i as i64),
+                vec![],
+                None,
+            );
         }
         assert_eq!(mgr.len(), MAX_CHECKPOINTS);
     }
@@ -668,13 +379,7 @@ mod tests {
     #[test]
     fn test_discard_last_with_data() {
         let mgr = CheckpointManager::new();
-        let cp = Checkpoint {
-            hash: "aaa111bbb222".to_string(),
-            short_hash: "aaa111b".to_string(),
-            description: "test".to_string(),
-            timestamp: 1700000000,
-        };
-        mgr.record_turn(0, cp, vec!["a.rs".to_string()], None);
+        mgr.record_turn(0, cp("test", 1700000000), vec!["a.rs".to_string()], None);
         assert_eq!(mgr.len(), 1);
 
         let discarded = mgr.discard_last().unwrap();
@@ -683,49 +388,21 @@ mod tests {
     }
 
     #[test]
-    fn test_list_legacy_checkpoints() {
-        let mgr = CheckpointManager::new();
-        let cp = Checkpoint {
-            hash: "cccccc1234567890".to_string(),
-            short_hash: "cccccc1".to_string(),
-            description: "legacy".to_string(),
-            timestamp: 1700000000,
-        };
-        mgr.record_turn(0, cp, vec![], None);
-        let legacy = mgr.list_legacy_checkpoints();
-        assert_eq!(legacy.len(), 1);
-        assert_eq!(legacy[0].hash, "cccccc1234567890");
-    }
-
-    #[test]
     fn test_checkpoint_serialization_roundtrip() {
-        let cp = Checkpoint {
-            hash: "a1b2c3d4e5f6".to_string(),
-            short_hash: "a1b2c3d".to_string(),
-            description: "before write".to_string(),
-            timestamp: 1700000000,
-        };
-        let json = serde_json::to_string(&cp).unwrap();
+        let original = cp("before write", 1700000000);
+        let json = serde_json::to_string(&original).unwrap();
         let back: Checkpoint = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.hash, cp.hash);
-        assert_eq!(back.short_hash, cp.short_hash);
-        assert_eq!(back.description, cp.description);
-        assert_eq!(back.timestamp, cp.timestamp);
+        assert_eq!(back.description, original.description);
+        assert_eq!(back.timestamp, original.timestamp);
     }
 
     #[test]
     fn test_multiple_turns_ordering() {
         let mgr = CheckpointManager::new();
         for i in 0..3 {
-            let cp = Checkpoint {
-                hash: format!("h{i:016}"),
-                short_hash: format!("h{i:07}"),
-                description: format!("turn {i}"),
-                timestamp: 1700000000 + i as i64,
-            };
             mgr.record_turn(
                 i,
-                cp,
+                cp(&format!("turn {i}"), 1700000000 + i as i64),
                 vec![format!("file{i}.rs")],
                 Some(format!("prompt {i}")),
             );
@@ -737,92 +414,9 @@ mod tests {
     }
 
     #[test]
-    fn test_revert_truncates_checkpoints() {
-        let mgr = CheckpointManager::new();
-        for i in 0..3 {
-            let cp = Checkpoint {
-                hash: format!("h{i:016}"),
-                short_hash: format!("h{i:07}"),
-                description: format!("turn {i}"),
-                timestamp: 1700000000 + i as i64,
-            };
-            mgr.record_turn(i, cp, vec![], None);
-        }
-        assert_eq!(mgr.len(), 3);
-        // revert_to with ConversationOnly doesn't need git
-        let result = mgr.revert_to(0, RestoreMode::ConversationOnly);
-        assert!(result.is_ok());
-        assert_eq!(mgr.len(), 1); // Only index 0 remains
-    }
-
-    #[test]
-    fn test_preview_revert_invalid_index() {
-        let mgr = CheckpointManager::new();
-        let result = mgr.preview_revert(0);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid checkpoint index"));
-    }
-
-    #[test]
-    fn test_preview_revert_with_data() {
-        let mgr = CheckpointManager::new();
-        let cp = Checkpoint {
-            hash: "preview1234567890".to_string(),
-            short_hash: "preview1".to_string(),
-            description: "before edit".to_string(),
-            timestamp: 1700000000,
-        };
-        mgr.record_turn(
-            0,
-            cp,
-            vec!["src/main.rs".to_string()],
-            Some("edit file".to_string()),
-        );
-        // preview_revert requires a real git diff, so it may fail in test env
-        // but should at least accept the index and attempt the diff
-        let result = mgr.preview_revert(0);
-        // In a git repo it should succeed (possibly with empty diff)
-        // or fail gracefully on git diff
-        assert!(result.is_ok() || result.unwrap_err().contains("diff"));
-    }
-
-    #[test]
-    fn test_file_change_preview_struct() {
-        let fcp = FileChangePreview {
-            path: "src/main.rs".to_string(),
-            additions: 10,
-            deletions: 5,
-        };
-        assert_eq!(fcp.path, "src/main.rs");
-        assert_eq!(fcp.additions, 10);
-        assert_eq!(fcp.deletions, 5);
-    }
-
-    #[test]
-    fn test_revert_preview_struct() {
-        let tc = TurnCheckpoint {
-            turn_index: 0,
-            checkpoint: Checkpoint {
-                hash: "abc123".to_string(),
-                short_hash: "abc123d".to_string(),
-                description: "test".to_string(),
-                timestamp: 1700000000,
-            },
-            files_changed: vec!["a.rs".to_string()],
-            prompt_preview: None,
-        };
-        let rp = RevertPreview {
-            checkpoint: tc,
-            files_changed: vec![FileChangePreview {
-                path: "a.rs".to_string(),
-                additions: 3,
-                deletions: 1,
-            }],
-            diff_stats: "1 file changed, 3 insertions(+), 1 deletion(-)".to_string(),
-            full_diff: "diff --git a/a.rs".to_string(),
-        };
-        assert_eq!(rp.files_changed.len(), 1);
-        assert!(!rp.diff_stats.is_empty());
-        assert!(!rp.full_diff.is_empty());
+    fn test_cleanup_old_checkpoints_no_panic() {
+        // Should not panic even if the checkpoint directory does not exist.
+        let result = CheckpointManager::cleanup_old_checkpoints();
+        assert!(result.is_ok(), "cleanup should not error");
     }
 }

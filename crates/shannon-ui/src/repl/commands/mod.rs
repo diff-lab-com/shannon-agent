@@ -27,6 +27,7 @@ pub(crate) use git::format_change_bar;
 pub(crate) use loop_engine::{check_loop_iteration, check_ralph_iteration, notify_query_complete};
 pub use media::handle_image_paste_from_input;
 pub(crate) use media::{copy_nth_response, copy_to_clipboard};
+pub(crate) use session::apply_file_rewind;
 
 use crate::{Result, widgets::ChatRole};
 use rust_i18n::t;
@@ -415,6 +416,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         "context",
         "undo",
         "rewind",
+        "checkpoint",
         "notify",
         "webhook",
         "routine",
@@ -521,7 +523,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "mode" => config::handle_mode(repl, args)?,
             "context" => config::handle_context(repl, args)?,
             "undo" => session::handle_undo(repl, args)?,
-            "rewind" => session::handle_rewind(repl, args)?,
+            "rewind" | "checkpoint" => session::handle_rewind(repl, args)?,
             "notify" => web::handle_notify(repl, args)?,
             "webhook" => web::handle_webhook(repl, args)?,
             "routine" => loop_engine::handle_routine(repl, args)?,

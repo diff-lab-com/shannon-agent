@@ -607,7 +607,7 @@ pub fn handle_input(
                 if let Some(last) = repl.state.last_esc_time {
                     if now.duration_since(last).as_millis() < 500 {
                         repl.state.last_esc_time = None;
-                        super::commands::handle_command(repl, "/undo")?;
+                        super::commands::handle_command(repl, "/rewind")?;
                         return Ok(());
                     }
                 }
@@ -1472,47 +1472,34 @@ fn handle_active_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                             super::commands::execute_pending_action(repl, &cmd)?;
                         }
                     }
-                    "show_diff" => {
-                        if let Some(preview) = repl.state.undo_preview.take() {
-                            let mut viewer = crate::widgets::diff_viewer::DiffViewerWidget::new();
-                            viewer.load_raw_diff(&preview.full_diff);
-                            repl.state.diff_viewer = Some(viewer);
-                        }
-                    }
-                    "undo_confirm_revert" => {
-                        let index = repl.state.undo_target_index.take();
-                        let preview = repl.state.undo_preview.take();
-                        if let (Some(idx), Some(pv)) = (index, preview) {
-                            match repl
-                                .checkpoint_manager
-                                .revert_to(idx, shannon_core::RestoreMode::CodeAndConversation)
-                            {
-                                Ok(tc) => {
+                    "rewind_file_confirm" => {
+                        let path = repl.state.rewind_file_path.take();
+                        let id = repl.state.rewind_file_snapshot_id.take();
+                        if let (Some(path), Some(id)) = (path, id) {
+                            match super::commands::apply_file_rewind(&path, &id) {
+                                Ok(content) => {
+                                    let lines = content.lines().count();
                                     repl.chat.add_message(
                                         ChatRole::System,
                                         format!(
-                                            "Reverted to checkpoint [{}] ({})\n{}",
-                                            idx,
-                                            tc.checkpoint.short_hash,
-                                            tc.checkpoint.description
+                                            "Rewound `{}` to its previous version ({} lines).",
+                                            path.display(),
+                                            lines
                                         ),
                                     );
                                 }
                                 Err(e) => {
                                     repl.chat.add_message(
                                         ChatRole::System,
-                                        format!("Revert failed: {e}"),
+                                        format!("File rewind failed: {e}"),
                                     );
-                                    // Restore preview since revert failed
-                                    repl.state.undo_preview = Some(pv);
-                                    repl.state.undo_target_index = Some(idx);
                                 }
                             }
                         }
                     }
                     "cancel" | "ok" => {
-                        repl.state.undo_preview = None;
-                        repl.state.undo_target_index = None;
+                        repl.state.rewind_file_path = None;
+                        repl.state.rewind_file_snapshot_id = None;
                     }
                     _ => {}
                 }
