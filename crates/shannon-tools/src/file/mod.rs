@@ -74,6 +74,18 @@ fn snapshot_for_undo(history: &Option<Arc<Mutex<history::FileHistoryManager>>>, 
     let Some(history) = history else {
         return;
     };
+    // Bound memory before reading: the history manager's storage-quota check
+    // only runs *after* content is in memory, so pre-filter oversized files
+    // here. 10 MB covers typical source files; large data/minified files are
+    // poor undo targets anyway. A benign TOCTOU exists between this stat and
+    // the read — the cap is a best-effort guard, not a hard guarantee.
+    const MAX_SNAPSHOT_BYTES: u64 = 10 * 1024 * 1024;
+    let Ok(meta) = std::fs::metadata(file_path) else {
+        return;
+    };
+    if meta.len() > MAX_SNAPSHOT_BYTES {
+        return;
+    }
     // Only existing, readable text files carry restorable pre-modify state.
     let Ok(old_content) = std::fs::read_to_string(file_path) else {
         return;
@@ -934,5 +946,29 @@ mod tests {
         });
         tool.execute(input).await.unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "changed");
+    }
+
+    #[tokio::test]
+    async fn write_tool_skips_snapshot_for_oversized_file() {
+        // Memory bound: pre-modify content over the 10 MB snapshot cap is not
+        // read into memory or recorded.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("big.txt");
+        std::fs::write(&path, "x".repeat(10 * 1024 * 1024 + 1)).unwrap();
+
+        let history = history_manager();
+        let tool = WriteTool::with_sandbox(sandbox_for(dir.path())).with_history(history.clone());
+
+        let input = serde_json::json!({
+            "file_path": path.to_string_lossy(),
+            "content": "shrunk"
+        });
+        tool.execute(input).await.unwrap();
+
+        let mut mgr = history.lock().unwrap();
+        assert!(
+            mgr.get_history(&path).is_err(),
+            "oversized pre-modify content must not be snapshotted"
+        );
     }
 }

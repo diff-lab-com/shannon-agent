@@ -319,11 +319,25 @@ pub fn register_default_tools_with_project_dir(
         strict_mode: true,
     });
 
+    // ── File-history snapshots (shared manager for file-level `/undo`; W6-2) ──
+    // Default config persists to ~/.shannon/file_history/. The manager is shared
+    // across Write/Edit/MultiEdit so `/undo` can reach every pre-modify state.
+    // A.4 makes history dir / TTL / enable configurable; default-on here.
+    let history = std::sync::Arc::new(std::sync::Mutex::new(FileHistoryManager::new(
+        FileHistoryConfig::default(),
+    )));
+
     // ── File operations (project-scoped sandbox) ───────────────────────
     registry.register(Box::new(ReadTool::with_sandbox(sandbox.clone())))?;
-    registry.register(Box::new(WriteTool::with_sandbox(sandbox.clone())))?;
-    registry.register(Box::new(EditTool::with_sandbox(sandbox.clone())))?;
-    registry.register(Box::new(MultiEditTool::with_sandbox(sandbox.clone())))?;
+    registry.register(Box::new(
+        WriteTool::with_sandbox(sandbox.clone()).with_history(history.clone()),
+    ))?;
+    registry.register(Box::new(
+        EditTool::with_sandbox(sandbox.clone()).with_history(history.clone()),
+    ))?;
+    registry.register(Box::new(
+        MultiEditTool::with_sandbox(sandbox.clone()).with_history(history.clone()),
+    ))?;
     registry.register(Box::new(GlobTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(GrepTool::with_sandbox(sandbox)))?;
 
@@ -469,11 +483,25 @@ pub fn register_default_tools_with_project_dir_ex(
         strict_mode: true,
     });
 
+    // ── File-history snapshots (shared manager for file-level `/undo`; W6-2) ──
+    // Default config persists to ~/.shannon/file_history/. The manager is shared
+    // across Write/Edit/MultiEdit so `/undo` can reach every pre-modify state.
+    // A.4 makes history dir / TTL / enable configurable; default-on here.
+    let history = std::sync::Arc::new(std::sync::Mutex::new(FileHistoryManager::new(
+        FileHistoryConfig::default(),
+    )));
+
     // ── File operations (project-scoped sandbox) ───────────────────────
     registry.register(Box::new(ReadTool::with_sandbox(sandbox.clone())))?;
-    registry.register(Box::new(WriteTool::with_sandbox(sandbox.clone())))?;
-    registry.register(Box::new(EditTool::with_sandbox(sandbox.clone())))?;
-    registry.register(Box::new(MultiEditTool::with_sandbox(sandbox.clone())))?;
+    registry.register(Box::new(
+        WriteTool::with_sandbox(sandbox.clone()).with_history(history.clone()),
+    ))?;
+    registry.register(Box::new(
+        EditTool::with_sandbox(sandbox.clone()).with_history(history.clone()),
+    ))?;
+    registry.register(Box::new(
+        MultiEditTool::with_sandbox(sandbox.clone()).with_history(history.clone()),
+    ))?;
     registry.register(Box::new(GlobTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(GrepTool::with_sandbox(sandbox)))?;
 
