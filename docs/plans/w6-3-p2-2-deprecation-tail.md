@@ -2,7 +2,7 @@
 
 > **Track**: Wave 6(功能收尾)
 > **Date**: 2026-08-08
-> **Status**: Proposed(评审通过后执行)
+> **Status**: ✅ Done(2026-08-09,PR #51)
 > **Estimate**: 3–5d · **Priority**: 🟡 中(低风险,推荐 Wave 6 最先做)
 > **Dependencies**: 无(读写路径 + C3 parity 已闭环,见 PR #34 / #41 / #42 / #46 / #49)
 > **Parent**: [wave-5-followup.md](./wave-5-followup.md) §2 W6-3
@@ -26,6 +26,7 @@ P2-2 Wave 6 已完成 provider 读写路径单一化(ADR-0008 D3)+ 读 facade(AD
 
 - **文件**:`crates/shannon-core/src/provider.rs`、`desktop/src/commands_config.rs`。
 - **动作**:对 Phase 2 将删除的 API 加 `#[deprecated(note = "ADR-0009 Phase 2: use ProviderProfile directly; see TD-4")]`;验证 `cargo-semver-checks` 接受 minor-bump 路径(`0.8.x → 0.9.0`)。
+- **实际执行(2026-08-09,PR #51)**:改为只在 `desktop/src/config.rs` 的 `ProviderConnection` 加 doc-comment 标注退役;**未加 `#[deprecated]` attribute**(会在该类型仍广泛内部使用时 flood ~67 warnings,违反 compile-without-warnings)。真正的退役走 [TD-4](../tech-debt.md) 直接删除,不走 deprecation cycle。
 
 ### 2.3 CLI / 桌面 provider·credential 行为差异表
 
