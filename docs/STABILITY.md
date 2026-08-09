@@ -96,6 +96,25 @@ When a `#[stable_api]` API needs to break:
 The desktop shell must compile without warnings against the
 intermediate release.
 
+## Planned deprecations / internal wire-type retirement
+
+Internal wire types that are **not** on the public stable surface (e.g.
+the desktop's `ProviderConnection`) are retired by direct mechanical
+replacement + deletion, **not** the `#[deprecated]` cycle above — they
+have no external consumers, and adding `#[deprecated]` while they are
+still in wide internal use would flood the build with warnings (violating
+the "compile without warnings" rule above).
+
+- **`desktop::config::ProviderConnection`** — planned retirement in
+  ADR-0009 Phase 2 (tech-debt TD-4). ~49 Rust + ~18 TS references today;
+  the single conversion chokepoint (`from_provider_profile`) and single
+  read projection (`ProviderReadSnapshot::to_providers_file`) already
+  isolate it. Inventory + migration order:
+  `docs/plans/w6-3-provider-connection-inventory.md`. Parity between the
+  two surfaces is already pinned (C3 matrix, 6/6 rows — see
+  `docs/plans/w6-3-parity-diff.md`). Estimated ~1–1.5d mechanical swap
+  once prioritised.
+
 ## Cross-repo coordination
 
 The desktop shell pins a specific `shannon-code` git rev via its
