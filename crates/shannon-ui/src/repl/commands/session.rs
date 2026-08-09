@@ -570,8 +570,27 @@ fn run_file_rewind(repl: &mut Repl, raw_path: &str, skip_confirm: bool) -> Resul
 /// (no git). `index` is a list position (as shown by `/rewind history`); the actual
 /// `turn_index` is resolved from that entry since the two can diverge across file-less
 /// turns. Returns a human-readable summary, or an error.
-fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, String> {
-    let checkpoints = repl.checkpoint_manager.list_checkpoints();
+/// Outcome of a code rewind: the target turn, and which files were restored
+/// vs. deleted (because they were created after the target).
+#[derive(Debug)]
+struct CodeRewindOutcome {
+    target_turn: usize,
+    restored: Vec<String>,
+    deleted: Vec<String>,
+}
+
+/// Core code-rewind logic, factored out so it is unit-testable without env or
+/// a live `Repl`.
+///
+/// For each file touched in a turn *after* `checkpoints[index].turn_index`,
+/// restore it to its end-of-target content (or delete it if it was created
+/// after the target) via the file-history manager.
+fn apply_code_rewind(
+    checkpoints: &[shannon_core::TurnCheckpoint],
+    index: usize,
+    manager: &mut FileHistoryManager,
+    cwd: &Path,
+) -> std::result::Result<CodeRewindOutcome, String> {
     let target = checkpoints.get(index).ok_or_else(|| {
         format!(
             "Invalid checkpoint [{index}]. Available: 0..{}",
@@ -583,7 +602,7 @@ fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, Str
     // Files touched in any turn AFTER the target are the only ones that may differ
     // from the end-of-target state.
     let mut files_after: Vec<String> = Vec::new();
-    for tc in &checkpoints {
+    for tc in checkpoints {
         if tc.turn_index > target_turn {
             for f in &tc.files_changed {
                 if !files_after.contains(f) {
@@ -592,14 +611,6 @@ fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, Str
             }
         }
     }
-
-    let Some(config) = FileHistoryConfig::from_env() else {
-        return Err(
-            "File history is disabled (SHANNON_FILE_HISTORY=0); cannot rewind code.".into(),
-        );
-    };
-    let mut manager = FileHistoryManager::new(config);
-    let cwd = std::env::current_dir().unwrap_or_default();
 
     let mut restored: Vec<String> = Vec::new();
     let mut deleted: Vec<String> = Vec::new();
@@ -629,17 +640,35 @@ fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, Str
         }
     }
 
-    let mut summary = format!("Reverted code to turn {target_turn}.");
-    if restored.is_empty() && deleted.is_empty() {
+    Ok(CodeRewindOutcome {
+        target_turn,
+        restored,
+        deleted,
+    })
+}
+
+fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, String> {
+    let checkpoints = repl.checkpoint_manager.list_checkpoints();
+    let Some(config) = FileHistoryConfig::from_env() else {
+        return Err(
+            "File history is disabled (SHANNON_FILE_HISTORY=0); cannot rewind code.".into(),
+        );
+    };
+    let mut manager = FileHistoryManager::new(config);
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let outcome = apply_code_rewind(&checkpoints, index, &mut manager, &cwd)?;
+
+    let mut summary = format!("Reverted code to turn {}.", outcome.target_turn);
+    if outcome.restored.is_empty() && outcome.deleted.is_empty() {
         summary.push_str(" No files needed reverting (no recorded changes after this turn).");
     } else {
-        if !restored.is_empty() {
-            summary.push_str(&format!("\nRestored: {}", restored.join(", ")));
+        if !outcome.restored.is_empty() {
+            summary.push_str(&format!("\nRestored: {}", outcome.restored.join(", ")));
         }
-        if !deleted.is_empty() {
+        if !outcome.deleted.is_empty() {
             summary.push_str(&format!(
                 "\nDeleted (created after this turn): {}",
-                deleted.join(", ")
+                outcome.deleted.join(", ")
             ));
         }
     }
@@ -1600,5 +1629,99 @@ mod rewind_tests {
         let restored = restore_file_snapshot(&mut mgr, &file, &target.id).unwrap();
         assert_eq!(restored, "original\n");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "original\n");
+    }
+
+    // --- apply_code_rewind (B.2 end-to-end) --------------------------------
+    //
+    // Wires the two B.2 halves: turn-tagged content snapshots (what
+    // `capture_turn_snapshots` records) → multi-file restore/delete (what
+    // `run_code_rewind` orchestrates). No Repl or env needed — the core takes
+    // the manager + checkpoints directly.
+
+    #[test]
+    fn apply_code_rewind_restores_and_deletes_across_turns() {
+        //   turn 0: edit `a.txt` (content "v0")
+        //   turn 1: edit `a.txt` again ("v1") + create `b.txt` ("b1")
+        // Rewind to turn 0 → `a.txt` restored to "v0", `b.txt` deleted.
+        let (tmp, mut mgr) = mgr_in_tmp();
+        let cwd = tmp.path();
+        let a = cwd.join("a.txt");
+        let b = cwd.join("b.txt");
+        let a_s = a.to_string_lossy().to_string();
+        let b_s = b.to_string_lossy().to_string();
+
+        // Simulate `capture_turn_snapshots` recording post-turn content.
+        mgr.record_turn_snapshot(&a, "v0\n", 0).unwrap();
+        mgr.record_turn_snapshot(&a, "v1\n", 1).unwrap();
+        mgr.record_turn_snapshot(&b, "b1\n", 1).unwrap();
+
+        // Disk is in the post-turn-1 state.
+        std::fs::write(&a, "v1\n").unwrap();
+        std::fs::write(&b, "b1\n").unwrap();
+
+        let cps = vec![
+            shannon_core::TurnCheckpoint {
+                turn_index: 0,
+                checkpoint: shannon_core::Checkpoint {
+                    description: "turn 0".into(),
+                    timestamp: 0,
+                },
+                files_changed: vec![a_s.clone()],
+                prompt_preview: None,
+            },
+            shannon_core::TurnCheckpoint {
+                turn_index: 1,
+                checkpoint: shannon_core::Checkpoint {
+                    description: "turn 1".into(),
+                    timestamp: 1,
+                },
+                files_changed: vec![a_s.clone(), b_s.clone()],
+                prompt_preview: None,
+            },
+        ];
+
+        let outcome = apply_code_rewind(&cps, 0, &mut mgr, cwd).unwrap();
+        assert_eq!(outcome.target_turn, 0);
+        assert!(outcome.restored.contains(&a_s));
+        assert!(outcome.deleted.contains(&b_s));
+
+        // Disk reflects the rewind: `a.txt` back to "v0", `b.txt` gone.
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "v0\n");
+        assert!(!b.exists());
+    }
+
+    #[test]
+    fn apply_code_rewind_no_change_when_target_is_latest() {
+        // Rewinding to the latest turn touches no later turns → no-op.
+        let (tmp, mut mgr) = mgr_in_tmp();
+        let cwd = tmp.path();
+        let a = cwd.join("a.txt");
+        let a_s = a.to_string_lossy().to_string();
+        mgr.record_turn_snapshot(&a, "v0\n", 0).unwrap();
+        std::fs::write(&a, "v0\n").unwrap();
+
+        let cps = vec![shannon_core::TurnCheckpoint {
+            turn_index: 0,
+            checkpoint: shannon_core::Checkpoint {
+                description: "turn 0".into(),
+                timestamp: 0,
+            },
+            files_changed: vec![a_s.clone()],
+            prompt_preview: None,
+        }];
+
+        let outcome = apply_code_rewind(&cps, 0, &mut mgr, cwd).unwrap();
+        assert_eq!(outcome.target_turn, 0);
+        assert!(outcome.restored.is_empty());
+        assert!(outcome.deleted.is_empty());
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "v0\n");
+    }
+
+    #[test]
+    fn apply_code_rewind_invalid_index_errors() {
+        let (_tmp, mut mgr) = mgr_in_tmp();
+        let cps: Vec<shannon_core::TurnCheckpoint> = vec![];
+        let err = apply_code_rewind(&cps, 0, &mut mgr, std::path::Path::new(".")).unwrap_err();
+        assert!(err.contains("Invalid checkpoint"));
     }
 }
