@@ -4,6 +4,9 @@ use crate::{Result, widgets::ChatRole};
 
 use super::super::Repl;
 
+use shannon_tools::{FileHistoryConfig, FileHistoryManager, FileSnapshot};
+use std::path::{Path, PathBuf};
+
 pub(crate) fn handle_sessions(repl: &mut Repl, _args: &str) -> Result<()> {
     // /sessions has been removed in favour of /resume (the picker).
     // Stub retained temporarily so existing muscle memory gets a clear pointer.
@@ -297,110 +300,257 @@ pub(crate) fn handle_history(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 pub(crate) fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
-    let trimmed = args.trim();
-    let mgr = &repl.checkpoint_manager;
+    // `/undo` is an alias of `/rewind` (W6-2 B.1 command unification). The
+    // git-checkpoint preview/confirm flow that used to live here is reachable
+    // via `/rewind code <n>` / `/rewind both <n>`; per-file content-snapshot
+    // revert is `/rewind <path>`.
+    handle_rewind(repl, args)
+}
 
-    if !mgr.is_enabled() {
+/// What a `/rewind` (or `/undo` / `/checkpoint` alias) invocation intends to do.
+#[derive(Debug)]
+enum RewindIntent {
+    /// Show the turn-checkpoint history list.
+    History,
+    /// Revert file changes to turn checkpoint `index` (git-checkpoint;
+    /// transitional — B.2 migrates this onto content snapshots).
+    Code(usize),
+    /// Revert file changes and rewind the conversation to turn checkpoint `index`.
+    Both(usize),
+    /// Rewind the conversation by `turns` turns.
+    Conversation(usize),
+    /// Per-file revert: restore `path` to its most recent content snapshot.
+    /// `skip_confirm` is set by `--yes`.
+    File { path: String, skip_confirm: bool },
+}
+
+/// Parse `/rewind` arguments into a [`RewindIntent`].
+///
+/// Disambiguation: a bare number is always a conversation-turn count (never a
+/// file), and any other token — optionally followed by `--yes` — is treated as
+/// a file path. Keyword subcommands (`history`, `code <n>`, `both <n>`) match
+/// first.
+fn parse_rewind_intent(args: &str) -> RewindIntent {
+    let trimmed = args.trim();
+
+    if trimmed.is_empty() {
+        return RewindIntent::Conversation(1);
+    }
+
+    if matches!(trimmed, "history" | "list" | "ls") {
+        return RewindIntent::History;
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("code ") {
+        if let Ok(n) = rest.trim().parse::<usize>() {
+            return RewindIntent::Code(n);
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("both ") {
+        if let Ok(n) = rest.trim().parse::<usize>() {
+            return RewindIntent::Both(n);
+        }
+    }
+
+    let (positional, skip_confirm) = strip_trailing_yes(trimmed);
+    if positional.is_empty() {
+        // Only `--yes` was provided — no meaningful target; default to 1 turn.
+        return RewindIntent::Conversation(1);
+    }
+    if let Ok(n) = positional.parse::<usize>() {
+        return RewindIntent::Conversation(n);
+    }
+    RewindIntent::File {
+        path: positional,
+        skip_confirm,
+    }
+}
+
+/// Split a trailing `--yes` flag off `s`. Returns the remaining positional text
+/// and whether `--yes` was present.
+fn strip_trailing_yes(s: &str) -> (String, bool) {
+    let trimmed = s.trim();
+    if let Some(rest) = trimmed.strip_suffix("--yes") {
+        (rest.trim().to_string(), true)
+    } else {
+        (trimmed.to_string(), false)
+    }
+}
+
+/// Resolve a user-typed path against the set of file-history-tracked files.
+///
+/// Matching is tried in order: exact string, canonicalized absolute, then
+/// suffix (so a relative `src/foo.rs` matches a tracked `/abs/.../src/foo.rs`
+/// and vice-versa). Returns the tracked key form — what the manager stores
+/// snapshots under.
+fn resolve_tracked_path(tracked: &[PathBuf], user: &str) -> Option<PathBuf> {
+    let user_path = PathBuf::from(user);
+
+    if let Some(t) = tracked.iter().find(|t| *t == &user_path) {
+        return Some(t.clone());
+    }
+
+    let canon = canonicalish(&user_path);
+    for t in tracked {
+        if canonicalish(t) == canon {
+            return Some(t.clone());
+        }
+    }
+
+    for t in tracked {
+        if t.ends_with(&user_path) || user_path.ends_with(t) {
+            return Some(t.clone());
+        }
+    }
+
+    None
+}
+
+/// Best-effort absolute form of `p`: canonicalize if it exists, else absolutize
+/// relative to the current directory without resolving symlinks.
+fn canonicalish(p: &Path) -> PathBuf {
+    if let Ok(c) = p.canonicalize() {
+        return c;
+    }
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(p))
+        .unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// Choose which snapshot to restore for a per-file rewind: the most recent
+/// snapshot whose content differs from the current on-disk content. A restore
+/// records itself as a new snapshot, so this skip lets repeated `/rewind <path>`
+/// calls walk backwards through real versions.
+fn select_restore_snapshot<'a>(
+    snapshots: &'a [FileSnapshot],
+    current: &str,
+) -> Option<&'a FileSnapshot> {
+    snapshots.iter().rev().find(|s| s.content != current)
+}
+
+/// Core per-file restore: roll `path` back to snapshot `id` via the manager and
+/// persist the restored content to disk. The manager records the restore itself
+/// as a new snapshot (so it can be undone by rewinding again).
+fn restore_file_snapshot(
+    mgr: &mut FileHistoryManager,
+    path: &Path,
+    id: &str,
+) -> std::result::Result<String, String> {
+    let content = mgr.rollback(path, id).map_err(|e| e.to_string())?;
+    std::fs::write(path, &content).map_err(|e| format!("failed to write {path:?}: {e}"))?;
+    Ok(content)
+}
+
+/// Per-file rewind used by both the `--yes` fast path and the confirm-dialog
+/// handler. Builds a manager from the file-history env config (the same source
+/// the file tools use) so it reads the same on-disk store.
+pub(crate) fn apply_file_rewind(path: &Path, id: &str) -> std::result::Result<String, String> {
+    let cfg = FileHistoryConfig::from_env().unwrap_or_default();
+    let mut mgr = FileHistoryManager::new(cfg);
+    restore_file_snapshot(&mut mgr, path, id)
+}
+
+/// Drive a per-file rewind: resolve the path, pick the snapshot, and either
+/// restore immediately (`skip_confirm`) or raise a confirm dialog. Failures are
+/// reported as system chat messages; this always returns `Ok(())`.
+fn run_file_rewind(repl: &mut Repl, raw_path: &str, skip_confirm: bool) -> Result<()> {
+    let cfg = FileHistoryConfig::from_env().unwrap_or_default();
+    let mut mgr = FileHistoryManager::new(cfg);
+
+    let tracked = match mgr.list_tracked_files() {
+        Ok(t) => t,
+        Err(e) => {
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("File rewind unavailable: could not read history ({e})."),
+            );
+            return Ok(());
+        }
+    };
+
+    let Some(path) = resolve_tracked_path(&tracked, raw_path) else {
         repl.chat.add_message(
             ChatRole::System,
-            "Undo unavailable: not in a git repository.".to_string(),
+            format!(
+                "No file history for `{raw_path}`. Snapshots are recorded before AI file edits — \
+                 edit the file first or check the path.",
+            ),
+        );
+        return Ok(());
+    };
+
+    let history = match mgr.get_history(&path) {
+        Ok(h) => h,
+        Err(e) => {
+            repl.chat
+                .add_message(ChatRole::System, format!("Could not read history: {e}."));
+            return Ok(());
+        }
+    };
+    if history.snapshots.is_empty() {
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("No snapshots recorded for `{}`.", path.display()),
         );
         return Ok(());
     }
 
-    // /undo list — show checkpoints
-    if trimmed == "list" || trimmed == "ls" {
-        let checkpoints = mgr.list_checkpoints();
-        if checkpoints.is_empty() {
-            repl.chat.add_message(
-                ChatRole::System,
-                "No checkpoints available. Checkpoints are created before file-modifying operations.".to_string(),
-            );
-            return Ok(());
-        }
-        let mut msg = String::from("Checkpoints:\n\n");
-        for (i, tc) in checkpoints.iter().enumerate() {
-            let time = chrono::DateTime::from_timestamp(tc.checkpoint.timestamp, 0)
-                .map(|t| t.format("%H:%M:%S").to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-            let files = if tc.files_changed.is_empty() {
-                String::new()
-            } else if tc.files_changed.len() <= 3 {
-                format!(" [{}]", tc.files_changed.join(", "))
-            } else {
-                format!(" [{} files]", tc.files_changed.len())
-            };
-            let preview = tc
-                .prompt_preview
-                .as_deref()
-                .map(|p| format!(" — {p}"))
-                .unwrap_or_default();
-            msg.push_str(&format!(
-                "  [{}] {} {}{}{} — {}\n",
-                i, tc.checkpoint.short_hash, time, files, preview, tc.checkpoint.description
-            ));
-        }
-        msg.push_str("\nUse /undo <number> to preview and revert to a checkpoint.");
-        msg.push_str("\nUse /undo (no args) to preview revert of the last checkpoint.");
-        repl.chat.add_message(ChatRole::System, msg);
-        return Ok(());
-    }
-
-    // Resolve target index
-    let index = if trimmed.is_empty() {
-        let count = mgr.len();
-        if count == 0 {
-            repl.chat
-                .add_message(ChatRole::System, "No checkpoints available.".to_string());
-            return Ok(());
-        }
-        count - 1
-    } else if let Ok(n) = trimmed.parse::<usize>() {
-        n
-    } else {
-        repl.chat
-            .add_message(ChatRole::System, "Usage: /undo [list|<number>]".to_string());
+    let current = std::fs::read_to_string(&path).unwrap_or_default();
+    let Some(target) = select_restore_snapshot(&history.snapshots, &current) else {
+        repl.chat.add_message(
+            ChatRole::System,
+            format!(
+                "`{}` is already at its earliest recorded version — nothing to rewind.",
+                path.display()
+            ),
+        );
         return Ok(());
     };
 
-    // Preview the revert
-    match mgr.preview_revert(index) {
-        Ok(preview) => {
-            let file_count = preview.files_changed.len();
-            let stats = if preview.diff_stats.is_empty() {
-                "no changes".to_string()
-            } else {
-                preview.diff_stats.clone()
-            };
+    let id = target.id.clone();
+    let restored_lines = target.content.lines().count();
+    let current_lines = current.lines().count();
+    let time = target.timestamp.format("%H:%M:%S");
+    let op = format!("{:?}", target.operation).to_lowercase();
+    let short_id = &id[..id.len().min(8)];
 
-            let mut content_lines = Vec::new();
-            if file_count > 0 {
-                for fc in &preview.files_changed {
-                    content_lines.push(format!(
-                        "  {} (+{} -{})",
-                        fc.path, fc.additions, fc.deletions
-                    ));
-                }
-            } else {
-                content_lines.push("  (no file changes)".to_string());
+    if skip_confirm {
+        match apply_file_rewind(&path, &id) {
+            Ok(_) => {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!(
+                        "Rewound `{}` to snapshot `{short_id}` ({op} @ {time}): {current_lines} → {restored_lines} lines.",
+                        path.display()
+                    ),
+                );
             }
-            content_lines.push(String::new());
-            content_lines.push(stats.clone());
+            Err(e) => {
+                repl.chat
+                    .add_message(ChatRole::System, format!("File rewind failed: {e}"));
+            }
+        }
+        return Ok(());
+    }
 
-            let dialog = crate::widgets::dialog::DialogWidget::new(format!(
-                "Revert to checkpoint [{}] ({})",
-                index, preview.checkpoint.checkpoint.short_hash
-            ))
-            .with_subtitle(format!("{file_count} file(s) changed"))
-            .with_content(content_lines.join("\n"))
-            .with_button(crate::widgets::dialog::DialogButton::new(
-                "Show Diff".to_string(),
-                "show_diff".to_string(),
+    // Confirm before overwriting uncommitted work (W6-2 §3.2).
+    let dialog =
+        crate::widgets::dialog::DialogWidget::new(format!("Rewind file: {}", path.display()))
+            .with_subtitle(format!("restore to {op} @ {time} · {restored_lines} lines"))
+            .with_content(format!(
+                "Restore `{}` to its most recent saved snapshot?\n\n\
+         current on disk: {current_lines} lines\n\
+         restore to:      {restored_lines} lines ({op} @ {time})\n\n\
+         This overwrites the file's current (possibly uncommitted) contents.",
+                path.display(),
             ))
             .with_button(
                 crate::widgets::dialog::DialogButton::new(
                     "Revert".to_string(),
-                    "undo_confirm_revert".to_string(),
+                    "rewind_file_confirm".to_string(),
                 )
                 .dangerous(),
             )
@@ -409,190 +559,165 @@ pub(crate) fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
                 "cancel".to_string(),
             ));
 
-            repl.state.undo_preview = Some(preview);
-            repl.state.undo_target_index = Some(index);
-            repl.state.active_dialog = Some(dialog);
-        }
-        Err(e) => {
-            repl.chat
-                .add_message(ChatRole::System, format!("Preview failed: {e}"));
-        }
-    }
-
+    repl.state.rewind_file_path = Some(path);
+    repl.state.rewind_file_snapshot_id = Some(id);
+    repl.state.active_dialog = Some(dialog);
     Ok(())
 }
 
 pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
-    let trimmed = args.trim();
-
-    // /rewind history — show checkpoint history with turn info
-    if trimmed == "history" || trimmed == "list" || trimmed == "ls" {
-        let checkpoints = repl.checkpoint_manager.list_checkpoints();
-        if checkpoints.is_empty() {
-            repl.chat.add_message(
-                ChatRole::System,
-                "No turn checkpoints available.".to_string(),
+    match parse_rewind_intent(args) {
+        RewindIntent::History => {
+            let checkpoints = repl.checkpoint_manager.list_checkpoints();
+            if checkpoints.is_empty() {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No turn checkpoints available.".to_string(),
+                );
+                return Ok(());
+            }
+            let mut msg = String::from("Turn history:\n\n");
+            for (i, tc) in checkpoints.iter().enumerate() {
+                let time = chrono::DateTime::from_timestamp(tc.checkpoint.timestamp, 0)
+                    .map(|t| t.format("%H:%M:%S").to_string())
+                    .unwrap_or_else(|| "??:??:??".to_string());
+                let files = if tc.files_changed.is_empty() {
+                    String::new()
+                } else if tc.files_changed.len() <= 3 {
+                    format!(" [{}]", tc.files_changed.join(", "))
+                } else {
+                    format!(" [{} files]", tc.files_changed.len())
+                };
+                let preview = tc
+                    .prompt_preview
+                    .as_deref()
+                    .map(|p| {
+                        if p.len() > 60 {
+                            let mut end = 60;
+                            while !p.is_char_boundary(end) {
+                                end -= 1;
+                            }
+                            format!("{}...", &p[..end])
+                        } else {
+                            p.to_string()
+                        }
+                    })
+                    .unwrap_or_default();
+                msg.push_str(&format!(
+                    "  [{}] turn {} {}{} — {}\n",
+                    i, tc.turn_index, time, files, preview,
+                ));
+            }
+            msg.push_str("\n/rewind <n> — rewind conversation by n turns");
+            msg.push_str("\n/rewind code <n> — revert code to checkpoint [n]");
+            msg.push_str(
+                "\n/rewind both <n> — revert code + rewind conversation to checkpoint [n]",
             );
-            return Ok(());
+            msg.push_str("\n/rewind <path> — rewind a single file to its previous version");
+            repl.chat.add_message(ChatRole::System, msg);
         }
-        let mut msg = String::from("Turn history:\n\n");
-        for (i, tc) in checkpoints.iter().enumerate() {
-            let time = chrono::DateTime::from_timestamp(tc.checkpoint.timestamp, 0)
-                .map(|t| t.format("%H:%M:%S").to_string())
-                .unwrap_or_else(|| "??:??:??".to_string());
-            let files = if tc.files_changed.is_empty() {
-                String::new()
-            } else if tc.files_changed.len() <= 3 {
-                format!(" [{}]", tc.files_changed.join(", "))
-            } else {
-                format!(" [{} files]", tc.files_changed.len())
-            };
-            let preview = tc
-                .prompt_preview
-                .as_deref()
-                .map(|p| {
-                    if p.len() > 60 {
-                        let mut end = 60;
-                        while !p.is_char_boundary(end) {
-                            end -= 1;
-                        }
-                        format!("{}...", &p[..end])
-                    } else {
-                        p.to_string()
-                    }
-                })
-                .unwrap_or_default();
-            msg.push_str(&format!(
-                "  [{}] turn {} {}{} — {}\n",
-                i, tc.turn_index, time, files, preview,
-            ));
-        }
-        msg.push_str("\n/rewind <n> — rewind conversation by n turns");
-        msg.push_str("\n/rewind code <n> — revert code to checkpoint [n]");
-        msg.push_str("\n/rewind both <n> — revert code + rewind conversation to checkpoint [n]");
-        repl.chat.add_message(ChatRole::System, msg);
-        return Ok(());
-    }
 
-    // /rewind code <n> — revert file changes to checkpoint index n
-    if let Some(rest) = trimmed.strip_prefix("code ") {
-        if let Ok(index) = rest.trim().parse::<usize>() {
-            match repl
-                .checkpoint_manager
-                .revert_to(index, shannon_core::RestoreMode::CodeOnly)
-            {
-                Ok(tc) => {
-                    let files = if tc.files_changed.is_empty() {
-                        "no files".to_string()
-                    } else {
-                        tc.files_changed.join(", ")
-                    };
-                    repl.chat.add_message(
-                        ChatRole::System,
-                        format!(
-                            "Reverted code to checkpoint [{}] (turn {}).\nFiles affected: {}",
-                            index, tc.turn_index, files
-                        ),
-                    );
-                }
-                Err(e) => {
-                    repl.chat
-                        .add_message(ChatRole::System, format!("Code revert failed: {e}"));
-                }
+        RewindIntent::Code(index) => match repl
+            .checkpoint_manager
+            .revert_to(index, shannon_core::RestoreMode::CodeOnly)
+        {
+            Ok(tc) => {
+                let files = if tc.files_changed.is_empty() {
+                    "no files".to_string()
+                } else {
+                    tc.files_changed.join(", ")
+                };
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!(
+                        "Reverted code to checkpoint [{}] (turn {}).\nFiles affected: {}",
+                        index, tc.turn_index, files
+                    ),
+                );
             }
-            return Ok(());
-        }
-    }
-
-    // /rewind both <n> — revert code + rewind conversation to checkpoint index n
-    if let Some(rest) = trimmed.strip_prefix("both ") {
-        if let Ok(index) = rest.trim().parse::<usize>() {
-            match repl
-                .checkpoint_manager
-                .revert_to(index, shannon_core::RestoreMode::CodeAndConversation)
-            {
-                Ok(tc) => {
-                    // Remove the "/rewind both" command message
-                    repl.chat.pop_last();
-                    // Calculate turns to rewind from conversation
-                    let turns_to_rewind = repl
-                        .checkpoint_manager
-                        .list_checkpoints()
-                        .len()
-                        .saturating_sub(index);
-                    if turns_to_rewind > 0 {
-                        repl.chat.rewind(turns_to_rewind);
-                        if let Some(ref mut engine) = repl.query_engine {
-                            engine.rewind_conversation(turns_to_rewind);
-                        }
-                    }
-                    let files = if tc.files_changed.is_empty() {
-                        "no files".to_string()
-                    } else {
-                        tc.files_changed.join(", ")
-                    };
-                    repl.chat.add_message(
-                        ChatRole::System,
-                        format!(
-                            "Rewound to checkpoint [{}] (turn {}): reverted code + conversation.\nFiles: {}",
-                            index, tc.turn_index, files
-                        ),
-                    );
-                }
-                Err(e) => {
-                    repl.chat
-                        .add_message(ChatRole::System, format!("Rewind failed: {e}"));
-                }
+            Err(e) => {
+                repl.chat
+                    .add_message(ChatRole::System, format!("Code revert failed: {e}"));
             }
-            return Ok(());
-        }
-    }
+        },
 
-    // /rewind <n> — rewind conversation by n turns (existing behavior)
-    let turns = if trimmed.is_empty() {
-        1
-    } else if let Ok(n) = trimmed.parse::<usize>() {
-        if n == 0 {
+        RewindIntent::Both(index) => match repl
+            .checkpoint_manager
+            .revert_to(index, shannon_core::RestoreMode::CodeAndConversation)
+        {
+            Ok(tc) => {
+                // Remove the "/rewind both" command message
+                repl.chat.pop_last();
+                // Calculate turns to rewind from conversation
+                let turns_to_rewind = repl
+                    .checkpoint_manager
+                    .list_checkpoints()
+                    .len()
+                    .saturating_sub(index);
+                if turns_to_rewind > 0 {
+                    repl.chat.rewind(turns_to_rewind);
+                    if let Some(ref mut engine) = repl.query_engine {
+                        engine.rewind_conversation(turns_to_rewind);
+                    }
+                }
+                let files = if tc.files_changed.is_empty() {
+                    "no files".to_string()
+                } else {
+                    tc.files_changed.join(", ")
+                };
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!(
+                        "Rewound to checkpoint [{}] (turn {}): reverted code + conversation.\nFiles: {}",
+                        index, tc.turn_index, files
+                    ),
+                );
+            }
+            Err(e) => {
+                repl.chat
+                    .add_message(ChatRole::System, format!("Rewind failed: {e}"));
+            }
+        },
+
+        RewindIntent::Conversation(turns) => {
+            if turns == 0 {
+                repl.chat.pop_last();
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Usage: /rewind [n | history | code <n> | both <n> | <path>]".to_string(),
+                );
+                return Ok(());
+            }
+
+            // Remove the "/rewind" command message
             repl.chat.pop_last();
-            repl.chat.add_message(
-                ChatRole::System,
-                "Usage: /rewind [n | history | code <n> | both <n>]".to_string(),
-            );
-            return Ok(());
+
+            let before_count = repl.chat.len();
+            let removed = repl.chat.rewind(turns);
+            let after_count = repl.chat.len();
+
+            if let Some(ref mut engine) = repl.query_engine {
+                engine.rewind_conversation(turns);
+            }
+
+            if removed > 0 {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!(
+                        "Rewound {turns} turn(s): removed {removed} messages ({before_count} → {after_count} remaining).\nUse /rewind code <n> to also revert file changes, or /rewind <path> for a single file."
+                    ),
+                );
+            } else {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No conversation turns to rewind.".to_string(),
+                );
+            }
         }
-        n
-    } else {
-        repl.chat.pop_last();
-        repl.chat.add_message(
-            ChatRole::System,
-            "Usage: /rewind [n | history | code <n> | both <n>]".to_string(),
-        );
-        return Ok(());
-    };
 
-    // Remove the "/rewind" command message
-    repl.chat.pop_last();
-
-    let before_count = repl.chat.len();
-    let removed = repl.chat.rewind(turns);
-    let after_count = repl.chat.len();
-
-    if let Some(ref mut engine) = repl.query_engine {
-        engine.rewind_conversation(turns);
-    }
-
-    if removed > 0 {
-        repl.chat.add_message(
-            ChatRole::System,
-            format!(
-                "Rewound {turns} turn(s): removed {removed} messages ({before_count} → {after_count} remaining).\nUse /rewind code <n> to also revert file changes."
-            ),
-        );
-    } else {
-        repl.chat.add_message(
-            ChatRole::System,
-            "No conversation turns to rewind.".to_string(),
-        );
+        RewindIntent::File { path, skip_confirm } => {
+            run_file_rewind(repl, &path, skip_confirm)?;
+        }
     }
 
     Ok(())
@@ -1239,4 +1364,183 @@ pub(crate) fn handle_focus(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod rewind_tests {
+    use super::*;
+    use shannon_tools::FileHistoryOperation;
+
+    // --- parse_rewind_intent -------------------------------------------------
+
+    #[test]
+    fn parse_conversation_variants() {
+        assert!(matches!(
+            parse_rewind_intent(""),
+            RewindIntent::Conversation(1)
+        ));
+        assert!(matches!(
+            parse_rewind_intent("   "),
+            RewindIntent::Conversation(1)
+        ));
+        assert!(matches!(
+            parse_rewind_intent("3"),
+            RewindIntent::Conversation(3)
+        ));
+        assert!(matches!(
+            parse_rewind_intent("0"),
+            RewindIntent::Conversation(0)
+        ));
+    }
+
+    #[test]
+    fn parse_keyword_subcommands() {
+        assert!(matches!(
+            parse_rewind_intent("history"),
+            RewindIntent::History
+        ));
+        assert!(matches!(parse_rewind_intent("list"), RewindIntent::History));
+        assert!(matches!(parse_rewind_intent("ls"), RewindIntent::History));
+        assert!(matches!(
+            parse_rewind_intent("code 2"),
+            RewindIntent::Code(2)
+        ));
+        assert!(matches!(
+            parse_rewind_intent("both 5"),
+            RewindIntent::Both(5)
+        ));
+        // A non-numeric `code <x>` argument falls through to file-path handling.
+        assert!(matches!(
+            parse_rewind_intent("code abc"),
+            RewindIntent::File { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_file_path_with_and_without_yes() {
+        match parse_rewind_intent("src/main.rs") {
+            RewindIntent::File { path, skip_confirm } => {
+                assert_eq!(path, "src/main.rs");
+                assert!(!skip_confirm);
+            }
+            other => panic!("expected File, got {other:?}"),
+        }
+        match parse_rewind_intent("src/main.rs --yes") {
+            RewindIntent::File { path, skip_confirm } => {
+                assert_eq!(path, "src/main.rs");
+                assert!(skip_confirm);
+            }
+            other => panic!("expected File, got {other:?}"),
+        }
+        // A path with spaces before --yes keeps the full path.
+        match parse_rewind_intent("src/my file.rs --yes") {
+            RewindIntent::File { path, skip_confirm } => {
+                assert_eq!(path, "src/my file.rs");
+                assert!(skip_confirm);
+            }
+            other => panic!("expected File, got {other:?}"),
+        }
+        // Bare --yes (no target) defaults to a 1-turn conversation rewind.
+        assert!(matches!(
+            parse_rewind_intent("--yes"),
+            RewindIntent::Conversation(1)
+        ));
+    }
+
+    // --- strip_trailing_yes --------------------------------------------------
+
+    #[test]
+    fn strip_yes_handles_trailing_flag() {
+        assert_eq!(strip_trailing_yes("foo --yes"), ("foo".to_string(), true));
+        assert_eq!(strip_trailing_yes("foo"), ("foo".to_string(), false));
+        assert_eq!(
+            strip_trailing_yes("  bar --yes  "),
+            ("bar".to_string(), true)
+        );
+        assert_eq!(strip_trailing_yes("--yes"), ("".to_string(), true));
+    }
+
+    // --- resolve_tracked_path ------------------------------------------------
+
+    #[test]
+    fn resolve_exact_and_suffix_match() {
+        let tracked: Vec<PathBuf> = vec![
+            PathBuf::from("/abs/src/foo.rs"),
+            PathBuf::from("/abs/other/bar.rs"),
+        ];
+        // Exact string match.
+        assert_eq!(
+            resolve_tracked_path(&tracked, "/abs/src/foo.rs"),
+            Some(PathBuf::from("/abs/src/foo.rs"))
+        );
+        // Suffix match: a relative path resolves to the tracked absolute one.
+        assert_eq!(
+            resolve_tracked_path(&tracked, "src/foo.rs"),
+            Some(PathBuf::from("/abs/src/foo.rs"))
+        );
+        // No match.
+        assert_eq!(resolve_tracked_path(&tracked, "nope.rs"), None);
+    }
+
+    // --- select_restore_snapshot + restore_file_snapshot ---------------------
+
+    fn mgr_in_tmp() -> (tempfile::TempDir, FileHistoryManager) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cfg = FileHistoryConfig {
+            history_dir: tmp.path().to_path_buf(),
+            max_history_per_file: 50,
+            max_total_history_mb: 100,
+            ttl: Some(604_800),
+        };
+        (tmp, FileHistoryManager::new(cfg))
+    }
+
+    #[test]
+    fn select_restore_picks_previous_version() {
+        // Real flow: snapshots record pre-edit content. Two edits → [v1, v2],
+        // disk now at v3 (post last edit). Rewind selects v2 (undo last edit).
+        let (_tmp, mut mgr) = mgr_in_tmp();
+        let path = Path::new("/tmp/shannon-rewind-fake.rs");
+        mgr.record_snapshot(path, "v1\n", FileHistoryOperation::Edit)
+            .unwrap();
+        mgr.record_snapshot(path, "v2\n", FileHistoryOperation::Edit)
+            .unwrap();
+
+        let history = mgr.get_history(path).unwrap();
+        let pick = select_restore_snapshot(&history.snapshots, "v3\n").unwrap();
+        assert_eq!(pick.content, "v2\n");
+    }
+
+    #[test]
+    fn select_restore_none_when_already_earliest() {
+        let (_tmp, mut mgr) = mgr_in_tmp();
+        let path = Path::new("/tmp/shannon-rewind-fake2.rs");
+        mgr.record_snapshot(path, "only\n", FileHistoryOperation::Edit)
+            .unwrap();
+
+        let history = mgr.get_history(path).unwrap();
+        // Disk equals the only snapshot → nothing earlier to restore.
+        assert!(select_restore_snapshot(&history.snapshots, "only\n").is_none());
+    }
+
+    #[test]
+    fn restore_writes_previous_version_to_disk() {
+        let (_hist_tmp, mut mgr) = mgr_in_tmp();
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("target.txt");
+
+        // File at "original"; snapshot it; then mutate to "changed".
+        std::fs::write(&file, "original\n").unwrap();
+        mgr.record_snapshot(&file, "original\n", FileHistoryOperation::Edit)
+            .unwrap();
+        std::fs::write(&file, "changed\n").unwrap();
+
+        let history = mgr.get_history(&file).unwrap();
+        let current = std::fs::read_to_string(&file).unwrap();
+        let target = select_restore_snapshot(&history.snapshots, &current).unwrap();
+
+        let restored = restore_file_snapshot(&mut mgr, &file, &target.id).unwrap();
+        assert_eq!(restored, "original\n");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "original\n");
+    }
 }

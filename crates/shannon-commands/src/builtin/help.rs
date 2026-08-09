@@ -630,24 +630,35 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
         "undo" => Some(
             CommandHelpEntry::new(
                 "undo".to_string(),
-                "Revert file changes using git checkpoints".to_string(),
+                "Alias for /rewind — rewind conversation turns or a single file".to_string(),
                 HelpCategory::System,
             )
-            .with_arg_hint("[list|<number>]")
-            .with_examples(vec!["/undo", "/undo list", "/undo 2"])
-            .with_when_to_use("Use to undo file changes made by AI tools. Checkpoints are created automatically before file modifications.")
-            .with_related(vec!["diff", "status"])
+            .with_arg_hint("[n | history | code <n> | both <n> | <path>]")
+            .with_examples(vec!["/undo", "/undo 2", "/undo src/main.rs"])
+            .with_when_to_use("Alias of /rewind. Use to remove recent conversation turns from context, or `/undo <path>` to rewind a single file to its previous version.")
+            .with_related(vec!["rewind", "diff", "status"])
         ),
         "rewind" => Some(
             CommandHelpEntry::new(
                 "rewind".to_string(),
-                "Remove the last N conversation turns from context".to_string(),
+                "Rewind conversation turns, or a single file to its previous version".to_string(),
                 HelpCategory::System,
             )
-            .with_arg_hint("[number-of-turns]")
-            .with_examples(vec!["/rewind", "/rewind 3"])
-            .with_when_to_use("Use to remove the last AI exchange(s) from the conversation history. Unlike /undo (which reverts files), /rewind removes messages so the AI forgets previous context.")
-            .with_related(vec!["undo", "compact", "clear"])
+            .with_arg_hint("[n | history | code <n> | both <n> | <path> [--yes]]")
+            .with_examples(vec!["/rewind", "/rewind 3", "/rewind src/main.rs", "/rewind src/main.rs --yes"])
+            .with_when_to_use("Use to remove recent conversation turns from context (`/rewind [n]`), or rewind a single file to its previous AI-saved version (`/rewind <path>`, confirms before overwriting; `--yes` skips confirm). `/rewind code|both <n>` revert via git checkpoints. Aliases: /undo, /checkpoint.")
+            .with_related(vec!["undo", "checkpoint", "compact", "clear"])
+        ),
+        "checkpoint" => Some(
+            CommandHelpEntry::new(
+                "checkpoint".to_string(),
+                "Alias for /rewind".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[n | history | code <n> | both <n> | <path>]")
+            .with_examples(vec!["/checkpoint", "/checkpoint 2", "/checkpoint src/main.rs"])
+            .with_when_to_use("Alias of /rewind. Same behavior: rewind conversation turns or a single file to its previous version.")
+            .with_related(vec!["rewind", "undo"])
         ),
         "notify" => Some(
             CommandHelpEntry::new(
@@ -1139,6 +1150,7 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         "context",
         "undo",
         "rewind",
+        "checkpoint",
         "notify",
         "create-pr",
         "patch",

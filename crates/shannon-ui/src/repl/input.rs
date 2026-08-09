@@ -607,7 +607,7 @@ pub fn handle_input(
                 if let Some(last) = repl.state.last_esc_time {
                     if now.duration_since(last).as_millis() < 500 {
                         repl.state.last_esc_time = None;
-                        super::commands::handle_command(repl, "/undo")?;
+                        super::commands::handle_command(repl, "/rewind")?;
                         return Ok(());
                     }
                 }
@@ -1510,9 +1510,36 @@ fn handle_active_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                             }
                         }
                     }
+                    "rewind_file_confirm" => {
+                        let path = repl.state.rewind_file_path.take();
+                        let id = repl.state.rewind_file_snapshot_id.take();
+                        if let (Some(path), Some(id)) = (path, id) {
+                            match super::commands::apply_file_rewind(&path, &id) {
+                                Ok(content) => {
+                                    let lines = content.lines().count();
+                                    repl.chat.add_message(
+                                        ChatRole::System,
+                                        format!(
+                                            "Rewound `{}` to its previous version ({} lines).",
+                                            path.display(),
+                                            lines
+                                        ),
+                                    );
+                                }
+                                Err(e) => {
+                                    repl.chat.add_message(
+                                        ChatRole::System,
+                                        format!("File rewind failed: {e}"),
+                                    );
+                                }
+                            }
+                        }
+                    }
                     "cancel" | "ok" => {
                         repl.state.undo_preview = None;
                         repl.state.undo_target_index = None;
+                        repl.state.rewind_file_path = None;
+                        repl.state.rewind_file_snapshot_id = None;
                     }
                     _ => {}
                 }

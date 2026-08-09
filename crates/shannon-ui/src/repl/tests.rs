@@ -2288,38 +2288,42 @@ fn test_repl_context_in_help() {
 // --- /undo command tests ---
 
 #[test]
-fn test_repl_undo_no_checkpoints() {
+fn test_repl_undo_alias_rewinds_conversation() {
+    // /undo is now an alias of /rewind (W6-2 B.1 unification): it rewinds the
+    // conversation rather than reverting git checkpoints.
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/undo".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
-        last_msg.contains("No checkpoints") || last_msg.contains("Undo failed"),
-        "/undo with no checkpoints should show error"
+        last_msg.contains("No conversation turns to rewind"),
+        "/undo should behave as /rewind (conversation rewind). Got: {last_msg}"
     );
 }
 
 #[test]
-fn test_repl_undo_list_empty() {
+fn test_repl_undo_alias_list_is_history() {
+    // /undo list maps to /rewind history.
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/undo list".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
-        last_msg.contains("No checkpoints"),
-        "/undo list with no checkpoints should say so"
+        last_msg.contains("No turn checkpoints available"),
+        "/undo list should map to /rewind history. Got: {last_msg}"
     );
 }
 
 #[test]
-fn test_repl_undo_invalid_index() {
+fn test_repl_undo_alias_zero_is_usage() {
+    // /undo 0 → /rewind 0 → rewinding 0 turns is invalid → usage hint.
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/undo 0".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
-        last_msg.contains("Revert failed") || last_msg.contains("Invalid"),
-        "/undo 0 with no checkpoints should fail"
+        last_msg.contains("Usage: /rewind"),
+        "/undo 0 should show /rewind usage. Got: {last_msg}"
     );
 }
 
@@ -2992,13 +2996,18 @@ fn test_rewind_command_zero() {
 }
 
 #[test]
-fn test_rewind_command_invalid_arg() {
+fn test_rewind_untracked_file_path() {
+    // A non-numeric, non-keyword argument is now treated as a per-file rewind
+    // target (W6-2 B.1). An untracked path reports no file history.
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/rewind abc".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
 
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Usage: /rewind"));
+    assert!(
+        last_msg.contains("No file history for `abc`"),
+        "/rewind <path> on an untracked file should say so. Got: {last_msg}"
+    );
 }
 
 #[test]

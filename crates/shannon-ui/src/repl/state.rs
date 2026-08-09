@@ -287,6 +287,11 @@ pub struct ReplState {
     pub undo_preview: Option<shannon_core::RevertPreview>,
     /// Target checkpoint index for pending undo operation
     pub undo_target_index: Option<usize>,
+    /// Pending per-file rewind target: the tracked path to restore (set by
+    /// `/rewind <path>` before its confirm dialog).
+    pub rewind_file_path: Option<std::path::PathBuf>,
+    /// Snapshot id to restore for the pending per-file rewind.
+    pub rewind_file_snapshot_id: Option<String>,
     /// Sender for pending MCP elicitation requests (provider → TUI event loop).
     ///
     /// Set once during REPL init; cloned into the elicitation provider callback.
@@ -591,6 +596,8 @@ impl Default for ReplState {
             persisted_ui_state: None,
             undo_preview: None,
             undo_target_index: None,
+            rewind_file_path: None,
+            rewind_file_snapshot_id: None,
             pending_elicitation_tx: None,
             pending_elicitation_rx: None,
             active_elicitation: None,

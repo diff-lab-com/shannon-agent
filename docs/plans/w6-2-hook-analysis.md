@@ -146,9 +146,12 @@ A.1 增量(自包含在 `history.rs`):
 | A.1 | `history.rs` 加 time-based TTL + 测试 | ~0.5d | ✅ `9a9d3ac3` |
 | A.2 | Write/Edit/MultiEdit 加 `history` 字段 + `with_history()` + `execute()` pre-modify 快照 + 测试 | ~1.5d | ✅ `ba2a01f6` |
 | A.3 | `lib.rs` register fn 注入 manager(2 个 project-scoped fn;`register_default_tools` no-sandbox 不接,避免测试污染 HOME) | ~0.5d | ✅ `2dad59ac` |
-| A.4 | config(开关 / history dir / TTL);默认开,可禁用 | ~0.5d | ✅ 本次 |
-| B | `/undo` 命令(`builtin/undo.rs`)over `rollback()` + 覆盖前确认 + `/rewind` 区分 | ~1d | 待开始 |
+| A.4 | config(开关 / history dir / TTL);默认开,可禁用 | ~0.5d | ✅ `c83f761d` |
+| B.1 | **命令统一 + per-file 回退**:`/undo` / `/checkpoint` 收敛为 `/rewind` 别名(同一 `handle_rewind`,Claude-Code-aligned 机制);`/rewind <path>` 经 `FileHistoryManager.rollback()` + 写盘做 per-file 内容快照回退(覆盖前确认 / `--yes` 跳过);help 元数据 + 8 个单测;`code`/`both` 多文件模式本阶段仍走 git-checkpoint(过渡态) | ~2d | ✅ 本次 |
+| B.2 | turn-boundary 多文件回退 manifest(`FileHistoryManager` 增 `checkpoints.json`,timestamp-based,复用 `TurnCheckpoint`);`code`/`both` 模式从 git-checkpoint 迁到内容快照;停掉 `engine.rs:2758` 每次 Edit/Write/Bash 的 auto-commit;`checkpoint.rs` 模块保留作库原语(供 `AutoCommitTool` 等)但与 `/rewind` 解耦 | ~1.5-2d | 待开始 |
 | C | auto-commit —— **DEFERRED**(见下) | — | ⏸️ |
+
+> **B.1 设计决策(2026-08-09)**:经调研 + 用户确认,采纳 Claude-Code-aligned 方案 —— canonical 命令 `/rewind`(`/undo`、`/checkpoint` 为别名,行为完全一致);per-file 回退基于 `FileHistoryManager` 内容快照(非 git);`checkpoint.rs`(git-checkpoint)模块**保留**为库原语供其它场景(`AutoCommitTool` 等),但不再驱动 `/rewind`(B.2 完成 `code`/`both` 迁移后即完全解耦)。详见记忆 `existing-undo-is-destructive-git-reset`。
 
 ### A.4 配置开关(env vars,默认开)
 
