@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -133,6 +134,10 @@ pub struct FileSnapshot {
     pub line_count: usize,
     /// SHA-256 hash of the content for deduplication.
     pub hash: String,
+    /// Conversation turn this snapshot was captured at (W6-2 B.2 turn-based rewind).
+    /// `None` for ordinary per-edit snapshots not tied to a turn boundary.
+    #[serde(default)]
+    pub turn_index: Option<usize>,
 }
 
 impl FileSnapshot {
@@ -148,6 +153,7 @@ impl FileSnapshot {
             operation,
             line_count,
             hash,
+            turn_index: None,
         }
     }
 
@@ -168,6 +174,7 @@ impl FileSnapshot {
             operation,
             line_count,
             hash,
+            turn_index: None,
         }
     }
 
@@ -329,6 +336,12 @@ pub struct FileHistoryConfig {
     pub max_history_per_file: usize,
     /// Maximum total history storage in MB.
     pub max_total_history_mb: usize,
+    /// Time-to-live for snapshots, in whole seconds. Snapshots older than
+    /// this become cleanup-eligible. `None` disables time-based expiry (only
+    /// the per-file count limit and storage quota apply). Default: 7 days
+    /// (604_800). Stored as seconds because `std::time::Duration` does not
+    /// implement `Serialize`/`Deserialize`.
+    pub ttl: Option<u64>,
 }
 
 impl Default for FileHistoryConfig {
@@ -342,7 +355,59 @@ impl Default for FileHistoryConfig {
             history_dir,
             max_history_per_file: 50,
             max_total_history_mb: 100,
+            // 7 days in seconds (604_800). Snapshots older than this expire.
+            ttl: Some(7 * 24 * 60 * 60),
         }
+    }
+}
+
+impl FileHistoryConfig {
+    /// Build config from `SHANNON_FILE_HISTORY*` env overrides (W6-2 A.4),
+    /// falling back to [`FileHistoryConfig::default`]. Returns `None` only
+    /// when history is explicitly disabled.
+    ///
+    /// Recognized env vars (consistent with the documented `SHANNON_*` config
+    /// layer; see `web.rs` for precedent):
+    /// - `SHANNON_FILE_HISTORY` — `0`/`false`/`off`/`no` disables history
+    ///   entirely (tools register without a manager = pre-W6-2 behavior).
+    ///   Unset or any other value keeps it enabled (default-on).
+    /// - `SHANNON_FILE_HISTORY_DIR` — overrides `history_dir`.
+    /// - `SHANNON_FILE_HISTORY_TTL` — overrides `ttl`, in whole seconds.
+    ///   `0` disables time-based expiry (`ttl = None`); count + quota still apply.
+    ///
+    /// Unset or unparseable values keep the default.
+    pub fn from_env() -> Option<Self> {
+        Self::from_env_vars(
+            std::env::var("SHANNON_FILE_HISTORY").ok(),
+            std::env::var("SHANNON_FILE_HISTORY_DIR").ok(),
+            std::env::var("SHANNON_FILE_HISTORY_TTL").ok(),
+        )
+    }
+
+    /// Pure core of [`from_env`](Self::from_env): accepts the raw env values so
+    /// it can be unit-tested without mutating process-global environment state.
+    pub(crate) fn from_env_vars(
+        enabled: Option<String>,
+        dir: Option<String>,
+        ttl: Option<String>,
+    ) -> Option<Self> {
+        if matches!(enabled.as_deref(), Some("0" | "false" | "off" | "no")) {
+            return None;
+        }
+        let mut cfg = Self::default();
+        if let Some(dir) = dir {
+            let dir = dir.trim();
+            if !dir.is_empty() {
+                cfg.history_dir = PathBuf::from(dir);
+            }
+        }
+        if let Some(ttl) = ttl {
+            if let Ok(secs) = ttl.trim().parse::<u64>() {
+                // 0 → no time-based expiry (None); positive N → Some(N) seconds.
+                cfg.ttl = (secs > 0).then_some(secs);
+            }
+        }
+        Some(cfg)
     }
 }
 
@@ -364,10 +429,26 @@ pub struct FileHistoryManager {
     history_dir: PathBuf,
     max_history_per_file: usize,
     max_total_history_mb: usize,
+    /// Time-to-live; snapshots older than this are cleanup-eligible.
+    /// `None` disables time-based expiry.
+    ttl: Option<Duration>,
     /// In-memory cache of file histories.
     cache: HashMap<PathBuf, FileHistory>,
     /// Whether the cache has been loaded from disk.
     cache_loaded: bool,
+}
+
+/// Action that [`FileHistoryManager::rewind_file_to_turn`] prescribes for a file
+/// when rewinding code to a given turn (W6-2 B.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RewindAction {
+    /// Restore the file to this content.
+    Restore(String),
+    /// The file's earliest turn-tagged snapshot is newer than the target turn, so it
+    /// did not exist at the target — delete it.
+    Delete,
+    /// No turn-tagged history for this file — leave it untouched.
+    NoChange,
 }
 
 impl FileHistoryManager {
@@ -377,6 +458,7 @@ impl FileHistoryManager {
             history_dir: config.history_dir,
             max_history_per_file: config.max_history_per_file,
             max_total_history_mb: config.max_total_history_mb,
+            ttl: config.ttl.map(Duration::from_secs),
             cache: HashMap::new(),
             cache_loaded: false,
         };
@@ -395,6 +477,7 @@ impl FileHistoryManager {
             history_dir: temp_path,
             max_history_per_file: 10,
             max_total_history_mb: 10,
+            ttl: Some(7 * 24 * 60 * 60),
         };
         Ok(Self::new(config))
     }
@@ -585,6 +668,85 @@ impl FileHistoryManager {
         Ok(snapshot.content.clone())
     }
 
+    /// Record a turn-boundary snapshot capturing the file's content at the end of a
+    /// conversation turn (W6-2 B.2). Tagged with `turn_index` so [`rewind_file_to_turn`]
+    /// can locate it. Content-deduplicated like ordinary snapshots.
+    ///
+    /// [`rewind_file_to_turn`]: FileHistoryManager::rewind_file_to_turn
+    pub fn record_turn_snapshot(
+        &mut self,
+        file_path: &Path,
+        content: &str,
+        turn_index: usize,
+    ) -> Result<FileSnapshot, FileHistoryError> {
+        self.ensure_cache_loaded()?;
+        self.check_storage_quota()?;
+
+        let mut snapshot = FileSnapshot::new(
+            file_path.to_path_buf(),
+            content.to_string(),
+            FileOperation::Edit,
+        );
+        snapshot.turn_index = Some(turn_index);
+
+        let history = self
+            .cache
+            .entry(file_path.to_path_buf())
+            .or_insert_with(|| {
+                FileHistory::new(file_path.to_path_buf(), self.max_history_per_file)
+            });
+
+        if let Some(recorded) = history.add_snapshot(snapshot.clone()) {
+            self.save_snapshot(&recorded)?;
+            self.save_index()?;
+            Ok(recorded)
+        } else {
+            Err(FileHistoryError::Diff(
+                "Snapshot deduplicated: content matches the latest snapshot".to_string(),
+            ))
+        }
+    }
+
+    /// Determine how to restore `file_path` to its state at the end of `turn_index`.
+    ///
+    /// Among the file's **turn-tagged** snapshots, picks the one with the largest
+    /// `turn_index <= turn_index` and prescribes a [`RewindAction::Restore`] to its
+    /// content. If every turn-tagged snapshot is newer than the target (the file was
+    /// first created after that turn), prescribes [`RewindAction::Delete`]. If the
+    /// file has no turn-tagged snapshots at all, prescribes [`RewindAction::NoChange`].
+    ///
+    /// This only *decides* the action; the caller writes to disk so it can confirm
+    /// before overwriting uncommitted work.
+    pub fn rewind_file_to_turn(
+        &mut self,
+        file_path: &Path,
+        turn_index: usize,
+    ) -> Result<RewindAction, FileHistoryError> {
+        self.ensure_cache_loaded()?;
+
+        let history = match self.cache.get(file_path) {
+            Some(h) => h,
+            None => return Ok(RewindAction::NoChange),
+        };
+
+        let target = history
+            .snapshots
+            .iter()
+            .filter(|s| s.turn_index.is_some_and(|t| t <= turn_index))
+            .max_by_key(|s| s.turn_index);
+
+        match target {
+            Some(s) => Ok(RewindAction::Restore(s.content.clone())),
+            None => {
+                if history.snapshots.iter().any(|s| s.turn_index.is_some()) {
+                    Ok(RewindAction::Delete)
+                } else {
+                    Ok(RewindAction::NoChange)
+                }
+            }
+        }
+    }
+
     /// List all tracked files.
     pub fn list_tracked_files(&mut self) -> Result<Vec<PathBuf>, FileHistoryError> {
         self.ensure_cache_loaded()?;
@@ -631,6 +793,69 @@ impl FileHistoryManager {
         }
 
         Ok(removed)
+    }
+
+    /// Remove all snapshots strictly older than `cutoff`.
+    ///
+    /// Returns the number of snapshots removed. This is the deterministic,
+    /// testable core of time-based expiry; [`FileHistoryManager::cleanup_expired`]
+    /// wraps it with the configured TTL. Note this is **not** called
+    /// automatically from `record_snapshot` (to keep the write path fast); it
+    /// is meant to be invoked periodically — e.g. on session start or when
+    /// `/undo` runs.
+    pub fn cleanup_expired_before(
+        &mut self,
+        cutoff: DateTime<Utc>,
+    ) -> Result<usize, FileHistoryError> {
+        self.ensure_cache_loaded()?;
+
+        let mut removed = 0usize;
+        let mut to_delete: Vec<(PathBuf, String)> = Vec::new();
+
+        for (file_path, history) in &mut self.cache {
+            let expired: Vec<String> = history
+                .snapshots
+                .iter()
+                .filter(|s| s.timestamp < cutoff)
+                .map(|s| s.id.clone())
+                .collect();
+            for id in &expired {
+                to_delete.push((file_path.clone(), id.clone()));
+            }
+            history.snapshots.retain(|s| s.timestamp >= cutoff);
+            removed += expired.len();
+        }
+
+        for (file_path, snapshot_id) in &to_delete {
+            let snapshot_path = self.file_dir(file_path).join(format!("{snapshot_id}.json"));
+            if let Err(e) = std::fs::remove_file(&snapshot_path) {
+                tracing::debug!("Failed to remove expired snapshot: {e}");
+            }
+        }
+
+        if removed > 0 {
+            self.save_index()?;
+        }
+
+        Ok(removed)
+    }
+
+    /// Remove snapshots older than the configured TTL.
+    ///
+    /// Returns the number removed. Returns `Ok(0)` when TTL is `None`.
+    pub fn cleanup_expired(&mut self) -> Result<usize, FileHistoryError> {
+        self.ensure_cache_loaded()?;
+        let Some(ttl) = self.ttl else {
+            return Ok(0);
+        };
+        // chrono::Duration is calendar-based; convert from std::time::Duration.
+        // On overflow (impossibly large TTL) fall back to a zero offset, which
+        // makes nothing expire — a safe no-op.
+        let offset = chrono::Duration::from_std(ttl).unwrap_or_else(|_| chrono::Duration::zero());
+        let cutoff = Utc::now()
+            .checked_sub_signed(offset)
+            .unwrap_or_else(Utc::now);
+        self.cleanup_expired_before(cutoff)
     }
 
     /// Check total storage usage against the quota.
@@ -1338,6 +1563,78 @@ mod tests {
     }
 
     #[test]
+    fn test_record_turn_snapshot_tags_turn_index() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_turn_tag.rs");
+
+        let recorded = manager.record_turn_snapshot(path, "v1", 3).unwrap();
+        assert_eq!(recorded.turn_index, Some(3));
+
+        // The tagged snapshot is retrievable and carries the tag.
+        let history = manager.get_history(path).unwrap();
+        assert!(history.snapshots.iter().any(|s| s.turn_index == Some(3)));
+    }
+
+    #[test]
+    fn test_rewind_file_to_turn_restores_earlier_version() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_turn_rewind.rs");
+
+        // Simulate per-turn captures across turns 1, 2, 3.
+        manager.record_turn_snapshot(path, "turn1", 1).unwrap();
+        manager.record_turn_snapshot(path, "turn2", 2).unwrap();
+        manager.record_turn_snapshot(path, "turn3", 3).unwrap();
+
+        // Rewind to turn 2 → restore turn-2 content.
+        assert_eq!(
+            manager.rewind_file_to_turn(path, 2).unwrap(),
+            RewindAction::Restore("turn2".to_string())
+        );
+        // Rewind to turn 3 (latest) → restore turn-3 content.
+        assert_eq!(
+            manager.rewind_file_to_turn(path, 3).unwrap(),
+            RewindAction::Restore("turn3".to_string())
+        );
+    }
+
+    #[test]
+    fn test_rewind_file_to_turn_deletes_future_created_file() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_turn_delete.rs");
+
+        // File first appears at turn 5 (no earlier history).
+        manager.record_turn_snapshot(path, "created", 5).unwrap();
+
+        // Rewinding to turn 3 (before it existed) → Delete.
+        assert_eq!(
+            manager.rewind_file_to_turn(path, 3).unwrap(),
+            RewindAction::Delete
+        );
+    }
+
+    #[test]
+    fn test_rewind_file_to_turn_no_change_for_untracked() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_turn_nochg.rs");
+
+        // No snapshots at all → NoChange.
+        assert_eq!(
+            manager.rewind_file_to_turn(path, 2).unwrap(),
+            RewindAction::NoChange
+        );
+
+        // Only an UNTAGGED (per-edit) snapshot: still NoChange, since turn rewind
+        // only considers turn-tagged snapshots.
+        manager
+            .record_snapshot(path, "edit", FileOperation::Edit)
+            .unwrap();
+        assert_eq!(
+            manager.rewind_file_to_turn(path, 2).unwrap(),
+            RewindAction::NoChange
+        );
+    }
+
+    #[test]
     fn test_manager_list_tracked_files() {
         let mut manager = FileHistoryManager::new_temp().unwrap();
 
@@ -1387,6 +1684,7 @@ mod tests {
             history_dir: temp_dir.path().to_path_buf(),
             max_history_per_file: 10,
             max_total_history_mb: 10,
+            ttl: Some(7 * 24 * 60 * 60),
         };
 
         let path = Path::new("/tmp/test_persist.rs");
@@ -1415,6 +1713,94 @@ mod tests {
         let config = FileHistoryConfig::default();
         assert_eq!(config.max_history_per_file, 50);
         assert_eq!(config.max_total_history_mb, 100);
+        assert_eq!(
+            config.ttl,
+            Some(7 * 24 * 60 * 60),
+            "default TTL should be 7 days in seconds (604_800)"
+        );
+    }
+
+    // ---- TTL / cleanup_expired tests --------------------------------------
+
+    #[test]
+    fn test_cleanup_expired_before_removes_old_snapshots() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_ttl.rs");
+
+        manager
+            .record_snapshot(path, "v1", FileOperation::Create)
+            .unwrap();
+
+        // Backdate the recorded snapshot to well before the cutoff.
+        let ancient = Utc::now() - chrono::Duration::days(30);
+        for history in manager.cache.values_mut() {
+            for snap in &mut history.snapshots {
+                snap.timestamp = ancient;
+            }
+        }
+
+        // Cutoff = now; the backdated snapshot is strictly older → removed.
+        let removed = manager.cleanup_expired_before(Utc::now()).unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(manager.get_history(path).unwrap().len(), 0);
+
+        // Idempotent: nothing left to remove.
+        assert_eq!(manager.cleanup_expired_before(Utc::now()).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_cleanup_expired_ttl_none_is_noop() {
+        let config = FileHistoryConfig {
+            history_dir: tempfile::tempdir().unwrap().keep(),
+            max_history_per_file: 10,
+            max_total_history_mb: 10,
+            ttl: None,
+        };
+        let mut manager = FileHistoryManager::new(config);
+        let path = Path::new("/tmp/test_ttl_none.rs");
+        manager
+            .record_snapshot(path, "v1", FileOperation::Create)
+            .unwrap();
+
+        // ttl = None → cleanup_expired removes nothing.
+        assert_eq!(manager.cleanup_expired().unwrap(), 0);
+        assert_eq!(manager.get_history(path).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_cleanup_expired_removes_only_aged_snapshots() {
+        // ttl = 1 hour. A backdated (1-day-old) snapshot expires; a freshly
+        // recorded one (within the hour) is kept. The 1-hour margin avoids
+        // real-time flakiness on loaded machines.
+        let config = FileHistoryConfig {
+            history_dir: tempfile::tempdir().unwrap().keep(),
+            max_history_per_file: 10,
+            max_total_history_mb: 10,
+            ttl: Some(3600),
+        };
+        let mut manager = FileHistoryManager::new(config);
+        let path = Path::new("/tmp/test_ttl_aged.rs");
+
+        manager
+            .record_snapshot(path, "v1", FileOperation::Create)
+            .unwrap();
+        // Backdate v1 by one day.
+        let ancient = Utc::now() - chrono::Duration::days(1);
+        for history in manager.cache.values_mut() {
+            for snap in &mut history.snapshots {
+                snap.timestamp = ancient;
+            }
+        }
+        // Record a fresh v2 (timestamp ≈ now, within the 1h TTL).
+        manager
+            .record_snapshot(path, "v2", FileOperation::Edit)
+            .unwrap();
+
+        let removed = manager.cleanup_expired().unwrap();
+        assert_eq!(removed, 1, "only the backdated v1 should be removed");
+        let history = manager.get_history(path).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.snapshots[0].content, "v2");
     }
 
     // ---- FileHistoryError tests -------------------------------------------
@@ -1429,5 +1815,70 @@ mod tests {
             snapshot_id: "abc".to_string(),
         };
         assert!(err.to_string().contains("abc"));
+    }
+
+    // ---- from_env / from_env_vars (W6-2 A.4) ----------------------------
+
+    #[test]
+    fn from_env_vars_default_enabled() {
+        // No disable flag → Some(config with default values).
+        let cfg = FileHistoryConfig::from_env_vars(None, None, None).unwrap();
+        assert_eq!(cfg.ttl, Some(7 * 24 * 60 * 60));
+        assert_eq!(cfg.max_history_per_file, 50);
+    }
+
+    #[test]
+    fn from_env_vars_disabled_by_flag() {
+        for v in ["0", "false", "off", "no"] {
+            assert!(
+                FileHistoryConfig::from_env_vars(Some(v.to_string()), None, None).is_none(),
+                "SHANNON_FILE_HISTORY={v} must disable"
+            );
+        }
+    }
+
+    #[test]
+    fn from_env_vars_truthy_or_unknown_keeps_enabled() {
+        // "1"/"true"/"on"/"yes" and unknown/empty values do NOT disable.
+        for v in ["1", "true", "on", "yes", "enabled", "maybe", ""] {
+            assert!(
+                FileHistoryConfig::from_env_vars(Some(v.to_string()), None, None).is_some(),
+                "SHANNON_FILE_HISTORY={v:?} must not disable"
+            );
+        }
+    }
+
+    #[test]
+    fn from_env_vars_dir_override() {
+        let cfg =
+            FileHistoryConfig::from_env_vars(None, Some("/tmp/shannon_hist_xyz".to_string()), None)
+                .unwrap();
+        assert_eq!(cfg.history_dir, PathBuf::from("/tmp/shannon_hist_xyz"));
+    }
+
+    #[test]
+    fn from_env_vars_dir_override_ignores_whitespace_only() {
+        let cfg = FileHistoryConfig::from_env_vars(None, Some("   ".to_string()), None).unwrap();
+        // Whitespace-only dir keeps the default rather than wiping it.
+        assert!(cfg.history_dir.ends_with("file_history"));
+    }
+
+    #[test]
+    fn from_env_vars_ttl_override() {
+        let cfg = FileHistoryConfig::from_env_vars(None, None, Some("3600".to_string())).unwrap();
+        assert_eq!(cfg.ttl, Some(3600));
+    }
+
+    #[test]
+    fn from_env_vars_ttl_zero_means_no_expiry() {
+        let cfg = FileHistoryConfig::from_env_vars(None, None, Some("0".to_string())).unwrap();
+        assert_eq!(cfg.ttl, None, "TTL=0 disables time-based expiry");
+    }
+
+    #[test]
+    fn from_env_vars_ttl_unparseable_keeps_default() {
+        let cfg =
+            FileHistoryConfig::from_env_vars(None, None, Some("not-a-number".to_string())).unwrap();
+        assert_eq!(cfg.ttl, Some(7 * 24 * 60 * 60));
     }
 }

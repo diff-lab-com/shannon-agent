@@ -21,6 +21,63 @@ fn animated_dots(_elapsed: std::time::Duration) -> &'static str {
     "···"
 }
 
+/// W6-2 B.2: record a post-turn content snapshot for each file modified or created
+/// during the turn, so `/rewind code/both <n>` can restore files via `FileHistoryManager`
+/// (content snapshots) instead of git.
+///
+/// Files that cannot be read (deleted this turn, binary, missing) are skipped.
+/// Snapshots are keyed by the path string exactly as the turn-tracker reports it,
+/// so the rewind lookup (which reads the same strings from `TurnCheckpoint.files_changed`)
+/// matches.
+pub(crate) fn capture_turn_snapshots_with(
+    manager: &mut shannon_tools::FileHistoryManager,
+    files: &[String],
+    turn_index: usize,
+) {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    for file in files {
+        let key = std::path::Path::new(file);
+        // Resolve a relative path against the process cwd so we can read the bytes;
+        // the snapshot KEY stays the raw turn-tracker string for lookup consistency.
+        let fs_path = if key.is_absolute() {
+            std::path::PathBuf::from(file)
+        } else {
+            cwd.join(file)
+        };
+        // Bound memory the same way the per-edit path does: skip oversized,
+        // missing, or non-UTF-8 files rather than reading them fully in.
+        let Ok(meta) = std::fs::metadata(&fs_path) else {
+            continue;
+        };
+        if meta.len() > shannon_tools::file::MAX_SNAPSHOT_BYTES {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&fs_path) else {
+            continue;
+        };
+        if let Err(e) = manager.record_turn_snapshot(key, &content, turn_index) {
+            tracing::debug!("turn snapshot skipped for {fs_path:?}: {e}");
+        }
+    }
+}
+
+/// Capture post-turn snapshots using a manager built from
+/// `FileHistoryConfig::from_env()`. No-op when file history is disabled
+/// (`SHANNON_FILE_HISTORY=0`); see [`capture_turn_snapshots_with`].
+///
+/// This manager is intentionally a SEPARATE instance from the one the
+/// Write/Edit tools hold: both persist to the same on-disk `history_dir`, and
+/// `run_code_rewind` always builds its own fresh manager that re-reads the
+/// complete on-disk index, so the cross-instance in-memory cache divergence is
+/// benign (no data is lost).
+fn capture_turn_snapshots(files: &[String], turn_index: usize) {
+    let Some(config) = shannon_tools::FileHistoryConfig::from_env() else {
+        return;
+    };
+    let mut manager = shannon_tools::FileHistoryManager::new(config);
+    capture_turn_snapshots_with(&mut manager, files, turn_index);
+}
+
 /// Wrap a single line to fit within `max_width` columns, breaking at char boundaries.
 /// Returns a list of lines, each prefixed with `indent`.
 fn wrap_line(line: &str, max_width: usize, indent: &str) -> Vec<String> {
@@ -1374,6 +1431,10 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             }
             repl.current_turn += 1;
 
+            // W6-2 B.2: capture per-turn content snapshots so `/rewind code/both <n>`
+            // can restore files via FileHistoryManager (content snapshots, not git).
+            capture_turn_snapshots(&turn_files, repl.current_turn - 1);
+
             // Record per-turn checkpoint with file change tracking
             let prompt_preview = if unicode_width::UnicodeWidthStr::width(input) > 80 {
                 let mut len = 0;
@@ -1403,8 +1464,6 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 );
             } else if files_touched > 0 {
                 let synthetic_cp = shannon_core::Checkpoint {
-                    hash: String::new(),
-                    short_hash: String::new(),
                     description: format!("turn {}", repl.current_turn),
                     timestamp: chrono::Utc::now().timestamp(),
                 };
