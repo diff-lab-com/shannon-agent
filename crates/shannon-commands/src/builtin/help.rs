@@ -646,7 +646,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             )
             .with_arg_hint("[n | history | code <n> | both <n> | <path> [--yes]]")
             .with_examples(vec!["/rewind", "/rewind 3", "/rewind src/main.rs", "/rewind src/main.rs --yes"])
-            .with_when_to_use("Use to remove recent conversation turns from context (`/rewind [n]`), or rewind a single file to its previous AI-saved version (`/rewind <path>`, confirms before overwriting; `--yes` skips confirm). `/rewind code|both <n>` revert via git checkpoints. Aliases: /undo, /checkpoint.")
+            .with_when_to_use("Use to remove recent conversation turns from context (`/rewind [n]`), or rewind a single file to its previous AI-saved version (`/rewind <path>`, confirms before overwriting; `--yes` skips confirm). `/rewind code|both <n>` revert files to their turn-N state (content snapshots). Aliases: /undo, /checkpoint.")
             .with_related(vec!["undo", "checkpoint", "compact", "clear"])
         ),
         "checkpoint" => Some(

@@ -67,6 +67,7 @@ The StatusBar shows a compact `[provider/model · tier]` pill that updates in re
 - **Extensions**: MCP (Model Context Protocol) — Claude Code compatible. Servers configured in `.mcp.json`, `~/.claude/settings.json`, `~/.shannon/settings.json` via `mcpServers` key. Tools auto-discovered via `tools/list`.
 - **Memory subsystem**: `MemoryStore` with Jaccard similarity dedup, `MemoryConsolidator` for merge/prune, `AutoDreamService` for conversation→memory extraction.
 - **Tool interface**: `Tool` trait in `shannon-tool-interface` with `execute()`, `execute_streaming()`, `is_read_only()`, `is_concurrency_safe()`, `is_destructive()`.
+- **File history + `/rewind`**: `FileHistoryManager` (shannon-tools) records per-file content snapshots — pre-modify on Write/Edit/MultiEdit, plus post-turn in `repl/query.rs`. `/rewind` has three modes: `/rewind [n]` rewinds conversation turns; `/rewind <path>` reverts one file to its previous snapshot (confirms before overwriting; `--yes` skips); `/rewind code|both <n>` reverts files to their turn-N state. `/undo` and `/checkpoint` are aliases. Driven by content snapshots, not git (works in non-git dirs; never rewrites history). Config: `SHANNON_FILE_HISTORY` / `SHANNON_FILE_HISTORY_DIR` / `SHANNON_FILE_HISTORY_TTL` env (on by default).
 - **Tests with HTTP mocking**: Use `mockito` crate for API integration tests (see `crates/shannon-core/tests/api_integration.rs`).
 
 ## Testing Guidelines

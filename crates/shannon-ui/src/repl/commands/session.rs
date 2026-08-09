@@ -312,8 +312,9 @@ pub(crate) fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
 enum RewindIntent {
     /// Show the turn-checkpoint history list.
     History,
-    /// Revert file changes to turn checkpoint `index` (git-checkpoint;
-    /// transitional — B.2 migrates this onto content snapshots).
+    /// Revert file changes to their state at turn checkpoint `index`
+    /// (B.2: driven by `FileHistoryManager` turn-tagged content snapshots,
+    /// not git).
     Code(usize),
     /// Revert file changes and rewind the conversation to turn checkpoint `index`.
     Both(usize),
