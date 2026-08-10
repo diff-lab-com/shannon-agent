@@ -112,7 +112,7 @@ W5(对齐,独立)── 解除"文档撒谎"
 
 W6-1 P2-8 VS Code ── ⏸️ 暂缓(2026-08-08);依赖 P2-7 ✅ 已满足,随时可重启
 W6-2 P2-6 auto-commit/Undo ── ✅ done(#52;Phase C auto-commit dropped)
-W6-3 P2-2 deprecation 收尾 ── ✅ done(#51)── TD-4 inventory 已铺垫
+W6-3 P2-2 deprecation 收尾 ── ✅ done(#51)── TD-4 retire ✅ done(#54)
 
 W7-1 P3-7 沙盒 ── 评审驱动,独立
 W7-2 P3-1 artifact ── 依赖 P2-5d ✅
@@ -128,7 +128,7 @@ W7-2 P3-1 artifact ── 依赖 P2-5d ✅
 | 顺序 | Task | 估时 | 优先级 | 备注 |
 |---|---|---|---|---|
 | 1 | W5-1/2/3 文档收敛 | 0.5–1d | 🔴 高 | 大部分已做,补 metrics 刷新即可 |
-| 2 | W6-3 P2-2 deprecation 收尾 | 3–5d | ✅ done | PR #51;inventory/parity/STABILITY;`#[deprecated]`→TD-4 |
+| 2 | W6-3 P2-2 deprecation 收尾 | 3–5d | ✅ done | PR #51;inventory/parity/STABILITY;TD-4 retire ✅ done(#54) |
 | 3 | W6-1 P2-8 VS Code | 2–3w | ⏸️ 暂缓 | 2026-08-08 用户决策;spike+方案就绪,可重启 |
 | 4 | W6-2 P2-6 auto-commit/Undo | 1–1.5w | ✅ done | PR #52;快照 + 统一 `/rewind`;Phase C auto-commit dropped |
 | 5 | W7-2 P3-1 artifact | 2w | 🟢 稳 | 依赖已满足,可提前 |
