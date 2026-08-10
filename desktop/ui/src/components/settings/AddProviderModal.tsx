@@ -114,11 +114,11 @@ function parseDefaultMaxTokens(s: string): number | null {
 export default function AddProviderModal({ editing, onClose, onSaved }: AddProviderModalProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const [label, setLabel] = useState(editing?.label ?? '')
-  const [kind, setKind] = useState<string>(editing?.provider_kind ?? 'openai-compatible')
+  const [label, setLabel] = useState(editing?.display_name ?? '')
+  const [kind, setKind] = useState<string>(editing?.kind ?? 'openai-compatible')
   const [baseUrl, setBaseUrl] = useState(editing?.base_url ?? '')
   const [apiKey, setApiKey] = useState('')
-  const [model, setModel] = useState(editing?.model ?? '')
+  const [model, setModel] = useState('')
   const [advanced, setAdvanced] = useState<AdvancedState>(() => advancedFromEditing(editing))
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -147,8 +147,8 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
     setError(null)
     const input: ProviderInput = {
       id: editing?.id,
-      label: trimmedLabel,
-      provider_kind: kind,
+      display_name: trimmedLabel,
+      kind: kind,
       // For a new connection require a key when the kind needs one; on edit,
       // an empty value tells the backend to keep the existing key.
       api_key: apiKey.trim() || undefined,
