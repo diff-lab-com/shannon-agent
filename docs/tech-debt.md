@@ -87,19 +87,15 @@
 
 ## TD-4 · ADR-0009 Phase 2 — retire `ProviderConnection` wire type
 
-**Status**: 🔬 **spike 完成,未实施**(登记 2026-08-08)
+**Status**: ✅ **已完成**(PR #54,合并至 dev `07913d97`,2026-08-10)
 
-**当前状态**:
-- 桌面仍维护 `ProviderConnection` wire type(`desktop/src/config.rs::from_provider_profile`),与引擎 `ProviderProfile` 并存。Phase 1 已把所有读写收口到 `ProviderReadSnapshot::to_providers_file()` 单一 chokepoint。
-- spike 结论:blast radius **小**(`Welcome.tsx` 是薄消费者,只碰 4 字段),不是早先估计的 ~724 行重写。
+**落地结果**:
+- `ProviderConnection` 现镜像 `ProviderProfile`(`label`→`display_name`、`provider_kind`→`kind` 保留为 String slug;删除死字段 `api_key`/`model`/`created_at`;新增 `has_api_key: bool` 派生自 `credential_manager::read_credential_value_default(id)` —— 修复 Phase 1 起的 dead signal:UI `hasKey = !!conn.api_key` 恒为 false)。
+- 边界 = 薄 wire DTO 对齐 `ProviderProfile` + 派生 `has_api_key`,**不是**删除 struct(设计修正:`ProviderProfile` 带 `#[serde(deny_unknown_fields)]` + `CredentialRef`(后端细节 UI 不消费)+ 无 has_api_key 信号,不能直接当 wire type)。
+- legacy `providers.json` 读路径用独立 `LegacyProviderConnection`/`LegacyProvidersFile` 保留(一次性 `migrate_providers_to_toml`)。
+- `mask_providers` 已删除;`save_provider` 加 model_id 级联、`set_active_provider` 硬编码 `"default"`(无回归:`conn.model` 在该路径恒为 None)。
 
-**触发条件**:
-1. 启动桌面下一轮 provider UX 改造;
-2. `ProviderConnection` ↔ `ProviderProfile` 字段漂移引发第二个 bug。
-
-**预估成本**:~1–1.5d(机械类型替换:`label↔display_name`、`provider_kind↔kind`、`model/api_key/created_at` 删除;`ModelsSettings.tsx` 最重 ~25 处;一个行为风险点:`testProviderConnection` 改从 credential store 取 key)。
-
-**Owner**:TBD。**参考**:`docs/spikes/p2-2-s1-1-lock-design.md` §7、ADR-0009。
+**参考**:设计记录 `docs/plans/td-4-retire-provider-connection.md`;spike `docs/spikes/p2-2-s1-1-lock-design.md` §7;ADR-0009。
 
 ---
 
