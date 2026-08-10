@@ -42,10 +42,9 @@ vi.mock('@/lib/tauri-api', () => ({
     providers: [
       {
         id: 'anthropic-main',
-        label: 'Anthropic',
-        provider_kind: 'anthropic',
-        model: 'claude-sonnet-4-6',
-        created_at: '2026-07-30T00:00:00Z',
+        display_name: 'Anthropic',
+        kind: 'anthropic',
+        has_api_key: false,
       },
     ],
   }),
@@ -514,13 +513,13 @@ describe('Welcome — env provider detection (T7.A)', () => {
       .mockResolvedValueOnce({
         active_provider_id: 'anthropic-main',
         providers: [
-          { id: 'anthropic-main', label: 'Anthropic', provider_kind: 'anthropic', model: 'claude-sonnet-4-6', created_at: '2026-07-30T00:00:00Z' },
+          { id: 'anthropic-main', display_name: 'Anthropic', kind: 'anthropic', has_api_key: false },
         ],
       })
       .mockResolvedValueOnce({
         active_provider_id: 'openai-main',
         providers: [
-          { id: 'openai-main', label: 'OpenAI', provider_kind: 'openai', model: 'gpt-4o', created_at: '2026-07-30T00:00:00Z' },
+          { id: 'openai-main', display_name: 'OpenAI', kind: 'openai', has_api_key: false },
         ],
       })
 

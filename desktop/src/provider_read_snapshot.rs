@@ -89,9 +89,9 @@ impl ProviderReadSnapshot {
         self.providers.iter().find(|p| &p.id == id)
     }
 
-    /// Wire projection — generates the legacy `ProviderConnection` DTO in
-    /// exactly one place (ADR-0009 Decision 3: keep the wire type for now;
-    /// retire it in a separate phase gated by the `Welcome.tsx` rewrite).
+    /// Wire projection — generates the `ProviderConnection` DTO in exactly
+    /// one place (ADR-0009 Decision 3: the wire type mirrors `ProviderProfile`
+    /// + a derived `has_api_key`, minus the backend-only `credential` field).
     pub fn to_providers_file(&self) -> ProvidersFile {
         let providers: Vec<ProviderConnection> = self
             .providers
@@ -214,17 +214,18 @@ mod tests {
         assert_eq!(file.active_provider_id.as_deref(), Some("anthropic-main"));
         assert_eq!(file.providers.len(), 1);
         assert_eq!(file.providers[0].id, "anthropic-main");
-        // API key must never serialize onto the wire (A1).
-        assert_eq!(file.providers[0].api_key, None);
+        // TD-4: wire type has `has_api_key: bool` (no `api_key` field).
+        // Credential store is empty in this test → has_api_key is false.
+        assert!(!file.providers[0].has_api_key);
     }
 
     /// Row 5 (C3-b) — read-view parity. The desktop's
     /// `ProviderReadSnapshot::to_providers_file()` and the CLI's
     /// `ProviderConfigStore::config()` read the SAME store, so the desktop
     /// wire projection must faithfully reproduce the CLI's view: matching
-    /// active id, a 1:1 provider vec (id + base_url), and no api_key on the
-    /// wire. This is the ADR-0009 read-facade acceptance gate promoted to a
-    /// multi-provider cross-surface check (the single-provider shape is
+    /// active id, a 1:1 provider vec (id + base_url), and no raw secret on
+    /// the wire. This is the ADR-0009 read-facade acceptance gate promoted
+    /// to a multi-provider cross-surface check (the single-provider shape is
     /// pinned by `to_providers_file_round_trips_wire_shape` above).
     #[test]
     fn read_view_cli_vs_desktop_match() {
@@ -289,7 +290,8 @@ mod tests {
         );
 
         // Each desktop wire entry maps 1:1 to a CLI config provider by id,
-        // with matching base_url and no api_key serialised.
+        // with matching base_url. The wire type carries `has_api_key: bool`
+        // (TD-4); no raw key ever appears on the wire.
         for conn in &file.providers {
             let cli_p = cli_default
                 .providers
@@ -302,9 +304,11 @@ mod tests {
                 "base_url diverges for `{}`",
                 conn.id
             );
-            assert_eq!(
-                conn.api_key, None,
-                "api_key must never serialize onto the wire for `{}`",
+            // Wire JSON must not carry a raw api_key (TD-4: the field is gone).
+            let wire_json = serde_json::to_string(conn).unwrap();
+            assert!(
+                !wire_json.contains("sk-"),
+                "no secret-like value in wire JSON for `{}` (saw {wire_json})",
                 conn.id
             );
         }

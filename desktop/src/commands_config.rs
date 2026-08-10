@@ -37,7 +37,7 @@ fn default_base_url_for_kind(kind: &str) -> Option<&'static str> {
 fn connection_to_profile(
     conn: &ProviderConnection,
 ) -> shannon_types::provider_config::ProviderProfile {
-    let default = default_base_url_for_kind(&conn.provider_kind).unwrap_or("");
+    let default = default_base_url_for_kind(&conn.kind).unwrap_or("");
     conn.to_provider_profile(default)
 }
 
@@ -966,10 +966,10 @@ pub async fn test_all_providers(
     let mut tasks = Vec::with_capacity(connections.len());
     for conn in connections {
         let id = conn.id.clone();
-        let label = conn.label.clone();
-        let provider_kind_str = conn.provider_kind.clone();
+        let label = conn.display_name.clone();
+        let provider_kind_str = conn.kind.clone();
         let base_url = conn.base_url.clone();
-        let needs_key = match conn.provider_kind.as_str() {
+        let needs_key = match conn.kind.as_str() {
             // Mirror KIND_INFO's `needsKey`: only Ollama runs without a key.
             "ollama" => false,
             _ => true,
@@ -1128,8 +1128,8 @@ fn engine_kind_str(k: &shannon_types::provider_config::ProviderKind) -> String {
 pub struct ProviderInput {
     #[serde(default)]
     pub id: Option<String>,
-    pub label: String,
-    pub provider_kind: String,
+    pub display_name: String,
+    pub kind: String,
     #[serde(default)]
     pub api_key: Option<String>,
     #[serde(default)]
@@ -1197,18 +1197,6 @@ fn unique_provider_slug(label: &str, existing: &[ProviderConnection]) -> String 
     candidate
 }
 
-/// Return a copy of `file` with every provider's api_key masked to `"***"`
-/// (or left `None`). The UI uses presence to show a "key set" dot without ever
-/// receiving the raw secret.
-fn mask_providers(mut file: ProvidersFile) -> ProvidersFile {
-    for conn in &mut file.providers {
-        if conn.api_key.is_some() {
-            conn.api_key = Some("***".into());
-        }
-    }
-    file
-}
-
 fn emit_providers_changed(app_handle: &tauri::AppHandle, file: &ProvidersFile) {
     let _ = app_handle.emit(
         event_names::CONFIG_UPDATED,
@@ -1221,12 +1209,12 @@ fn emit_providers_changed(app_handle: &tauri::AppHandle, file: &ProvidersFile) {
 
 /// Apply a provider edit to an existing connection. The API key is preserved
 /// unless the caller supplied a fresh (non-empty, non-mask) value, so editing
-/// the label/model never blanks the stored secret.
+/// the display name never blanks the stored secret.
 /// Persist a new key into the credential store. Returns Ok when nothing
 /// needed to be stored (input key is `None`, empty, or the `"***"` mask).
-/// Key write failures surface to the caller; clearing `conn.api_key` only
-/// happens after a successful store so a partial write can never leave a
-/// provider without its key.
+/// Key write failures surface to the caller; the credential store is the
+/// single source of truth for keys — the wire type carries only
+/// `has_api_key: bool`.
 fn store_provider_key(
     conn_id: &str,
     conn_label: &str,
@@ -1248,18 +1236,9 @@ fn apply_provider_update(
     input: &ProviderInput,
     base_url: Option<String>,
 ) {
-    conn.label = input.label.clone();
-    conn.provider_kind = input.provider_kind.clone();
-    // The api_key plaintext path lives in the credential store now — see
-    // `save_provider`. Here we only clear when the caller explicitly
-    // requested removal (empty string), and never write the key itself.
-    if let Some(k) = input.api_key.as_deref() {
-        if k.is_empty() {
-            conn.api_key = None;
-        }
-    }
+    conn.display_name = input.display_name.clone();
+    conn.kind = input.kind.clone();
     conn.base_url = base_url;
-    conn.model = input.model.clone().filter(|s| !s.is_empty());
     // Phase 2 task 3 — v2 ProviderProfile fields. `None` means "don't
     // touch" so editing the label never blanks an existing setting.
     // `extra_headers` and `default_max_tokens` use `None` for "leave
@@ -1312,8 +1291,10 @@ fn remove_provider(mut file: ProvidersFile, id: &str) -> Result<ProvidersFile, S
 /// - Read or write `~/.shannon/desktop/providers.json` (the engine
 ///   store is the only authority; the legacy file is touched solely by
 ///   the one-shot startup migration, which lifts then deletes it).
-/// - Materialize a real api_key. The wire type's `api_key` is
-///   `skip_serializing`; `from_provider_profile` leaves it `None`.
+/// - Materialize a real api_key. The wire type's `has_api_key: bool`
+///   reports credential-store presence; the raw key never travels the
+///   bridge (`from_provider_profile` derives it from
+///   `credential_manager::read_credential_value_default`).
 ///
 /// Empty-store policy: an empty engine store returns an empty
 /// `ProvidersFile`. We do NOT attempt to re-migrate from the legacy
@@ -1379,11 +1360,21 @@ pub async fn save_provider(
     app_handle: tauri::AppHandle,
     input: ProviderInput,
 ) -> Result<ProvidersFile, String> {
-    if !is_known_kind(&input.provider_kind) {
-        return Err(format!("unknown provider kind: {}", input.provider_kind));
+    if !is_known_kind(&input.kind) {
+        return Err(format!("unknown provider kind: {}", input.kind));
     }
     let base_url = resolve_base_url(&input.base_url)?;
     let mut file = providers_file_from_state(&state).await;
+
+    // model_id cascade: compute once before the insert/update branch so
+    // both paths can hand it to `land_profile_in_engine_store`. The wire
+    // type no longer carries `model` (TD-4), so this is the single source
+    // of the user-supplied default model id for the engine landing.
+    let model_id = input
+        .model
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "default".to_string());
 
     let (target_id, target_label) = if let Some(id) = input.id.as_deref() {
         let conn = file
@@ -1392,19 +1383,15 @@ pub async fn save_provider(
             .find(|p| p.id == id)
             .ok_or_else(|| format!("provider not found: {id}"))?;
         apply_provider_update(conn, &input, base_url);
-        (conn.id.clone(), conn.label.clone())
+        (conn.id.clone(), conn.display_name.clone())
     } else {
-        let id = unique_provider_slug(&input.label, &file.providers);
+        let id = unique_provider_slug(&input.display_name, &file.providers);
         let conn = ProviderConnection {
             id: id.clone(),
-            label: input.label.clone(),
-            provider_kind: input.provider_kind.clone(),
-            // The plaintext key lives in the credential store, never in this
-            // struct. `store_provider_key` below writes it through the
-            // store. We deliberately leave the struct field `None` here.
-            api_key: None,
+            display_name: input.display_name.clone(),
+            kind: input.kind.clone(),
+            has_api_key: false,
             base_url,
-            model: input.model.filter(|s| !s.is_empty()),
             // Phase 2 task 3 — v2 ProviderProfile fields authored by
             // the Add Provider modal. On insert the client sends the
             // explicit value (or `None` for "unset") for all three;
@@ -1413,10 +1400,9 @@ pub async fn save_provider(
             extra_headers: input.extra_headers.clone().unwrap_or_default(),
             default_max_tokens: input.default_max_tokens.unwrap_or(None),
             tiers: input.tiers.clone().unwrap_or_default(),
-            created_at: chrono::Utc::now().to_rfc3339(),
             ..Default::default()
         };
-        let label = conn.label.clone();
+        let label = conn.display_name.clone();
         file.providers.push(conn);
         (id, label)
     };
@@ -1429,9 +1415,7 @@ pub async fn save_provider(
     store_provider_key(&target_id, &target_label, input.api_key.as_deref())?;
 
     // Land the connection in the engine's providers.toml so the runtime
-    // path reads the same shape as the UI. The model_id we hand the
-    // engine is the user-supplied default for this connection (or
-    // "default" when the user didn't pick one). For managed
+    // path reads the same shape as the UI. For managed
     // openai-compatible connections (glm / kimi / etc.) this uses the
     // desktop's slug ("glm") as the profile id, which `upsert_profile`
     // preserves verbatim — no OpenAI-collapse.
@@ -1441,14 +1425,10 @@ pub async fn save_provider(
         .find(|p| p.id == target_id)
         .expect("just inserted/updated")
         .clone();
-    let model_id = updated_conn
-        .model
-        .clone()
-        .unwrap_or_else(|| "default".to_string());
     land_profile_in_engine_store(&state, &updated_conn, &model_id).await?;
 
     emit_providers_changed(&app_handle, &file);
-    Ok(mask_providers(file))
+    Ok(file)
 }
 
 /// Delete a managed provider by id. Returns the updated (masked) file.
@@ -1465,7 +1445,7 @@ pub async fn delete_provider(
     let file = remove_provider(providers_file_from_state(&state).await, &id)?;
     remove_profile_from_engine_store(&state, &id).await?;
     emit_providers_changed(&app_handle, &file);
-    Ok(mask_providers(file))
+    Ok(file)
 }
 
 /// Activate a managed provider: lands the connection in the engine's
@@ -1494,8 +1474,7 @@ pub async fn set_active_provider(
         .ok_or_else(|| format!("provider not found: {id}"))?
         .clone();
 
-    let provider_kind = conn.provider_kind.clone();
-    let model = conn.model.clone();
+    let provider_kind = conn.kind.clone();
 
     // Land the activation in the engine's `~/.shannon/providers.toml`
     // *before* rebuilding the client config, because the
@@ -1505,7 +1484,12 @@ pub async fn set_active_provider(
     // openai-compatible slot (glm / kimi) keeps its desktop slug as
     // the profile id and does not collapse onto the engine's single
     // "openai" slot.
-    let model_id = model.clone().unwrap_or_else(|| "default".to_string());
+    //
+    // TD-4: the wire type no longer carries `model`; the engine store
+    // preserves the existing `active_target.model_id` across the
+    // upsert. Pass "default" so a fresh activation still has a
+    // resolvable model id.
+    let model_id = "default".to_string();
     land_profile_in_engine_store(&state, &conn, &model_id).await?;
 
     // The runtime client config reads from the engine store (now
@@ -1655,12 +1639,10 @@ mod tests {
     fn unique_provider_slug_appends_suffix_on_collision() {
         let existing = vec![ProviderConnection {
             id: "glm".into(),
-            label: "GLM".into(),
-            provider_kind: "openai-compatible".into(),
-            api_key: None,
+            display_name: "GLM".into(),
+            kind: "openai-compatible".into(),
+            has_api_key: false,
             base_url: None,
-            model: None,
-            created_at: "2026-06-27T00:00:00Z".into(),
             ..Default::default()
         }];
         // "glm" already exists → first collision gets "-2".
@@ -1670,42 +1652,10 @@ mod tests {
     }
 
     #[test]
-    fn mask_providers_replaces_keys_but_keeps_absence() {
-        let file = ProvidersFile {
-            active_provider_id: Some("a".into()),
-            providers: vec![
-                ProviderConnection {
-                    id: "a".into(),
-                    label: "A".into(),
-                    provider_kind: "anthropic".into(),
-                    api_key: Some("sk-secret".into()),
-                    base_url: None,
-                    model: None,
-                    created_at: "2026-06-27T00:00:00Z".into(),
-                    ..Default::default()
-                },
-                ProviderConnection {
-                    id: "b".into(),
-                    label: "B".into(),
-                    provider_kind: "ollama".into(),
-                    api_key: None,
-                    base_url: None,
-                    model: None,
-                    created_at: "2026-06-27T00:00:00Z".into(),
-                    ..Default::default()
-                },
-            ],
-        };
-        let masked = mask_providers(file);
-        assert_eq!(masked.providers[0].api_key.as_deref(), Some("***"));
-        assert!(masked.providers[1].api_key.is_none());
-    }
-
-    #[test]
     fn provider_input_deserializes_without_optional_fields() {
-        let json = r#"{"label":"GLM","provider_kind":"openai-compatible"}"#;
+        let json = r#"{"display_name":"GLM","kind":"openai-compatible"}"#;
         let input: ProviderInput = serde_json::from_str(json).unwrap();
-        assert_eq!(input.label, "GLM");
+        assert_eq!(input.display_name, "GLM");
         assert!(input.id.is_none());
         assert!(input.api_key.is_none());
         assert!(input.base_url.is_none());
@@ -1721,26 +1671,24 @@ mod tests {
         // is retained so existing call sites continue to compile.
         ProviderConnection {
             id: id.into(),
-            label: id.into(),
-            provider_kind: kind.into(),
-            api_key: None,
+            display_name: id.into(),
+            kind: kind.into(),
+            has_api_key: false,
             base_url: None,
-            model: None,
-            created_at: "2026-06-28T00:00:00Z".into(),
             ..Default::default()
         }
     }
 
     fn provider_input(
         id: Option<&str>,
-        label: &str,
+        display_name: &str,
         kind: &str,
         key: Option<&str>,
     ) -> ProviderInput {
         ProviderInput {
             id: id.map(str::to_string),
-            label: label.into(),
-            provider_kind: kind.into(),
+            display_name: display_name.into(),
+            kind: kind.into(),
             api_key: key.map(str::to_string),
             base_url: None,
             model: None,
@@ -1754,11 +1702,12 @@ mod tests {
     }
 
     #[test]
-    fn apply_provider_update_never_touches_plaintext_key_field() {
-        // ADR-0005 Phase 2: `apply_provider_update` no longer mutates
-        // `conn.api_key`. Plaintext keys live in the credential store, so the
-        // metadata-only update is responsible for everything except the key
-        // (which `store_provider_key` writes separately from the caller).
+    fn apply_provider_update_never_touches_credential_store() {
+        // TD-4: `apply_provider_update` is metadata-only — it never touches
+        // the credential store. The wire type has no `api_key` field at all;
+        // `has_api_key` is derived from the credential store by
+        // `from_provider_profile` and is NOT updated here (the caller's
+        // `store_provider_key` write is what flips credential-store presence).
         let mut conn = sample_conn("anthropic", "anthropic", Some("sk-real"));
 
         for key in [Some("***"), None, Some(""), Some("sk-new")] {
@@ -1768,22 +1717,22 @@ mod tests {
                 None,
             );
             assert!(
-                conn.api_key.is_none(),
-                "apply_provider_update must never set api_key (saw key={:?})",
+                !conn.has_api_key,
+                "apply_provider_update must never set has_api_key (saw key={:?})",
                 key
             );
         }
-        // The label still updates regardless of key handling.
-        assert_eq!(conn.label, "Anthropic");
+        // The display name still updates regardless of key handling.
+        assert_eq!(conn.display_name, "Anthropic");
     }
 
     #[test]
-    fn apply_provider_update_sets_base_url_and_blanks_empty_model() {
+    fn apply_provider_update_sets_base_url_and_display_name() {
         let mut conn = sample_conn("glm", "openai-compatible", Some("k"));
         let input = ProviderInput {
             id: Some("glm".into()),
-            label: "My GLM".into(),
-            provider_kind: "openai-compatible".into(),
+            display_name: "My GLM".into(),
+            kind: "openai-compatible".into(),
             api_key: Some("***".into()),
             base_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
             model: Some("".into()), // empty => cleared
@@ -1800,7 +1749,7 @@ mod tests {
             conn.base_url.as_deref(),
             Some("https://open.bigmodel.cn/api/paas/v4")
         );
-        assert!(conn.model.is_none());
+        assert_eq!(conn.display_name, "My GLM");
     }
 
     /// Phase 2 task 3 — the desktop Add Provider modal authors
@@ -1815,8 +1764,8 @@ mod tests {
         headers.insert("X-Custom".to_string(), "yes".to_string());
         let input = ProviderInput {
             id: Some("anthropic".into()),
-            label: "Anthropic".into(),
-            provider_kind: "anthropic".into(),
+            display_name: "Anthropic".into(),
+            kind: "anthropic".into(),
             api_key: Some("***".into()),
             base_url: None,
             model: None,
@@ -1838,7 +1787,7 @@ mod tests {
 
     #[test]
     fn apply_provider_update_leaves_v2_profile_fields_untouched_when_none() {
-        // Editing the label must not blank out an existing
+        // Editing the display name must not blank out an existing
         // `default_max_tokens` override the user previously set.
         let mut conn = sample_conn("anthropic", "anthropic", Some("k"));
         conn.extra_headers.insert("X-Existing".into(), "yes".into());
@@ -1847,8 +1796,8 @@ mod tests {
 
         let input = ProviderInput {
             id: Some("anthropic".into()),
-            label: "Renamed".into(),
-            provider_kind: "anthropic".into(),
+            display_name: "Renamed".into(),
+            kind: "anthropic".into(),
             api_key: Some("***".into()),
             base_url: None,
             model: None,
@@ -1857,7 +1806,7 @@ mod tests {
             tiers: None,
         };
         apply_provider_update(&mut conn, &input, None);
-        assert_eq!(conn.label, "Renamed");
+        assert_eq!(conn.display_name, "Renamed");
         assert_eq!(
             conn.extra_headers.get("X-Existing").map(String::as_str),
             Some("yes"),
@@ -1877,8 +1826,8 @@ mod tests {
 
         let input = ProviderInput {
             id: Some("anthropic".into()),
-            label: "Anthropic".into(),
-            provider_kind: "anthropic".into(),
+            display_name: "Anthropic".into(),
+            kind: "anthropic".into(),
             api_key: Some("***".into()),
             base_url: None,
             model: None,
@@ -1976,12 +1925,10 @@ mod tests {
         // compatible case), the default-base-url fallback is not used.
         let conn = ProviderConnection {
             id: "kimi".into(),
-            label: "Kimi".into(),
-            provider_kind: "openai-compatible".into(),
-            api_key: None,
+            display_name: "Kimi".into(),
+            kind: "openai-compatible".into(),
+            has_api_key: false,
             base_url: Some("https://api.moonshot.cn/v1".into()),
-            model: Some("moonshot-v1-128k".into()),
-            created_at: "2026-07-30T00:00:00Z".into(),
             ..Default::default()
         };
         let profile = connection_to_profile(&conn);
@@ -2001,12 +1948,10 @@ mod tests {
         // Anthropic without an explicit base_url → engine default.
         let conn = ProviderConnection {
             id: "anthropic-main".into(),
-            label: "Anthropic".into(),
-            provider_kind: "anthropic".into(),
-            api_key: None,
+            display_name: "Anthropic".into(),
+            kind: "anthropic".into(),
+            has_api_key: false,
             base_url: None,
-            model: None,
-            created_at: "2026-07-30T00:00:00Z".into(),
             ..Default::default()
         };
         let profile = connection_to_profile(&conn);
@@ -2077,8 +2022,8 @@ mod tests {
         assert_eq!(file.providers.len(), 1);
         let conn = &file.providers[0];
         assert_eq!(conn.id, "anthropic-main");
-        assert_eq!(conn.label, "anthropic-main label");
-        assert_eq!(conn.provider_kind, "anthropic");
+        assert_eq!(conn.display_name, "anthropic-main label");
+        assert_eq!(conn.kind, "anthropic");
         assert_eq!(conn.base_url.as_deref(), Some("https://api.anthropic.com"));
         // Active target follows the last upsert.
         assert_eq!(file.active_provider_id.as_deref(), Some("anthropic-main"));
@@ -2122,12 +2067,10 @@ mod tests {
     }
 
     #[test]
-    fn list_providers_does_not_serialize_api_key() {
-        // A1: the wire type's `api_key` is `skip_serializing`. The
-        // pure helper always sets it to None — even if an engine
-        // profile could theoretically carry one, we never propagate
-        // it. The masked JSON string must contain no "api_key" / no
-        // secret-looking value.
+    fn list_providers_wire_json_has_has_api_key_not_dead_fields() {
+        // TD-4: the wire JSON must contain `has_api_key` and must NOT
+        // contain `api_key`/`model`/`created_at`/`label`/`provider_kind`
+        // (all removed/renamed). No secret-like value may appear.
         let mut store = shannon_core::provider_config_store::ProviderConfigStore::default();
         upsert_test_profile(
             &mut store,
@@ -2138,12 +2081,30 @@ mod tests {
         );
 
         let file = ProviderReadSnapshot::from_store(&store).to_providers_file();
-        assert!(file.providers[0].api_key.is_none());
-
         let json = serde_json::to_string(&file).expect("wire file serializes");
         assert!(
-            !json.contains("api_key"),
-            "api_key must not appear in wire JSON (saw {json})"
+            json.contains("\"has_api_key\""),
+            "has_api_key missing (saw {json})"
+        );
+        assert!(
+            !json.contains("\"api_key\""),
+            "api_key field in wire JSON (saw {json})"
+        );
+        assert!(
+            !json.contains("\"model\""),
+            "model field in wire JSON (saw {json})"
+        );
+        assert!(
+            !json.contains("\"created_at\""),
+            "created_at field in wire JSON (saw {json})"
+        );
+        assert!(
+            !json.contains("\"label\""),
+            "label field in wire JSON (saw {json})"
+        );
+        assert!(
+            !json.contains("\"provider_kind\""),
+            "provider_kind field in wire JSON (saw {json})"
         );
         assert!(
             !json.contains("sk-"),
