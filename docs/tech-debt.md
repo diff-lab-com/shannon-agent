@@ -48,16 +48,16 @@
 
 ## TD-2 · `pre_resolve_context` 签名债(返回 `()` 非 `Result`)
 
-**Status**: ⏸️ **deferred**(ADR-0008 P2-6,登记 2026-08-08)
+**Status**: ⏸️ **deferred**(ADR-0008 P2-6,登记 2026-08-08;2026-08-10 复审维持)
 
 **当前状态**:
-- `crates/shannon-core/src/query_engine/engine.rs:422` 的 `pub async fn pre_resolve_context(&mut self)` 返回 `()`,内部用 `catch_unwind` 兜底,错误靠日志而非 `Result` 传播。
-- ADR-0008 已识别为 deferred;与 P2-6(catch_unwind 日志)关联。
+- `crates/shannon-core/src/query_engine/engine.rs:420` 的 `pub async fn pre_resolve_context(&mut self)` 返回 `()`。**2026-08-10 复审核实**:实际实现是 Ollama-only 的 `check_ollama_capabilities().await` → `Option`,`if let Some` 命中才更新 `effective_max_context_tokens`,None 静默跳过 —— **无 `catch_unwind`、无 error 路径**(原登记描述"catch_unwind 兜底,错误靠日志"不准确,已修正)。
+- ADR-0008 已识别为 deferred。
 
-**为什么不修**:签名改动会牵动所有调用点,属于"正确但昂贵"的重构;当前 fail-soft 行为可接受。
+**为什么不修**:函数无失败路径,强改 `Result` 会是恒定 `Ok(())`;签名改动还牵动 3 个 `block_on` 调用点。"有信息就更新、没有就跳过"是设计意图,非 fail-soft 缺陷。
 
 **触发条件**(任一即应还清):
-1. 出现因 `pre_resolve_context` 静默吞错导致的真实 bug;
+1. 出现因 `pre_resolve_context` 静默吞错导致的真实 bug(经核实当前无 error 路径,短期内不适用);
 2. 启动一轮 query engine 错误处理统一化(panic vs `Result` 收口)。
 
 **预估成本**:1–2d(签名 + 全调用点 + 测试调整)。
@@ -101,17 +101,18 @@
 
 ## TD-5 · auto-commit hook 拆分多文件提交(UX 债)
 
-**Status**: ⏸️ **known,暂不改**(登记 2026-08-08)
+**Status**: ⏸️ **known,暂不改**(登记 2026-08-08;2026-08-10 复审维持)
 
 **当前状态**:
 - PostToolUse hook 在每次 Edit/Write 后触发,把多文件重构拆成多个泛化 commit;多文件 PR 需手动 `git reset --soft HEAD~N && git commit` 合并。
+- **2026-08-10 复审澄清**:这是**开发工具链 hook**(用 Claude Code/OMC 开发 Shannon 时的 auto-commit),**非 Shannon 产品债** —— 不进 Shannon 代码库。W6-2 P2-6(PR #52,产品 file-history/`/rewind`)与 `AutoCommitTool`(Shannon agent 工具)均不解决本项。
 
-**为什么不修**:hook 对单文件编辑体验是正向的;关掉会损失自动提交便利。这是工作流偏好,非 bug。
+**为什么不修**:hook 对单文件编辑体验是正向的;关掉会损失自动提交便利。这是工作流偏好,非 bug;解法在开发工具链(OMC hook 配置批量窗口 / `--squash`),不在 Shannon 仓库。
 
 **触发条件**:
-1. P2-6(auto-commit + Undo)启动时一并设计 `--squash` / 批量提交选项;
+1. P2-6(auto-commit + Undo)启动时一并设计 `--squash` / 批量提交选项(注:P2-6 已 done,指产品侧,未触及本开发体验项);
 2. 贡献者普遍反馈合并成本过高。
 
-**预估成本**:0.5–1d(hook 加批量窗口或 `--squash` flag,见 Wave 6 P2-6 规划)。
+**预估成本**:0.5–1d(开发工具链 hook 改造,非 Shannon 代码)。
 
 **Owner**:TBD。**参考**:memory `auto-commit-hook-splits-edits`。
