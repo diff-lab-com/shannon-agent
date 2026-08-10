@@ -4,6 +4,10 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased]
 
+_No entries yet._
+
+## v0.9.0 (2026-08-10) — file-history snapshots + unified `/rewind`, provider read facade + wire alignment
+
 ### Added
 
 - First-screen status card showing active provider/model/tier plus available providers and models
@@ -28,6 +32,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 - Config files (`config.toml`, `.shannon.toml`, `providers.toml`) now resolve `{env:VAR}`, `{env:VAR:-default}`, and `{file:/abs/path}` / `{file:~/.shannon/x}` tokens in every string field. Single-pass so `{env:X}` whose value is `{env:Y}` stays literal (no recursive injection); `file:` paths must be absolute or `~/.shannon/`-rooted and may not contain `..`. Lets users reference secrets without inlining them, strengthening A1.
 - **Provider store unification (Phase 2 task 4).** Desktop-managed provider connections (Add Provider modal → `~/.shannon/desktop/providers.json`) now round-trip through the engine's `~/.shannon/providers.toml` via `ProviderConfigStore::upsert_profile / remove_profile`. A process-level `Mutex<ProviderConfigStore>` on `AppState` serializes the read-modify-write so concurrent `save_provider` / `set_active_provider` / `delete_provider` calls can't clobber each other. On first launch, a one-shot migration lifts any existing `providers.json` entries into the engine store and removes the legacy file. Two distinct `openai-compatible` connections (e.g. GLM + Kimi) now keep their desktop slugs as the engine profile id, fixing the OpenAI-collapse that the `set_active(&LlmProvider, ...)` path caused. `ProviderConnection` gains the v2 `ProviderProfile` fields (`models_url`, `extra_headers`, `default_max_tokens`, `fallback_models`, `quirks`, `tiers`) so the desktop's UI surface matches the engine schema; the engine's runtime path still only consumes `extra_headers` + `default_max_tokens` end-to-end.
 - **Stopped per-edit git auto-commit.** Shannon no longer creates a git checkpoint after every Edit/Write/Bash tool call; the REPL-side `CheckpointManager` git machinery (`create_checkpoint` / `revert_to` / `undo_last` / `preview_revert`) is removed. `/rewind code|both <n>` reverts through on-disk content snapshots instead of `git reset`, so it works in non-git directories and never rewrites git history.
+- **ProviderConnection wire alignment (TD-4, ADR-0009 Phase 2).** The desktop's `ProviderConnection` DTO now mirrors the engine's `ProviderProfile` schema (`label`→`display_name`, `provider_kind`→`kind` kept as a String slug; dropped dead `api_key`/`model`/`created_at`; added `has_api_key: bool` derived from the credential store — fixes a pre-existing dead signal where the UI's "has key" indicator was always false since Phase 1). Legacy `providers.json` reads preserved via separate `LegacyProviderConnection`/`LegacyProvidersFile` structs for the one-shot migration.
 
 ### Fixed
 
