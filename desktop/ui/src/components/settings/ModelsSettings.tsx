@@ -409,23 +409,24 @@ function ProvidersSection({
   const handleTest = async (conn: ProviderConnection) => {
     // Only the active provider's key is mirrored into config; for a connection
     // we can only test when a key is set on it. Ollama needs no key.
-    const info = KIND_INFO[conn.provider_kind]
-    if (info?.needsKey && !conn.api_key) {
-      toast.error(intl.formatMessage({ id: 'settings.models.providers.needKey' }, { label: conn.label }))
+    const info = KIND_INFO[conn.kind]
+    if (info?.needsKey && !conn.has_api_key) {
+      toast.error(intl.formatMessage({ id: 'settings.models.providers.needKey' }, { label: conn.display_name }))
       return
     }
     setTestingId(conn.id)
     try {
-      // Use the masked "***" sentinel only when it's the only thing available —
-      // the backend can't test against a masked value, so for non-active
-      // connections without a fresh key we ask the user to re-enter it.
-      const apiKey = conn.api_key && conn.api_key !== '***' ? conn.api_key : ''
-      if (info?.needsKey && !apiKey) {
-        toast.error(intl.formatMessage({ id: 'settings.models.providers.reenterKey' }, { label: conn.label }))
+      // TD-4: the wire type no longer carries the raw api_key — only
+      // `has_api_key: bool`. The backend reads the key from the credential
+      // store; pass an empty string so the prompt-for-key flow triggers
+      // when no key is resolvable.
+      const apiKey = ''
+      if (info?.needsKey && !conn.has_api_key) {
+        toast.error(intl.formatMessage({ id: 'settings.models.providers.reenterKey' }, { label: conn.display_name }))
         return
       }
-      const result = await api.testProviderConnection(conn.provider_kind, apiKey, conn.base_url ?? undefined)
-      toastTestResult(intl, result, conn.provider_kind)
+      const result = await api.testProviderConnection(conn.kind, apiKey, conn.base_url ?? undefined)
+      toastTestResult(intl, result, conn.kind)
     } catch (e) {
       toastError(t('settings.models.testResult.failed'), e)
     } finally {
@@ -441,7 +442,7 @@ function ProvidersSection({
       const fresh = await api.listProviders()
       onChange(fresh)
       await onActivated()
-      toast.success(intl.formatMessage({ id: 'settings.models.providers.activated' }, { label: conn.label }))
+      toast.success(intl.formatMessage({ id: 'settings.models.providers.activated' }, { label: conn.display_name }))
     } catch (e) {
       toastError(t('settings.models.providers.activateFailed'), e)
     } finally {
@@ -458,7 +459,7 @@ function ProvidersSection({
     try {
       const fresh = await api.deleteProvider(conn.id)
       onChange(fresh)
-      toast.success(intl.formatMessage({ id: 'settings.models.providers.deleted' }, { label: conn.label }))
+      toast.success(intl.formatMessage({ id: 'settings.models.providers.deleted' }, { label: conn.display_name }))
     } catch (e) {
       toastError(t('settings.models.providers.deleteFailed'), e)
     }
@@ -532,8 +533,8 @@ function ProvidersSection({
         <div className="grid grid-cols-1 gap-sm">
           {providersFile.providers.map(conn => {
             const isActive = providersFile.active_provider_id === conn.id
-            const hasKey = !!conn.api_key
-            const info = KIND_INFO[conn.provider_kind]
+            const hasKey = conn.has_api_key
+            const info = KIND_INFO[conn.kind]
             return (
               <div
                 key={conn.id}
@@ -547,18 +548,15 @@ function ProvidersSection({
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-xs">
-                      <span className="font-label-md font-bold text-on-surface truncate">{conn.label}</span>
+                      <span className="font-label-md font-bold text-on-surface truncate">{conn.display_name}</span>
                       {isActive ? (
                         <span className="px-xs py-[1px] bg-primary text-on-primary rounded text-[10px] font-bold shrink-0">{t('settings.models.providers.activeBadge')}</span>
                       ) : null}
                     </div>
                     <div className="flex items-center gap-xs flex-wrap">
-                      <span className="font-label-xs text-[11px] text-on-surface-variant">{kindLabel(intl, conn.provider_kind)}</span>
+                      <span className="font-label-xs text-[11px] text-on-surface-variant">{kindLabel(intl, conn.kind)}</span>
                       {conn.base_url ? (
                         <span className="font-label-xs text-[11px] text-on-surface-variant font-mono truncate max-w-[260px]" title={conn.base_url ?? undefined}>{conn.base_url}</span>
-                      ) : null}
-                      {conn.model ? (
-                        <span className="font-label-xs text-[11px] text-on-surface-variant font-mono">{conn.model}</span>
                       ) : null}
                       <span
                         className={`inline-flex items-center gap-[2px] font-label-xs text-[10px] ${hasKey ? 'text-primary' : 'text-on-surface-variant opacity-60'}`}
@@ -624,7 +622,7 @@ function ProvidersSection({
           open
           destructive
           title={t('settings.models.providers.deleteConfirmTitle')}
-          message={intl.formatMessage({ id: 'settings.models.providers.confirmDelete' }, { label: deleteTarget.label })}
+          message={intl.formatMessage({ id: 'settings.models.providers.confirmDelete' }, { label: deleteTarget.display_name })}
           confirmLabel={t('settings.models.providers.delete')}
           cancelLabel={t('settings.models.providers.cancel')}
           onConfirm={confirmDeleteProvider}

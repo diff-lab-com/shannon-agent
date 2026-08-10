@@ -212,7 +212,7 @@ export default function Welcome() {
       // Mirror the active kind back into local state for the Done summary.
       const active = f.providers.find(p => p.id === targetId)
       if (active) {
-        setProvider(active.provider_kind)
+        setProvider(active.kind)
       }
       // Pre-check tools recommended for this task so the user can opt in/out.
       const initial: Record<string, boolean> = {}

@@ -256,13 +256,12 @@ export type ProviderKind =
 
 export interface ProviderConnection {
   id: string
-  label: string
-  provider_kind: ProviderKind | string
-  /// Masked to '***' by the backend in list responses when a key is set.
-  api_key?: string | null
+  display_name: string
+  kind: ProviderKind | string
+  /// True when the credential store has a key for this id. Replaces the
+  /// dead `api_key` field (TD-4).
+  has_api_key: boolean
   base_url?: string | null
-  model?: string | null
-  created_at: string
   /// v2 ProviderProfile fields surfaced in Phase 2 task 3. The backend
   /// deserializes them into `providers.json` + engine's `providers.toml`
   /// (see `desktop/src/commands_config.rs::apply_provider_update`).
@@ -311,8 +310,8 @@ export interface ProvidersFile {
 /// unset.
 export interface ProviderInput {
   id?: string
-  label: string
-  provider_kind: ProviderKind | string
+  display_name: string
+  kind: ProviderKind | string
   api_key?: string
   base_url?: string
   model?: string

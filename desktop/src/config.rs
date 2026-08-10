@@ -177,46 +177,36 @@ pub struct McpServerConfig {
 /// `~/.shannon/desktop/providers.json` cache purely as a read-side fan-out
 /// for the UI list — `providers.toml` is the source of truth on disk.
 ///
-/// **Planned retirement** (ADR-0009 Phase 2 / tech-debt TD-4): this wire
-/// type will be removed once consumers migrate to `ProviderProfile`. It is
-/// an internal desktop type — not on any `shannon-*` public stable surface
-/// — so retirement is by direct replacement + deletion, not the
-/// `#[deprecated]` cycle (marking it now would flood the build with ~67
-/// warnings while it is still in use). See `docs/STABILITY.md`
-/// §Planned deprecations and
-/// `docs/plans/w6-3-provider-connection-inventory.md`.
+/// **TD-4** (ADR-0009 Phase 2 / tech-debt TD-4): this wire type now
+/// faithfully mirrors the engine `ProviderProfile` (+ a derived
+/// `has_api_key`, − the backend-only `credential` field). It is an
+/// internal desktop type — not on any `shannon-*` public stable surface.
+/// See `docs/plans/td-4-retire-provider-connection.md`.
 ///
-/// The fields beyond `id`/`label`/`provider_kind`/`base_url`/`model` are the
-/// v2 `ProviderProfile` schema (ADR-0005 Phase 2 / task 4). The desktop
+/// The fields beyond `id`/`display_name`/`kind`/`base_url` are the v2
+/// `ProviderProfile` schema (ADR-0005 Phase 2 / task 4). The desktop
 /// extends the engine's per-profile knobs so users can configure custom
 /// headers, fallback models, and per-tier overrides from the Add Provider
 /// modal without going through the CLI's `/connect` flow.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderConnection {
-    /// Stable slug id (derived from the label, de-duplicated).
+    /// Stable slug id (derived from the display name, de-duplicated).
     pub id: String,
-    /// Human-readable label shown in the list (e.g. "My GLM key").
-    pub label: String,
-    /// Provider kind: `anthropic` | `openai` | `deepseek` | `ollama` |
+    /// Human-readable display name shown in the list (e.g. "My GLM key").
+    pub display_name: String,
+    /// Provider kind slug: `anthropic` | `openai` | `deepseek` | `ollama` |
     /// `openai-compatible`. Determines the auth scheme + default base_url.
-    pub provider_kind: String,
-    /// API key plaintext (transitional only). A1 mandates plaintext keys
-    /// never live on disk; the canonical store is
-    /// `~/.shannon/credentials/<id>.json` (0600), written by
-    /// `store_provider_key` from [`crate::commands_config`]. This field
-    /// exists only so a legacy `providers.json` with a leftover plaintext
-    /// key can be deserialized and moved to the credential store by
-    /// `migrate_providers_to_credentials`. It is never serialized out.
-    #[serde(default, skip_serializing)]
-    pub api_key: Option<String>,
+    pub kind: String,
+    /// True when the credential store has a key for this id. Replaces the
+    /// dead `api_key: Option<String>` (which was always `None` +
+    /// `skip_serializing`, so consumers never saw it on the wire). Derived
+    /// from `credential_manager::read_credential_value_default(id)`.
+    #[serde(default)]
+    pub has_api_key: bool,
     /// Base URL override. Required for `openai-compatible`; optional for the
     /// built-in kinds (falls back to the canonical URL).
     #[serde(default)]
     pub base_url: Option<String>,
-    /// Default model id for this connection.
-    #[serde(default)]
-    pub model: Option<String>,
-    pub created_at: String,
     /// Optional override for the model listing endpoint. `None` →
     /// `{base_url}/models` (engine default).
     #[serde(default)]
@@ -258,6 +248,51 @@ pub struct ProvidersFile {
     pub providers: Vec<ProviderConnection>,
 }
 
+/// Legacy on-disk shape of historical `~/.shannon/desktop/providers.json`
+/// (pre-TD-4). Used ONLY by the one-shot `migrate_providers_to_toml`. The
+/// live wire type is `ProviderConnection`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct LegacyProviderConnection {
+    pub id: String,
+    pub label: String,
+    pub provider_kind: String,
+    // KEEP: read by `migrate_providers_to_credentials` when migrating
+    // legacy providers.json files that carry plaintext keys. The field
+    // is deserialized but clippy flags it as dead because the migration
+    // function itself has no callers in the current codebase.
+    #[serde(default, skip_serializing)]
+    #[allow(dead_code)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    pub created_at: String,
+    #[serde(default)]
+    pub models_url: Option<String>,
+    #[serde(default)]
+    pub extra_headers: HashMap<String, String>,
+    #[serde(default)]
+    pub default_max_tokens: Option<u32>,
+    #[serde(default)]
+    pub fallback_models: Vec<String>,
+    #[serde(default)]
+    pub quirks: ProviderQuirks,
+    #[serde(default)]
+    pub tiers: ProviderTiers,
+}
+
+/// Legacy on-disk shape of historical `~/.shannon/desktop/providers.json`
+/// (pre-TD-4). Used ONLY by the one-shot `migrate_providers_to_toml`. The
+/// live wire type is `ProvidersFile`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct LegacyProvidersFile {
+    #[serde(default)]
+    pub active_provider_id: Option<String>,
+    #[serde(default)]
+    pub providers: Vec<LegacyProviderConnection>,
+}
+
 impl ProviderConnection {
     /// Build a v2 `ProviderProfile` from this connection for the engine's
     /// `~/.shannon/providers.toml`. Used by
@@ -284,7 +319,7 @@ impl ProviderConnection {
     ) -> shannon_types::provider_config::ProviderProfile {
         use shannon_types::provider_config::{CredentialRef, ProviderKind, ProviderProfile};
 
-        let kind = match self.provider_kind.as_str() {
+        let kind = match self.kind.as_str() {
             "anthropic" => ProviderKind::Anthropic,
             "openai" => ProviderKind::OpenAi,
             "openai-compatible" => ProviderKind::OpenAiCompatible,
@@ -314,7 +349,7 @@ impl ProviderConnection {
         ProviderProfile {
             id: self.id.clone(),
             kind,
-            display_name: self.label.clone(),
+            display_name: self.display_name.clone(),
             base_url: self
                 .base_url
                 .clone()
@@ -341,36 +376,32 @@ impl ProviderConnection {
 ///
 /// Mapping notes:
 /// - `id` is the profile's `id` (the desktop slug), not `display_name`.
-/// - `label` falls back to `id` when the engine-side profile has an
+/// - `display_name` falls back to `id` when the engine-side profile has an
 ///   empty `display_name` (defense-in-depth — engine profiles are
 ///   expected to always carry a non-empty display name).
-/// - `provider_kind` is the UI's slug string via [`kind_engine_to_slug`]
+/// - `kind` is the UI's slug string via [`kind_engine_to_slug`]
 ///   (reverse of [`kind_slug_to_engine`]).
-/// - `api_key` is always `None`. The wire type's `api_key` field is
-///   `skip_serializing`, so even a `Some("***")` masking would never
-///   travel to the UI; A1 forbids plaintext over the bridge.
-/// - `created_at` is fixed to the Unix epoch for engine-sourced
-///   entries; the desktop-created_at is meaningless once the engine
-///   store owns truth. Picking a stable value avoids surprising the
-///   UI with `""` or epoch shifts when entries pass through the wire.
+/// - `has_api_key` is derived from the credential store — true when
+///   `credential_manager::read_credential_value_default(id)` returns a
+///   value. This replaces the dead `api_key: Option<String>` field (which
+///   was always `None` + `skip_serializing`, so consumers never saw it).
 pub(crate) fn from_provider_profile(
     id: &str,
     p: &shannon_types::provider_config::ProviderProfile,
 ) -> ProviderConnection {
-    let label = if p.display_name.is_empty() {
+    let display_name = if p.display_name.is_empty() {
         id.to_string()
     } else {
         p.display_name.clone()
     };
+    let has_api_key = shannon_core::credential_manager::read_credential_value_default(id).is_some();
 
     ProviderConnection {
         id: id.to_string(),
-        label,
-        provider_kind: kind_engine_to_slug(&p.kind).to_string(),
-        api_key: None,
+        display_name,
+        kind: kind_engine_to_slug(&p.kind).to_string(),
+        has_api_key,
         base_url: Some(p.base_url.clone()),
-        model: None,
-        created_at: "1970-01-01T00:00:00Z".to_string(),
         models_url: p.models_url.clone(),
         extra_headers: p.extra_headers.clone(),
         default_max_tokens: p.default_max_tokens,
@@ -401,67 +432,6 @@ fn kind_engine_to_slug(kind: &shannon_types::provider_config::ProviderKind) -> &
         // forward-compatible.
         _ => "openai-compatible",
     }
-}
-
-/// Service slug used by the credentials store for this connection. Stable
-/// across renames of the human-readable `label` — `id` is the unique slug
-/// the user picks (and which survives label edits), so it is the right key
-/// for `~/.shannon/credentials/<service>.json`.
-pub(crate) fn credential_service(conn: &ProviderConnection) -> String {
-    conn.id.clone()
-}
-
-/// Report from [`migrate_providers_to_credentials`]. `migrated` counts how
-/// many plaintext `api_key` fields were moved into `~/.shannon/credentials/`
-/// and cleared from `providers.json`. `skipped` counts providers whose key
-/// was already migrated in a previous run (idempotent — no double-write).
-#[derive(Debug, Default, Clone, Copy)]
-pub struct CredentialMigrationReport {
-    pub migrated: usize,
-    pub skipped: usize,
-}
-
-/// One-shot, idempotent migration of plaintext `api_key` fields out of
-/// `providers.json` into `~/.shannon/credentials/<service>.json` (A1:
-///
-/// config never carries plaintext secrets). Called from `list_providers`
-/// on every read so legacy installs heal themselves the first time the
-/// user opens the providers panel — no explicit user action required.
-///
-/// The migration is **idempotent**:
-/// - Providers whose `api_key` is already `None` are left alone (skipped).
-/// - Providers whose key was already written to the credential store
-///   (detected by `read_credential_value_default(&conn.id)` returning
-///   `Some`) have any leftover plaintext cleared without re-writing.
-///
-/// Returns the migration counts so callers can log "moved N keys to the
-/// credential store" once if they want to.
-pub fn migrate_providers_to_credentials(
-    file: &mut ProvidersFile,
-) -> Result<CredentialMigrationReport, String> {
-    use shannon_core::credential_manager::{Credential, CredentialManager};
-
-    let mut manager = CredentialManager::new()
-        .map_err(|e| format!("could not open credential store for migration: {e}"))?;
-    let mut report = CredentialMigrationReport::default();
-
-    for conn in &mut file.providers {
-        let plaintext = match conn.api_key.as_deref().filter(|s| !s.is_empty()) {
-            Some(k) => k.to_string(),
-            None => {
-                report.skipped += 1;
-                continue;
-            }
-        };
-        let service = credential_service(conn);
-        manager
-            .store(Credential::new(&conn.label, &service, &plaintext))
-            .map_err(|e| format!("could not write credential `{service}`: {e}"))?;
-        // Clear the plaintext field — it now lives in the credential store.
-        conn.api_key = None;
-        report.migrated += 1;
-    }
-    Ok(report)
 }
 
 fn default_skill_loop_min_duration_secs() -> u64 {
@@ -635,12 +605,15 @@ pub fn providers_path() -> PathBuf {
     home.join(".shannon").join("desktop").join("providers.json")
 }
 
-/// Load managed providers from disk, returning an empty file if not found.
-pub fn load_providers() -> ProvidersFile {
+/// Load the historical (pre-TD-4) `~/.shannon/desktop/providers.json` from
+/// disk, returning an empty file if not found. Used only by the one-shot
+/// `migrate_providers_to_toml`. The live read path is
+/// `ProviderReadSnapshot::to_providers_file`.
+pub(crate) fn load_legacy_providers() -> LegacyProvidersFile {
     let path = providers_path();
     match std::fs::read_to_string(&path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => ProvidersFile::default(),
+        Err(_) => LegacyProvidersFile::default(),
     }
 }
 
@@ -672,7 +645,7 @@ pub fn migrate_providers_to_toml() -> Option<shannon_types::provider_config::Pro
     if !path.exists() {
         return None;
     }
-    let file = load_providers();
+    let file = load_legacy_providers();
     if file.providers.is_empty() {
         return None;
     }
@@ -702,7 +675,7 @@ pub fn migrate_providers_to_toml() -> Option<shannon_types::provider_config::Pro
 /// from the user's home dir, which tests can't mock without
 /// process-wide env mutation).
 pub(crate) fn build_migrated_provider_model(
-    file: &ProvidersFile,
+    file: &LegacyProvidersFile,
 ) -> Option<shannon_types::provider_config::ProviderModelConfig> {
     use shannon_types::provider_config::{
         ActiveTarget, CredentialRef, CredentialScope, ModelProfile, ProviderModelConfig,
@@ -1011,12 +984,10 @@ mod tests {
             active_provider_id: Some("glm".into()),
             providers: vec![ProviderConnection {
                 id: "glm".into(),
-                label: "My GLM".into(),
-                provider_kind: "openai-compatible".into(),
-                api_key: Some("sk-x".into()),
+                display_name: "My GLM".into(),
+                kind: "openai-compatible".into(),
+                has_api_key: false,
                 base_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
-                model: Some("glm-4.6".into()),
-                created_at: "2026-06-27T00:00:00Z".into(),
                 ..Default::default()
             }],
         };
@@ -1024,7 +995,7 @@ mod tests {
         let back: ProvidersFile = serde_json::from_str(&json).unwrap();
         assert_eq!(back.active_provider_id, Some("glm".into()));
         assert_eq!(back.providers.len(), 1);
-        assert_eq!(back.providers[0].provider_kind, "openai-compatible");
+        assert_eq!(back.providers[0].kind, "openai-compatible");
         assert_eq!(
             back.providers[0].base_url.as_deref(),
             Some("https://open.bigmodel.cn/api/paas/v4")
@@ -1040,19 +1011,17 @@ mod tests {
 
     #[test]
     fn provider_connection_without_optional_fields_deserializes() {
-        // api_key/base_url/model are all #[serde(default)]-Optional — a legacy
-        // or hand-written entry omitting them must still parse.
+        // base_url/has_api_key are all #[serde(default)]-Optional/default —
+        // a hand-written entry omitting them must still parse.
         let json = r#"{
             "id":"anthropic",
-            "label":"Anthropic",
-            "provider_kind":"anthropic",
-            "created_at":"2026-06-27T00:00:00Z"
+            "display_name":"Anthropic",
+            "kind":"anthropic"
         }"#;
         let conn: ProviderConnection = serde_json::from_str(json).unwrap();
         assert_eq!(conn.id, "anthropic");
-        assert!(conn.api_key.is_none());
+        assert!(!conn.has_api_key);
         assert!(conn.base_url.is_none());
-        assert!(conn.model.is_none());
     }
 
     #[test]
@@ -1077,12 +1046,10 @@ mod tests {
         extra_headers.insert("X-Region".into(), "us-east".into());
         ProviderConnection {
             id: id.into(),
-            label: format!("{id} label"),
-            provider_kind: kind.into(),
-            api_key: None,
+            display_name: format!("{id} label"),
+            kind: kind.into(),
+            has_api_key: false,
             base_url: Some("https://example.test/v1".into()),
-            model: Some("default-model".into()),
-            created_at: "2026-07-30T00:00:00Z".into(),
             models_url: Some("https://example.test/v1/models".into()),
             extra_headers,
             default_max_tokens: Some(8192),
@@ -1172,11 +1139,10 @@ mod tests {
         // piecewise (e.g. the Add Provider modal's reset state).
         let conn = ProviderConnection::default();
         assert!(conn.id.is_empty());
-        assert!(conn.label.is_empty());
-        assert!(conn.provider_kind.is_empty());
-        assert!(conn.api_key.is_none());
+        assert!(conn.display_name.is_empty());
+        assert!(conn.kind.is_empty());
+        assert!(!conn.has_api_key);
         assert!(conn.base_url.is_none());
-        assert!(conn.model.is_none());
         assert!(conn.models_url.is_none());
         assert!(conn.extra_headers.is_empty());
         assert!(conn.default_max_tokens.is_none());
@@ -1185,34 +1151,37 @@ mod tests {
     }
 
     #[test]
-    fn provider_connection_legacy_api_key_field_does_not_serialize() {
-        // The api_key field is a transitional deserialization seam
-        // only — once the credential-store migration runs the value
-        // is None, and we never write it back out.
+    fn provider_connection_does_not_serialize_dead_fields() {
+        // TD-4: api_key/model/created_at/label/provider_kind are gone
+        // from the wire. The serialized JSON must not contain any of
+        // them. has_api_key is the new presence signal.
         let conn = ProviderConnection {
             id: "a".into(),
-            label: "A".into(),
-            provider_kind: "anthropic".into(),
-            api_key: Some("sk-secret".into()),
+            display_name: "A".into(),
+            kind: "anthropic".into(),
+            has_api_key: true,
             base_url: None,
-            model: None,
-            created_at: "2026-07-30T00:00:00Z".into(),
             ..Default::default()
         };
         let json = serde_json::to_string(&conn).unwrap();
+        assert!(!json.contains("\"api_key\""), "saw api_key in {json}");
+        assert!(!json.contains("\"model\""), "saw model in {json}");
+        assert!(!json.contains("\"created_at\""), "saw created_at in {json}");
+        assert!(!json.contains("\"label\""), "saw label in {json}");
         assert!(
-            !json.contains("api_key"),
-            "api_key must not be serialized (saw {json})"
+            !json.contains("\"provider_kind\""),
+            "saw provider_kind in {json}"
         );
-        assert!(!json.contains("sk-secret"));
+        assert!(json.contains("\"has_api_key\""));
+        assert!(json.contains("\"display_name\""));
+        assert!(json.contains("\"kind\""));
     }
 
     #[test]
-    fn provider_connection_legacy_api_key_field_deserializes_and_is_consumed() {
+    fn provider_connection_legacy_api_key_field_deserializes_via_legacy_struct() {
         // A legacy providers.json with a plaintext api_key must still
-        // parse (so the credential-store migration can run). The
-        // value is captured into the struct, but apply_provider_update
-        // never writes it back out.
+        // parse via LegacyProviderConnection (so the credential-store
+        // migration can run). The live wire type no longer has api_key.
         let json = r#"{
             "id":"glm",
             "label":"GLM",
@@ -1220,9 +1189,9 @@ mod tests {
             "api_key":"sk-legacy-plaintext",
             "created_at":"2026-07-30T00:00:00Z"
         }"#;
-        let conn: ProviderConnection = serde_json::from_str(json).unwrap();
+        let conn: LegacyProviderConnection = serde_json::from_str(json).unwrap();
         assert_eq!(conn.api_key.as_deref(), Some("sk-legacy-plaintext"));
-        // Round-trip back out: api_key must be gone.
+        // Round-trip back out: api_key must be gone (skip_serializing).
         let back = serde_json::to_string(&conn).unwrap();
         assert!(!back.contains("api_key"));
         assert!(!back.contains("sk-legacy-plaintext"));
@@ -1235,9 +1204,9 @@ mod tests {
     // tolerant — one bad row (empty base_url) doesn't bail the whole
     // migration.
 
-    /// Write a `ProvidersFile` to the canonical path so the migration
+    /// Write a `LegacyProvidersFile` to the canonical path so the migration
     /// helper picks it up. Cleans up afterwards.
-    fn seed_legacy_providers_file(file: &ProvidersFile) {
+    fn seed_legacy_providers_file(file: &LegacyProvidersFile) {
         let path = providers_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap();
@@ -1258,7 +1227,7 @@ mod tests {
     #[test]
     fn migrate_returns_none_when_legacy_file_empty() {
         let _home = IsolatedHome::new();
-        seed_legacy_providers_file(&ProvidersFile::default());
+        seed_legacy_providers_file(&LegacyProvidersFile::default());
         assert!(migrate_providers_to_toml().is_none());
     }
 
@@ -1271,10 +1240,10 @@ mod tests {
         // - keep both provider slots distinct (no OpenAI collapse
         //   for the openai-compatible slot)
         // - set the active target to the file's active_provider_id
-        let file = ProvidersFile {
+        let file = LegacyProvidersFile {
             active_provider_id: Some("glm".into()),
             providers: vec![
-                ProviderConnection {
+                LegacyProviderConnection {
                     id: "anthropic-main".into(),
                     label: "Anthropic".into(),
                     provider_kind: "anthropic".into(),
@@ -1284,7 +1253,7 @@ mod tests {
                     created_at: "2026-07-30T00:00:00Z".into(),
                     ..Default::default()
                 },
-                ProviderConnection {
+                LegacyProviderConnection {
                     id: "glm".into(),
                     label: "GLM".into(),
                     provider_kind: "openai-compatible".into(),
@@ -1327,9 +1296,9 @@ mod tests {
 
     #[test]
     fn build_migrated_provider_model_uses_first_entry_when_active_unset() {
-        let file = ProvidersFile {
+        let file = LegacyProvidersFile {
             active_provider_id: None,
-            providers: vec![ProviderConnection {
+            providers: vec![LegacyProviderConnection {
                 id: "anthropic-main".into(),
                 label: "Anthropic".into(),
                 provider_kind: "anthropic".into(),
@@ -1352,10 +1321,10 @@ mod tests {
         // canonical default and no user-supplied URL — the helper
         // must skip it rather than land a profile with
         // base_url="". The other entries still migrate.
-        let file = ProvidersFile {
+        let file = LegacyProvidersFile {
             active_provider_id: Some("anthropic-main".into()),
             providers: vec![
-                ProviderConnection {
+                LegacyProviderConnection {
                     id: "anthropic-main".into(),
                     label: "Anthropic".into(),
                     provider_kind: "anthropic".into(),
@@ -1365,7 +1334,7 @@ mod tests {
                     created_at: "2026-07-30T00:00:00Z".into(),
                     ..Default::default()
                 },
-                ProviderConnection {
+                LegacyProviderConnection {
                     id: "broken-glm".into(),
                     label: "Broken GLM".into(),
                     provider_kind: "openai-compatible".into(),
@@ -1389,9 +1358,9 @@ mod tests {
         // If every entry is broken (e.g. all openai-compatible
         // with no base_url), the helper returns None — the
         // caller treats that as "no migration needed".
-        let file = ProvidersFile {
+        let file = LegacyProvidersFile {
             active_provider_id: Some("broken-1".into()),
-            providers: vec![ProviderConnection {
+            providers: vec![LegacyProviderConnection {
                 id: "broken-1".into(),
                 label: "Broken".into(),
                 provider_kind: "openai-compatible".into(),
@@ -1415,9 +1384,9 @@ mod tests {
         // `cleanup_legacy_providers_file()` deleted this test's shared file
         // mid-run.
         let _home = IsolatedHome::new();
-        let file = ProvidersFile {
+        let file = LegacyProvidersFile {
             active_provider_id: Some("anthropic-main".into()),
-            providers: vec![ProviderConnection {
+            providers: vec![LegacyProviderConnection {
                 id: "anthropic-main".into(),
                 label: "Anthropic".into(),
                 provider_kind: "anthropic".into(),
