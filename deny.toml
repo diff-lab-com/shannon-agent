@@ -67,6 +67,11 @@ ignore = [
     # via ratatui → shannon-ui. Not exploitable: shannon-ui never calls
     # LruCache::iter_mut(). See audit.toml for the full rationale.
     "RUSTSEC-2026-0002",
+    # lru 0.12.5 — `LruCache::pop()` use-after-free under panic (unsound).
+    # Same family as -0002; transitive via ratatui → shannon-ui, no direct
+    # lru usage in Shannon, no panic path reaches pop(). See audit.toml for
+    # the full rationale.
+    "RUSTSEC-2026-0253",
 ]
 
 [licenses]
