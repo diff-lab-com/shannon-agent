@@ -6,7 +6,7 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-7889-brightgreen.svg)
+[![Tests](https://img.shields.io/badge/tests-see%20metrics.md-brightgreen.svg)](./docs/metrics.md)
 [![Crates](https://img.shields.io/badge/crates-12-blue.svg)
 
 [English](./README.md) | [中文文档](#什么是-shannon-code) | [完整文档](https://shannon-agent.github.io/shannon-code/)

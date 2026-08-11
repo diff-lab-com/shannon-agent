@@ -12,6 +12,7 @@
 pub mod adapter;
 pub mod client;
 pub mod error;
+pub mod probe;
 pub mod retry;
 pub mod streaming;
 pub mod types;

@@ -36,21 +36,17 @@ export const MOCK_PROVIDERS: ProvidersFile = {
   providers: [
     {
       id: 'prov-anthropic',
-      label: 'Anthropic',
-      provider_kind: 'anthropic',
-      api_key: '***',
+      display_name: 'Anthropic',
+      kind: 'anthropic',
+      has_api_key: true,
       base_url: null,
-      model: 'claude-sonnet-4-6',
-      created_at: '2026-06-20T10:00:00Z',
     },
     {
       id: 'prov-glm',
-      label: 'GLM (Zhipu)',
-      provider_kind: 'openai-compatible',
-      api_key: '***',
+      display_name: 'GLM (Zhipu)',
+      kind: 'openai-compatible',
+      has_api_key: true,
       base_url: 'https://open.bigmodel.cn/api/paas/v4',
-      model: 'glm-4.6',
-      created_at: '2026-06-25T14:30:00Z',
     },
   ],
 }

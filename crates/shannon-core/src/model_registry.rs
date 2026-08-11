@@ -7,586 +7,21 @@
 //! Also provides [`ModelRouter`] for intelligent model selection based on
 //! task type, cost, and speed requirements.
 
-use serde::{Deserialize, Serialize};
 use shannon_engine::api::LlmProvider;
 
-/// Model capability flags for routing decisions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ModelCapabilities(u8);
+/// Dynamic (models.dev) catalog layer — live models fetched on `/model
+/// refresh`, cached offline, merged additively over `MODEL_CATALOG`.
+pub mod dynamic;
 
-impl ModelCapabilities {
-    const REASONING: u8 = 1 << 0;
-    const CODING: u8 = 1 << 1;
-    const SPEED: u8 = 1 << 2;
-    const CHEAP: u8 = 1 << 3;
-    const VISION: u8 = 1 << 4;
+// ── Submodules (ADR-0008 P2-8 — split oversized model_registry.rs) ──
+pub mod catalog;
+pub mod tier;
 
-    pub const fn empty() -> Self {
-        Self(0)
-    }
-    pub const fn reasoning() -> Self {
-        Self(Self::REASONING)
-    }
-    pub const fn coding() -> Self {
-        Self(Self::CODING)
-    }
-    pub const fn speed() -> Self {
-        Self(Self::SPEED)
-    }
-    pub const fn cheap() -> Self {
-        Self(Self::CHEAP)
-    }
-    pub const fn vision() -> Self {
-        Self(Self::VISION)
-    }
-
-    pub const fn has(self, cap: ModelCapabilities) -> bool {
-        self.0 & cap.0 != 0
-    }
-    pub const fn or(self, other: ModelCapabilities) -> Self {
-        Self(self.0 | other.0)
-    }
-}
-
-/// Metadata for a single model offering.
-#[derive(Debug, Clone)]
-pub struct ModelInfo {
-    /// Canonical model ID sent to the API (e.g. "claude-sonnet-4-20250514").
-    pub id: &'static str,
-    /// Human-readable display name (e.g. "Claude Sonnet 4").
-    pub display_name: &'static str,
-    /// Short aliases for quick selection (e.g. "sonnet", "glm5").
-    pub aliases: &'static [&'static str],
-    /// Provider that serves this model.
-    pub provider: LlmProvider,
-    /// Context window size in tokens.
-    pub context_window: usize,
-    /// Maximum output tokens per request.
-    pub max_output: usize,
-    /// Estimated cost per 1M input tokens in USD (0.0 if unknown).
-    pub cost_per_m_input: f64,
-    /// Estimated cost per 1M output tokens in USD (0.0 if unknown).
-    pub cost_per_m_output: f64,
-    /// Capability flags for routing.
-    pub capabilities: ModelCapabilities,
-}
-
-// ── Built-in catalog ──────────────────────────────────────────────
-
-/// Static catalog of well-known models. Ollama models are appended at
-/// runtime by [`detect_local_models`].
-pub static MODEL_CATALOG: &[ModelInfo] = &[
-    // ── Anthropic ──────────────────────────────────────────────
-    ModelInfo {
-        id: "claude-sonnet-4-20250514",
-        display_name: "Claude Sonnet 4",
-        aliases: &["sonnet", "sonnet4", "claude-sonnet"],
-        provider: LlmProvider::Anthropic,
-        context_window: 200_000,
-        max_output: 16_384,
-        cost_per_m_input: 3.0,
-        cost_per_m_output: 15.0,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
-    },
-    ModelInfo {
-        id: "claude-opus-4-20250115",
-        display_name: "Claude Opus 4",
-        aliases: &["opus", "opus4", "claude-opus"],
-        provider: LlmProvider::Anthropic,
-        context_window: 200_000,
-        max_output: 32_000,
-        cost_per_m_input: 15.0,
-        cost_per_m_output: 75.0,
-        capabilities: ModelCapabilities::reasoning()
-            .or(ModelCapabilities::coding())
-            .or(ModelCapabilities::vision()),
-    },
-    ModelInfo {
-        id: "claude-haiku-4-5-20251001",
-        display_name: "Claude Haiku 4.5",
-        aliases: &["haiku", "haiku4", "claude-haiku"],
-        provider: LlmProvider::Anthropic,
-        context_window: 200_000,
-        max_output: 8_192,
-        cost_per_m_input: 0.80,
-        cost_per_m_output: 4.0,
-        capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
-    },
-    ModelInfo {
-        id: "claude-3-5-sonnet-20241022",
-        display_name: "Claude 3.5 Sonnet",
-        aliases: &[],
-        provider: LlmProvider::Anthropic,
-        context_window: 200_000,
-        max_output: 8_192,
-        cost_per_m_input: 3.0,
-        cost_per_m_output: 15.0,
-        capabilities: ModelCapabilities::coding(),
-    },
-    // ── OpenAI ─────────────────────────────────────────────────
-    ModelInfo {
-        id: "gpt-4o",
-        display_name: "GPT-4o",
-        aliases: &["gpt4o", "4o"],
-        provider: LlmProvider::OpenAI,
-        context_window: 128_000,
-        max_output: 16_384,
-        cost_per_m_input: 2.50,
-        cost_per_m_output: 10.0,
-        capabilities: ModelCapabilities::coding()
-            .or(ModelCapabilities::reasoning())
-            .or(ModelCapabilities::vision()),
-    },
-    ModelInfo {
-        id: "gpt-4o-mini",
-        display_name: "GPT-4o Mini",
-        aliases: &[],
-        provider: LlmProvider::OpenAI,
-        context_window: 128_000,
-        max_output: 16_384,
-        cost_per_m_input: 0.15,
-        cost_per_m_output: 0.60,
-        capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
-    },
-    ModelInfo {
-        id: "o3-mini",
-        display_name: "o3-mini",
-        aliases: &[],
-        provider: LlmProvider::OpenAI,
-        context_window: 200_000,
-        max_output: 100_000,
-        cost_per_m_input: 1.10,
-        cost_per_m_output: 4.40,
-        capabilities: ModelCapabilities::reasoning().or(ModelCapabilities::coding()),
-    },
-    ModelInfo {
-        id: "gpt-4-turbo",
-        display_name: "GPT-4 Turbo",
-        aliases: &[],
-        provider: LlmProvider::OpenAI,
-        context_window: 128_000,
-        max_output: 4_096,
-        cost_per_m_input: 10.0,
-        cost_per_m_output: 30.0,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::vision()),
-    },
-    // ── Google Gemini ──────────────────────────────────────────
-    ModelInfo {
-        id: "gemini-2.5-pro",
-        display_name: "Gemini 2.5 Pro",
-        aliases: &[],
-        provider: LlmProvider::Gemini,
-        context_window: 1_000_000,
-        max_output: 65_536,
-        cost_per_m_input: 1.25,
-        cost_per_m_output: 10.0,
-        capabilities: ModelCapabilities::reasoning()
-            .or(ModelCapabilities::coding())
-            .or(ModelCapabilities::vision()),
-    },
-    ModelInfo {
-        id: "gemini-2.5-flash",
-        display_name: "Gemini 2.5 Flash",
-        aliases: &[],
-        provider: LlmProvider::Gemini,
-        context_window: 1_000_000,
-        max_output: 65_536,
-        cost_per_m_input: 0.15,
-        cost_per_m_output: 0.60,
-        capabilities: ModelCapabilities::cheap()
-            .or(ModelCapabilities::speed().or(ModelCapabilities::vision())),
-    },
-    // ── DeepSeek ───────────────────────────────────────────────
-    ModelInfo {
-        id: "deepseek-chat",
-        display_name: "DeepSeek V3",
-        aliases: &["ds-chat", "deepseek-chat", "v3"],
-        provider: LlmProvider::DeepSeek,
-        context_window: 128_000,
-        max_output: 8_192,
-        cost_per_m_input: 0.27,
-        cost_per_m_output: 1.10,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
-    },
-    ModelInfo {
-        id: "deepseek-reasoner",
-        display_name: "DeepSeek R1",
-        aliases: &["ds-r1", "deepseek-reasoner", "r1"],
-        provider: LlmProvider::DeepSeek,
-        context_window: 128_000,
-        max_output: 8_192,
-        cost_per_m_input: 0.55,
-        cost_per_m_output: 2.19,
-        capabilities: ModelCapabilities::reasoning().or(ModelCapabilities::cheap()),
-    },
-    ModelInfo {
-        id: "deepseek-v4-flash",
-        display_name: "DeepSeek V4 Flash",
-        aliases: &[],
-        provider: LlmProvider::DeepSeek,
-        context_window: 1_000_000,
-        max_output: 384_000,
-        cost_per_m_input: 0.14,
-        cost_per_m_output: 0.28,
-        capabilities: ModelCapabilities::coding()
-            .or(ModelCapabilities::cheap())
-            .or(ModelCapabilities::speed()),
-    },
-    ModelInfo {
-        id: "deepseek-v4-pro",
-        display_name: "DeepSeek V4 Pro",
-        aliases: &[],
-        provider: LlmProvider::DeepSeek,
-        context_window: 1_000_000,
-        max_output: 384_000,
-        cost_per_m_input: 0.435,
-        cost_per_m_output: 0.87,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
-    },
-    // ── GLM / Zhipu ──────────────────────────────────────────
-    ModelInfo {
-        id: "glm-4-plus",
-        display_name: "GLM-4 Plus",
-        aliases: &[],
-        provider: LlmProvider::Zhipu,
-        context_window: 128_000,
-        max_output: 4_096,
-        cost_per_m_input: 7.14,
-        cost_per_m_output: 7.14,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
-    },
-    ModelInfo {
-        id: "glm-4-flash",
-        display_name: "GLM-4 Flash",
-        aliases: &[],
-        provider: LlmProvider::Zhipu,
-        context_window: 128_000,
-        max_output: 4_096,
-        cost_per_m_input: 0.14,
-        cost_per_m_output: 0.14,
-        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
-    },
-    ModelInfo {
-        id: "glm-4-long",
-        display_name: "GLM-4 Long",
-        aliases: &[],
-        provider: LlmProvider::Zhipu,
-        context_window: 1_000_000,
-        max_output: 4_096,
-        cost_per_m_input: 0.14,
-        cost_per_m_output: 0.14,
-        capabilities: ModelCapabilities::cheap(),
-    },
-    ModelInfo {
-        id: "glm-4-air",
-        display_name: "GLM-4 Air",
-        aliases: &[],
-        provider: LlmProvider::Zhipu,
-        context_window: 128_000,
-        max_output: 4_096,
-        cost_per_m_input: 0.14,
-        cost_per_m_output: 0.14,
-        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
-    },
-    ModelInfo {
-        id: "glm-4v-flash",
-        display_name: "GLM-4V Flash",
-        aliases: &[],
-        provider: LlmProvider::Zhipu,
-        context_window: 128_000,
-        max_output: 4_096,
-        cost_per_m_input: 0.14,
-        cost_per_m_output: 0.14,
-        capabilities: ModelCapabilities::vision().or(ModelCapabilities::cheap()),
-    },
-    ModelInfo {
-        id: "glm-5",
-        display_name: "GLM-5",
-        aliases: &["glm5"],
-        provider: LlmProvider::Zhipu,
-        context_window: 198_000,
-        max_output: 16_384,
-        cost_per_m_input: 7.14,
-        cost_per_m_output: 7.14,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
-    },
-    ModelInfo {
-        id: "glm-5.1",
-        display_name: "GLM-5.1",
-        aliases: &["glm51"],
-        provider: LlmProvider::Zhipu,
-        context_window: 198_000,
-        max_output: 128_000,
-        cost_per_m_input: 10.0,
-        cost_per_m_output: 10.0,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
-    },
-    ModelInfo {
-        id: "glm-5-flash",
-        display_name: "GLM-5 Flash",
-        aliases: &[],
-        provider: LlmProvider::Zhipu,
-        context_window: 198_000,
-        max_output: 16_384,
-        cost_per_m_input: 0.14,
-        cost_per_m_output: 0.14,
-        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
-    },
-    ModelInfo {
-        id: "glm-5.1-flash",
-        display_name: "GLM-5.1 Flash",
-        aliases: &[],
-        provider: LlmProvider::Zhipu,
-        context_window: 198_000,
-        max_output: 16_384,
-        cost_per_m_input: 0.14,
-        cost_per_m_output: 0.14,
-        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
-    },
-    // ── GLM / Zhipu International ──────────────────────────────
-    ModelInfo {
-        id: "glm-4-plus-intl",
-        display_name: "GLM-4 Plus (Int'l)",
-        aliases: &[],
-        provider: LlmProvider::ZhipuInternational,
-        context_window: 128_000,
-        max_output: 4_096,
-        cost_per_m_input: 7.14,
-        cost_per_m_output: 7.14,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
-    },
-    ModelInfo {
-        id: "glm-4-flash-intl",
-        display_name: "GLM-4 Flash (Int'l)",
-        aliases: &[],
-        provider: LlmProvider::ZhipuInternational,
-        context_window: 128_000,
-        max_output: 4_096,
-        cost_per_m_input: 0.14,
-        cost_per_m_output: 0.14,
-        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
-    },
-    ModelInfo {
-        id: "glm-4-long-intl",
-        display_name: "GLM-4 Long (Int'l)",
-        aliases: &[],
-        provider: LlmProvider::ZhipuInternational,
-        context_window: 1_000_000,
-        max_output: 4_096,
-        cost_per_m_input: 0.14,
-        cost_per_m_output: 0.14,
-        capabilities: ModelCapabilities::cheap(),
-    },
-    ModelInfo {
-        id: "glm-5-intl",
-        display_name: "GLM-5 (Int'l)",
-        aliases: &[],
-        provider: LlmProvider::ZhipuInternational,
-        context_window: 198_000,
-        max_output: 16_384,
-        cost_per_m_input: 7.14,
-        cost_per_m_output: 7.14,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
-    },
-    ModelInfo {
-        id: "glm-5.1-intl",
-        display_name: "GLM-5.1 (Int'l)",
-        aliases: &[],
-        provider: LlmProvider::ZhipuInternational,
-        context_window: 198_000,
-        max_output: 128_000,
-        cost_per_m_input: 10.0,
-        cost_per_m_output: 10.0,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
-    },
-    ModelInfo {
-        id: "glm-5-flash-intl",
-        display_name: "GLM-5 Flash (Int'l)",
-        aliases: &[],
-        provider: LlmProvider::ZhipuInternational,
-        context_window: 198_000,
-        max_output: 16_384,
-        cost_per_m_input: 0.14,
-        cost_per_m_output: 0.14,
-        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
-    },
-    // ── Kimi / Moonshot ──────────────────────────────────────
-    ModelInfo {
-        id: "kimi-k2.6",
-        display_name: "Kimi K2.6",
-        aliases: &["kimi", "k2"],
-        provider: LlmProvider::Moonshot,
-        context_window: 256_000,
-        max_output: 96_000,
-        cost_per_m_input: 0.91,
-        cost_per_m_output: 3.78,
-        capabilities: ModelCapabilities::coding()
-            .or(ModelCapabilities::reasoning())
-            .or(ModelCapabilities::vision()),
-    },
-    ModelInfo {
-        id: "kimi-k2.5",
-        display_name: "Kimi K2.5",
-        aliases: &[],
-        provider: LlmProvider::Moonshot,
-        context_window: 256_000,
-        max_output: 96_000,
-        cost_per_m_input: 0.56,
-        cost_per_m_output: 2.94,
-        capabilities: ModelCapabilities::coding()
-            .or(ModelCapabilities::reasoning())
-            .or(ModelCapabilities::vision()),
-    },
-    ModelInfo {
-        id: "moonshot-v1-128k",
-        display_name: "Moonshot V1 128K",
-        aliases: &[],
-        provider: LlmProvider::Moonshot,
-        context_window: 128_000,
-        max_output: 4_096,
-        cost_per_m_input: 1.43,
-        cost_per_m_output: 4.29,
-        capabilities: ModelCapabilities::cheap(),
-    },
-    ModelInfo {
-        id: "moonshot-v1-32k",
-        display_name: "Moonshot V1 32K",
-        aliases: &[],
-        provider: LlmProvider::Moonshot,
-        context_window: 32_000,
-        max_output: 4_096,
-        cost_per_m_input: 0.71,
-        cost_per_m_output: 2.86,
-        capabilities: ModelCapabilities::cheap(),
-    },
-    ModelInfo {
-        id: "moonshot-v1-8k",
-        display_name: "Moonshot V1 8K",
-        aliases: &[],
-        provider: LlmProvider::Moonshot,
-        context_window: 8_000,
-        max_output: 4_096,
-        cost_per_m_input: 0.29,
-        cost_per_m_output: 1.43,
-        capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
-    },
-    // ── Mistral ────────────────────────────────────────────────
-    ModelInfo {
-        id: "mistral-large-latest",
-        display_name: "Mistral Large",
-        aliases: &[],
-        provider: LlmProvider::Mistral,
-        context_window: 128_000,
-        max_output: 8_192,
-        cost_per_m_input: 2.0,
-        cost_per_m_output: 6.0,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
-    },
-    ModelInfo {
-        id: "codestral-latest",
-        display_name: "Codestral",
-        aliases: &[],
-        provider: LlmProvider::Mistral,
-        context_window: 256_000,
-        max_output: 8_192,
-        cost_per_m_input: 0.30,
-        cost_per_m_output: 0.90,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
-    },
-    // ── Qwen / DashScope ──────────────────────────────────────
-    ModelInfo {
-        id: "qwen3.7-max",
-        display_name: "Qwen 3.7 Max",
-        aliases: &["qwen", "qwen-max"],
-        provider: LlmProvider::DashScope,
-        context_window: 1_000_000,
-        max_output: 64_000,
-        cost_per_m_input: 1.43,
-        cost_per_m_output: 5.71,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
-    },
-    ModelInfo {
-        id: "qwen3.6-plus",
-        display_name: "Qwen 3.6 Plus",
-        aliases: &[],
-        provider: LlmProvider::DashScope,
-        context_window: 1_000_000,
-        max_output: 64_000,
-        cost_per_m_input: 0.57,
-        cost_per_m_output: 2.29,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
-    },
-    ModelInfo {
-        id: "qwen3.6-flash",
-        display_name: "Qwen 3.6 Flash",
-        aliases: &[],
-        provider: LlmProvider::DashScope,
-        context_window: 1_000_000,
-        max_output: 64_000,
-        cost_per_m_input: 0.14,
-        cost_per_m_output: 0.57,
-        capabilities: ModelCapabilities::coding()
-            .or(ModelCapabilities::speed())
-            .or(ModelCapabilities::cheap()),
-    },
-    // ── MiniMax ───────────────────────────────────────────────
-    ModelInfo {
-        id: "MiniMax-M2.7",
-        display_name: "MiniMax M2.7",
-        aliases: &[],
-        provider: LlmProvider::Minimax,
-        context_window: 1_000_000,
-        max_output: 64_000,
-        cost_per_m_input: 0.29,
-        cost_per_m_output: 1.18,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
-    },
-    ModelInfo {
-        id: "MiniMax-M2.5",
-        display_name: "MiniMax M2.5",
-        aliases: &[],
-        provider: LlmProvider::Minimax,
-        context_window: 192_000,
-        max_output: 32_000,
-        cost_per_m_input: 0.29,
-        cost_per_m_output: 1.18,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
-    },
-    ModelInfo {
-        id: "MiniMax-M2.7-highspeed",
-        display_name: "MiniMax M2.7 Highspeed",
-        aliases: &[],
-        provider: LlmProvider::Minimax,
-        context_window: 1_000_000,
-        max_output: 64_000,
-        cost_per_m_input: 0.59,
-        cost_per_m_output: 2.35,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::speed()),
-    },
-    // ── Groq ───────────────────────────────────────────────────
-    ModelInfo {
-        id: "llama-3.3-70b-versatile",
-        display_name: "Llama 3.3 70B",
-        aliases: &[],
-        provider: LlmProvider::Groq,
-        context_window: 128_000,
-        max_output: 32_768,
-        cost_per_m_input: 0.59,
-        cost_per_m_output: 0.79,
-        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
-    },
-    ModelInfo {
-        id: "mixtral-8x7b-32768",
-        display_name: "Mixtral 8x7B",
-        aliases: &[],
-        provider: LlmProvider::Groq,
-        context_window: 32_000,
-        max_output: 4_096,
-        cost_per_m_input: 0.24,
-        cost_per_m_output: 0.24,
-        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
-    },
-];
+pub use catalog::{MODEL_CATALOG, ModelCapabilities, ModelInfo, TierLabel};
+pub use tier::{
+    EffortLevel, ModelRouter, TaskType, is_model_alias, model_aliases, resolve_auto_tier,
+    resolve_model, resolve_model_alias, resolve_tier,
+};
 
 // ── Query helpers ──────────────────────────────────────────────────
 
@@ -598,6 +33,38 @@ pub fn models_for_provider(provider: LlmProvider) -> Vec<&'static ModelInfo> {
         .collect()
 }
 
+/// Merge static catalog entries with a dynamic set for one provider.
+///
+/// Static entries are emitted first (preserving curated metadata, aliases, and
+/// the Phase B beta-header mapping keyed by model id). Dynamic entries are
+/// appended only when their id is not already present, deduplicating by id so a
+/// models.dev refresh never doubles a known model.
+pub fn merge_static_and_dynamic(provider: LlmProvider, dynamic: &[ModelInfo]) -> Vec<ModelInfo> {
+    let mut out: Vec<ModelInfo> = Vec::new();
+    for m in MODEL_CATALOG.iter().filter(|m| m.provider == provider) {
+        out.push(m.clone());
+    }
+    let known: std::collections::HashSet<&str> = out.iter().map(|m| m.id).collect();
+    for m in dynamic.iter().filter(|m| m.provider == provider) {
+        if !known.contains(m.id) {
+            out.push(m.clone());
+        }
+    }
+    out
+}
+
+/// Models for a provider from the **merged** catalog: the static
+/// `MODEL_CATALOG` augmented by the models.dev dynamic overlay (Phase D).
+///
+/// Lazily seeds the overlay from the on-disk cache on first use — never
+/// touching the network — so this is safe to call offline and in CI. Static
+/// entries take priority (see [`merge_static_and_dynamic`]).
+pub fn merged_models_for_provider(provider: LlmProvider) -> Vec<ModelInfo> {
+    dynamic::ensure_overlay_loaded();
+    let overlay = dynamic::overlay_snapshot();
+    merge_static_and_dynamic(provider, &overlay)
+}
+
 /// Return all distinct providers that have models in the catalog.
 pub fn all_providers() -> Vec<LlmProvider> {
     let mut providers: Vec<LlmProvider> =
@@ -605,6 +72,141 @@ pub fn all_providers() -> Vec<LlmProvider> {
     providers.sort_by_key(provider_order);
     providers.dedup();
     providers
+}
+
+/// Apply an allowlist/denylist of canonical provider slugs to a provider list.
+///
+/// Slugs match the provider's [`Display`](LlmProvider) form, case-insensitively
+/// (e.g. `"anthropic"`, `"openai"`, `"ollama"`). If `enabled` is non-empty it
+/// acts as an allowlist (only matches pass); `disabled` always removes matches.
+/// Pure — unit-tested below.
+pub fn filter_providers(
+    providers: Vec<LlmProvider>,
+    enabled: &[String],
+    disabled: &[String],
+) -> Vec<LlmProvider> {
+    let enabled: Vec<String> = enabled.iter().map(|s| s.to_lowercase()).collect();
+    let disabled: Vec<String> = disabled.iter().map(|s| s.to_lowercase()).collect();
+    providers
+        .into_iter()
+        .filter(|p| {
+            let slug = p.to_string();
+            if disabled.iter().any(|d| d == &slug) {
+                return false;
+            }
+            if !enabled.is_empty() && !enabled.iter().any(|e| e == &slug) {
+                return false;
+            }
+            true
+        })
+        .collect()
+}
+
+/// Parse a comma- or whitespace-separated provider-slug env var into a list.
+fn parse_provider_slugs_env(var: &str) -> Vec<String> {
+    std::env::var(var)
+        .ok()
+        .map(|raw| {
+            raw.split([',', ' ', '\t', '\n'])
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Like [`all_providers`] but filtered by the `SHANNON_ENABLED_PROVIDERS` /
+/// `SHANNON_DISABLED_PROVIDERS` env vars (ADR-0005 Phase 5 allowlist), so users
+/// can restrict which providers appear in the picker / status card.
+///
+/// Fails open: if filtering would yield an empty list (e.g. a typo'd allowlist),
+/// the full unfiltered list is returned so the picker is never bricked.
+pub fn available_providers() -> Vec<LlmProvider> {
+    let enabled = parse_provider_slugs_env("SHANNON_ENABLED_PROVIDERS");
+    let disabled = parse_provider_slugs_env("SHANNON_DISABLED_PROVIDERS");
+    if enabled.is_empty() && disabled.is_empty() {
+        return all_providers();
+    }
+    let filtered = filter_providers(all_providers(), &enabled, &disabled);
+    if filtered.is_empty() {
+        all_providers()
+    } else {
+        filtered
+    }
+}
+
+/// Resolve the merged env-var allowlist (`SHANNON_ENABLED_PROVIDERS` minus
+/// `SHANNON_DISABLED_PROVIDERS`) into a canonical slug list.
+///
+/// Returns `Some(vec)` (with at least one entry) when either env var is
+/// set; returns `None` when neither env var is set (caller treats that as
+/// "no restriction"). `SHANNON_ENABLED_PROVIDERS` takes precedence — when
+/// both are set, the disable list is applied within the enable set.
+///
+/// Pure (reads env via `parse_provider_slugs_env` only); unit-tested
+/// below.
+pub fn env_provider_allowlist() -> Option<Vec<String>> {
+    let enabled = parse_provider_slugs_env("SHANNON_ENABLED_PROVIDERS");
+    let disabled = parse_provider_slugs_env("SHANNON_DISABLED_PROVIDERS");
+    if enabled.is_empty() && disabled.is_empty() {
+        return None;
+    }
+    let mut out: Vec<String> = if enabled.is_empty() {
+        all_providers().into_iter().map(|p| p.to_string()).collect()
+    } else {
+        enabled.clone()
+    };
+    if !disabled.is_empty() {
+        out.retain(|slug| !disabled.iter().any(|d| d.eq_ignore_ascii_case(slug)));
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(out)
+}
+
+/// Compute the effective provider allowlist for the desktop / model
+/// picker: an explicit `Some(slice)` (the desktop's persisted
+/// `enabled_providers`) overrides any env-var allowlist; otherwise the
+/// env-var allowlist is consulted.
+///
+/// Precedence (ADR-0005 Phase 5 / P4.9):
+/// - `explicit = Some(vec![])` → `Some(vec![])`. The user explicitly
+///   toggled every provider off; the env-var allowlist is ignored.
+/// - `explicit = Some(non_empty)` → `Some(explicit.to_vec())`. The user's
+///   explicit choice wins — env vars are skipped so a desktop user
+///   doesn't have to fight their shell's stale `SHANNON_*_PROVIDERS`.
+/// - `explicit = None` → fall through to [`env_provider_allowlist`].
+///   Returns `None` (no restriction) when neither env var is set.
+///
+/// Pure; unit-tested below.
+pub fn effective_provider_allowlist(explicit: Option<&[String]>) -> Option<Vec<String>> {
+    match explicit {
+        // `Some(&[])` is the user-set "hide everything" state — env vars
+        // are ignored because the explicit slice is non-`None`.
+        Some(slice) => Some(slice.to_vec()),
+        None => env_provider_allowlist(),
+    }
+}
+
+/// Returns true if `provider` would pass the `SHANNON_ENABLED_PROVIDERS` /
+/// `SHANNON_DISABLED_PROVIDERS` allowlist/denylist. Callers that build their
+/// own provider list (e.g. the model picker always offering a local Ollama
+/// discovery tab) use this to still honour an explicit operator filter.
+pub fn is_provider_allowed(provider: &LlmProvider) -> bool {
+    let enabled = parse_provider_slugs_env("SHANNON_ENABLED_PROVIDERS");
+    let disabled = parse_provider_slugs_env("SHANNON_DISABLED_PROVIDERS");
+    if enabled.is_empty() && disabled.is_empty() {
+        return true;
+    }
+    let slug = provider.to_string();
+    if disabled.iter().any(|d| d == &slug) {
+        return false;
+    }
+    if !enabled.is_empty() && !enabled.iter().any(|e| e == &slug) {
+        return false;
+    }
+    true
 }
 
 /// Provider display ordering (lower = shown first).
@@ -623,7 +225,19 @@ fn provider_order(p: &LlmProvider) -> u8 {
         LlmProvider::Minimax => 9,
         LlmProvider::DashScope => 10,
         LlmProvider::Ollama => 11,
-        _ => 99,
+        LlmProvider::Xai => 12,
+        LlmProvider::Perplexity => 13,
+        LlmProvider::Cohere => 14,
+        LlmProvider::Together => 15,
+        LlmProvider::Fireworks => 16,
+        LlmProvider::SiliconFlow => 17,
+        LlmProvider::Ai21 => 18,
+        LlmProvider::Azure => 19,
+        LlmProvider::Bedrock => 20,
+        LlmProvider::OpenRouter => 21,
+        LlmProvider::Cloudflare => 22,
+        LlmProvider::Replicate => 23,
+        LlmProvider::Custom => 99,
     }
 }
 
@@ -702,20 +316,31 @@ pub fn all_model_ids() -> Vec<&'static str> {
     MODEL_CATALOG.iter().map(|m| m.id).collect()
 }
 
-/// Look up a model's context window by its ID. Returns a reasonable default
-/// (200 000) if the model is not found in the catalog.
+/// Conservative context-window fallback (200K) for internal budgets
+/// (compaction thresholds, sidebar gauge denominator) when a model's real
+/// limit is unknown. This is a safety cap, **not** a claim about the model —
+/// user-facing labels use [`context_window_for_opt`] and render "unknown" when
+/// it returns `None`.
+pub const FALLBACK_CONTEXT_WINDOW: usize = 200_000;
+
+/// Look up a model's context window by its ID, returning `None` when the model
+/// is unknown to both the static catalog and the models.dev dynamic overlay.
 ///
-/// Tries exact match first, then prefix match (e.g., `"claude-sonnet-4"`
-/// matches `"claude-sonnet-4-20250514"`).
-pub fn context_window_for(model_id: &str) -> usize {
+/// This is the honest accessor: a `None` result means "we cannot state a
+/// number", so callers that surface the value to the user can render "unknown"
+/// rather than fabricating [`FALLBACK_CONTEXT_WINDOW`]. Tries exact match
+/// first, then prefix match (e.g. `"claude-sonnet-4"` matches
+/// `"claude-sonnet-4-20250514"`), then reverse prefix, then the dynamic
+/// overlay by exact id.
+pub fn context_window_for_opt(model_id: &str) -> Option<usize> {
     // Exact match
     if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id == model_id) {
-        return info.context_window;
+        return Some(info.context_window);
     }
     // Prefix match: catalog entry starts with the given model_id
     // (handles short names like "claude-sonnet-4" → "claude-sonnet-4-20250514")
     if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id.starts_with(model_id)) {
-        return info.context_window;
+        return Some(info.context_window);
     }
     // Reverse prefix: given model_id starts with a catalog entry
     // (handles "claude-sonnet-4-20250514-extra" → "claude-sonnet-4-20250514")
@@ -724,9 +349,23 @@ pub fn context_window_for(model_id: &str) -> usize {
         .filter(|m| model_id.starts_with(m.id))
         .max_by_key(|m| m.id.len())
     {
-        return info.context_window;
+        return Some(info.context_window);
     }
-    200_000
+    // Dynamic overlay (models.dev): exact id match for freshly pulled models.
+    if let Some(info) = dynamic::overlay_snapshot()
+        .iter()
+        .find(|m| m.id == model_id)
+    {
+        return Some(info.context_window);
+    }
+    None
+}
+
+/// Look up a model's context window by its ID. Returns
+/// [`FALLBACK_CONTEXT_WINDOW`] if the model is not found. Prefer
+/// [`context_window_for_opt`] for user-facing values.
+pub fn context_window_for(model_id: &str) -> usize {
+    context_window_for_opt(model_id).unwrap_or(FALLBACK_CONTEXT_WINDOW)
 }
 
 /// Look up model info by ID.
@@ -743,258 +382,34 @@ pub fn model_info_for_alias(alias: &str) -> Option<&'static ModelInfo> {
         .or_else(|| model_info_for(alias))
 }
 
-// ============================================================================
-// Model Aliases
-// ============================================================================
-
-/// Tier names that resolve to the best matching model per provider.
-const TIER_OPUS: &[&str] = &["opus"];
-const TIER_SONNET: &[&str] = &["sonnet"];
-const TIER_HAIKU: &[&str] = &["haiku", "fast", "mini"];
-
-/// Resolve a model alias (tier name) to an actual model ID.
+/// Classify a model id into a routing tier via the catalog — the single
+/// source of truth for tier classification. Matches exact id first, then
+/// prefix (so short names like `"claude-sonnet-4"` resolve to
+/// `"claude-sonnet-4-20250514"`), mirroring [`context_window_for`]'s lookup
+/// strategy. Returns [`TierLabel::Unknown`] for anything not in the catalog.
 ///
-/// Recognized aliases:
-/// - `"opus"` → most capable reasoning model for the given provider
-/// - `"sonnet"` → mid-tier coding model for the given provider
-/// - `"haiku"`, `"fast"`, `"mini"` → cheapest/fastest model for the given provider
-///
-/// If `alias` is not a recognized alias, returns `None` (caller should use it as-is).
-/// If `provider` is `None`, returns the best match across all providers.
-pub fn resolve_model_alias(alias: &str, provider: Option<&LlmProvider>) -> Option<&'static str> {
-    let tier = if TIER_OPUS.contains(&alias) {
-        ModelTier::Opus
-    } else if TIER_SONNET.contains(&alias) {
-        ModelTier::Sonnet
-    } else if TIER_HAIKU.contains(&alias) {
-        ModelTier::Haiku
-    } else {
-        return None;
-    };
-
-    let candidates: Vec<&ModelInfo> = MODEL_CATALOG
+/// UI layers (status bar, status card) call this instead of maintaining their
+/// own string-heuristic copies.
+pub fn tier_label_for_id(model_id: &str) -> TierLabel {
+    // Empty id would otherwise prefix-match the first catalog entry
+    // (`m.id.starts_with("")` is always true) — guard it explicitly.
+    if model_id.is_empty() {
+        return TierLabel::Unknown;
+    }
+    if let Some(info) = model_info_for(model_id) {
+        return info.tier_label();
+    }
+    if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id.starts_with(model_id)) {
+        return info.tier_label();
+    }
+    if let Some(info) = MODEL_CATALOG
         .iter()
-        .filter(|m| match provider {
-            Some(p) => m.provider == *p,
-            None => true,
-        })
-        .filter(|m| m.capabilities.has(tier.required_capability()))
-        .collect();
-
-    if candidates.is_empty() {
-        return None;
+        .filter(|m| model_id.starts_with(m.id))
+        .max_by_key(|m| m.id.len())
+    {
+        return info.tier_label();
     }
-
-    Some(tier.select(&candidates).id)
-}
-
-/// Resolve a model string that might be an alias or a literal model ID.
-///
-/// If the string is a recognized alias, resolves it. Otherwise returns it as-is.
-pub fn resolve_model(model: &str, provider: Option<&LlmProvider>) -> String {
-    resolve_model_alias(model, provider)
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| model.to_string())
-}
-
-/// Model tier for alias resolution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModelTier {
-    Opus,
-    Sonnet,
-    Haiku,
-}
-
-impl ModelTier {
-    fn required_capability(self) -> ModelCapabilities {
-        match self {
-            Self::Opus => ModelCapabilities::reasoning(),
-            Self::Sonnet => ModelCapabilities::coding(),
-            Self::Haiku => ModelCapabilities::cheap().or(ModelCapabilities::speed()),
-        }
-    }
-
-    fn select<'a>(self, candidates: &[&'a ModelInfo]) -> &'a ModelInfo {
-        if candidates.is_empty() {
-            tracing::warn!(
-                "ModelTier::select called with no candidates; falling back to first catalog entry"
-            );
-            return &MODEL_CATALOG[0];
-        }
-        match self {
-            // Opus: pick most expensive (most capable)
-            Self::Opus => candidates
-                .iter()
-                .max_by(|a, b| {
-                    (a.cost_per_m_input + a.cost_per_m_output)
-                        .partial_cmp(&(b.cost_per_m_input + b.cost_per_m_output))
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .map_or(&MODEL_CATALOG[0], |v| *v),
-            // Sonnet: pick mid-range cost
-            Self::Sonnet => {
-                let mut sorted: Vec<&ModelInfo> = candidates.to_vec();
-                sorted.sort_by(|a, b| {
-                    (a.cost_per_m_input + a.cost_per_m_output)
-                        .partial_cmp(&(b.cost_per_m_input + b.cost_per_m_output))
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-                let idx = (sorted.len() - 1) / 2;
-                sorted[idx]
-            }
-            // Haiku: pick cheapest
-            Self::Haiku => candidates
-                .iter()
-                .min_by(|a, b| {
-                    (a.cost_per_m_input + a.cost_per_m_output)
-                        .partial_cmp(&(b.cost_per_m_input + b.cost_per_m_output))
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .map_or(&MODEL_CATALOG[0], |v| *v),
-        }
-    }
-}
-
-/// Return all recognized alias names (for tab completion).
-pub fn model_aliases() -> &'static [&'static str] {
-    &["opus", "sonnet", "haiku"]
-}
-
-/// Check if a string is a recognized model alias.
-pub fn is_model_alias(s: &str) -> bool {
-    resolve_model_alias(s, None).is_some()
-}
-
-// ============================================================================
-// Model Router
-// ============================================================================
-
-/// Effort level controlling reasoning depth and token budget.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EffortLevel {
-    Low,
-    Medium,
-    High,
-}
-
-impl Default for EffortLevel {
-    fn default() -> Self {
-        Self::Medium
-    }
-}
-
-impl EffortLevel {
-    /// Parse from string (case-insensitive). Returns None for unrecognized values.
-    pub fn from_str_opt(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "low" => Some(Self::Low),
-            "medium" | "med" => Some(Self::Medium),
-            "high" | "max" => Some(Self::High),
-            _ => None,
-        }
-    }
-
-    /// Suggested `thinking_budget` (extended thinking tokens) for this effort level.
-    pub fn thinking_budget(self) -> Option<usize> {
-        match self {
-            Self::Low => None,
-            Self::Medium => Some(10_000),
-            Self::High => Some(32_000),
-        }
-    }
-
-    /// Suggested `max_tokens` multiplier relative to the model's default.
-    pub fn max_tokens_factor(self) -> f64 {
-        match self {
-            Self::Low => 0.5,
-            Self::Medium => 1.0,
-            Self::High => 1.5,
-        }
-    }
-}
-
-/// Task type hint for model routing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskType {
-    /// Simple question, quick lookup — prefer cheap/fast models
-    QuickQuery,
-    /// Code generation, editing, debugging — prefer coding models
-    CodeGeneration,
-    /// Architecture design, complex reasoning — prefer reasoning models
-    ArchitectureDesign,
-    /// Multi-step workflow — prefer coding + reasoning
-    ComplexWorkflow,
-}
-
-/// Recommends a model based on task type and preferences.
-pub struct ModelRouter;
-
-impl ModelRouter {
-    /// Recommend the best model ID for a given task type.
-    ///
-    /// Falls back to the first model in the catalog if no match is found.
-    pub fn recommend(task: TaskType) -> &'static str {
-        let required = match task {
-            TaskType::QuickQuery => ModelCapabilities::cheap(),
-            TaskType::CodeGeneration => ModelCapabilities::coding(),
-            TaskType::ArchitectureDesign => ModelCapabilities::reasoning(),
-            TaskType::ComplexWorkflow => {
-                ModelCapabilities::coding().or(ModelCapabilities::reasoning())
-            }
-        };
-
-        // Find cheapest model that has the required capabilities
-        let mut best: Option<&'static ModelInfo> = None;
-        let mut best_cost = f64::MAX;
-
-        for model in MODEL_CATALOG {
-            if model.capabilities.has(required) {
-                let cost = model.cost_per_m_input + model.cost_per_m_output;
-                if cost < best_cost {
-                    best_cost = cost;
-                    best = Some(model);
-                }
-            }
-        }
-
-        match best {
-            Some(m) => m.id,
-            None => MODEL_CATALOG[0].id,
-        }
-    }
-
-    /// Recommend a model for the given task, with a preference for speed.
-    pub fn recommend_fast(task: TaskType) -> &'static str {
-        let required = match task {
-            TaskType::QuickQuery => ModelCapabilities::cheap().or(ModelCapabilities::speed()),
-            TaskType::CodeGeneration => ModelCapabilities::coding().or(ModelCapabilities::speed()),
-            TaskType::ArchitectureDesign => ModelCapabilities::reasoning(),
-            TaskType::ComplexWorkflow => {
-                ModelCapabilities::coding().or(ModelCapabilities::reasoning())
-            }
-        };
-
-        for model in MODEL_CATALOG {
-            if model.capabilities.has(required)
-                && model.capabilities.has(ModelCapabilities::speed())
-            {
-                return model.id;
-            }
-        }
-
-        Self::recommend(task)
-    }
-
-    /// Estimate cost for a request with the given model and token counts.
-    pub fn estimate_cost(model_id: &str, input_tokens: usize, output_tokens: usize) -> f64 {
-        if let Some(info) = model_info_for(model_id) {
-            let input_cost = (input_tokens as f64 / 1_000_000.0) * info.cost_per_m_input;
-            let output_cost = (output_tokens as f64 / 1_000_000.0) * info.cost_per_m_output;
-            input_cost + output_cost
-        } else {
-            0.0
-        }
-    }
+    TierLabel::Unknown
 }
 
 #[cfg(test)]
@@ -1002,6 +417,83 @@ impl ModelRouter {
 mod tests {
     use super::*;
     use shannon_engine::api::types::WireFormat;
+    use shannon_types::provider_config::{ProviderTiers, TierName};
+
+    #[test]
+    fn resolve_tier_anthropic_fast_uses_haiku() {
+        let tiers = ProviderTiers::default();
+        let resolved = resolve_tier("fast", &LlmProvider::Anthropic, &tiers);
+        assert_eq!(resolved, Some("claude-haiku-4-5".to_string()));
+    }
+
+    #[test]
+    fn resolve_tier_anthropic_standard_uses_sonnet() {
+        let tiers = ProviderTiers::default();
+        let resolved = resolve_tier("standard", &LlmProvider::Anthropic, &tiers);
+        assert_eq!(resolved, Some("claude-sonnet-4-20250514".to_string()));
+    }
+
+    #[test]
+    fn resolve_tier_anthropic_pro_uses_opus() {
+        let tiers = ProviderTiers::default();
+        let resolved = resolve_tier("pro", &LlmProvider::Anthropic, &tiers);
+        assert_eq!(resolved, Some("claude-opus-4".to_string()));
+    }
+
+    #[test]
+    fn resolve_tier_accepts_anthropic_aliases() {
+        let tiers = ProviderTiers::default();
+        assert_eq!(
+            resolve_tier("haiku", &LlmProvider::Anthropic, &tiers),
+            Some("claude-haiku-4-5".to_string())
+        );
+        assert_eq!(
+            resolve_tier("sonnet", &LlmProvider::Anthropic, &tiers),
+            Some("claude-sonnet-4-20250514".to_string())
+        );
+        assert_eq!(
+            resolve_tier("opus", &LlmProvider::Anthropic, &tiers),
+            Some("claude-opus-4".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_tier_accepts_other_provider_aliases() {
+        let tiers = ProviderTiers::default();
+        assert!(resolve_tier("flash", &LlmProvider::Gemini, &tiers).is_some());
+        assert!(resolve_tier("mini", &LlmProvider::OpenAI, &tiers).is_some());
+        assert!(resolve_tier("ultra", &LlmProvider::Gemini, &tiers).is_some());
+    }
+
+    #[test]
+    fn resolve_tier_profile_override_wins() {
+        let tiers = ProviderTiers {
+            fast: Some("claude-haiku-3-5".to_string()),
+            ..Default::default()
+        };
+        let resolved = resolve_tier("fast", &LlmProvider::Anthropic, &tiers);
+        assert_eq!(
+            resolved,
+            Some("claude-haiku-3-5".to_string()),
+            "explicit profile_tiers.fast should win over catalog default"
+        );
+    }
+
+    #[test]
+    fn resolve_tier_unknown_input_returns_none() {
+        let tiers = ProviderTiers::default();
+        assert_eq!(
+            resolve_tier("garbage", &LlmProvider::Anthropic, &tiers),
+            None
+        );
+        assert_eq!(resolve_tier("", &LlmProvider::Anthropic, &tiers), None);
+    }
+
+    #[test]
+    fn resolve_tier_auto_returns_none() {
+        let tiers = ProviderTiers::default();
+        assert_eq!(resolve_tier("auto", &LlmProvider::Anthropic, &tiers), None);
+    }
 
     #[test]
     fn test_models_for_provider_anthropic() {
@@ -1016,6 +508,234 @@ mod tests {
         assert!(providers.contains(&LlmProvider::Anthropic));
         assert!(providers.contains(&LlmProvider::OpenAI));
         assert!(providers.contains(&LlmProvider::Gemini));
+    }
+
+    fn slugs_of(providers: &[LlmProvider]) -> Vec<String> {
+        providers.iter().map(|p| p.to_string()).collect()
+    }
+
+    #[test]
+    fn test_filter_providers_empty_lists_pass_through() {
+        let input = vec![LlmProvider::Anthropic, LlmProvider::OpenAI];
+        let out = filter_providers(input.clone(), &[], &[]);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn test_filter_providers_allowlist_only() {
+        let input = vec![
+            LlmProvider::Anthropic,
+            LlmProvider::OpenAI,
+            LlmProvider::Ollama,
+        ];
+        let enabled = vec!["anthropic".to_string(), "openai".to_string()];
+        let out = filter_providers(input, &enabled, &[]);
+        assert_eq!(slugs_of(&out), vec!["anthropic", "openai"]);
+    }
+
+    #[test]
+    fn test_filter_providers_denylist_only() {
+        let input = vec![
+            LlmProvider::Anthropic,
+            LlmProvider::OpenAI,
+            LlmProvider::Ollama,
+        ];
+        let disabled = vec!["ollama".to_string()];
+        let out = filter_providers(input, &[], &disabled);
+        assert_eq!(slugs_of(&out), vec!["anthropic", "openai"]);
+    }
+
+    #[test]
+    fn test_filter_providers_allowlist_plus_denylist() {
+        let input = vec![
+            LlmProvider::Anthropic,
+            LlmProvider::OpenAI,
+            LlmProvider::Ollama,
+        ];
+        let enabled = vec!["anthropic".to_string(), "ollama".to_string()];
+        let disabled = vec!["ollama".to_string()];
+        let out = filter_providers(input, &enabled, &disabled);
+        assert_eq!(slugs_of(&out), vec!["anthropic"]);
+    }
+
+    #[test]
+    fn test_filter_providers_case_insensitive() {
+        let input = vec![LlmProvider::Anthropic, LlmProvider::OpenAI];
+        let enabled = vec!["ANTHROPIC".to_string()];
+        let out = filter_providers(input, &enabled, &[]);
+        assert_eq!(slugs_of(&out), vec!["anthropic"]);
+    }
+
+    #[test]
+    fn test_filter_providers_allowlist_no_matches_yields_empty() {
+        // filter_providers itself is pure: a non-matching allowlist yields empty.
+        // (available_providers wraps this with a fail-open guard.)
+        let input = vec![LlmProvider::Anthropic, LlmProvider::OpenAI];
+        let enabled = vec!["nonexistent-provider".to_string()];
+        let out = filter_providers(input, &enabled, &[]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_available_providers_honours_env_and_fails_open() {
+        // An allowlist matching nothing must fall back to all providers so a
+        // typo'd SHANNON_ENABLED_PROVIDERS never bricks the picker.
+        unsafe {
+            std::env::set_var("SHANNON_ENABLED_PROVIDERS", "does-not-exist");
+        }
+        let fallback = available_providers();
+        unsafe {
+            std::env::remove_var("SHANNON_ENABLED_PROVIDERS");
+        }
+        assert!(
+            fallback.contains(&LlmProvider::Anthropic),
+            "fail-open should still include anthropic"
+        );
+
+        // A valid allowlist restricts to matching providers (comma + space
+        // separated slugs).
+        unsafe {
+            std::env::set_var("SHANNON_ENABLED_PROVIDERS", "anthropic, openai");
+        }
+        let providers = available_providers();
+        unsafe {
+            std::env::remove_var("SHANNON_ENABLED_PROVIDERS");
+        }
+        let slugs = slugs_of(&providers);
+        assert!(slugs.contains(&"anthropic".to_string()));
+        assert!(slugs.contains(&"openai".to_string()));
+        assert!(!slugs.contains(&"ollama".to_string()));
+    }
+
+    // === effective_provider_allowlist (ADR-0005 P4.9) ===
+    //
+    // The desktop's Settings UI persists an `enabled_providers` override;
+    // the engine reads it via this helper. Precedence is documented on
+    // the function; the tests below pin each branch. They save/restore
+    // the env vars because `parse_provider_slugs_env` is process-global.
+
+    /// RAII guard that snapshots `SHANNON_ENABLED_PROVIDERS` /
+    /// `SHANNON_DISABLED_PROVIDERS` on construction and restores them on
+    /// drop — keeps the env-mutating tests from leaking state into
+    /// siblings.
+    struct EnvGuard {
+        saved_enabled: Option<String>,
+        saved_disabled: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn new() -> Self {
+            Self {
+                saved_enabled: std::env::var("SHANNON_ENABLED_PROVIDERS").ok(),
+                saved_disabled: std::env::var("SHANNON_DISABLED_PROVIDERS").ok(),
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.saved_enabled {
+                Some(v) => unsafe {
+                    std::env::set_var("SHANNON_ENABLED_PROVIDERS", v);
+                },
+                None => unsafe {
+                    std::env::remove_var("SHANNON_ENABLED_PROVIDERS");
+                },
+            }
+            match &self.saved_disabled {
+                Some(v) => unsafe {
+                    std::env::set_var("SHANNON_DISABLED_PROVIDERS", v);
+                },
+                None => unsafe {
+                    std::env::remove_var("SHANNON_DISABLED_PROVIDERS");
+                },
+            }
+        }
+    }
+
+    fn clear_allowlist_env() {
+        unsafe {
+            std::env::remove_var("SHANNON_ENABLED_PROVIDERS");
+        }
+        unsafe {
+            std::env::remove_var("SHANNON_DISABLED_PROVIDERS");
+        }
+    }
+
+    #[test]
+    fn effective_provider_allowlist_explicit_empty_returns_empty() {
+        // `Some(&[])` is the desktop's "hide every provider" state —
+        // must short-circuit to the same empty vec, ignoring env vars.
+        let _g = EnvGuard::new();
+        clear_allowlist_env();
+        unsafe {
+            std::env::set_var("SHANNON_ENABLED_PROVIDERS", "anthropic");
+        }
+        let out = effective_provider_allowlist(Some(&[]));
+        assert_eq!(out, Some(vec![]));
+    }
+
+    #[test]
+    fn effective_provider_allowlist_explicit_overrides_env() {
+        // User-set non-empty allowlist beats the env. A shell exporting
+        // a stale `SHANNON_ENABLED_PROVIDERS` must NOT clobber the
+        // desktop's persisted choice.
+        let _g = EnvGuard::new();
+        clear_allowlist_env();
+        unsafe {
+            std::env::set_var("SHANNON_ENABLED_PROVIDERS", "anthropic, openai");
+        }
+        let explicit = vec!["ollama".to_string()];
+        let out = effective_provider_allowlist(Some(&explicit));
+        assert_eq!(out, Some(vec!["ollama".to_string()]));
+    }
+
+    #[test]
+    fn effective_provider_allowlist_env_only_returns_parsed() {
+        // No explicit slice → fall through to env-var allowlist parsing.
+        let _g = EnvGuard::new();
+        clear_allowlist_env();
+        unsafe {
+            std::env::set_var("SHANNON_ENABLED_PROVIDERS", "anthropic, openai");
+        }
+        let out = effective_provider_allowlist(None);
+        let mut v = out.expect("env-only path returns Some");
+        v.sort();
+        assert_eq!(v, vec!["anthropic".to_string(), "openai".to_string()]);
+    }
+
+    #[test]
+    fn effective_provider_allowlist_neither_returns_none() {
+        // No explicit slice, no env vars → `None` (no restriction). The
+        // picker then shows every catalog provider.
+        let _g = EnvGuard::new();
+        clear_allowlist_env();
+        assert_eq!(effective_provider_allowlist(None), None);
+    }
+
+    #[test]
+    fn effective_provider_allowlist_disabled_only_returns_remaining() {
+        // `SHANNON_DISABLED_PROVIDERS` without `SHANNON_ENABLED_PROVIDERS`
+        // produces the full provider list minus the disabled slugs.
+        let _g = EnvGuard::new();
+        clear_allowlist_env();
+        unsafe {
+            std::env::set_var("SHANNON_DISABLED_PROVIDERS", "ollama");
+        }
+        let out = effective_provider_allowlist(None).expect("disabled-only path returns Some");
+        let slugs: Vec<String> = out.into_iter().map(|s| s.to_lowercase()).collect();
+        assert!(slugs.contains(&"anthropic".to_string()));
+        assert!(!slugs.contains(&"ollama".to_string()));
+    }
+
+    #[test]
+    fn env_provider_allowlist_returns_none_when_neither_set() {
+        // `env_provider_allowlist` is the same logic but with no
+        // explicit override. Sanity-check that the helper itself
+        // returns `None` when both env vars are empty.
+        let _g = EnvGuard::new();
+        clear_allowlist_env();
+        assert!(env_provider_allowlist().is_none());
     }
 
     #[test]
@@ -1150,6 +870,42 @@ mod tests {
     }
 
     #[test]
+    fn resolve_auto_tier_prefers_standard_when_available() {
+        // Anthropic ships all tiers, so the lightweight heuristic should pick
+        // Standard (the workhorse default) and agree with an explicit
+        // `/model --tier standard`.
+        let tiers = ProviderTiers::default();
+        let (tier, id) =
+            resolve_auto_tier(&LlmProvider::Anthropic, &tiers).expect("anthropic has tiers");
+        assert_eq!(tier, TierName::Standard);
+        assert_eq!(
+            id,
+            resolve_tier("standard", &LlmProvider::Anthropic, &tiers).unwrap()
+        );
+    }
+
+    #[test]
+    fn resolve_auto_tier_respects_profile_override() {
+        // A pinned providers.toml override for `standard` wins for auto too,
+        // since auto delegates through resolve_tier.
+        let mut tiers = ProviderTiers::default();
+        tiers.standard = Some("claude-opus-4-20250115".to_string());
+        let (tier, id) =
+            resolve_auto_tier(&LlmProvider::Anthropic, &tiers).expect("resolves via override");
+        assert_eq!(tier, TierName::Standard);
+        assert_eq!(id, "claude-opus-4-20250115");
+    }
+
+    #[test]
+    fn resolve_auto_tier_none_for_provider_with_no_models() {
+        // Ollama has no static catalog entries and no alias-mapped models, so
+        // every candidate tier misses — auto honestly returns None rather than
+        // inventing a model.
+        let tiers = ProviderTiers::default();
+        assert!(resolve_auto_tier(&LlmProvider::Ollama, &tiers).is_none());
+    }
+
+    #[test]
     fn test_is_model_alias() {
         assert!(is_model_alias("opus"));
         assert!(is_model_alias("sonnet"));
@@ -1208,6 +964,20 @@ mod tests {
     #[test]
     fn test_context_window_unknown_fallback() {
         assert_eq!(context_window_for("totally-unknown-model"), 200_000);
+    }
+
+    #[test]
+    fn test_context_window_opt_honest_about_unknown() {
+        // Known models resolve to their cataloged window.
+        assert_eq!(context_window_for_opt("gpt-4o"), Some(128_000));
+        assert_eq!(context_window_for_opt("gemini-2.5-pro"), Some(1_000_000));
+        // Unknown models are None — not a fabricated 200K (Phase E).
+        assert_eq!(context_window_for_opt("totally-unknown-model"), None);
+        // The usize accessor still falls back to the named constant.
+        assert_eq!(
+            context_window_for("totally-unknown-model"),
+            FALLBACK_CONTEXT_WINDOW
+        );
     }
 
     #[test]
@@ -1760,6 +1530,124 @@ mod tests {
         assert_eq!(
             model_info_for("MiniMax-M2.7-highspeed").unwrap().max_output,
             64_000
+        );
+    }
+
+    fn find_model(id: &str) -> Option<&'static ModelInfo> {
+        // Aliases let the brief's exact test IDs resolve against the current
+        // catalog without adding obsolete duplicate entries. The static
+        // fixture covers `o1-preview`, which has no canonical catalog entry.
+        static O1_PREVIEW: ModelInfo = ModelInfo {
+            id: "o1-preview",
+            display_name: "o1-preview",
+            aliases: &[],
+            provider: LlmProvider::OpenAI,
+            context_window: 128_000,
+            max_output: 32_768,
+            cost_per_m_input: 15.0,
+            cost_per_m_output: 60.0,
+            capabilities: ModelCapabilities::reasoning(),
+        };
+        match id {
+            "claude-haiku-4-5" => MODEL_CATALOG
+                .iter()
+                .find(|m| m.id == "claude-haiku-4-5-20251001"),
+            "claude-opus-4" => MODEL_CATALOG
+                .iter()
+                .find(|m| m.id == "claude-opus-4-20250115"),
+            "gemini-1.5-flash" => MODEL_CATALOG.iter().find(|m| m.id == "gemini-2.5-flash"),
+            "gemini-1.5-pro" => MODEL_CATALOG.iter().find(|m| m.id == "gemini-2.5-pro"),
+            "o1-preview" => Some(&O1_PREVIEW),
+            other => MODEL_CATALOG.iter().find(|m| m.id == other),
+        }
+    }
+
+    #[test]
+    fn tier_label_classifies_anthropic_models() {
+        let haiku = find_model("claude-haiku-4-5-20251001").unwrap();
+        assert_eq!(haiku.tier_label(), TierLabel::Fast);
+
+        let sonnet = find_model("claude-sonnet-4-20250514").unwrap();
+        assert_eq!(sonnet.tier_label(), TierLabel::Standard);
+
+        let opus = find_model("claude-opus-4-20250115").unwrap();
+        assert_eq!(opus.tier_label(), TierLabel::Pro);
+    }
+
+    #[test]
+    fn tier_label_for_id_resolves_exact_short_and_unknown() {
+        // Exact catalog id.
+        assert_eq!(
+            tier_label_for_id("claude-haiku-4-5-20251001"),
+            TierLabel::Fast
+        );
+        // Short name resolves via prefix match (no exact catalog entry).
+        assert_eq!(tier_label_for_id("claude-haiku-4-5"), TierLabel::Fast);
+        assert_eq!(tier_label_for_id("claude-opus-4"), TierLabel::Pro);
+        assert_eq!(tier_label_for_id("claude-sonnet-4"), TierLabel::Standard);
+        // Non-catalog / empty.
+        assert_eq!(tier_label_for_id("made-up-model"), TierLabel::Unknown);
+        assert_eq!(tier_label_for_id(""), TierLabel::Unknown);
+    }
+
+    #[test]
+    fn tier_label_classifies_gemini_models() {
+        let flash = find_model("gemini-2.5-flash").unwrap();
+        assert_eq!(flash.tier_label(), TierLabel::Fast);
+
+        let pro = find_model("gemini-2.5-pro").unwrap();
+        assert_eq!(pro.tier_label(), TierLabel::Standard);
+    }
+
+    #[test]
+    fn tier_label_classifies_openai_models() {
+        let mini = find_model("gpt-4o-mini").unwrap();
+        assert_eq!(mini.tier_label(), TierLabel::Fast);
+
+        let o1 = find_model("o1-preview").unwrap();
+        assert_eq!(o1.tier_label(), TierLabel::Pro);
+    }
+
+    #[test]
+    fn catalog_previously_empty_providers_now_have_models() {
+        // Phase A: providers that previously had zero catalog entries.
+        let xai = models_for_provider(LlmProvider::Xai);
+        assert!(!xai.is_empty(), "xAI should have models");
+        assert!(xai.iter().any(|m| m.id == "grok-4.5"));
+        for provider in [
+            LlmProvider::Perplexity,
+            LlmProvider::Cohere,
+            LlmProvider::SiliconFlow,
+            LlmProvider::Together,
+            LlmProvider::Fireworks,
+            LlmProvider::Ai21,
+        ] {
+            assert!(
+                !models_for_provider(provider.clone()).is_empty(),
+                "{provider:?} should have at least one model"
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_2026_frontier_models_resolve() {
+        // Anthropic 4.6 — 1M context GA (no beta header needed).
+        let sonnet46 = model_info_for("claude-sonnet-4-6").unwrap();
+        assert_eq!(sonnet46.context_window, 1_000_000);
+        assert_eq!(
+            model_info_for("claude-opus-4-6").unwrap().context_window,
+            1_000_000
+        );
+        // OpenAI GPT-5 alias resolves.
+        assert!(model_info_for_alias("gpt5").is_some());
+        // grok alias → grok-4.5 (grok-4 retired).
+        let grok = model_info_for_alias("grok").unwrap();
+        assert_eq!(grok.id, "grok-4.5");
+        // grok-4.5 (coding+reasoning) → Standard; grok-4.1-fast (speed+cheap) → Fast.
+        assert_eq!(grok.tier_label(), TierLabel::Standard);
+        assert_eq!(
+            model_info_for("grok-4.1-fast").unwrap().tier_label(),
+            TierLabel::Fast
         );
     }
 }

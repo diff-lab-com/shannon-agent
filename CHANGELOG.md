@@ -2,6 +2,103 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
+## [Unreleased]
+
+_No entries yet._
+
+## v0.9.0 (2026-08-10) — file-history snapshots + unified `/rewind`, provider read facade + wire alignment
+
+### Added
+
+- First-screen status card showing active provider/model/tier plus available providers and models
+- `/model --tier <fast|standard|pro>` command surface (also accepts aliases: `haiku`/`sonnet`/`opus`/`flash`/`mini`/`plus`/`ultra`/`max`)
+- `/model --save` flag persists tier choice to `~/.shannon/providers.toml`
+- Three-level picker navigation (provider → tier → model)
+- `TierName` enum (`fast`/`standard`/`pro`/`auto`) with alias normalization
+- `/connect` validates the credential with a 1-token probe at connect time, so a bad key/region/model fails immediately instead of mid-query (fail-soft: a non-auth error warns but keeps the connection)
+- Provider allowlist via `SHANNON_ENABLED_PROVIDERS` / `SHANNON_DISABLED_PROVIDERS` env vars — restricts the model picker, first-screen status card, and `/provider` / `/connect` listings; fails open (full list) when an allowlist matches nothing so a typo never bricks the picker
+- LiteLLM community pricing table — `/model refresh` now also refreshes `model_prices_and_context_window.json`, so dynamic/custom models show real per-token prices instead of the estimate fallback
+- `/model --tier auto` — resolves `auto` to a concrete tier via a lightweight best-default heuristic (standard → pro → fast); `auto` is input-only and never persisted
+- `/provider health` — live-probes the active provider (1-token round-trip, 15s timeout, reuses the running key) and inventories every allowed provider's credential status. Informational only; no automatic failover (Shannon ships no model router by design).
+- **File-level snapshots + unified `/rewind` (W6-2).** `FileHistoryManager` records per-file content snapshots (pre-modify on Write/Edit/MultiEdit, plus post-turn in `repl/query.rs`), giving `/rewind` three modes: `/rewind [n]` rewinds conversation turns, `/rewind <path>` reverts a single file to its previous AI-saved version (confirms before overwriting; `--yes` skips confirm), and `/rewind code|both <n>` reverts file changes to their state at turn N. `/undo` and `/checkpoint` are now aliases of `/rewind`. Configurable via `SHANNON_FILE_HISTORY` / `SHANNON_FILE_HISTORY_DIR` / `SHANNON_FILE_HISTORY_TTL` env (on by default).
+
+### Changed
+
+- `/help` now opens a modal overlay instead of injecting a System message into chat history (prevents `<file>`/`<line>`/`<character>` placeholders from leaking into LLM context)
+- StatusBar pill format upgraded from `[model]` to `[provider/model · tier]`
+- `arg_hint` placeholders renamed from `<file>` to `<FILE_PATH>` (ALL_CAPS) to reduce LLM misidentification risk
+- `MODEL_CATALOG` is now the canonical pricing source of truth (SSOT) — cost tracking resolves per-model pricing through the catalog first, then file/env overrides, then LiteLLM, then a documented `$3/$15` fallback. Local catalog entries no longer get mispriced as hosted (bare `qwen` alias removed).
+- Model picker shows an honest cost label — models with unknown pricing or context windows render `unknown` instead of fabricating a 200K window or a default price.
+- Config files (`config.toml`, `.shannon.toml`, `providers.toml`) now resolve `{env:VAR}`, `{env:VAR:-default}`, and `{file:/abs/path}` / `{file:~/.shannon/x}` tokens in every string field. Single-pass so `{env:X}` whose value is `{env:Y}` stays literal (no recursive injection); `file:` paths must be absolute or `~/.shannon/`-rooted and may not contain `..`. Lets users reference secrets without inlining them, strengthening A1.
+- **Provider store unification (Phase 2 task 4).** Desktop-managed provider connections (Add Provider modal → `~/.shannon/desktop/providers.json`) now round-trip through the engine's `~/.shannon/providers.toml` via `ProviderConfigStore::upsert_profile / remove_profile`. A process-level `Mutex<ProviderConfigStore>` on `AppState` serializes the read-modify-write so concurrent `save_provider` / `set_active_provider` / `delete_provider` calls can't clobber each other. On first launch, a one-shot migration lifts any existing `providers.json` entries into the engine store and removes the legacy file. Two distinct `openai-compatible` connections (e.g. GLM + Kimi) now keep their desktop slugs as the engine profile id, fixing the OpenAI-collapse that the `set_active(&LlmProvider, ...)` path caused. `ProviderConnection` gains the v2 `ProviderProfile` fields (`models_url`, `extra_headers`, `default_max_tokens`, `fallback_models`, `quirks`, `tiers`) so the desktop's UI surface matches the engine schema; the engine's runtime path still only consumes `extra_headers` + `default_max_tokens` end-to-end.
+- **Stopped per-edit git auto-commit.** Shannon no longer creates a git checkpoint after every Edit/Write/Bash tool call; the REPL-side `CheckpointManager` git machinery (`create_checkpoint` / `revert_to` / `undo_last` / `preview_revert`) is removed. `/rewind code|both <n>` reverts through on-disk content snapshots instead of `git reset`, so it works in non-git directories and never rewrites git history.
+- **ProviderConnection wire alignment (TD-4, ADR-0009 Phase 2).** The desktop's `ProviderConnection` DTO now mirrors the engine's `ProviderProfile` schema (`label`→`display_name`, `provider_kind`→`kind` kept as a String slug; dropped dead `api_key`/`model`/`created_at`; added `has_api_key: bool` derived from the credential store — fixes a pre-existing dead signal where the UI's "has key" indicator was always false since Phase 1). Legacy `providers.json` reads preserved via separate `LegacyProviderConnection`/`LegacyProvidersFile` structs for the one-shot migration.
+
+### Fixed
+
+- `/connect` no longer drops previously connected providers. The REPL connect path now writes `~/.shannon/providers.toml` through `ProviderConfigService::connect` (the same write path as `shannon providers add`), so `/connect A` then `/connect B` keeps both — previously the second `/connect` overwrote the file with a single-provider config and silently lost `A`. `/disconnect` still removes one provider; anyone who relied on `/connect` as "reset to one provider" can `/disconnect` the others.
+- Status card now renders the "available providers/models" list from `MODEL_CATALOG` and connected/disconnected markers from `~/.shannon/providers.toml` in real time (was a static placeholder).
+- `/model --tier <t> --save` tier override now survives a restart. `persist_model_to_providers_toml` writes `active_target` (provider + model id) via `ProviderConfigStore::set_active`, not just the tier name, so `resolve_active_target` reads back the chosen model on next launch. Verified by `store_set_active_survives_save_load_cycle`.
+
+## v0.8.0 (2026-08-06) — provider write/read consolidation, local voice, CI gates
+
+> Note: between v0.5.5 and this entry the CHANGELOG fell behind the unified-version releases (v0.6.x / v0.7.x). Entries below are reconstructed from `git log` per tag; the `[Unreleased]` block above accumulated across the same window and has not yet been redistributed into per-version sections.
+
+### Features
+
+- **Single write path for `providers.toml` (P2-2 Wave 6, PR #34).** Every write across CLI / REPL / Desktop flows through `ProviderConfigService`'s RAII `flock` + lock-then-reload read-modify-write (ADR-0008 Decision 3). Eliminates the concurrent-write clobber hazard on `save_provider` / `set_active_provider` / `delete_provider`.
+- **Provider Store Read Facade (ADR-0009, accepted).** `ProviderReadSnapshot` consolidates the desktop's scattered `provider_store` read sites into one typed snapshot, built under one short-lived lock and released before any further `.await` — the read-side complement to the write-path `ProviderConfigService`.
+- **Local voice (P2-5e).** On-device speech-to-text via `whisper-rs` backend + desktop frontend.
+- **Chat polish (P2-5d).** Design tokens, `MessageBubble` refactor, Markdown rendering, Composer redesign, accessibility pass.
+- **MCP integrations.** Notion MCP (P1-3c) and Linear MCP (P1-3d).
+
+### Changed
+
+- **C2 — drop `providers.json` dual-write (PR #37).** `save_provider` / `delete_provider` / `set_active_provider` R-M-W against the engine store only; the legacy `~/.shannon/desktop/providers.json` write-through cache is retired.
+- **Semver gate required (S1-6/B1/B2, PR #40).** `cargo-semver-checks` flipped from advisory (`continue-on-error`) to a required merge gate; baseline `v0.8.0`. Pre-1.0 breaking changes still allowed as long as the minor bumps.
+
+### Fixed
+
+- CI: install Tauri + libdbus system deps in the metrics job; relocate `audit.toml` to `.cargo/` (cargo-audit 0.22+ discovers project config there, not at repo root); exclude `shannon-mcp-saas` from musl (keyring→libdbus-sys not musl-portable) and `shannon-desktop` from semver (Tauri GTK/WebKit rustdoc deps the job can't install); fix ~96 workspace intra-doc-link lint errors across 11 crates; strengthen Rust gates (P2-4: doc build, rustsec-audit, cross-platform matrix).
+
+## v0.7.1 (2026-07-21) — gateway supervisor, engine discovery
+
+### Features
+
+- **Gateway supervisor prefers OS-managed service.** When `gateway.managed` is on, the desktop first tries an OS-managed `shannon-gateway` service before spawning its own subprocess.
+- **Engine discovery — reuse existing api_server on :33420.** The desktop detects and reuses an already-running engine instead of starting a duplicate.
+
+### Fixed
+
+- Service probe hardened (per-platform service name, deterministic timeout + test).
+- Windows: gateway built + installed via `install.ps1`; post-install hint block expanded to 5 steps.
+- Surfaced the `shannon-code` → `shannon` rename in the desktop window title + docs.
+
+## v0.7.0 (2026-07-19) — unified release & install story
+
+### Features
+
+- **Hermes-modeled unified release/install story.** One tag ships CLI + desktop + gateway together; `cargo-dist` + `tauri-action` + `gh release` pipeline.
+- Windows bundler switched MSI → NSIS; added a Windows icon.
+- Repository hygiene: Dependabot config, CODEOWNERS, issue templates, CONTRIBUTING.
+
+### Fixed
+
+- Release pipeline: `gh release edit --draft=false` (not softprops), `shasum -a 256` for the CLI checksum (macOS has no `sha256sum`), justfile release-prep echo, internal dep-pin + desktop version bumps with the workspace.
+
+## v0.6.0 (2026-07-17) — OSS metadata, monorepo cleanup, CI hardening
+
+### Features
+
+- **OSS metadata + monorepo cleanup (phase6).** LICENSE, README polish, and the top-level restructure pairing `docs/archive/legacy-archives/` (markdown) with `legacy-archives/` (code + config) for pre-unification artifacts.
+- **Desktop + gateway matrix release workflow.** Per-OS matrix (`cargo-dist` + `tauri-action`), upload-artifact scoping.
+
+### Fixed
+
+- CI hardening (F1-F7): Tauri apt deps, semver baseline, Node 24, serial tests; `shannon-desktop` excluded from semver + musl.
+- Serialized flaky tests (`roll_over_resets_spend` date test, MCP config isolation) with `#[serial]`.
+- Desktop release pipeline H-fix series: aarch64 cross-compile, Tauri deps for cargo-dist Linux, musl→gnu targets, bundle path globbing, YAML indent.
+
 ## v0.5.5 (2026-06-17) — notifications next phase (T-series + C9)
 
 ### Features

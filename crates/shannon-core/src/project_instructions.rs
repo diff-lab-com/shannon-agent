@@ -1,6 +1,7 @@
 //! Auto-loading project instructions from CLAUDE.md / AGENTS.md and cross-tool files.
 
 use std::path::{Path, PathBuf};
+use tracing::debug;
 
 /// Default filenames to search for, in priority order.
 /// Includes cross-tool compatibility with Cursor, Windsurf, and Crush.
@@ -703,6 +704,14 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
     if all_content.is_empty() {
         None
     } else {
+        // Emit the `InstructionsLoaded` hook event after the merge of CLAUDE.md,
+        // AGENTS.md, `.claude/rules/*.md`, and cross-tool instruction files
+        // completes. We count files actually merged (instruction_files +
+        // any imported files) and report the total payload size in bytes.
+        // Emit is best-effort and never blocks instruction loading — any
+        // error from the hook system is logged at debug level and swallowed.
+        emit_instructions_loaded(instruction_files.len(), all_content.len(), &all_files);
+
         Some(ProjectInstructions {
             content: all_content,
             loaded_files: all_files,
@@ -710,6 +719,50 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
             instruction_files,
         })
     }
+}
+
+/// Emit a `HookEvent::InstructionsLoaded` event when the engine is wired up.
+///
+/// This is the no-op default implementation: the hook manager sits in
+/// `tool_execution.rs` (a sibling module). To avoid a circular dependency
+/// between `project_instructions` and `tool_execution`, the actual emit is
+/// performed via the `INSTRUCTION_HOOK_EMITTER` global set at startup by
+/// `ToolExecutionContext::install_instructions_emitter`. The default (when
+/// not installed) is a no-op so the loader keeps working in tests / CLI
+/// headless mode without any hook setup.
+fn emit_instructions_loaded(files_count: usize, total_bytes: usize, files: &[String]) {
+    if let Some(emitter) = INSTRUCTION_HOOK_EMITTER.get() {
+        let event = shannon_engine::hooks::HookEvent::InstructionsLoaded {
+            files_count,
+            total_bytes,
+        };
+        debug!(
+            "Emitting InstructionsLoaded: files={}, bytes={}, sources={:?}",
+            files_count, total_bytes, files
+        );
+        emitter(event);
+    }
+}
+
+/// Type alias for the global instructions emitter. Stored as a `OnceLock`
+/// because it is set exactly once during engine wiring.
+type InstructionsHookEmitter = Box<dyn Fn(shannon_engine::hooks::HookEvent) + Send + Sync>;
+
+/// Global slot for the instructions hook emitter. Populated by
+/// [`install_instructions_emitter`] from `tool_execution.rs` after the
+/// `HookManager` is constructed; read by [`emit_instructions_loaded`] every
+/// time the instruction loader finishes a merge.
+static INSTRUCTION_HOOK_EMITTER: std::sync::OnceLock<InstructionsHookEmitter> =
+    std::sync::OnceLock::new();
+
+/// Install the global instructions hook emitter. Call this exactly once
+/// during engine startup, after the `HookManager` is available.
+///
+/// The closure should serialize the event to JSON and dispatch it through
+/// the `HookManager` (fire-and-forget). Errors must be swallowed inside the
+/// closure so they never propagate back into the instruction loader.
+pub fn install_instructions_emitter(emitter: InstructionsHookEmitter) {
+    let _ = INSTRUCTION_HOOK_EMITTER.set(emitter);
 }
 
 /// Load managed/organization instructions from `RemoteManagedSettings`.
@@ -1626,6 +1679,71 @@ mod tests {
             "Should still load project instructions: {:?}",
             instr.content
         );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------------
+    // HookEmitter wiring tests (P1-2b)
+    // -----------------------------------------------------------------------
+
+    /// Calling `load_full_context` without an installed emitter must succeed
+    /// and never panic — the global `OnceLock` is empty by default.
+    #[test]
+    fn test_instructions_emitter_noop_when_unset() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# No-op emitter").unwrap();
+
+        let result = load_full_context(&tmp);
+        assert!(result.is_some());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// With an emitter installed, every `load_full_context` call must produce
+    /// at least one `HookEvent::InstructionsLoaded` event carrying non-zero
+    /// file count and total byte size.
+    ///
+    /// Note: the emitter is a process-global `OnceLock`, so this test can
+    /// observe events from concurrent tests that also installed an emitter.
+    /// We therefore assert that *at least one* event was recorded by our
+    /// capture, and that it matches the expected schema.
+    #[test]
+    fn test_instructions_emitter_fires_on_load() {
+        use shannon_engine::hooks::HookEvent;
+
+        let captured: std::sync::Arc<std::sync::Mutex<Vec<HookEvent>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_clone = captured.clone();
+
+        install_instructions_emitter(Box::new(move |event| {
+            captured_clone.lock().unwrap().push(event);
+        }));
+
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# Emit me").unwrap();
+
+        let result = load_full_context(&tmp);
+        assert!(result.is_some());
+
+        let events = captured.lock().unwrap();
+        assert!(
+            !events.is_empty(),
+            "expected at least one InstructionsLoaded event"
+        );
+        // The last event recorded by our capture should be a fresh
+        // InstructionsLoaded from the load we just performed.
+        match events.last().expect("at least one event") {
+            HookEvent::InstructionsLoaded {
+                files_count,
+                total_bytes,
+            } => {
+                assert!(*files_count >= 1, "should report at least one file");
+                assert!(*total_bytes > 0, "should report non-zero payload size");
+            }
+            other => panic!("expected InstructionsLoaded, got {other:?}"),
+        }
 
         let _ = fs::remove_dir_all(&tmp);
     }

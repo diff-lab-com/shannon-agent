@@ -15,7 +15,7 @@ Arguments: {args}
 Categories:
 - Git & Version Control: commit, status, diff, review-pr, worktree
 - Code Review & Analysis: review-pr, diff
-- Files & Documents: pdf, export
+- Files & Documents: export
 - System & Configuration: config, debug, credentials
 - User Interface: search, clear, help, history
 
@@ -272,18 +272,6 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("To review code changes before merging")
             .with_related(vec!["commit", "diff"])
         ),
-        "pdf" => Some(
-            CommandHelpEntry::new(
-                "pdf".to_string(),
-                "Extract and analyze content from PDF files".to_string(),
-                HelpCategory::Files,
-            )
-            .with_aliases(vec!["read-pdf", "analyze-pdf"])
-            .with_arg_hint("<file.pdf>")
-            .with_examples(vec!["/pdf document.pdf", "/pdf research.pdf --pages 1-5"])
-            .with_when_to_use("When you need to read or analyze PDF documents")
-            .with_related(vec![])
-        ),
         "status" => Some(
             CommandHelpEntry::new(
                 "status".to_string(),
@@ -301,7 +289,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Show git diff of changes, with interactive review mode".to_string(),
                 HelpCategory::Git,
             )
-            .with_arg_hint("[options | review [n] | accept <file> | reject <file> | accept-all | reject-all]")
+            .with_arg_hint("[options | review [n] | accept <FILE_PATH> | reject <FILE_PATH> | accept-all | reject-all]")
             .with_examples(vec!["/diff", "/diff HEAD~1", "/diff review", "/diff review 2", "/diff accept src/main.rs", "/diff reject-all"])
             .with_when_to_use("To see what has changed, or interactively review/accept/reject individual file changes")
             .with_related(vec!["status", "commit", "undo"])
@@ -369,6 +357,42 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             ])
             .with_when_to_use("To restore a previously exported conversation into the current session")
             .with_related(vec!["export", "history"])
+        ),
+        "connect" => Some(
+            CommandHelpEntry::new(
+                "connect".to_string(),
+                "Connect a provider end-to-end with no environment variable".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("<provider> [api-key]")
+            .with_examples(vec![
+                "/connect anthropic sk-ant-api03-...",
+                "/connect openai sk-...",
+                "/connect ollama",
+            ])
+            .with_when_to_use(
+                "To set up a provider without exporting an env var. The API key is stored \
+                 on disk (0600) and a profile is persisted to ~/.shannon/providers.toml, so \
+                 the connection survives restart. The connected provider loads on next launch.",
+            )
+            .with_related(vec!["provider", "model", "credentials"]),
+        ),
+        "disconnect" => Some(
+            CommandHelpEntry::new(
+                "disconnect".to_string(),
+                "Remove a provider's saved profile so it is no longer connected".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("<provider>")
+            .with_examples(vec!["/disconnect anthropic", "/disconnect ollama"])
+            .with_when_to_use(
+                "To remove a provider connection. The persisted profile is deleted from \
+                 ~/.shannon/providers.toml and the provider stops appearing as connected. \
+                 The stored API key is kept, so re-running /connect is a one-step reconnect. \
+                 If you disconnect the active provider, Shannon switches to the next \
+                 connected one (or goes unconfigured).",
+            )
+            .with_related(vec!["connect", "provider"]),
         ),
         "config" => Some(
             CommandHelpEntry::new(
@@ -456,26 +480,26 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
         "sessions" => Some(
             CommandHelpEntry::new(
                 "sessions".to_string(),
-                "List saved sessions".to_string(),
+                "Removed — use /resume to open the session picker".to_string(),
                 HelpCategory::Ui,
             )
             .with_aliases(vec!["list-sessions"])
-            .with_arg_hint("[--all] [--search <query>]")
-            .with_examples(vec!["/sessions", "/sessions --all", "/sessions --search bugfix"])
-            .with_when_to_use("Use to see previously saved sessions that can be resumed")
+            .with_arg_hint("")
+            .with_examples(vec!["/resume"])
+            .with_when_to_use("Use /resume instead")
             .with_related(vec!["resume", "history"])
         ),
         "resume" => Some(
             CommandHelpEntry::new(
                 "resume".to_string(),
-                "Resume a saved session by UUID or number".to_string(),
+                "Open the session picker, or resume a specific session by UUID/number".to_string(),
                 HelpCategory::Ui,
             )
             .with_aliases(vec!["restore"])
-            .with_arg_hint("<number-or-uuid>")
-            .with_examples(vec!["/resume 1", "/resume <uuid>"])
+            .with_arg_hint("[<number-or-uuid>]")
+            .with_examples(vec!["/resume", "/resume <uuid>"])
             .with_when_to_use("Use to continue a previous session")
-            .with_related(vec!["sessions", "history"])
+            .with_related(vec!["history"])
         ),
         "history" => Some(
             CommandHelpEntry::new(
@@ -579,7 +603,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_arg_hint("<file-path> [prompt]")
             .with_examples(vec!["/image screenshot.png", "/image diagram.png Explain this architecture", "/img ~/photos/error.jpg What went wrong?"])
             .with_when_to_use("Use to share a screenshot, diagram, or photo with the AI for visual analysis")
-            .with_related(vec!["pdf"])
+            .with_related(vec![])
         ),
         "mode" => Some(
             CommandHelpEntry::new(
@@ -606,24 +630,35 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
         "undo" => Some(
             CommandHelpEntry::new(
                 "undo".to_string(),
-                "Revert file changes using git checkpoints".to_string(),
+                "Alias for /rewind — rewind conversation turns or a single file".to_string(),
                 HelpCategory::System,
             )
-            .with_arg_hint("[list|<number>]")
-            .with_examples(vec!["/undo", "/undo list", "/undo 2"])
-            .with_when_to_use("Use to undo file changes made by AI tools. Checkpoints are created automatically before file modifications.")
-            .with_related(vec!["diff", "status"])
+            .with_arg_hint("[n | history | code <n> | both <n> | <path>]")
+            .with_examples(vec!["/undo", "/undo 2", "/undo src/main.rs"])
+            .with_when_to_use("Alias of /rewind. Use to remove recent conversation turns from context, or `/undo <path>` to rewind a single file to its previous version.")
+            .with_related(vec!["rewind", "diff", "status"])
         ),
         "rewind" => Some(
             CommandHelpEntry::new(
                 "rewind".to_string(),
-                "Remove the last N conversation turns from context".to_string(),
+                "Rewind conversation turns, or a single file to its previous version".to_string(),
                 HelpCategory::System,
             )
-            .with_arg_hint("[number-of-turns]")
-            .with_examples(vec!["/rewind", "/rewind 3"])
-            .with_when_to_use("Use to remove the last AI exchange(s) from the conversation history. Unlike /undo (which reverts files), /rewind removes messages so the AI forgets previous context.")
-            .with_related(vec!["undo", "compact", "clear"])
+            .with_arg_hint("[n | history | code <n> | both <n> | <path> [--yes]]")
+            .with_examples(vec!["/rewind", "/rewind 3", "/rewind src/main.rs", "/rewind src/main.rs --yes"])
+            .with_when_to_use("Use to remove recent conversation turns from context (`/rewind [n]`), or rewind a single file to its previous AI-saved version (`/rewind <path>`, confirms before overwriting; `--yes` skips confirm). `/rewind code|both <n>` revert files to their turn-N state (content snapshots). Aliases: /undo, /checkpoint.")
+            .with_related(vec!["undo", "checkpoint", "compact", "clear"])
+        ),
+        "checkpoint" => Some(
+            CommandHelpEntry::new(
+                "checkpoint".to_string(),
+                "Alias for /rewind".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[n | history | code <n> | both <n> | <path>]")
+            .with_examples(vec!["/checkpoint", "/checkpoint 2", "/checkpoint src/main.rs"])
+            .with_when_to_use("Alias of /rewind. Same behavior: rewind conversation turns or a single file to its previous version.")
+            .with_related(vec!["rewind", "undo"])
         ),
         "notify" => Some(
             CommandHelpEntry::new(
@@ -653,7 +688,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Search/replace with diff preview before applying".to_string(),
                 HelpCategory::Files,
             )
-            .with_arg_hint("<file> <search> --- <replace> [--apply] [--all]")
+            .with_arg_hint("<FILE_PATH> <search> --- <replace> [--apply] [--all]")
             .with_examples(vec!["/patch src/main.rs old_fn --- new_fn", "/patch --apply src/lib.rs foo --- bar", "/patch --all config.rs old_val --- new_val"])
             .with_when_to_use("Use to preview and apply targeted text replacements in files")
             .with_related(vec!["edit", "diff", "undo"])
@@ -821,7 +856,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Find where a symbol is defined using LSP".to_string(),
                 HelpCategory::Review,
             )
-            .with_arg_hint("<file> <line> <character>")
+            .with_arg_hint("<FILE_PATH> <LINE:int> <CHARACTER:int>")
             .with_examples(vec!["/go_to_definition src/main.rs 10 5"])
             .with_when_to_use("Use to navigate to the definition of a symbol at a position in a file")
             .with_related(vec!["find_references", "hover"])
@@ -832,7 +867,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Find all references to a symbol using LSP".to_string(),
                 HelpCategory::Review,
             )
-            .with_arg_hint("<file> <line> <character>")
+            .with_arg_hint("<FILE_PATH> <LINE:int> <CHARACTER:int>")
             .with_examples(vec!["/find_references src/main.rs 10 5"])
             .with_when_to_use("Use to find all usages of a symbol across the codebase")
             .with_related(vec!["go_to_definition", "rename_symbol"])
@@ -843,7 +878,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Get type info and docs for a symbol using LSP".to_string(),
                 HelpCategory::Review,
             )
-            .with_arg_hint("<file> <line> <character>")
+            .with_arg_hint("<FILE_PATH> <LINE:int> <CHARACTER:int>")
             .with_examples(vec!["/hover src/main.rs 10 5"])
             .with_when_to_use("Use to see type signatures, doc comments, and contextual info for a symbol")
             .with_related(vec!["go_to_definition", "document_symbol"])
@@ -854,7 +889,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "List all symbols in a file using LSP".to_string(),
                 HelpCategory::Review,
             )
-            .with_arg_hint("<file>")
+            .with_arg_hint("<FILE_PATH>")
             .with_examples(vec!["/document_symbol src/main.rs"])
             .with_when_to_use("Use to get a hierarchical view of functions, classes, and other symbols in a file")
             .with_related(vec!["hover", "workspace_symbol"])
@@ -876,7 +911,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Rename a symbol across the codebase using LSP".to_string(),
                 HelpCategory::Review,
             )
-            .with_arg_hint("<file> <line> <character> <new_name>")
+            .with_arg_hint("<FILE_PATH> <LINE:int> <CHARACTER:int> <NEW_NAME>")
             .with_examples(vec!["/rename_symbol src/main.rs 10 5 new_name"])
             .with_when_to_use("Use to safely rename a variable, function, class, or other symbol across the entire project")
             .with_related(vec!["find_references", "go_to_definition"])
@@ -887,7 +922,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Get available quick fixes and refactorings using LSP".to_string(),
                 HelpCategory::Review,
             )
-            .with_arg_hint("<file> <start_line> <start_char> <end_line> <end_char>")
+            .with_arg_hint("<FILE_PATH> <START_LINE:int> <START_CHAR:int> <END_LINE:int> <END_CHAR:int>")
             .with_examples(vec!["/code_actions src/main.rs 10 0 10 20"])
             .with_when_to_use("Use to get suggested fixes for diagnostics and available refactorings for a code range")
             .with_related(vec!["hover", "rename_symbol"])
@@ -1032,7 +1067,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Monitor workspace for external file changes".to_string(),
                 HelpCategory::System,
             )
-            .with_arg_hint("[status|check|list|track <file>]")
+            .with_arg_hint("[status|check|list|track <FILE_PATH>]")
             .with_examples(vec!["/watch", "/watch check", "/watch list"])
             .with_when_to_use("Use to detect external file changes made outside of Shannon")
             .with_related(vec!["diff", "status"])
@@ -1068,12 +1103,13 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
     [
         "commit",
         "review-pr",
-        "pdf",
         "status",
         "diff",
         "search",
         "export",
         "config",
+        "connect",
+        "disconnect",
         "debug",
         "clear",
         "quit",
@@ -1114,6 +1150,7 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         "context",
         "undo",
         "rewind",
+        "checkpoint",
         "notify",
         "create-pr",
         "patch",
@@ -1127,6 +1164,32 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
     .iter()
     .filter_map(|name| get_command_help(name))
     .collect()
+}
+
+/// Build the categorized command list used by the `/help` overlay.
+///
+/// Returns `(category_display_name, [(command_name, description)])` pairs in
+/// canonical [`HelpCategory`] order, skipping empty categories. This is the
+/// real data source for the REPL's `HelpOverlay` widget — it replaces the
+/// placeholder category list so the overlay surfaces every discoverable
+/// command, not a hardcoded sample.
+///
+/// This mirrors [`generate_help`] (which renders the same data as markdown);
+/// this function exposes the structured form the TUI needs.
+pub fn categorize_commands() -> Vec<(&'static str, Vec<(String, String)>)> {
+    let entries = all_help_entries();
+    HelpCategory::all()
+        .iter()
+        .map(|category| {
+            let commands: Vec<(String, String)> = entries
+                .iter()
+                .filter(|e| &e.category == category)
+                .map(|e| (e.name.clone(), e.description.clone()))
+                .collect();
+            (category.display_name(), commands)
+        })
+        .filter(|(_, commands)| !commands.is_empty())
+        .collect()
 }
 
 /// Generate help output
@@ -1217,5 +1280,86 @@ mod tests {
         assert!(help.contains("/commit"));
         // Related commands are shown in command help, so review-pr is expected
         assert!(help.contains("/review-pr"));
+    }
+
+    #[test]
+    fn test_categorize_commands_has_real_commands() {
+        let categories = categorize_commands();
+        assert!(!categories.is_empty(), "overlay must have categories");
+
+        // Category display names come from HelpCategory::display_name().
+        let names: Vec<&str> = categories.iter().map(|(n, _)| *n).collect();
+        assert!(
+            names.contains(&"Git & Version Control"),
+            "expected Git category, got: {names:?}"
+        );
+
+        // No empty categories are emitted.
+        assert!(
+            categories.iter().all(|(_, cmds)| !cmds.is_empty()),
+            "no category should be empty"
+        );
+
+        // Real commands are present — not the old placeholder {/help, /edit}.
+        let all_cmds: Vec<&str> = categories
+            .iter()
+            .flat_map(|(_, cmds)| cmds.iter().map(|(c, _)| c.as_str()))
+            .collect();
+        assert!(
+            all_cmds.contains(&"commit"),
+            "commit must appear, got: {all_cmds:?}"
+        );
+        assert!(
+            all_cmds.contains(&"model"),
+            "model must appear, got: {all_cmds:?}"
+        );
+        assert!(
+            all_cmds.len() > 10,
+            "expected many commands, got {}",
+            all_cmds.len()
+        );
+    }
+
+    #[test]
+    fn categorize_commands_not_the_placeholder_set() {
+        // Regression guard: the overlay must not fall back to the old hardcoded
+        // {("NAVIGATION", [/help]), ("EDITING", [/edit])} placeholder.
+        let categories = categorize_commands();
+        let names: Vec<&str> = categories.iter().map(|(n, _)| *n).collect();
+        assert!(
+            !names.contains(&"NAVIGATION"),
+            "NAVIGATION was a placeholder category"
+        );
+        assert!(
+            !names.contains(&"EDITING"),
+            "EDITING was a placeholder category"
+        );
+    }
+
+    #[test]
+    fn help_output_has_no_xml_like_placeholders() {
+        let text = generate_help(None);
+        assert!(
+            !text.contains("<file>"),
+            "help output must not contain lowercase <file> tag (got: {})",
+            &text[..text.len().min(200)]
+        );
+        assert!(
+            !text.contains("<line>"),
+            "help output must not contain lowercase <line> tag"
+        );
+        assert!(
+            !text.contains("<character>"),
+            "help output must not contain lowercase <character> tag"
+        );
+    }
+
+    #[test]
+    fn help_output_uses_uppercase_placeholders() {
+        let text = generate_help(Some("go_to_definition"));
+        assert!(
+            text.contains("<FILE_PATH>"),
+            "go_to_definition arg_hint should use <FILE_PATH>"
+        );
     }
 }

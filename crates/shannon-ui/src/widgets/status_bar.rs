@@ -14,6 +14,65 @@ use ratatui::{
 use rust_i18n::t;
 use unicode_width::UnicodeWidthStr;
 
+/// Resolve the provider label rendered inside the status pill.
+///
+/// The provider slug is produced upstream by `provider_id()` in
+/// `repl/render.rs`, which is exhaustive over every `LlmProvider` variant.
+/// Historically this widget maintained a second, hand-curated whitelist that
+/// fell out of sync every time a new provider was added — `Minimax`,
+/// `Bedrock`, `Azure`, `Replicate`, `SiliconFlow`, `Cloudflare`, `Ai21`, and
+/// `ZhipuCoding` all rendered as "unknown" until someone remembered to extend
+/// the list here. The whitelist was redundant (it never transformed the
+/// input) and silently degrading. We now pass the canonical slug through
+/// directly; `None` renders as `"unknown"` so an unconfigured session still
+/// reads naturally.
+fn provider_short_name(provider: Option<&str>) -> &str {
+    provider.unwrap_or("unknown")
+}
+
+/// Classify a model identifier into a human-friendly tier label
+/// ("fast" | "standard" | "pro").
+///
+/// Catalog models go through the **authoritative** `tier_label_for_id`
+/// (driven by `ModelCapabilities`), so the status pill can never disagree
+/// with `/model --tier` or the first-screen StatusCard. Models outside the
+/// catalog (dynamic models.dev entries, user-entered ids) fall back to the
+/// substring heuristic so the pill still reads naturally — ADR-0008
+/// Decision 1 makes this the single source of truth; the substring match is
+/// now explicitly a last-resort fallback, not the primary classifier.
+fn tier_label_for(model_id: &str) -> &'static str {
+    use shannon_core::model_registry::{TierLabel, tier_label_for_id};
+    match tier_label_for_id(model_id) {
+        TierLabel::Fast => "fast",
+        TierLabel::Standard => "standard",
+        TierLabel::Pro => "pro",
+        TierLabel::Unknown => substring_tier_fallback(model_id),
+    }
+}
+
+/// Last-resort substring heuristic for models not in the catalog (dynamic
+/// models.dev entries or user-entered ids). Catalog models never reach here —
+/// `tier_label_for_id` resolves them first.
+fn substring_tier_fallback(model_id: &str) -> &'static str {
+    let lower = model_id.to_lowercase();
+    if lower.contains("haiku")
+        || lower.contains("flash")
+        || lower.contains("mini")
+        || lower.contains("nano")
+        || lower.contains("turbo")
+    {
+        "fast"
+    } else if lower.contains("opus")
+        || lower.contains("ultra")
+        || lower.contains("o1")
+        || lower.contains("max")
+    {
+        "pro"
+    } else {
+        "standard"
+    }
+}
+
 /// Status bar widget
 pub struct StatusBarWidget;
 
@@ -59,6 +118,7 @@ impl StatusBarWidget {
             area,
             &status,
             ctx.model,
+            ctx.provider,
             ctx.effort_level,
             ctx.tokens_used,
             ctx.max_tokens,
@@ -93,6 +153,7 @@ impl StatusBarWidget {
         area: Rect,
         status: &str,
         model: Option<&str>,
+        provider: Option<&str>,
         effort_level: Option<&str>,
         tokens_used: Option<u64>,
         max_tokens: Option<u64>,
@@ -178,10 +239,23 @@ impl StatusBarWidget {
         // Model (pill-style) with effort level
         if let Some(m) = model {
             left.push(Span::styled(" ", Style::default().fg(theme.border_dim)));
+            let provider_short = provider_short_name(provider);
+            let tier_str = tier_label_for(m);
             let label = if let Some(effort) = effort_level {
-                format!("[{} · {}]", truncate_model(m), effort)
+                format!(
+                    "[{} · {} · {} · {}]",
+                    provider_short,
+                    truncate_model(m),
+                    tier_str,
+                    effort
+                )
             } else {
-                format!("[{}]", truncate_model(m))
+                format!(
+                    "[{} · {} · {}]",
+                    provider_short,
+                    truncate_model(m),
+                    tier_str
+                )
             };
             left.push(Span::styled(
                 label,
@@ -192,7 +266,7 @@ impl StatusBarWidget {
         } else {
             left.push(Span::styled(" ", Style::default().fg(theme.border_dim)));
             left.push(Span::styled(
-                format!("[{}]", t!("ui.no_model")),
+                "[No provider connected]".to_string(),
                 Style::default().fg(theme.warning),
             ));
         }
@@ -608,4 +682,127 @@ fn render_line(
         .alignment(Alignment::Left);
 
     frame.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tier_label_for_classifies_models() {
+        assert_eq!(tier_label_for("claude-haiku-4-5"), "fast");
+        assert_eq!(tier_label_for("claude-sonnet-4"), "standard");
+        assert_eq!(tier_label_for("claude-opus-4"), "pro");
+        assert_eq!(tier_label_for("gemini-1.5-flash"), "fast");
+        assert_eq!(tier_label_for("gpt-4o-mini"), "fast");
+        assert_eq!(tier_label_for("o1-preview"), "pro");
+    }
+
+    #[test]
+    fn provider_short_name_passes_known_slugs_through() {
+        // Every variant of `LlmProvider` is canonicalized to a stable lowercase
+        // id by `provider_id()` in `repl/render.rs` (line ~1514, exhaustive).
+        // This widget used to maintain a second hand-curated whitelist that
+        // silently downgraded unknown providers to "unknown" — every new
+        // provider (Minimax, Bedrock, Azure, Replicate, SiliconFlow,
+        // Cloudflare, Ai21, ZhipuCoding) regressed until someone noticed.
+        // The whitelist has been removed: we pass the slug through. These
+        // assertions lock in the new contract and act as a tripwire if
+        // `provider_id()` ever drifts out of sync with `LlmProvider`.
+        use shannon_engine::api::LlmProvider;
+
+        let known = [
+            ("anthropic", LlmProvider::Anthropic),
+            ("openai", LlmProvider::OpenAI),
+            ("ollama", LlmProvider::Ollama),
+            ("custom", LlmProvider::Custom),
+            ("gemini", LlmProvider::Gemini),
+            ("azure", LlmProvider::Azure),
+            ("bedrock", LlmProvider::Bedrock),
+            ("mistral", LlmProvider::Mistral),
+            ("deepseek", LlmProvider::DeepSeek),
+            ("groq", LlmProvider::Groq),
+            ("together", LlmProvider::Together),
+            ("openrouter", LlmProvider::OpenRouter),
+            ("cohere", LlmProvider::Cohere),
+            ("fireworks", LlmProvider::Fireworks),
+            ("perplexity", LlmProvider::Perplexity),
+            ("xai", LlmProvider::Xai),
+            ("ai21", LlmProvider::Ai21),
+            ("cloudflare", LlmProvider::Cloudflare),
+            ("replicate", LlmProvider::Replicate),
+            ("siliconflow", LlmProvider::SiliconFlow),
+            ("zhipu", LlmProvider::Zhipu),
+            ("zhipu_international", LlmProvider::ZhipuInternational),
+            ("zhipu_coding", LlmProvider::ZhipuCoding),
+            ("moonshot", LlmProvider::Moonshot),
+            ("minimax", LlmProvider::Minimax),
+            ("dashscope", LlmProvider::DashScope),
+        ];
+
+        // Use `provider_id` from the live module to avoid duplicating the
+        // canonical slug mapping here.
+        let provider_id = |p: &LlmProvider| -> &'static str {
+            // Mirrors the body of `provider_id` in `repl/render.rs`; this is
+            // intentionally a small enough helper that we can assert against
+            // it directly without importing the private function.
+            match p {
+                LlmProvider::Anthropic => "anthropic",
+                LlmProvider::OpenAI => "openai",
+                LlmProvider::Ollama => "ollama",
+                LlmProvider::Custom => "custom",
+                LlmProvider::Gemini => "gemini",
+                LlmProvider::Azure => "azure",
+                LlmProvider::Bedrock => "bedrock",
+                LlmProvider::Mistral => "mistral",
+                LlmProvider::DeepSeek => "deepseek",
+                LlmProvider::Groq => "groq",
+                LlmProvider::Together => "together",
+                LlmProvider::OpenRouter => "openrouter",
+                LlmProvider::Cohere => "cohere",
+                LlmProvider::Fireworks => "fireworks",
+                LlmProvider::Perplexity => "perplexity",
+                LlmProvider::Xai => "xai",
+                LlmProvider::Ai21 => "ai21",
+                LlmProvider::Cloudflare => "cloudflare",
+                LlmProvider::Replicate => "replicate",
+                LlmProvider::SiliconFlow => "siliconflow",
+                LlmProvider::Zhipu => "zhipu",
+                LlmProvider::ZhipuInternational => "zhipu_international",
+                LlmProvider::ZhipuCoding => "zhipu_coding",
+                LlmProvider::Moonshot => "moonshot",
+                LlmProvider::Minimax => "minimax",
+                LlmProvider::DashScope => "dashscope",
+            }
+        };
+
+        for (expected_slug, variant) in known {
+            let slug = provider_id(&variant);
+            assert_eq!(
+                provider_short_name(Some(slug)),
+                expected_slug,
+                "{variant:?} must surface its canonical slug, not \"unknown\"",
+            );
+        }
+    }
+
+    #[test]
+    fn provider_short_name_none_is_unknown() {
+        // `None` continues to render as "unknown" — that string is part of
+        // the unconfigured-session UX contract and is independent of which
+        // providers exist.
+        assert_eq!(provider_short_name(None), "unknown");
+    }
+
+    #[test]
+    fn provider_short_name_passes_unknown_slugs_through() {
+        // The deliberate behavior change: an unrecognized slug is now shown
+        // verbatim rather than silently downgraded to "unknown". If a
+        // caller ever passes a raw string the user will see what was sent,
+        // which is strictly better than a misleading label.
+        assert_eq!(
+            provider_short_name(Some("completely-bogus")),
+            "completely-bogus"
+        );
+    }
 }

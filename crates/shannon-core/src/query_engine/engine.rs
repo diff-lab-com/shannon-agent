@@ -42,6 +42,13 @@
 use crate::memory::AutoDreamService;
 use crate::memory::MemoryStore;
 use crate::query_engine::context_injector::ContextInjector;
+use crate::query_engine::repo_map_injector::RepoMapInjector;
+// P2-1: multi-strategy compact facade. See `crate::compact` for the
+// selector-driven entry point. The existing `shannon_engine::compact`
+// path is preserved as the LLM-backed summarizer; the facade's token-based
+// strategy is what fires when no summarizer is available or when the
+// selector chooses the cheap path.
+use crate::compact as p2_compact;
 use crate::query_engine::streaming::ConversationState;
 use crate::query_engine::types::{
     ConversationStats, CostTracker, QueryContext, QueryEngineConfig, QueryError, QueryEvent,
@@ -305,7 +312,34 @@ fn classify_query_complexity(query: &str) -> QueryComplexity {
     QueryComplexity::Standard
 }
 
+/// Verdict for a single provider returned by [`QueryEngine::probe_all_health`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderHealthStatus {
+    /// Endpoint answered 2xx within the per-provider timeout.
+    Reachable,
+    /// Endpoint reachable but credential rejected (401 / 403).
+    AuthFailed,
+    /// Endpoint unreachable (timeout, network error, 5xx, or non-http probe
+    /// failure). Surface as a hint, never as automatic failover.
+    Unreachable,
+    /// Provider requires auth but no key is resolvable from the env chain.
+    /// Marked without a network round-trip so the table stays honest.
+    NotConfigured,
+}
+
+/// Per-provider health snapshot returned by [`QueryEngine::probe_all_health`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderHealth {
+    pub provider: shannon_engine::api::LlmProvider,
+    pub status: ProviderHealthStatus,
+    /// Round-trip latency in milliseconds. `None` for `NotConfigured` (no
+    /// network call made) and for providers skipped because their bespoke
+    /// list-models API is not generically probeable.
+    pub latency_ms: Option<u32>,
+}
+
 /// Main query engine orchestrator
+#[derive(Clone)]
 pub struct QueryEngine {
     pub(crate) client: LlmClient,
     pub(crate) tools: Arc<ToolRegistry>,
@@ -325,12 +359,13 @@ pub struct QueryEngine {
         Arc<tokio::sync::RwLock<crate::triggered_routines::TriggeredRoutineRegistry>>,
     /// Context injector for project instructions and preference memory.
     pub(crate) context_injector: Option<Arc<ContextInjector>>,
+    /// P1-4 repo map injector. Lazily built; consumed by the system-prompt
+    /// assembly path when [`QueryEngineConfig::repo_map_enabled`] is true.
+    pub(crate) repo_map_injector: RepoMapInjector,
     /// Shared flag set by `PlanManager` (in `shannon-tools`) to signal that
     /// plan mode is active. When `true`, the engine blocks write tools before
     /// the permission check.
     pub(crate) plan_mode_active: Arc<RwLock<bool>>,
-    /// Git-based checkpoint manager for undo/revert support before file-modifying tools.
-    pub(crate) checkpoint_manager: crate::checkpoint::CheckpointManager,
     /// Effective maximum context tokens — resolved from user config > Ollama num_ctx > model registry.
     pub(crate) effective_max_context_tokens: usize,
     /// Custom permission profiles loaded from `.shannon/profiles/*.toml` and `.claude/profiles/*.toml`.
@@ -354,17 +389,27 @@ impl QueryEngine {
     /// queried from the running model), then falls back to the initial value
     /// resolved from config / model registry at construction time.
     pub fn resolved_context_window(&self) -> usize {
+        self.resolved_context_window_opt()
+            .unwrap_or(crate::model_registry::FALLBACK_CONTEXT_WINDOW)
+    }
+
+    /// Like `resolved_context_window` but returns `None` when the context
+    /// window is genuinely unknown (no user override, no live Ollama `num_ctx`,
+    /// and the model absent from both the static catalog and the models.dev
+    /// overlay). User-facing labels render "unknown" for `None` instead of the
+    /// fabricated 200K fallback (Phase E).
+    pub fn resolved_context_window_opt(&self) -> Option<usize> {
         if self.config.max_context_tokens.is_some() {
-            return self.effective_max_context_tokens;
+            return Some(self.effective_max_context_tokens);
         }
         if *self.client.provider() == shannon_engine::api::LlmProvider::Ollama {
             if let Some(info) = self.client.cached_ollama_info() {
                 if info.num_ctx > 0 {
-                    return info.num_ctx;
+                    return Some(info.num_ctx);
                 }
             }
         }
-        self.effective_max_context_tokens
+        crate::model_registry::context_window_for_opt(self.client.model())
     }
 
     /// Pre-query provider for real context window size.
@@ -462,6 +507,10 @@ impl QueryEngine {
         let session_id = Uuid::new_v4();
         let effective_max_context_tokens =
             Self::resolve_max_context_tokens(client.model(), config.max_context_tokens);
+        let repo_map_injector = RepoMapInjector::new(
+            config.repo_map_root.as_deref(),
+            config.repo_map_budget_tokens,
+        );
         Self {
             client,
             tools: Arc::new(tools),
@@ -477,10 +526,8 @@ impl QueryEngine {
                 crate::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
             )),
             context_injector: None,
+            repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
-            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
-                &session_id.to_string(),
-            ),
             effective_max_context_tokens,
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
@@ -514,12 +561,17 @@ impl QueryEngine {
             client.model(),
             None, // defaults have no user override
         );
+        let defaults = QueryEngineConfig::default();
+        let repo_map_injector = RepoMapInjector::new(
+            defaults.repo_map_root.as_deref(),
+            defaults.repo_map_budget_tokens,
+        );
         Self {
             client,
             tools,
             permissions: Arc::new(RwLock::new(permissions)),
             state: Arc::new(state),
-            config: QueryEngineConfig::default(),
+            config: defaults,
             conversation: ConversationState::default(),
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
             memory: None,
@@ -529,10 +581,8 @@ impl QueryEngine {
                 crate::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
             )),
             context_injector: None,
+            repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
-            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
-                &session_id.to_string(),
-            ),
             effective_max_context_tokens,
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
@@ -555,6 +605,10 @@ impl QueryEngine {
         let model = client.model().to_string();
         let effective_max_context_tokens =
             Self::resolve_max_context_tokens(client.model(), config.max_context_tokens);
+        let repo_map_injector = RepoMapInjector::new(
+            config.repo_map_root.as_deref(),
+            config.repo_map_budget_tokens,
+        );
         Self {
             client,
             tools: Arc::new(tools),
@@ -570,10 +624,8 @@ impl QueryEngine {
                 crate::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
             )),
             context_injector: None,
+            repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
-            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
-                &session_id.to_string(),
-            ),
             effective_max_context_tokens,
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
@@ -644,7 +696,7 @@ impl QueryEngine {
     /// Set the shared plan-mode flag so the engine can block write tools when
     /// plan mode is active.
     ///
-    /// The flag is typically obtained from [`PlanManager::plan_mode_flag()`] in
+    /// The flag is typically obtained from `PlanManager::plan_mode_flag()` in
     /// `shannon-tools` and cloned into the engine before the first query.
     pub fn with_plan_mode_active(mut self, flag: Arc<RwLock<bool>>) -> Self {
         self.plan_mode_active = flag;
@@ -838,6 +890,144 @@ impl QueryEngine {
         &self.client
     }
 
+    /// Validate that `api_key` works for the currently-selected provider + model
+    /// by sending a 1-token probe.
+    ///
+    /// Does NOT mutate the running client — it clones the current config (which
+    /// already carries the right base_url, provider, model, api_version, and
+    /// extra_headers), swaps in the supplied key, and probes. Used by `/connect`
+    /// to fail fast on a bad key/region/model before the user relies on it.
+    pub async fn validate_credential(
+        &self,
+        api_key: &str,
+    ) -> Result<(), shannon_engine::api::ApiError> {
+        let mut cfg = self.client.config().clone();
+        cfg.api_key = api_key.to_string();
+        cfg.max_tokens = 1;
+        // Short probe timeout so /connect never hangs on an unreachable endpoint.
+        cfg.timeout_seconds = 15;
+        let probe = shannon_engine::api::LlmClient::new(cfg);
+        probe.validate_connection().await
+    }
+
+    /// Hot-reload the running client's API key without a restart
+    /// (ADR-0008 Decision 4 / P1-1).
+    ///
+    /// `/connect <provider> <key>` stores the key and switches the engine to the
+    /// provider via `set_model_for_provider`, which updates the client's
+    /// provider/model/base_url — but **not** its api_key (the client retains the
+    /// startup credential). This method rebuilds the client from the current
+    /// config (which already reflects the switched provider/base_url) with the
+    /// new key, so the very next query uses it. No restart, no "switch takes
+    /// effect on next launch".
+    ///
+    /// Mirrors `validate_credential`'s clone-and-rebuild dance; the only
+    /// difference is this method *replaces* `self.client` instead of probing a
+    /// throwaway. `api_key` is taken verbatim — callers resolve it from the
+    /// `/connect` arg or the credential store before calling.
+    ///
+    /// Ollama capability cache is dropped on rebuild (same as a provider
+    /// switch); it re-populates lazily on the next query.
+    pub fn reload_credential(&mut self, api_key: &str) {
+        let mut cfg = self.client.config().clone();
+        cfg.api_key = api_key.to_string();
+        self.client = shannon_engine::api::LlmClient::new(cfg);
+    }
+
+    /// Health-check the currently-active provider + model by sending a 1-token
+    /// probe with the client's **existing** credentials (no key swap). Returns
+    /// `Ok(())` if the endpoint is reachable and the credential/model work.
+    ///
+    /// Does not mutate the running client. Used by `/provider health`. For
+    /// probing an *alternate* key (e.g. during `/connect`), use
+    /// `validate_credential` instead.
+    pub async fn probe_active_health(&self) -> Result<(), shannon_engine::api::ApiError> {
+        let mut cfg = self.client.config().clone();
+        cfg.max_tokens = 1;
+        cfg.timeout_seconds = 15;
+        let probe = shannon_engine::api::LlmClient::new(cfg);
+        probe.validate_connection().await
+    }
+
+    /// Concurrently live-probe every allowed provider
+    /// (`shannon_core::model_registry::available_providers`, honouring the
+    /// `SHANNON_*_PROVIDERS` allowlist) and return per-provider verdicts.
+    ///
+    /// Each provider is wrapped in its own `per_provider_timeout` so a single
+    /// slow / unreachable provider cannot stall the whole table. Auth-required
+    /// providers with no key are reported as [`ProviderHealthStatus::NotConfigured`]
+    /// without a network round-trip (no point pinging without credentials).
+    /// Non-probeable providers (Gemini, Bedrock, Azure, Replicate — bespoke
+    /// list-models APIs) are skipped entirely.
+    ///
+    /// **Non-goal — automatic failover.** This is informational only (per
+    /// ADR-0005 spec §11: Shannon ships no model router). Used by `/provider
+    /// health` to populate the multi-provider table and the active-provider
+    /// switch hint.
+    pub async fn probe_all_health(
+        &self,
+        per_provider_timeout: std::time::Duration,
+    ) -> Vec<ProviderHealth> {
+        use shannon_engine::api::probe::probe_kind_for_provider;
+
+        let providers = crate::model_registry::available_providers();
+        let mut tasks = Vec::with_capacity(providers.len());
+        for p in providers {
+            // Auth-required but no key → mark NotConfigured without probing
+            // (no point in a 401 round-trip; the report should be honest).
+            let api_key = p.resolve_api_key_from_env();
+            if p.requires_auth() && api_key.is_empty() {
+                tasks.push(tokio::spawn(async move {
+                    ProviderHealth {
+                        provider: p,
+                        status: ProviderHealthStatus::NotConfigured,
+                        latency_ms: None,
+                    }
+                }));
+                continue;
+            }
+
+            let Some(probe_kind) = probe_kind_for_provider(&p) else {
+                // Bespoke list-models API we cannot probe generically.
+                continue;
+            };
+            let base_url = p.default_base_url().to_string();
+            tasks.push(tokio::spawn(async move {
+                let start = std::time::Instant::now();
+                let result = tokio::time::timeout(
+                    per_provider_timeout,
+                    shannon_engine::api::probe::probe_provider_endpoint(
+                        probe_kind,
+                        &api_key,
+                        Some(&base_url),
+                    ),
+                )
+                .await;
+                let latency_ms = start.elapsed().as_millis() as u32;
+                let status = match result {
+                    Ok(Ok(())) => ProviderHealthStatus::Reachable,
+                    Ok(Err(shannon_engine::api::ApiError::AuthenticationFailed)) => {
+                        ProviderHealthStatus::AuthFailed
+                    }
+                    Ok(Err(_)) | Err(_) => ProviderHealthStatus::Unreachable,
+                };
+                ProviderHealth {
+                    provider: p,
+                    status,
+                    latency_ms: Some(latency_ms),
+                }
+            }));
+        }
+
+        let mut out = Vec::with_capacity(tasks.len());
+        for t in tasks {
+            if let Ok(h) = t.await {
+                out.push(h);
+            }
+        }
+        out
+    }
+
     /// Update the model used for API calls.
     pub fn set_model(&mut self, model: String) {
         self.effective_max_context_tokens = crate::model_registry::context_window_for(&model);
@@ -932,7 +1122,6 @@ impl QueryEngine {
         let triggered_routines = self.triggered_routines.clone();
         let context_injector = self.context_injector.clone();
         let plan_mode_active = self.plan_mode_active.clone();
-        let checkpoint_manager = self.checkpoint_manager.clone();
         let effective_max_context_tokens = self.effective_max_context_tokens;
 
         // Search for relevant memories to augment the system prompt
@@ -1019,6 +1208,23 @@ impl QueryEngine {
         if let Some(ref injector) = self.context_injector {
             let extra_blocks = injector.build_system_blocks(use_cache);
             system_blocks.extend(extra_blocks);
+        }
+
+        // Inject the project repo map (P1-4) — a per-project, budget-trimmed
+        // symbol overview rendered as markdown. Best-effort: a None return
+        // (parse / walk failure) means we skip silently. We use `cached`
+        // because the repo map is stable across turns within a session —
+        // changing only when source files change, which we invalidate via
+        // `notify_file_changed`.
+        if config.repo_map_enabled {
+            if let Some(repo_map_md) = self.repo_map_injector.build() {
+                let block = if use_cache {
+                    SystemContentBlock::cached(repo_map_md)
+                } else {
+                    SystemContentBlock::text(repo_map_md)
+                };
+                system_blocks.push(block);
+            }
         }
 
         // Inject browser control instructions when browser MCP tools are present
@@ -1193,6 +1399,12 @@ impl QueryEngine {
             const DENIAL_SOFT_LIMIT: u32 = 3; // inject warning to LLM
             const DENIAL_HARD_LIMIT: u32 = 5; // abort the agent loop
 
+            // Auto-test loop state (P1-5). Initialized lazily inside the loop body
+            // because `AutoLoopState` is only needed when `config.auto_test` is `Some`.
+            // We keep the struct default-constructible so this declaration is cheap.
+            let mut auto_test_state: crate::auto_test::AntiLoopState =
+                crate::auto_test::AntiLoopState::new();
+
             loop {
                 if turn >= config.max_turns {
                     let total_cost = CostTracker::calculate_cost(
@@ -1359,6 +1571,78 @@ impl QueryEngine {
                                 message: "Compaction skipped (too many failures), truncating old messages".to_string(),
                             });
                         } else {
+                            // P2-1 multi-strategy selector: choose between the
+                            // LLM-backed path (preserves high-fidelity summary)
+                            // and the cheaper token-based path (greedy drop-oldest)
+                            // based on the conversation profile. TokenDense or
+                            // small history -> token-based; otherwise the LLM
+                            // summarizer is preferred.
+                            let selector = p2_compact::default_selector();
+                            let decision = selector.recommend(&messages, effective_max_context);
+                            let wants_token_only =
+                                matches!(decision.strategy, p2_compact::Strategy::TokenBased);
+
+                            if wants_token_only {
+                                // Greedy drop-oldest — never blocks on an LLM
+                                // call. P2-1 contract: summary_path_or_local
+                                // guarantees a fallback even when the LLM is
+                                // unavailable.
+                                let p2_policy = p2_compact::Policy {
+                                    keep_recent: config.keep_recent_messages,
+                                    ..p2_compact::Policy::default()
+                                };
+                                let outcome = p2_compact::maybe_compact_with_policy(
+                                    &messages,
+                                    effective_max_context,
+                                    p2_policy,
+                                );
+                                let reduction = outcome.reduction_ratio();
+                                let compacted_vec = outcome.compacted.clone();
+                                let removed = messages.len() - compacted_vec.len();
+                                let original = outcome.original_tokens;
+                                let compacted_tok = outcome.compacted_tokens;
+                                if outcome.did_compact {
+                                    messages = compacted_vec;
+                                    send_event!(
+                                        tx,
+                                        QueryEvent::Progress {
+                                            query_id,
+                                            message: format!(
+                                                "Context compacted (token-based): {} → {} tokens ({:.0}% reduction, {} messages removed)",
+                                                original,
+                                                compacted_tok,
+                                                reduction * 100.0,
+                                                removed,
+                                            ),
+                                        }
+                                    );
+                                    // Re-inject critical context after compaction
+                                    // so the model retains project instructions.
+                                    let reinjection = context_injector
+                                        .as_ref()
+                                        .map(|ci| ci.reinjection_context())
+                                        .unwrap_or_default();
+                                    if !reinjection.is_empty() && !messages.is_empty() {
+                                        let ctx_msg = shannon_engine::api::Message {
+                                            role: "system".to_string(),
+                                            content: shannon_engine::api::MessageContent::Text(
+                                                format!(
+                                                    "[Re-injected context after compaction]\n\n{reinjection}"
+                                                ),
+                                            ),
+                                        };
+                                        messages.insert(0, ctx_msg);
+                                    }
+                                    compaction_failures = 0;
+                                } else {
+                                    // Selector said token-based but no progress
+                                    // possible (e.g. all-system messages) — count
+                                    // as failure so the circuit breaker engages.
+                                    compaction_failures += 1;
+                                }
+                                continue;
+                            }
+
                             match shannon_engine::compact::CompactEngine::with_llm_summarizer(
                                 client.clone(),
                             ) {
@@ -2460,17 +2744,6 @@ impl QueryEngine {
                                                                 effective_input,
                                                             )) => {
                                                                 // Execute write tools sequentially (one at a time)
-                                                                // Create a checkpoint before file-modifying tools for undo support
-                                                                if matches!(
-                                                                    tool_name.as_str(),
-                                                                    "Edit" | "Write" | "Bash"
-                                                                ) && checkpoint_manager
-                                                                    .is_enabled()
-                                                                {
-                                                                    if let Err(e) = checkpoint_manager.create_checkpoint(&tool_name, &format!("Before {tool_name} tool execution")) {
-                                                                        tracing::debug!("Checkpoint creation skipped: {e}");
-                                                                    }
-                                                                }
                                                                 // Emit progress: tool started
                                                                 send_event!(
                                                                     tx,
@@ -2616,6 +2889,28 @@ impl QueryEngine {
                                                                 }
                                                             }
                                                         }
+                                                    }
+                                                }
+
+                                                // Auto-test loop (P1-5): when enabled, after a
+                                                // successful file-modifying tool, run the
+                                                // configured test command. On failure, inject
+                                                // the failure into the next LLM context so the
+                                                // model can fix the code. Anti-loop guards
+                                                // (max_iterations / total_timeout / no_progress)
+                                                // cap iteration. Only triggered by Edit/Write —
+                                                // we don't auto-test after Read/Grep/Bash.
+                                                if file_edits_made {
+                                                    if let Some(auto_cfg) = config.auto_test.clone()
+                                                    {
+                                                        maybe_run_auto_test(
+                                                            &auto_cfg,
+                                                            &mut auto_test_state,
+                                                            &mut tool_results,
+                                                            &tx,
+                                                            query_id,
+                                                        )
+                                                        .await;
                                                     }
                                                 }
 
@@ -3613,6 +3908,86 @@ fn save_conversation_to_disk(
         .map_err(|e| e.to_string())
 }
 
+// ─── Auto-test loop (P1-5) ──────────────────────────────────────────────────
+//
+// Wired into the main agent loop: after a successful file-modifying tool
+// (`Edit`/`Write`) the engine invokes `maybe_run_auto_test` to run the
+// configured test command and, on failure, inject the result into the next
+// LLM context so the model can fix the code.
+
+/// Run one auto-test iteration if appropriate.
+///
+/// Called after each successful file-modifying tool. Pushes a
+/// [`ToolResultEntry`] into `tool_results` describing what happened so the
+/// next API call sees it. Returns `()`; loop-state lives in `auto_test_state`.
+async fn maybe_run_auto_test(
+    cfg: &crate::auto_test::AutoTestConfig,
+    state: &mut crate::auto_test::AntiLoopState,
+    tool_results: &mut Vec<ToolResultEntry>,
+    tx: &mpsc::UnboundedSender<Result<QueryEvent, QueryError>>,
+    query_id: Uuid,
+) {
+    // Emit a progress event so the UI shows the auto-test is running.
+    send_event!(
+        tx,
+        QueryEvent::Progress {
+            query_id,
+            message: format!(
+                "auto-test: running configured test command (iteration {})",
+                state.iterations + 1
+            ),
+        }
+    );
+
+    let project_dir = crate::auto_test::project_dir();
+    let outcome = match crate::auto_test::run_auto_test(cfg, &project_dir).await {
+        Some(o) => o,
+        None => {
+            // No command could be resolved — silently skip. The user hasn't
+            // configured a project that auto-detection can map to a test runner.
+            return;
+        }
+    };
+
+    let decision = state.record(cfg, &outcome);
+
+    // Build a synthetic tool-result so the next API call sees it. We use a
+    // synthetic tool_use_id — these entries don't correspond to a real tool
+    // invocation but `user(tool_result)` is the only way to push text into
+    // the model's context mid-loop.
+    let description = outcome.describe();
+    let entry = ToolResultEntry {
+        tool_use_id: format!("auto_test_iter_{}", state.iterations),
+        content: description,
+        is_error: !outcome.is_passed(),
+        metadata: Default::default(),
+    };
+    tool_results.push(entry);
+
+    // Emit a structured progress event with the outcome so the UI can show
+    // pass/fail badges without parsing the description string.
+    send_event!(
+        tx,
+        QueryEvent::Progress {
+            query_id,
+            message: format!(
+                "auto-test: {} ({} iter, reason: {})",
+                match &outcome {
+                    crate::auto_test::TestOutcome::Passed => "passed",
+                    crate::auto_test::TestOutcome::Failed { .. } => "failed",
+                    crate::auto_test::TestOutcome::TimedOut => "timed out",
+                    crate::auto_test::TestOutcome::SpawnError(_) => "spawn error",
+                },
+                state.iterations,
+                match &decision {
+                    crate::auto_test::LoopDecision::Continue => "continue",
+                    crate::auto_test::LoopDecision::Stop(r) => r.as_str(),
+                }
+            ),
+        }
+    );
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -3688,6 +4063,71 @@ mod tests {
             ..Default::default()
         };
         LlmClient::new(config)
+    }
+
+    #[tokio::test]
+    async fn probe_active_health_errors_on_unreachable_endpoint_without_swapping_key() {
+        // `/provider health` reuses the running client's existing key (no swap,
+        // unlike validate_credential) and must surface an Err — never panic or
+        // hang — when the endpoint is down. Port 1 cannot be bound without root,
+        // so connecting is refused near-instantly; this exercises the full
+        // validate_connection() → send_message() → HTTP path deterministically,
+        // without fragile mockito path-matching. send_message (not the _with_retry
+        // variant) is single-attempt, so there is no retry backoff to wait out.
+        let config = LlmClientConfig {
+            api_key: "running-client-key".to_string(),
+            base_url: "http://127.0.0.1:1".to_string(),
+            model: "test-model".to_string(),
+            provider: LlmProvider::Ollama,
+            ..Default::default()
+        };
+        let client = LlmClient::new(config);
+        let engine = QueryEngine::new(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+            QueryEngineConfig::default(),
+        );
+        let result = engine.probe_active_health().await;
+        assert!(
+            result.is_err(),
+            "an unreachable endpoint must surface an error, not Ok or a panic"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_all_health_returns_valid_verdicts() {
+        // Smoke test: `probe_all_health` returns a Vec<ProviderHealth> whose
+        // entries are well-formed. We do NOT assert specific providers (the
+        // SHANNON_*_PROVIDERS allowlist may filter them in CI) or specific
+        // statuses (those depend on the local env's keys and network state).
+        // We only require the structure to be sound.
+        let engine = create_test_engine();
+        let health = engine
+            .probe_all_health(std::time::Duration::from_millis(200))
+            .await;
+        // Every entry has a documented status variant; NotConfigured carries
+        // no latency.
+        for h in &health {
+            assert!(
+                matches!(
+                    h.status,
+                    ProviderHealthStatus::Reachable
+                        | ProviderHealthStatus::AuthFailed
+                        | ProviderHealthStatus::Unreachable
+                        | ProviderHealthStatus::NotConfigured
+                ),
+                "unexpected status: {:?}",
+                h.status
+            );
+            if h.status == ProviderHealthStatus::NotConfigured {
+                assert!(
+                    h.latency_ms.is_none(),
+                    "NotConfigured must have no latency_ms"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3942,6 +4382,27 @@ mod tests {
         let state = StateManager::new();
         let config = QueryEngineConfig::default();
         QueryEngine::new(client, tools, permissions, state, config)
+    }
+
+    #[test]
+    fn reload_credential_swaps_api_key_without_touching_other_config() {
+        // ADR-0008 Decision 4 / P1-1: /connect must hot-swap the running
+        // client's key so the next query uses it — no restart. The rebuild
+        // preserves the rest of the config (provider/model/base_url already
+        // set by set_model_for_provider); only the key changes.
+        let mut engine = create_test_engine();
+        assert_eq!(engine.client().config().api_key, "test-key");
+        assert_eq!(engine.client().config().model, "test-model");
+        assert_eq!(engine.client().config().base_url, "http://localhost:11434");
+
+        engine.reload_credential("sk-freshly-connected");
+
+        let cfg = engine.client().config();
+        assert_eq!(cfg.api_key, "sk-freshly-connected");
+        // Unrelated fields preserved by the rebuild.
+        assert_eq!(cfg.model, "test-model");
+        assert_eq!(cfg.base_url, "http://localhost:11434");
+        assert_eq!(cfg.provider, LlmProvider::Ollama);
     }
 
     // ── ContextInjector Integration Tests ──────────────────────────────

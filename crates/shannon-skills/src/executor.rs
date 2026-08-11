@@ -8,6 +8,26 @@ use std::path::Path;
 use std::sync::OnceLock;
 use tracing::debug;
 
+/// Optional sink for emitting hook events from skill execution.
+///
+/// Passed in by callers (CLI/UI/REPL) so `shannon-skills` does not need a
+/// hard dependency on `shannon-engine`. The signature mirrors the
+/// `HookManager::run_hooks` future so callers can route events to the manager
+/// without changing the public API.
+pub trait HookEmitter: Send + Sync {
+    /// Emit a hook event. Implementations should be fire-and-forget — failures
+    /// here must not break skill execution.
+    fn emit(&self, event_json: Vec<u8>);
+}
+
+/// No-op emitter used when no hook system is wired up.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopHookEmitter;
+
+impl HookEmitter for NoopHookEmitter {
+    fn emit(&self, _event_json: Vec<u8>) {}
+}
+
 /// Cached regex pattern for inline shell commands: !`command`
 fn inline_shell_pattern() -> &'static Regex {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
@@ -24,6 +44,8 @@ fn block_shell_pattern() -> &'static Regex {
 pub struct SkillExecutor {
     /// Shell command executor
     shell_executor: Option<ShellExecutor>,
+    /// Optional hook emitter for `UserPromptExpansion` events.
+    hook_emitter: Option<Box<dyn HookEmitter>>,
 }
 
 impl Default for SkillExecutor {
@@ -37,7 +59,18 @@ impl SkillExecutor {
     pub fn new() -> Self {
         Self {
             shell_executor: Some(ShellExecutor::new()),
+            hook_emitter: None,
         }
+    }
+
+    /// Attach a hook emitter so this executor fires `UserPromptExpansion`
+    /// events after template substitution completes.
+    ///
+    /// The emitter is invoked once per `execute()` call with a serialized
+    /// `HookEvent::UserPromptExpansion` event. If unset, no event is emitted.
+    pub fn with_hook_emitter(mut self, emitter: Box<dyn HookEmitter>) -> Self {
+        self.hook_emitter = Some(emitter);
+        self
     }
 
     /// Execute a skill with the given context
@@ -47,6 +80,12 @@ impl SkillExecutor {
         context: &SkillContext,
     ) -> SkillResult<SkillExecutionResult> {
         let start = std::time::Instant::now();
+
+        // Capture the pre-substitution content so we can emit
+        // `UserPromptExpansion { original_prompt, expanded_prompt }` after
+        // template substitution. The base-directory prefix is part of the
+        // expanded form; the raw skill content is the original template.
+        let original_prompt = skill.content.clone();
 
         // Start with the skill content
         let mut content = skill.content.clone();
@@ -87,6 +126,12 @@ impl SkillExecutor {
             false
         };
 
+        // Emit `UserPromptExpansion` hook event now that all template
+        // variables (`$ARGUMENTS`, `${0}`, `${CLAUDE_SESSION_ID}`, ...) have
+        // been resolved. The emitter is optional; if not wired up we silently
+        // skip to keep this crate's dep surface minimal.
+        self.emit_user_prompt_expansion(&original_prompt, &content);
+
         let duration = start.elapsed();
 
         Ok(SkillExecutionResult {
@@ -99,6 +144,30 @@ impl SkillExecutor {
                 had_shell_commands: had_shell,
             },
         })
+    }
+
+    /// Fire the `UserPromptExpansion` hook event when an emitter is attached.
+    ///
+    /// The event JSON is the same shape `HookManager::run_hooks` consumes, so
+    /// callers can wrap an existing `HookManager` with a thin adapter. Schema
+    /// matches `HookEvent::UserPromptExpansion` in
+    /// `crates/shannon-engine/src/hooks/events.rs`.
+    fn emit_user_prompt_expansion(&self, original_prompt: &str, expanded_prompt: &str) {
+        if let Some(emitter) = &self.hook_emitter {
+            let event = shannon_engine::hooks::HookEvent::UserPromptExpansion {
+                expanded_prompt: expanded_prompt.to_string(),
+                original_prompt: original_prompt.to_string(),
+            };
+            match serde_json::to_vec(&event) {
+                Ok(bytes) => {
+                    debug!("Emitting UserPromptExpansion event ({} bytes)", bytes.len());
+                    emitter.emit(bytes);
+                }
+                Err(e) => {
+                    debug!("Failed to serialize UserPromptExpansion event: {e}");
+                }
+            }
+        }
     }
 
     /// Substitute argument placeholders in content
@@ -542,5 +611,82 @@ mod tests {
 
         let result = executor.execute(&skill, &context).unwrap();
         assert_eq!(result.prompt_content, "Deploy production with tag v2.1.0");
+    }
+
+    // --- UserPromptExpansion hook emission tests ---
+
+    /// Test sink that records every emitted event payload.
+    #[derive(Default)]
+    struct RecordingEmitter(std::sync::Mutex<Vec<Vec<u8>>>);
+
+    impl HookEmitter for RecordingEmitter {
+        fn emit(&self, event_json: Vec<u8>) {
+            if let Ok(mut g) = self.0.lock() {
+                g.push(event_json);
+            }
+        }
+    }
+
+    #[test]
+    fn test_user_prompt_expansion_emitted_when_wired() {
+        let recorder = std::sync::Arc::new(RecordingEmitter::default());
+        let recorder_clone: std::sync::Arc<RecordingEmitter> = recorder.clone();
+        let emitter: Box<dyn HookEmitter> = Box::new(RecordingAdapter(recorder_clone));
+        let executor = SkillExecutor::new().with_hook_emitter(emitter);
+
+        let skill = Skill::new(
+            "demo".to_string(),
+            "Demo".to_string(),
+            "demo skill".to_string(),
+            "Hello ${0}".to_string(),
+        );
+        let context = SkillContext {
+            arguments: vec!["World".to_string()],
+            cwd: PathBuf::from("/tmp"),
+            session_id: "sess-1".to_string(),
+            effort_level: "medium".to_string(),
+            permissions: SkillPermissions::default(),
+        };
+
+        executor.execute(&skill, &context).unwrap();
+
+        let events = recorder.0.lock().unwrap();
+        assert_eq!(events.len(), 1, "expected exactly one hook event");
+        let parsed: serde_json::Value = serde_json::from_slice(&events[0]).unwrap();
+        let inner = parsed.get("UserPromptExpansion").expect("event tag");
+        assert_eq!(inner.get("original_prompt").unwrap(), "Hello ${0}");
+        assert_eq!(inner.get("expanded_prompt").unwrap(), "Hello World");
+    }
+
+    /// Thin adapter so we can box an `Arc<RecordingEmitter>` into a
+    /// `Box<dyn HookEmitter>` without cloning the inner state.
+    struct RecordingAdapter(std::sync::Arc<RecordingEmitter>);
+    impl HookEmitter for RecordingAdapter {
+        fn emit(&self, event_json: Vec<u8>) {
+            self.0.emit(event_json);
+        }
+    }
+
+    #[test]
+    fn test_no_emit_when_emitter_not_wired() {
+        // Default executor must NOT panic or call any external code path.
+        let executor = SkillExecutor::new();
+        let skill = Skill::new(
+            "demo".to_string(),
+            "Demo".to_string(),
+            "demo skill".to_string(),
+            "Hello ${0}".to_string(),
+        );
+        let context = SkillContext {
+            arguments: vec!["World".to_string()],
+            cwd: PathBuf::from("/tmp"),
+            session_id: "sess-1".to_string(),
+            effort_level: "medium".to_string(),
+            permissions: SkillPermissions::default(),
+        };
+
+        // Just verify it returns successfully.
+        let result = executor.execute(&skill, &context).unwrap();
+        assert_eq!(result.prompt_content, "Hello World");
     }
 }

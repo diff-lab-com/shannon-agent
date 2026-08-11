@@ -3,13 +3,23 @@
 //! Second step of the commands.rs decomposition (R2-A3 / P1.1). The session
 //! cluster is the largest cohesive domain — new/list/search/load/export/
 //! switch/delete/rename/duplicate/branch + working_dir. StateManager-backed.
+//!
+//! P0-4: per-session mutable state (`messages`, `querying`,
+//! `cancellation_token`, `current_session_id`) lives in `state.registry`
+//! keyed by `SessionKey`. The display list (`state.sessions: Vec<SessionMeta>`)
+//! stays on `AppState` because the UI consumes it as a flat list keyed by
+//! UUID strings.
 
 use crate::commands::{AppState, ChatMessage, SessionMeta, chrono_timestamp};
 use crate::scheduled_commands::TaskWorktreeDto;
+use crate::session_registry::SessionKey;
 use crate::{config, events, events::event_names};
 use tauri::Emitter;
 
 /// Create a new session and return its UUID.
+///
+/// P0-4: materialises the new session in `state.registry`, clears the
+/// (about-to-be-stale) message buffer, and promotes the new key to active.
 #[tauri::command]
 pub async fn new_session(
     state: tauri::State<'_, AppState>,
@@ -21,7 +31,7 @@ pub async fn new_session(
     let now = chrono_timestamp();
 
     // Create empty session file using StateManager
-    let model = state.model.lock().await.clone();
+    let model = state.client_config.read().await.model.clone();
     let metadata = shannon_engine::state::SessionPersistMetadata {
         model,
         turn_count: 0,
@@ -51,15 +61,13 @@ pub async fn new_session(
         sessions.push(session_meta);
     }
 
-    // Set as current session
-    {
-        let mut current = state.current_session_id.lock().await;
-        *current = Some(id_str.clone());
-    }
+    // P0-4: register in the per-session registry and promote to active.
+    state.registry.insert(id);
+    state.registry.set_active(SessionKey(id));
 
     // Clear messages for new session
-    {
-        let mut messages = state.messages.lock().await;
+    if let Some(session) = state.registry.get(SessionKey(id)) {
+        let mut messages = session.messages.lock().await;
         messages.clear();
     }
 
@@ -200,16 +208,14 @@ pub async fn load_session(
         .collect();
 
     // Update current messages
+    let session = state.registry.get_or_create(SessionKey(session_uuid));
     {
-        let mut current_messages = state.messages.lock().await;
+        let mut current_messages = session.messages.lock().await;
         *current_messages = messages.clone();
     }
 
-    // Set as current session
-    {
-        let mut current = state.current_session_id.lock().await;
-        *current = Some(id.clone());
-    }
+    // P0-4: promote to active session.
+    state.registry.set_active(SessionKey(session_uuid));
 
     // Emit session loaded event
     let event_messages: Vec<events::ChatMessage> = messages
@@ -328,13 +334,13 @@ pub async fn switch_session(
 ) -> Result<Vec<ChatMessage>, String> {
     let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
-    // Save current session before switching
+    // Save current session before switching (P0-4: use registry's active key)
     {
-        let current_id = state.current_session_id.lock().await.clone();
-        if let Some(ref sid) = current_id {
-            let messages = state.messages.lock().await.clone();
-            if let Ok(uuid) = uuid::Uuid::parse_str(sid) {
-                let model = state.model.lock().await.clone();
+        let current_key = state.registry.active_key();
+        if let Some(key) = current_key {
+            if let Some(current_session) = state.registry.get(key) {
+                let messages = current_session.messages.lock().await.clone();
+                let model = state.client_config.read().await.model.clone();
                 let core_msgs: Vec<shannon_engine::api::Message> = messages
                     .iter()
                     .map(|m| shannon_engine::api::Message {
@@ -347,7 +353,7 @@ pub async fn switch_session(
                     turn_count: core_msgs.len() / 2,
                     ..Default::default()
                 };
-                let _ = state.state_manager.save_session(&uuid, &core_msgs, &meta);
+                let _ = state.state_manager.save_session(&key.0, &core_msgs, &meta);
             }
         }
     }
@@ -381,15 +387,14 @@ pub async fn switch_session(
         None => Vec::new(),
     };
 
-    // Update state
+    // Update state (P0-4: register the new session and promote to active).
+    state.registry.insert(session_uuid);
+    let new_session = state.registry.get_or_create(SessionKey(session_uuid));
     {
-        let mut current = state.current_session_id.lock().await;
-        *current = Some(id.clone());
-    }
-    {
-        let mut msgs = state.messages.lock().await;
+        let mut msgs = new_session.messages.lock().await;
         *msgs = messages.clone();
     }
+    state.registry.set_active(SessionKey(session_uuid));
 
     // Restore working_dir from session metadata if present.
     {
@@ -439,6 +444,7 @@ pub async fn set_session_working_dir(
     id: String,
     path: String,
 ) -> Result<(), String> {
+    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
     let wd = if path.trim().is_empty() {
         None
     } else {
@@ -456,8 +462,8 @@ pub async fn set_session_working_dir(
     }
 
     // If this is the current session, switch process cwd + desktop config
-    let current = state.current_session_id.lock().await.clone();
-    let is_current = current.as_deref() == Some(id.as_str());
+    let current = state.registry.active_key();
+    let is_current = current == Some(SessionKey(session_uuid));
     if is_current {
         if let Some(ref p) = wd {
             let _ = std::env::set_current_dir(p);
@@ -520,8 +526,8 @@ pub async fn create_session_worktree(
     }
 
     // If this is the current session, switch process cwd + desktop config
-    let current = state.current_session_id.lock().await.clone();
-    if current.as_deref() == Some(id.as_str()) {
+    let current = state.registry.active_key();
+    if current == Some(SessionKey(session_uuid)) {
         let _ = std::env::set_current_dir(&wt_path);
         let mut desktop_cfg = state.desktop_config.write().await;
         desktop_cfg.working_dir = Some(wt_path.clone());
@@ -616,9 +622,11 @@ pub async fn rename_session(
     if let Some(session) = sessions.iter_mut().find(|s| s.id == id) {
         session.title = title.clone();
 
-        // Update persisted session metadata
-        let model = state.model.lock().await.clone();
-        let messages = state.messages.lock().await.clone();
+        // Update persisted session metadata (P0-4: read messages from the
+        // target session in the registry, not from `state.messages`).
+        let model = state.client_config.read().await.model.clone();
+        let target_session = state.registry.get_or_create(SessionKey(session_uuid));
+        let messages = target_session.messages.lock().await.clone();
         let core_msgs: Vec<shannon_engine::api::Message> = messages
             .iter()
             .map(|m| shannon_engine::api::Message {
@@ -676,7 +684,7 @@ pub async fn duplicate_session(
     let new_title = format!("Copy of {}", original_session.title);
     let now = chrono_timestamp();
 
-    let model_name = state.model.lock().await.clone();
+    let model_name = state.client_config.read().await.model.clone();
     let metadata = shannon_engine::state::SessionPersistMetadata {
         model: model_name,
         turn_count: session_data.messages.len() / 2,
@@ -770,7 +778,7 @@ pub(crate) async fn branch_session_internal(
         .cloned()
         .collect();
 
-    let model_name = state.model.lock().await.clone();
+    let model_name = state.client_config.read().await.model.clone();
     let metadata = shannon_engine::state::SessionPersistMetadata {
         model: model_name,
         turn_count: branch_messages.len() / 2,

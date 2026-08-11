@@ -69,7 +69,8 @@ use shannon_tools::register_default_tools_with_project_dir_ex;
 
 // Re-export public types from state submodule
 pub use state::{
-    AgentDisplay, LoopState, PendingElicitation, PlanState, RalphState, ReplState, SidebarTab,
+    AgentDisplay, HelpOverlayState, LoopState, PendingElicitation, PlanState, RalphState,
+    ReplState, SidebarTab,
 };
 
 // Re-export custom_commands types used by other modules
@@ -175,8 +176,6 @@ pub struct Repl {
     pub(crate) diagnostic_rx: Option<diagnostic_watcher::DiagnosticReceiver>,
     /// Background update check result (deferred to avoid blocking startup)
     pub(crate) update_check_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
-    /// Crash-safe JSONL session recovery log (appends each turn with fsync)
-    pub(crate) session_recovery: shannon_core::SessionRecovery,
     /// Shared plan-mode flag (clone of the one in QueryEngine)
     pub(crate) plan_mode_flag: std::sync::Arc<std::sync::RwLock<bool>>,
     /// Session recorder for deterministic replay testing
@@ -378,10 +377,13 @@ impl Repl {
             diagnostic_pending: std::sync::Arc::new(tokio::sync::Mutex::new(false)),
             diagnostic_rx: None,
             update_check_rx: None,
-            session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: std::sync::Arc::new(std::sync::RwLock::new(false)),
             session_recorder: None,
         };
+
+        // Wire provider/model/tier into chat welcome StatusCard via the single
+        // derivation path (ADR-0008 Decision 1 — authoritative tier label).
+        commands::sync_active_to_chat(&mut repl);
 
         repl.sync_approval_mode_label();
         repl.state
@@ -1368,10 +1370,13 @@ impl Repl {
             diagnostic_pending: std::sync::Arc::new(tokio::sync::Mutex::new(false)),
             diagnostic_rx: None,
             update_check_rx: None,
-            session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: plan_mode_flag.clone(),
             session_recorder: None,
         };
+
+        // Wire provider/model/tier into chat welcome StatusCard via the single
+        // derivation path (ADR-0008 Decision 1).
+        commands::sync_active_to_chat(&mut repl);
 
         // Pre-query Ollama model info so context_window is correct from the start
         if let Some(ref mut engine) = repl.query_engine {
@@ -1793,9 +1798,13 @@ impl Repl {
                     total_input_tokens: self.state.tokens_used,
                     total_output_tokens: 0,
                     turn_count: messages.iter().filter(|m| m.role == "user").count(),
-                    title: None,
+                    // Persist any /rename title; save_session merges with the
+                    // existing on-disk metadata so this won't clobber branch
+                    // lineage or the original creation time.
+                    title: self.state.session_title.clone(),
                     parent_session_id: None,
                     branch_point_message_index: None,
+                    project_path: Some(self.state.working_directory.clone()),
                 };
                 if let Err(e) =
                     self.state_manager

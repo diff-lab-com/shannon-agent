@@ -25,7 +25,7 @@
 //! - [`DiagnosticTracker`]: Error tracking, pattern analysis, and diagnostic event management
 //! - [`VoiceModeService`]: Voice input/output management and keyword spotting
 //! - [`MagicDocsService`]: Automatic documentation generation from source paths
-//! - [`SessionHistoryManager`]: Session history listing, searching, archiving, and resumption
+//! - `SessionHistoryManager`: Session history listing, searching, archiving, and resumption
 //! - [`TranscriptStore`]: Persistent conversation transcript storage and search
 //! - [`ActivityManager`]: Long-running task activity tracking with progress
 //! - [`Housekeeper`]: Periodic background cleanup tasks
@@ -43,6 +43,10 @@ pub mod api_services;
 pub mod away_summary;
 pub mod bridge_service;
 pub mod checkpoint;
+pub mod compact;
+pub mod config_migration;
+pub mod config_persist;
+pub mod config_watcher;
 pub mod diagnostics;
 pub mod extract_memories;
 pub mod git_operation_tracking;
@@ -60,14 +64,17 @@ pub mod prevent_sleep;
 pub mod progressive_loader;
 pub mod project_instructions;
 pub mod project_memory;
+pub mod provider_config_service;
+pub mod provider_config_store;
+pub mod provider_resolver;
 pub mod query_engine;
 pub mod rate_limit;
 pub mod rate_limit_messages;
 pub mod remote_settings;
-pub mod session_history;
 pub mod settings;
 pub mod settings_sync;
 pub mod smart_context;
+pub mod substitute;
 pub mod suggestions;
 pub mod tips;
 pub mod token_estimation;
@@ -96,12 +103,12 @@ pub mod plugin;
 pub mod preference_memory;
 pub mod recording;
 pub mod sandbox;
+pub mod scheduled_budget;
+pub mod scheduled_retry;
 pub mod scheduled_routines;
 pub mod scheduled_runs;
 pub mod scheduled_task_store;
 pub mod scheduled_worktree;
-pub mod session_persist;
-pub mod session_recovery;
 pub mod session_transcript;
 pub mod skill_loop;
 pub mod team_memory_sync;
@@ -113,6 +120,8 @@ pub mod testing;
 
 pub mod i18n;
 pub mod triggered_routines;
+
+pub mod auto_test;
 
 // Re-export key types for convenience
 pub use ai_limits::{AiLimitType, AiLimitsTracker, AiUsageRecord, LimitStatus};
@@ -128,9 +137,8 @@ pub use bridge_service::{
     BridgeConfig, BridgeError, BridgeService, BridgeSession, BridgeStatus, MessageDirection,
     SessionMessage,
 };
-pub use checkpoint::{
-    Checkpoint, CheckpointManager, FileChangePreview, RestoreMode, RevertPreview, TurnCheckpoint,
-};
+pub use checkpoint::{Checkpoint, CheckpointManager, TurnCheckpoint};
+pub use config_migration::{SecretBinding, default_secrets_path, persist_secrets};
 pub use diagnostics::{
     DiagnosticCategory, DiagnosticEvent, DiagnosticLevel, DiagnosticSummary, DiagnosticTracker,
     ErrorPattern,
@@ -166,7 +174,8 @@ pub use oauth::{OAuthClient, OAuthError, OAuthService, OAuthToken, TokenEncrypti
 pub use output_format::{OutputEvent, StructuredOutputConfig, StructuredOutputError};
 pub use policy_limits::{PolicyCheckResult, PolicyError, PolicyLimits, PolicyLimitsManager};
 pub use query_engine::{
-    QueryContext, QueryEngine, QueryEvent, browser_control_prompt, teammate_instructions,
+    ProviderHealth, ProviderHealthStatus, QueryContext, QueryEngine, QueryEvent,
+    browser_control_prompt, teammate_instructions,
 };
 pub use rate_limit::{
     ExponentialBackoff, RateLimitConfig, RateLimitResult, RateLimiter, TokenBucket,
@@ -175,13 +184,6 @@ pub use rate_limit_messages::RateLimitMessageBuilder;
 pub use remote_settings::{
     RemoteManagedSettings, RemoteSettingsError, RemoteSettingsProvider, SettingOverride,
     SettingSource,
-};
-pub use session_history::{
-    ResumeInfo, SessionFilter, SessionHistoryEntry, SessionHistoryError, SessionHistoryManager,
-    SessionMetadata, SessionSortField, SortOrder,
-};
-pub use session_recovery::{
-    RecoveryMetadata, SessionLogEntry, SessionRecovery, SessionRecoveryError,
 };
 pub use settings::{Settings, SettingsError, SettingsManager};
 pub use settings_sync::{
@@ -328,8 +330,6 @@ pub mod error {
     pub use crate::policy_limits::PolicyError;
     pub use crate::project_memory::ProjectMemoryError;
     pub use crate::remote_settings::RemoteSettingsError;
-    pub use crate::session_history::SessionHistoryError;
-    pub use crate::session_recovery::SessionRecoveryError;
     pub use crate::session_transcript::TranscriptError;
     pub use crate::settings::SettingsError;
     pub use crate::settings_sync::SyncError;

@@ -333,36 +333,48 @@ impl MessageCell {
                 }
                 l.insert(0, Line::from(header_spans));
             } else {
-                let sep_color = match msg.role {
-                    ChatRole::Assistant => theme.assistant_msg,
-                    ChatRole::Tool => theme.tool_msg,
-                    ChatRole::System => theme.system_msg,
-                    ChatRole::User => unreachable!("User role handled in if-branch above"),
-                };
-                // Separator: show timestamp only on first message of a role group
-                if !self.is_continuation {
-                    let time_str = msg.timestamp.format("%H:%M").to_string();
-                    let time_w = unicode_width::UnicodeWidthStr::width(time_str.as_str());
-                    let max_sep = (width as usize).saturating_sub(2);
-                    let total_dash = max_sep.saturating_sub(time_w + 4);
-                    let left_dash = total_dash / 2;
-                    let right_dash = total_dash.saturating_sub(left_dash);
-                    let sep = Line::from(vec![
-                        Span::styled("\u{2500}".repeat(left_dash), Style::default().fg(sep_color)),
-                        Span::styled(format!(" {time_str} "), Style::default().fg(theme.text_dim)),
-                        Span::styled(
-                            "\u{2500}".repeat(right_dash),
+                // System messages skip the full-width turn separator: the ⚑
+                // label plus the trailing blank line below is enough spacing,
+                // and a full-width rule would extend past a floating popup on
+                // both sides, interfering with the popup's own border.
+                if msg.role != ChatRole::System {
+                    let sep_color = match msg.role {
+                        ChatRole::Assistant => theme.assistant_msg,
+                        ChatRole::Tool => theme.tool_msg,
+                        ChatRole::System => theme.system_msg,
+                        ChatRole::User => unreachable!("User role handled in if-branch above"),
+                    };
+                    // Separator: show timestamp only on first message of a role group
+                    if !self.is_continuation {
+                        let time_str = msg.timestamp.format("%H:%M").to_string();
+                        let time_w = unicode_width::UnicodeWidthStr::width(time_str.as_str());
+                        let max_sep = (width as usize).saturating_sub(2);
+                        let total_dash = max_sep.saturating_sub(time_w + 4);
+                        let left_dash = total_dash / 2;
+                        let right_dash = total_dash.saturating_sub(left_dash);
+                        let sep = Line::from(vec![
+                            Span::styled(
+                                "\u{2500}".repeat(left_dash),
+                                Style::default().fg(sep_color),
+                            ),
+                            Span::styled(
+                                format!(" {time_str} "),
+                                Style::default().fg(theme.text_dim),
+                            ),
+                            Span::styled(
+                                "\u{2500}".repeat(right_dash),
+                                Style::default().fg(sep_color),
+                            ),
+                        ]);
+                        l.insert(0, sep);
+                    } else {
+                        // Continuation: just a thin separator without timestamp
+                        let sep = Line::from(vec![Span::styled(
+                            "\u{2500}".repeat(width as usize),
                             Style::default().fg(sep_color),
-                        ),
-                    ]);
-                    l.insert(0, sep);
-                } else {
-                    // Continuation: just a thin separator without timestamp
-                    let sep = Line::from(vec![Span::styled(
-                        "\u{2500}".repeat(width as usize),
-                        Style::default().fg(sep_color),
-                    )]);
-                    l.insert(0, sep);
+                        )]);
+                        l.insert(0, sep);
+                    }
                 }
 
                 // Thinking content for assistant messages
@@ -1937,6 +1949,42 @@ mod tests {
         assert!(cell.is_continuation());
         cell.set_continuation(false);
         assert!(!cell.is_continuation());
+    }
+
+    // ── MessageCell separator (system messages omit the full-width rule) ──
+
+    #[test]
+    fn test_system_message_has_no_full_width_separator() {
+        // System messages must not get the full-width ─ turn separator: such a
+        // line would extend past a floating popup on both sides and interfere
+        // with the popup's own border. The ⚑ label + trailing blank line
+        // provide enough separation on their own.
+        let theme = Theme::default_dark();
+        let msg = test_message(ChatRole::System, "Source changed: foo.js");
+        let cell = MessageCell::new(msg, false);
+        let lines = cell.lines(80, &theme);
+        let first: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            !first.contains('\u{2500}'),
+            "system message must not start with a dash separator, got: {first:?}"
+        );
+    }
+
+    #[test]
+    fn test_assistant_and_tool_keep_full_width_separator() {
+        // Regression guard: only System is excluded. Assistant and Tool
+        // (including same-role continuations) still render their separator.
+        let theme = Theme::default_dark();
+        for role in [ChatRole::Assistant, ChatRole::Tool] {
+            let msg = test_message(role, "body");
+            let cell = MessageCell::new(msg, false);
+            let lines = cell.lines(80, &theme);
+            let first: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(
+                first.contains('\u{2500}'),
+                "{role:?} message should still have a dash separator, got: {first:?}"
+            );
+        }
     }
 
     // ── MessageCell set_message ───────────────────────────────────────────

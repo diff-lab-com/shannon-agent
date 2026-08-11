@@ -14,7 +14,7 @@
 //!    `min_occurrences`+ total occurrences become new candidates.
 //!
 //! New candidates are appended to the existing JSONL via
-//! [`crate::commands_skill_candidates::append_candidate_in`]; existing
+//! `crate::commands_skill_candidates::append_candidate_in`; existing
 //! candidate ids are left untouched so approval flows aren't disrupted.
 
 use std::collections::HashMap;
@@ -141,7 +141,7 @@ struct SignatureAgg {
 ///
 /// `sessions_dir` is normally `~/.shannon/sessions/` but injected for
 /// testability. Candidates are appended under the real `~/.shannon/desktop/`
-/// (resolved here); tests that need isolation call [`run_detection_in`] with a
+/// (resolved here); tests that need isolation call `run_detection_in` with a
 /// tempdir so they never mutate the process-global `HOME` env var.
 pub fn run_detection(
     sessions_dir: &Path,

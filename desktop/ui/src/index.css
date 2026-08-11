@@ -2,6 +2,11 @@
 @import "tw-animate-css";
 /* @import "shadcn/tailwind.css"; — broken: package not installed, pre-existing */
 @import "@fontsource-variable/geist";
+/* P2-5d design-token reference (documented inventory of every token
+ * used across the app; "how to add a token" lives in
+ * src/styles/README.md). Tailwind v4's @theme {} below is the source
+ * of truth for the actual values. */
+@import "./styles/tokens.css";
 
 @custom-variant dark (&:where([data-theme="tokyo-night"], [data-theme="catppuccin"], [data-theme="nord"], [data-theme="ember"], [data-theme="slate"], [data-theme="solarized"], [data-theme="dracula"], [data-theme="gruvbox"]) *);
 

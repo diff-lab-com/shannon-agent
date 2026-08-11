@@ -5,6 +5,14 @@
 
 ---
 
+> **状态更新(2026-08-08)**:本文件生成于 2026-04-12,下方多数 P1/P2 项**已实现**,仅保留作历史。当前实际状态以 [improvement-plan-2026-08.md](./improvement-plan-2026-08.md) §v4 + [CHANGELOG.md](../CHANGELOG.md) 为准。
+>
+> **已实现**(勿再当 future):Repo Map · tree-sitter(P1-4 `69797143`)、Auto-test Loop(P1-5 `3a00b207`)、`/export` · `/debug` · `/diff` · `/review_pr`(P1-1 `448061e5`)、HTTP API Server `shannon serve`(P2-7 `3ed22799`)、Voice Input · whisper-rs(P2-5e `d983f527`)、Notion / Linear MCP(P1-3c/d)。
+>
+> **仍 future**:VS Code 扩展完善(spike done,[spikes/p2-8-vscode.md](./spikes/p2-8-vscode.md))、Architect 模式、Auto-commit + Undo(P2-6)、Cross-surface / Cloud / Agent SDK / Skills marketplace(P3)。
+
+---
+
 ## P1 - High-Value Gaps (Future)
 
 ### Auto-commit with Contextual Messages
@@ -54,27 +62,42 @@ Use a "planner" model (Opus) to design changes and a separate "editor" model (So
 
 ### Session Export (`/export`)
 Export conversations to markdown/JSON.
-- **Status**: Dead code exists in `crates/shannon-commands/src/builtin/export.rs`
+- **Status**: **Wired (P1-1, 2026-08-03)** — `export_to_markdown`/`export_to_json` implemented
+  with `ExportOptions` plumbing; `export_session_from_transcript` adapter pulls
+  real history from `shannon_core::session_transcript::TranscriptStore`;
+  `maybe_build_session_from_args` resolves `--session <id>` /
+  `--from-transcript <id>` arguments.
 - **Effort**: Low
-
-### PDF Processing (`/pdf`)
-PDF text extraction, table extraction, OCR.
-- **Status**: Dead code exists in `crates/shannon-commands/src/builtin/pdf.rs`
-- **Effort**: High (external PDF library)
 
 ### Debug Instrumentation (`/debug`)
 Runtime log level switching, profiling.
-- **Status**: Dead code exists in `crates/shannon-commands/src/builtin/debug.rs`
+- **Status**: **Wired (P1-1, 2026-08-03)** — `set_runtime_log_level` /
+  `current_log_level` provide process-wide runtime override; `LogLevel::FromStr`
+  rejects unknown levels; `to_internal_log_level` bridges to
+  `shannon_core::internal_logging::InternalLogLevel`; `filter_internal_entries_below`
+  query the in-memory `InternalLogger`. `RUST_LOG` and `SHANNON_LOG_LEVEL` env
+  vars retained as upstream / convenience paths.
 - **Effort**: Low
 
 ### Diff Review (`/diff`)
 Intelligent diff viewer with change categorization.
-- **Status**: Dead code exists in `crates/shannon-commands/src/builtin/diff.rs`
+- **Status**: **Wired (P1-1, 2026-08-03)** — `ChangeCategory` enum fed through
+  `DiffAnalyzer` (regex constants in `patterns::*`); `DiffAnalysis::summary()`
+  rendered; `has_test_changes()` / `has_doc_changes()` / `has_config_changes()`
+  drive commit-message generation; `commit_summary()` produces
+  conventional-commit strings; `analyze_diff()` is the canonical
+  end-to-end entry point.
 - **Effort**: Medium
 
 ### PR Review (`/review_pr`)
 AI-powered PR review with severity-based feedback.
-- **Status**: Dead code exists in `crates/shannon-commands/src/builtin/review_pr.rs`
+- **Status**: **Wired (P1-1, 2026-08-03)** — `ReviewCategory::FromStr` and
+  `IssueSeverity::FromStr` reject unknown inputs with clear errors;
+  `ReviewResult::filter_by_severity()` thresholds issues; structured-output
+  `ReviewSuggestion` (with `from_issue` / `to_json`) and
+  `ReviewResult::suggestions_as_json()` pair with `REVIEW_PROMPT_SCHEMA_FRAGMENT`
+  appended to every `/review-pr` prompt so LLMs emit `{"suggestions": [...]}`.
+  `run_pr_analysis` already wired to `gh pr view` / `gh pr diff`.
 - **Effort**: Medium
 
 ---
@@ -111,11 +134,10 @@ The following modules have dead code that should be wired up:
 
 | Module | File | Dead Code | Priority |
 |--------|------|-----------|----------|
-| `/diff` | `shannon-commands/src/builtin/diff.rs` | ChangeCategory, DiffAnalysis | P2 |
-| `/review_pr` | `shannon-commands/src/builtin/review_pr.rs` | ReviewSeverity, PRAnalysis | P2 |
-| `/export` | `shannon-commands/src/builtin/export.rs` | ExportFormat, export_to_markdown/json | P2 |
-| `/pdf` | `shannon-commands/src/builtin/pdf.rs` | PdfTable, ImageFormat | P2 |
-| `/debug` | `shannon-commands/src/builtin/debug.rs` | DebugCategory, LogLevel | P2 |
+| `/diff` | `shannon-commands/src/builtin/diff.rs` | ChangeCategory, DiffAnalysis | **Wired (P1-1)** |
+| `/review_pr` | `shannon-commands/src/builtin/review_pr.rs` | ReviewSeverity, PRAnalysis | **Wired (P1-1)** |
+| `/export` | `shannon-commands/src/builtin/export.rs` | ExportFormat, export_to_markdown/json | **Wired (P1-1)** |
+| `/debug` | `shannon-commands/src/builtin/debug.rs` | DebugCategory, LogLevel | **Wired (P1-1)** |
 | Agent Coordinator | `shannon-agents/src/coordinator.rs` | AgentTeam, task assignment | P3 |
 | Compact Strategies | `shannon-core/src/compact.rs` | All 5 strategies defined, not wired | P0 (item 3) |
 | Doctor Command | `shannon-core/src/doctor.rs` | DoctorError variants | P3 |

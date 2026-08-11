@@ -53,6 +53,10 @@ export interface QueryFailedPayload {
   error: string
 }
 
+export interface QueryCancelledPayload {
+  query_id: string
+}
+
 export interface PermissionRequest {
   tool: string
   input: unknown
@@ -63,7 +67,7 @@ export interface PermissionRequest {
 // --- Core Types ---
 
 export interface ChatMessage {
-  role: 'user' | 'assistant' | 'system'
+  role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
   timestamp: number
   tool_calls?: ToolCall[]
@@ -142,7 +146,18 @@ export interface ModelInfo {
   id: string
   name: string
   provider: string
+  /** Tokens. 0 means unknown — the UI should render "unknown" instead of
+   *  fabricating a number (ADR-0005 P0-2 honest cost/context). */
   context_window: number
+  /** Per-million-token input price. null = unknown / fallback. */
+  price_in?: number | null
+  /** Per-million-token output price. null = unknown / fallback. */
+  price_out?: number | null
+  /** Optional tier label (`fast` / `standard` / `pro`). */
+  tier?: string | null
+  /** Whether this entry comes from the dynamic models.dev overlay (vs the
+   *  static catalog). Surfaces a freshness indicator in the UI. */
+  dynamic?: boolean
 }
 
 export interface ToolInfo {
@@ -241,13 +256,42 @@ export type ProviderKind =
 
 export interface ProviderConnection {
   id: string
-  label: string
-  provider_kind: ProviderKind | string
-  /// Masked to '***' by the backend in list responses when a key is set.
-  api_key?: string | null
+  display_name: string
+  kind: ProviderKind | string
+  /// True when the credential store has a key for this id. Replaces the
+  /// dead `api_key` field (TD-4).
+  has_api_key: boolean
   base_url?: string | null
-  model?: string | null
-  created_at: string
+  /// v2 ProviderProfile fields surfaced in Phase 2 task 3. The backend
+  /// deserializes them into `providers.json` + engine's `providers.toml`
+  /// (see `desktop/src/commands_config.rs::apply_provider_update`).
+  /// Optional on the wire because every field is `#[serde(default)]` on
+  /// the Rust side for backward compat with legacy entries.
+  models_url?: string | null
+  extra_headers?: Record<string, string>
+  default_max_tokens?: number | null
+  fallback_models?: string[]
+  quirks?: ProviderQuirks
+  tiers?: ProviderTiers
+}
+
+/// Mirrors `shannon_types::provider_config::ProviderTiers`. Canonical
+/// tier names are `fast` / `standard` / `pro` — aliases like `haiku` /
+/// `sonnet` / `opus` are engine-resolved and never surfaced to the UI.
+export interface ProviderTiers {
+  fast?: string | null
+  standard?: string | null
+  pro?: string | null
+}
+
+/// Mirrors `shannon_types::provider_config::ProviderQuirks`. Out of scope
+/// for the modal in Phase 2 task 3 — the Add Provider modal only edits
+/// `extra_headers`, `default_max_tokens`, and `tiers`. Kept here so the
+/// `ProviderConnection` shape round-trips when the backend serializes it.
+export interface ProviderQuirks {
+  temperature_strategy?: string | null
+  max_tokens_override?: number | null
+  send_temperature?: boolean
 }
 
 export interface ProvidersFile {
@@ -257,13 +301,23 @@ export interface ProvidersFile {
 
 /// Payload for adding or editing a managed provider. On edit, `id` identifies
 /// the entry; an `api_key` of '***' or empty means "keep the existing key".
+///
+/// Phase 2 task 3: the three v2 ProviderProfile fields the Add Provider
+/// modal authors. Empty-key header rows and empty tier strings are
+/// silently dropped on the client before submit so the backend never sees
+/// `""` overrides. `default_max_tokens` is `null` when the input is
+/// blank; the engine falls back to `cfg.max_tokens` (then 4096) when
+/// unset.
 export interface ProviderInput {
   id?: string
-  label: string
-  provider_kind: ProviderKind | string
+  display_name: string
+  kind: ProviderKind | string
   api_key?: string
   base_url?: string
   model?: string
+  extra_headers?: Record<string, string>
+  default_max_tokens?: number | null
+  tiers?: ProviderTiers
 }
 
 export interface DesktopConfig {
@@ -290,6 +344,10 @@ export interface DesktopConfig {
   skill_loop_min_tool_calls?: number
   skill_detection_enabled?: boolean
   stt?: SttConfig
+  /** P2-5e local-only STT (whisper-rs). Independent of `stt`
+   *  so a user can keep a cloud key for fallback while local
+   *  is the primary. */
+  voice_local?: import('@/lib/tauri-api').VoiceLocalConfig
 }
 
 export interface SttConfig {

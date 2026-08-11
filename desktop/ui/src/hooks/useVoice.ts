@@ -14,6 +14,24 @@ export interface UseVoiceOptions {
   /** Non-silent provider failures (rejected mic, bad key, network, …). */
   onError?: (message: string) => void
   lang?: string
+  /**
+   * P2-5e: force a specific STT provider. When unset, the hook
+   * falls back to the cloud provider (default). Local recordings
+   * require the desktop to be built with the `voice-local` Cargo
+   * feature; the backend returns `STT_FEATURE_DISABLED` when
+   * that feature is missing.
+   */
+  provider?: 'cloud' | 'local'
+  /**
+   * Local-provider options (only used when `provider === 'local'`).
+   * The factory passes these into `createLocalProvider`, which
+   * forwards them to `transcribe_audio_local`. `null` model lets
+   * the Rust side pick the smallest downloaded model.
+   */
+  local?: {
+    model: string | null
+    language?: string | null
+  }
 }
 
 export interface UseVoiceResult {
@@ -41,7 +59,7 @@ function claimSpeaker(speaker: TtsSpeaker) {
 }
 
 export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
-  const { onTranscript, onError, lang = 'en-US' } = options
+  const { onTranscript, onError, lang = 'en-US', provider = 'cloud', local } = options
   const [state, setState] = useState<VoiceState>('idle')
   const [partialTranscript, setPartialTranscript] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -51,11 +69,17 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const errorRef = useRef(onError)
   errorRef.current = onError
 
-  // Build the provider once. defaultVoiceConfig() picks cloud STT; the
-  // factory falls back to the stub provider when MediaRecorder is unavailable.
+  // Build the provider once. The kind is resolved from
+  // `options.provider` (P2-5e). When the local provider is
+  // selected and MediaRecorder is unavailable, the factory
+  // falls back to the stub — same fallback semantics as the
+  // cloud provider.
   const providerRef = useRef<VoiceProvider | null>(null)
   if (!providerRef.current) {
-    providerRef.current = createVoiceProvider(defaultVoiceConfig())
+    const config = provider === 'local'
+      ? { kind: 'local' as const, local: local ?? { model: null, language: null } }
+      : defaultVoiceConfig()
+    providerRef.current = createVoiceProvider(config)
   }
   const supported = providerRef.current.isSupported()
 

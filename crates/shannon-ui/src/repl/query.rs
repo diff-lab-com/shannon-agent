@@ -21,6 +21,63 @@ fn animated_dots(_elapsed: std::time::Duration) -> &'static str {
     "···"
 }
 
+/// W6-2 B.2: record a post-turn content snapshot for each file modified or created
+/// during the turn, so `/rewind code/both <n>` can restore files via `FileHistoryManager`
+/// (content snapshots) instead of git.
+///
+/// Files that cannot be read (deleted this turn, binary, missing) are skipped.
+/// Snapshots are keyed by the path string exactly as the turn-tracker reports it,
+/// so the rewind lookup (which reads the same strings from `TurnCheckpoint.files_changed`)
+/// matches.
+pub(crate) fn capture_turn_snapshots_with(
+    manager: &mut shannon_tools::FileHistoryManager,
+    files: &[String],
+    turn_index: usize,
+) {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    for file in files {
+        let key = std::path::Path::new(file);
+        // Resolve a relative path against the process cwd so we can read the bytes;
+        // the snapshot KEY stays the raw turn-tracker string for lookup consistency.
+        let fs_path = if key.is_absolute() {
+            std::path::PathBuf::from(file)
+        } else {
+            cwd.join(file)
+        };
+        // Bound memory the same way the per-edit path does: skip oversized,
+        // missing, or non-UTF-8 files rather than reading them fully in.
+        let Ok(meta) = std::fs::metadata(&fs_path) else {
+            continue;
+        };
+        if meta.len() > shannon_tools::file::MAX_SNAPSHOT_BYTES {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&fs_path) else {
+            continue;
+        };
+        if let Err(e) = manager.record_turn_snapshot(key, &content, turn_index) {
+            tracing::debug!("turn snapshot skipped for {fs_path:?}: {e}");
+        }
+    }
+}
+
+/// Capture post-turn snapshots using a manager built from
+/// `FileHistoryConfig::from_env()`. No-op when file history is disabled
+/// (`SHANNON_FILE_HISTORY=0`); see [`capture_turn_snapshots_with`].
+///
+/// This manager is intentionally a SEPARATE instance from the one the
+/// Write/Edit tools hold: both persist to the same on-disk `history_dir`, and
+/// `run_code_rewind` always builds its own fresh manager that re-reads the
+/// complete on-disk index, so the cross-instance in-memory cache divergence is
+/// benign (no data is lost).
+fn capture_turn_snapshots(files: &[String], turn_index: usize) {
+    let Some(config) = shannon_tools::FileHistoryConfig::from_env() else {
+        return;
+    };
+    let mut manager = shannon_tools::FileHistoryManager::new(config);
+    capture_turn_snapshots_with(&mut manager, files, turn_index);
+}
+
 /// Wrap a single line to fit within `max_width` columns, breaking at char boundaries.
 /// Returns a list of lines, each prefixed with `indent`.
 fn wrap_line(line: &str, max_width: usize, indent: &str) -> Vec<String> {
@@ -221,10 +278,20 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         query_engine.set_model(model.clone());
     }
 
-    // Resolve real context window for Ollama models before query starts
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    // Resolve real context window for Ollama models before query starts.
+    // A panic here is recovered (a stale context window beats a dead REPL) but
+    // logged at ERROR so the failure is diagnosable instead of silent
+    // (ADR-0008 P2-6; mirrors `apply_model_selection` in config.rs).
+    let pre_resolve_panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         repl.runtime.block_on(query_engine.pre_resolve_context());
     }));
+    if pre_resolve_panicked.is_err() {
+        tracing::error!(
+            model = ?repl.state.model,
+            provider = ?repl.state.selected_provider,
+            "pre_resolve_context panicked before query (recovered)"
+        );
+    }
     repl.state.context_window = query_engine.resolved_context_window();
 
     // Sync effort_level and focus_area from REPL state into the query engine
@@ -1364,6 +1431,10 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             }
             repl.current_turn += 1;
 
+            // W6-2 B.2: capture per-turn content snapshots so `/rewind code/both <n>`
+            // can restore files via FileHistoryManager (content snapshots, not git).
+            capture_turn_snapshots(&turn_files, repl.current_turn - 1);
+
             // Record per-turn checkpoint with file change tracking
             let prompt_preview = if unicode_width::UnicodeWidthStr::width(input) > 80 {
                 let mut len = 0;
@@ -1393,8 +1464,6 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 );
             } else if files_touched > 0 {
                 let synthetic_cp = shannon_core::Checkpoint {
-                    hash: String::new(),
-                    short_hash: String::new(),
                     description: format!("turn {}", repl.current_turn),
                     timestamp: chrono::Utc::now().timestamp(),
                 };
@@ -1420,56 +1489,19 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     total_input_tokens: repl.state.tokens_used,
                     total_output_tokens: 0,
                     turn_count: repl.current_turn,
-                    title: None,
+                    // Persist any /rename title; save_session also merges with
+                    // existing on-disk metadata so this won't clobber branch
+                    // lineage or creation time.
+                    title: repl.state.session_title.clone(),
                     parent_session_id: None,
                     branch_point_message_index: None,
+                    project_path: Some(repl.state.working_directory.clone()),
                 };
                 if let Err(e) =
                     repl.state_manager
                         .save_session(&engine.session_id(), &messages, &metadata)
                 {
                     tracing::debug!("Auto-save session error: {e}");
-                }
-
-                // Crash-safe JSONL append: log the latest user message + assistant
-                // response so that on crash only the in-flight turn is lost.
-                {
-                    let project_dir = std::env::current_dir().unwrap_or_default();
-                    let session_id_str = engine.session_id().to_string();
-                    let model = repl.state.model.clone().unwrap_or_default();
-                    let sr = &repl.session_recovery;
-
-                    // Ensure a recovery session exists for this engine session.
-                    let log_path =
-                        sr.session_log_path(&sr.project_session_dir(&project_dir), &session_id_str);
-                    if !log_path.exists() {
-                        if let Err(e) =
-                            sr.create_session_with_id(&project_dir, &session_id_str, &model)
-                        {
-                            tracing::debug!("Recovery session create error: {e}");
-                        }
-                    }
-
-                    // Append the last two messages (user + assistant) if available.
-                    let seq = (repl.current_turn.saturating_sub(1)) as u64 * 2;
-                    if messages.len() >= 2 {
-                        let user_msg = &messages[messages.len() - 2];
-                        let asst_msg = &messages[messages.len() - 1];
-                        if let Err(e) = sr.append_messages(
-                            &project_dir,
-                            &session_id_str,
-                            seq,
-                            &[user_msg.clone(), asst_msg.clone()],
-                        ) {
-                            tracing::debug!("Recovery append error: {e}");
-                        }
-                    } else if messages.len() == 1 {
-                        if let Err(e) =
-                            sr.append_message(&project_dir, &session_id_str, seq, &messages[0])
-                        {
-                            tracing::debug!("Recovery append error: {e}");
-                        }
-                    }
                 }
             }
 

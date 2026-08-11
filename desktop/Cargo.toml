@@ -1,6 +1,6 @@
 [package]
 name = "shannon-desktop"
-version = "0.7.1"
+version = "0.9.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Shannon — your AI workspace (Tauri desktop app)"
@@ -12,6 +12,12 @@ homepage = "https://github.com/shannon-agent/shannon-agent"
 [features]
 default = ["tauri"]
 tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-plugin-updater", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-window-state", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
+# Local STT (P2-5e). Pulls in whisper-rs (which builds whisper.cpp 1.5.x via
+# its own build.rs) and hound (pure-Rust WAV decoder). Requires cmake ≥ 3.18
+# and a C++17 compiler on the build host. The cloud D4 STT path is unchanged
+# and remains the default; this feature is opt-in for privacy-first users.
+# See docs/integrations/voice-local.md for the design.
+voice-local = ["dep:whisper-rs", "dep:hound"]
 
 [dependencies]
 # Shannon engine crates — provided by the unified workspace (no git, no SSH, no rev, no patch).
@@ -44,6 +50,7 @@ lsp-types = "0.95"
 url = "2"
 async-trait = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "multipart"] }
+dashmap = "6.1"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 sha2 = "0.10"
 rand = "0.8"
@@ -58,6 +65,16 @@ tauri-plugin-global-shortcut = { version = "2", optional = true }
 tauri-plugin-window-state = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
+
+# Local STT (P2-5e). whisper-rs 0.13 ships whisper.cpp 1.5.x as a vendored
+# git submodule and compiles it via its own build.rs — adding it here pulls
+# in ~150 C++ files on the first build (one-time cost, then cached). hound
+# is a tiny pure-Rust WAV reader used to convert MediaRecorder output into
+# the 16 kHz mono PCM f32 buffer whisper-rs expects. Both are gated behind
+# the `voice-local` feature so the default `cargo check` / `cargo clippy`
+# matrix stays fast and doesn't need the C++ toolchain.
+whisper-rs = { version = "0.13", optional = true }
+hound = { version = "3", optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

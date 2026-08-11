@@ -51,7 +51,6 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::checkpoint::CheckpointManager;
 use crate::tools::{ToolError, ToolOutput, ToolRegistry};
 use shannon_engine::hooks::{HookDecision, HookEvent, HookManager};
 use shannon_engine::permissions::{PermissionError, PermissionManager};
@@ -352,8 +351,6 @@ pub struct ToolExecutionResult {
     pub session_id: Uuid,
     /// File paths modified by this tool execution (extracted from input).
     pub files_modified: Vec<String>,
-    /// Whether a checkpoint was created before this tool execution.
-    pub checkpoint_created: bool,
 }
 
 impl ToolExecutionResult {
@@ -518,8 +515,6 @@ pub struct ToolExecutionConfig {
     pub collect_attachments: bool,
     /// Whether to emit hook progress messages.
     pub emit_hook_progress: bool,
-    /// Whether to auto-checkpoint before file-modifying tools.
-    pub auto_checkpoint: bool,
 }
 
 impl Default for ToolExecutionConfig {
@@ -528,7 +523,6 @@ impl Default for ToolExecutionConfig {
             default_timeout: Duration::from_secs(300), // 5 minutes
             collect_attachments: true,
             emit_hook_progress: true,
-            auto_checkpoint: true,
         }
     }
 }
@@ -544,8 +538,6 @@ pub struct ToolExecutionService {
     permission_manager: Arc<PermissionManager>,
     /// Optional progress callback.
     progress_callback: Option<Arc<dyn ProgressCallback>>,
-    /// Optional checkpoint manager for auto-checkpointing before file modifications.
-    checkpoint_manager: Option<CheckpointManager>,
     /// Optional hook manager for PreToolUse/PostToolUse lifecycle hooks.
     hook_manager: Option<Arc<tokio::sync::RwLock<HookManager>>>,
     /// Configuration.
@@ -559,7 +551,6 @@ impl ToolExecutionService {
             registry,
             permission_manager,
             progress_callback: None,
-            checkpoint_manager: None,
             hook_manager: None,
             config: ToolExecutionConfig::default(),
         }
@@ -575,7 +566,6 @@ impl ToolExecutionService {
             registry,
             permission_manager,
             progress_callback: Some(callback),
-            checkpoint_manager: None,
             hook_manager: None,
             config: ToolExecutionConfig::default(),
         }
@@ -591,15 +581,9 @@ impl ToolExecutionService {
             registry,
             permission_manager,
             progress_callback: None,
-            checkpoint_manager: None,
             hook_manager: None,
             config,
         }
-    }
-
-    /// Set the checkpoint manager for auto-checkpointing before file modifications.
-    pub fn set_checkpoint_manager(&mut self, mgr: CheckpointManager) {
-        self.checkpoint_manager = Some(mgr);
     }
 
     /// Set the progress callback.
@@ -612,7 +596,50 @@ impl ToolExecutionService {
     /// The hook manager is stored behind an `Arc<RwLock<...>>` so it can be
     /// shared with other components (e.g. the query engine) that also need to
     /// fire lifecycle events.
+    ///
+    /// As a side effect, this also wires the global instructions hook
+    /// emitter (P1-2) so the project-instructions loader can fire
+    /// `HookEvent::InstructionsLoaded` after merging CLAUDE.md / AGENTS.md /
+    /// `.claude/rules/*.md`. The emitter is a fire-and-forget closure that
+    /// serializes the event to JSON and dispatches it asynchronously through
+    /// the hook manager.
     pub fn set_hook_manager(&mut self, hook_manager: Arc<tokio::sync::RwLock<HookManager>>) {
+        // Install the global instructions emitter FIRST so any concurrent
+        // instruction load on a worker thread can pick it up immediately.
+        // The closure must not panic: errors inside the manager are swallowed.
+        let hm_for_emitter = Arc::clone(&hook_manager);
+        crate::project_instructions::install_instructions_emitter(Box::new(move |event| {
+            // Fire-and-forget: dispatch on the tokio runtime without blocking
+            // the caller. If we are not inside a runtime (e.g. in a unit test),
+            // fall back to a blocking call so the event still reaches the
+            // manager.
+            let hm = Arc::clone(&hm_for_emitter);
+            let bytes = event.to_json_bytes();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let ev = match serde_json::from_slice::<HookEvent>(&bytes) {
+                        Ok(ev) => ev,
+                        Err(e) => {
+                            tracing::debug!("InstructionsLoaded event JSON reparse failed: {e}");
+                            return;
+                        }
+                    };
+                    if let Err(e) = hm.read().await.run_hooks(&ev).await {
+                        tracing::debug!("InstructionsLoaded hook dispatch failed: {e}");
+                    }
+                });
+            } else {
+                // No runtime available; spin a fresh one. This only happens
+                // in unit tests that don't install a runtime, so we keep
+                // this path intentionally simple.
+                if let Ok(rt) = tokio::runtime::Runtime::new() {
+                    rt.block_on(async {
+                        let guard = hm.read().await;
+                        let _ = guard.run_hooks(&event).await;
+                    });
+                }
+            }
+        }));
         self.hook_manager = Some(hook_manager);
     }
 
@@ -655,23 +682,6 @@ impl ToolExecutionService {
 
         // 2b. Extract file paths from input for file-modifying tools
         let files_modified = Self::extract_file_paths(tool_name, &input);
-
-        // 2c. Auto-checkpoint before file-modifying tools
-        let mut checkpoint_created = false;
-        if self.config.auto_checkpoint
-            && is_file_modifying_tool(tool_name)
-            && !files_modified.is_empty()
-        {
-            if let Some(ref mgr) = self.checkpoint_manager {
-                let desc = format!("{}: {}", tool_name, files_modified.join(", "));
-                match mgr.create_checkpoint(tool_name, &desc) {
-                    Ok(_) => checkpoint_created = true,
-                    Err(e) => {
-                        tracing::debug!("Auto-checkpoint skipped: {e}");
-                    }
-                }
-            }
-        }
 
         // 2d. Run PreToolUse hooks - deny blocks execution, modify can change input
         let mut effective_input = input;
@@ -721,12 +731,6 @@ impl ToolExecutionService {
         let output = match tokio::time::timeout(self.config.default_timeout, execute_future).await {
             Ok(Ok(output)) => output,
             Ok(Err(err)) => {
-                // Discard checkpoint if tool failed to execute
-                if checkpoint_created {
-                    if let Some(ref mgr) = self.checkpoint_manager {
-                        mgr.discard_last();
-                    }
-                }
                 let msg = err.to_string();
                 let progress = ToolProgress::failed(&tool_id, tool_name, &msg);
                 progress_events.push(progress.clone());
@@ -740,11 +744,6 @@ impl ToolExecutionService {
             }
             Err(_) => {
                 // Tool timed out
-                if checkpoint_created {
-                    if let Some(ref mgr) = self.checkpoint_manager {
-                        mgr.discard_last();
-                    }
-                }
                 let msg = format!("Tool timed out after {:?}", self.config.default_timeout);
                 let progress = ToolProgress::failed(&tool_id, tool_name, &msg);
                 progress_events.push(progress.clone());
@@ -762,14 +761,6 @@ impl ToolExecutionService {
 
         let duration = start_time.elapsed();
         let is_error = output.is_error;
-
-        // If tool returned an error, discard the checkpoint
-        if is_error && checkpoint_created {
-            if let Some(ref mgr) = self.checkpoint_manager {
-                mgr.discard_last();
-            }
-            checkpoint_created = false;
-        }
 
         // 4b. Truncate oversized tool output (~10K tokens max)
         const MAX_TOOL_OUTPUT_CHARS: usize = 40_000; // ~10K tokens at 4 chars/token
@@ -844,7 +835,6 @@ impl ToolExecutionService {
             stop_hook_info,
             session_id,
             files_modified,
-            checkpoint_created,
         })
     }
 
@@ -1329,7 +1319,6 @@ mod tests {
         assert_eq!(config.default_timeout, Duration::from_secs(300));
         assert!(config.collect_attachments);
         assert!(config.emit_hook_progress);
-        assert!(config.auto_checkpoint);
     }
 
     // -- ToolExecutionService integration tests --
@@ -1553,21 +1542,6 @@ mod tests {
             .unwrap();
 
         assert!(result.files_modified.is_empty());
-        assert!(!result.checkpoint_created);
-    }
-
-    #[tokio::test]
-    async fn test_service_no_checkpoint_without_manager() {
-        let service = make_service().await;
-        let session_id = Uuid::new_v4();
-
-        // Even for file-modifying tools, no checkpoint is created without a manager
-        let result = service
-            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "hello"}))
-            .await
-            .unwrap();
-
-        assert!(!result.checkpoint_created);
     }
 
     // ── Hook integration tests ──────────────────────────────────────────────
@@ -2439,7 +2413,6 @@ mod tests {
             default_timeout: Duration::from_millis(10), // 10ms timeout, much shorter than delay
             collect_attachments: true,
             emit_hook_progress: true,
-            auto_checkpoint: false,
         };
 
         let service =
@@ -2479,7 +2452,6 @@ mod tests {
             default_timeout: Duration::from_millis(10),
             collect_attachments: true,
             emit_hook_progress: true,
-            auto_checkpoint: false,
         };
 
         let mut service =
@@ -2771,7 +2743,6 @@ mod tests {
             default_timeout: Duration::from_secs(300),
             collect_attachments: false, // disabled
             emit_hook_progress: true,
-            auto_checkpoint: false,
         };
 
         let service =
@@ -2864,7 +2835,6 @@ mod tests {
             default_timeout: Duration::from_secs(60),
             collect_attachments: false,
             emit_hook_progress: false,
-            auto_checkpoint: false,
         };
 
         let service = ToolExecutionService::with_config(
@@ -3366,38 +3336,6 @@ mod tests {
         assert!(result.is_some());
         let prompt = result.unwrap();
         assert_eq!(prompt.tool_name, "Echo");
-    }
-
-    // -- Auto-checkpoint disabled in config --
-
-    #[tokio::test]
-    async fn test_auto_checkpoint_disabled() {
-        let registry = ToolRegistry::new();
-        registry.register(Box::new(EchoTool)).unwrap();
-        let registry = Arc::new(registry);
-
-        let config = ToolExecutionConfig {
-            default_timeout: Duration::from_secs(300),
-            collect_attachments: true,
-            emit_hook_progress: true,
-            auto_checkpoint: false,
-        };
-
-        let mut service =
-            ToolExecutionService::with_config(registry, Arc::new(PermissionManager::new()), config);
-        // Set a checkpoint manager - it shouldn't be used because auto_checkpoint is false
-        service.set_checkpoint_manager(CheckpointManager::new());
-
-        let result = service
-            .run_tool_use(
-                Uuid::new_v4(),
-                "Echo",
-                serde_json::json!({"message": "test"}),
-            )
-            .await
-            .unwrap();
-
-        assert!(!result.checkpoint_created);
     }
 
     // -- Bash tool metadata with "cmd" field --

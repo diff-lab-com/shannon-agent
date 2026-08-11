@@ -10,6 +10,12 @@
 //! Common types used across the Shannon project.
 
 pub mod events;
+pub mod model_ref;
+pub mod provider_config;
+
+// Re-export the canonical `provider/model` identifier at the crate root for
+// ergonomics (`shannon_types::ModelRef`); see ADR-0005 Phase 0.
+pub use model_ref::{ModelRef, ModelRefParseError};
 
 use serde::{Deserialize, Serialize};
 use shannon_stability_attr::stable_api;

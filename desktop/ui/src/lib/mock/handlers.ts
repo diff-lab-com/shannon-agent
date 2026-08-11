@@ -84,21 +84,18 @@ export const handlers: Record<string, MockHandler> = {
       // Edit: keep the stored key when the frontend re-submits the mask.
       const keepKey = !input.api_key || input.api_key === '***'
       Object.assign(existing, {
-        label: input.label,
-        provider_kind: input.provider_kind,
-        api_key: keepKey ? existing.api_key : input.api_key,
+        display_name: input.display_name,
+        kind: input.kind,
+        has_api_key: keepKey ? existing.has_api_key : !!input.api_key,
         base_url: input.base_url || null,
-        model: input.model || null,
       })
     } else {
       state.providers.providers.push({
         id: `prov-${Date.now()}`,
-        label: input.label,
-        provider_kind: input.provider_kind,
-        api_key: input.api_key || null,
+        display_name: input.display_name,
+        kind: input.kind,
+        has_api_key: !!input.api_key,
         base_url: input.base_url || null,
-        model: input.model || null,
-        created_at: new Date().toISOString(),
       })
     }
     return providersFile()

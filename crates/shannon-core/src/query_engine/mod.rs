@@ -5,6 +5,8 @@
 mod browser_control_prompt;
 mod context_injector;
 mod engine;
+pub mod litellm;
+mod repo_map_injector;
 mod streaming;
 mod team_prompt;
 mod types;
@@ -12,11 +14,13 @@ mod types;
 // Re-export all public types to maintain the same public API as the original flat file.
 pub use browser_control_prompt::browser_control_prompt;
 pub use context_injector::ContextInjector;
-pub use engine::QueryEngine;
+pub use engine::{ProviderHealth, ProviderHealthStatus, QueryEngine};
+pub use repo_map_injector::RepoMapInjector;
 pub use team_prompt::teammate_instructions;
 pub use types::{
     CompressionStrategy, ConversationStats, CostEstimate, CostTracker, PermissionRequest,
     QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryMetadata, QueryStream,
+    pricing_for_model_opt,
 };
 
 #[cfg(test)]
@@ -922,6 +926,10 @@ mod tests {
             fast_model: None,
             plan_model: None,
             max_parallel_tools: 10,
+            repo_map_enabled: true,
+            repo_map_budget_tokens: 2_000,
+            repo_map_root: None,
+            auto_test: None,
         };
         assert_eq!(config.max_turns, 5);
         assert_eq!(config.max_budget_usd, Some(1.0));
@@ -1187,6 +1195,10 @@ mod tests {
             fast_model: None,
             plan_model: None,
             max_parallel_tools: 10,
+            repo_map_enabled: true,
+            repo_map_budget_tokens: 2_000,
+            repo_map_root: None,
+            auto_test: None,
         };
         assert_eq!(config.max_turns, 1);
         assert_eq!(config.max_budget_usd, Some(0.01));

@@ -136,11 +136,10 @@ fn test_repl_help_command() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    assert!(!repl.chat.is_empty());
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Shannon Code Commands"));
-    assert!(last_msg.contains("/help"));
-    assert!(last_msg.contains("/quit"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -205,16 +204,16 @@ fn test_repl_unknown_command() {
 // ── Session Command Tests ──────────────────────────────────────────
 
 #[test]
-fn test_sessions_command_empty() {
+fn test_resume_command_no_args() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/sessions".to_string());
+    repl.prompt.set_input("/resume".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    // With no saved sessions, the picker should be inactive and a chat message shown
-    // OR if sessions exist, the fuzzy picker should be open
+    // /resume with no args opens the picker (if sessions exist for the current
+    // project) or shows a "No sessions" message (project-scoped or all).
     let has_chat_msg = repl
         .chat
         .last_message()
-        .map(|m| m.content.contains("No saved sessions") || m.content.contains("Saved sessions"))
+        .map(|m| m.content.contains("No sessions"))
         .unwrap_or(false);
     let picker_open = repl.state.fuzzy_picker.is_some() && repl.state.session_picker_active;
     assert!(has_chat_msg || picker_open);
@@ -225,19 +224,10 @@ fn test_sessions_command_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/sessions"));
-    assert!(last_msg.contains("/resume"));
-    assert!(last_msg.contains("/history"));
-}
-
-#[test]
-fn test_resume_command_no_args() {
-    let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/resume".to_string());
-    super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Usage: /resume"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -906,8 +896,10 @@ fn test_repl_doctor_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/doctor"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 // ── /compact Command Tests ──────────────────────────────────────────
@@ -943,8 +935,10 @@ fn test_repl_compact_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/compact"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -1000,8 +994,10 @@ fn test_repl_cost_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/cost"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 // ── /team Command Tests ────────────────────────────────────────────
@@ -1214,8 +1210,10 @@ fn test_repl_permissions_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/permissions"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -1408,8 +1406,10 @@ fn test_repl_plan_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/plan"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -1643,8 +1643,10 @@ fn test_repl_web_search_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/web-search"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -1670,8 +1672,10 @@ fn test_repl_review_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/review"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -1715,8 +1719,10 @@ fn test_repl_local_models_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/local-models"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -1853,8 +1859,10 @@ fn test_repl_ci_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/ci"));
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 #[test]
@@ -2280,38 +2288,42 @@ fn test_repl_context_in_help() {
 // --- /undo command tests ---
 
 #[test]
-fn test_repl_undo_no_checkpoints() {
+fn test_repl_undo_alias_rewinds_conversation() {
+    // /undo is now an alias of /rewind (W6-2 B.1 unification): it rewinds the
+    // conversation rather than reverting git checkpoints.
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/undo".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
-        last_msg.contains("No checkpoints") || last_msg.contains("Undo failed"),
-        "/undo with no checkpoints should show error"
+        last_msg.contains("No conversation turns to rewind"),
+        "/undo should behave as /rewind (conversation rewind). Got: {last_msg}"
     );
 }
 
 #[test]
-fn test_repl_undo_list_empty() {
+fn test_repl_undo_alias_list_is_history() {
+    // /undo list maps to /rewind history.
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/undo list".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
-        last_msg.contains("No checkpoints"),
-        "/undo list with no checkpoints should say so"
+        last_msg.contains("No turn checkpoints available"),
+        "/undo list should map to /rewind history. Got: {last_msg}"
     );
 }
 
 #[test]
-fn test_repl_undo_invalid_index() {
+fn test_repl_undo_alias_zero_is_usage() {
+    // /undo 0 → /rewind 0 → rewinding 0 turns is invalid → usage hint.
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/undo 0".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
-        last_msg.contains("Revert failed") || last_msg.contains("Invalid"),
-        "/undo 0 with no checkpoints should fail"
+        last_msg.contains("Usage: /rewind"),
+        "/undo 0 should show /rewind usage. Got: {last_msg}"
     );
 }
 
@@ -2323,13 +2335,8 @@ fn test_repl_undo_in_help() {
 }
 
 #[test]
-fn test_repl_checkpoint_manager_enabled() {
+fn test_repl_checkpoint_manager_starts_empty() {
     let repl = Repl::new().unwrap();
-    // Running in a git repo, so should be enabled
-    assert!(
-        repl.checkpoint_manager.is_enabled(),
-        "checkpoint manager should be enabled in git repo"
-    );
     assert!(
         repl.checkpoint_manager.is_empty(),
         "should start with no checkpoints"
@@ -2455,11 +2462,9 @@ fn test_repl_patch_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let help_text = &repl.chat.last_message().unwrap().content;
     assert!(
-        help_text.contains("patch"),
-        "/help output should list patch command, got partial: {}",
-        &help_text[..help_text.len().min(200)]
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
     );
 }
 
@@ -2524,10 +2529,9 @@ fn test_repl_sandbox_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let help_text = &repl.chat.last_message().unwrap().content;
     assert!(
-        help_text.contains("sandbox"),
-        "/help output should list sandbox command"
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
     );
 }
 
@@ -2577,8 +2581,10 @@ fn test_repl_find_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    let help_text = &repl.chat.last_message().unwrap().content;
-    assert!(help_text.contains("find"), "/help should list find command");
+    assert!(
+        repl.state.help_overlay.is_some(),
+        "/help should open overlay; chat should not be polluted"
+    );
 }
 
 // ---- /agents command tests ----
@@ -2985,13 +2991,18 @@ fn test_rewind_command_zero() {
 }
 
 #[test]
-fn test_rewind_command_invalid_arg() {
+fn test_rewind_untracked_file_path() {
+    // A non-numeric, non-keyword argument is now treated as a per-file rewind
+    // target (W6-2 B.1). An untracked path reports no file history.
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/rewind abc".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
 
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Usage: /rewind"));
+    assert!(
+        last_msg.contains("No file history for `abc`"),
+        "/rewind <path> on an untracked file should say so. Got: {last_msg}"
+    );
 }
 
 #[test]

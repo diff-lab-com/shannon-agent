@@ -8,6 +8,8 @@ import * as api from '@/lib/tauri-api'
 import { useCatalog } from '@/context/CatalogContext'
 import { SIDEBAR_MODE_KEY } from '@/components/Sidebar'
 import { formatShortcut } from '@/lib/platform'
+import AddProviderModal from '@/components/settings/AddProviderModal'
+import type { ProvidersFile } from '@/types'
 
 // ─── Task taxonomy ──────────────────────────────────────────────────────────
 // Drives Step 0 (primary use case). Each task carries a model recommendation
@@ -161,14 +163,14 @@ export default function Welcome() {
   const [step, setStep] = useState(0)
   const [task, setTask] = useState<TaskId>('general')
   const [provider, setProvider] = useState<string>('anthropic')
-  const [apiKey, setApiKey] = useState('')
   const [saving, setSaving] = useState(false)
   const [pickedDir, setPickedDir] = useState<string | null>(null)
   const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({})
   const [devMode, setDevMode] = useState(false)
-  const [testing, setTesting] = useState(false)
   const [envHasKey, setEnvHasKey] = useState(false)
   const envCheckedRef = useRef(false)
+  const [providerSaved, setProviderSaved] = useState(false)
+  const [showAddProviderModal, setShowAddProviderModal] = useState(false)
   const [skillState, setSkillState] = useState<
     Record<string, { status: 'idle' | 'installing' | 'installed' | 'failed'; error?: string }>
   >({})
@@ -197,36 +199,32 @@ export default function Welcome() {
       .catch(e => console.warn('detectProviderFromEnv failed:', e))
   }, [intl])
 
-  const runTestConnection = async () => {
-    if (provider === 'ollama') return
-    setTesting(true)
+  const handleAddProviderSaved = async (f: ProvidersFile) => {
+    const targetId = f.active_provider_id ?? f.providers[f.providers.length - 1]?.id
+    if (!targetId) {
+      toastError(intl.formatMessage({ id: 'welcome.toast.provider.failed' }), new Error('No provider id returned'))
+      return
+    }
+    setSaving(true)
     try {
-      const result = await api.testProviderConnection(provider, apiKey)
-      const label = PROVIDERS.find(p => p.id === provider)?.label ?? provider
-      switch (result.kind) {
-        case 'success':
-          toast.success(intl.formatMessage({ id: 'welcome.testConnection.success' }, { provider: label }))
-          return
-        case 'invalid_key':
-          toast.error(intl.formatMessage({ id: 'welcome.testConnection.invalidKey' }))
-          return
-        case 'rate_limited':
-          toast.warning(intl.formatMessage({ id: 'welcome.testConnection.rateLimited' }))
-          return
-        case 'provider_error':
-          toast.error(intl.formatMessage({ id: 'welcome.testConnection.providerError' }, { provider: label, status: result.status }))
-          return
-        case 'network_unreachable':
-          toast.error(intl.formatMessage({ id: 'welcome.testConnection.networkUnreachable' }, { provider: label }))
-          return
-        case 'unknown':
-          toast.error(intl.formatMessage({ id: 'welcome.testConnection.unknown' }, { message: result.message }))
-          return
+      await api.setActiveProvider(targetId)
+      await Promise.all([refreshConfig(), refreshStatus()])
+      // Mirror the active kind back into local state for the Done summary.
+      const active = f.providers.find(p => p.id === targetId)
+      if (active) {
+        setProvider(active.kind)
       }
+      // Pre-check tools recommended for this task so the user can opt in/out.
+      const initial: Record<string, boolean> = {}
+      for (const t of currentTask.tools) initial[t] = true
+      setEnabledTools(prev => ({ ...initial, ...prev }))
+      setShowAddProviderModal(false)
+      setProviderSaved(true)
+      setStep(2)
     } catch (e) {
-      toastError(intl.formatMessage({ id: 'welcome.testConnection.failed' }), e)
+      toastError(intl.formatMessage({ id: 'welcome.toast.provider.failed' }), e)
     } finally {
-      setTesting(false)
+      setSaving(false)
     }
   }
 
@@ -264,22 +262,18 @@ export default function Welcome() {
   }
 
   const handleModelSubmit = async () => {
-    setSaving(true)
-    try {
-      if (provider !== 'ollama' && apiKey) {
-        await api.configure({ key: 'api_key', value: apiKey })
-      }
-      await api.switchProvider({ provider, model: '' }).catch(e => console.warn('switchProvider in welcome:', e))
-      await Promise.all([refreshConfig(), refreshStatus()])
-      // Pre-check tools recommended for this task so the user can opt in/out.
-      const initial: Record<string, boolean> = {}
-      for (const t of currentTask.tools) initial[t] = true
-      setEnabledTools(prev => ({ ...initial, ...prev }))
-      setStep(2)
-    } catch (e) {
-      toastError(intl.formatMessage({ id: 'welcome.toast.provider.failed' }), e)
-    }
-    setSaving(false)
+    // Step 1 → Step 2 transition. In the new modal-launcher flow the actual
+    // provider save happens inside AddProviderModal; here we only advance
+    // when the user has either (a) saved via the modal in this session, or
+    // (b) confirmed the env-detected provider is enough. `providerSaved`
+    // is set true by `handleAddProviderSaved`; `envHasKey` covers the
+    // pre-existing Ollama/ANTHROPIC/OPENAI key case.
+    if (!providerSaved && !(envHasKey && provider === currentTask.recommendedProvider)) return
+    // Pre-check tools recommended for this task so the user can opt in/out.
+    const initial: Record<string, boolean> = {}
+    for (const t of currentTask.tools) initial[t] = true
+    setEnabledTools(prev => ({ ...initial, ...prev }))
+    setStep(2)
   }
 
   const toggleTool = (id: string) => {
@@ -385,72 +379,48 @@ export default function Welcome() {
                   <button onClick={() => setStep(0)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
                     {intl.formatMessage({ id: 'welcome.model.back' })}
                   </button>
-                  <button
-                    onClick={handleModelSubmit}
-                    disabled={saving || (provider !== 'ollama' && !apiKey && !envHasKey)}
-                    className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                  >
-                    {saving
-                      ? intl.formatMessage({ id: 'welcome.model.saving' })
-                      : intl.formatMessage({ id: 'welcome.model.continue' })}
-                  </button>
+                  <div className="flex flex-col items-end gap-xs">
+                    <button
+                      onClick={handleModelSubmit}
+                      disabled={saving || (!providerSaved && !(envHasKey && provider === currentTask.recommendedProvider))}
+                      className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    >
+                      {intl.formatMessage({ id: 'welcome.model.continue' })}
+                    </button>
+                    {!providerSaved && !(envHasKey && provider === currentTask.recommendedProvider) ? (
+                      <span className="font-label-sm text-on-surface-variant">
+                        {intl.formatMessage({ id: 'welcome.model.continue.hint' })}
+                      </span>
+                    ) : null}
+                  </div>
                 </>
               }
             >
-              <div className="space-y-sm mb-lg">
-                {PROVIDERS.map(p => (
-                  <button
-                    key={p.id}
-                    onClick={() => setProvider(p.id)}
-                    aria-pressed={provider === p.id}
-                    className={`w-full text-left p-md rounded-xl border cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${
-                      provider === p.id
-                        ? 'border-2 border-primary bg-primary-container/5'
-                        : 'border-outline-variant/50 hover:border-primary/50'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-sm">
-                      <div>
-                        <div className="font-headline-md text-on-surface">{p.label}</div>
-                        <div className="font-body-sm text-on-surface-variant">{intl.formatMessage({ id: p.descKey })}</div>
-                      </div>
-                      <div className={`w-5 h-5 rounded-full border-2 shrink-0 ${provider === p.id ? 'border-primary bg-primary' : 'border-outline-variant'}`} />
-                    </div>
-                  </button>
-                ))}
-              </div>
-              {provider !== 'ollama' && (
-                <div className="mb-lg">
-                  <label htmlFor="welcome-api-key" className="font-label-md text-on-surface-variant block mb-xs">
-                    {intl.formatMessage({ id: 'welcome.model.apiKey.label' })}
-                  </label>
-                  <input
-                    id="welcome-api-key"
-                    type="password"
-                    value={apiKey}
-                    onChange={e => setApiKey(e.target.value)}
-                    placeholder={envHasKey ? intl.formatMessage({ id: 'welcome.model.apiKey.placeholderEnv' }) : intl.formatMessage({ id: 'welcome.model.apiKey.placeholder' })}
-                    autoComplete="off"
-                    className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm"
-                  />
-                  <div className="flex items-center justify-between gap-md mt-xs">
-                    <p className="font-label-sm text-on-surface-variant flex-1">
-                      {intl.formatMessage({ id: 'welcome.model.apiKey.help' })}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={runTestConnection}
-                      disabled={testing || !apiKey}
-                      className="shrink-0 px-md py-xs rounded-lg font-label-md cursor-pointer transition-all bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 text-on-surface disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary flex items-center gap-xs"
-                    >
-                      {testing && <span className="material-symbols-outlined icon-sm animate-spin">progress_activity</span>}
-                      {testing
-                        ? intl.formatMessage({ id: 'welcome.testConnection.testing' })
-                        : intl.formatMessage({ id: 'welcome.testConnection.button' })}
-                    </button>
+              {/* P1.2-C: replaced the legacy provider picker + bare <input
+                  type="password"> with a single launcher that opens the
+                  canonical AddProviderModal (also used in Settings → Models).
+                  The modal handles saving to ~/.shannon/credentials/<id>.json
+                  (A1 — no plaintext key in config.json). */}
+              <button
+                type="button"
+                onClick={() => setShowAddProviderModal(true)}
+                className="w-full p-md rounded-xl border border-outline-variant/50 hover:border-primary/50 bg-surface-container-low cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary flex items-center gap-md"
+                data-testid="welcome-add-provider"
+              >
+                <span className="material-symbols-outlined text-primary">add_circle</span>
+                <span className="flex-1 text-left">
+                  <div className="font-headline-md text-on-surface">
+                    {intl.formatMessage({ id: 'welcome.model.addProvider.label' })}
                   </div>
-                </div>
-              )}
+                  <div className="font-body-sm text-on-surface-variant mt-xs">
+                    {intl.formatMessage({ id: 'welcome.model.addProvider.help' })}
+                  </div>
+                </span>
+                <span className="material-symbols-outlined text-on-surface-variant">arrow_forward</span>
+              </button>
+              <p className="font-body-sm text-on-surface-variant mt-md">
+                {intl.formatMessage({ id: 'welcome.model.addProvider.testHint' })}
+              </p>
             </Card>
           )}
 
@@ -699,6 +669,18 @@ export default function Welcome() {
           )}
         </div>
       </main>
+
+      {/* P1.2-C: Step 1 now launches the canonical AddProviderModal instead
+          of authoring a bespoke provider picker + bare API-key input. The
+          modal calls saveProvider internally; handleAddProviderSaved
+          activates the new profile and advances to Step 2. */}
+      {showAddProviderModal && (
+        <AddProviderModal
+          editing={null}
+          onClose={() => setShowAddProviderModal(false)}
+          onSaved={handleAddProviderSaved}
+        />
+      )}
     </div>
   )
 }

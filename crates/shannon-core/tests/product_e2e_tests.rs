@@ -804,6 +804,7 @@ fn test_session_persistence_round_trip() {
         title: Some("Rust hello world".to_string()),
         parent_session_id: None,
         branch_point_message_index: None,
+        project_path: None,
     };
 
     // Save
@@ -964,6 +965,10 @@ fn test_query_engine_config_custom() {
         fast_model: None,
         plan_model: None,
         max_parallel_tools: 10,
+        repo_map_enabled: true,
+        repo_map_budget_tokens: 2_000,
+        repo_map_root: None,
+        auto_test: None,
     };
     assert_eq!(config.max_turns, 5);
     assert_eq!(config.max_budget_usd, Some(1.0));

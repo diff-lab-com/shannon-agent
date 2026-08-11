@@ -34,6 +34,12 @@ shannon-api-protocol = { path = "../shannon-api-protocol" }
 # Engine (extracted modules — api/, testing/record_replay)
 shannon-engine = { path = "../shannon-engine" }
 
+# Repo map (P1-4): tree-sitter based symbol map injected into the system
+# prompt. Always built — the integration is gated by a config toggle on
+# the engine side, but the binary is small and depends on the same tree-
+# sitter grammars already pulled in by shannon-repomap itself.
+shannon-repomap = { path = "../shannon-repomap" }
+
 # HTTP client for Claude API
 reqwest = { workspace = true }
 
@@ -80,6 +86,13 @@ base64 = { workspace = true }
 # Testing utilities
 tempfile = "3.16"
 
+# Cross-process advisory file lock (`flock`) on `~/.shannon/providers.toml`
+# so concurrent shannon processes (desktop + CLI) can't tear the file.
+# Mirrors the established pattern in `shannon-agents` (see
+# `crates/shannon-agents/src/persistence.rs`). Same crate (`fs2` 0.4) so
+# the locking semantics + RAII drop-unlock are identical across crates.
+fs2 = "0.4"
+
 # LSP integration
 lsp-types = "0.95"
 
@@ -95,6 +108,11 @@ landlock = { version = "0.4", optional = true }
 # Cron expression parsing (5-field, Claude Code / Codex compatible)
 croner = "3.0"
 
+# Filesystem watcher for `.shannon.toml` (P1-2 ConfigChange hook).
+# v7 matches what shannon-ui uses for the SourceWatcher; we keep them
+# aligned to avoid two copies of differing notify ABI.
+notify = { version = "7", features = ["macos_kqueue"] }
+
 [features]
 default = []
 landlock = ["dep:landlock"]
@@ -103,7 +121,7 @@ landlock = ["dep:landlock"]
 tokio-test = "0.4"
 criterion = "0.5"
 tower = "0.5"
-insta = "1.42"
+insta = { workspace = true }
 proptest = { workspace = true }
 
 [[bench]]

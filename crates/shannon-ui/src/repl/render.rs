@@ -235,8 +235,24 @@ pub fn draw_frame(
             effort_level: state.effort_level.as_deref(),
             thinking_phase: state.thinking_phase,
             thinking_chars: 0,
+            provider: state.selected_provider.as_ref().map(|p| provider_id(p)),
+            tier_label: state
+                .model
+                .as_deref()
+                .map(|m| shannon_core::model_registry::tier_label_for_id(m).as_str()),
         };
         crate::widgets::MainLayoutWidget::render_with_ctx(f, &render_ctx);
+
+        // Render /help overlay if active
+        if let Some(ref overlay_state) = state.help_overlay {
+            let categories = shannon_commands::help_utils::categorize_commands();
+            let _ = crate::widgets::help_overlay::render_help_overlay(
+                f,
+                f.area(),
+                overlay_state,
+                &categories,
+            );
+        }
 
         // Overlay dialogs on top of base layout
         if let Some(ref dialog) = state.permission_dialog {
@@ -1489,4 +1505,56 @@ fn render_chat_search_overlay(
     );
 
     frame.render_widget(paragraph, bar_area);
+}
+
+/// Map an `LlmProvider` to a stable lowercase id string (e.g. `"anthropic"`).
+///
+/// Exhaustive over all known variants; unknown future variants fall back to
+/// `"unknown"` so the UI never panics on a new provider.
+fn provider_id(p: &shannon_engine::api::LlmProvider) -> &'static str {
+    use shannon_engine::api::LlmProvider;
+    match p {
+        LlmProvider::Anthropic => "anthropic",
+        LlmProvider::OpenAI => "openai",
+        LlmProvider::Ollama => "ollama",
+        LlmProvider::Custom => "custom",
+        LlmProvider::Gemini => "gemini",
+        LlmProvider::Azure => "azure",
+        LlmProvider::Bedrock => "bedrock",
+        LlmProvider::Mistral => "mistral",
+        LlmProvider::DeepSeek => "deepseek",
+        LlmProvider::Groq => "groq",
+        LlmProvider::Together => "together",
+        LlmProvider::OpenRouter => "openrouter",
+        LlmProvider::Cohere => "cohere",
+        LlmProvider::Fireworks => "fireworks",
+        LlmProvider::Perplexity => "perplexity",
+        LlmProvider::Xai => "xai",
+        LlmProvider::Ai21 => "ai21",
+        LlmProvider::Cloudflare => "cloudflare",
+        LlmProvider::Replicate => "replicate",
+        LlmProvider::SiliconFlow => "siliconflow",
+        LlmProvider::Zhipu => "zhipu",
+        LlmProvider::ZhipuInternational => "zhipu_international",
+        LlmProvider::ZhipuCoding => "zhipu_coding",
+        LlmProvider::Moonshot => "moonshot",
+        LlmProvider::Minimax => "minimax",
+        LlmProvider::DashScope => "dashscope",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_id_known() {
+        use shannon_engine::api::LlmProvider;
+        assert_eq!(provider_id(&LlmProvider::Anthropic), "anthropic");
+        assert_eq!(provider_id(&LlmProvider::OpenAI), "openai");
+        assert_eq!(provider_id(&LlmProvider::Gemini), "gemini");
+        assert_eq!(provider_id(&LlmProvider::Ollama), "ollama");
+        assert_eq!(provider_id(&LlmProvider::Minimax), "minimax");
+        assert_eq!(provider_id(&LlmProvider::ZhipuCoding), "zhipu_coding");
+    }
 }

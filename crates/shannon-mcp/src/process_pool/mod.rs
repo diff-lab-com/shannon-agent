@@ -69,7 +69,7 @@ pub(crate) type SamplingProvider = Arc<
 
 /// Provider for elicitation requests (server → client user prompts).
 ///
-/// Takes an [`ElicitationRequest`] and returns an [`ElicitationResult`].
+/// Takes an `ElicitationRequest` and returns an `ElicitationResult`.
 /// Typically wired to a TUI prompt or auto-declined in non-interactive mode.
 pub(crate) type ElicitationProvider = Arc<
     dyn Fn(
@@ -496,7 +496,7 @@ impl McpProcessPool {
 
     /// Start a WebSocket-based MCP server and add it to the pool.
     ///
-    /// Creates a [`WebSocketTransport`], connects to the endpoint, then runs
+    /// Creates a `WebSocketTransport`, connects to the endpoint, then runs
     /// the standard MCP initialization handshake. The resulting handle is
     /// stored in `remote_handles` with `ws_transport` set, so all subsequent
     /// requests go over the WebSocket instead of HTTP.
@@ -1329,7 +1329,7 @@ impl McpProcessPool {
     ///
     /// Periodically pings each server. On failure, marks the server as
     /// unhealthy and attempts an automatic restart with exponential backoff.
-    /// The task handle is stored so it can be cancelled via [`stop_health_checks`].
+    /// The task handle is stored so it can be cancelled via `stop_health_checks`.
     pub async fn start_health_checks(&self) {
         let handles = self.handles.clone();
         let interval = self.health_interval;
@@ -1646,8 +1646,8 @@ impl McpProcessPool {
 
     /// Set the elicitation provider for handling `elicitation/create` requests.
     ///
-    /// The provider receives an [`ElicitationRequest`] and returns an
-    /// [`ElicitationResult`]. If no provider is set, servers receive a
+    /// The provider receives an `ElicitationRequest` and returns an
+    /// `ElicitationResult`. If no provider is set, servers receive a
     /// "method not found" error when they attempt elicitation.
     pub async fn set_elicitation_provider(&self, provider: ElicitationProvider) {
         *self.elicitation_provider.lock().await = Some(provider);

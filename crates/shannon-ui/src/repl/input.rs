@@ -70,6 +70,20 @@ pub fn handle_input(
     key: KeyEvent,
     terminal: Option<&mut super::query::Term>,
 ) -> Result<()> {
+    // If the /help overlay is active, Esc closes it; all other keys are
+    // consumed while the overlay is open (precedes any other Esc handling).
+    if repl.state.help_overlay.is_some() {
+        if let KeyEvent {
+            code: KeyCode::Esc, ..
+        } = key
+        {
+            repl.state.help_overlay = None;
+            return Ok(());
+        }
+        // Consume all other keys while overlay is open
+        return Ok(());
+    }
+
     // Dismiss onboarding overlay on user interaction
     if repl.state.onboarding_active {
         match key.code {
@@ -593,7 +607,7 @@ pub fn handle_input(
                 if let Some(last) = repl.state.last_esc_time {
                     if now.duration_since(last).as_millis() < 500 {
                         repl.state.last_esc_time = None;
-                        super::commands::handle_command(repl, "/undo")?;
+                        super::commands::handle_command(repl, "/rewind")?;
                         return Ok(());
                     }
                 }
@@ -1153,8 +1167,8 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "terminal-setup" => &[],
         "help" => &[],
         "init" => &[],
-        "sessions" => &["list", "delete", "export"],
-        "resume" => &["--last", "--list"],
+        "sessions" => &[],
+        "resume" => &[],
         _ => &[],
     };
 
@@ -1458,47 +1472,34 @@ fn handle_active_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                             super::commands::execute_pending_action(repl, &cmd)?;
                         }
                     }
-                    "show_diff" => {
-                        if let Some(preview) = repl.state.undo_preview.take() {
-                            let mut viewer = crate::widgets::diff_viewer::DiffViewerWidget::new();
-                            viewer.load_raw_diff(&preview.full_diff);
-                            repl.state.diff_viewer = Some(viewer);
-                        }
-                    }
-                    "undo_confirm_revert" => {
-                        let index = repl.state.undo_target_index.take();
-                        let preview = repl.state.undo_preview.take();
-                        if let (Some(idx), Some(pv)) = (index, preview) {
-                            match repl
-                                .checkpoint_manager
-                                .revert_to(idx, shannon_core::RestoreMode::CodeAndConversation)
-                            {
-                                Ok(tc) => {
+                    "rewind_file_confirm" => {
+                        let path = repl.state.rewind_file_path.take();
+                        let id = repl.state.rewind_file_snapshot_id.take();
+                        if let (Some(path), Some(id)) = (path, id) {
+                            match super::commands::apply_file_rewind(&path, &id) {
+                                Ok(content) => {
+                                    let lines = content.lines().count();
                                     repl.chat.add_message(
                                         ChatRole::System,
                                         format!(
-                                            "Reverted to checkpoint [{}] ({})\n{}",
-                                            idx,
-                                            tc.checkpoint.short_hash,
-                                            tc.checkpoint.description
+                                            "Rewound `{}` to its previous version ({} lines).",
+                                            path.display(),
+                                            lines
                                         ),
                                     );
                                 }
                                 Err(e) => {
                                     repl.chat.add_message(
                                         ChatRole::System,
-                                        format!("Revert failed: {e}"),
+                                        format!("File rewind failed: {e}"),
                                     );
-                                    // Restore preview since revert failed
-                                    repl.state.undo_preview = Some(pv);
-                                    repl.state.undo_target_index = Some(idx);
                                 }
                             }
                         }
                     }
                     "cancel" | "ok" => {
-                        repl.state.undo_preview = None;
-                        repl.state.undo_target_index = None;
+                        repl.state.rewind_file_path = None;
+                        repl.state.rewind_file_snapshot_id = None;
                     }
                     _ => {}
                 }
@@ -1770,9 +1771,18 @@ fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 }
             }
         }
+        KeyCode::Tab => {
+            // Session-picker only: toggle between current-project and
+            // all-projects scope and refresh the visible list.
+            if repl.state.session_picker_active {
+                repl.state.session_picker_show_all = !repl.state.session_picker_show_all;
+                repl.refresh_session_picker_scope()?;
+            }
+        }
         KeyCode::Esc => {
             repl.state.fuzzy_picker = None;
             repl.state.file_selector_for_at = false;
+            repl.state.session_picker_active = false;
         }
         _ => {}
     }
@@ -1908,6 +1918,15 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 }
 
 fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    // Manual model-id entry intercepts most keys (typing, backspace, confirm).
+    if repl
+        .state
+        .model_picker
+        .as_ref()
+        .is_some_and(|mp| mp.is_manual_mode())
+    {
+        return handle_model_picker_manual_input(repl, key);
+    }
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
             if let Some(ref mut mp) = repl.state.model_picker {
@@ -1929,15 +1948,102 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 mp.next_provider();
             }
         }
+        KeyCode::Tab => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.next_tier();
+            }
+        }
+        KeyCode::Char('i') => {
+            // Enter manual model-id entry (escape hatch for catalog-external ids).
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.enter_manual_mode();
+            }
+        }
+        KeyCode::BackTab => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.prev_tier();
+            }
+        }
         KeyCode::Enter => {
-            let model_id = repl
+            let (model_id, provider) = repl
                 .state
                 .model_picker
                 .as_ref()
-                .and_then(|mp| mp.selected_model().map(|m| m.id.to_string()));
-            repl.state.model_picker = None;
+                .map(|mp| {
+                    (
+                        mp.selected_model().map(|m| m.id.to_string()),
+                        mp.selected_model().map(|m| m.provider.clone()),
+                    )
+                })
+                .unwrap_or((None, None));
 
-            if let Some(id) = model_id {
+            let Some(id) = model_id else {
+                let provider_name = provider
+                    .as_ref()
+                    .map(shannon_core::provider_resolver::llm_provider_id)
+                    .unwrap_or_else(|| "current provider".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!(
+                        "No model selected for {provider_name} — run `/model refresh` or check provider config"
+                    ),
+                );
+                return Ok(());
+            };
+
+            repl.state.model_picker = None;
+            if let Some(provider) = provider {
+                crate::repl::commands::apply_model_selection(
+                    repl,
+                    provider,
+                    Some(id.clone()),
+                    None,
+                    false,
+                )?;
+            } else {
+                repl.state.model = Some(id.clone());
+                crate::repl::commands::sync_active_to_chat(repl);
+            }
+            repl.chat.add_message(
+                ChatRole::System,
+                t!("commands.model.set", name = id).to_string(),
+            );
+        }
+        KeyCode::Esc => {
+            repl.state.model_picker = None;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Handle keystrokes while the model picker is in manual-id entry mode.
+///
+/// Typed characters build the model id; Backspace deletes; Enter confirms the
+/// typed id (closing the picker) only when non-empty; Esc returns to the list.
+fn handle_model_picker_manual_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Char(c) => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.add_manual_char(c);
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.remove_manual_char();
+            }
+        }
+        KeyCode::Enter => {
+            let typed = repl.state.model_picker.as_ref().and_then(|mp| {
+                let s = mp.manual_input();
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s.to_string())
+                }
+            });
+            if let Some(id) = typed {
+                repl.state.model_picker = None;
                 repl.state.model = Some(id);
                 crate::repl::preferences::save_preferences(
                     &crate::repl::preferences::Preferences {
@@ -1955,9 +2061,12 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     .to_string(),
                 );
             }
+            // Empty Enter is a no-op: stay in manual mode until something is typed.
         }
         KeyCode::Esc => {
-            repl.state.model_picker = None;
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.exit_manual_mode();
+            }
         }
         _ => {}
     }
@@ -3364,9 +3473,12 @@ mod tests {
 
     #[test]
     fn test_complete_command_args_resume_completions() {
+        // /resume takes a positional UUID or picker number — no flag completions.
+        // (No-arg opens the picker.) Confirm the stale --last/--list flags are gone.
         let resume = complete_command_args("resume", "");
-        assert!(resume.contains(&"--last".to_string()));
-        assert!(resume.contains(&"--list".to_string()));
+        assert!(!resume.contains(&"--last".to_string()));
+        assert!(!resume.contains(&"--list".to_string()));
+        assert!(resume.is_empty());
     }
 
     #[test]

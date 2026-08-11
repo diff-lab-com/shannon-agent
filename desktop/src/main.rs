@@ -27,6 +27,7 @@ fn main() {
     use shannon_desktop::commands_tasks;
     use shannon_desktop::commands_usage;
     use shannon_desktop::commands_voice;
+    use shannon_desktop::commands_voice_models;
     use shannon_desktop::engine_discovery;
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
     use shannon_desktop::extensions_commands;
@@ -71,6 +72,7 @@ fn main() {
             commands::send_message,
             commands_chat::get_conversation,
             commands_chat::list_models,
+            commands_chat::get_provider_allowlist,
             commands_chat::get_status,
             commands_chat::cancel_query,
             commands_chat::list_tools,
@@ -79,6 +81,7 @@ fn main() {
             commands_config::get_config,
             commands_config::detect_provider_from_env,
             commands_config::test_provider_connection,
+            commands_config::test_all_providers,
             commands_config::list_providers,
             commands_config::save_provider,
             commands_config::delete_provider,
@@ -104,6 +107,18 @@ fn main() {
             commands_voice::transcribe_audio,
             commands_voice::get_stt_config,
             commands_voice::save_stt_config,
+            // P2-5e — local whisper-rs speech-to-text (feature-gated
+            // command; stub returns STT_FEATURE_DISABLED without the
+            // `voice-local` feature so the wire shape is stable)
+            commands_voice::transcribe_audio_local,
+            commands_voice::transcribe_audio_local_base64,
+            commands_voice::get_voice_local_config,
+            commands_voice::save_voice_local_config,
+            // P2-5e — whisper model catalog (always compiled; the
+            // catalog is reachable from a cloud-only build too)
+            commands_voice_models::list_whisper_models,
+            commands_voice_models::download_whisper_model,
+            commands_voice_models::delete_whisper_model,
             commands_sessions::new_session,
             commands_sessions::list_sessions,
             commands_sessions::search_sessions,
@@ -203,6 +218,8 @@ fn main() {
             commands_tasks::update_task,
             commands_files::get_file_tree,
             commands_files::get_working_dir_info,
+            commands_files::read_attachment,
+            commands_files::read_attachments,
             // Scheduled tasks, triage, history, triggered routines (Sprint 2)
             shannon_desktop::scheduled_commands::list_scheduled_tasks,
             shannon_desktop::scheduled_commands::create_scheduled_task,
@@ -375,7 +392,7 @@ fn main() {
             // current desktop config, and a background task refreshes the tray
             // whenever the provider/model changes (covers both `configure` and
             // `switch_provider`).
-            let initial_label = tray_status_label(&shannon_desktop::config::load_config());
+            let initial_label = tray_status_label(app.handle());
             let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
             let new_session_item =
                 MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
@@ -445,7 +462,7 @@ fn main() {
             let _ = app.listen(
                 shannon_desktop::events::event_names::CONFIG_UPDATED,
                 move |_| {
-                    let label = tray_status_label(&shannon_desktop::config::load_config());
+                    let label = tray_status_label(&refresh_handle);
                     if let Err(e) = rebuild_tray_menu(&refresh_handle, &label) {
                         tracing::warn!(error = %e, "tray refresh: failed to rebuild menu");
                     }
@@ -492,15 +509,30 @@ fn main() {
 const TRAY_ID: &str = "main";
 
 /// Build the human-readable status label shown in the tray menu and tooltip.
-/// Falls back to sane defaults when the config is missing fields.
 ///
-/// Format: `Status: <provider> / <model>`. Provider defaults to `anthropic`,
-/// model to `claude-sonnet-4-6` (the prior hardcoded value) — only used if the
-/// config genuinely has no value yet.
+/// Reads `provider` / `model` from the live `state.client_config` (which
+/// mirrors the engine `ProviderConfigStore` after P1.1). Falls back to
+/// sane defaults — `anthropic` / `claude-sonnet-4-6` — when the store
+/// has no resolvable active target (fresh install, no providers added
+/// yet).
+///
+/// P1.2-B (ADR-0005): the previous implementation read the singular
+/// `DesktopConfig.{provider,model}` fields, which are gone — the engine
+/// store is now the source of truth.
 #[cfg(feature = "tauri")]
-fn tray_status_label(cfg: &shannon_desktop::config::DesktopConfig) -> String {
-    let provider = cfg.provider.as_deref().unwrap_or("anthropic");
-    let model = cfg.model.as_deref().unwrap_or("claude-sonnet-4-6");
+fn tray_status_label(app: &tauri::AppHandle) -> String {
+    use shannon_desktop::commands;
+    use tauri::Manager;
+    let cc = app
+        .try_state::<commands::AppState>()
+        .map(|s| s.client_config.blocking_read().clone());
+    let (provider, model) = match cc {
+        Some(c) => (c.provider.to_string(), c.model),
+        None => (String::from("anthropic"), String::from("claude-sonnet-4-6")),
+    };
+    if provider.is_empty() || model.is_empty() {
+        return format!("Status: {provider} / {model}");
+    }
     format!("Status: {provider} / {model}")
 }
 

@@ -12,6 +12,7 @@ pub mod events;
 pub mod extensions;
 pub mod file_permissions;
 pub mod mcp;
+pub mod provider_read_snapshot;
 pub mod routine_templates;
 
 /// Resolve `path` relative to `working_dir` (or use it as-is if absolute),
@@ -153,10 +154,16 @@ pub mod commands_sessions;
 pub mod commands_tasks;
 
 #[cfg(feature = "tauri")]
+pub mod session_registry;
+
+#[cfg(feature = "tauri")]
 pub mod commands_usage;
 
 #[cfg(feature = "tauri")]
 pub mod commands_voice;
+
+#[cfg(feature = "tauri")]
+pub mod commands_voice_models;
 
 #[cfg(feature = "tauri")]
 pub mod scheduled_commands;

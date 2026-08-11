@@ -28,12 +28,14 @@ dirs = "6"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 shannon-core = { path = "../shannon-core" }
+shannon-types = { path = "../shannon-types" }
 shannon-engine = { path = "../shannon-engine" }
 shannon-ui = { path = "../shannon-ui" }
 shannon-commands = { path = "../shannon-commands" }
 shannon-tools = { path = "../shannon-tools" }
 shannon-skills = { path = "../shannon-skills" }
 shannon-agents = { path = "../shannon-agents" }
+shannon-server = { path = "../shannon-server" }
 
 # Internationalization
 rust-i18n = { workspace = true }

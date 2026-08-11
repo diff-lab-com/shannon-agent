@@ -305,7 +305,10 @@ pub(crate) fn handle_export(repl: &mut Repl, args: &str) -> Result<()> {
         export_utils::ExportFormat::Markdown => {
             export_utils::export_to_markdown(&session, &options)
         }
-        export_utils::ExportFormat::Json => export_utils::export_to_json(&session, &options),
+        export_utils::ExportFormat::Json => {
+            serde_json::to_string_pretty(&export_utils::export_to_json(&session, &options))
+                .expect("JSON value serialization should succeed")
+        }
     };
 
     match export_utils::write_export(&content, &filename) {

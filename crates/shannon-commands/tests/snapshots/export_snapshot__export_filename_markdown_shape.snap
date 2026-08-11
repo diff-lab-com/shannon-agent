@@ -1,0 +1,5 @@
+---
+source: crates/shannon-commands/tests/export_snapshot.rs
+expression: shape(&markdown)
+---
+shannon_session_<ts>.md

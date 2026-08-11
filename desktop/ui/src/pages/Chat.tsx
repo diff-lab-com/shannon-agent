@@ -513,6 +513,8 @@ export default function Chat() {
           {messages.length > 0 && shouldVirtualize && (
             <div
               style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}
+              role="log"
+              aria-live="polite"
               aria-label={t('chat.history.aria')}
             >
               {virtualizer.getVirtualItems().map(vItem => {
@@ -533,7 +535,7 @@ export default function Chat() {
           )}
 
           {messages.length > 0 && !shouldVirtualize && (
-            <div aria-label={t('chat.history.aria')}>
+            <div role="log" aria-live="polite" aria-label={t('chat.history.aria')}>
               {messages.map((msg, i) => (
                 <div key={`${msg.timestamp}-${i}`} className="pb-lg">
                   <MessageBubble message={msg} messageIndex={i} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} />

@@ -15,7 +15,7 @@
 //! - **Normal** (20% of conversation): older conversation turns
 //! - **Low** (10% of conversation): verbose output, historical context
 //!
-//! Budget adjusts dynamically under pressure (see [`adjust_for_pressure`]).
+//! Budget adjusts dynamically under pressure (see `adjust_for_pressure`).
 
 use crate::api::LlmProvider;
 use crate::context_pressure::PressureLevel;

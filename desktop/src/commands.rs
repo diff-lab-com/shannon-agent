@@ -24,6 +24,7 @@ use crate::commands_billing::iso_days_ago;
 use crate::config::{self, DesktopConfig};
 use crate::events::event_names;
 use crate::events::{self};
+use crate::session_registry::SessionRegistry;
 use tokio_util::sync::CancellationToken;
 
 /// Parse approval mode string into ApprovalMode enum
@@ -55,16 +56,29 @@ fn plugin_registry_dir() -> std::path::PathBuf {
 
 /// Shared application state accessible to all Tauri commands.
 pub struct AppState {
-    /// Current conversation messages for the active session.
-    pub(crate) messages: Arc<Mutex<Vec<ChatMessage>>>,
-    /// Whether a query is currently in progress.
-    pub(crate) querying: Arc<Mutex<bool>>,
-    /// Current model identifier.
-    pub(crate) model: Arc<Mutex<String>>,
-    /// Current provider name.
-    pub(crate) provider: Arc<Mutex<String>>,
-    /// LLM client config — used to build clients on demand.
-    pub(crate) client_config: Arc<RwLock<LlmClientConfig>>,
+    /// Per-session state registry. Holds the active session's messages /
+    /// querying flag / cancellation token, plus the "focused" session
+    /// pointer (P0-4 / `query-coordinator-concurrency`). Spike scope: all
+    /// existing single-session command paths resolve the active session
+    /// via `registry.get_or_create_active()`.
+    pub(crate) registry: Arc<SessionRegistry>,
+    /// LLM client config — used to build clients on demand. P1.2-B:
+    /// this is the single source of truth for the active `model` /
+    /// `provider`; the legacy `Arc<Mutex<String>>` mirrors were
+    /// removed when the engine `ProviderConfigStore` took ownership.
+    /// `pub` (not `pub(crate)`) so the `shannon-desktop` binary
+    /// crate's `main.rs` can read it for the tray status label —
+    /// `pub(crate)` only spans lib-internal code, not the bin.
+    pub client_config: Arc<RwLock<LlmClientConfig>>,
+    /// Engine-side `~/.shannon/providers.toml` write path. Held behind
+    /// an in-process `Mutex` so the three desktop commands that touch
+    /// it (`save_provider`, `set_active_provider`, `delete_provider`)
+    /// can't clobber each other via the load-mutate-save race that
+    /// `ProviderConfigStore::save` is otherwise vulnerable to. On
+    /// startup the in-memory state is loaded from disk; subsequent
+    /// edits round-trip through this single instance.
+    pub(crate) provider_store:
+        Arc<tokio::sync::Mutex<shannon_core::provider_config_store::ProviderConfigStore>>,
     /// Tool registry with default tools.
     pub(crate) tools: Arc<ToolRegistry>,
     /// Permission manager.
@@ -81,12 +95,11 @@ pub struct AppState {
     pub(crate) desktop_config: Arc<RwLock<DesktopConfig>>,
     /// Pending permission requests (request_id -> sender).
     pub(crate) pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
-    /// Session metadata for session list.
+    /// Session metadata for session list. (P0-4: kept on AppState for
+    /// now; this is the *display* list (titles, message counts), not the
+    /// per-session query state. Migrating this into the registry is
+    /// deferred until the UI uses session keys end-to-end.)
     pub(crate) sessions: Arc<Mutex<Vec<SessionMeta>>>,
-    /// Cancellation token for the current query.
-    pub(crate) cancellation_token: Arc<Mutex<Option<CancellationToken>>>,
-    /// Currently active session ID.
-    pub(crate) current_session_id: Arc<Mutex<Option<String>>>,
     /// Background tasks.
     pub(crate) background_tasks: Arc<Mutex<Vec<BackgroundTaskMeta>>>,
     /// Skill registry for skill discovery and listing.
@@ -211,13 +224,31 @@ pub struct StatusResponse {
     pub working_dir: String,
 }
 
-/// Model info for the model selector.
+/// Model info for the model selector. The optional fields are populated
+/// when `list_models` is routed through the engine model registry (ADR-0005
+/// Phase 2 / task 4); `null` means unknown / not in pricing SSOT.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
     pub provider: String,
+    /// Tokens. `0` means unknown — the UI should render "unknown" instead
+    /// of fabricating a number (P0-2 honest cost/context).
     pub context_window: usize,
+    /// Per-million-token input price (USD). `None` = unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_in: Option<f64>,
+    /// Per-million-token output price (USD). `None` = unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_out: Option<f64>,
+    /// Tier label (`fast` / `standard` / `pro`). Optional — not all
+    /// catalog entries carry tier metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    /// Whether this entry comes from the dynamic models.dev overlay rather
+    /// than the static catalog. Surfaces a freshness indicator in the UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic: Option<bool>,
 }
 
 /// Tool info for the tools panel.
@@ -244,16 +275,36 @@ impl AppState {
     /// Create a new AppState, initializing the LLM client from env/config.
     pub fn new() -> Self {
         let desktop_config = config::load_config();
-        let client_config = Self::build_client_config(&desktop_config);
 
-        let model = desktop_config
-            .model
-            .clone()
-            .unwrap_or_else(|| "claude-sonnet-4-6".into());
-        let provider = desktop_config
-            .provider
-            .clone()
-            .unwrap_or_else(|| "anthropic".into());
+        // One-shot migration: if the desktop has a populated
+        // `providers.json` cache but the engine's `providers.toml` is
+        // missing or empty, lift each entry into the engine store and
+        // remove the legacy file. Idempotent — re-running on a clean
+        // store is a no-op. See [`config::migrate_providers_to_toml`].
+        //
+        // P1.1 (ADR-0005): the provider store must be loaded *first*
+        // because the runtime client config is now built from its
+        // resolved active target (see `build_client_config`). Reading
+        // `DesktopConfig.provider`/`api_key`/`base_url`/`model` for
+        // the runtime is intentionally gone — those legacy singular
+        // fields are scheduled for removal in T2.
+        let provider_store = if let Some(seed) = config::migrate_providers_to_toml() {
+            shannon_core::provider_config_store::ProviderConfigStore::from_config(seed)
+        } else {
+            shannon_core::provider_config_store::ProviderConfigStore::load_or_default()
+        };
+
+        // Build the engine-side `ShannonConfig` carrying only the behavioural
+        // overrides (`max_tokens`/`temperature`) from the desktop's legacy
+        // `DesktopConfig`. Provider identity, base_url, model and credential
+        // are sourced from `provider_store` via `build_client_config` below.
+        let shannon_overrides = shannon_core::unified_config::ShannonConfig {
+            max_tokens: desktop_config.max_tokens.map(|v| v as usize),
+            temperature: desktop_config.temperature,
+            ..Default::default()
+        };
+        let client_config = Self::build_client_config(&provider_store, &shannon_overrides)
+            .unwrap_or_else(LlmClientConfig::default);
 
         // Initialize tool registry with default tools
         let mut tool_registry = ToolRegistry::new();
@@ -261,11 +312,9 @@ impl AppState {
             register_default_tools(&mut tool_registry).expect("Failed to register default tools");
 
         Self {
-            messages: Arc::new(Mutex::new(Vec::new())),
-            querying: Arc::new(Mutex::new(false)),
-            model: Arc::new(Mutex::new(model)),
-            provider: Arc::new(Mutex::new(provider)),
+            registry: Arc::new(SessionRegistry::new()),
             client_config: Arc::new(RwLock::new(client_config)),
+            provider_store: Arc::new(tokio::sync::Mutex::new(provider_store)),
             tools: Arc::new(tool_registry),
             permissions: Arc::new(RwLock::new(PermissionManager::new())),
             state_manager: Arc::new(StateManager::new()),
@@ -275,8 +324,6 @@ impl AppState {
             desktop_config: Arc::new(RwLock::new(desktop_config)),
             pending_permissions: Arc::new(Mutex::new(HashMap::new())),
             sessions: Arc::new(Mutex::new(Vec::new())),
-            cancellation_token: Arc::new(Mutex::new(None)),
-            current_session_id: Arc::new(Mutex::new(None)),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
             skill_registry: Arc::new(SkillRegistry::new()),
             mcp_pool: Arc::new(McpProcessPool::new()),
@@ -335,34 +382,40 @@ impl AppState {
         self.notifier = Arc::new(notifier);
     }
 
-    pub(crate) fn build_client_config(cfg: &DesktopConfig) -> LlmClientConfig {
-        let provider_str = cfg.provider.as_deref().unwrap_or("anthropic");
-        let provider = provider_from_str(provider_str);
-        let api_key = cfg
-            .api_key
-            .clone()
-            .filter(|k| !k.is_empty())
-            .unwrap_or_else(|| provider.resolve_api_key_from_env());
-        let base_url = cfg
-            .base_url
-            .clone()
-            .unwrap_or_else(|| provider.default_base_url().to_string());
-        let model = cfg
-            .model
-            .clone()
-            .unwrap_or_else(|| "claude-sonnet-4-6".into());
+    /// Build the runtime `LlmClientConfig` from the engine `ProviderConfigStore`
+    /// (v2 active target) plus the engine-side `ShannonConfig` for
+    /// behavioural overrides (`max_tokens`/`timeout`/`temperature`).
+    ///
+    /// Returns `None` when the store has no resolvable active target — the
+    /// caller is expected to fall back to [`LlmClientConfig::default`] in that
+    /// case (which reads `SHANNON_*` env vars).
+    ///
+    /// P1.1 (ADR-0005): the legacy path that read singular fields off
+    /// `DesktopConfig` (`provider`/`api_key`/`base_url`/`model`) is removed.
+    /// Provider identity, base_url, model and credential are now sourced
+    /// from the `"default"` [`crate::provider_resolver::ResolvedTarget`] of
+    /// `provider_store`. The legacy fields are scheduled for full removal
+    /// in T2.
+    pub(crate) fn build_client_config(
+        provider_store: &shannon_core::provider_config_store::ProviderConfigStore,
+        shannon_config: &shannon_core::unified_config::ShannonConfig,
+    ) -> Option<LlmClientConfig> {
+        use shannon_core::provider_resolver::resolve_active_target;
+        use shannon_core::unified_config::build_client_from_resolved;
 
-        LlmClientConfig {
-            api_key,
-            base_url,
-            model,
-            provider,
-            ..LlmClientConfig::default()
-        }
+        let rt = resolve_active_target(provider_store.config())?;
+        Some(build_client_from_resolved(shannon_config, rt))
     }
 }
 
 /// Send a user message and stream the AI response via Tauri events.
+///
+/// P0-4 spike scope: `messages`, `querying`, `cancellation_token` and the
+/// session ID are now sourced from the active session in `state.registry`
+/// instead of from `AppState` directly. The active session is materialised
+/// lazily on first call. The hard-rejection ("A query is already in
+/// progress") now fires per-session rather than globally — multi-session
+/// multiplexing is unlocked but not yet exercised by the UI.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn send_message(
@@ -371,9 +424,14 @@ pub async fn send_message(
     message: String,
     file_paths: Option<Vec<String>>,
 ) -> Result<SendMessageResponse, String> {
+    // P0-4: resolve the active session lazily. Falls through to creating
+    // one if the registry is empty (the "first call ever" case).
+    let active_session = state.registry.get_or_create_active();
+    let session_id = active_session.session_id;
+
     // Prevent concurrent queries — check and set in a single lock scope to avoid TOCTOU race
     {
-        let mut querying = state.querying.lock().await;
+        let mut querying = active_session.querying.lock().await;
         if *querying {
             return Err("A query is already in progress".into());
         }
@@ -383,7 +441,7 @@ pub async fn send_message(
     // Create cancellation token
     let cancel_token = CancellationToken::new();
     {
-        let mut token_guard = state.cancellation_token.lock().await;
+        let mut token_guard = active_session.cancellation_token.lock().await;
         *token_guard = Some(cancel_token.clone());
     }
 
@@ -433,7 +491,7 @@ pub async fn send_message(
     });
 
     {
-        let mut messages = state.messages.lock().await;
+        let mut messages = active_session.messages.lock().await;
         messages.push(ChatMessage {
             role: "user".into(),
             content: message.clone(),
@@ -464,12 +522,25 @@ pub async fn send_message(
 
     let engine = QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new());
 
+    // P0-4: stash the engine on the session so subsequent queries on the
+    // same session reuse the same `Arc<ToolRegistry>` / hook manager /
+    // triggered-routine registry instead of paying re-init cost. We
+    // `take()` first so the clone below doesn't double-init: if a second
+    // `send_message` races in (the per-session `querying` guard above
+    // already prevents that, but defence-in-depth), the second caller
+    // still gets a freshly built engine from this same code path.
+    let engine_for_session = engine.clone();
+    {
+        let mut slot = active_session.query_engine.lock().await;
+        *slot = Some(engine_for_session);
+    }
+
     // Create query context
-    let model = state.model.lock().await.clone();
+    let model = state.client_config.read().await.model.clone();
     let message_for_skill_loop = message.clone();
     let context = QueryContext {
         query_id,
-        session_id: uuid::Uuid::new_v4(),
+        session_id,
         user_message: message,
         metadata: shannon_core::query_engine::QueryMetadata {
             timestamp: chrono::Utc::now(),
@@ -481,18 +552,28 @@ pub async fn send_message(
         },
     };
 
-    // Spawn the query in a background task, streaming events to frontend
-    let querying_flag = state.querying.clone();
-    let messages_arc = state.messages.clone();
+    // Spawn the query in a background task, streaming events to frontend.
+    // P0-4: per-session flags live on the `Arc<SessionState>` clone.
     let app = app_handle.clone();
     let cancel_token_clone = cancel_token.clone();
-    let current_session_id_arc = state.current_session_id.clone();
     let state_mgr_arc = state.state_manager.clone();
-    let model_arc = state.model.clone();
-    let provider_arc = state.provider.clone();
+    let client_config_arc = state.client_config.clone();
     let usage_store_arc = state.usage_store.clone();
     let notifier_arc = state.notifier.clone();
+    let session_for_task = active_session.clone();
 
+    // P2-5b: per-session in-process fan-out. Every event the loop
+    // emits to the Tauri wire is also pushed onto `session_for_task`'s
+    // mpsc channel so a future in-process consumer (the thread
+    // switcher being built in a follow-up iteration) can subscribe to
+    // *this session's* stream without conflating it with siblings.
+    // Best-effort — channel send errors are silently ignored (the
+    // Tauri wire + `messages` buffer still cover the user-visible path).
+    let session = session_for_task.clone();
+    let session_for_inproc = session.clone();
+    let route_event = move |evt: crate::session_registry::SessionEvent| {
+        session_for_inproc.try_send_event(evt);
+    };
     let return_qid = qid_str.clone();
     tokio::spawn(async move {
         let stream = engine.process_query(context, None).await;
@@ -516,6 +597,9 @@ pub async fn send_message(
                         query_id: qid_str.clone(),
                     },
                 );
+                route_event(crate::session_registry::SessionEvent::Status(
+                    crate::session_registry::SessionEventStatus::Cancelled,
+                ));
                 break;
             }
 
@@ -523,13 +607,14 @@ pub async fn send_message(
                 Ok(event) => match event {
                     QueryEvent::Text { content, .. } => {
                         final_content.push_str(&content);
-                        let _ = app.emit(
-                            event_names::QUERY_TEXT,
-                            events::QueryTextPayload {
-                                query_id: qid_str.clone(),
-                                content,
-                            },
-                        );
+                        let payload = events::QueryTextPayload {
+                            query_id: qid_str.clone(),
+                            content,
+                        };
+                        route_event(crate::session_registry::SessionEvent::QueryText(
+                            payload.clone(),
+                        ));
+                        let _ = app.emit(event_names::QUERY_TEXT, payload);
                     }
                     QueryEvent::ToolUseRequest {
                         tool_use_id,
@@ -539,15 +624,16 @@ pub async fn send_message(
                     } => {
                         tool_call_count += 1;
                         tool_names_used.insert(tool_name.clone());
-                        let _ = app.emit(
-                            event_names::QUERY_TOOL_START,
-                            events::ToolStartPayload {
-                                query_id: qid_str.clone(),
-                                tool_use_id,
-                                tool_name,
-                                tool_input,
-                            },
-                        );
+                        let payload = events::ToolStartPayload {
+                            query_id: qid_str.clone(),
+                            tool_use_id,
+                            tool_name,
+                            tool_input,
+                        };
+                        route_event(crate::session_registry::SessionEvent::ToolStart(
+                            payload.clone(),
+                        ));
+                        let _ = app.emit(event_names::QUERY_TOOL_START, payload);
                     }
                     QueryEvent::ToolUseResult {
                         tool_use_id,
@@ -556,16 +642,17 @@ pub async fn send_message(
                         is_error,
                         ..
                     } => {
-                        let _ = app.emit(
-                            event_names::QUERY_TOOL_RESULT,
-                            events::ToolResultPayload {
-                                query_id: qid_str.clone(),
-                                tool_use_id,
-                                tool_name,
-                                result,
-                                is_error,
-                            },
-                        );
+                        let payload = events::ToolResultPayload {
+                            query_id: qid_str.clone(),
+                            tool_use_id,
+                            tool_name,
+                            result,
+                            is_error,
+                        };
+                        route_event(crate::session_registry::SessionEvent::ToolResult(
+                            payload.clone(),
+                        ));
+                        let _ = app.emit(event_names::QUERY_TOOL_RESULT, payload);
                     }
                     QueryEvent::ToolProgress {
                         tool_use_id,
@@ -574,25 +661,27 @@ pub async fn send_message(
                         message: msg,
                         ..
                     } => {
-                        let _ = app.emit(
-                            event_names::QUERY_TOOL_PROGRESS,
-                            events::ToolProgressPayload {
-                                query_id: qid_str.clone(),
-                                tool_use_id,
-                                tool_name,
-                                progress,
-                                message: msg,
-                            },
-                        );
+                        let payload = events::ToolProgressPayload {
+                            query_id: qid_str.clone(),
+                            tool_use_id,
+                            tool_name,
+                            progress,
+                            message: msg,
+                        };
+                        route_event(crate::session_registry::SessionEvent::ToolProgress(
+                            payload.clone(),
+                        ));
+                        let _ = app.emit(event_names::QUERY_TOOL_PROGRESS, payload);
                     }
                     QueryEvent::Thinking { content, .. } => {
-                        let _ = app.emit(
-                            event_names::QUERY_THINKING,
-                            events::ThinkingPayload {
-                                query_id: qid_str.clone(),
-                                content,
-                            },
-                        );
+                        let payload = events::ThinkingPayload {
+                            query_id: qid_str.clone(),
+                            content,
+                        };
+                        route_event(crate::session_registry::SessionEvent::Thinking(
+                            payload.clone(),
+                        ));
+                        let _ = app.emit(event_names::QUERY_THINKING, payload);
                     }
                     QueryEvent::Usage {
                         input_tokens,
@@ -604,8 +693,10 @@ pub async fn send_message(
                     } => {
                         // Persist to the local usage ledger. Best-effort:
                         // a log write failure must never break the stream.
-                        let model_now = model_arc.lock().await.clone();
-                        let provider_now = provider_arc.lock().await.clone();
+                        let cc_now = client_config_arc.read().await;
+                        let model_now = cc_now.model.clone();
+                        let provider_now = cc_now.provider.to_string();
+                        drop(cc_now);
                         let _ = usage_store_arc.append(&crate::commands_usage::record_event(
                             &model_now,
                             &provider_now,
@@ -615,20 +706,21 @@ pub async fn send_message(
                             cache_read_tokens,
                             cost_usd,
                         ));
-                        let _ = app.emit(
-                            event_names::QUERY_USAGE,
-                            events::UsagePayload {
-                                query_id: qid_str.clone(),
-                                input_tokens,
-                                output_tokens,
-                                cost_usd,
-                            },
-                        );
+                        let payload = events::UsagePayload {
+                            query_id: qid_str.clone(),
+                            input_tokens,
+                            output_tokens,
+                            cost_usd,
+                        };
+                        route_event(crate::session_registry::SessionEvent::Usage(
+                            payload.clone(),
+                        ));
+                        let _ = app.emit(event_names::QUERY_USAGE, payload);
                     }
                     QueryEvent::Completed { .. } => {
-                        // Save final assistant message
+                        // Save final assistant message into the per-session buffer.
                         {
-                            let mut messages = messages_arc.lock().await;
+                            let mut messages = session_for_task.messages.lock().await;
                             messages.push(ChatMessage {
                                 role: "assistant".into(),
                                 content: if final_content.is_empty() {
@@ -641,34 +733,29 @@ pub async fn send_message(
                             });
                         }
 
-                        // Auto-persist to StateManager
+                        // Auto-persist to StateManager using the per-session UUID.
                         {
-                            let session_id_opt = current_session_id_arc.lock().await.clone();
-                            if let Some(sid) = session_id_opt {
-                                let msgs = messages_arc.lock().await.clone();
-                                let model = model_arc.lock().await.clone();
-                                if let Ok(session_uuid) = uuid::Uuid::parse_str(&sid) {
-                                    let core_msgs: Vec<shannon_engine::api::Message> = msgs
-                                        .iter()
-                                        .map(|m| shannon_engine::api::Message {
-                                            role: m.role.clone(),
-                                            content: shannon_engine::api::MessageContent::Text(
-                                                m.content.clone(),
-                                            ),
-                                        })
-                                        .collect();
-                                    let meta = shannon_engine::state::SessionPersistMetadata {
-                                        model,
-                                        turn_count: core_msgs.len() / 2,
-                                        ..Default::default()
-                                    };
-                                    let _ = state_mgr_arc.save_session(
-                                        &session_uuid,
-                                        &core_msgs,
-                                        &meta,
-                                    );
-                                }
-                            }
+                            let msgs = session_for_task.messages.lock().await.clone();
+                            let model = client_config_arc.read().await.model.clone();
+                            let core_msgs: Vec<shannon_engine::api::Message> = msgs
+                                .iter()
+                                .map(|m| shannon_engine::api::Message {
+                                    role: m.role.clone(),
+                                    content: shannon_engine::api::MessageContent::Text(
+                                        m.content.clone(),
+                                    ),
+                                })
+                                .collect();
+                            let meta = shannon_engine::state::SessionPersistMetadata {
+                                model,
+                                turn_count: core_msgs.len() / 2,
+                                ..Default::default()
+                            };
+                            let _ = state_mgr_arc.save_session(
+                                &session_for_task.session_id,
+                                &core_msgs,
+                                &meta,
+                            );
                         }
 
                         let _ = app.emit(
@@ -677,6 +764,9 @@ pub async fn send_message(
                                 query_id: qid_str.clone(),
                             },
                         );
+                        route_event(crate::session_registry::SessionEvent::Status(
+                            crate::session_registry::SessionEventStatus::Completed,
+                        ));
                         crate::commands_notifications::fire_query_notification_logged(
                             &notifier_arc,
                             crate::commands_notifications::NotificationKind::Completed,
@@ -794,6 +884,9 @@ pub async fn send_message(
                                 error: error.clone(),
                             },
                         );
+                        route_event(crate::session_registry::SessionEvent::Status(
+                            crate::session_registry::SessionEventStatus::Failed(error.clone()),
+                        ));
                         crate::commands_notifications::fire_query_notification_logged(
                             &notifier_arc,
                             crate::commands_notifications::NotificationKind::Failed(error),
@@ -804,26 +897,34 @@ pub async fn send_message(
                     _ => {}
                 },
                 Err(e) => {
+                    let err_string = e.to_string();
                     let _ = app.emit(
                         event_names::QUERY_FAILED,
                         events::QueryFailedPayload {
                             query_id: qid_str.clone(),
-                            error: e.to_string(),
+                            error: err_string.clone(),
                         },
                     );
+                    route_event(crate::session_registry::SessionEvent::Status(
+                        crate::session_registry::SessionEventStatus::Failed(err_string.clone()),
+                    ));
                     crate::commands_notifications::fire_query_notification_logged(
                         &notifier_arc,
-                        crate::commands_notifications::NotificationKind::Failed(e.to_string()),
+                        crate::commands_notifications::NotificationKind::Failed(err_string),
                         "query_failed",
                     );
                 }
             }
         }
 
-        // Clear querying flag and cancellation token
+        // Clear per-session querying flag and cancellation token.
         {
-            let mut q = querying_flag.lock().await;
+            let mut q = session_for_task.querying.lock().await;
             *q = false;
+        }
+        {
+            let mut token_guard = session_for_task.cancellation_token.lock().await;
+            *token_guard = None;
         }
     });
 
@@ -861,22 +962,6 @@ pub(crate) fn chrono_timestamp() -> i64 {
         .as_millis() as i64
 }
 
-fn provider_from_str(s: &str) -> shannon_engine::api::types::LlmProvider {
-    use shannon_engine::api::types::LlmProvider;
-    match s {
-        "anthropic" => LlmProvider::Anthropic,
-        "openai" => LlmProvider::OpenAI,
-        "ollama" => LlmProvider::Ollama,
-        "deepseek" => LlmProvider::DeepSeek,
-        "gemini" => LlmProvider::Gemini,
-        "mistral" => LlmProvider::Mistral,
-        "groq" => LlmProvider::Groq,
-        "openrouter" => LlmProvider::OpenRouter,
-        "xai" => LlmProvider::Xai,
-        _ => LlmProvider::Custom,
-    }
-}
-
 /// Start a new background task.
 #[tauri::command]
 pub async fn start_background_task(
@@ -912,8 +997,8 @@ pub async fn start_background_task(
     let client_config = state.client_config.read().await.clone();
     let tools = state.tools.clone();
     let _qe_config = state.qe_config.read().await.clone();
-    let model = state.model.lock().await.clone();
-    let provider = state.provider.lock().await.clone();
+    let model = client_config.model.clone();
+    let provider = client_config.provider.to_string();
     let usage_store = state.usage_store.clone();
     let approval_mode_str = state.desktop_config.read().await.approval_mode.clone();
 
@@ -1100,9 +1185,12 @@ mod tests {
     #[test]
     fn test_app_state_new() {
         let state = AppState::new();
-        let messages = state.messages.blocking_lock();
+        // P0-4: messages/querying moved into the active session in the
+        // registry. Lazily create one to verify the empty initial state.
+        let session = state.registry.get_or_create_active();
+        let messages = session.messages.blocking_lock();
         assert!(messages.is_empty());
-        assert!(!*state.querying.blocking_lock());
+        assert!(!*session.querying.blocking_lock());
         assert_eq!(state.notifier.handler_count(), 0);
     }
 
@@ -1157,6 +1245,10 @@ mod tests {
             name: "GPT-4".to_string(),
             provider: "openai".to_string(),
             context_window: 128_000,
+            price_in: None,
+            price_out: None,
+            tier: None,
+            dynamic: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: ModelInfo = serde_json::from_str(&json).unwrap();
@@ -1198,23 +1290,25 @@ mod tests {
     #[tokio::test]
     async fn test_app_state_querying_toggle() {
         let state = AppState::new();
+        let session = state.registry.get_or_create_active();
         {
-            let mut q = state.querying.lock().await;
+            let mut q = session.querying.lock().await;
             *q = true;
         }
-        assert!(*state.querying.lock().await);
+        assert!(*session.querying.lock().await);
         {
-            let mut q = state.querying.lock().await;
+            let mut q = session.querying.lock().await;
             *q = false;
         }
-        assert!(!*state.querying.lock().await);
+        assert!(!*session.querying.lock().await);
     }
 
     #[tokio::test]
     async fn test_app_state_messages_push() {
         let state = AppState::new();
+        let session = state.registry.get_or_create_active();
         {
-            let mut msgs = state.messages.lock().await;
+            let mut msgs = session.messages.lock().await;
             msgs.push(ChatMessage {
                 role: "user".to_string(),
                 content: "hello".to_string(),
@@ -1228,7 +1322,7 @@ mod tests {
                 file_attachments: None,
             });
         }
-        let msgs = state.messages.lock().await;
+        let msgs = session.messages.lock().await;
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].role, "user");
         assert_eq!(msgs[1].content, "hi");
@@ -1644,22 +1738,6 @@ mod pure_function_tests {
         assert!(detect_media_type("").is_none());
     }
 
-    // ── provider_from_str ─────────────────────────────────────────────
-
-    #[test]
-    fn provider_from_str_maps_known_providers() {
-        use shannon_engine::api::types::LlmProvider;
-        assert_eq!(provider_from_str("anthropic"), LlmProvider::Anthropic);
-        assert_eq!(provider_from_str("openai"), LlmProvider::OpenAI);
-        assert_eq!(provider_from_str("ollama"), LlmProvider::Ollama);
-        assert_eq!(provider_from_str("deepseek"), LlmProvider::DeepSeek);
-        assert_eq!(provider_from_str("gemini"), LlmProvider::Gemini);
-        assert_eq!(provider_from_str("mistral"), LlmProvider::Mistral);
-        assert_eq!(provider_from_str("groq"), LlmProvider::Groq);
-        assert_eq!(provider_from_str("openrouter"), LlmProvider::OpenRouter);
-        assert_eq!(provider_from_str("xai"), LlmProvider::Xai);
-    }
-
     // ── iso_days_ago ──────────────────────────────────────────────────
 
     #[test]
@@ -1688,5 +1766,211 @@ mod pure_function_tests {
             && b[..4].iter().all(|c| c.is_ascii_digit())
             && b[5..7].iter().all(|c| c.is_ascii_digit())
             && b[8..10].iter().all(|c| c.is_ascii_digit())
+    }
+}
+
+// ── P1.1 (ADR-0005): `build_client_config` reads from the v2 ProviderConfigStore ────
+// These tests pin the contract that the desktop runtime client construction
+// consumes `ProviderProfile` data (not the legacy `DesktopConfig` singular
+// fields). The provider/store fixtures are constructed in-memory — no disk
+// reads, no `~/.shannon/providers.toml` writes.
+
+#[cfg(test)]
+mod build_client_config_tests {
+    use super::*;
+    use shannon_core::provider_config_store::ProviderConfigStore;
+    use shannon_core::unified_config::ShannonConfig;
+    use shannon_engine::api::LlmProvider;
+    use shannon_types::provider_config::{
+        CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderProfile, ProviderTiers,
+        Scope,
+    };
+    use std::collections::HashMap;
+
+    /// Build a single-active-profile `ProviderModelConfig` and wrap it in a
+    /// `ProviderConfigStore`. No disk access — safe under nextest isolation.
+    fn store_with_active(profile: ProviderProfile, model: &str) -> ProviderConfigStore {
+        use shannon_types::provider_config::{ActiveTarget, ProviderModelConfig};
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ModelProfile {
+                name: "default".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: profile.id.clone(),
+                    model_id: model.to_string(),
+                    scope: Scope::Global,
+                },
+                providers: vec![profile],
+                auxiliary: HashMap::new(),
+                credential_scope: CredentialScope::Shared,
+            },
+        );
+        ProviderConfigStore::from_config(ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            profiles,
+            gateway: Default::default(),
+        })
+    }
+
+    fn anthropic_profile(cred_var: &str, base_url: &str) -> ProviderProfile {
+        ProviderProfile {
+            id: "anthropic".to_string(),
+            kind: ProviderKind::Anthropic,
+            display_name: "anthropic".to_string(),
+            base_url: base_url.to_string(),
+            models_url: None,
+            credential: CredentialRef::Env {
+                var: cred_var.to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+        }
+    }
+
+    #[test]
+    fn returns_none_when_store_has_no_active_target() {
+        // Empty store → no `default` profile → no resolved target → None.
+        let store = ProviderConfigStore::default();
+        let cfg = ShannonConfig::default();
+        assert!(AppState::build_client_config(&store, &cfg).is_none());
+    }
+
+    #[test]
+    fn returns_none_when_profile_present_but_no_active_target() {
+        // Defensive: even with a profile in the store, if `active_target`
+        // is blank (the post-`remove_profile` state) we get None.
+        let mut store = ProviderConfigStore::default();
+        let profile = anthropic_profile("UNUSED", "https://api.anthropic.com");
+        // Use ensure_provider so the active_target stays blank.
+        let _ = store.ensure_provider(&LlmProvider::Anthropic);
+        // Sanity: a profile was added but active_target.provider_id == "".
+        let cfg = ShannonConfig::default();
+        assert!(AppState::build_client_config(&store, &cfg).is_none());
+        // Suppress the unused-var warning without changing behaviour.
+        let _ = profile;
+    }
+
+    #[test]
+    fn single_active_profile_returns_some_with_matching_fields() {
+        // SAFETY: unique key read only by this test thread; no concurrent
+        // set/remove of the same key elsewhere.
+        unsafe { std::env::set_var("BCC_TEST_KEY", "resolved-key") };
+        let store = store_with_active(
+            anthropic_profile("BCC_TEST_KEY", "https://api.anthropic.com"),
+            "claude-sonnet-4-6",
+        );
+        let cfg = ShannonConfig::default();
+
+        let out =
+            AppState::build_client_config(&store, &cfg).expect("active target should resolve");
+        assert_eq!(out.provider, LlmProvider::Anthropic);
+        assert_eq!(out.base_url, "https://api.anthropic.com");
+        assert_eq!(out.model, "claude-sonnet-4-6");
+        assert_eq!(out.api_key, "resolved-key");
+        // SAFETY: see above.
+        unsafe { std::env::remove_var("BCC_TEST_KEY") };
+    }
+
+    #[test]
+    fn extra_headers_round_trip_from_profile_to_config() {
+        let mut profile = anthropic_profile("BCC_UNSET", "https://api.anthropic.com");
+        profile
+            .extra_headers
+            .insert("X-Foo".to_string(), "bar".to_string());
+        profile
+            .extra_headers
+            .insert("X-Trace".to_string(), "abc-123".to_string());
+        let store = store_with_active(profile, "claude-sonnet-4-6");
+        let cfg = ShannonConfig::default();
+
+        let out =
+            AppState::build_client_config(&store, &cfg).expect("active target should resolve");
+        assert_eq!(
+            out.extra_headers.get("X-Foo").map(String::as_str),
+            Some("bar")
+        );
+        assert_eq!(
+            out.extra_headers.get("X-Trace").map(String::as_str),
+            Some("abc-123")
+        );
+    }
+
+    #[test]
+    fn default_max_tokens_overrides_when_no_cfg_override() {
+        // No `cfg.max_tokens` → use profile.default_max_tokens.
+        let mut profile = anthropic_profile("BCC_UNSET", "https://api.anthropic.com");
+        profile.default_max_tokens = Some(8192);
+        let store = store_with_active(profile, "claude-sonnet-4-6");
+        let cfg = ShannonConfig::default();
+
+        let out =
+            AppState::build_client_config(&store, &cfg).expect("active target should resolve");
+        assert_eq!(out.max_tokens, 8192);
+    }
+
+    #[test]
+    fn cfg_max_tokens_wins_when_both_set() {
+        // Explicit `cfg.max_tokens` beats the profile's `default_max_tokens`.
+        let mut profile = anthropic_profile("BCC_UNSET", "https://api.anthropic.com");
+        profile.default_max_tokens = Some(8192);
+        let store = store_with_active(profile, "claude-sonnet-4-6");
+        let mut cfg = ShannonConfig::default();
+        cfg.max_tokens = Some(1024);
+
+        let out =
+            AppState::build_client_config(&store, &cfg).expect("active target should resolve");
+        assert_eq!(out.max_tokens, 1024);
+    }
+
+    #[test]
+    fn engine_fallback_when_neither_max_tokens_set() {
+        // Neither `cfg.max_tokens` nor `profile.default_max_tokens` set →
+        // engine fallback to 4096.
+        let profile = anthropic_profile("BCC_UNSET", "https://api.anthropic.com");
+        let store = store_with_active(profile, "claude-sonnet-4-6");
+        let cfg = ShannonConfig::default();
+
+        let out =
+            AppState::build_client_config(&store, &cfg).expect("active target should resolve");
+        assert_eq!(out.max_tokens, 4096);
+    }
+
+    #[test]
+    fn ollama_profile_no_api_key_uses_300s_timeout() {
+        // Ollama branch: empty api_key + provider-conditional timeout (300s).
+        // SAFETY: unique key read only by this test thread.
+        unsafe { std::env::remove_var("BCC_OLLAMA_KEY") };
+        let profile = ProviderProfile {
+            id: "ollama".to_string(),
+            kind: ProviderKind::Ollama,
+            display_name: "ollama".to_string(),
+            base_url: "http://localhost:11434".to_string(),
+            models_url: None,
+            credential: CredentialRef::Env {
+                var: "BCC_OLLAMA_KEY".to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+        };
+        let store = store_with_active(profile, "llama3");
+        let cfg = ShannonConfig::default();
+
+        let out =
+            AppState::build_client_config(&store, &cfg).expect("active target should resolve");
+        assert_eq!(out.provider, LlmProvider::Ollama);
+        assert_eq!(out.api_key, "", "ollama has no credential");
+        assert_eq!(
+            out.timeout_seconds, 300,
+            "Ollama auto-uses the 300s timeout branch"
+        );
+        assert_eq!(out.base_url, "http://localhost:11434");
+        assert_eq!(out.model, "llama3");
     }
 }

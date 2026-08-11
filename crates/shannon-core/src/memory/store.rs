@@ -483,7 +483,7 @@ impl MemoryStore {
 
     /// Search memories ranked by multi-signal relevance to the query.
     ///
-    /// Unlike [`search`] which requires a substring match, this method scores
+    /// Unlike `search` which requires a substring match, this method scores
     /// every memory against the query using term overlap, category affinity,
     /// temporal decay, confidence, and access frequency. Results are returned
     /// in descending relevance order.

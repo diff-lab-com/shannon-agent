@@ -1,5 +1,14 @@
 # Shannon Code
 
+> **Active workspace note**: This repository (`/home/ed/workspace/app/work/shannon/shannon-mono`) is the **canonical active workspace** for the Shannon monorepo (`diff-lab-com/shannon-agent`). The older `shannon-agent/` parent directory (with its `shannon-code` / `shannon-desktop` / `shannon-gateway` sub-repos) is **obsolete** — do not open or work from it. The `shannon-agent-build/shannon-agent` mirror is **archived** (see its `ARCHIVED-NOTICE.md`).
+>
+> Historical artifacts from the consolidated repos are parked in two paired, gitignored top-level directories (both excluded from any commit):
+>
+> - `docs/archive/legacy-archives/` — **markdown documentation** (CHANGELOGs, READMEs, ADRs, design specs, audits, research)
+> - `legacy-archives/` — **non-markdown code + config** (build configs, scripts, package metadata, TypeScript source for the VS Code extension)
+>
+> See `docs/archive/legacy-archives/INDEX.md` and `legacy-archives/INDEX.md` for the contents, layout, and editing policy. The `docs/` directory is reserved for documentation in this monorepo, so non-markdown artifacts live at the repo root.
+
 > **Note:** The unified `shannon` CLI replaces the former `shannon-code` product. Internal `shannon-code` references in CHANGELOG / release notes / migration docs are historical and intentionally retained.
 
 Rust-based AI code assistant (like Claude Code) with multi-provider LLM support, MCP-based extensions, and terminal UI.
@@ -20,22 +29,33 @@ Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` ha
 
 | Crate | Responsibility | Tests |
 |-------|---------------|-------|
-| `shannon-core` | API client, query engine, permissions, tools, state management | ~3370 |
-| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1089 |
-| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~1111 |
-| `shannon-commands` | Built-in commands (/help, /config, /pdf, /commit, etc.) | ~335 |
-| `shannon-agents` | Multi-agent orchestration | ~471 |
-| `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~191 |
-| `shannon-skills` | Skill system (command templates) | ~171 |
-| `shannon-mcp` | MCP (Model Context Protocol) server integration | ~373 |
-| `shannon-types` | Shared types (re-exported by shannon-core) | ~22 |
-| `shannon-tool-interface` | Tool trait definitions | ~24 |
-| `shannon-codegen` | Code generation utilities | ~102 |
-| `shannon-agent` | Single agent runtime (binary crate) | ~65 |
+| `shannon-core` | API client, query engine, permissions, tools, state management | [metrics.md](./docs/metrics.md) |
+| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | [metrics.md](./docs/metrics.md) |
+| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | [metrics.md](./docs/metrics.md) |
+| `shannon-commands` | Built-in commands (/help, /config, /commit, etc.) | [metrics.md](./docs/metrics.md) |
+| `shannon-agents` | Multi-agent orchestration | [metrics.md](./docs/metrics.md) |
+| `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | [metrics.md](./docs/metrics.md) |
+| `shannon-skills` | Skill system (command templates) | [metrics.md](./docs/metrics.md) |
+| `shannon-mcp` | MCP (Model Context Protocol) server integration | [metrics.md](./docs/metrics.md) |
+| `shannon-types` | Shared types (re-exported by shannon-core) | [metrics.md](./docs/metrics.md) |
+| `shannon-tool-interface` | Tool trait definitions | n/a |
+| `shannon-codegen` | Code generation utilities | n/a |
+| `shannon-agent` | Single agent runtime (binary crate) | n/a |
 
-> **Note**: `shannon-desktop` was extracted to a separate repo (`../shannon-desktop`).
-> Its Cargo.toml pulls shannon-* via git subpath dep with a `[patch]` override
-> pointing back at this checkout for dev. See `justfile` desktop recipes.
+### First-Screen UX
+
+The REPL first screen (when chat is empty) renders a `StatusCardWidget` above the welcome text showing:
+- Active provider + model + tier (canonical: fast/standard/pro; aliases accepted: haiku/sonnet/opus/flash/mini/plus/ultra/max)
+- Available providers and their models (from `MODEL_CATALOG`)
+- Command hints (`/connect`, `/model`, `/provider`, `/profile`, `/help`)
+
+The StatusBar shows a compact `[provider/model · tier]` pill that updates in real time.
+
+`/help` opens a modal overlay (does not pollute chat history); `/model --tier <name>` switches between tiers with `--save` persisting to `~/.shannon/providers.toml`.
+
+> **Note**: `shannon-desktop` is a **workspace member** at `desktop/` (crate name `shannon-desktop`),
+> not a separate repo. Its `Cargo.toml` depends on the engine crates via `<name>.workspace = true`
+> (path + version) — no git/SSH/rev deps, no `[patch]` override. See `justfile` desktop recipes.
 
 ## Key Patterns
 
@@ -47,6 +67,7 @@ Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` ha
 - **Extensions**: MCP (Model Context Protocol) — Claude Code compatible. Servers configured in `.mcp.json`, `~/.claude/settings.json`, `~/.shannon/settings.json` via `mcpServers` key. Tools auto-discovered via `tools/list`.
 - **Memory subsystem**: `MemoryStore` with Jaccard similarity dedup, `MemoryConsolidator` for merge/prune, `AutoDreamService` for conversation→memory extraction.
 - **Tool interface**: `Tool` trait in `shannon-tool-interface` with `execute()`, `execute_streaming()`, `is_read_only()`, `is_concurrency_safe()`, `is_destructive()`.
+- **File history + `/rewind`**: `FileHistoryManager` (shannon-tools) records per-file content snapshots — pre-modify on Write/Edit/MultiEdit, plus post-turn in `repl/query.rs`. `/rewind` has three modes: `/rewind [n]` rewinds conversation turns; `/rewind <path>` reverts one file to its previous snapshot (confirms before overwriting; `--yes` skips); `/rewind code|both <n>` reverts files to their turn-N state. `/undo` and `/checkpoint` are aliases. Driven by content snapshots, not git (works in non-git dirs; never rewrites history). Config: `SHANNON_FILE_HISTORY` / `SHANNON_FILE_HISTORY_DIR` / `SHANNON_FILE_HISTORY_TTL` env (on by default).
 - **Tests with HTTP mocking**: Use `mockito` crate for API integration tests (see `crates/shannon-core/tests/api_integration.rs`).
 
 ## Testing Guidelines
@@ -112,7 +133,7 @@ just replay
 - **LSP integration**: 6 LSP tools + `DiagnosticRegistry` + two client implementations. `DiagnosticStore.mark_stale()` called on source file changes. Background `cargo check` diagnostics auto-run via `DiagnosticWatcher` when source files change — debounce, parse, display in UI.
 - **Plugin system**: `PluginRegistry` with manifest parsing. Tool plugins fully wired (MCP discovery). Command plugins register as `PromptCommand` in `CommandRegistry` (source: `Plugin`). Skill plugins register as `PromptCommand` with trigger as slash command name and entry file as template. Loading in both REPL (`new()`) and CLI headless mode.
 - **Notifications**: `Notifier` pipeline in `shannon-core::notifier` with `Cooldown` (DashMap-backed per-source dedup), `NotificationsConfig` (interactive/headless defaults), and pluggable `NotificationHandler` trait. Built-in handlers: `LogNotifier`, `FileNotifier`, `CallbackNotifier`, `DesktopNotifier`, `ShellNotifier` (CLI), `TauriNotificationHandler` (desktop), and `WebhookHandler` (six templates: Slack/Discord/Feishu/WeChat Work/custom/raw — optional HMAC-SHA256 signing). CLI `--notify` flag for headless mode; desktop auto-fires on query completion/error.
-- **Desktop app**: Scaffolded Tauri app with TODO stubs.
+- **Desktop app**: Substantial Tauri app (workspace member `desktop/`, crate `shannon-desktop`, ~25K Rust LOC) with command modules for chat/config/connections/billing/agents/mcp/memory. Provider/credential UX parity with the CLI (connect/model/tier/refresh) is being verified. Full engine re-platforming onto the shared `ProviderProfile`/credential store is ADR-0005 Phase 2 (deferred).
 
 ### MEDIUM — Quality-of-life gaps
 
@@ -122,7 +143,7 @@ just replay
 
 ### Test Coverage
 
-~7889 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them. Performance benchmarks in `crates/shannon-*/benches/` run via `cargo bench`.
+See [metrics.md](./docs/metrics.md) for the canonical, CI-generated test count, line counts, and lint/audit status. Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them. Performance benchmarks in `crates/shannon-*/benches/` run via `cargo bench`. Regenerate with `bash scripts/gen-metrics.sh`.
 
 ## Competitor Feature Tiers
 
@@ -155,4 +176,4 @@ Computer use (desktop automation via `computer-use` feature flag). Browser autom
 - Integration tests in `shannon-core/tests/` use `mockito::Server` — never hit real APIs.
 - The `mockito` server matchers are order-dependent when using `.expect(N)`.
 - `LlmClientConfig` must include `max_stream_reconnects` field (all constructors have it).
-- `#[allow(dead_code)]` annotations in production code: 61 remaining, all annotated with `// KEEP: <reason>` comments. Categories: cross-platform stubs, deserialized fields, command template dynamic dispatch, test-only utilities, struct ownership, watcher lifecycle fields. Dead constants, duplicate functions, and unused error types have been removed.
+- `#[allow(dead_code)]` annotations in production code: ~96 remaining (re-count 2026-08-08 via `grep -r "allow(dead_code)" crates/ | wc -l`; was 61 — the count drifts as code grows, re-run before quoting). All annotated with `// KEEP: <reason>` comments. Categories: cross-platform stubs, deserialized fields, command template dynamic dispatch, test-only utilities, struct ownership, watcher lifecycle fields. The four modules a prior review flagged as dead-code sinks (`coordinator.rs`, `compact.rs`, `doctor.rs`, `ui_adapter.rs`) now carry **zero** such annotations.

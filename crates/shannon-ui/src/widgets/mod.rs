@@ -9,6 +9,7 @@ pub mod command_palette;
 pub mod dialog;
 pub mod diff_viewer;
 pub mod header;
+pub mod help_overlay;
 pub mod key_hint;
 pub mod progress;
 pub mod prompt;
@@ -17,6 +18,7 @@ pub mod select;
 pub mod session_tab;
 pub mod sidebar;
 pub mod status_bar;
+pub mod status_card;
 pub mod tool_approval;
 
 // Re-exports for convenient access
@@ -26,6 +28,8 @@ pub use chat::{ChatMessage, ChatRole, ChatWidget};
 #[allow(unused_imports)]
 pub use command_palette::{CommandCategory, CommandPaletteWidget, PaletteCommand};
 pub use header::HeaderWidget;
+#[allow(unused_imports)]
+pub use help_overlay::render_help_overlay;
 pub use key_hint::KeyHintWidget;
 pub use prompt::PromptWidget;
 #[allow(unused_imports)]
@@ -33,6 +37,8 @@ pub use session_tab::{SessionInfo, SessionTabWidget};
 #[allow(unused_imports)]
 pub use sidebar::{SidebarInfo, SidebarSection, SidebarWidget};
 pub use status_bar::StatusBarWidget;
+#[allow(unused_imports)]
+pub use status_card::{CardStatus, render_status_card};
 #[allow(unused_imports)]
 pub use tool_approval::{ApprovalDecision, RiskLevel, ToolApprovalRequest, ToolApprovalWidget};
 
@@ -122,6 +128,12 @@ pub struct RenderContext<'a> {
     pub effort_level: Option<&'a str>,
     pub thinking_phase: bool,
     pub thinking_chars: usize,
+
+    // Provider / model tier (used by StatusCard + StatusBar to render labels)
+    /// Currently active provider id (e.g., "anthropic"). `None` if unconfigured.
+    pub provider: Option<&'a str>,
+    /// Tier label for the active model: "fast" / "standard" / "pro" / "unknown".
+    pub tier_label: Option<&'a str>,
 }
 
 impl<'a> RenderContext<'a> {
@@ -166,6 +178,8 @@ impl<'a> RenderContext<'a> {
             effort_level: None,
             thinking_phase: false,
             thinking_chars: 0,
+            provider: None,
+            tier_label: None,
         }
     }
 }

@@ -65,6 +65,12 @@ Things deferred to future work.
 | [0001](0001-scheduled-tasks-storage.md) | Scheduled Tasks Storage — SKILL.md + JSONL Partitioned History | Accepted | 2026-06-13 |
 | [0002](0002-sprint-5-deepen-mcp-integration.md) | Sprint 5 — Deepen MCP Integration | Accepted | 2026-06-16 |
 | [0003](0003-vcr-replay-for-agent-ci-regression.md) | VCR Replay for Agent-Level CI Regression | Accepted | 2026-07-12 |
+| [0004](0004-build-schema-redeclaration.md) | `build.rs` schema-stubs redeclaration pattern | Proposed | 2026-07-22 |
+| [0005](0005-unified-provider-model-credential-management.md) | Unified Provider/Model/Credential Management (code + desktop) | Proposed | 2026-07-24 |
+| [0006](0006-no-assistant-ui-chat-ui-migration.md) | Do Not Migrate Shannon Desktop Chat UI to assistant-ui | Accepted | 2026-07-31 |
+| [0007](0007-connect-auto-opens-model-picker.md) | `/connect` Auto-Opens the Model Picker + Background models.dev Refresh | Accepted | 2026-07-31 |
+| [0008](0008-provider-model-command-architecture-remediation.md) | Provider/Model Command Architecture Remediation | Proposed | 2026-08-01 |
+| [0009](0009-provider-store-read-facade.md) | Provider Store Read Facade (desktop read-path consolidation) | Accepted | 2026-08-06 |
 
 ## Numbering
 

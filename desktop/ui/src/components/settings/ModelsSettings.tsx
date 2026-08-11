@@ -3,14 +3,12 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { Input } from '@/components/ui/input'
+import AddProviderModal from '@/components/settings/AddProviderModal'
 import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type {
   ProviderConnection,
-  ProviderInput,
-  ProviderKind,
   ProvidersFile,
 } from '@/types'
 
@@ -124,6 +122,11 @@ export default function ModelsSettings() {
           onActivated={async () => { await Promise.all([refreshModels(), refreshStatus()]) }}
         />
 
+        {/* Provider visibility (ADR-0005 P4.9) */}
+        <ProviderVisibilitySection
+          onChanged={async () => { await refreshModels() }}
+        />
+
         {/* Provider Tabs */}
         <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl shadow-sm overflow-hidden">
           <div className="border-b border-outline-variant/30 bg-surface-container-low/30 px-lg pt-md">
@@ -174,12 +177,43 @@ export default function ModelsSettings() {
                         <span className="material-symbols-outlined">psychology</span>
                       </div>
                       <div>
-                        <div className="flex items-center gap-xs">
-                          <span className={`font-headline-md text-lg ${m.id === currentModel ? 'text-primary' : 'text-on-surface'}`}>{m.name}</span>
-                          {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary text-on-primary rounded text-[10px] font-bold">{t('settings.models.defaultBadge')}</span> : null}
-                        </div>
-                        <p className="text-label-sm text-on-surface-variant opacity-70">{m.provider} {m.context_window > 0 ? intl.formatMessage({ id: 'settings.models.contextWindow' }, { count: (m.context_window / 1000).toFixed(0) }) : ''}</p>
-                      </div>
+                    <div className="flex items-center gap-xs">
+                      <span className={`font-headline-md text-lg ${m.id === currentModel ? 'text-primary' : 'text-on-surface'}`}>{m.name}</span>
+                      {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary text-on-primary rounded text-[10px] font-bold">{t('settings.models.defaultBadge')}</span> : null}
+                      {m.tier ? (
+                        <span
+                          className="px-xs py-[2px] bg-secondary-container text-on-secondary-container rounded text-[10px] font-bold uppercase tracking-wider"
+                          title={t('settings.models.tier')}
+                        >
+                          {t(`settings.models.tier${m.tier.charAt(0).toUpperCase()}${m.tier.slice(1)}` as 'settings.models.tierFast' | 'settings.models.tierStandard' | 'settings.models.tierPro')}
+                        </span>
+                      ) : null}
+                      {m.dynamic ? (
+                        <span
+                          className="px-xs py-[2px] bg-tertiary-container text-on-tertiary-container rounded text-[10px] font-bold uppercase tracking-wider"
+                          title="From models.dev (live)"
+                        >
+                          {t('settings.models.dynamicBadge')}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="text-label-sm text-on-surface-variant opacity-70">
+                      {m.provider}
+                      {m.context_window > 0
+                        ? ' ' + intl.formatMessage({ id: 'settings.models.contextWindow' }, { count: (m.context_window / 1000).toFixed(0) })
+                        : ''}
+                      {' · '}
+                      {intl.formatMessage(
+                        { id: 'settings.models.priceInput' },
+                        { value: formatPrice(m.price_in) },
+                      )}
+                      {' / '}
+                      {intl.formatMessage(
+                        { id: 'settings.models.priceOutput' },
+                        { value: formatPrice(m.price_out) },
+                      )}
+                    </p>
+                  </div>
                     </div>
                     {switching === m.id ? (
                       <span className="material-symbols-outlined text-primary animate-spin text-[20px]">progress_activity</span>
@@ -219,34 +253,26 @@ const KIND_INFO: Record<string, KindInfo> = {
   openai: { labelKey: 'settings.models.providers.kinds.openai', icon: 'bolt', baseUrlRequired: false, needsKey: true },
   deepseek: { labelKey: 'settings.models.providers.kinds.deepseek', icon: 'psychology', baseUrlRequired: false, needsKey: true },
   ollama: { labelKey: 'settings.models.providers.kinds.ollama', icon: 'dns', baseUrlRequired: false, needsKey: false },
+  gemini: { labelKey: 'settings.models.providers.kinds.gemini', icon: 'spark', baseUrlRequired: false, needsKey: true },
   'openai-compatible': { labelKey: 'settings.models.providers.kinds.openaiCompatible', icon: 'hub', baseUrlRequired: true, needsKey: true },
 }
 
-interface QuickFill {
-  id: string
-  label: string
-  icon: string
-  kind: ProviderKind
-  baseUrl?: string
-  model?: string
-}
-
-// Quick-fill chips in the Add/Edit modal. The built-in providers map to their
-// kind; GLM / Kimi / MiniMax are OpenAI-compatible endpoints (kind =
-// `openai-compatible`), which the Rust layer tests with a Bearer token.
-const QUICK_FILL: QuickFill[] = [
-  { id: 'anthropic', label: 'Anthropic', icon: 'auto_awesome', kind: 'anthropic', model: 'claude-sonnet-4-6' },
-  { id: 'openai', label: 'OpenAI', icon: 'bolt', kind: 'openai', model: 'gpt-4.1-mini' },
-  { id: 'deepseek', label: 'DeepSeek', icon: 'psychology', kind: 'deepseek', model: 'deepseek-chat' },
-  { id: 'glm', label: 'GLM (Zhipu)', icon: 'auto_awesome', kind: 'openai-compatible', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-plus' },
-  { id: 'kimi', label: 'Kimi (Moonshot)', icon: 'dark_mode', kind: 'openai-compatible', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
-  { id: 'minimax', label: 'MiniMax', icon: 'group', kind: 'openai-compatible', baseUrl: 'https://api.minimax.chat/v1', model: 'abab6.5s-chat' },
-  { id: 'ollama', label: 'Ollama (local)', icon: 'dns', kind: 'ollama', baseUrl: 'http://localhost:11434', model: 'llama3.2' },
-  { id: 'custom', label: 'settings.models.providers.customOpenAI', icon: 'hub', kind: 'openai-compatible' },
-]
-
 function kindLabel(intl: ReturnType<typeof useIntl>, kind: string): string {
   return intl.formatMessage({ id: KIND_INFO[kind]?.labelKey ?? 'settings.models.providers.kinds.openaiCompatible' })
+}
+
+/**
+ * Format a per-million-token USD price for the model list. Returns the
+ * i18n "unknown" placeholder for null / non-finite values so the UI
+ * never invents a number (ADR-0005 P0-2 honest-cost). Two decimals
+ * are enough resolution for a sidebar; the engine pricing SSOT is the
+ * canonical source.
+ */
+function formatPrice(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) {
+    return '—'
+  }
+  return value.toFixed(2)
 }
 
 function toastTestResult(
@@ -277,6 +303,88 @@ function toastTestResult(
   }
 }
 
+/**
+ * Renders the results of the "Test all providers" fan-out probe as a compact
+ * list of provider label + status pill + latency. Status pill reuses the
+ * same `settings.models.testResult.*` keys the single-provider toast uses so
+ * the wording stays identical between the two surfaces.
+ */
+function TestAllResultsPanel({
+  rows,
+  intl,
+  t,
+}: {
+  rows: api.ProviderTestRow[]
+  intl: ReturnType<typeof useIntl>
+  t: (id: string) => string
+}) {
+  const okCount = rows.filter(r => r.result.kind === 'success').length
+  const summary = intl.formatMessage(
+    { id: 'settings.models.providers.testAllSummary' },
+    { ok: okCount, total: rows.length },
+  )
+  return (
+    <div
+      data-testid="test-all-results"
+      className="mt-md rounded-lg border border-outline-variant/30 bg-surface-container-low/30 p-md space-y-sm"
+    >
+      <p className="font-label-sm text-on-surface-variant">{summary}</p>
+      <div className="grid grid-cols-1 gap-xs">
+        {rows.map(r => {
+          const result = r.result
+          const pillClass =
+            result.kind === 'success'
+              ? 'bg-primary-container text-on-primary-container'
+              : result.kind === 'rate_limited'
+                ? 'bg-tertiary-container text-on-tertiary-container'
+                : 'bg-error-container text-on-error-container'
+          const pillLabel = (() => {
+            switch (result.kind) {
+              case 'success':
+                return t('settings.models.testResult.success')
+              case 'invalid_key':
+                return t('settings.models.testResult.invalidKey')
+              case 'rate_limited':
+                return t('settings.models.testResult.rateLimited')
+              case 'network_unreachable':
+                return intl.formatMessage({ id: 'settings.models.testResult.networkUnreachable' }, { provider: r.provider_kind })
+              case 'provider_error':
+                return intl.formatMessage({ id: 'settings.models.testResult.providerError' }, { provider: r.provider_kind, status: result.status })
+              case 'unknown':
+                return intl.formatMessage({ id: 'settings.models.testResult.unknown' }, { message: result.message })
+            }
+          })()
+          return (
+            <div
+              key={r.id}
+              className="flex items-center justify-between gap-md px-sm py-xs rounded-md bg-surface-container-lowest"
+            >
+              <div className="flex items-center gap-sm min-w-0">
+                <span className="font-label-md text-on-surface truncate">{r.label}</span>
+                <span className="font-label-xs text-[11px] text-on-surface-variant">{r.provider_kind}</span>
+              </div>
+              <div className="flex items-center gap-sm shrink-0">
+                {r.latency_ms !== null ? (
+                  <span className="font-label-xs text-[11px] text-on-surface-variant">
+                    {intl.formatMessage({ id: 'settings.models.providers.latency' }, { ms: r.latency_ms })}
+                  </span>
+                ) : null}
+                <span
+                  data-testid={`test-all-result-${r.id}`}
+                  className={`px-sm py-[2px] rounded-full text-[10px] font-bold uppercase tracking-wider ${pillClass}`}
+                  title={pillLabel}
+                >
+                  {pillLabel}
+                </span>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function ProvidersSection({
   providersFile,
   loading,
@@ -295,27 +403,30 @@ function ProvidersSection({
   const [testingId, setTestingId] = useState<string | null>(null)
   const [activatingId, setActivatingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ProviderConnection | null>(null)
+  const [testAllRunning, setTestAllRunning] = useState(false)
+  const [testAllRows, setTestAllRows] = useState<api.ProviderTestRow[] | null>(null)
 
   const handleTest = async (conn: ProviderConnection) => {
     // Only the active provider's key is mirrored into config; for a connection
     // we can only test when a key is set on it. Ollama needs no key.
-    const info = KIND_INFO[conn.provider_kind]
-    if (info?.needsKey && !conn.api_key) {
-      toast.error(intl.formatMessage({ id: 'settings.models.providers.needKey' }, { label: conn.label }))
+    const info = KIND_INFO[conn.kind]
+    if (info?.needsKey && !conn.has_api_key) {
+      toast.error(intl.formatMessage({ id: 'settings.models.providers.needKey' }, { label: conn.display_name }))
       return
     }
     setTestingId(conn.id)
     try {
-      // Use the masked "***" sentinel only when it's the only thing available —
-      // the backend can't test against a masked value, so for non-active
-      // connections without a fresh key we ask the user to re-enter it.
-      const apiKey = conn.api_key && conn.api_key !== '***' ? conn.api_key : ''
-      if (info?.needsKey && !apiKey) {
-        toast.error(intl.formatMessage({ id: 'settings.models.providers.reenterKey' }, { label: conn.label }))
+      // TD-4: the wire type no longer carries the raw api_key — only
+      // `has_api_key: bool`. The backend reads the key from the credential
+      // store; pass an empty string so the prompt-for-key flow triggers
+      // when no key is resolvable.
+      const apiKey = ''
+      if (info?.needsKey && !conn.has_api_key) {
+        toast.error(intl.formatMessage({ id: 'settings.models.providers.reenterKey' }, { label: conn.display_name }))
         return
       }
-      const result = await api.testProviderConnection(conn.provider_kind, apiKey, conn.base_url ?? undefined)
-      toastTestResult(intl, result, conn.provider_kind)
+      const result = await api.testProviderConnection(conn.kind, apiKey, conn.base_url ?? undefined)
+      toastTestResult(intl, result, conn.kind)
     } catch (e) {
       toastError(t('settings.models.testResult.failed'), e)
     } finally {
@@ -331,7 +442,7 @@ function ProvidersSection({
       const fresh = await api.listProviders()
       onChange(fresh)
       await onActivated()
-      toast.success(intl.formatMessage({ id: 'settings.models.providers.activated' }, { label: conn.label }))
+      toast.success(intl.formatMessage({ id: 'settings.models.providers.activated' }, { label: conn.display_name }))
     } catch (e) {
       toastError(t('settings.models.providers.activateFailed'), e)
     } finally {
@@ -348,7 +459,7 @@ function ProvidersSection({
     try {
       const fresh = await api.deleteProvider(conn.id)
       onChange(fresh)
-      toast.success(intl.formatMessage({ id: 'settings.models.providers.deleted' }, { label: conn.label }))
+      toast.success(intl.formatMessage({ id: 'settings.models.providers.deleted' }, { label: conn.display_name }))
     } catch (e) {
       toastError(t('settings.models.providers.deleteFailed'), e)
     }
@@ -358,7 +469,23 @@ function ProvidersSection({
     onChange(fresh)
     setModalOpen(false)
     setEditing(null)
+    // Stale "test all" results would mislead if the user then re-runs the
+    // batch probe — drop them and force the user to re-run.
+    setTestAllRows(null)
     toast.success(t('settings.models.providers.saved'))
+  }
+
+  const handleTestAll = async () => {
+    if (testAllRunning) return
+    setTestAllRunning(true)
+    try {
+      const rows = await api.testAllProviders()
+      setTestAllRows(rows)
+    } catch (e) {
+      toastError(t('settings.models.testResult.failed'), e)
+    } finally {
+      setTestAllRunning(false)
+    }
   }
 
   return (
@@ -376,6 +503,27 @@ function ProvidersSection({
           {t('settings.models.providers.add')}
         </Button>
       </div>
+      <div className="flex justify-end -mt-md mb-md">
+        <Button
+          variant="ghost"
+          className="px-md py-sm text-on-surface-variant hover:text-primary whitespace-nowrap cursor-pointer disabled:opacity-50"
+          onClick={handleTestAll}
+          disabled={testAllRunning || providersFile.providers.length === 0}
+          aria-label={t('settings.models.providers.testAll')}
+        >
+          {testAllRunning ? (
+            <>
+              <span className="material-symbols-outlined text-[18px] animate-spin">progress_activity</span>
+              {t('settings.models.providers.testAllInProgress')}
+            </>
+          ) : (
+            <>
+              <span className="material-symbols-outlined text-[18px]">cable</span>
+              {t('settings.models.providers.testAll')}
+            </>
+          )}
+        </Button>
+      </div>
 
       {loading ? (
         <p className="text-body-sm text-on-surface-variant py-lg text-center">{t('settings.models.providers.loading')}</p>
@@ -385,8 +533,8 @@ function ProvidersSection({
         <div className="grid grid-cols-1 gap-sm">
           {providersFile.providers.map(conn => {
             const isActive = providersFile.active_provider_id === conn.id
-            const hasKey = !!conn.api_key
-            const info = KIND_INFO[conn.provider_kind]
+            const hasKey = conn.has_api_key
+            const info = KIND_INFO[conn.kind]
             return (
               <div
                 key={conn.id}
@@ -400,18 +548,15 @@ function ProvidersSection({
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-xs">
-                      <span className="font-label-md font-bold text-on-surface truncate">{conn.label}</span>
+                      <span className="font-label-md font-bold text-on-surface truncate">{conn.display_name}</span>
                       {isActive ? (
                         <span className="px-xs py-[1px] bg-primary text-on-primary rounded text-[10px] font-bold shrink-0">{t('settings.models.providers.activeBadge')}</span>
                       ) : null}
                     </div>
                     <div className="flex items-center gap-xs flex-wrap">
-                      <span className="font-label-xs text-[11px] text-on-surface-variant">{kindLabel(intl, conn.provider_kind)}</span>
+                      <span className="font-label-xs text-[11px] text-on-surface-variant">{kindLabel(intl, conn.kind)}</span>
                       {conn.base_url ? (
                         <span className="font-label-xs text-[11px] text-on-surface-variant font-mono truncate max-w-[260px]" title={conn.base_url ?? undefined}>{conn.base_url}</span>
-                      ) : null}
-                      {conn.model ? (
-                        <span className="font-label-xs text-[11px] text-on-surface-variant font-mono">{conn.model}</span>
                       ) : null}
                       <span
                         className={`inline-flex items-center gap-[2px] font-label-xs text-[10px] ${hasKey ? 'text-primary' : 'text-on-surface-variant opacity-60'}`}
@@ -456,8 +601,16 @@ function ProvidersSection({
         </div>
       )}
 
+      {testAllRows !== null ? (
+        testAllRows.length === 0 ? (
+          <p className="text-body-sm text-on-surface-variant py-md text-center">{t('settings.models.providers.testAllEmpty')}</p>
+        ) : (
+          <TestAllResultsPanel rows={testAllRows} intl={intl} t={t} />
+        )
+      ) : null}
+
       {modalOpen ? (
-        <ProviderModal
+        <AddProviderModal
           editing={editing}
           onClose={() => { setModalOpen(false); setEditing(null) }}
           onSaved={handleSaved}
@@ -469,7 +622,7 @@ function ProvidersSection({
           open
           destructive
           title={t('settings.models.providers.deleteConfirmTitle')}
-          message={intl.formatMessage({ id: 'settings.models.providers.confirmDelete' }, { label: deleteTarget.label })}
+          message={intl.formatMessage({ id: 'settings.models.providers.confirmDelete' }, { label: deleteTarget.display_name })}
           confirmLabel={t('settings.models.providers.delete')}
           cancelLabel={t('settings.models.providers.cancel')}
           onConfirm={confirmDeleteProvider}
@@ -480,160 +633,158 @@ function ProvidersSection({
   )
 }
 
-function ProviderModal({
-  editing,
-  onClose,
-  onSaved,
+// === Provider visibility (ADR-0005 P4.9) ===
+//
+// Settings panel that toggles which provider kinds appear in the model
+// picker. Backed by `DesktopConfig.enabled_providers` (persisted to
+// `~/.shannon/desktop/config.json`); the engine's `SHANNON_*_PROVIDERS`
+// env vars are honoured only when the override is `null`.
+//
+// `null` (no override) is rendered as every checkbox checked — the user
+// sees the engine env-var state would apply, even though no explicit
+// state is persisted. `[]` is rendered as none checked. Otherwise only
+// the listed slugs are checked.
+
+const PROVIDER_KINDS_FOR_VISIBILITY = [
+  'anthropic',
+  'openai',
+  'deepseek',
+  'ollama',
+  'gemini',
+  'openai-compatible',
+] as const
+
+function ProviderVisibilitySection({
+  onChanged,
 }: {
-  editing: ProviderConnection | null
-  onClose: () => void
-  onSaved: (f: ProvidersFile) => void
+  onChanged: () => Promise<void>
 }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const [label, setLabel] = useState(editing?.label ?? '')
-  const [kind, setKind] = useState<string>(editing?.provider_kind ?? 'openai-compatible')
-  const [baseUrl, setBaseUrl] = useState(editing?.base_url ?? '')
-  const [apiKey, setApiKey] = useState('')
-  const [model, setModel] = useState(editing?.model ?? '')
+  // `null` ⇒ no desktop override (engine env vars decide).
+  // `Some([])` ⇒ user toggled every provider off.
+  // `Some([..])` ⇒ explicit allowlist.
+  const [override, setOverride] = useState<string[] | null>(null)
+  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
-  const info = KIND_INFO[kind] ?? KIND_INFO['openai-compatible']
+  useEffect(() => {
+    let cancelled = false
+    api.getProviderAllowlist()
+      .then(() => {
+        if (!cancelled) {
+          // The backend returns the *effective* allowlist (env vars
+          // resolved when desktop override is `null`). For the UI we
+          // want the desktop override specifically — `null` ⇒
+          // "use env vars", `Some([])` ⇒ "all off",
+          // `Some(non_empty)` ⇒ explicit list. Read `enabled_providers`
+          // through `getConfig` to disambiguate.
+          api.getConfig().then((cfg) => {
+            if (cancelled) return
+            const ep = (cfg as { enabled_providers?: string[] | null }).enabled_providers
+            setOverride(ep === undefined ? null : ep)
+            setLoading(false)
+          }).catch(() => { if (!cancelled) setLoading(false) })
+        }
+      })
+      .catch(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
 
-  const applyQuickFill = (qf: QuickFill) => {
-    setKind(qf.kind)
-    if (qf.baseUrl) setBaseUrl(qf.baseUrl)
-    if (qf.model) setModel(qf.model)
-    if (!label) setLabel(qf.id === 'custom' ? '' : qf.label)
+  const isChecked = (kind: string): boolean => {
+    // `null` (no override) ⇒ all checked (engine env-var decides).
+    // `Some([])` ⇒ none checked. `Some(non_empty)` ⇒ only those.
+    if (override === null) return true
+    return override.includes(kind)
   }
 
-  const submit = async () => {
-    const trimmedLabel = label.trim()
-    if (!trimmedLabel) {
-      setError(t('settings.models.providers.needLabel'))
-      return
-    }
-    if (info.baseUrlRequired && !baseUrl.trim()) {
-      setError(t('settings.models.providers.needBaseUrl'))
-      return
-    }
+  const toggle = async (kind: string) => {
+    if (saving) return
+    const current = override === null
+      ? [...PROVIDER_KINDS_FOR_VISIBILITY]
+      : override
+    const next = current.includes(kind)
+      ? current.filter((k) => k !== kind)
+      : [...current, kind]
     setSaving(true)
-    setError(null)
-    const input: ProviderInput = {
-      id: editing?.id,
-      label: trimmedLabel,
-      provider_kind: kind,
-      // For a new connection require a key when the kind needs one; on edit,
-      // an empty value tells the backend to keep the existing key.
-      api_key: apiKey.trim() || undefined,
-      base_url: baseUrl.trim() || undefined,
-      model: model.trim() || undefined,
-    }
     try {
-      const fresh = await api.saveProvider(input)
-      onSaved(fresh)
+      await api.configure({
+        key: 'enabled_providers',
+        value: JSON.stringify(next),
+      })
+      setOverride(next)
+      await onChanged()
     } catch (e) {
-      setError(String(e))
+      toastError(t('settings.models.providers.saveFailed'), e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const resetToDefault = async () => {
+    if (saving) return
+    setSaving(true)
+    try {
+      // `null` clears the desktop override (falls back to env vars).
+      await api.configure({ key: 'enabled_providers', value: 'null' })
+      setOverride(null)
+      await onChanged()
+      toast.success(t('settings.models.providerVisibility.reset'))
+    } catch (e) {
+      toastError(t('settings.models.providers.saveFailed'), e)
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-md" onClick={onClose}>
-      <div
-        className="bg-surface-container-lowest border border-outline-variant/40 rounded-2xl shadow-xl w-full max-w-lg p-lg space-y-md"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between">
-          <h3 className="font-headline-md text-on-surface">
-            {editing ? t('settings.models.providers.editTitle') : t('settings.models.providers.addTitle')}
-          </h3>
-          <Button variant="ghost" className="text-on-surface-variant hover:text-primary cursor-pointer" onClick={onClose} aria-label={t('settings.models.providers.cancel')}>
-            <span className="material-symbols-outlined">close</span>
-          </Button>
-        </div>
-
-        {/* Quick fill */}
+    <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-sm">
+      <div className="flex items-start justify-between mb-md gap-md">
         <div>
-          <p className="font-label-sm text-on-surface-variant mb-xs">{t('settings.models.providers.quickFill')}</p>
-          <div className="flex flex-wrap gap-xs">
-            {QUICK_FILL.map(qf => (
-              <button
-                key={qf.id}
-                type="button"
-                onClick={() => applyQuickFill(qf)}
-                className="inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low/40 hover:border-primary/40 hover:bg-primary/5 text-on-surface-variant hover:text-primary font-label-sm text-[12px] cursor-pointer"
-              >
-                <span className="material-symbols-outlined text-[14px]">{qf.icon}</span>
-                {qf.id === 'custom' ? t(qf.label) : qf.label}
-              </button>
-            ))}
-          </div>
+          <h3 className="font-headline-md text-on-surface">
+            {t('settings.models.providerVisibility.title')}
+          </h3>
+          <p className="text-body-sm text-on-surface-variant mt-xs">
+            {t('settings.models.providerVisibility.subtitle')}
+          </p>
         </div>
-
-        <div className="space-y-sm">
-          <Field label={t('settings.models.providers.labelField')}>
-            <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm" value={label} onChange={(e) => { setLabel(e.target.value); setError(null) }} placeholder={t('settings.models.providers.labelPlaceholder')} autoFocus />
-          </Field>
-
-          <Field label={t('settings.models.providers.kindField')}>
-            <select
-              className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm cursor-pointer"
-              value={kind}
-              onChange={(e) => setKind(e.target.value)}
-            >
-              {Object.keys(KIND_INFO).map(k => (
-                <option key={k} value={k}>{kindLabel(intl, k)}</option>
-              ))}
-            </select>
-          </Field>
-
-          <Field label={t(info.baseUrlRequired ? 'settings.models.providers.baseUrlRequired' : 'settings.models.providers.baseUrlOptional')}>
-            <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono" value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setError(null) }} placeholder="https://api.example.com/v1" />
-          </Field>
-
-          <Field label={t('settings.models.providers.apiKeyField')}>
-            <Input
-              className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono"
-              type="password"
-              value={apiKey}
-              onChange={(e) => { setApiKey(e.target.value); setError(null) }}
-              placeholder={editing ? t('settings.models.providers.apiKeyKeep') : t('settings.models.providers.apiKeyPlaceholder')}
-              disabled={!info.needsKey}
-            />
-          </Field>
-
-          <Field label={t('settings.models.providers.modelField')}>
-            <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono" value={model} onChange={(e) => setModel(e.target.value)} placeholder="claude-sonnet-4-6" />
-          </Field>
-        </div>
-
-        {error ? (
-          <div className="font-label-sm text-[12px] text-error">{error}</div>
-        ) : null}
-
-        <div className="flex justify-end gap-sm pt-xs">
-          <Button className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface font-label-md rounded-lg hover:bg-surface-container cursor-pointer" onClick={onClose}>
-            {t('settings.models.providers.cancel')}
-          </Button>
-          <Button className="px-lg py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-sm cursor-pointer disabled:opacity-50" onClick={submit} disabled={saving}>
-            <span className="material-symbols-outlined text-[18px]">{saving ? 'progress_activity' : 'save'}</span>
-            {saving ? t('settings.models.providers.saving') : t('settings.models.providers.save')}
-          </Button>
-        </div>
+        <Button
+          variant="ghost"
+          className="px-md py-sm text-on-surface-variant hover:text-primary whitespace-nowrap cursor-pointer disabled:opacity-50"
+          onClick={resetToDefault}
+          disabled={loading || saving || override === null}
+        >
+          {t('settings.models.providerVisibility.reset')}
+        </Button>
       </div>
-    </div>
-  )
-}
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="block font-label-sm text-on-surface-variant mb-xs">{label}</span>
-      {children}
-    </label>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm">
+        {PROVIDER_KINDS_FOR_VISIBILITY.map((kind) => {
+          const checked = isChecked(kind)
+          return (
+            <label
+              key={kind}
+              className={`flex items-center gap-md p-sm rounded-lg border cursor-pointer transition-colors ${
+                checked
+                  ? 'border-primary/50 bg-primary-container/5'
+                  : 'border-outline-variant/30 hover:border-outline-variant'
+              }`}
+            >
+              <input
+                type="checkbox"
+                className="w-4 h-4 cursor-pointer accent-primary"
+                checked={checked}
+                disabled={loading || saving}
+                onChange={() => toggle(kind)}
+              />
+              <span className="font-label-md text-on-surface">
+                {kindLabel(intl, kind)}
+              </span>
+            </label>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 

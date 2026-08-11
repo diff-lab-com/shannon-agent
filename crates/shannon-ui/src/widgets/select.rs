@@ -6,10 +6,11 @@ use crate::theme::Theme;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
+use rust_i18n::t;
 
 /// Selection item for lists
 #[derive(Debug, Clone)]
@@ -530,6 +531,20 @@ impl FuzzyPickerWidget {
         self
     }
 
+    /// Replace the item set in place (used to swap scopes without rebuilding
+    /// the picker). Re-applies the current search query so an active filter is
+    /// preserved across the swap.
+    pub fn set_items(&mut self, items: Vec<SelectItem<String>>) {
+        self.items = items;
+        self.selected_index = 0;
+        self.update_filtered();
+    }
+
+    /// Update the border title (used to reflect the active scope).
+    pub fn set_title(&mut self, title: String) {
+        self.title = title;
+    }
+
     /// Enter search mode
     pub fn start_search(&mut self) {
         self.state = PickerState::Searching;
@@ -716,6 +731,194 @@ mod tests {
     }
 
     #[test]
+    fn picker_cycles_through_tiers() {
+        let mut picker = ModelPickerWidget::new(None);
+        assert_eq!(picker.current_tier_idx, 0);
+
+        picker.next_tier();
+        assert_eq!(picker.current_tier_idx, 1);
+
+        picker.next_tier();
+        assert_eq!(picker.current_tier_idx, 2);
+
+        picker.next_tier();
+        assert_eq!(picker.current_tier_idx, 0, "should wrap around");
+
+        picker.prev_tier();
+        assert_eq!(picker.current_tier_idx, 2, "should wrap to Pro from Fast");
+
+        picker.prev_tier();
+        assert_eq!(picker.current_tier_idx, 1);
+    }
+
+    #[test]
+    fn picker_tier_filters_models() {
+        // Anthropic provider has Fast (haiku), Standard (sonnet), Pro (opus)
+        let mut picker = ModelPickerWidget::new(None);
+        // Jump to Anthropic if available; otherwise just confirm filtering works
+        if let Some(idx) = picker
+            .providers
+            .iter()
+            .position(|p| *p == LlmProvider::Anthropic)
+        {
+            picker.current_provider_idx = idx;
+            picker.refresh_models();
+        }
+
+        let total = picker.models.len();
+        assert!(total > 0, "expected at least one model for the provider");
+
+        // Standard tier should be a strict subset
+        picker.current_tier_idx = 1;
+        picker.refresh_models_for_tier();
+        assert!(
+            picker.models.len() <= total,
+            "filtered list must not exceed the unfiltered list"
+        );
+        for m in &picker.models {
+            assert_eq!(m.tier_label(), TierLabel::Standard);
+        }
+        assert_eq!(picker.selected_idx, 0);
+    }
+
+    #[test]
+    fn picker_manual_entry_builds_and_clears() {
+        let mut picker = ModelPickerWidget::new(None);
+
+        // Outside manual mode, typed chars are ignored.
+        picker.add_manual_char('x');
+        assert!(picker.manual_input().is_empty());
+        assert!(!picker.is_manual_mode());
+
+        // Entering manual mode exposes a typed buffer for catalog-external ids.
+        picker.enter_manual_mode();
+        assert!(picker.is_manual_mode());
+        for c in "llama3.2".chars() {
+            picker.add_manual_char(c);
+        }
+        assert_eq!(picker.manual_input(), "llama3.2");
+
+        // Backspace trims the buffer; Esc-style exit clears it.
+        picker.remove_manual_char();
+        assert_eq!(picker.manual_input(), "llama3.");
+        picker.exit_manual_mode();
+        assert!(!picker.is_manual_mode());
+        assert!(picker.manual_input().is_empty());
+    }
+
+    #[test]
+    fn picker_empty_state_renders_provider_name_and_refresh_hint() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // Force a provider tab that has zero models so the empty-state branch
+        // is exercised (P0-1 QA bug #1 + #2). Clear any pre-existing local
+        // Ollama models via the test-only constructor.
+        let mut picker = ModelPickerWidget::new(None);
+        picker.local_models.clear();
+        picker.models.clear();
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test backend");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                picker.render(frame, area, &Theme::default());
+            })
+            .expect("draw");
+
+        let rendered = format!("{:?}", terminal.backend().buffer());
+        // The empty-state message is now provider-aware (P0-1 QA bug #1) and
+        // contains a refresh hint that is NOT Ollama-specific.
+        assert!(
+            rendered.contains("No models found for"),
+            "empty state should mention the provider: {rendered}"
+        );
+        assert!(
+            rendered.contains("/model refresh") || rendered.contains("SHANNON_ENABLED_PROVIDERS"),
+            "empty state should hint at /model refresh or env: {rendered}"
+        );
+        assert!(
+            !rendered.contains("ollama pull"),
+            "empty state must not mention ollama pull anymore: {rendered}"
+        );
+        assert!(
+            !rendered.contains("No local models detected"),
+            "old ollama-only empty state must be gone: {rendered}"
+        );
+    }
+
+    #[test]
+    fn model_cost_label_honest_about_unknown() {
+        use shannon_core::model_registry::{ModelCapabilities, ModelInfo};
+        use shannon_engine::api::LlmProvider;
+
+        fn leaked(s: &str) -> &'static str {
+            Box::leak(s.to_string().into_boxed_str())
+        }
+
+        // Curated paid model → per-million rate.
+        let paid = ModelInfo {
+            id: leaked("some-paid-model"),
+            display_name: leaked("Paid"),
+            aliases: &[],
+            provider: LlmProvider::Anthropic,
+            context_window: 200_000,
+            max_output: 8192,
+            cost_per_m_input: 3.0,
+            cost_per_m_output: 15.0,
+            capabilities: ModelCapabilities::empty(),
+        };
+        let label = model_cost_label(&paid);
+        assert!(label.contains("$3.00"), "paid model shows rate: {label}");
+        assert!(
+            label.contains("$15.00"),
+            "paid model shows output rate: {label}"
+        );
+
+        // Dynamic/custom model with zero pricing (non-Ollama) → estimate
+        // unavailable, never a misleading $0.00.
+        let dynamic = ModelInfo {
+            id: leaked("dynamic-future-model"),
+            display_name: leaked("Dynamic"),
+            aliases: &[],
+            provider: LlmProvider::OpenAI,
+            context_window: 1_000_000,
+            max_output: 8192,
+            cost_per_m_input: 0.0,
+            cost_per_m_output: 0.0,
+            capabilities: ModelCapabilities::empty(),
+        };
+        let label = model_cost_label(&dynamic);
+        assert!(
+            !label.contains('$'),
+            "dynamic model must not show $0: {label}"
+        );
+        assert!(
+            label.contains("estimate") || label.contains("估算"),
+            "dynamic model shows unknown: {label}"
+        );
+
+        // Local Ollama model → free.
+        let local = ModelInfo {
+            id: leaked("llama3"),
+            display_name: leaked("Llama"),
+            aliases: &[],
+            provider: LlmProvider::Ollama,
+            context_window: 8192,
+            max_output: 4096,
+            cost_per_m_input: 0.0,
+            cost_per_m_output: 0.0,
+            capabilities: ModelCapabilities::empty(),
+        };
+        let label = model_cost_label(&local);
+        assert!(
+            label.contains("free") || label.contains("免费"),
+            "local model shows free: {label}"
+        );
+    }
+
+    #[test]
     fn test_multi_select_with_items() {
         let items = vec![
             SelectItem::new("Option 1", "val1".to_string()),
@@ -756,7 +959,8 @@ mod tests {
 // ── Model Picker Widget ────────────────────────────────────────────
 
 use shannon_core::model_registry::{
-    ModelInfo, all_providers, detect_local_models, models_for_provider, provider_display_name,
+    ModelInfo, TierLabel, available_providers, detect_local_models, is_provider_allowed,
+    merged_models_for_provider, provider_display_name,
 };
 use shannon_engine::api::LlmProvider;
 
@@ -766,6 +970,7 @@ const MAX_VISIBLE_MODELS: usize = 10;
 ///
 /// Navigate with:
 /// - `←` / `→` — switch provider tab
+/// - `Tab` / `BackTab` — cycle tier tab (Fast → Standard → Pro)
 /// - `↑` / `↓` / `j` / `k` — select model
 /// - `Enter` — confirm selection
 /// - `Esc` — cancel
@@ -775,7 +980,7 @@ pub struct ModelPickerWidget {
     providers: Vec<LlmProvider>,
     /// Index into `providers` for the currently active tab.
     current_provider_idx: usize,
-    /// Models for the currently selected provider.
+    /// Models for the currently selected provider + tier.
     models: Vec<ModelInfo>,
     /// Index of the highlighted model within `models`.
     selected_idx: usize,
@@ -785,16 +990,46 @@ pub struct ModelPickerWidget {
     local_models: Vec<ModelInfo>,
     /// The model ID currently in use (shown with ✓ marker).
     current_model_id: Option<String>,
+    /// Index of the currently active tier tab (0 = Fast, 1 = Standard, 2 = Pro).
+    pub current_tier_idx: usize,
+    /// Manual model-id entry mode (escape hatch for models outside the catalog).
+    manual_mode: bool,
+    /// Typed model id while in manual entry mode.
+    manual_input: String,
 }
+
+/// Honest cost label for a model shown in the picker detail line.
+///
+/// - Local Ollama models are free.
+/// - Curated catalog models with non-zero pricing show their per-million rate.
+/// - Dynamic/custom models with no pricing (`cost_per_m_* == 0.0`) show
+///   "estimate unavailable" instead of a misleading `$0.00`.
+fn model_cost_label(model: &ModelInfo) -> String {
+    if model.provider == LlmProvider::Ollama {
+        t!("commands.model.cost_free_local").to_string()
+    } else if model.cost_per_m_input > 0.0 || model.cost_per_m_output > 0.0 {
+        format!(
+            "${:.2}/M in · ${:.2}/M out",
+            model.cost_per_m_input, model.cost_per_m_output
+        )
+    } else {
+        t!("commands.model.cost_unknown").to_string()
+    }
+}
+
+/// Number of tier tabs (Fast, Standard, Pro).
+pub const TIER_COUNT: usize = 3;
 
 impl ModelPickerWidget {
     /// Create a new model picker, optionally highlighting `current_model`.
     pub fn new(current_model: Option<&str>) -> Self {
         let local_models = detect_local_models();
-        let mut providers = all_providers();
+        let mut providers = available_providers();
 
-        // Always include Ollama tab (shows "No local models" if none detected)
-        if !providers.contains(&LlmProvider::Ollama) {
+        // Always offer an Ollama tab for local discovery (the static catalog
+        // omits Ollama until models are detected at runtime), unless an operator
+        // filtered it out via the SHANNON_*_PROVIDERS allowlist/denylist.
+        if !providers.contains(&LlmProvider::Ollama) && is_provider_allowed(&LlmProvider::Ollama) {
             providers.push(LlmProvider::Ollama);
         }
 
@@ -807,6 +1042,9 @@ impl ModelPickerWidget {
             scroll_offset: 0,
             local_models,
             current_model_id,
+            current_tier_idx: 0,
+            manual_mode: false,
+            manual_input: String::new(),
         };
 
         // Find the provider of the current model to open the right tab
@@ -842,7 +1080,9 @@ impl ModelPickerWidget {
             // Return detected local models, or empty vec (render shows "No local models detected")
             self.local_models.clone()
         } else {
-            models_for_provider(provider).into_iter().cloned().collect()
+            // Merged catalog = static + models.dev dynamic overlay (Phase D).
+            // Lazy-seeded from the on-disk cache; never touches the network.
+            merged_models_for_provider(provider)
         }
     }
 
@@ -854,6 +1094,34 @@ impl ModelPickerWidget {
         }
         let provider = self.providers[self.current_provider_idx].clone();
         self.models = self.models_for(provider);
+        self.selected_idx = 0;
+        self.scroll_offset = 0;
+    }
+
+    /// Cycle to the next tier tab (Fast → Standard → Pro → Fast).
+    pub fn next_tier(&mut self) {
+        self.current_tier_idx = (self.current_tier_idx + 1) % TIER_COUNT;
+        self.refresh_models_for_tier();
+    }
+
+    /// Cycle to the previous tier tab (Fast → Pro → Standard → Fast).
+    pub fn prev_tier(&mut self) {
+        self.current_tier_idx = if self.current_tier_idx == 0 {
+            TIER_COUNT - 1
+        } else {
+            self.current_tier_idx - 1
+        };
+        self.refresh_models_for_tier();
+    }
+
+    /// Filter the current model list to those matching the selected tier.
+    fn refresh_models_for_tier(&mut self) {
+        let tier_label = match self.current_tier_idx {
+            0 => TierLabel::Fast,
+            1 => TierLabel::Standard,
+            _ => TierLabel::Pro,
+        };
+        self.models.retain(|m| m.tier_label() == tier_label);
         self.selected_idx = 0;
         self.scroll_offset = 0;
     }
@@ -921,14 +1189,60 @@ impl ModelPickerWidget {
         self.models.get(self.selected_idx)
     }
 
+    /// Enter manual model-id entry mode — an escape hatch for models not in the
+    /// built-in catalog (a freshly pulled Ollama model, an OpenRouter id, a
+    /// Bedrock inference profile, …). The typed id is confirmed with Enter.
+    pub fn enter_manual_mode(&mut self) {
+        self.manual_mode = true;
+        self.manual_input.clear();
+    }
+
+    /// Leave manual entry mode without confirming.
+    pub fn exit_manual_mode(&mut self) {
+        self.manual_mode = false;
+        self.manual_input.clear();
+    }
+
+    /// Whether the picker is currently accepting a typed model id.
+    pub fn is_manual_mode(&self) -> bool {
+        self.manual_mode
+    }
+
+    /// Append a character to the manual entry buffer.
+    pub fn add_manual_char(&mut self, c: char) {
+        if self.manual_mode {
+            self.manual_input.push(c);
+        }
+    }
+
+    /// Delete the last character from the manual entry buffer.
+    pub fn remove_manual_char(&mut self) {
+        if self.manual_mode {
+            self.manual_input.pop();
+        }
+    }
+
+    /// The current manual-entry buffer (rendered inline; confirmed on Enter).
+    pub fn manual_input(&self) -> &str {
+        &self.manual_input
+    }
+
     /// Render the model picker as a centered dialog.
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         use ratatui::widgets::Clear;
 
         let dialog_width = 52u16.min(area.width.saturating_sub(4));
         let visible_count = MAX_VISIBLE_MODELS.min(self.models.len());
-        // +3 for title, +2 for tab bar, +1 for footer hint
-        let dialog_height = (visible_count as u16 + 6).min(area.height.saturating_sub(4));
+        // When the model list is empty we render a 2-line empty-state message
+        // instead of the scrolled model rows. Provider tabs may also wrap onto
+        // many rows inside a narrow dialog (~19 providers in 52 cols => 7 rows),
+        // so reserve enough vertical room for the wrapped tabs + tier tabs +
+        // empty-state message (P0-1 QA bug #1).
+        let empty_state_lines: u16 = if self.models.is_empty() { 10 } else { 0 };
+        // +3 title, +2 tab bar, +1 footer hint, +2 manual input line when active.
+        let extra = if self.manual_mode { 2 } else { 0 };
+        let dialog_height = (visible_count as u16 + 6 + extra + empty_state_lines)
+            .min(area.height.saturating_sub(4));
 
         let x = (area.width.saturating_sub(dialog_width)) / 2;
         let y = (area.height.saturating_sub(dialog_height)) / 2;
@@ -985,16 +1299,40 @@ impl ModelPickerWidget {
             lines.push(Line::from(""));
         }
 
+        // ── Tier tabs (Fast / Standard / Pro) ──
+        let tiers = ["Fast", "Standard", "Pro"];
+        let tier_spans: Vec<Span> = tiers
+            .iter()
+            .enumerate()
+            .flat_map(|(i, label)| {
+                let style = if i == self.current_tier_idx {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                let pill = if i == self.current_tier_idx {
+                    format!(" [{label}] ")
+                } else {
+                    format!("  {label}  ")
+                };
+                vec![Span::styled(pill, style)]
+            })
+            .collect();
+        lines.push(Line::from(tier_spans));
+        lines.push(Line::from(""));
+
         // ── Model list ──
         if self.models.is_empty() {
             lines.push(Line::from(Span::styled(
-                "  No local models detected",
+                format!("  No models found for {provider_name}"),
                 Style::default()
                     .fg(theme.text_dim)
                     .add_modifier(Modifier::ITALIC),
             )));
             lines.push(Line::from(Span::styled(
-                "  Install Ollama and run: ollama pull llama3",
+                "  Run /model refresh or check SHANNON_ENABLED_PROVIDERS",
                 Style::default().fg(theme.text_dim),
             )));
         } else {
@@ -1067,26 +1405,47 @@ impl ModelPickerWidget {
             } else {
                 model.max_output.to_string()
             };
+            let cost_label = model_cost_label(model);
             lines.push(Line::from(Span::styled(
                 format!("  ctx: {ctx} tokens  |  max output: {out} tokens"),
                 Style::default().fg(theme.warning),
             )));
+            lines.push(Line::from(Span::styled(
+                format!("  cost: {cost_label}"),
+                Style::default().fg(theme.warning),
+            )));
         }
 
-        // ── Scroll indicators ──
+        // ── Manual entry line (escape hatch for catalog-external models) ──
+        if self.manual_mode {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!(" Model ID: {}▏", self.manual_input),
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+
+        // ── Scroll indicators + footer hint ──
         let mut hints = String::new();
-        if self.models.len() > MAX_VISIBLE_MODELS {
-            if self.scroll_offset > 0 {
-                hints.push_str("↑ ");
+        if self.manual_mode {
+            hints.push_str("⏎ confirm  esc back  ⌫ delete");
+        } else {
+            if self.models.len() > MAX_VISIBLE_MODELS {
+                if self.scroll_offset > 0 {
+                    hints.push_str("↑ ");
+                }
+                if self.scroll_offset + MAX_VISIBLE_MODELS < self.models.len() {
+                    hints.push_str("↓ ");
+                }
             }
-            if self.scroll_offset + MAX_VISIBLE_MODELS < self.models.len() {
-                hints.push_str("↓ ");
+            if self.providers.len() > 1 {
+                hints.push_str("←→ provider  ");
             }
+            hints.push_str("⇥ tier  ↑↓ select  ⏎ ok  esc cancel");
+            hints.push_str("  i manual");
         }
-        if self.providers.len() > 1 {
-            hints.push_str("←→ provider  ");
-        }
-        hints.push_str("↑↓ select  ⏎ ok  esc cancel");
 
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(

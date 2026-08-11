@@ -83,6 +83,33 @@ pub async fn query_gateway_service_state() -> ServiceState {
     default_probe().await
 }
 
+/// Map the raw `systemctl --user is-active` outcome to a
+/// [`ServiceState`].
+///
+/// Extracted as a pure function so the four-way branch (success /
+/// non-zero exit / spawn failure / timeout) is unit-testable without
+/// depending on whether `shannon-gateway.service` is registered on the
+/// host. The previous inline `match` could only be exercised by running
+/// the probe against the real service manager, which made the test
+/// env-fragile — it passed on CI (no service installed) but failed on
+/// any dev machine where `shannon gateway install` had registered an
+/// active service, since the probe correctly returns `Active` there.
+#[cfg(target_os = "linux")]
+fn classify_systemctl_outcome(
+    timed_out: bool,
+    spawn_succeeded: bool,
+    exit_success: bool,
+) -> ServiceState {
+    if timed_out || !spawn_succeeded {
+        return ServiceState::Unknown;
+    }
+    if exit_success {
+        ServiceState::Active
+    } else {
+        ServiceState::Inactive
+    }
+}
+
 /// Platform-default probe implementation.
 ///
 /// Each branch shells out to the platform service manager with stdout/stderr
@@ -103,12 +130,13 @@ async fn default_probe() -> ServiceState {
             .output()
             .await
     };
-    match tokio::time::timeout(Duration::from_secs(2), probe).await {
-        Ok(Ok(o)) if o.status.success() => ServiceState::Active,
-        Ok(Ok(_)) => ServiceState::Inactive,
-        Ok(Err(_)) => ServiceState::Unknown,
-        Err(_elapsed) => ServiceState::Unknown,
-    }
+    let (timed_out, spawn_succeeded, exit_success) =
+        match tokio::time::timeout(Duration::from_secs(2), probe).await {
+            Ok(Ok(o)) => (false, true, o.status.success()),
+            Ok(Err(_)) => (false, false, false),
+            Err(_elapsed) => (true, false, false),
+        };
+    classify_systemctl_outcome(timed_out, spawn_succeeded, exit_success)
 }
 
 #[cfg(target_os = "macos")]
@@ -216,24 +244,62 @@ mod tests {
         );
     }
 
+    // The four `classify_systemctl_outcome` tests below replace the old
+    // `linux_default_probe_returns_unknown_for_unregistered_service` test,
+    // which shelled out to the real `systemctl` and asserted the result was
+    // not `Active`. That assertion only held in environments where
+    // `shannon-gateway.service` was unregistered — it passed on CI but
+    // failed on any dev machine that had run `shannon gateway install`
+    // (where the probe correctly returns `Active`). Testing the pure
+    // classifier covers all four branches deterministically, with no
+    // dependency on host service state. The remaining `systemctl` shell-out
+    // in `default_probe` is a trivial one-liner not worth an integration
+    // test, and is exercised end-toend by the supervisor when
+    // `gateway.managed` is on.
     #[test]
     #[cfg(target_os = "linux")]
-    fn linux_default_probe_returns_unknown_for_unregistered_service() {
-        // `shannon-gateway.service` is almost certainly not registered
-        // in CI. systemctl returns non-zero, the probe returns Inactive.
-        // Acceptable: also a "don't spawn externally" signal for the
-        // supervisor (matches Unknown's spawn behavior). The strict
-        // assertion here is "anything other than Active".
-        let _g = TEST_LOCK.lock().unwrap();
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let state = rt.block_on(default_probe());
-        assert_ne!(
-            state,
-            ServiceState::Active,
-            "test env must not have a real shannon-gateway.service running"
+    fn classify_systemctl_outcome_zero_exit_is_active() {
+        assert_eq!(
+            classify_systemctl_outcome(false, true, true),
+            ServiceState::Active
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn classify_systemctl_outcome_nonzero_exit_is_inactive() {
+        // `systemctl is-active` returns non-zero for "inactive",
+        // "activating", "deactivating", "failed" — all map to Inactive,
+        // which tells the supervisor "registered but not running, spawn".
+        assert_eq!(
+            classify_systemctl_outcome(false, true, false),
+            ServiceState::Inactive
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn classify_systemctl_outcome_spawn_failure_is_unknown() {
+        // `systemctl` binary missing or exec permission denied — treat as
+        // unregistered so the supervisor spawns (first-run UX).
+        assert_eq!(
+            classify_systemctl_outcome(false, false, false),
+            ServiceState::Unknown
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn classify_systemctl_outcome_timeout_is_unknown() {
+        // `systemctl --user` hung on a dbus stall — the 2s timeout trips
+        // and the supervisor falls back to spawning.
+        assert_eq!(
+            classify_systemctl_outcome(true, true, true),
+            ServiceState::Unknown
+        );
+        assert_eq!(
+            classify_systemctl_outcome(true, false, false),
+            ServiceState::Unknown
         );
     }
 }

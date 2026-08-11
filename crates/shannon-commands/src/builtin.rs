@@ -3,7 +3,6 @@
 //! Core commands inspired by Claude Code:
 //! - /commit: Create git commits
 //! - /review-pr: Review pull requests
-//! - /pdf: Process PDF documents
 //! - /help: Show command help
 //! - /status: Show git status
 //! - /diff: Show git diff
@@ -32,7 +31,6 @@ mod lsp;
 mod mcp;
 mod memory;
 mod monitor;
-mod pdf;
 mod plan;
 mod preset;
 mod profile;
@@ -74,7 +72,6 @@ pub fn all_commands() -> Vec<Command> {
         plan::command(),
         monitor::command(),
         check::command(),
-        pdf::command(),
         issue::command(),
         help::command(),
         status::command(),
@@ -108,7 +105,6 @@ pub mod commands {
     pub use super::commit::command as commit_command;
     pub use super::diff::command as diff_command;
     pub use super::help::command as help_command;
-    pub use super::pdf::command as pdf_command;
     pub use super::review_pr::command as review_pr_command;
     pub use super::status::command as status_command;
 }
@@ -116,23 +112,18 @@ pub mod commands {
 /// Re-export help utilities for REPL integration
 pub mod help_utils {
     pub use super::help::{
-        CommandHelpEntry, HelpCategory, all_help_entries, generate_help, get_command_help,
-    };
-}
-
-/// Re-export PDF types for external consumers
-pub mod pdf_types {
-    pub use super::pdf::{
-        ImageFormat, PdfContent, PdfImage, PdfMetadata, PdfOptions, PdfPage, PdfTable,
-        get_pdf_prompt,
+        CommandHelpEntry, HelpCategory, all_help_entries, categorize_commands, generate_help,
+        get_command_help,
     };
 }
 
 /// Re-export export utilities for REPL integration
 pub mod export_utils {
     pub use super::export::{
-        ExportFormat, ExportMessage, ExportOptions, ExportSession, SessionMetadata, export_to_json,
-        export_to_markdown, generate_filename, parse_export_args, write_export,
+        ExportFormat, ExportMessage, ExportOptions, ExportSession, SessionMetadata,
+        export_session_from_store, export_session_from_transcript, export_to_json,
+        export_to_markdown, generate_filename, maybe_build_session_from_args, parse_export_args,
+        write_export,
     };
 }
 
@@ -155,7 +146,7 @@ pub mod status_utils {
 pub mod diff_utils {
     pub use super::diff::{
         CategorizedChange, ChangeCategory, DiffAnalysis, DiffAnalyzer, DiffOptions, DiffScope,
-        DiffStats, FileStats, build_diff_command, parse_diff_stat, run_diff_analysis,
+        DiffStats, FileStats, analyze_diff, build_diff_command, parse_diff_stat, run_diff_analysis,
     };
 }
 
@@ -169,8 +160,10 @@ pub mod search_utils {
 /// Re-export debug utilities for REPL integration
 pub mod debug_utils {
     pub use super::debug::{
-        DebugSubcommand, LogLevel, format_debug_help, format_log_response, format_profile_response,
+        DebugSubcommand, LogLevel, current_log_level, filter_internal_entries_below,
+        format_debug_help, format_log_response, format_profile_response, format_runtime_log_status,
         format_system_info, format_trace_response, parse_debug_subcommand, parse_log_level,
+        set_runtime_log_level, to_internal_log_level,
     };
 }
 
@@ -185,8 +178,8 @@ pub mod config_utils {
 /// Re-export PR review utilities for prompt generation and output formatting
 pub mod review_utils {
     pub use super::review_pr::{
-        Assessment, IssueSeverity, ReviewCategory, ReviewIssue, ReviewResult, get_review_prompt,
-        run_pr_analysis,
+        Assessment, IssueSeverity, ReviewCategory, ReviewIssue, ReviewResult, ReviewSuggestion,
+        get_review_prompt, run_pr_analysis,
     };
 }
 
@@ -270,7 +263,6 @@ mod tests {
         assert!(names.contains("status"));
         assert!(names.contains("diff"));
         assert!(names.contains("config"));
-        assert!(names.contains("pdf"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

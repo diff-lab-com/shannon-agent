@@ -3,18 +3,23 @@ use clap::Parser;
 use clap::Subcommand;
 use futures::StreamExt;
 
+mod commands_providers;
+mod loop_command;
 mod mcp_install;
 mod notifications;
+mod triggered_command;
 use shannon_commands::preset_utils::ConversationPreset;
 use shannon_core::{
     i18n,
     model_registry::resolve_model,
+    provider_resolver::{resolve_model_ref, synthesize_default_profile},
     query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata},
     tools::ToolRegistry,
     unified_config::{ConfigBuilder, ShannonConfig},
 };
 use shannon_engine::{api::LlmClientConfig, state::StateManager};
 use shannon_tools::register_default_tools_with_project_dir_ex;
+use shannon_types::model_ref::ModelRef;
 use shannon_ui::Repl;
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
@@ -169,18 +174,39 @@ struct CliConfig {
 
 impl CliConfig {
     /// Get the model, with fallback to environment variable and alias resolution.
+    ///
+    /// Accepts the ADR-0005 `provider/model` qualified form: when the value
+    /// (or `SHANNON_MODEL`) is qualified, the provider prefix is consumed here
+    /// (and surfaced via [`Self::provider`]) and the model is alias-expanded
+    /// **within the named provider** (so `anthropic/sonnet` stays Anthropic).
     fn model(&self) -> Option<String> {
         self.model
             .clone()
             .or_else(|| std::env::var("SHANNON_MODEL").ok())
-            .map(|m| resolve_model(&m, None))
+            .map(|raw| {
+                if let Some(mref) = ModelRef::parse(&raw) {
+                    resolve_model_ref(&mref).model_id
+                } else {
+                    resolve_model(&raw, None)
+                }
+            })
     }
 
-    /// Get the provider, with fallback to environment variable.
+    /// Get the provider, with fallback to environment variable and the
+    /// `provider/model` qualifier embedded in `--model` / `SHANNON_MODEL`.
+    /// An explicit `--provider` / `SHANNON_PROVIDER` always wins.
     fn provider(&self) -> Option<String> {
-        self.provider
+        if let Some(p) = self
+            .provider
             .clone()
             .or_else(|| std::env::var("SHANNON_PROVIDER").ok())
+        {
+            return Some(p);
+        }
+        self.model
+            .clone()
+            .or_else(|| std::env::var("SHANNON_MODEL").ok())
+            .and_then(|raw| ModelRef::parse(&raw).map(|m| m.provider))
     }
 
     /// Get max_tokens, with fallback to environment variable.
@@ -248,8 +274,12 @@ struct ShannonTomlConfig {
     temperature: Option<f32>,
     timeout: Option<u64>,
     debug: Option<bool>,
-    api_key: Option<String>,
-    base_url: Option<String>,
+    /// N1/C-fields: legacy `api_key`/`base_url` removed under no-compat. TOML
+    /// `api_key` is **silently ignored** (would conflict with A1 — plaintext
+    /// never enters the config; use `~/.shannon/secrets.env` instead).
+    /// `base_url` is no longer recognised here either; put it on the
+    /// `provider_model` profile in TOML (full TOML config support is in
+    /// `shannon-cli` via `ConfigBuilder`'s JSON parse path).
     enable_tools: Option<bool>,
     /// User-defined conversation presets.
     presets: HashMap<String, ConversationPreset>,
@@ -293,12 +323,6 @@ fn load_toml_config() -> ShannonTomlConfig {
                 }
                 if cfg.debug.is_some() {
                     merged.debug = cfg.debug;
-                }
-                if cfg.api_key.is_some() {
-                    merged.api_key = cfg.api_key;
-                }
-                if cfg.base_url.is_some() {
-                    merged.base_url = cfg.base_url;
                 }
                 if cfg.enable_tools.is_some() {
                     merged.enable_tools = cfg.enable_tools;
@@ -389,7 +413,7 @@ struct Cli {
     #[arg(short = 'r', long, value_name = "UUID", num_args = 0..=1)]
     resume: Option<String>,
 
-    /// Resume a specific session by UUID (explicit alternative to --resume <UUID>).
+    /// Resume a specific session by UUID (explicit alternative to --resume `<UUID>`).
     /// Example: shannon --resume-id 550e8400-e29b-41d4-a716-446655440000
     #[arg(long = "resume-id", value_name = "UUID")]
     resume_id: Option<String>,
@@ -586,6 +610,103 @@ enum Commands {
 
     /// Run diagnostics: check toolchain, ports, and services.
     Doctor,
+
+    /// List provider profiles configured in `~/.shannon/providers.toml`.
+    ///
+    /// Mirrors the desktop's provider picker. With `--json` prints the full
+    /// `{active, providers}` structure for scripting (never includes raw
+    /// api-key values — credential info is exposed only as `store:<service>`).
+    ListProviders {
+        /// Emit JSON instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Manage provider profiles (add/remove).
+    ///
+    /// Mirrors the desktop's Add Provider / Delete Provider flows. Writes
+    /// through the engine `ProviderConfigStore`, so the CLI and desktop
+    /// join the same `~/.shannon/providers.toml` file.
+    Providers {
+        #[command(subcommand)]
+        command: ProvidersSubcommand,
+    },
+}
+
+/// Subcommands for `shannon providers <add|remove>`.
+#[derive(Subcommand, Debug)]
+enum ProvidersSubcommand {
+    /// Add or replace a provider profile.
+    ///
+    /// Validates the inputs, persists the profile via
+    /// `ProviderConfigStore::upsert_profile`, and (with `--set-active`) makes
+    /// it the active target. Credentials are always stored as
+    /// `CredentialRef::Store { service }` — never as a raw api-key string.
+    Add(ProvidersAddArgs),
+
+    /// Remove a provider profile by id. If the removed profile was the
+    /// active target, the active pointer is cleared (engine falls back to
+    /// synthesis on the next request).
+    Remove {
+        /// The provider id to remove (positional).
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+}
+
+/// Args for `shannon providers add <ID> --kind <KIND> [--base-url …] --model …`.
+///
+/// Mirrors the desktop's Add Provider form. See
+/// `crates/shannon-cli/src/commands_providers.rs` for the validation
+/// surface (canonical tier names only, alias rejection, required base-url
+/// for openai-compatible / ollama, optional `--api-key-ref` that maps to
+/// `CredentialRef::Store { service }`).
+#[derive(clap::Args, Debug)]
+struct ProvidersAddArgs {
+    /// Provider id (positional). Names must be unique across the configured
+    /// `~/.shannon/providers.toml`.
+    #[arg(value_name = "ID")]
+    id: String,
+
+    /// Provider wire-protocol kind.
+    #[arg(long = "kind", value_name = "KIND")]
+    kind: String,
+
+    /// Base URL of the provider endpoint. Required for `--kind
+    /// openai-compatible` and `--kind ollama`; defaults to the canonical
+    /// endpoint for known kinds (anthropic, openai, gemini, deepseek).
+    #[arg(long = "base-url", value_name = "URL")]
+    base_url: Option<String>,
+
+    /// Model id (the primary model for this profile — also written to
+    /// the `--tier` slot when `--tier` is supplied).
+    #[arg(long = "model", value_name = "MODEL")]
+    model: String,
+
+    /// Credential service name. Maps to `CredentialRef::Store { service }`.
+    /// Defaults to the provider id when omitted (one credential per
+    /// provider). The CLI never accepts a raw api-key string.
+    #[arg(long = "api-key-ref", value_name = "SERVICE")]
+    api_key_ref: Option<String>,
+
+    /// Canonical tier name (`fast` / `standard` / `pro`) to assign this
+    /// model to. The persisted schema does not have alias keys (no
+    /// `haiku`/`sonnet`/`opus`), so alias inputs are rejected with a
+    /// helpful error.
+    #[arg(long = "tier", value_name = "TIER")]
+    tier: Option<String>,
+
+    /// Extra header in KEY=VALUE form. Repeatable. Empty key or empty value
+    /// is rejected.
+    #[arg(long = "extra-header", value_name = "KEY=VALUE")]
+    extra_header: Vec<String>,
+
+    /// After upsert, make this provider the active target.
+    /// (`upsert_profile` already pins `active_target` to the new id, but
+    /// the flag is explicit so callers/scripts can read intent from the
+    /// command line.)
+    #[arg(long = "set-active")]
+    set_active: bool,
 }
 
 /// Subcommands for `shannon gateway` (delegated to the external binary).
@@ -702,37 +823,101 @@ fn should_enable_tools(provider: shannon_engine::api::LlmProvider) -> bool {
 
 /// Priority (highest → lowest):
 ///   CLI overrides > env vars (`SHANNON_*`) > local `.shannon.toml` > global `~/.shannon/config.toml`
+///
+/// N1/C-fields: the legacy `ShannonConfig { model, provider, api_key,
+/// base_url, … }` literal is gone. CLI options feed
+/// [`shannon_core::provider_resolver::synthesize_default_profile`] (with
+/// `explicit_cred_var = Some("SHANNON_API_KEY")` so the credential routing is
+/// deterministic) to build the default v2 profile (provider/base_url/model +
+/// a `CredentialRef::Env` pointing at `SHANNON_API_KEY`). The plaintext
+/// api-key value never enters the config (A1-strict); at `From`-time the
+/// value is sourced from the process environment via `resolve_credential`.
+///
+/// The CLI temporarily injects the resolved api-key value into the
+/// `SHANNON_API_KEY` env var so `resolve_credential` can pick it up. This is
+/// restored before returning. **N2 will replace this with proper secrets.env
+/// plumbing** via `crate::config_migration::persist_secrets` —
+/// pre-N1 the same `unsafe std::env` pattern was used by
+/// `apply_env_overrides`, so this preserves A1 and the same overall behaviour.
 fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
-    // 1. Convert the already-parsed CLI options into a ShannonConfig for the
-    //    highest-priority layer. Use the accessor methods which include env var
-    //    fallback (e.g. cli_config.provider() checks SHANNON_PROVIDER).
+    // 1. Resolve the canonical api-key value: SHANNON_API_KEY (or
+    //    cli-injected override) → ANTHROPIC_API_KEY → OPENAI_API_KEY.
+    let api_key_resolved = cli_config
+        .get_env("SHANNON_API_KEY")
+        .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+        .or_else(|| std::env::var("OPENAI_API_KEY").ok());
+
+    // 2. Inject into env so synthesize (which may run multiple times across
+    //    layers) always picks `SHANNON_API_KEY` via the explicit override
+    //    path. Save any prior value so we can restore.
+    let saved_shannon_api_key = std::env::var("SHANNON_API_KEY").ok();
+    let saved_anthropic_api_key = std::env::var("ANTHROPIC_API_KEY").ok();
+    let saved_openai_api_key = std::env::var("OPENAI_API_KEY").ok();
+    if let Some(ref v) = api_key_resolved {
+        // SAFETY: single-threaded CLI startup — no concurrent env readers
+        // observe an inconsistent state. N2 will move this into a
+        // shannon-core-scoped resolver. Last `unsafe std::env::set_var`
+        // wins.
+        unsafe { std::env::set_var("SHANNON_API_KEY", v) };
+    }
+    // SAFETY: see above; clear ANTHROPIC/OPENAI so the canonical chain
+    // (and our explicit-cred_var override) deterministically picks
+    // SHANNON_API_KEY.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+    unsafe { std::env::remove_var("OPENAI_API_KEY") };
+
+    // 3. Synthesize the v2 default profile now that SHANNON_API_KEY is the
+    //    chosen cred var.
+    let provider_model = synthesize_default_profile(
+        cli_config.model().as_deref(),
+        cli_config.provider().as_deref(),
+        cli_config.get_env("SHANNON_BASE_URL").as_deref(),
+        Some("SHANNON_API_KEY"),
+    )
+    .unwrap_or_default();
+
     let cli_overrides = ShannonConfig {
-        model: cli_config.model(),
-        provider: cli_config.provider(),
-        api_key: cli_config
-            .get_env("SHANNON_API_KEY")
-            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
-            .or_else(|| std::env::var("OPENAI_API_KEY").ok()),
-        base_url: cli_config.get_env("SHANNON_BASE_URL"),
         max_tokens: cli_config.max_tokens(),
         temperature: cli_config.temperature(),
         timeout: cli_config.timeout(),
         debug: cli_config.debug(),
         enable_tools: None,
         max_context_tokens: None,
-        ..Default::default()
+        presets: None,
+        permission_profile: None,
+        notifications: None,
+        provider_model,
     };
 
-    // 2. Build the merged ShannonConfig via ConfigBuilder.
+    // 4. Build merged config + convert. (load_env_vars will see
+    //    SHANNON_API_KEY still set and synthesise with the same cred var.)
     let merged = ConfigBuilder::new()
         .load_global_toml()
         .load_local_toml()
         .load_env_vars()
+        .load_connected_profile()
         .set_cli_overrides(cli_overrides)
         .build();
 
-    // 3. Convert to LlmClientConfig (uses the `From<ShannonConfig>` impl).
-    LlmClientConfig::from(merged)
+    let out = LlmClientConfig::from(merged);
+
+    // 5. Restore env (in reverse order; failures don't propagate to avoid
+    //    masking the actual LlmClientConfig result).
+    // SAFETY: see step 2.
+    let restore = |name: &str, prior: Option<String>| {
+        if let Some(v) = prior {
+            // SAFETY: see step 2.
+            unsafe { std::env::set_var(name, v) };
+        } else {
+            // SAFETY: see step 2.
+            unsafe { std::env::remove_var(name) };
+        }
+    };
+    restore("OPENAI_API_KEY", saved_openai_api_key);
+    restore("ANTHROPIC_API_KEY", saved_anthropic_api_key);
+    restore("SHANNON_API_KEY", saved_shannon_api_key);
+
+    out
 }
 
 /// Load a session for resumption.
@@ -1782,21 +1967,14 @@ fn run_serve_command(
             Err(e) => eprintln!("Warning: Team context init failed: {e}"),
         }
 
-        let mut server = shannon_core::api_server::ShannonApiServer::new(client_config)
-            .with_tools(tools)
-            .port(port)
-            .allow_nonloopback(allow_nonloopback);
-
-        if let Some(h) = host.as_deref() {
-            server = server.host(h);
+        if allow_nonloopback && auth_token.is_none() {
+            anyhow::bail!("non-loopback serve requires --auth-token");
         }
-        if let Some(token) = auth_token {
-            server = server.auth_token(token);
-        }
-
         let bind_host = host.as_deref().unwrap_or("127.0.0.1");
         println!("Shannon API server starting on {bind_host}:{port}");
-        server.serve().await.map_err(|e| anyhow::anyhow!("{e}"))
+        return shannon_server::run(bind_host, port, client_config, auth_token)
+            .await
+            .map_err(|e| anyhow::anyhow!(e));
     })
 }
 
@@ -2964,7 +3142,9 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         | Some(Commands::Desktop { .. })
         | Some(Commands::Gateway { .. })
         | Some(Commands::Update)
-        | Some(Commands::Doctor) => CliConfig::default(),
+        | Some(Commands::Doctor)
+        | Some(Commands::ListProviders { .. })
+        | Some(Commands::Providers { .. }) => CliConfig::default(),
     };
 
     // Initialize tracing if debug mode enabled
@@ -2982,7 +3162,13 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     match cli.command {
         None => {
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            if should_resume {
+            let open_picker = cli.resume.is_some() && resume_session_id.is_none();
+            if open_picker {
+                // Bare `--resume` (no id) in interactive mode opens the picker.
+                if let Err(e) = repl.open_session_picker() {
+                    eprintln!("Warning: could not open session picker: {e}");
+                }
+            } else if should_resume {
                 match load_resume_session(resume_session_id) {
                     Ok(session_data) => {
                         let count = repl.restore_session(session_data);
@@ -3002,7 +3188,13 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                     .map_err(|e| anyhow::anyhow!("Failed to set working directory: {e}"))?;
             }
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            if should_resume {
+            let open_picker = cli.resume.is_some() && resume_session_id.is_none();
+            if open_picker {
+                // Bare `--resume` (no id) in interactive mode opens the picker.
+                if let Err(e) = repl.open_session_picker() {
+                    eprintln!("Warning: could not open session picker: {e}");
+                }
+            } else if should_resume {
                 match load_resume_session(resume_session_id) {
                     Ok(session_data) => {
                         let count = repl.restore_session(session_data);
@@ -3218,6 +3410,53 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         Some(Commands::Doctor) => {
             run_doctor_command()?;
         }
+        Some(Commands::ListProviders { json }) => {
+            // Engine store reads from `~/.shannon/providers.toml`. The CLI
+            // and the desktop join the same file (ADR-0005 Phase 2 task 4).
+            let store = shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+            if let Err(e) = commands_providers::run_list_providers(&store, json) {
+                eprintln!("list-providers failed: {e:?}");
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Providers { command }) => match command {
+            ProvidersSubcommand::Add(add_args) => {
+                let parsed_kind = match commands_providers::parse_kind_cli(&add_args.kind) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                };
+
+                let cli_args = commands_providers::AddProviderArgs {
+                    id: add_args.id.clone(),
+                    kind: parsed_kind,
+                    base_url: add_args.base_url.clone(),
+                    model: add_args.model.clone(),
+                    api_key_ref: add_args.api_key_ref.clone(),
+                    tier: add_args.tier.clone(),
+                    extra_header: add_args.extra_header.clone(),
+                    set_active: add_args.set_active,
+                };
+
+                let mut store =
+                    shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+                if let Err(e) = commands_providers::run_providers_add(&mut store, &cli_args) {
+                    eprintln!("providers add failed: {e:?}");
+                    std::process::exit(1);
+                }
+            }
+            ProvidersSubcommand::Remove { id } => {
+                let remove_args = commands_providers::RemoveProviderArgs { id: id.clone() };
+                let mut store =
+                    shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+                if let Err(e) = commands_providers::run_providers_remove(&mut store, &remove_args) {
+                    eprintln!("providers remove failed: {e:?}");
+                    std::process::exit(1);
+                }
+            }
+        },
     }
 
     Ok(())
@@ -3355,6 +3594,72 @@ mod tests {
         assert_eq!(config.temperature(), Some(0.5));
         assert_eq!(config.timeout(), Some(60));
         assert!(config.debug());
+    }
+
+    #[test]
+    fn test_cli_config_qualified_model_routes_provider() {
+        // `--model anthropic/claude-sonnet-4-20250514` (no --provider):
+        // model() returns the bare id, provider() is recovered from the ref.
+        let config = CliConfig {
+            model: Some("anthropic/claude-sonnet-4-20250514".to_string()),
+            provider: None,
+            max_tokens: None,
+            temperature: None,
+            timeout: None,
+            debug: false,
+            env_overrides: HashMap::new(),
+        };
+        assert_eq!(config.model().as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(config.provider().as_deref(), Some("anthropic"));
+    }
+
+    #[test]
+    fn test_cli_config_qualified_model_alias_expands_within_provider() {
+        // `anthropic/sonnet` must expand within Anthropic, not across providers.
+        let config = CliConfig {
+            model: Some("anthropic/sonnet".to_string()),
+            provider: None,
+            max_tokens: None,
+            temperature: None,
+            timeout: None,
+            debug: false,
+            env_overrides: HashMap::new(),
+        };
+        let model = config.model().expect("model resolved");
+        assert_ne!(model, "sonnet");
+        assert!(model.starts_with("claude-"), "got {model}");
+        assert_eq!(config.provider().as_deref(), Some("anthropic"));
+    }
+
+    #[test]
+    fn test_cli_config_explicit_provider_overrides_qualified_model() {
+        // `--provider openai --model anthropic/sonnet`: explicit provider wins.
+        let config = CliConfig {
+            model: Some("anthropic/sonnet".to_string()),
+            provider: Some("openai".to_string()),
+            max_tokens: None,
+            temperature: None,
+            timeout: None,
+            debug: false,
+            env_overrides: HashMap::new(),
+        };
+        assert_eq!(config.provider().as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn test_cli_config_bare_model_unaffected() {
+        // Legacy bare `--model gpt-4o` still works; provider() stays None.
+        let config = CliConfig {
+            model: Some("gpt-4o".to_string()),
+            provider: None,
+            max_tokens: None,
+            temperature: None,
+            timeout: None,
+            debug: false,
+            env_overrides: HashMap::new(),
+        };
+        assert_eq!(config.model().as_deref(), Some("gpt-4o"));
+        assert!(config.provider().is_none());
     }
 
     #[test]
@@ -4305,8 +4610,6 @@ mod tests {
             temperature = 0.7
             timeout = 120
             debug = true
-            api_key = "sk-test"
-            base_url = "https://api.openai.com/v1"
         "#;
         let config: ShannonTomlConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.model.as_deref(), Some("gpt-4o"));
@@ -4315,11 +4618,10 @@ mod tests {
         assert_eq!(config.temperature, Some(0.7));
         assert_eq!(config.timeout, Some(120));
         assert!(config.debug.unwrap());
-        assert_eq!(config.api_key.as_deref(), Some("sk-test"));
-        assert_eq!(
-            config.base_url.as_deref(),
-            Some("https://api.openai.com/v1")
-        );
+        // N1/C-fields: legacy `api_key` / `base_url` are no longer recognised
+        // in ShannonTomlConfig (A1-strict: plaintext never enters the config;
+        // use `~/.shannon/secrets.env` instead for keys, and `provider_model`
+        // for base_url).
     }
 
     #[test]

@@ -1,0 +1,79 @@
+# cargo-audit config for the shannon-agent monorepo.
+#
+# Path matters: cargo-audit 0.22+ discovers project config at
+# `.cargo/audit.toml`, NOT `audit.toml` at the repo root. Moving this
+# file back to the repo root silently disables the ignore list below and
+# turns the `RustSec Advisory Audit` CI job red (every suppressed
+# advisory re-surfaces as a denied warning).
+#
+# The `RustSec Advisory Audit` CI job runs `cargo audit --deny warnings`,
+# which escalates *every* advisory (including unmaintained/unsound
+# informational ones) to a hard error. This file suppresses the same
+# set of advisories that `deny.toml`'s `[advisories].ignore` already
+# vetted and accepted for `cargo deny` (the `Dependency Audit` job).
+#
+# KEEP THIS LIST IN SYNC with `deny.toml` `[advisories].ignore`. The two
+# jobs read the same rustsec.org advisory-db; diverging lists cause
+# either false-green (advisory ignored by one but flagged by the other)
+# or false-red (the noise this file exists to suppress). When you add an
+# ignore to one file, add it to the other in the same change.
+
+[advisories]
+ignore = [
+    # Informational advisories — ecosystem-wide, no fix available without
+    # breaking the dependency chain.
+    "RUSTSEC-2021-0145", # atty - unsound, pervasive in Rust CLIs
+    "RUSTSEC-2024-0375", # proc-macro-error - unmaintained
+    "RUSTSEC-2025-0141", # paste - unmaintained
+    "RUSTSEC-2024-0384", # glob - unmaintained
+    "RUSTSEC-2024-0436", # paste - unmaintained (duplicate)
+    "RUSTSEC-2017-0008", # flatten-tool - unmaintained
+    "RUSTSEC-2024-0320", # yaml-rust - unsound (transitive via syntect)
+    # quick-xml 0.39.4 (via plist 1.9.0 → syntect 5.3.0 → shannon-ui). Two
+    # DoS advisories: 0194 = quadratic duplicate-attribute check, 0195 =
+    # NsReader unbounded namespace-decl allocation. Not exploitable here —
+    # shannon-ui consumes syntect ONLY through compile-time-embedded
+    # ThemeSet/SyntaxSet assets; no attacker-controlled XML reaches
+    # quick-xml. Upgrade blocked upstream: plist 1.9.0 pins quick-xml
+    # ^0.39 and there is no newer plist. See deny.toml for full rationale.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+    # gtk-rs GTK3 bindings - no longer maintained. Pulled in by Tauri /
+    # wry; no GTK3 usage in shannon-agent. Fix requires upstream Tauri to
+    # drop gtk-sys, out of our control.
+    "RUSTSEC-2024-0411", "RUSTSEC-2024-0412", "RUSTSEC-2024-0413",
+    "RUSTSEC-2024-0414", "RUSTSEC-2024-0415", "RUSTSEC-2024-0416",
+    "RUSTSEC-2024-0417", "RUSTSEC-2024-0418", "RUSTSEC-2024-0419",
+    "RUSTSEC-2024-0420",
+    # glib 0.18.5 VariantStrIter unsound — same gtk-rs/GTK3 family, via
+    # atk → gtk → libappindicator → tray-icon → tauri → shannon-desktop.
+    # No GTK3 usage in shannon-agent; upgrade blocked on Tauri dropping gtk-sys.
+    "RUSTSEC-2024-0429",
+    # `instant` is unmaintained — transitive via `tokio` test deps.
+    "RUSTSEC-2024-0370",
+    # `serial` is unmaintained — transitive via test fixtures.
+    "RUSTSEC-2025-0075",
+    # `unic-*` is unmaintained — transitive via `urlpattern` → `tauri-utils`.
+    # Evaluate when Tauri 3 lands.
+    "RUSTSEC-2025-0080", "RUSTSEC-2025-0081",
+    "RUSTSEC-2025-0098", "RUSTSEC-2025-0100",
+    # memmap2 0.8.0 — unchecked pointer offset (unsound). Transitive via
+    # the Tauri / notify / image ecosystem; no attacker-controlled size or
+    # offset drives the mmap regions in our usage (build-time assets,
+    # notification icons, file-watch internals). `cargo audit --deny
+    # warnings` escalates `unsound` to an error; `cargo deny` already
+    # treats it as a non-fatal warning. Upgrade blocked on the parent
+    # crates pinning memmap2 >= 0.9. Re-evaluate when the ecosystem lifts
+    # the floor.
+    "RUSTSEC-2026-0186",
+    # event-listener 5.4.1 — `!Send` tags cross thread boundaries via
+    # StackSlot (unsound). Transitive via zbus → notify-rust →
+    # tauri-plugin-notification → shannon-desktop. Not exploitable: the
+    # Tauri notification path does not share these slots across threads.
+    # Upgrade blocked on zbus bumping event-listener.
+    "RUSTSEC-2026-0221",
+    # lru 0.12.5 — IterMut violates Stacked Borrows (unsound). Transitive
+    # via ratatui → shannon-ui. Not exploitable: shannon-ui never calls
+    # LruCache::iter_mut(). Upgrade blocked on ratatui bumping lru.
+    "RUSTSEC-2026-0002",
+]

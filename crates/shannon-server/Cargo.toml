@@ -1,0 +1,32 @@
+[package]
+name = "shannon-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+description = "HTTP API server for Shannon sessions"
+
+[dependencies]
+axum = { workspace = true, features = ["json"] }
+tower = "0.5"
+tower-http = { workspace = true, features = ["cors", "trace"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+utoipa = { version = "5", features = ["uuid"] }
+utoipa-swagger-ui = { version = "9", optional = true }
+tracing = { workspace = true }
+subtle = "2.6"
+futures = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+shannon-core = { path = "../shannon-core" }
+shannon-engine = { path = "../shannon-engine" }
+
+[features]
+default = []
+swagger-ui = ["dep:utoipa-swagger-ui"]
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

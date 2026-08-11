@@ -221,28 +221,62 @@ const DEFAULT_PRICING_FALLBACK: ModelPricing = ModelPricing {
     output_price_per_mtok: 15.0,
 };
 
-/// Lazily-built pricing table: merge defaults with any runtime overrides.
+/// Lazily-built pricing table: merge the canonical catalog with runtime overrides.
 static PRICING_TABLE: Lazy<HashMap<String, ModelPricing>> = Lazy::new(build_pricing_table);
 
-/// Build the final pricing table by layering overrides on top of defaults.
+/// Seed pricing entries from the canonical `MODEL_CATALOG`.
 ///
-/// Override sources (later wins):
-/// 1. `.shannon-pricing.json` file in the current working directory
-/// 2. `SHANNON_PRICING_JSON` environment variable (JSON string)
+/// Each model contributes its canonical `id` plus every alias, so both exact
+/// and substring lookups resolve to the curated catalog price. This makes the
+/// catalog the single source of truth for pricing — [`DEFAULT_PRICING`] below is
+/// only a gap-filler for patterns the catalog does not yet cover.
+fn seed_catalog_pricing(table: &mut HashMap<String, ModelPricing>) {
+    for info in crate::model_registry::MODEL_CATALOG {
+        let pricing = ModelPricing {
+            input_price_per_mtok: info.cost_per_m_input,
+            output_price_per_mtok: info.cost_per_m_output,
+        };
+        // Canonical id is authoritative — plain insert lets it win over any
+        // legacy duplicate.
+        table.insert(info.id.to_string(), pricing.clone());
+        // Aliases enable exact-match resolution (e.g. "sonnet" -> sonnet price);
+        // first alias wins on collision.
+        for alias in info.aliases {
+            table
+                .entry((*alias).to_string())
+                .or_insert_with(|| pricing.clone());
+        }
+    }
+}
+
+/// Build the final pricing table by layering sources. Catalog ids/aliases are
+/// authoritative; everything else only fills gaps or overrides explicitly.
+///
+/// 1. **`MODEL_CATALOG`** (canonical) — id + aliases, curated in Phase A.
+/// 2. **`DEFAULT_PRICING`** (legacy gap-filler) — substring patterns/models not
+///    yet in the catalog (e.g. free local `"llama"`/`"mistral"`/`"qwen"`).
+///    Never overrides a catalog entry.
+/// 3. `.shannon-pricing.json` file in the current working directory.
+/// 4. `SHANNON_PRICING_JSON` environment variable (highest priority).
 fn build_pricing_table() -> HashMap<String, ModelPricing> {
     let mut table = HashMap::new();
 
-    // Seed with defaults
+    // 1. Canonical catalog source.
+    seed_catalog_pricing(&mut table);
+
+    // 2. Legacy gap-filler (never overrides catalog).
     for (key, pricing) in DEFAULT_PRICING {
-        table.insert(key.to_string(), pricing.clone());
+        table
+            .entry((*key).to_string())
+            .or_insert_with(|| pricing.clone());
     }
 
-    // Layer 1: file overrides
+    // 3. file overrides
     if let Ok(data) = std::fs::read_to_string(".shannon-pricing.json") {
         apply_pricing_overrides(&mut table, &data, "file .shannon-pricing.json");
     }
 
-    // Layer 2: env-var overrides (highest priority)
+    // 4. env-var overrides (highest priority)
     if let Ok(data) = std::env::var("SHANNON_PRICING_JSON") {
         apply_pricing_overrides(&mut table, &data, "env SHANNON_PRICING_JSON");
     }
@@ -285,21 +319,49 @@ fn apply_pricing_overrides(table: &mut HashMap<String, ModelPricing>, json: &str
     }
 }
 
-/// Look up pricing for a model name.  The model string is matched by
-/// substring against the keys in the pricing table (first match wins),
-/// matching the original `contains()` semantics.  Falls back to the default
-/// pricing and emits a debug log for truly unknown models.
-fn lookup_pricing(model: &str) -> ModelPricing {
-    // Check for an exact override first (env/file overrides use exact keys).
+/// Find a curated or overridden price for `model`, without falling back to the
+/// estimate. Exact match wins; otherwise substring (`contains`) against known
+/// keys, mirroring the original semantics. Returns `None` when only the
+/// [`DEFAULT_PRICING_FALLBACK`] estimate would apply (dynamic/custom models).
+fn find_pricing(model: &str) -> Option<&ModelPricing> {
+    // Exact match first (catalog id/alias, and env/file overrides use exact keys).
     if let Some(pricing) = PRICING_TABLE.get(model) {
-        return pricing.clone();
+        return Some(pricing);
     }
 
     // Substring matching against known patterns (mirrors original logic).
     for (key, pricing) in PRICING_TABLE.iter() {
         if model.contains(key.as_str()) {
-            return pricing.clone();
+            return Some(pricing);
         }
+    }
+
+    None
+}
+
+/// Like `find_pricing` but owned and public, for display code that must
+/// distinguish a *known* price (catalog/override) from an *estimate*
+/// (dynamic/custom models with no pricing entry).
+///
+/// Dynamic/custom models absent from the curated table fall through to the
+/// LiteLLM community pricing overlay ([`super::litellm`]) before being declared
+/// unknown, so freshly discovered models show a real price where one exists.
+pub fn pricing_for_model_opt(model: &str) -> Option<ModelPricing> {
+    if let Some(pricing) = find_pricing(model) {
+        return Some(pricing.clone());
+    }
+    super::litellm::lookup_pricing(model)
+}
+
+/// Look up pricing for a model name, falling back to the LiteLLM community
+/// table and then the default estimate, emitting a debug log for truly unknown
+/// models.
+fn lookup_pricing(model: &str) -> ModelPricing {
+    if let Some(pricing) = find_pricing(model) {
+        return pricing.clone();
+    }
+    if let Some(pricing) = super::litellm::lookup_pricing(model) {
+        return pricing;
     }
 
     tracing::debug!(
@@ -618,6 +680,24 @@ pub struct QueryEngineConfig {
     /// If set, complex queries are routed to this model while execution
     /// uses the primary model. Supports aliases: "opus", "sonnet".
     pub plan_model: Option<String>,
+    /// When true, inject a project-wide symbol map (P1-4) into the system
+    /// prompt under a clearly labelled section. Defaults to `true` because
+    /// the map is generated on-demand with a token budget cap and
+    /// degrades gracefully when parsing fails.
+    pub repo_map_enabled: bool,
+    /// Token budget for the repo map injection. Defaults to 2,000 tokens,
+    /// which fits comfortably alongside the rest of the system prompt.
+    pub repo_map_budget_tokens: usize,
+    /// Optional override for the repo map root. Defaults to the current
+    /// working directory when the engine is asked to inject.
+    pub repo_map_root: Option<std::path::PathBuf>,
+    /// Optional auto-test loop config (P1-5). When `Some`, after a successful
+    /// file-modifying tool (`Edit`/`Write`) the engine runs the configured
+    /// test command, parses the result, and — on failure — injects the
+    /// failure into the next LLM context so the model can fix the code.
+    /// Anti-loop guards (`max_iterations`, `total_timeout_secs`,
+    /// `no_progress_strikes`) cap the iteration count.
+    pub auto_test: Option<crate::auto_test::AutoTestConfig>,
 }
 
 impl Default for QueryEngineConfig {
@@ -668,6 +748,10 @@ impl Default for QueryEngineConfig {
             focus_area: None,
             fast_model: None,
             plan_model: None,
+            repo_map_enabled: true,
+            repo_map_budget_tokens: 2_000,
+            repo_map_root: None,
+            auto_test: None,
         }
     }
 }
@@ -1083,6 +1167,47 @@ mod tests {
         // "gpt-4o" should match "gpt-4o" entry, not "gpt-4" or others
         let p = lookup_pricing("gpt-4o");
         assert!((p.input_price_per_mtok - 2.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_pricing_catalog_is_canonical_source() {
+        // Every priced catalog entry must resolve in the pricing table to its
+        // OWN catalog price — proving billing reads the curated catalog (single
+        // source of truth) rather than the divergent DEFAULT_PRICING table.
+        use crate::model_registry::MODEL_CATALOG;
+        let mut checked = 0;
+        for info in MODEL_CATALOG {
+            if info.cost_per_m_input > 0.0 || info.cost_per_m_output > 0.0 {
+                let got = pricing_for_model_opt(info.id).unwrap_or_else(|| {
+                    panic!("catalog model {} missing from pricing table", info.id)
+                });
+                assert!(
+                    (got.input_price_per_mtok - info.cost_per_m_input).abs() < 1e-9,
+                    "input price mismatch for {}: got {}, want {}",
+                    info.id,
+                    got.input_price_per_mtok,
+                    info.cost_per_m_input
+                );
+                assert!(
+                    (got.output_price_per_mtok - info.cost_per_m_output).abs() < 1e-9,
+                    "output price mismatch for {}: got {}, want {}",
+                    info.id,
+                    got.output_price_per_mtok,
+                    info.cost_per_m_output
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "expected at least one priced catalog entry");
+    }
+
+    #[test]
+    fn test_pricing_for_model_opt_honest_about_unknown() {
+        // A dynamic/custom model with no catalog or override entry is honestly
+        // None rather than silently falling back to the $3/$15 estimate.
+        assert!(pricing_for_model_opt("zzz-not-a-real-model-xyz").is_none());
+        // A known catalog model is Some.
+        assert!(pricing_for_model_opt("claude-sonnet-4-20250514").is_some());
     }
 
     #[test]

@@ -2,6 +2,12 @@
 
 > Generated: 2026-04-12
 > Status: Draft, awaiting approval
+> **Update (2026-08-03, P1-1 dead-code cleanup)** — Phase 1.1–1.3 and 2.1
+> (`/diff`, `/review_pr`, `/export`, `/debug`) are now wired. See commit
+> history on `feat/p1-1-dead-code`. The `/pdf` command was removed (file
+> and registration). The remaining dead-code items in this document
+> (Phase 4.1 Agent Coordinator, Phase 5.2-5.4) are deferred per the
+> improvement plan §P1.
 
 This document maps out the planned but partially-implemented feature modules,
 their current state, dependencies, and proposed implementation phases.
@@ -13,81 +19,63 @@ All modules listed below are **registered and reachable** from the main binary
 contain internal dead code — types, functions, or enum variants that are defined
 but not yet exercised by the application flow.
 
+Phase 1.1–1.3 and Phase 2.1 below are exceptions: those `/diff`,
+`/review_pr`, `/export`, and `/debug` commands are now wired end-to-end
+(2026-08-03, P1-1). Each file may still carry `// KEEP:` markers for
+forward-compatibility scaffolding; none of the entry points or types are
+unreachable. `/pdf` was deleted entirely (file, registration, ROADMAP
+entry).
+
 ---
 
 ## Phase 1: Core REPL Enhancements (Priority: P1)
 
-### 1.1 `/diff` Command — Intelligent Diff Viewer
+### 1.1 `/diff` Command — Intelligent Diff Viewer — **WIRED (P1-1)**
 **File**: `crates/shannon-commands/src/builtin/diff.rs`
-**Dead code**: `ChangeCategory` variants, `CategorizedChange` fields,
-`DiffAnalysis` methods, `DiffPattern` regex fields
+**Status**: Done. `DiffAnalyzer` compiles `patterns::*` regexes and
+feeds them through `categorize_line` for every diff line; `DiffAnalysis`
+exposes `summary()`, `has_test_changes()`, `has_doc_changes()`,
+`has_config_changes()`, and `commit_summary()` (conventional-commit
+string). `analyze_diff()` is the canonical end-to-end entry; the
+`run_diff_analysis()` REPL output formatter consumes it.
 
-**Work needed**:
-- Wire `ChangeCategory` classification into the diff output pipeline
-- Implement `DiffAnalysis::summary()` for human-readable change summaries
-- Connect `DiffPattern` regexes to actual diff parsing logic
-- Add `has_test_changes()` detection for smart commit messages
-
-**Dependencies**: None — standalone command
-
-### 1.2 `/review_pr` Command — AI-Powered PR Review
+### 1.2 `/review_pr` Command — AI-Powered PR Review — **WIRED (P1-1)**
 **File**: `crates/shannon-commands/src/builtin/review_pr.rs`
-**Dead code**: `ReviewSeverity` variants, `ReviewCategory` methods,
-`ReviewSuggestion` fields, `PRAnalysis` methods
+**Status**: Done. `ReviewCategory::FromStr` and `IssueSeverity::FromStr`
+reject unknown inputs with descriptive errors. `ReviewSuggestion` is the
+structured-output row (`from_issue` + `to_json`); `REVIEW_PROMPT_SCHEMA_FRAGMENT`
+appended to every prompt instructs the model to emit
+`{"suggestions": [...]}`. `ReviewResult::filter_by_severity(threshold)`
+filters issues; `suggestions_as_json()` groups suggestions for
+downstream consumers. `run_pr_analysis()` already wired to
+`gh pr view` / `gh pr diff`.
 
-**Work needed**:
-- Implement `ReviewCategory::from_str()` for configurable review focus
-- Wire `ReviewSuggestion` into the LLM prompt for structured review output
-- Connect `PRAnalysis` methods to actual git diff analysis
-- Add severity-based filtering and display formatting
-
-**Dependencies**: `diff.rs` (uses categorized diff analysis)
-
-### 1.3 `/export` Command — Session Export
+### 1.3 `/export` Command — Session Export — **WIRED (P1-1)**
 **File**: `crates/shannon-commands/src/builtin/export.rs`
-**Dead code**: `ExportFormat` variants, `ExportOptions` fields,
-`parse_export_args()`, `export_to_markdown()`, `export_to_json()`
-
-**Work needed**:
-- Implement `export_to_markdown()` with proper formatting
-- Implement `export_to_json()` with structured output
-- Wire `ExportOptions` into the command handler
-- Add file attachment handling for exports
-
-**Dependencies**: `session_transcript` module for conversation history
+**Status**: Done. `export_to_markdown()` and `export_to_json()` are
+implemented with `ExportOptions` plumbing
+(`include_metadata` / `include_timestamps` / `sanitize`). New adapter
+functions `export_session_from_transcript`, `export_session_from_store`,
+and `maybe_build_session_from_args` pull live history from
+`shannon_core::session_transcript::TranscriptStore`. File attachment
+handling is left for P2-5c (chat upgrade).
 
 ---
 
-## Phase 2: Document Processing (Priority: P2)
+## Phase 2: Debug & Developer Tools (Priority: P2)
 
-### 2.1 `/pdf` Command — PDF Processing
-**File**: `crates/shannon-commands/src/builtin/pdf.rs`
-**Dead code**: `ImageFormat` variants, `PdfTable` fields and methods,
-`PdfPage` extraction methods
-
-**Work needed**:
-- Implement `PdfTable::to_text()` for table extraction
-- Wire `ImageFormat` into image extraction pipeline
-- Add OCR integration for scanned PDFs
-- Implement page-range selection via `PdfPage` methods
-
-**Dependencies**: External `pdf` crate or similar PDF library
-
----
-
-## Phase 3: Debug & Developer Tools (Priority: P2)
-
-### 3.1 `/debug` Command — Debug Instrumentation
+### 2.1 `/debug` Command — Debug Instrumentation — **WIRED (P1-1)**
 **File**: `crates/shannon-commands/src/builtin/debug.rs`
-**Dead code**: `DebugCategory` variants, `LogLevel` variants
-
-**Work needed**:
-- Wire `DebugCategory` into debug command filtering
-- Connect `LogLevel` to the `InternalLogger` in shannon-core
-- Add profiling sub-command using timing instrumentation
-- Implement log level switching at runtime
-
-**Dependencies**: `internal_logging` module in shannon-core
+**Status**: Done. `LogLevel` derives `PartialOrd` + `Ord` and `FromStr`;
+`to_internal_log_level` bridges to `shannon_core::internal_logging::InternalLogLevel`
+(Trace→Debug collapse is deliberate). Process-wide runtime override
+via `set_runtime_log_level` / `current_log_level` satisfies "runtime log
+level switching at runtime"; resolution order is explicit override →
+`SHANNON_LOG_LEVEL` env → `RUST_LOG` hint → `Info` default.
+`filter_internal_entries_below` queries the in-memory `InternalLogger`
+buffer. The `DebugCategory` enum the plan referenced is named
+`DebugSubcommand` in current code (`Log`/`Profile`/`Trace`/`Info`/`Help`);
+filtering goes through `parse_debug_subcommand` + `parse_log_level`.
 
 ---
 
@@ -137,8 +125,7 @@ not yet called from the application layer:
 | 1.1 diff | Medium | High | Low | 1st |
 | 1.2 review_pr | Medium | High | Low | 2nd |
 | 1.3 export | Low | Medium | Low | 3rd |
-| 2.1 pdf | High | Medium | Medium | 6th |
-| 3.1 debug | Low | Medium | Low | 4th |
+| 2.1 debug | Low | Medium | Low | 4th |
 | 4.1 coordinator | High | High | High | 7th |
 | 5.x core enhancements | Variable | Medium | Low | 5th |
 

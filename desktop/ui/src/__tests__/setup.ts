@@ -61,6 +61,16 @@ global.ResizeObserver = ResizeObserverMock as any
 // Mock scrollIntoView for jsdom
 Element.prototype.scrollIntoView = vi.fn()
 
+// jsdom doesn't implement scrollTo / scrollHeight / scrollTop uniformly,
+// so alias scrollTo and stub the read-only layout properties via
+// Object.defineProperty (direct assignment triggers jsdom's strict setter
+// guard). Used by StreamingResponse's auto-scroll + jump-to-bottom.
+Element.prototype.scrollTo = vi.fn() as unknown as HTMLElement['scrollTo']
+Object.defineProperty(HTMLElement.prototype, 'scrollTop', { configurable: true, get() { return 0 }, set() { /* noop */ } })
+Object.defineProperty(HTMLElement.prototype, 'scrollLeft', { configurable: true, get() { return 0 }, set() { /* noop */ } })
+Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get() { return 0 } })
+Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get() { return 0 } })
+
 // Mock getAnimations for base-ui ScrollArea
 Element.prototype.getAnimations = vi.fn().mockReturnValue([])
 
@@ -127,9 +137,14 @@ vi.mock('@/lib/tauri-api', () => ({
   saveProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   deleteProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   setActiveProvider: vi.fn().mockResolvedValue(undefined),
+  // ADR-0005 P4.12 — fan-out probe. Default: empty roster.
+  testAllProviders: vi.fn().mockResolvedValue([]),
   listModels: vi.fn().mockResolvedValue([
     { id: 'claude-sonnet-4-6', name: 'Claude Sonnet', provider: 'anthropic', context_window: 200000 },
   ]),
+  // ADR-0005 P4.9 — provider allowlist. Default: no override (returns
+  // env-var state or null).
+  getProviderAllowlist: vi.fn().mockResolvedValue(null),
   getStatus: vi.fn().mockResolvedValue({
     provider: 'anthropic',
     model: 'claude-sonnet-4-6',
@@ -206,6 +221,26 @@ vi.mock('@/lib/tauri-api', () => ({
   markTriageRead: vi.fn().mockResolvedValue(undefined),
   archiveTriageItem: vi.fn().mockResolvedValue(undefined),
   transcribeAudio: vi.fn().mockResolvedValue({ text: 'mock transcript' }),
+  // P2-5e — local voice (whisper-rs). Default: returns the same
+  // mock transcript as the cloud path so existing tests don't
+  // regress; per-test `vi.mocked(...)` overrides cover the
+  // STT_* error codes (model-not-found, inference-failed, …).
+  transcribeAudioLocal: vi.fn().mockResolvedValue({ text: 'mock transcript' }),
+  transcribeAudioLocalBase64: vi.fn().mockResolvedValue({ text: 'mock transcript' }),
   getSttConfig: vi.fn().mockResolvedValue(null),
   saveSttConfig: vi.fn().mockResolvedValue(undefined),
+  getVoiceLocalConfig: vi.fn().mockResolvedValue({
+    enabled: false,
+    model: null,
+    language: null,
+    auto_download: true,
+  }),
+  saveVoiceLocalConfig: vi.fn().mockResolvedValue(undefined),
+  listWhisperModels: vi.fn().mockResolvedValue([]),
+  downloadWhisperModel: vi.fn().mockResolvedValue('/tmp/dummy'),
+  deleteWhisperModel: vi.fn().mockResolvedValue(false),
+  // P2-5c — attachment uploads. Default: empty payloads, sane cap.
+  readAttachment: vi.fn().mockResolvedValue({ mime: 'application/octet-stream', name: '', size: 0 }),
+  readAttachments: vi.fn().mockResolvedValue([]),
+  MAX_ATTACHMENT_COUNT: 10,
 }))

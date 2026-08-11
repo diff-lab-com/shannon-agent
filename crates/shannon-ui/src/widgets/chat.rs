@@ -13,7 +13,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
 };
@@ -108,6 +108,29 @@ pub(super) fn highlight_code_cached(
 // ── Message height estimation ──────────────────────────────────────────
 
 /// Estimate the number of terminal rows a message will occupy.
+/// Cached inputs for the welcome-screen StatusCard (ADR-0008 P3-1).
+///
+/// The welcome view used to call `available_providers()`, rebuild the merged
+/// catalog per provider, and parse `~/.shannon/providers.toml` on **every
+/// animation frame**. This cache stores the result instead. It is invalidated
+/// by:
+/// - [`ChatWidget::set_active`] — fires on every provider/model switch and on
+///   `/connect` / `/disconnect` (both clear the cache, so the connection
+///   markers update immediately).
+/// - an overlay-generation mismatch — a background models.dev refresh that
+///   lands after a `/connect` bumps the generation, so the next frame rebuilds
+///   `available` and picks up the new models.
+#[derive(Clone)]
+struct StatusCardCache {
+    /// `(provider_slug, model_ids)` in catalog order, merged-catalog overlay
+    /// applied.
+    available: Vec<(String, Vec<String>)>,
+    /// Slugs with a persisted provider config in `providers.toml`.
+    connected: Vec<String>,
+    /// `overlay_generation()` observed when `available` was built.
+    generation: u64,
+}
+
 /// Chat message widget
 pub struct ChatWidget {
     /// All chat messages
@@ -132,6 +155,15 @@ pub struct ChatWidget {
     column: super::column::ColumnRenderable,
     /// Lines buffered for scrollback insertion on next draw_frame()
     pub pending_scrollback: Vec<ratatui::text::Line<'static>>,
+    /// Active provider id for status card (e.g., "anthropic"). `None` if unconfigured.
+    pub active_provider: Option<String>,
+    /// Active model id for status card. `None` if unconfigured.
+    pub active_model: Option<String>,
+    /// Active tier label for status card (e.g., "fast"/"standard"/"pro"). `None` if unknown.
+    pub active_tier: Option<String>,
+    /// Cached welcome-screen StatusCard inputs — avoids per-frame disk I/O and
+    /// catalog rebuilds (ADR-0008 P3-1). See [`StatusCardCache`].
+    status_card_cache: std::sync::Mutex<Option<StatusCardCache>>,
 }
 
 /// A single chat message
@@ -198,6 +230,29 @@ impl ChatWidget {
             committed_width: std::sync::atomic::AtomicU16::new(0),
             column: super::column::ColumnRenderable::new(),
             pending_scrollback: Vec::new(),
+            active_provider: None,
+            active_model: None,
+            active_tier: None,
+            status_card_cache: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Set the active provider/model/tier used by the welcome-screen StatusCard.
+    pub fn set_active(
+        &mut self,
+        provider: Option<String>,
+        model: Option<String>,
+        tier: Option<String>,
+    ) {
+        self.active_provider = provider;
+        self.active_model = model;
+        self.active_tier = tier;
+        // A provider/model switch (or a /connect /disconnect that calls
+        // sync_active_to_chat) can change the connection set, so drop the
+        // cached StatusCard inputs. The catalog half is also rebuilt on the
+        // next frame if the overlay generation moved. (ADR-0008 P3-1.)
+        if let Ok(mut cache) = self.status_card_cache.lock() {
+            *cache = None;
         }
     }
 
@@ -693,6 +748,92 @@ impl ChatWidget {
             let border = b.fg(theme.border_dim);
             let sep = "\u{2500}".repeat(sep_w);
 
+            // Allocate top portion for the StatusCard when there's enough vertical space;
+            // the remaining area holds the welcome text.
+            let (status_card_area, welcome_area) = if inner.height > 10 {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Length(8), Constraint::Min(0)])
+                    .split(inner);
+                (Some(chunks[0]), chunks[1])
+            } else {
+                (None, inner)
+            };
+
+            if let Some(card_area) = status_card_area {
+                use crate::widgets::status_card::{CardStatus, render_status_card};
+
+                let status = if self.active_provider.is_some() {
+                    CardStatus::Configured
+                } else {
+                    CardStatus::Unconfigured
+                };
+
+                // Cached catalog snapshot + connection set so the welcome screen
+                // doesn't parse providers.toml and rebuild the merged catalog on
+                // every animation frame. The cache is rebuilt only when it was
+                // cleared by `set_active` (every /connect, /disconnect, and
+                // provider/model switch) or when the models.dev overlay
+                // generation moved (a background refresh landing after a
+                // /connect). One merged-catalog source of truth, shared with
+                // the /connect dashboard via `connected_slugs`
+                // (ADR-0008 Decision 3 + P3-1).
+                if let Ok(mut cache_cell) = self.status_card_cache.lock() {
+                    let overlay_gen = shannon_core::model_registry::dynamic::overlay_generation();
+                    let stale = cache_cell
+                        .as_ref()
+                        .is_none_or(|c| c.generation != overlay_gen);
+                    if stale {
+                        // Real catalog: models.dev dynamic overlay merged over the
+                        // static MODEL_CATALOG, grouped by provider (in catalog
+                        // order). ratatui's List clips beyond card height. Honours
+                        // the SHANNON_*_PROVIDERS allowlist/denylist
+                        // (ADR-0005 Phase 5).
+                        let available: Vec<(String, Vec<String>)> =
+                            shannon_core::model_registry::available_providers()
+                                .into_iter()
+                                .map(|p| {
+                                    let slug = shannon_core::provider_resolver::llm_provider_id(&p);
+                                    let models: Vec<String> =
+                                        shannon_core::model_registry::merged_models_for_provider(p)
+                                            .into_iter()
+                                            .map(|m| m.id.to_string())
+                                            .collect();
+                                    (slug, models)
+                                })
+                                .collect();
+                        // Real connection state: provider ids persisted in
+                        // providers.toml (via /connect or /model --save). Same
+                        // helper the /connect dashboard uses.
+                        let connected: Vec<String> =
+                            shannon_core::provider_config_store::connected_slugs()
+                                .into_iter()
+                                .collect();
+                        *cache_cell = Some(StatusCardCache {
+                            available,
+                            connected,
+                            generation: overlay_gen,
+                        });
+                    }
+                    // Borrow the cached data for drawing — no per-frame clone;
+                    // the guard drops as soon as the card is drawn.
+                    if let Some(cache) = cache_cell.as_ref() {
+                        let connected_refs: Vec<&str> =
+                            cache.connected.iter().map(|s| s.as_str()).collect();
+                        render_status_card(
+                            frame,
+                            card_area,
+                            status,
+                            self.active_provider.as_deref(),
+                            self.active_model.as_deref(),
+                            self.active_tier.as_deref(),
+                            &cache.available,
+                            &connected_refs,
+                        );
+                    }
+                }
+            }
+
             let mut welcome_lines = vec![
                 ratatui::text::Line::from(""),
                 ratatui::text::Line::from(vec![
@@ -746,7 +887,7 @@ impl ChatWidget {
             ];
 
             // Keyboard shortcuts row (only if enough vertical space)
-            if inner.height >= 16 {
+            if welcome_area.height >= 16 {
                 welcome_lines.push(ratatui::text::Line::from(""));
                 welcome_lines.push(ratatui::text::Line::from(vec![
                     ratatui::text::Span::styled("  ", b),
@@ -762,7 +903,7 @@ impl ChatWidget {
             }
 
             let welcome = ratatui::widgets::Paragraph::new(welcome_lines);
-            frame.render_widget(welcome, inner);
+            frame.render_widget(welcome, welcome_area);
             return;
         }
 
@@ -2064,6 +2205,31 @@ mod tests {
         assert!(!msg.thinking_expanded);
         assert!(msg.thinking_duration_secs.is_none());
         assert!(msg.diff_stats.is_none());
+    }
+
+    #[test]
+    fn set_active_invalidates_status_card_cache() {
+        // P3-1: a provider/model switch (or /connect //disconnect via
+        // sync_active_to_chat) must drop the cached StatusCard inputs so the
+        // connection markers refresh on the next render instead of going stale.
+        let mut w = ChatWidget::new(8);
+        *w.status_card_cache.lock().unwrap() = Some(StatusCardCache {
+            available: vec![("anthropic".to_string(), vec!["claude-sonnet-4".to_string()])],
+            connected: vec!["anthropic".to_string()],
+            generation: 7,
+        });
+        w.set_active(
+            Some("anthropic".to_string()),
+            Some("claude-sonnet-4".to_string()),
+            Some("standard".to_string()),
+        );
+        assert!(
+            w.status_card_cache.lock().unwrap().is_none(),
+            "set_active must clear the StatusCard cache"
+        );
+        // And the active fields themselves are still set.
+        assert_eq!(w.active_provider.as_deref(), Some("anthropic"));
+        assert_eq!(w.active_model.as_deref(), Some("claude-sonnet-4"));
     }
 
     #[test]

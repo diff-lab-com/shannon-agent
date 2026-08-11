@@ -325,7 +325,7 @@ impl CustomAgentDef {
 
     /// Parse a single `.md` file into a `CustomAgentDef`.
     ///
-    /// Convenience wrapper around [`CustomAgentLoader::parse_file`].
+    /// Convenience wrapper around `CustomAgentLoader::parse_file`.
     pub fn from_file(path: &Path) -> Result<Self, CustomAgentError> {
         CustomAgentLoader::parse_file(path)
     }

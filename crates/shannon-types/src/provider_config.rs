@@ -1,0 +1,481 @@
+//! v2 multi-provider/model protocol-schema vocabulary for shannon-agent.
+//!
+//! Defines the cross-sibling protocol contract (Rust → JSON Schema → consumed by
+//! shannon-desktop + shannon-gateway). Encodes decisions A1 (env-default credentials,
+//! no plaintext in v2), B3 (phased: profile + multiplex routing, default off), and C1
+//! (one-shot v1→v2 migration). The emitted schema lives at
+//! `crates/shannon-types/schema/provider-model-config.schema.json`.
+//!
+//! ⚠ If you change types in this file, you MUST also update the redeclaration block
+//! in `build.rs` (`build.rs:~356–557`) — `schemars::schema_for!` only sees the build.rs
+//! stubs. Drift = schema silently diverges from Rust types. See ledger note.
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum ProviderKind {
+    Anthropic,
+    #[serde(rename = "openai")]
+    OpenAi,
+    #[serde(rename = "openai-compatible")]
+    OpenAiCompatible,
+    Ollama,
+    Gemini,
+    Deepseek,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum Scope {
+    Process,
+    Session,
+    Project,
+    Global,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ModelSource {
+    Catalog,
+    Discovered,
+    #[default]
+    UserDeclared,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AuxRole {
+    Vision,
+    WebExtract,
+    Compression,
+    TitleGeneration,
+    SessionSearch,
+}
+
+/// 凭据引用。A1 决议：Env 是默认/可用性下界；Keyring 机会性可选（探测失败静默降级）。
+/// v2 结构化配置永不存明文——InlineLegacy 仅迁移过渡期，迁移后转 Env/Keyring。
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(tag = "backend", rename_all = "snake_case")]
+pub enum CredentialRef {
+    /// 默认后端：环境变量（CI / ~/.shannon/secrets.env chmod 0600）
+    Env { var: String },
+    /// Shannon 凭据存储后端：值落在 `~/.shannon/credentials/<service>.json`
+    /// （0600）。这是 `/connect`、`/credentials` 写入、请求路径读取的统一
+    /// 后端（ADR-0005 Phase 1）。读取由 provider_resolver 完成；缺失时返回
+    /// 空，调用方自然回退到 provider 的 env 链。
+    Store { service: String },
+    /// 机会性可选：仅探测到 D-Bus secret-service 可用时启用
+    Keyring { service: String, account: String },
+    /// 迁移过渡期：已 mask 的旧明文，迁移完成后清除
+    InlineLegacy { masked: String },
+    /// 会话内临时注入，不落盘
+    Ephemeral,
+}
+
+/// 原子切换单元：provider+model+scope 同组切换，杜绝半切换不一致（P3）。
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+pub struct ActiveTarget {
+    pub provider_id: String,
+    pub model_id: String,
+    pub scope: Scope,
+}
+
+/// 温度发送策略：None=用调用方默认；Omit=完全不发（如 Kimi 服务端自管）
+#[derive(Debug, Clone, Copy, PartialEq, JsonSchema, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TemperatureStrategy {
+    #[default]
+    Default,
+    Omit,
+}
+
+/// 首期最小集（避免 Hermes 20+ 布尔标志反模式）
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+pub struct ProviderQuirks {
+    pub temperature_strategy: TemperatureStrategy,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub max_tokens_override: Option<u32>,
+    #[serde(default = "default_true")]
+    pub send_temperature: bool,
+}
+
+impl Default for ProviderQuirks {
+    fn default() -> Self {
+        Self {
+            temperature_strategy: TemperatureStrategy::default(),
+            max_tokens_override: None,
+            send_temperature: default_true(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, JsonSchema)]
+pub struct ProviderTiers {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pro: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderProfile {
+    pub id: String,
+    pub kind: ProviderKind,
+    pub display_name: String,
+    pub base_url: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub models_url: Option<String>, // None → {base_url}/models
+    pub credential: CredentialRef,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra_headers: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub default_max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_models: Vec<String>,
+    #[serde(default)]
+    pub quirks: ProviderQuirks,
+    #[serde(default)]
+    pub tiers: ProviderTiers,
+}
+
+/// Provider 注册的模型目录条目（context 限制、工具支持、来源标签）。
+/// 写权限在 catalog；运行期只读。
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+pub struct ModelDescriptor {
+    pub id: String,
+    pub provider_id: String,
+    pub display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub context_limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_limit: Option<u32>,
+    #[serde(default)]
+    pub supports_tools: bool,
+    #[serde(default)]
+    pub supports_vision: bool,
+    #[serde(default)]
+    pub source: ModelSource,
+    #[serde(default)]
+    pub available: bool,
+}
+
+/// 命名 profile（providers + active target + credential scope）。
+/// 同一 v2 config 可承载多个 profile（gateway multiplex 路由按
+/// `ProfileRoute.specificity_weight` 选路），单 profile 场景下
+/// gateway 默认 off，字节级等同 v1 行为。
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+pub struct ModelProfile {
+    #[serde(default)]
+    pub name: String,
+    pub active_target: ActiveTarget,
+    #[serde(default)]
+    pub providers: Vec<ProviderProfile>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub auxiliary: HashMap<AuxRole, ActiveTarget>,
+    /// C1 两层凭据解析（默认 Shared；isolated 时独立解析，互不影响）
+    #[serde(default)]
+    pub credential_scope: CredentialScope,
+}
+
+/// v2 多 provider/model 协议 schema 顶层文档。
+///
+/// 承载 A1（env-default credentials, 永不存明文）/ B3（phased profile +
+/// multiplex routing, 默认 off）/ C1（v1→v2 one-shot 迁移前置 version
+/// 字段）。`version` 必须 = `VERSION`；迁移逻辑见 Φ1。
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+pub struct ProviderModelConfig {
+    pub version: u32, // = VERSION
+    pub profiles: HashMap<String, ModelProfile>,
+    /// B3 契约：网关多 profile 路由（默认 off，字节级等同单 profile）
+    #[serde(default)]
+    pub gateway: GatewayConfig,
+}
+
+impl ProviderModelConfig {
+    /// 当前 schema version。`ProviderModelConfig::version` 字段必须等于此常量。
+    pub const VERSION: u32 = 2;
+}
+
+/// N1: a `Default` so `ShannonConfig` (which embeds this via `#[serde(default)]`)
+/// can keep its `#[derive(Default)]`. Empty profiles → no active target → the
+/// legacy v1 flat fields / Ollama default are used. `version` is pinned to
+/// `VERSION`; no schema impact (T5 stays green).
+impl Default for ProviderModelConfig {
+    fn default() -> Self {
+        Self {
+            version: Self::VERSION,
+            profiles: HashMap::new(),
+            gateway: Default::default(),
+        }
+    }
+}
+
+/// C1 两层凭据解析：默认 Shared（沿用旧单 profile 语义）；
+/// Isolated 表示该 profile 独立解析凭据，互不影响。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialScope {
+    #[default]
+    Shared,
+    Isolated,
+}
+
+/// B3 契约：profile 路由条目。specificity 由 `specificity_weight` 计算：
+/// session(8) > project(4) > tenant(2)，client_id 不参与评分。
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+pub struct ProfileRoute {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tenant_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub project_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub client_id: Option<String>,
+    pub profile: String,
+    #[serde(default = "default_route_enabled")]
+    pub enabled: bool,
+}
+
+fn default_route_enabled() -> bool {
+    true
+}
+
+/// B3 契约：网关级 multiplex 路由配置。`multiplex_profiles=false`（默认）时
+/// `profile_routes` 完全被忽略，行为字节级等同单 profile。
+#[derive(Debug, Clone, Default, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+pub struct GatewayConfig {
+    #[serde(default)]
+    pub multiplex_profiles: bool,
+    #[serde(default)]
+    pub profile_routes: Vec<ProfileRoute>,
+}
+
+/// 计算路由条目的 specificity 加权值。
+/// 规则：session=8 / project=4 / tenant=2，按字段是否设置累加；未设置=0。
+/// client_id 不参与评分（仅用于 audit / 标识，不影响选路）。
+pub fn specificity_weight(r: &ProfileRoute) -> u32 {
+    let mut w: u32 = 0;
+    if r.session_id.is_some() {
+        w += 8;
+    }
+    if r.project_path.is_some() {
+        w += 4;
+    }
+    if r.tenant_id.is_some() {
+        w += 2;
+    }
+    w
+}
+
+/// Model tier. Canonical names are `fast`/`standard`/`pro`/`auto`.
+/// Aliases (input-only) include Anthropic's `haiku`/`sonnet`/`opus`
+/// and provider-native names (`flash`/`mini`/`plus`/`ultra`/`max`).
+///
+/// `Auto` is an input-only tier: `/model --tier auto` resolves it to a
+/// concrete tier via a lightweight best-default heuristic (standard → pro →
+/// fast; ADR-0005 decision ②) — not the full task-type router (spec §11).
+/// `Auto` is never persisted; only the resolved concrete tier is stored.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TierName {
+    Fast,
+    Standard,
+    Pro,
+    Auto,
+}
+
+impl TierName {
+    /// Canonical lowercase name (used in toml, logs, status pills).
+    pub fn canonical(self) -> &'static str {
+        match self {
+            TierName::Fast => "fast",
+            TierName::Standard => "standard",
+            TierName::Pro => "pro",
+            TierName::Auto => "auto",
+        }
+    }
+
+    /// Human-readable display label (capitalized, used in UI).
+    pub fn display(self) -> &'static str {
+        match self {
+            TierName::Fast => "Fast",
+            TierName::Standard => "Standard",
+            TierName::Pro => "Pro",
+            TierName::Auto => "Auto",
+        }
+    }
+
+    /// Normalize any accepted user input to canonical TierName.
+    /// Accepts canonical names + Anthropic aliases + other provider-native
+    /// aliases. Case-insensitive. Returns None for unrecognized input.
+    pub fn from_user_input(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            // Canonical
+            "fast" => Some(TierName::Fast),
+            "standard" => Some(TierName::Standard),
+            "pro" => Some(TierName::Pro),
+            "auto" => Some(TierName::Auto),
+            // Aliases → Fast
+            "flash" | "mini" | "nano" | "haiku" => Some(TierName::Fast),
+            // Aliases → Standard
+            "plus" | "sonnet" | "medium" | "turbo" => Some(TierName::Standard),
+            // Aliases → Pro
+            "opus" | "ultra" | "max" | "large" => Some(TierName::Pro),
+            _ => None,
+        }
+    }
+
+    /// Tab-completion suggestions shown to the user.
+    /// Order: canonical first, then Anthropic aliases, then other aliases.
+    pub fn suggestions() -> &'static [&'static str] {
+        &[
+            "fast", "standard", "pro", "auto", "haiku", "sonnet", "opus", "flash", "mini", "plus",
+            "ultra", "max",
+        ]
+    }
+}
+
+#[cfg(test)]
+mod tier_name_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_is_lowercase() {
+        assert_eq!(TierName::Fast.canonical(), "fast");
+        assert_eq!(TierName::Standard.canonical(), "standard");
+        assert_eq!(TierName::Pro.canonical(), "pro");
+        assert_eq!(TierName::Auto.canonical(), "auto");
+    }
+
+    #[test]
+    fn from_user_input_accepts_canonical() {
+        assert_eq!(TierName::from_user_input("fast"), Some(TierName::Fast));
+        assert_eq!(
+            TierName::from_user_input("standard"),
+            Some(TierName::Standard)
+        );
+        assert_eq!(TierName::from_user_input("pro"), Some(TierName::Pro));
+        assert_eq!(TierName::from_user_input("auto"), Some(TierName::Auto));
+    }
+
+    #[test]
+    fn from_user_input_accepts_anthropic_aliases() {
+        assert_eq!(TierName::from_user_input("haiku"), Some(TierName::Fast));
+        assert_eq!(
+            TierName::from_user_input("sonnet"),
+            Some(TierName::Standard)
+        );
+        assert_eq!(TierName::from_user_input("opus"), Some(TierName::Pro));
+    }
+
+    #[test]
+    fn from_user_input_accepts_other_provider_aliases() {
+        assert_eq!(TierName::from_user_input("flash"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("mini"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("plus"), Some(TierName::Standard));
+        assert_eq!(TierName::from_user_input("ultra"), Some(TierName::Pro));
+        assert_eq!(TierName::from_user_input("max"), Some(TierName::Pro));
+    }
+
+    #[test]
+    fn from_user_input_is_case_insensitive() {
+        assert_eq!(TierName::from_user_input("FAST"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("Haiku"), Some(TierName::Fast));
+        assert_eq!(TierName::from_user_input("oPuS"), Some(TierName::Pro));
+    }
+
+    #[test]
+    fn from_user_input_rejects_unknown() {
+        assert_eq!(TierName::from_user_input(""), None);
+        assert_eq!(TierName::from_user_input("xyz"), None);
+        assert_eq!(TierName::from_user_input("turbo-xl"), None);
+    }
+
+    #[test]
+    fn canonical_round_trips_through_from_user_input() {
+        for tier in [
+            TierName::Fast,
+            TierName::Standard,
+            TierName::Pro,
+            TierName::Auto,
+        ] {
+            assert_eq!(TierName::from_user_input(tier.canonical()), Some(tier));
+        }
+    }
+
+    #[test]
+    fn suggestions_starts_with_canonical() {
+        let s = TierName::suggestions();
+        assert_eq!(s[0], "fast");
+        assert_eq!(s[1], "standard");
+        assert_eq!(s[2], "pro");
+        assert_eq!(s[3], "auto");
+        // Anthropic aliases present
+        assert!(s.contains(&"haiku"));
+        assert!(s.contains(&"sonnet"));
+        assert!(s.contains(&"opus"));
+    }
+
+    #[test]
+    fn provider_profile_round_trip_with_tiers() {
+        let profile = ProviderProfile {
+            id: "anthropic".to_string(),
+            kind: ProviderKind::Anthropic,
+            display_name: "Anthropic".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            models_url: None,
+            credential: CredentialRef::Env {
+                var: "ANTHROPIC_API_KEY".to_string(),
+            },
+            extra_headers: Default::default(),
+            default_max_tokens: None,
+            fallback_models: vec![],
+            quirks: ProviderQuirks::default(),
+            tiers: ProviderTiers {
+                fast: Some("claude-haiku-4-5".to_string()),
+                standard: Some("claude-sonnet-4-20250514".to_string()),
+                pro: Some("claude-opus-4".to_string()),
+            },
+        };
+
+        let toml_str = toml::to_string(&profile).expect("serialize");
+        assert!(toml_str.contains("fast = \"claude-haiku-4-5\""));
+        assert!(toml_str.contains("standard = \"claude-sonnet-4-20250514\""));
+        assert!(toml_str.contains("pro = \"claude-opus-4\""));
+
+        let parsed: ProviderProfile = toml::from_str(&toml_str).expect("deserialize");
+        assert_eq!(parsed.tiers.fast, profile.tiers.fast);
+        assert_eq!(parsed.tiers.standard, profile.tiers.standard);
+        assert_eq!(parsed.tiers.pro, profile.tiers.pro);
+    }
+
+    #[test]
+    fn provider_profile_round_trip_without_tiers_uses_default() {
+        // Existing toml files without `tiers` should still parse
+        let minimal_toml = r#"
+            id = "anthropic"
+            kind = "anthropic"
+            display_name = "Anthropic"
+            base_url = "https://api.anthropic.com"
+            credential = { backend = "env", var = "ANTHROPIC_API_KEY" }
+        "#;
+        let parsed: ProviderProfile = toml::from_str(minimal_toml).expect("deserialize");
+        assert_eq!(parsed.tiers, ProviderTiers::default());
+    }
+}

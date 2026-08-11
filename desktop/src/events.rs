@@ -29,7 +29,7 @@ pub use shannon_types::events::{
     QueryCancelledPayload, QueryCompletedPayload, QueryFailedPayload, QueryTextPayload,
     SessionInfo, SessionLoaded, TaskRetryPayload, TaskStepPayload, ThinkingPayload,
     ToolProgressPayload, ToolResultPayload, ToolStartPayload, UpdateAvailablePayload,
-    UpdateProgressPayload, UsagePayload,
+    UpdateProgressPayload, UsagePayload, VoiceModelDownloadProgressPayload,
 };
 
 /// Workflow streaming — helper to emit a `task:step` event from
