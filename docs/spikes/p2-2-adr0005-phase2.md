@@ -6,6 +6,24 @@
 
 ---
 
+> **⚠️ 勘误 (2026-08-11 代码审计)：本文已过时，仅作历史设计记录。**
+>
+> 本文 §0 的核心结论——"桌面写入路径仍绕过 `ProviderConfigService`、
+> `providers.json` 双写"——**已被后续 PR 解决**，不代表代码现状：
+> - PR #41 (ADR-0009) 引入 `ProviderReadSnapshot` 读 facade；
+> - PR #54 (TD-4) 把桌面 `ProviderConnection` DTO 对齐 `ProviderProfile`
+>   (删 `api_key`/`model`，加 `has_api_key`)；
+> - `desktop/src/commands_config.rs:85` 的 `with_engine_store` 让所有写入闭包
+>   收到 `&mut ProviderConfigService`，写臂调 `LockedService::upsert` /
+>   `disconnect_by_slug` / `set_active` —— 正是本文 §0.1 矩阵标注"缺失"的
+>   Service 级 API；`providers.json` 双写也已移除。
+>
+> 即 ADR-0005 Phase 2 re-platforming **已落地 (~90%)**。真实剩余的小尾巴
+> (G1 冻结 / G2-G3 迁移宽限期 / G4-G5 前端 / G6 前端联动) 见
+> ADR-0005 Phase 2 "收尾 tail (2026-08-11 code audit)" 小节。
+
+---
+
 ## 0. TL;DR
 
 ADR-0005 Phase 2 的**引擎侧架构改造**(单写入路径、`/connect` 热加载、Welcome 重写、`test_all_providers`、DesktopConfig 字段删除)已经在 `feat/provider-model-command-remediation` 分支(HEAD `839c2b92`)上**全部落地**。
