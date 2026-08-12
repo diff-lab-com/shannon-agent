@@ -1310,17 +1310,6 @@ pub async fn list_providers(state: tauri::State<'_, AppState>) -> Result<Provide
     let file = ProviderReadSnapshot::capture(&state.provider_store)
         .await
         .to_providers_file();
-    // Corrupted-state guard: the engine store is empty (after Phase 2
-    // task 4's one-shot migration ran) but a legacy `providers.json`
-    // still exists on disk. Don't silently re-migrate; surface the
-    // inconsistency so a user investigating the empty list knows what
-    // to look at.
-    if file.providers.is_empty() && config::providers_path().exists() {
-        tracing::warn!(
-            "engine ProviderConfigStore is empty but legacy providers.json exists; \
-             not re-migrating — check Phase 2 task 4 migration logs"
-        );
-    }
     Ok(file)
 }
 

@@ -297,12 +297,15 @@ paths unchanged.
 >   rewrite; `ProviderProfile` carries `#[serde(deny_unknown_fields)]` +
 >   a `credential` backend detail the UI never consumes, so the thin DTO
 >   is kept intentionally). Do not retire unilaterally.
-> - **G2/G3** — `LegacyProviderConnection` / `migrate_providers_to_toml`
->   / `providers_path()` one-shot migration code. **Deferred** — the
->   `providers.json → providers.toml` wire change first shipped in
->   **v0.9.0 (2026-08-10)**; removing the migration before one release
->   cycle has elapsed would strand `v0.8.0 → v0.9.1` skip-upgraders.
->   Revisit after v0.10.0.
+> - **G2/G3** — ✅ **DONE** (2026-08-12) — `LegacyProviderConnection` /
+>   `migrate_providers_to_toml` / `providers_path()` one-shot migration code
+>   **removed**. Shannon had not shipped a release carrying the
+>   `providers.json` wire format to external users, so the deferral
+>   condition ("strand `v0.8.0 → v0.9.1` skip-upgraders; revisit after
+>   v0.10.0") never obtained. Removal is total: the legacy wire types, the
+>   `AppState::new` startup-migration call, the `list_providers`
+>   empty-store stale-check, and the `IsolatedHome` test fixture are all
+>   gone; no code path reads or writes `providers.json` now.
 > - **G4** — per-tier / per-fallback editors in the Add Provider modal
 >   (frontend; data path ready). See item ⏳ above.
 > - **G5** — `SHANNON_*_PROVIDERS` allowlist not surfaced in the desktop
