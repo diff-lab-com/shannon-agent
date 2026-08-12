@@ -363,7 +363,7 @@ impl MemoryStore {
     /// Unlike [`search`](Self::search) (substring match, used by the REPL
     /// `/memory` command), this returns **every** memory for `project` —
     /// content only, grouped by [`MemoryCategory`] — capped at
-    /// [`MAX_INJECTED_MEMORIES`] most-recent entries. Recall is 100% for the
+    /// `MAX_INJECTED_MEMORIES` most-recent entries. Recall is 100% for the
     /// bounded volume a curated layer holds; the model decides relevance.
     /// Returns `None` when the project has no memories.
     pub fn format_for_injection(&self, project: &str) -> Option<String> {
