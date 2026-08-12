@@ -1,11 +1,13 @@
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 
 use super::consolidator::{ConsolidationResult, MemoryConsolidator};
 use super::error::MemoryError;
 use super::types::{MemoryCategory, MemoryEntry, MemoryType, SessionMemoryConfig};
+use fs2::FileExt;
 
 // Hash a project path to a safe filename.
 fn project_hash(project: &str) -> String {
@@ -15,6 +17,53 @@ fn project_hash(project: &str) -> String {
     let mut hasher = DefaultHasher::new();
     project.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+// ============================================================================
+// JSONL storage helpers (ADR-0010 D1/D3)
+// ============================================================================
+
+/// Per-project append-only store path: `{storage_path}/{project_hash}.jsonl`.
+fn project_jsonl_path(storage_path: &Path, project: &str) -> PathBuf {
+    storage_path.join(format!("{}.jsonl", project_hash(project)))
+}
+
+/// Sidecar `<path>.lock` for cross-process `flock(LOCK_EX)` on the cold
+/// (compaction) write path. Mirrors `provider_config_store::lockfile_for`.
+fn lockfile_for(path: &Path) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(".lock");
+    PathBuf::from(s)
+}
+
+/// Acquire a blocking `flock(LOCK_EX)` on the sidecar lockfile for `path`,
+/// creating it (and missing parent dirs) on demand. The returned `File`
+/// releases the lock on drop via Linux `flock(2)` close-on-release semantics.
+/// Hot-path appends do **not** take this lock; only the compaction rewriter
+/// (`save`) does. ADR-0010 D3.
+fn acquire_exclusive_lock(path: &Path) -> std::io::Result<File> {
+    let lock_path = lockfile_for(path);
+    if let Some(parent) = lock_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+    FileExt::lock_exclusive(&file)?;
+    Ok(file)
+}
+
+/// Atomically write `content` to `path` via a temp file + rename, so a crash
+/// mid-write cannot leave a partial store. Mirrors `config_persist::atomic_write`.
+/// Used by the compaction writer only.
+fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("jsonl.tmp");
+    fs::write(&tmp, content)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 // Simple word-level Jaccard similarity between two strings.
@@ -63,8 +112,24 @@ impl MemoryStore {
 
     /// Add a memory entry to the store.
     ///
-    /// If an entry with the same ID already exists it will be overwritten.
+    /// Appends one JSONL line to `{storage_path}/{project_hash}.jsonl`
+    /// immediately (ADR-0010 D1 hot path) so the write is durable the instant
+    /// it returns. Append is atomic at the OS level, so concurrent agents never
+    /// lose writes; no flock is taken here. The in-memory map is updated in
+    /// lockstep and stays the read-side source of truth.
+    ///
+    /// If an entry with the same ID already exists, the new line supersedes it
+    /// on the next load (last-write-wins); the old line becomes a stale
+    /// duplicate reclaimed by the compaction pass (ADR-0010 D4/C5').
     pub fn add(&mut self, entry: MemoryEntry) -> Result<(), MemoryError> {
+        let path = project_jsonl_path(&self.storage_path, &entry.project);
+        fs::create_dir_all(&self.storage_path)?;
+        let line = serde_json::to_string(&entry)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        // One write syscall: with O_APPEND a single write() of a small buffer
+        // appends atomically, so concurrent agents never interleave a line with
+        // a newline from another writer (which would corrupt both lines).
+        file.write_all(format!("{line}\n").as_bytes())?;
         self.entries.insert(entry.id.clone(), entry);
         Ok(())
     }
@@ -131,10 +196,15 @@ impl MemoryStore {
         Ok(self.entries.remove(id).is_some())
     }
 
-    /// Persist all memories to disk as JSON.
+    /// Persist the in-memory view to disk by rewriting each project's JSONL.
     ///
-    /// One JSON file per project is written to `{storage_path}/{project_hash}.json`.
-    /// Each file contains a `Vec<MemoryEntry>`.
+    /// This is the **cold path** — the only writer that rewrites the whole
+    /// file (used by compaction / cleanup / conflict-resolution). It takes an
+    /// exclusive `flock` on a sidecar lockfile and writes via temp + atomic
+    /// rename, so a crash mid-write cannot corrupt the store and concurrent
+    /// compaction passes serialize (ADR-0010 D3, mirrors
+    /// `provider_config_store`). Hot-path appends go through [`add`](Self::add)
+    /// and do not rewrite.
     pub fn save(&self) -> Result<(), MemoryError> {
         fs::create_dir_all(&self.storage_path)?;
 
@@ -148,10 +218,13 @@ impl MemoryStore {
         }
 
         for (project, entries) in &by_project {
-            let hash = project_hash(project);
-            let path = self.storage_path.join(format!("{hash}.json"));
-            let json = serde_json::to_string_pretty(entries)?;
-            fs::write(&path, json)?;
+            let path = project_jsonl_path(&self.storage_path, project);
+            let _lock = acquire_exclusive_lock(&path)?;
+            let jsonl: String = entries
+                .iter()
+                .map(|e| serde_json::to_string(e).map(|s| s + "\n"))
+                .collect::<Result<String, _>>()?;
+            atomic_write(&path, &jsonl)?;
         }
 
         Ok(())
@@ -159,40 +232,84 @@ impl MemoryStore {
 
     /// Load memories from disk.
     ///
-    /// Reads all `{project_hash}.json` files from the storage directory and
-    /// merges them into the in-memory store. Creates the storage directory
-    /// if it does not exist.
+    /// On first load across the JSONL boundary, each legacy
+    /// `{project_hash}.json` array is rewritten as `{project_hash}.jsonl` and
+    /// the `.json` set aside as `.json.migrated` (never read again — no
+    /// read-compat tail; ADR-0010 D7). Then every `{project_hash}.jsonl` is
+    /// streamed line-by-line into the in-memory store. A trailing partial line
+    /// (a crash mid-append) is skipped + logged rather than failing the whole
+    /// store (ADR-0010 D1 crash-safety).
     pub fn load(&mut self) -> Result<(), MemoryError> {
         fs::create_dir_all(&self.storage_path)?;
-
         if !self.storage_path.exists() {
             return Ok(());
         }
 
-        let entries = fs::read_dir(&self.storage_path)?;
-        for entry in entries {
-            let entry = match entry {
-                Ok(e) => e,
+        // One-shot migration: legacy `<hash>.json` → `<hash>.jsonl`. Skipped
+        // when the `.jsonl` already exists (already migrated, or written by a
+        // newer build). Unparseable `.json` files are left untouched.
+        for entry in fs::read_dir(&self.storage_path)? {
+            let path = match entry {
+                Ok(e) => e.path(),
                 Err(_) => continue,
             };
-
-            let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
+            let jsonl_path = path.with_extension("jsonl");
+            if jsonl_path.exists() {
+                continue;
+            }
+            let Ok(contents) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(arr) = serde_json::from_str::<Vec<MemoryEntry>>(&contents) else {
+                continue;
+            };
+            let jsonl: String = arr
+                .iter()
+                .map(|e| serde_json::to_string(e).map(|s| s + "\n"))
+                .collect::<Result<String, _>>()?;
+            if atomic_write(&jsonl_path, &jsonl).is_ok() {
+                let migrated = {
+                    let mut s = path.as_os_str().to_owned();
+                    s.push(".migrated");
+                    PathBuf::from(s)
+                };
+                let _ = fs::rename(&path, &migrated);
+            }
+        }
 
-            let contents = match fs::read_to_string(&path) {
-                Ok(c) => c,
+        // Stream every `<hash>.jsonl`, one MemoryEntry per line.
+        for entry in fs::read_dir(&self.storage_path)? {
+            let path = match entry {
+                Ok(e) => e.path(),
                 Err(_) => continue,
             };
-
-            let file_entries: Vec<MemoryEntry> = match serde_json::from_str(&contents) {
-                Ok(e) => e,
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let file = match File::open(&path) {
+                Ok(f) => f,
                 Err(_) => continue,
             };
-
-            for mem in file_entries {
-                self.entries.insert(mem.id.clone(), mem);
+            for line in BufReader::new(file).lines() {
+                let Ok(line) = line else { continue };
+                if line.trim().is_empty() {
+                    continue;
+                }
+                match serde_json::from_str::<MemoryEntry>(&line) {
+                    Ok(mem) => {
+                        self.entries.insert(mem.id.clone(), mem);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "skipping unparseable memory line"
+                        );
+                    }
+                }
             }
         }
 
@@ -953,6 +1070,129 @@ mod tests {
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         store.load().unwrap();
         assert!(store.is_empty());
+    }
+
+    // --- JSONL format + migration (ADR-0010 C2') ---
+
+    #[test]
+    fn test_add_appends_one_jsonl_line() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let entry = make_entry("proj", MemoryCategory::Preference, "Use tabs");
+        let expected = serde_json::to_string(&entry).unwrap();
+        store.add(entry).unwrap();
+        let path = dir.path().join(format!("{}.jsonl", project_hash("proj")));
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, format!("{expected}\n"));
+    }
+
+    #[test]
+    fn test_save_writes_jsonl_not_json() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store
+            .add(make_entry("proj", MemoryCategory::Decision, "Use Rust"))
+            .unwrap();
+        store.save().unwrap();
+        let jsonl = dir.path().join(format!("{}.jsonl", project_hash("proj")));
+        let json = dir.path().join(format!("{}.json", project_hash("proj")));
+        assert!(jsonl.exists(), ".jsonl should exist after save");
+        assert!(!json.exists(), "legacy .json must not be written");
+        let lines = std::fs::read_to_string(&jsonl).unwrap();
+        assert_eq!(lines.lines().count(), 1);
+    }
+
+    #[test]
+    fn test_load_migrates_legacy_json_to_jsonl() {
+        let dir = TempDir::new().unwrap();
+        let entries = vec![
+            make_entry("proj", MemoryCategory::Preference, "legacy pref"),
+            make_entry("proj", MemoryCategory::Decision, "legacy dec"),
+        ];
+        let json_path = dir.path().join(format!("{}.json", project_hash("proj")));
+        std::fs::write(&json_path, serde_json::to_string_pretty(&entries).unwrap()).unwrap();
+
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store.load().unwrap();
+
+        assert_eq!(store.len(), 2, "both legacy entries load post-migration");
+        let jsonl = dir.path().join(format!("{}.jsonl", project_hash("proj")));
+        assert!(jsonl.exists(), "migration produces a .jsonl");
+        assert!(
+            !json_path.exists(),
+            "legacy .json is renamed away (no read-compat)"
+        );
+        let migrated = {
+            let mut s = json_path.clone().into_os_string();
+            s.push(".migrated");
+            std::path::PathBuf::from(s)
+        };
+        assert!(
+            migrated.exists(),
+            "legacy .json backed up as .json.migrated"
+        );
+    }
+
+    #[test]
+    fn test_load_skips_partial_trailing_line() {
+        let dir = TempDir::new().unwrap();
+        let valid = make_entry("proj", MemoryCategory::Context, "good entry");
+        let valid_line = serde_json::to_string(&valid).unwrap();
+        // A valid line followed by a truncated (partial) line — the on-disk
+        // state after a crash mid-append.
+        let content = format!(
+            "{valid_line}\n{{\"id\":\"broken\",\"project\":\"proj\",\"category\":\"Context\""
+        );
+        let path = dir.path().join(format!("{}.jsonl", project_hash("proj")));
+        std::fs::write(&path, &content).unwrap();
+
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store.load().unwrap();
+
+        assert_eq!(store.len(), 1, "only the complete line loads");
+        assert_eq!(
+            store.get(&valid.id).map(|e| e.content.as_str()),
+            Some("good entry")
+        );
+    }
+
+    #[test]
+    fn test_concurrent_appends_lose_nothing() {
+        // Two independent stores (two agents) append to the same project file
+        // concurrently. Append-only storage must durably keep every write.
+        let dir = TempDir::new().unwrap();
+        let dir_path = std::sync::Arc::new(dir.path().to_path_buf());
+
+        let d1 = dir_path.clone();
+        let h1 = std::thread::spawn(move || {
+            let mut s = MemoryStore::new((*d1).clone());
+            for i in 0..20 {
+                s.add(make_entry(
+                    "proj",
+                    MemoryCategory::Context,
+                    &format!("A-{i}"),
+                ))
+                .unwrap();
+            }
+        });
+        let d2 = dir_path.clone();
+        let h2 = std::thread::spawn(move || {
+            let mut s = MemoryStore::new((*d2).clone());
+            for i in 0..20 {
+                s.add(make_entry(
+                    "proj",
+                    MemoryCategory::Context,
+                    &format!("B-{i}"),
+                ))
+                .unwrap();
+            }
+        });
+        h1.join().unwrap();
+        h2.join().unwrap();
+
+        let mut store = MemoryStore::new(dir_path.as_ref().clone());
+        store.load().unwrap();
+        assert_eq!(store.len(), 40, "all concurrent appends survive");
     }
 
     // --- Cleanup ---
