@@ -276,23 +276,12 @@ impl AppState {
     pub fn new() -> Self {
         let desktop_config = config::load_config();
 
-        // One-shot migration: if the desktop has a populated
-        // `providers.json` cache but the engine's `providers.toml` is
-        // missing or empty, lift each entry into the engine store and
-        // remove the legacy file. Idempotent — re-running on a clean
-        // store is a no-op. See [`config::migrate_providers_to_toml`].
-        //
-        // P1.1 (ADR-0005): the provider store must be loaded *first*
-        // because the runtime client config is now built from its
-        // resolved active target (see `build_client_config`). Reading
-        // `DesktopConfig.provider`/`api_key`/`base_url`/`model` for
-        // the runtime is intentionally gone — those legacy singular
-        // fields are scheduled for removal in T2.
-        let provider_store = if let Some(seed) = config::migrate_providers_to_toml() {
-            shannon_core::provider_config_store::ProviderConfigStore::from_config(seed)
-        } else {
-            shannon_core::provider_config_store::ProviderConfigStore::load_or_default()
-        };
+        // P1.1 (ADR-0005): load the provider store first — the runtime
+        // client config is built from its resolved active target
+        // (`build_client_config` below), not from `DesktopConfig`'s
+        // singular provider fields (those legacy mirrors are gone).
+        let provider_store =
+            shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
 
         // Build the engine-side `ShannonConfig` carrying only the behavioural
         // overrides (`max_tokens`/`temperature`) from the desktop's legacy
@@ -303,8 +292,8 @@ impl AppState {
             temperature: desktop_config.temperature,
             ..Default::default()
         };
-        let client_config = Self::build_client_config(&provider_store, &shannon_overrides)
-            .unwrap_or_else(LlmClientConfig::default);
+        let client_config =
+            Self::build_client_config(&provider_store, &shannon_overrides).unwrap_or_default();
 
         // Initialize tool registry with default tools
         let mut tool_registry = ToolRegistry::new();

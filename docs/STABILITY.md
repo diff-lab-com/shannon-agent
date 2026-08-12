@@ -115,6 +115,16 @@ the "compile without warnings" rule above).
   `docs/plans/w6-3-parity-diff.md`). Estimated ~1–1.5d mechanical swap
   once prioritised.
 
+- **`desktop::config::migrate_providers_to_toml` + legacy `providers.json`
+  wire types** — ✅ **removed** (2026-08-12, ADR-0005 G2/G3). The one-shot
+  `providers.json → providers.toml` startup migration, the
+  `LegacyProviderConnection` / `LegacyProvidersFile` shapes, `providers_path()`,
+  and the `list_providers` empty-store stale-check were deleted wholesale.
+  Shannon had not shipped a release carrying the `providers.json` wire format
+  to external users, so there were no skip-upgraders to strand. This is
+  distinct from the `ProviderConnection` retirement above (TD-4), which
+  remains planned.
+
 ## Cross-repo coordination
 
 The desktop shell pins a specific `shannon-code` git rev via its
