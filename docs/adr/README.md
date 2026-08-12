@@ -71,6 +71,7 @@ Things deferred to future work.
 | [0007](0007-connect-auto-opens-model-picker.md) | `/connect` Auto-Opens the Model Picker + Background models.dev Refresh | Accepted | 2026-07-31 |
 | [0008](0008-provider-model-command-architecture-remediation.md) | Provider/Model Command Architecture Remediation | Proposed | 2026-08-01 |
 | [0009](0009-provider-store-read-facade.md) | Provider Store Read Facade (desktop read-path consolidation) | Accepted | 2026-08-06 |
+| [0010](0010-memory-curated-layer-jsonl-injection.md) | Memory Curated-Layer Alignment to JSONL-Append + Scoped Injection | Proposed | 2026-08-12 |
 
 ## Numbering
 
