@@ -64,7 +64,6 @@ export const handlers: Record<string, MockHandler> = {
   // --- Config ---
   async get_config() { await delay(); return clone(MOCK_CONFIG) },
   async configure() { await delay() },
-  async switch_provider() { await delay(200) },
 
   // --- Managed providers (Models P2) ---
   async test_provider_connection() {

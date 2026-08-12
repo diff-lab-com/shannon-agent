@@ -67,7 +67,7 @@ describe('Header component', () => {
       expect(screen.getByText('GPT-4o')).toBeInTheDocument()
     })
     fireEvent.click(screen.getByText('GPT-4o'))
-    expect(api.switchProvider).toHaveBeenCalled()
+    expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'gpt-4o' })
   })
 
   it('renders OPC title on /opc route', () => {

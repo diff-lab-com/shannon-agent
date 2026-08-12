@@ -5,7 +5,6 @@ import type {
   ModelInfo,
   ToolInfo,
   ConfigUpdate,
-  ProviderSwitchRequest,
   ProviderConnection,
   ProvidersFile,
   ProviderInput,
@@ -216,10 +215,6 @@ export async function getNotificationPrefs(): Promise<NotificationPrefs> {
 
 export async function setNotificationPrefs(prefs: NotificationPrefs): Promise<void> {
   await invoke('set_notification_prefs', { prefs })
-}
-
-export async function switchProvider(req: ProviderSwitchRequest): Promise<void> {
-  await invoke('switch_provider', { request: req })
 }
 
 export interface DetectedProvider {

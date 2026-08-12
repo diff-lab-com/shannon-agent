@@ -84,7 +84,7 @@ export function Header() {
   const handleModelSwitch = async (modelId: string) => {
     if (!status) return
     try {
-      await api.switchProvider({ provider: status.provider, model: modelId })
+      await api.configure({ key: 'model', value: modelId })
       setModelOpen(false)
       toast.success(t('header.permRequest.toast.switched', { modelId }))
     } catch (e) { toastError(t('header.permRequest.error'), e) }
