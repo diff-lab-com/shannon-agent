@@ -53,8 +53,8 @@ pub fn write_mcp_server_config(name: &str, config: Value) -> Result<PathBuf, Ins
 
 /// `write_mcp_server_config` against an explicit `settings.json` `path`. Tests
 /// pass a tempdir path so they never mutate the process-global `HOME` env var
-/// — that mutation (the old `HOME_LOCK`) raced with unrelated tests reading
-/// `dirs::home_dir()` on another thread, a recurring parallel-`--lib` flake.
+/// — that mutation raced with unrelated tests reading `dirs::home_dir()` on
+/// another thread, a recurring parallel-`--lib` flake.
 pub fn write_mcp_server_config_to(
     path: &Path,
     name: &str,
