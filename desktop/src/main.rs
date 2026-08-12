@@ -77,7 +77,6 @@ fn main() {
             commands_chat::cancel_query,
             commands_chat::list_tools,
             commands_config::configure,
-            commands_config::switch_provider,
             commands_config::get_config,
             commands_config::detect_provider_from_env,
             commands_config::test_provider_connection,
@@ -390,8 +389,8 @@ fn main() {
             // Audit #25: the status line and tooltip previously hardcoded
             // `anthropic / claude-sonnet-4-6`. They are now built from the
             // current desktop config, and a background task refreshes the tray
-            // whenever the provider/model changes (covers both `configure` and
-            // `switch_provider`).
+            // whenever the provider/model changes (`configure('model')` and
+            // `set_active_provider` both emit `CONFIG_UPDATED`).
             let initial_label = tray_status_label(app.handle());
             let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
             let new_session_item =
@@ -455,9 +454,10 @@ fn main() {
                 .build(app)?;
 
             // Audit #25 / F3: refresh the tray menu + tooltip when the
-            // provider or model changes. Both `configure` and `switch_provider`
-            // emit `config-updated`, so we listen for that event and rebuild
-            // the menu on change. Replaces the prior 2-second polling loop.
+            // provider or model changes. Both `configure('model')` and
+            // `set_active_provider` emit `config-updated`, so we listen for
+            // that event and rebuild the menu on change. Replaces the prior
+            // 2-second polling loop.
             let refresh_handle = app.handle().clone();
             let _ = app.listen(
                 shannon_desktop::events::event_names::CONFIG_UPDATED,

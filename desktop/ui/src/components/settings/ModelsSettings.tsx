@@ -47,7 +47,7 @@ export default function ModelsSettings() {
     if (!status) return
     setSwitching(modelId)
     try {
-      await api.switchProvider({ provider: status.provider, model: modelId })
+      await api.configure({ key: 'model', value: modelId })
       await Promise.all([refreshModels(), refreshStatus()])
       toast.success(intl.formatMessage({ id: 'settings.models.switched' }, { model: modelId }))
     } catch (e) { toastError(t('settings.models.switchFailed'), e) }

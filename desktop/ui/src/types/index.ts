@@ -238,13 +238,6 @@ export interface GatewayProcessState {
   status: GatewaySupervisorStatus
 }
 
-export interface ProviderSwitchRequest {
-  provider: string
-  api_key?: string
-  base_url?: string
-  model: string
-}
-
 /// A managed provider connection kind. `openai-compatible` covers any
 /// OpenAI-style endpoint (GLM/Zhipu, Moonshot/Kimi, MiniMax, Together, Groq…).
 export type ProviderKind =
@@ -318,6 +311,7 @@ export interface ProviderInput {
   extra_headers?: Record<string, string>
   default_max_tokens?: number | null
   tiers?: ProviderTiers
+  fallback_models?: string[]
 }
 
 export interface DesktopConfig {
