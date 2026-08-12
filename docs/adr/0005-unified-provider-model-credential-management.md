@@ -281,9 +281,9 @@ paths unchanged.
 > - ✅ **DONE** — `DesktopConfig.provider/api_key/base_url/model` singular
 >   fields **removed** (`desktop/src/config.rs:13-16` documents the
 >   removal; the struct no longer carries provider mirror fields).
-> - ⏳ **Still deferred (G4)** — per-tier and per-fallback UI editors in
->   the Add Provider modal (the data round-trips through the engine store
->   already via the `tiers` field; there is no UI surface to author it).
+> - ✅ **DONE (G4, 2026-08-12)** — per-tier and per-fallback UI editors
+>   in the Add Provider modal (`TierEditor` + the `fallback_models` list
+>   editor in the advanced section).
 >
 > **Phase 2 收尾 tail (2026-08-11 code audit).** The re-platforming is
 > ~90% complete; the `docs/spikes/p2-2-adr0005-phase2.md` claim that the
@@ -306,15 +306,24 @@ paths unchanged.
 >   `AppState::new` startup-migration call, the `list_providers`
 >   empty-store stale-check, and the `IsolatedHome` test fixture are all
 >   gone; no code path reads or writes `providers.json` now.
-> - **G4** — per-tier / per-fallback editors in the Add Provider modal
->   (frontend; data path ready). See item ⏳ above.
-> - **G5** — `SHANNON_*_PROVIDERS` allowlist not surfaced in the desktop
->   settings UI (frontend; engine applies it already).
-> - **G6** — `switch_provider` is a vestigial shim (`let _ = request`;
->   rebuilds `client_config` from the store). **Not removable backend-only**
->   — the frontend calls `switchProvider` from `Header.tsx`,
->   `CommandPalette.tsx`, `ModelsSettings.tsx`. Retirement needs frontend
->   coordination (fold into the G4/G5 frontend work).
+> - **G4** — per-tier / per-fallback editors in the Add Provider modal.
+>   ✅ DONE (2026-08-12): `TierEditor` shipped earlier; the
+>   `fallback_models` list editor was added to the advanced section
+>   (`AddProviderModal.tsx`), wired through `ProviderInput` →
+>   `apply_provider_update` + the `save_provider` insert branch.
+> - **G5** — `SHANNON_*_PROVIDERS` allowlist surfaced in the desktop
+>   settings UI. ✅ DONE: `getProviderAllowlist()` wrapper + the
+>   `enabled_providers` config field in `ModelsSettings`.
+> - **G6** — `switch_provider` vestigial shim. ✅ DONE (2026-08-12):
+>   deleted (`commands_config::switch_provider` + `ProviderSwitchRequest`
+>   + the `main.rs` registration); the three frontend call sites
+>   (`Header.tsx`, `CommandPalette.tsx`, `ModelsSettings.tsx`) now route
+>   to `configure({ key: 'model', value })`, the canonical
+>   store-mutating model-switch path (writes the engine store via
+>   `set_active`, rebuilds `client_config`, emits `CONFIG_UPDATED`).
+>   This also fixes a latent bug — `switch_provider` ignored its
+>   `request` arg, so model-picking from those dropdowns had been a
+>   no-op since P1.2-B.
 >
 > **Parity assessment (P2-9, 2026-07-30).** Audited the Desktop provider/model
 > surface against the CLI's P0–P2 work. Desktop **already covers** connection

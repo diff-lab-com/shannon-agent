@@ -33,7 +33,6 @@ vi.mock('sonner', () => ({
 // longer surfaced on the Welcome wizard.
 vi.mock('@/lib/tauri-api', () => ({
   configure: vi.fn().mockResolvedValue(undefined),
-  switchProvider: vi.fn().mockResolvedValue(undefined),
   seedSampleData: vi.fn().mockResolvedValue({ tasks_seeded: 3 }),
   detectProviderFromEnv: vi.fn().mockResolvedValue(null),
   listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),

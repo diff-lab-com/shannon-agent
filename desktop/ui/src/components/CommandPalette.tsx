@@ -90,7 +90,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
     }))
     const modelItems: PaletteItem[] = models.slice(0, 5).map(m => ({
       id: `m-${m.id}`, label: m.name, icon: 'neurology', category: t('palette.category.switchModel'), action: () => {
-        api.switchProvider({ provider: m.provider, model: m.id })
+        api.configure({ key: 'model', value: m.id })
           .then(async () => {
             // Refresh app-wide config so the new provider/model is reflected
             // in footer, chat header, and anywhere else that reads current model.
