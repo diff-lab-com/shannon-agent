@@ -39,8 +39,8 @@
 //! # }
 //! ```
 
-use crate::memory::AutoDreamService;
 use crate::memory::MemoryStore;
+use crate::memory::{AutoDreamService, SessionMemoryConfig};
 use crate::query_engine::context_injector::ContextInjector;
 use crate::query_engine::repo_map_injector::RepoMapInjector;
 // P2-1: multi-strategy compact facade. See `crate::compact` for the
@@ -3793,6 +3793,10 @@ impl QueryEngine {
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|_| "default".to_string());
                     let _ = dream.process_conversation(&msgs, &project);
+                    // Periodic compaction (ADR-0010 C5'): dedupe + prune + size
+                    // control, gated by a persisted sidecar schedule. Each query
+                    // is one session; compaction fires at ~24 h or ≥ 5 sessions.
+                    let _ = dream.maybe_compact(&project, &SessionMemoryConfig::default());
                 });
             }
         });

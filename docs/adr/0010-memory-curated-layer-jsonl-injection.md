@@ -264,18 +264,26 @@ non-JSONL store — the inconsistency this ADR exists to resolve.
 
 ## Implementation References
 
-### Code (current state, to change in C2'-C6')
+### Code (current state)
 
-- `crates/shannon-core/src/memory/store.rs` — `MemoryStore` (struct
-  `:47`-ish), `search()` Jaccard (`:91`-ish), `save()` full-rewrite
-  (`:136`/`:152`-ish), `load()` (`:162`-ish).
-- `crates/shannon-core/src/memory/types.rs:163` — `MemoryEntry` (unchanged).
+- `crates/shannon-core/src/memory/store.rs` — `MemoryStore`: JSONL append
+  (`add`), dedup-aware write (`add_or_update`, C4'), scoped injection
+  (`format_for_injection`, C3'), reload-reconcile compaction write (`save`,
+  C5'), token-budget pruning (`prune_to_token_budget`, C5').
+- `crates/shannon-core/src/memory/compaction_trigger.rs` —
+  `MemoryCompactionTrigger` + `CompactSummary` + `CompactionState` (C5'):
+  the periodic-trigger scheduler with its persisted sidecar.
+- `crates/shannon-core/src/memory/types.rs` — `MemoryEntry` (unchanged),
+  `MemoryCategory` (gained `Ord` for deterministic injection grouping).
 - `crates/shannon-core/src/memory/consolidator.rs` — `MemoryConsolidator`
-  (retained, gains periodic trigger).
-- `crates/shannon-core/src/memory/auto_dream.rs` — `AutoDreamService`
-  (retained, drives the compaction trigger).
+  (rule-based dedupe + stale + caps; drives each compaction pass).
+- `crates/shannon-core/src/memory/auto_dream.rs` — `AutoDreamService`:
+  `process_conversation` writes via `add_or_update`; `maybe_compact` runs the
+  trigger (wired from the engine's post-query path).
+- `crates/shannon-core/src/query_engine/engine.rs` — post-query block calls
+  extraction then `maybe_compact`.
 - `crates/shannon-core/src/session_transcript.rs` — the JSONL append-only
-  precedent to mirror (write-one-line, skip-partial-last-line on load).
+  precedent mirrored here (write-one-line, skip-partial-last-line on load).
 
 ### Companion plan
 
@@ -305,9 +313,25 @@ non-JSONL store — the inconsistency this ADR exists to resolve.
 
 ## Acceptance
 
-C2' (format + migration + flock) and C3' (retrieval flip) have landed; this
-ADR is **Accepted**. Refinement: `search()` is retained for the REPL
-`/memory` command (a deliberate user keyword search), not deleted as the
-original D2 proposed — only the query-engine injection path flipped to
-scoped injection. C4'-C5' (write-time dedup, compaction trigger) are
-follow-on within the same Wave-7 plan.
+C2'-C5' have all landed; this ADR is fully **Accepted**.
+
+- **C2'** (format + migration + flock) and **C3'** (retrieval flip) shipped
+  first. Refinement: `search()` is retained for the REPL `/memory` command (a
+  deliberate user keyword search), not deleted as the original D2 proposed —
+  only the query-engine injection path flipped to scoped injection.
+- **C4'** (write-time dedup) landed as `MemoryStore::add_or_update`, now the
+  production write path (AutoDream extraction, `/remember`, auto-memory).
+  `add()` stays a raw append for tests and the consolidator.
+- **C5'** (periodic compaction + size control) landed as
+  `MemoryCompactionTrigger` + `AutoDreamService::maybe_compact`, wired into
+  the post-query path. The schedule persists in a sidecar (`compaction-state.json`)
+  because `AutoDreamService` is recreated per query. `save()` gained a
+  reload-reconcile so compaction neither clobbers other agents' concurrent
+  appends nor resurrects deliberately-deleted entries.
+- **Refinement (D5)**: relative→absolute date resolution is **deferred**. It
+  was listed as a compaction job but is fiddly to do correctly for free-text
+  ML-extracted content (the reference date is approximate, and "today/yesterday"
+  may be idiomatic rather than calendrical) and adds noise. Revisit via a new
+  ADR only if stale relative dates are observed in practice.
+
+C6' (old `.json` read-compat removal) remains, gated on one release cycle.

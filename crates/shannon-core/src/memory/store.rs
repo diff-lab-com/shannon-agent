@@ -1,5 +1,5 @@
 use chrono::{DateTime, Duration, Utc};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -85,6 +85,31 @@ fn content_similarity(a: &str, b: &str) -> f64 {
     intersection as f64 / union as f64
 }
 
+/// Parse a `<hash>.jsonl` file into entries, tolerating a trailing partial
+/// line (skipped + logged) so a crash mid-append never blocks a load. Shared
+/// by [`MemoryStore::load`] and the [`MemoryStore::save`] reload-reconcile.
+fn parse_jsonl_file(path: &Path) -> Vec<MemoryEntry> {
+    let Ok(file) = File::open(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in BufReader::new(file).lines() {
+        let Ok(line) = line else { continue };
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<MemoryEntry>(&line) {
+            Ok(mem) => out.push(mem),
+            Err(e) => tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "skipping unparseable memory line"
+            ),
+        }
+    }
+    out
+}
+
 // ============================================================================
 // Memory Store
 // ============================================================================
@@ -96,12 +121,36 @@ fn content_similarity(a: &str, b: &str) -> f64 {
 pub struct MemoryStore {
     entries: HashMap<String, MemoryEntry>,
     storage_path: PathBuf,
+    /// Per-project ids deliberately removed since [`load`](Self::load), so
+    /// [`save`](Self::save)'s reload-reconcile can propagate the deletion to
+    /// disk without resurrecting the entry from a stale line — and without
+    /// clobbering entries another agent appended concurrently (ADR-0010 C5').
+    tombstones: HashMap<String, HashSet<String>>,
 }
 
 /// Conservative cap on how many memories [`MemoryStore::format_for_injection`]
 /// loads into the system prompt (ADR-0010 C3' default, ~Claude Code's curated
 /// `memory/` volume). Tuned empirically once injection is exercised.
 const MAX_INJECTED_MEMORIES: usize = 50;
+
+/// Jaccard word-overlap at/above which two same-project, same-category entries
+/// are treated as the same fact at write time (ADR-0010 D4). Matches the
+/// compaction-time threshold used by [`MemoryStore::merge_duplicates`] and the
+/// [`MemoryConsolidator`](super::consolidator::MemoryConsolidator) default.
+const DEDUP_SIMILARITY_THRESHOLD: f64 = 0.8;
+
+/// Rough characters-per-token estimate for injection budgeting (ADR-0010 C5').
+const CHARS_PER_TOKEN: usize = 4;
+
+/// Outcome of a dedup-aware write ([`MemoryStore::add_or_update`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddOutcome {
+    /// A brand-new entry was appended under a fresh id.
+    Inserted,
+    /// A near-duplicate was found and updated in place (its id reused); the
+    /// previous JSONL line is now a stale duplicate that compaction reclaims.
+    Updated,
+}
 
 impl MemoryStore {
     /// Create a new empty memory store.
@@ -112,6 +161,30 @@ impl MemoryStore {
         Self {
             entries: HashMap::new(),
             storage_path,
+            tombstones: HashMap::new(),
+        }
+    }
+
+    /// Path under which this store reads/writes its per-project JSONL files.
+    /// The compaction trigger sidecar lives alongside it (ADR-0010 C5').
+    pub fn storage_path(&self) -> &Path {
+        &self.storage_path
+    }
+
+    /// Remove `id` from the in-memory map and record it as a deliberate
+    /// deletion in the per-project tombstone set, so the next
+    /// [`save`](Self::save) propagates the removal to disk instead of
+    /// resurrecting the entry from a stale line. Returns `true` if the id was
+    /// present.
+    fn evict(&mut self, id: &str) -> bool {
+        if let Some(entry) = self.entries.remove(id) {
+            self.tombstones
+                .entry(entry.project)
+                .or_default()
+                .insert(id.to_string());
+            true
+        } else {
+            false
         }
     }
 
@@ -129,6 +202,10 @@ impl MemoryStore {
     pub fn add(&mut self, entry: MemoryEntry) -> Result<(), MemoryError> {
         let path = project_jsonl_path(&self.storage_path, &entry.project);
         fs::create_dir_all(&self.storage_path)?;
+        // Adding (or re-adding) this id cancels any prior deliberate deletion.
+        if let Some(removed) = self.tombstones.get_mut(&entry.project) {
+            removed.remove(&entry.id);
+        }
         let line = serde_json::to_string(&entry)?;
         let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
         // One write syscall: with O_APPEND a single write() of a small buffer
@@ -137,6 +214,92 @@ impl MemoryStore {
         file.write_all(format!("{line}\n").as_bytes())?;
         self.entries.insert(entry.id.clone(), entry);
         Ok(())
+    }
+
+    /// Find the id of an existing entry that [`add_or_update`](Self::add_or_update)
+    /// would treat as the same fact: same project, same category, content
+    /// overlap ≥ [`DEDUP_SIMILARITY_THRESHOLD`].
+    fn find_dedup_match(&self, entry: &MemoryEntry) -> Option<String> {
+        self.entries
+            .values()
+            .find(|e| {
+                e.project == entry.project
+                    && e.category == entry.category
+                    && content_similarity(&e.content, &entry.content) >= DEDUP_SIMILARITY_THRESHOLD
+            })
+            .map(|e| e.id.clone())
+    }
+
+    /// Append `entry`, **unless** a near-duplicate already exists for the same
+    /// project + category, in which case update that entry in place
+    /// (ADR-0010 D4). This is the production write path; use [`add`](Self::add)
+    /// for a raw append with no dedup (tests, the consolidator).
+    ///
+    /// "Update in place" reuses the matched entry's `id` so the freshly
+    /// appended JSONL line supersedes the prior one on the next load
+    /// (last-write-wins by id); the old line becomes a stale duplicate that
+    /// the next compaction pass reclaims. The merged entry keeps the newer
+    /// content, the higher confidence, the union of tags, the earliest
+    /// `created_at`, and a refreshed `accessed_at`.
+    pub fn add_or_update(&mut self, mut entry: MemoryEntry) -> Result<AddOutcome, MemoryError> {
+        let matched_id = self.find_dedup_match(&entry);
+        if let Some(id) = matched_id {
+            if let Some(existing) = self.entries.get(&id).cloned() {
+                entry.id = existing.id;
+                entry.confidence = entry.confidence.max(existing.confidence);
+                let mut tags = existing.tags.clone();
+                for t in entry.tags.clone() {
+                    if !tags.contains(&t) {
+                        tags.push(t);
+                    }
+                }
+                entry.tags = tags;
+                entry.created_at = existing.created_at.min(entry.created_at);
+                entry.accessed_at = Utc::now();
+                entry.access_count = existing.access_count;
+                self.add(entry)?;
+                return Ok(AddOutcome::Updated);
+            }
+        }
+        self.add(entry)?;
+        Ok(AddOutcome::Inserted)
+    }
+
+    /// Prune `project`'s entries until [`format_for_injection`](Self::format_for_injection)
+    /// fits within `budget_tokens`, removing lowest-confidence entries first
+    /// (ties broken by oldest `accessed_at`). Returns the number removed. Does
+    /// not persist; the caller is expected to [`save`](Self::save) (ADR-0010
+    /// C5' size control).
+    pub fn prune_to_token_budget(&mut self, project: &str, budget_tokens: usize) -> usize {
+        let budget_chars = budget_tokens.saturating_mul(CHARS_PER_TOKEN);
+        // Victim ids in ascending value order: lowest confidence first, then
+        // least-recently-accessed.
+        let mut victims: Vec<(String, f64, DateTime<Utc>)> = self
+            .entries
+            .values()
+            .filter(|e| e.project == project)
+            .map(|e| (e.id.clone(), e.confidence, e.accessed_at))
+            .collect();
+        victims.sort_by(|a, b| {
+            a.1.partial_cmp(&b.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.2.cmp(&b.2))
+        });
+
+        let mut removed = 0;
+        for (id, _, _) in &victims {
+            let fits = self
+                .format_for_injection(project)
+                .map(|t| t.len() <= budget_chars)
+                .unwrap_or(true);
+            if fits {
+                break;
+            }
+            if self.evict(id) {
+                removed += 1;
+            }
+        }
+        removed
     }
 
     /// Retrieve a memory entry by ID.
@@ -228,7 +391,7 @@ impl MemoryStore {
     ///
     /// Returns `Ok(true)` if the entry was found and removed, `Ok(false)` otherwise.
     pub fn delete(&mut self, id: &str) -> Result<bool, MemoryError> {
-        Ok(self.entries.remove(id).is_some())
+        Ok(self.evict(id))
     }
 
     /// Persist the in-memory view to disk by rewriting each project's JSONL.
@@ -240,29 +403,82 @@ impl MemoryStore {
     /// compaction passes serialize (ADR-0010 D3, mirrors
     /// `provider_config_store`). Hot-path appends go through [`add`](Self::add)
     /// and do not rewrite.
-    pub fn save(&self) -> Result<(), MemoryError> {
+    ///
+    /// Under the lock the on-disk file is reloaded and reconciled with the
+    /// in-memory view (ADR-0010 C5'): entries another agent appended since our
+    /// [`load`](Self::load) are **preserved** (not clobbered), while ids in the
+    /// per-project tombstone set (deliberate deletions) are **dropped** rather
+    /// than resurrected from stale lines.
+    pub fn save(&mut self) -> Result<(), MemoryError> {
         fs::create_dir_all(&self.storage_path)?;
 
-        // Group entries by project
-        let mut by_project: HashMap<String, Vec<&MemoryEntry>> = HashMap::new();
+        // Group in-memory entries by project (clone out so we can mutate
+        // `tombstones` inside the loop without borrowing `self`).
+        let mut by_project: HashMap<String, Vec<MemoryEntry>> = HashMap::new();
         for entry in self.entries.values() {
             by_project
                 .entry(entry.project.clone())
                 .or_default()
-                .push(entry);
+                .push(entry.clone());
+        }
+        // Projects that only have tombstones (no live entries) still need a
+        // rewrite so the deletion propagates.
+        for project in self.tombstone_projects() {
+            by_project.entry(project).or_default();
         }
 
-        for (project, entries) in &by_project {
-            let path = project_jsonl_path(&self.storage_path, project);
+        for (project, mem_entries) in by_project {
+            let path = project_jsonl_path(&self.storage_path, &project);
             let _lock = acquire_exclusive_lock(&path)?;
-            let jsonl: String = entries
+
+            let disk = parse_jsonl_file(&path);
+            let removed = self.tombstones.get(&project).cloned().unwrap_or_default();
+            let mem_ids: HashSet<&String> = mem_entries.iter().map(|e| &e.id).collect();
+
+            let mut reconciled: Vec<MemoryEntry> = Vec::new();
+            let mut seen: HashSet<String> = HashSet::new();
+            for e in disk {
+                if removed.contains(&e.id) {
+                    continue; // deliberate deletion — drop the stale line
+                }
+                if mem_ids.contains(&e.id) {
+                    continue; // our (possibly updated) version wins; emitted below
+                }
+                // Another agent's append we don't know about — preserve it.
+                seen.insert(e.id.clone());
+                reconciled.push(e);
+            }
+            for e in &mem_entries {
+                if seen.insert(e.id.clone()) {
+                    reconciled.push(e.clone());
+                }
+            }
+            // Deterministic order so re-saves produce stable diffs.
+            reconciled.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+            let jsonl: String = reconciled
                 .iter()
                 .map(|e| serde_json::to_string(e).map(|s| s + "\n"))
                 .collect::<Result<String, _>>()?;
             atomic_write(&path, &jsonl)?;
+
+            // Tombstones for this project are consumed (excluded from disk).
+            if let Some(r) = self.tombstones.get_mut(&project) {
+                r.clear();
+            }
         }
 
         Ok(())
+    }
+
+    /// Projects that currently have at least one tombstoned id (used by
+    /// [`save`](Self::save) to ensure deletion-only projects still rewrite).
+    fn tombstone_projects(&self) -> Vec<String> {
+        self.tombstones
+            .iter()
+            .filter(|(_, ids)| !ids.is_empty())
+            .map(|(p, _)| p.clone())
+            .collect()
     }
 
     /// Load memories from disk.
@@ -279,6 +495,9 @@ impl MemoryStore {
         if !self.storage_path.exists() {
             return Ok(());
         }
+
+        // A fresh load has no deliberate deletions to carry forward.
+        self.tombstones.clear();
 
         // One-shot migration: legacy `<hash>.json` → `<hash>.jsonl`. Skipped
         // when the `.jsonl` already exists (already migrated, or written by a
@@ -315,7 +534,8 @@ impl MemoryStore {
             }
         }
 
-        // Stream every `<hash>.jsonl`, one MemoryEntry per line.
+        // Stream every `<hash>.jsonl`, one MemoryEntry per line (last write
+        // wins by id — how add_or_update's supersede and C4' reclaim work).
         for entry in fs::read_dir(&self.storage_path)? {
             let path = match entry {
                 Ok(e) => e.path(),
@@ -324,27 +544,8 @@ impl MemoryStore {
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            let file = match File::open(&path) {
-                Ok(f) => f,
-                Err(_) => continue,
-            };
-            for line in BufReader::new(file).lines() {
-                let Ok(line) = line else { continue };
-                if line.trim().is_empty() {
-                    continue;
-                }
-                match serde_json::from_str::<MemoryEntry>(&line) {
-                    Ok(mem) => {
-                        self.entries.insert(mem.id.clone(), mem);
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            path = %path.display(),
-                            error = %e,
-                            "skipping unparseable memory line"
-                        );
-                    }
-                }
+            for mem in parse_jsonl_file(&path) {
+                self.entries.insert(mem.id.clone(), mem);
             }
         }
 
@@ -362,8 +563,16 @@ impl MemoryStore {
         let cutoff = Utc::now() - max_age;
         let initial_count = self.entries.len();
 
-        // Remove entries older than max_age
-        self.entries.retain(|_, entry| entry.created_at > cutoff);
+        // Remove entries older than max_age (tombstoned so `save` propagates).
+        let aged_out: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.created_at <= cutoff)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in aged_out {
+            self.evict(&id);
+        }
 
         // If still over capacity, remove least-recently-accessed entries
         if self.entries.len() > max_entries {
@@ -377,7 +586,7 @@ impl MemoryStore {
 
             let to_remove = self.entries.len() - max_entries;
             for (id, _) in access_times.into_iter().take(to_remove) {
-                self.entries.remove(&id);
+                self.evict(&id);
             }
         }
 
@@ -582,7 +791,7 @@ impl MemoryStore {
         }
 
         for id in &to_remove {
-            self.entries.remove(id);
+            self.evict(id);
         }
 
         Ok(to_remove.len())
@@ -595,7 +804,15 @@ impl MemoryStore {
         let cutoff = Utc::now() - ttl;
         let initial_count = self.entries.len();
 
-        self.entries.retain(|_, entry| entry.created_at > cutoff);
+        let stale: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.created_at <= cutoff)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in stale {
+            self.evict(&id);
+        }
 
         Ok(initial_count - self.entries.len())
     }
@@ -628,7 +845,7 @@ impl MemoryStore {
 
             let to_remove = ids.len() - max_per_category;
             for id in ids.into_iter().take(to_remove) {
-                self.entries.remove(&id);
+                self.evict(&id);
             }
         }
     }
@@ -706,7 +923,7 @@ impl MemoryStore {
 
         let count = to_remove.len();
         for id in &to_remove {
-            self.entries.remove(id);
+            self.evict(id);
         }
 
         if count > 0 {
@@ -1311,6 +1528,279 @@ mod tests {
         let out = store.format_for_injection("proj").unwrap();
         // 120 stored, but injection capped at MAX_INJECTED_MEMORIES (50).
         assert_eq!(out.lines().filter(|l| l.starts_with("- ")).count(), 50);
+    }
+
+    // --- Write-time dedup (ADR-0010 C4') ---
+
+    #[test]
+    fn test_add_or_update_inserts_when_no_match() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store
+            .add_or_update(make_entry(
+                "p",
+                MemoryCategory::Preference,
+                "use tabs for indentation",
+            ))
+            .unwrap();
+        let outcome = store
+            .add_or_update(make_entry(
+                "p",
+                MemoryCategory::Decision,
+                "use postgres for the database",
+            ))
+            .unwrap();
+        assert_eq!(outcome, AddOutcome::Inserted);
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn test_add_or_update_updates_near_duplicate() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let first = make_entry_with_confidence(
+            "p",
+            MemoryCategory::Preference,
+            "always use tabs for indentation",
+            0.6,
+        );
+        let first_id = first.id.clone();
+        store.add_or_update(first).unwrap();
+        // Near-duplicate: same project + category, Jaccard overlap 5/6 = 0.83.
+        let outcome = store
+            .add_or_update(make_entry_with_confidence(
+                "p",
+                MemoryCategory::Preference,
+                "always use tabs for indentation rust",
+                0.9,
+            ))
+            .unwrap();
+        assert_eq!(outcome, AddOutcome::Updated);
+        assert_eq!(store.len(), 1, "near-dup updates rather than appends");
+        let survivor = store.get(&first_id).unwrap();
+        assert_eq!(survivor.id, first_id, "existing id reused (supersede)");
+        assert!(
+            survivor.content.contains("rust"),
+            "newer content wins on update"
+        );
+        assert!(
+            (survivor.confidence - 0.9).abs() < f64::EPSILON,
+            "higher confidence kept"
+        );
+    }
+
+    #[test]
+    fn test_add_or_update_different_category_inserts_both() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store
+            .add_or_update(make_entry(
+                "p",
+                MemoryCategory::Preference,
+                "always use tabs for indentation",
+            ))
+            .unwrap();
+        let outcome = store
+            .add_or_update(make_entry(
+                "p",
+                MemoryCategory::Decision,
+                "always use tabs for indentation",
+            ))
+            .unwrap();
+        assert_eq!(outcome, AddOutcome::Inserted);
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn test_add_or_update_different_project_inserts_both() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store
+            .add_or_update(make_entry(
+                "proj-a",
+                MemoryCategory::Preference,
+                "always use tabs for indentation",
+            ))
+            .unwrap();
+        let outcome = store
+            .add_or_update(make_entry(
+                "proj-b",
+                MemoryCategory::Preference,
+                "always use tabs for indentation",
+            ))
+            .unwrap();
+        assert_eq!(outcome, AddOutcome::Inserted);
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn test_add_or_update_stale_line_reclaimed_on_save() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store
+            .add_or_update(make_entry(
+                "p",
+                MemoryCategory::Preference,
+                "always use tabs for indentation",
+            ))
+            .unwrap();
+        store
+            .add_or_update(make_entry_with_confidence(
+                "p",
+                MemoryCategory::Preference,
+                "always use tabs for indentation rust",
+                0.9,
+            ))
+            .unwrap();
+        let path = dir.path().join(format!("{}.jsonl", project_hash("p")));
+        // Before compaction: the stale prior line is still on disk.
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().lines().count(),
+            2,
+            "update appended a superseding line; old line still present"
+        );
+        // Compaction rewrites from the deduped in-memory map → stale line gone.
+        store.save().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().lines().count(),
+            1,
+            "stale duplicate line reclaimed by save"
+        );
+    }
+
+    // --- save() reload-reconcile (ADR-0010 C5' multi-agent safety) ---
+
+    #[test]
+    fn test_save_preserves_other_agent_appends() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let ours = make_entry("p", MemoryCategory::Context, "our fact");
+        let our_id = ours.id.clone();
+        store.add(ours).unwrap();
+        let path = dir.path().join(format!("{}.jsonl", project_hash("p")));
+
+        // Another agent appends a line this store never loaded.
+        let theirs = make_entry("p", MemoryCategory::Context, "their fact");
+        let their_id = theirs.id.clone();
+        let mut content = std::fs::read_to_string(&path).unwrap();
+        content.push_str(&format!("{}\n", serde_json::to_string(&theirs).unwrap()));
+        std::fs::write(&path, content).unwrap();
+
+        // Our save() must NOT clobber the other agent's append.
+        store.save().unwrap();
+
+        let mut reloaded = MemoryStore::new(dir.path().to_path_buf());
+        reloaded.load().unwrap();
+        assert!(reloaded.get(&our_id).is_some(), "our entry preserved");
+        assert!(
+            reloaded.get(&their_id).is_some(),
+            "other agent's append preserved (not clobbered)"
+        );
+    }
+
+    #[test]
+    fn test_save_drops_deliberately_removed_entry() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let keep = make_entry("p", MemoryCategory::Context, "keep me");
+        let drop_ = make_entry("p", MemoryCategory::Context, "drop me");
+        let keep_id = keep.id.clone();
+        let drop_id = drop_.id.clone();
+        store.add(keep).unwrap();
+        store.add(drop_).unwrap();
+        store.delete(&drop_id).unwrap();
+
+        store.save().unwrap();
+
+        let mut reloaded = MemoryStore::new(dir.path().to_path_buf());
+        reloaded.load().unwrap();
+        assert!(reloaded.get(&keep_id).is_some(), "kept entry survives");
+        assert!(
+            reloaded.get(&drop_id).is_none(),
+            "deliberately removed entry not resurrected from stale line"
+        );
+    }
+
+    #[test]
+    fn test_save_reconcile_drops_removed_but_keeps_others_append() {
+        // Combines the two above: a deletion must propagate AND another agent's
+        // concurrent append must survive in the same save() pass.
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let victim = make_entry("p", MemoryCategory::Context, "we remove this");
+        let victim_id = victim.id.clone();
+        store.add(victim).unwrap();
+        let path = dir.path().join(format!("{}.jsonl", project_hash("p")));
+
+        // Other agent appends after our load.
+        let theirs = make_entry("p", MemoryCategory::Context, "their fact");
+        let their_id = theirs.id.clone();
+        let mut content = std::fs::read_to_string(&path).unwrap();
+        content.push_str(&format!("{}\n", serde_json::to_string(&theirs).unwrap()));
+        std::fs::write(&path, content).unwrap();
+
+        // We delete our entry (tombstone), then compact.
+        store.delete(&victim_id).unwrap();
+        store.save().unwrap();
+
+        let mut reloaded = MemoryStore::new(dir.path().to_path_buf());
+        reloaded.load().unwrap();
+        assert!(
+            reloaded.get(&victim_id).is_none(),
+            "our deletion propagated"
+        );
+        assert!(
+            reloaded.get(&their_id).is_some(),
+            "other agent's append kept despite our deletion"
+        );
+    }
+
+    // --- Token-budget pruning (ADR-0010 C5' size control) ---
+
+    #[test]
+    fn test_prune_to_token_budget_removes_lowest_confidence_first() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let low = make_entry_with_confidence("p", MemoryCategory::Context, "content aaaa", 0.2);
+        let mid = make_entry_with_confidence("p", MemoryCategory::Context, "content bbbb", 0.6);
+        let high = make_entry_with_confidence("p", MemoryCategory::Context, "content cccc", 0.95);
+        let low_id = low.id.clone();
+        let mid_id = mid.id.clone();
+        let high_id = high.id.clone();
+        store.add(low).unwrap();
+        store.add(mid).unwrap();
+        store.add(high).unwrap();
+
+        // 18 tokens (~72 chars): the 3-entry injection (~77 chars) is over
+        // budget, but the 2-entry one (~62) fits — so exactly the lowest-
+        // confidence entry is pruned.
+        let removed = store.prune_to_token_budget("p", 18);
+        assert_eq!(removed, 1);
+        assert!(
+            store.get(&low_id).is_none(),
+            "lowest-confidence pruned first"
+        );
+        assert!(store.get(&mid_id).is_some());
+        assert!(store.get(&high_id).is_some(), "highest-confidence survives");
+    }
+
+    #[test]
+    fn test_prune_to_token_budget_noop_when_under_budget() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store
+            .add(make_entry("p", MemoryCategory::Context, "tiny"))
+            .unwrap();
+        // Generous budget — nothing to prune.
+        assert_eq!(store.prune_to_token_budget("p", 10_000), 0);
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn test_prune_to_token_budget_empty_project() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        assert_eq!(store.prune_to_token_budget("no-such-project", 8), 0);
     }
 
     // --- Cleanup ---
