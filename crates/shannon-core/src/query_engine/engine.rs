@@ -1124,17 +1124,23 @@ impl QueryEngine {
         let plan_mode_active = self.plan_mode_active.clone();
         let effective_max_context_tokens = self.effective_max_context_tokens;
 
-        // Search for relevant memories to augment the system prompt
-        let memory_entries = if let Some(ref mem_store) = self.memory {
+        // Scoped injection (ADR-0010 D2): load ALL of the active project's
+        // memories into the prompt rather than search-then-inject-matches.
+        // Recall is 100% for the bounded volume a curated layer holds; the
+        // model decides relevance. `search()` is retained for the REPL
+        // `/memory` command (a deliberate user keyword search).
+        let memory_injection: Option<String> = if let Some(ref mem_store) = self.memory {
             match mem_store.read() {
                 Ok(store) => {
-                    let results = store.search(&user_message, None);
-                    results.into_iter().take(5).collect::<Vec<_>>()
+                    let project = std::env::current_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "default".to_string());
+                    store.format_for_injection(&project)
                 }
-                Err(_) => Vec::new(),
+                Err(_) => None,
             }
         } else {
-            Vec::new()
+            None
         };
 
         // Build structured system prompt with cache breakpoints.
@@ -1158,15 +1164,8 @@ impl QueryEngine {
             system_blocks.push(block);
         }
 
-        // Memory entries
-        if !memory_entries.is_empty() {
-            let mut mem_text = String::from("## Relevant Memories\n");
-            for entry in &memory_entries {
-                mem_text.push_str(&format!(
-                    "- [{}] (confidence: {:.2}) {}\n",
-                    entry.category, entry.confidence, entry.content
-                ));
-            }
+        // Memory entries — scoped injection, grouped by category (ADR-0010 D2).
+        if let Some(mem_text) = memory_injection {
             let block = if use_cache {
                 SystemContentBlock::cached(mem_text)
             } else {

@@ -89,14 +89,19 @@ fn content_similarity(a: &str, b: &str) -> f64 {
 // Memory Store
 // ============================================================================
 
-/// Persistent storage for memory entries, backed by JSON files on disk.
+/// Persistent storage for memory entries, backed by per-project JSONL files.
 ///
-/// Each project's memories are stored in a separate file:
-/// `{storage_path}/{project_hash}.json`
+/// Each project's memories live in a separate append-only file:
+/// `{storage_path}/{project_hash}.jsonl` (ADR-0010 D1).
 pub struct MemoryStore {
     entries: HashMap<String, MemoryEntry>,
     storage_path: PathBuf,
 }
+
+/// Conservative cap on how many memories [`MemoryStore::format_for_injection`]
+/// loads into the system prompt (ADR-0010 C3' default, ~Claude Code's curated
+/// `memory/` volume). Tuned empirically once injection is exercised.
+const MAX_INJECTED_MEMORIES: usize = 50;
 
 impl MemoryStore {
     /// Create a new empty memory store.
@@ -187,6 +192,36 @@ impl MemoryStore {
 
         results.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         results
+    }
+
+    /// Format the active project's memories for system-prompt injection
+    /// (ADR-0010 D2 scoped retrieval).
+    ///
+    /// Unlike [`search`](Self::search) (substring match, used by the REPL
+    /// `/memory` command), this returns **every** memory for `project` —
+    /// content only, grouped by [`MemoryCategory`] — capped at
+    /// [`MAX_INJECTED_MEMORIES`] most-recent entries. Recall is 100% for the
+    /// bounded volume a curated layer holds; the model decides relevance.
+    /// Returns `None` when the project has no memories.
+    pub fn format_for_injection(&self, project: &str) -> Option<String> {
+        let mut entries = self.project_memories(project);
+        if entries.is_empty() {
+            return None;
+        }
+        entries.truncate(MAX_INJECTED_MEMORIES);
+        let mut by_cat: std::collections::BTreeMap<&MemoryCategory, Vec<&str>> =
+            std::collections::BTreeMap::new();
+        for e in &entries {
+            by_cat.entry(&e.category).or_default().push(&e.content);
+        }
+        let mut out = String::from("## Project Memories\n");
+        for (cat, contents) in &by_cat {
+            out.push_str(&format!("### {cat}\n"));
+            for c in contents {
+                out.push_str(&format!("- {c}\n"));
+            }
+        }
+        Some(out)
     }
 
     /// Delete a memory entry by ID.
@@ -1193,6 +1228,89 @@ mod tests {
         let mut store = MemoryStore::new(dir_path.as_ref().clone());
         store.load().unwrap();
         assert_eq!(store.len(), 40, "all concurrent appends survive");
+    }
+
+    // --- Scoped injection (ADR-0010 C3') ---
+
+    #[test]
+    fn test_format_for_injection_none_when_empty() {
+        let dir = TempDir::new().unwrap();
+        let store = MemoryStore::new(dir.path().to_path_buf());
+        assert!(store.format_for_injection("no-such-project").is_none());
+    }
+
+    #[test]
+    fn test_format_for_injection_groups_by_category_content_only() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store
+            .add(make_entry_with_confidence(
+                "proj",
+                MemoryCategory::Preference,
+                "use tabs",
+                0.3,
+            ))
+            .unwrap();
+        store
+            .add(make_entry_with_confidence(
+                "proj",
+                MemoryCategory::Preference,
+                "dark mode",
+                0.9,
+            ))
+            .unwrap();
+        store
+            .add(make_entry_with_confidence(
+                "proj",
+                MemoryCategory::Decision,
+                "use rust",
+                0.95,
+            ))
+            .unwrap();
+
+        let out = store.format_for_injection("proj").unwrap();
+        // Header + both categories present, content included ...
+        assert!(out.starts_with("## Project Memories\n"));
+        assert!(out.contains("### preference\n"));
+        assert!(out.contains("### decision\n"));
+        assert!(out.contains("- use tabs\n"));
+        assert!(out.contains("- dark mode\n"));
+        assert!(out.contains("- use rust\n"));
+        // ... confidence NOT injected (ADR-0010 D2: content only).
+        assert!(!out.contains("confidence"));
+    }
+
+    #[test]
+    fn test_format_for_injection_scoped_to_project() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store
+            .add(make_entry("proj-a", MemoryCategory::Context, "from a"))
+            .unwrap();
+        store
+            .add(make_entry("proj-b", MemoryCategory::Context, "from b"))
+            .unwrap();
+        let out = store.format_for_injection("proj-a").unwrap();
+        assert!(out.contains("from a"));
+        assert!(!out.contains("from b"));
+    }
+
+    #[test]
+    fn test_format_for_injection_caps_at_fifty() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        for i in 0..120 {
+            store
+                .add(make_entry(
+                    "proj",
+                    MemoryCategory::Context,
+                    &format!("e{i}"),
+                ))
+                .unwrap();
+        }
+        let out = store.format_for_injection("proj").unwrap();
+        // 120 stored, but injection capped at MAX_INJECTED_MEMORIES (50).
+        assert_eq!(out.lines().filter(|l| l.starts_with("- ")).count(), 50);
     }
 
     // --- Cleanup ---

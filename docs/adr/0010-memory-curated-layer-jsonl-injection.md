@@ -1,7 +1,7 @@
 # ADR 0010 — Memory Curated-Layer Alignment to JSONL-Append + Scoped Injection
 
 **Date**: 2026-08-12
-**Status**: Proposed
+**Status**: Accepted
 **Sprint**: Wave-7
 
 ## TL;DR
@@ -112,21 +112,29 @@ with `{storage_path}/{project_hash}.jsonl` (one `MemoryEntry` per line).
   whether it's an array element or a JSONL line. `id` remains the
   per-entry key.
 
-### Decision 2 — Retrieval: delete `search()`, inject the active scope
+### Decision 2 — Retrieval: flip engine injection to scoped injection
 
-Remove the Jaccard `search()` path. At query-engine launch, **load the
-active project's memories into the system prompt** (scoped injection):
+Replace the query engine's **injection** path — which called
+`search(&user_message, None)` and injected the top-5 substring matches —
+with **scoped injection**: at query time, load the active project's
+memories into the system prompt directly (`MemoryStore::format_for_injection`):
 
 - Inject only the `content` field (natural language), grouped by
   `MemoryCategory`, with a short header — the same shape Claude Code's
   `MEMORY.md` index takes.
+- Scope = the current working directory (the same string `AutoDreamService`
+  stores in `MemoryEntry.project`), capped at ~50 most-recent entries
+  (`MAX_INJECTED_MEMORIES`).
 - The full `MemoryEntry` (tags, confidence, timestamps) stays in the
   in-memory map for the consolidator and UI; only `content` rides in the
   prompt.
 
-This is a **net code deletion** (the Jaccard tokenizer + scoring path goes
-away) and raises recall to 100% for the bounded volume a curated layer
-holds.
+**`search()` is retained.** The REPL `/memory <query>` command
+(`shannon-ui/.../repl/commands/memory.rs`) uses it as a deliberate user
+keyword search, distinct from auto-injection. The original "delete search()"
+wording was refined during C3' implementation once that consumer was
+discovered. Recall for *injection* is now 100% for the bounded volume a
+curated layer holds; the Jaccard path no longer gates what reaches the model.
 
 ### Decision 3 — Write safety: append for writes, flock + atomic-rename for compaction
 
@@ -197,8 +205,10 @@ per-project, shared across all sessions/agents for that project).
   race; flock guards the only rewriter (compaction).
 - **Higher recall** — scoped injection returns every active-scope memory
   to the model, instead of only Jaccard-matched ones.
-- **Net code reduction** — the Jaccard tokenizer/scoring/ranking path is
-  deleted.
+- **Higher recall at injection** — the engine injects every active-scope
+  memory instead of only Jaccard top-5 matches; the Jaccard path no longer
+  gates what reaches the model (`search()` is retained for the REPL
+  `/memory` command).
 - **Pattern reunification** — curated memory now uses the same append-only
   JSONL shape as the four event-log subsystems; one mental model.
 - **Crash safety** — a partial last line no longer corrupts the whole
@@ -295,6 +305,9 @@ non-JSONL store — the inconsistency this ADR exists to resolve.
 
 ## Acceptance
 
-This ADR moves to **Accepted** when C2' (format + migration + flock) and
-C3' (retrieval flip) land and the old `search()` path is deleted. C4'-C6'
-are follow-on within the same Wave-7 plan.
+C2' (format + migration + flock) and C3' (retrieval flip) have landed; this
+ADR is **Accepted**. Refinement: `search()` is retained for the REPL
+`/memory` command (a deliberate user keyword search), not deleted as the
+original D2 proposed — only the query-engine injection path flipped to
+scoped injection. C4'-C5' (write-time dedup, compaction trigger) are
+follow-on within the same Wave-7 plan.
