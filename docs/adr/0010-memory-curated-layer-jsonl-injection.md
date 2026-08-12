@@ -1,7 +1,7 @@
 # ADR 0010 — Memory Curated-Layer Alignment to JSONL-Append + Scoped Injection
 
 **Date**: 2026-08-12
-**Status**: Proposed
+**Status**: Accepted
 **Sprint**: Wave-7
 
 ## TL;DR
@@ -112,21 +112,29 @@ with `{storage_path}/{project_hash}.jsonl` (one `MemoryEntry` per line).
   whether it's an array element or a JSONL line. `id` remains the
   per-entry key.
 
-### Decision 2 — Retrieval: delete `search()`, inject the active scope
+### Decision 2 — Retrieval: flip engine injection to scoped injection
 
-Remove the Jaccard `search()` path. At query-engine launch, **load the
-active project's memories into the system prompt** (scoped injection):
+Replace the query engine's **injection** path — which called
+`search(&user_message, None)` and injected the top-5 substring matches —
+with **scoped injection**: at query time, load the active project's
+memories into the system prompt directly (`MemoryStore::format_for_injection`):
 
 - Inject only the `content` field (natural language), grouped by
   `MemoryCategory`, with a short header — the same shape Claude Code's
   `MEMORY.md` index takes.
+- Scope = the current working directory (the same string `AutoDreamService`
+  stores in `MemoryEntry.project`), capped at ~50 most-recent entries
+  (`MAX_INJECTED_MEMORIES`).
 - The full `MemoryEntry` (tags, confidence, timestamps) stays in the
   in-memory map for the consolidator and UI; only `content` rides in the
   prompt.
 
-This is a **net code deletion** (the Jaccard tokenizer + scoring path goes
-away) and raises recall to 100% for the bounded volume a curated layer
-holds.
+**`search()` is retained.** The REPL `/memory <query>` command
+(`shannon-ui/.../repl/commands/memory.rs`) uses it as a deliberate user
+keyword search, distinct from auto-injection. The original "delete search()"
+wording was refined during C3' implementation once that consumer was
+discovered. Recall for *injection* is now 100% for the bounded volume a
+curated layer holds; the Jaccard path no longer gates what reaches the model.
 
 ### Decision 3 — Write safety: append for writes, flock + atomic-rename for compaction
 
@@ -197,8 +205,10 @@ per-project, shared across all sessions/agents for that project).
   race; flock guards the only rewriter (compaction).
 - **Higher recall** — scoped injection returns every active-scope memory
   to the model, instead of only Jaccard-matched ones.
-- **Net code reduction** — the Jaccard tokenizer/scoring/ranking path is
-  deleted.
+- **Higher recall at injection** — the engine injects every active-scope
+  memory instead of only Jaccard top-5 matches; the Jaccard path no longer
+  gates what reaches the model (`search()` is retained for the REPL
+  `/memory` command).
 - **Pattern reunification** — curated memory now uses the same append-only
   JSONL shape as the four event-log subsystems; one mental model.
 - **Crash safety** — a partial last line no longer corrupts the whole
@@ -254,18 +264,26 @@ non-JSONL store — the inconsistency this ADR exists to resolve.
 
 ## Implementation References
 
-### Code (current state, to change in C2'-C6')
+### Code (current state)
 
-- `crates/shannon-core/src/memory/store.rs` — `MemoryStore` (struct
-  `:47`-ish), `search()` Jaccard (`:91`-ish), `save()` full-rewrite
-  (`:136`/`:152`-ish), `load()` (`:162`-ish).
-- `crates/shannon-core/src/memory/types.rs:163` — `MemoryEntry` (unchanged).
+- `crates/shannon-core/src/memory/store.rs` — `MemoryStore`: JSONL append
+  (`add`), dedup-aware write (`add_or_update`, C4'), scoped injection
+  (`format_for_injection`, C3'), reload-reconcile compaction write (`save`,
+  C5'), token-budget pruning (`prune_to_token_budget`, C5').
+- `crates/shannon-core/src/memory/compaction_trigger.rs` —
+  `MemoryCompactionTrigger` + `CompactSummary` + `CompactionState` (C5'):
+  the periodic-trigger scheduler with its persisted sidecar.
+- `crates/shannon-core/src/memory/types.rs` — `MemoryEntry` (unchanged),
+  `MemoryCategory` (gained `Ord` for deterministic injection grouping).
 - `crates/shannon-core/src/memory/consolidator.rs` — `MemoryConsolidator`
-  (retained, gains periodic trigger).
-- `crates/shannon-core/src/memory/auto_dream.rs` — `AutoDreamService`
-  (retained, drives the compaction trigger).
+  (rule-based dedupe + stale + caps; drives each compaction pass).
+- `crates/shannon-core/src/memory/auto_dream.rs` — `AutoDreamService`:
+  `process_conversation` writes via `add_or_update`; `maybe_compact` runs the
+  trigger (wired from the engine's post-query path).
+- `crates/shannon-core/src/query_engine/engine.rs` — post-query block calls
+  extraction then `maybe_compact`.
 - `crates/shannon-core/src/session_transcript.rs` — the JSONL append-only
-  precedent to mirror (write-one-line, skip-partial-last-line on load).
+  precedent mirrored here (write-one-line, skip-partial-last-line on load).
 
 ### Companion plan
 
@@ -295,6 +313,25 @@ non-JSONL store — the inconsistency this ADR exists to resolve.
 
 ## Acceptance
 
-This ADR moves to **Accepted** when C2' (format + migration + flock) and
-C3' (retrieval flip) land and the old `search()` path is deleted. C4'-C6'
-are follow-on within the same Wave-7 plan.
+C2'-C5' have all landed; this ADR is fully **Accepted**.
+
+- **C2'** (format + migration + flock) and **C3'** (retrieval flip) shipped
+  first. Refinement: `search()` is retained for the REPL `/memory` command (a
+  deliberate user keyword search), not deleted as the original D2 proposed —
+  only the query-engine injection path flipped to scoped injection.
+- **C4'** (write-time dedup) landed as `MemoryStore::add_or_update`, now the
+  production write path (AutoDream extraction, `/remember`, auto-memory).
+  `add()` stays a raw append for tests and the consolidator.
+- **C5'** (periodic compaction + size control) landed as
+  `MemoryCompactionTrigger` + `AutoDreamService::maybe_compact`, wired into
+  the post-query path. The schedule persists in a sidecar (`compaction-state.json`)
+  because `AutoDreamService` is recreated per query. `save()` gained a
+  reload-reconcile so compaction neither clobbers other agents' concurrent
+  appends nor resurrects deliberately-deleted entries.
+- **Refinement (D5)**: relative→absolute date resolution is **deferred**. It
+  was listed as a compaction job but is fiddly to do correctly for free-text
+  ML-extracted content (the reference date is approximate, and "today/yesterday"
+  may be idiomatic rather than calendrical) and adds noise. Revisit via a new
+  ADR only if stale relative dates are observed in practice.
+
+C6' (old `.json` read-compat removal) remains, gated on one release cycle.

@@ -2,9 +2,10 @@ use shannon_engine::api::{ContentBlock, Message, MessageContent};
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
+use super::compaction_trigger::{CompactSummary, MemoryCompactionTrigger};
 use super::error::MemoryError;
 use super::store::MemoryStore;
-use super::types::{MemoryCategory, MemoryEntry};
+use super::types::{MemoryCategory, MemoryEntry, SessionMemoryConfig};
 
 // ============================================================================
 // Extraction helpers
@@ -411,18 +412,39 @@ impl AutoDreamService {
         let extracted = self.extract_memories(&full_text, project);
         let deduped = deduplicate_memories(extracted);
 
-        // Store all new memories
+        // Store all new memories (write-time dedup: near-duplicates update in
+        // place rather than appending paraphrases; ADR-0010 D4/C4').
         let mut store = self
             .store
             .write()
             .map_err(|e| MemoryError::Io(std::io::Error::other(e.to_string())))?;
 
         for entry in &deduped {
-            store.add(entry.clone())?;
+            store.add_or_update(entry.clone())?;
         }
 
         store.save()?;
         Ok(deduped)
+    }
+
+    /// Run periodic compaction for `project` if the schedule says so
+    /// (ADR-0010 C5').
+    ///
+    /// Counts this call as one session and compacts when either the max-age or
+    /// max-sessions threshold is met. The schedule is persisted in a sidecar
+    /// next to the memory files, so it survives this service's per-query
+    /// lifetime. Returns `Some(summary)` when a compaction ran this call.
+    pub fn maybe_compact(
+        &self,
+        project: &str,
+        config: &SessionMemoryConfig,
+    ) -> Result<Option<CompactSummary>, MemoryError> {
+        let mut store = self
+            .store
+            .write()
+            .map_err(|e| MemoryError::Io(std::io::Error::other(e.to_string())))?;
+        let trigger = MemoryCompactionTrigger::for_store(&store);
+        trigger.maybe_compact(&mut store, project, config)
     }
 
     /// Search the memory store.

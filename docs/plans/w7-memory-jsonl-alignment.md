@@ -1,8 +1,8 @@
 # Wave-7: Memory Curated-Layer → JSONL-Append + Scoped Injection
 
-**ADR**: [0010 — Memory Curated-Layer Alignment to JSONL-Append + Scoped Injection](../adr/0010-memory-curated-layer-jsonl-injection.md) (Proposed)
-**Branch**: `feat/w7-memory-jsonl-alignment`
-**Status**: planning (C1' ADR written; C2'-C6' pending)
+**ADR**: [0010 — Memory Curated-Layer Alignment to JSONL-Append + Scoped Injection](../adr/0010-memory-curated-layer-jsonl-injection.md) (Accepted)
+**Branch**: `feat/w7-adr0010-memory-jsonl`
+**Status**: C2'-C5' landed (ADR Accepted); C6' gated on one release cycle.
 
 ## Goal
 
@@ -42,24 +42,36 @@ competitor evidence, and rejected alternatives (markdown, SQLite).
   (recall = 100%); insta snapshot of the injected prompt shape; net line
   count drops.
 
-### C4' — Write-time dedup
+### C4' — Write-time dedup — ✅ landed
 
-- Before append, token-overlap check vs same-`category` entries already in
-  the in-memory map; if over threshold, append an updated line (the old
-  line becomes stale, reclaimed by the next compaction).
-- **Verify**: appending a near-duplicate updates rather than duplicates;
-  the stale line is reclaimed on the next compaction pass.
+- `MemoryStore::add_or_update`: before append, token-overlap (Jaccard ≥ 0.8)
+  check vs same-`category` entries; on match, reuse the id and update in place
+  (newer content, max confidence, union tags, earliest `created_at`). The old
+  JSONL line becomes a stale duplicate reclaimed by the next compaction.
+- Production write paths switched to it: AutoDream `process_conversation`,
+  `/remember`, REPL auto-memory. `add()` stays raw for tests + consolidator.
+- **Verified**: appending a near-duplicate updates (`AddOutcome::Updated`)
+  rather than duplicates; the stale line is reclaimed on the next `save()`.
 
-### C5' — AutoDream periodic trigger + size control
+### C5' — AutoDream periodic trigger + size control — ✅ landed
 
-- Periodic compaction trigger (~24h wall-clock **or** ≥5 sessions for the
-  project): dedupe near-duplicates, prune stale entries (respecting
-  `cleanup()` `max_age` / `max_entries`), resolve relative→absolute dates,
-  reclaim stale duplicate lines from C4'.
-- **Size control**: if injected memory exceeds the token budget, compaction
-  prunes harder (lowest-confidence / oldest-accessed first).
-- **Verify**: trigger fires on schedule; compaction reduces entry count
-  without losing high-confidence facts; injected prompt stays under budget.
+- `MemoryCompactionTrigger` + `AutoDreamService::maybe_compact`, wired into
+  the engine post-query path. Schedule persisted in a sidecar
+  (`compaction-state.json`) because `AutoDreamService` is recreated per query.
+  Compacts at ~24 h wall-clock **or** ≥5 sessions (each query = 1 session):
+  dedupe + stale + per-category caps (rule-based `MemoryConsolidator`),
+  reclaim stale C4' lines, then token-budget prune.
+- **Size control**: `prune_to_token_budget` shrinks the injected prompt to a
+  ~2000-token budget, lowest-confidence / oldest-accessed first.
+- **Multi-agent-safe compaction**: `save()` reloads disk under flock and
+  reconciles — other agents' concurrent appends are preserved, deliberately
+  deleted ids are not resurrected.
+- **Verified**: trigger fires on the session/age threshold; compaction
+  reduces count without losing high-confidence facts; injected prompt stays
+  under budget; reconcile preserves another agent's append.
+- **Deferred**: relative→absolute date resolution (see ADR-0010 D5
+  refinement) — fiddly/low-value for ML-extracted content; revisit if
+  observed in practice.
 
 ### C6' — Old `<hash>.json` read-compat removal
 

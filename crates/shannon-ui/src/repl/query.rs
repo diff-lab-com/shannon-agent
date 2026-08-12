@@ -1692,7 +1692,7 @@ fn auto_save_memory(repl: &mut Repl, response: &str) {
     };
 
     let id = entry.id.clone();
-    if let Err(e) = store.add(entry) {
+    if let Err(e) = store.add_or_update(entry) {
         tracing::warn!("Auto-memory add failed: {e}");
         return;
     }
