@@ -24,13 +24,18 @@
 pub use shannon_engine::api::{Message, MessageContent};
 
 pub use auto_dream::AutoDreamService;
+pub use compaction_trigger::{
+    CompactSummary, CompactionState, DEFAULT_MAX_AGE, DEFAULT_MAX_SESSIONS, DEFAULT_TOKEN_BUDGET,
+    MemoryCompactionTrigger,
+};
 pub use consolidator::{ConsolidationResult, MemoryConsolidator};
 pub use error::MemoryError;
-pub use store::MemoryStore;
+pub use store::{AddOutcome, MemoryStore};
 pub use types::{MemoryCategory, MemoryEntry, MemoryType, SessionMemoryConfig};
 
 // Private modules
 mod auto_dream;
+mod compaction_trigger;
 mod consolidator;
 mod error;
 mod store;

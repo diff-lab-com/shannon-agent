@@ -9,7 +9,7 @@ use super::error::MemoryError;
 // ============================================================================
 
 /// Classification of a memory entry's content type.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MemoryCategory {
     /// User preferences ("always use tabs not spaces")
     Preference,
