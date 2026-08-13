@@ -2,16 +2,8 @@ import type { IncomingMessage } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 
 import type { Logger } from "../adapters/types.js";
-import {
-  JSONRPC_VERSION,
-  ShannonError,
-  parseNdjson,
-  serializeFrame,
-  type JsonRpcRequest,
-  type JsonRpcResponse,
-  type ShannonEvent,
-  type ShannonEventNotification,
-} from "./protocol.js";
+import type { ShannonEvent } from "./protocol.js";
+import { dispatchNdjson } from "./dispatch.js";
 
 /**
  * The inbound mobile server — a WebSocket endpoint speaking NDJSON `shannon/*`
@@ -28,6 +20,10 @@ import {
  *
  * Auth is an optional `authenticator` hook; P1.1 leaves it unset and P1.2
  * injects Ed25519 verification (every approval decision is signed).
+ *
+ * Dispatch logic is shared with the relay host transport via `dispatchNdjson`
+ * (see dispatch.ts) so both transports — direct WebSocket and E2E relay — route
+ * messages through the same JSON-RPC pipeline.
  */
 
 export interface MethodContext {
@@ -148,60 +144,22 @@ export class MobileServer {
   }
 
   private async onMessage(text: string, ctx: MethodContext): Promise<void> {
-    for (const record of parseNdjson(text)) {
-      if (record === null) {
-        this.send(ctx, errorResponse(null, ShannonError.PARSE_ERROR, "malformed JSON"));
-        continue;
-      }
-      await this.dispatch(record, ctx);
-    }
+    await dispatchNdjson(
+      text,
+      ctx,
+      this.opts.handlers,
+      (data) => this.send(ctx, data),
+      this.opts.logger,
+    );
   }
 
-  private async dispatch(raw: unknown, ctx: MethodContext): Promise<void> {
-    if (!isRequest(raw)) {
-      this.send(
-        ctx,
-        errorResponse(null, ShannonError.INVALID_REQUEST, "not a valid JSON-RPC request"),
-      );
-      return;
-    }
-    const handler = this.opts.handlers[raw.method];
-    if (!handler) {
-      this.send(
-        ctx,
-        errorResponse(raw.id, ShannonError.METHOD_NOT_FOUND, `no handler for ${raw.method}`),
-      );
-      return;
-    }
-    try {
-      const outcome = await handler(raw.params, ctx);
-      if (outcome.kind === "error") {
-        this.send(
-          ctx,
-          errorResponse(raw.id, outcome.code, outcome.message, outcome.data),
-        );
-        return;
-      }
-      if (outcome.kind === "stream") {
-        for await (const ev of outcome.stream) {
-          if (ctx.socket.readyState !== WebSocket.OPEN) return;
-          this.send(ctx, notification(ev));
-        }
-      }
-      this.send(ctx, successResponse(raw.id, outcome.result));
-    } catch (err) {
-      const message = (err as Error).message ?? "handler error";
-      this.send(ctx, errorResponse(raw.id, ShannonError.ENGINE_ERROR, message));
-    }
-  }
-
-  private send(ctx: MethodContext, value: unknown): void {
+  private send(ctx: MethodContext, data: string): void {
     if (ctx.socket.readyState !== WebSocket.OPEN) return;
-    ctx.socket.send(serializeFrame(value));
+    ctx.socket.send(data);
   }
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────
+// ── helpers ──────────────────────────────────────────────────────────────────
 
 function frameToString(data: unknown): string {
   if (typeof data === "string") return data;
@@ -210,33 +168,4 @@ function frameToString(data: unknown): string {
   if (Array.isArray(data)) return Buffer.concat(data as Buffer[]).toString("utf8");
   if (ArrayBuffer.isView(data)) return new TextDecoder().decode(data as Uint8Array);
   return String(data);
-}
-
-function isRequest(v: unknown): v is JsonRpcRequest {
-  if (typeof v !== "object" || v === null) return false;
-  const r = v as Record<string, unknown>;
-  return (
-    r.jsonrpc === JSONRPC_VERSION &&
-    typeof r.method === "string" &&
-    (typeof r.id === "string" || typeof r.id === "number")
-  );
-}
-
-function successResponse(id: string | number, result: unknown): JsonRpcResponse<unknown> {
-  return { jsonrpc: JSONRPC_VERSION, id, result };
-}
-
-function errorResponse(
-  id: string | number | null,
-  code: number,
-  message: string,
-  data?: unknown,
-): JsonRpcResponse<unknown> {
-  const error: { code: number; message: string; data?: unknown } = { code, message };
-  if (data !== undefined) error.data = data;
-  return { jsonrpc: JSONRPC_VERSION, id, error };
-}
-
-function notification(event: ShannonEvent): ShannonEventNotification {
-  return { jsonrpc: JSONRPC_VERSION, method: "shannon/event", params: event };
 }

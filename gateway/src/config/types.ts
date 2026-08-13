@@ -49,6 +49,13 @@ export interface GatewayConfig {
   mobile?: MobileGatewayConfig;
 }
 
+export interface RelayConfig {
+  /** Relay WebSocket URL (e.g. "wss://relay.shannon.example"). */
+  url: string;
+  /** Enable relay host mode (default false). */
+  enabled: boolean;
+}
+
 export interface MobileGatewayConfig {
   /** Enable the inbound mobile `shannon/*` WS server. Default false. */
   enabled?: boolean;
@@ -66,6 +73,17 @@ export interface MobileGatewayConfig {
    * Default `~/.shannon/mobile-devices.json`.
    */
   devicesFile?: string;
+  /**
+   * Relay host configuration. When `relay.enabled` is true, the gateway also
+   * connects outbound to shannon-relay so phones can pair without LAN access.
+   */
+  relay?: RelayConfig;
+  /**
+   * Path to write the QR v2 JSON payload for relay-mode pairing. The desktop
+   * app reads this file to render the QR code. Default: not written (relay
+   * mode logs the payload to the console instead).
+   */
+  qrPayloadFile?: string;
 }
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
