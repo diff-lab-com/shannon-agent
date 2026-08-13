@@ -381,11 +381,7 @@ describe('Editor page — Phase E1 v2', () => {
     fireEvent.click(screen.getByRole('button', { name: /load file/i }))
     const askBtn = await screen.findAllByRole('button', { name: /ask ai/i })
     fireEvent.click(askBtn[0])
-    // CI runners (2 vCPU) can exceed the 1s default waitFor timeout while
-    // the mocked diagnostics resolve and React flushes.
-    await waitFor(() => expect(router.state.location.pathname).toBe('/chat'), {
-      timeout: 5000,
-    })
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat'))
     expect(router.state.location.state).toEqual({
       prefill: expect.stringContaining('unused variable: x'),
     })
