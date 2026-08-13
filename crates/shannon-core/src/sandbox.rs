@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[cfg(feature = "landlock")]
-use landlock::{Access, AccessFs, Bitflags, Compatible, RulesetCreated, RulesetStatus};
+use landlock::{AccessFs, PathFd, Ruleset, RulesetAttr, RulesetCreated};
 
 // ============================================================================
 // Error Types
@@ -1592,43 +1592,41 @@ pub struct LandlockSandbox {
 #[cfg(feature = "landlock")]
 impl LandlockSandbox {
     /// Create a new Landlock sandbox with the given profile.
+    ///
+    /// Landlock is deny-by-default: every access right handled here is denied
+    /// unless a `PathBeneath` rule grants it beneath one of the profile's
+    /// paths. Missing profile paths fail closed (profile error) rather than
+    /// silently granting nothing.
     pub fn new(profile: SandboxProfile) -> Result<Self, SandboxError> {
-        use landlock::{AccessFs, Ruleset};
+        use landlock::ABI;
 
-        // Build the ruleset based on the profile
-        let mut ruleset = Ruleset::new()
-            .handle_access(AccessFs::from_bitflags(Access::from_read(|access| {
-                // Allow read access to allowed paths
-                for path in &profile.allowed_paths {
-                    if let Ok(path_str) = path.to_str().ok_or_else(|| {
-                        SandboxError::InvalidConfig("Invalid path in profile".to_string())
-                    }) {
-                        let _ = access.path_add_beneath(path_str, Access::FS_READ);
-                    }
-                }
-            })))
-            .handle_access(AccessFs::from_bitflags(Access::from_write(|access| {
-                // Allow write access to writable paths
-                for path in &profile.writable_paths {
-                    if let Ok(path_str) = path.to_str().ok_or_else(|| {
-                        SandboxError::InvalidConfig("Invalid path in profile".to_string())
-                    }) {
-                        let _ = access.path_add_beneath(path_str, Access::FS_WRITE);
-                    }
-                }
-            })));
+        // Request the full write set from the newest ABI the crate knows;
+        // the default BestEffort compatibility silently drops rights the
+        // running kernel doesn't support.
+        let read_access = AccessFs::from_read(ABI::V5);
+        let write_access = AccessFs::from_write(ABI::V5);
 
-        // Try to create the ruleset
-        let ruleset = match ruleset.create() {
-            Ok(r) => Some(r),
-            Err(_) => {
-                // Landlock might not be supported, fall back to no enforcement
-                tracing::warn!("Landlock not supported by kernel, running unsandboxed");
-                None
+        let ruleset = Ruleset::default()
+            .handle_access(read_access | write_access)
+            .map_err(|e| SandboxError::ProfileError(format!("handle_access: {e}")))?
+            .create()
+            .map_err(|e| SandboxError::ProfileError(format!("create ruleset: {e}")))?;
+
+        // Writable paths get read+write; read-only allowed paths get read.
+        let mut ruleset = ruleset;
+        for path in &profile.writable_paths {
+            ruleset = add_beneath_rule(ruleset, path, read_access | write_access)?;
+        }
+        for path in &profile.allowed_paths {
+            if !profile.writable_paths.contains(path) {
+                ruleset = add_beneath_rule(ruleset, path, read_access)?;
             }
-        };
+        }
 
-        Ok(Self { profile, ruleset })
+        Ok(Self {
+            profile,
+            ruleset: Some(ruleset),
+        })
     }
 
     /// Try to create a Landlock sandbox, returns None if not available.
@@ -1637,34 +1635,47 @@ impl LandlockSandbox {
     }
 
     /// Apply the Landlock restrictions to the current thread.
-    pub fn apply_restrictions(&self) -> Result<(), SandboxError> {
-        if let Some(ref ruleset) = self.ruleset {
-            ruleset.restrict().map_err(|e| {
+    ///
+    /// Landlock is thread-scoped: this restricts the calling thread (and any
+    /// process it later spawns). Callers running on a shared worker thread
+    /// (e.g. a tokio runtime) should spawn from a dedicated restricted
+    /// thread instead — see the W7-1 sandbox spike for the full design.
+    pub fn apply_restrictions(&mut self) -> Result<(), SandboxError> {
+        if let Some(ruleset) = self.ruleset.take() {
+            let status = ruleset.restrict_self().map_err(|e| {
                 SandboxError::ExecutionFailed(format!("Failed to apply Landlock: {e}"))
             })?;
+            tracing::debug!(?status, "Landlock restrictions applied");
         }
         Ok(())
     }
 
     /// Check if Landlock is available on this system.
     pub fn is_available() -> bool {
-        Ruleset::new().create().is_ok()
+        Ruleset::default().create().is_ok()
     }
 
     /// Get the sandbox profile.
     pub fn profile(&self) -> &SandboxProfile {
         &self.profile
     }
+}
 
-    /// Get the program being executed.
-    pub fn program(&self) -> &str {
-        &self.program
-    }
+/// Grant `access` beneath `path` on `ruleset`, failing closed if the path
+/// cannot be opened.
+#[cfg(feature = "landlock")]
+fn add_beneath_rule(
+    ruleset: RulesetCreated,
+    path: &Path,
+    access: landlock::BitFlags<AccessFs>,
+) -> Result<RulesetCreated, SandboxError> {
+    use landlock::{PathBeneath, RulesetCreatedAttr};
 
-    /// Get the arguments for the command.
-    pub fn args(&self) -> &[String] {
-        &self.args
-    }
+    let fd = PathFd::new(path)
+        .map_err(|e| SandboxError::ProfileError(format!("{}: {e}", path.display())))?;
+    ruleset
+        .add_rule(PathBeneath::new(fd, access))
+        .map_err(|e| SandboxError::ProfileError(format!("{}: {e}", path.display())))
 }
 
 // ============================================================================
@@ -1757,7 +1768,7 @@ impl SandboxedCommand {
 
         // Apply Landlock restrictions if available
         #[cfg(feature = "landlock")]
-        if let Some(ref landlock) = self.landlock {
+        if let Some(landlock) = self.landlock.as_mut() {
             landlock.apply_restrictions()?;
         }
 
