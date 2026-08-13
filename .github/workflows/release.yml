@@ -259,6 +259,40 @@ jobs:
         working-directory: desktop/ui
         run: pnpm install --frozen-lockfile
 
+      # tauri-bundler downloads NSIS on-demand with NO retry — a transient
+      # "io: Peer disconnected" mid-build sinks the whole release job (cost
+      # ~20 min per flake on v0.10.0). Pre-fetch + extract into Tauri's cache
+      # dir so the bundler finds it ready and skips the fragile download.
+      # Mirrors get_and_extract_nsis in
+      # tauri-bundler/src/bundle/windows/nsis/mod.rs (nsis-3.11 + utils v0.5.3).
+      - name: Pre-cache NSIS toolchain (defeat download flake)
+        if: matrix.ext == 'nsis'
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:LOCALAPPDATA 'tauri'
+          $nsis = Join-Path $tools 'NSIS'
+          if (Test-Path $nsis) {
+            Write-Host "NSIS toolchain already cached at $nsis"
+          } else {
+            New-Item -ItemType Directory -Force -Path $tools | Out-Null
+            $zip = Join-Path $tools 'nsis-3.11.zip'
+            $dll = Join-Path $tools 'nsis_tauri_utils.dll'
+            # --retry-all-errors survives transient Azure-blob disconnects
+            curl.exe -L --retry 5 --retry-all-errors --retry-delay 2 -o "$zip" `
+              'https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip'
+            curl.exe -L --retry 5 --retry-all-errors --retry-delay 2 -o "$dll" `
+              'https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll'
+            # SHA1 from tauri-bundler NSIS_SHA1 / NSIS_TAURI_UTILS_SHA1
+            if ((Get-FileHash $zip -Algorithm SHA1).Hash -ne 'EF7FF767E5CBD9EDD22ADD3A32C9B8F4500BB10D') { throw 'nsis-3.11.zip SHA1 mismatch' }
+            if ((Get-FileHash $dll -Algorithm SHA1).Hash -ne '75197FEE3C6A814FE035788D1C34EAD39349B860') { throw 'nsis_tauri_utils.dll SHA1 mismatch' }
+            Expand-Archive -Path $zip -DestinationPath $tools -Force
+            Rename-Item (Join-Path $tools 'nsis-3.11') 'NSIS'
+            $plugDir = Join-Path $nsis 'Plugins\x86-unicode\additional'
+            New-Item -ItemType Directory -Force -Path $plugDir | Out-Null
+            Copy-Item $dll (Join-Path $plugDir 'nsis_tauri_utils.dll') -Force
+            Write-Host "NSIS toolchain pre-cached at $nsis"
+          }
+
       # productName is `shannon-desktop`, so bundles are shannon-desktop_*.
       # releaseDraft:true only creates if missing — the draft from
       # create-release already exists, so this just uploads into it.
