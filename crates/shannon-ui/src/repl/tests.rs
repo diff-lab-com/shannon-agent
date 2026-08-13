@@ -2803,9 +2803,9 @@ fn clean_mcp_config() {
     let dir = tempfile::tempdir().expect("create mcp tempdir");
     let config_path = dir.path().join("mcp.json");
     let approval_path = dir.path().join("mcp_approvals.json");
-    // `tempdir()` removes the directory on drop, but we leak it via `into_path`
+    // `tempdir()` removes the directory on drop, but we leak it via `keep`
     // so the mcp code can keep reading after the helper returns.
-    let leaked: &'static std::path::Path = Box::leak(dir.into_path().into_boxed_path());
+    let leaked: &'static std::path::Path = Box::leak(dir.keep().into_boxed_path());
     // SAFETY: each `#[test]` in this module runs the helper once before any
     // mcp command touches the env vars. `serial_test` already serializes
     // shannon-ui repl::tests, and other crates do not read these vars.
