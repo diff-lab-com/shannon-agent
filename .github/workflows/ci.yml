@@ -323,7 +323,7 @@ jobs:
       # Bump this when cutting a new baseline release. It feeds both
       # `baseline-rev` and the cache `prefix-key`, so a baseline bump always
       # invalidates the cached baseline rustdoc and never serves a stale one.
-      SEMVER_BASELINE: v0.8.0
+      SEMVER_BASELINE: v0.10.0
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
