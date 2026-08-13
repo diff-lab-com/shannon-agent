@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { type AdapterContext, type ChannelAdapter, type Logger } from "./adapters/types.js";
 import { AdapterRegistry } from "./adapters/registry.js";
@@ -21,6 +22,9 @@ import {
   PairTokenStore,
 } from "./mobile/pairing.js";
 import type { EngineClientFactory as MobileEngineClientFactory } from "./mobile/engineBridge.js";
+import { deriveSessionKey } from "./mobile/relay/e2e.js";
+import { startRelayHost, type RelayHostHandle } from "./mobile/relay/relayHost.js";
+import { generateQrV2Payload, generateRelaySessionId } from "./mobile/relay/qrV2.js";
 
 /**
  * Turns an `AdapterConfig` + secret-backed `AdapterContext` into a live
@@ -191,6 +195,58 @@ async function startMobileServer(
 
   const server = new MobileServer({ host, port, logger, handlers });
   const handle = await server.start();
+
+  // Relay host mode: also connect outbound to shannon-relay so phones can
+  // pair without LAN access. The same MethodHandlers are reused — the relay
+  // host wraps messages in E2E encryption over the relay's binary transport.
+  if (mobileCfg.relay?.enabled && mobileCfg.relay.url) {
+    const relayUrl = mobileCfg.relay.url;
+    const relaySid = generateRelaySessionId();
+    const pairRecord = tokens.issue();
+    const sessionKey = deriveSessionKey(pairRecord.token);
+
+    const relayHandle: RelayHostHandle = startRelayHost({
+      relayUrl,
+      sid: relaySid,
+      sessionKey,
+      handlers,
+      logger,
+    });
+
+    // Generate the QR v2 payload for the phone to scan.
+    const scheme = relayUrl.startsWith("wss") ? "wss" : "ws";
+    const qrPayload = generateQrV2Payload({
+      scheme,
+      host,
+      port: handle.port,
+      pairToken: pairRecord.token,
+      expiresAt: pairRecord.expiresAt,
+      relayUrl,
+      relaySessionId: relaySid,
+    });
+
+    const qrJson = JSON.stringify(qrPayload);
+    logger.info(`relay host: QR v2 payload: ${qrJson}`);
+
+    if (mobileCfg.qrPayloadFile) {
+      mkdirSync(dirname(mobileCfg.qrPayloadFile), { recursive: true });
+      writeFileSync(mobileCfg.qrPayloadFile, qrJson, "utf8");
+      logger.info(`relay host: QR payload written to ${mobileCfg.qrPayloadFile}`);
+    }
+
+    // Extend the stop handle to also stop the relay host.
+    const originalStop = handle.stop;
+    return {
+      handle: {
+        stop: async () => {
+          await relayHandle.stop().catch(() => {});
+          await originalStop();
+        },
+      },
+      port: handle.port,
+    };
+  }
+
   return { handle, port: handle.port };
 }
 
