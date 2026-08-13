@@ -25,14 +25,17 @@ test.describe('Plugins Marketplace', () => {
     await expect(page.getByText('0 entries')).toBeVisible()
   })
 
-  test('shows filter chips for all addon kinds', async ({ page }) => {
-    // Even with empty state, the filter chips should be visible
-    await expect(page.getByRole('button', { name: 'All' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'MCP Servers' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Skills' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Agents' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Data Sources' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Plugin Bundles' })).toBeVisible()
+  test('shows trust and source filter dropdowns', async ({ page }) => {
+    // The kind chips were replaced by Trust / Source filter dropdowns.
+    const trustSelect = page.getByLabel('Trust', { exact: true })
+    const sourceSelect = page.getByLabel('Source', { exact: true })
+    await expect(trustSelect).toBeVisible()
+    await expect(sourceSelect).toBeVisible()
+    await expect(trustSelect).toHaveValue('all')
+    await expect(sourceSelect).toHaveValue('all')
+    for (const name of ['All sources', 'GitHub', 'Shannon Featured', 'Native', 'MCP Registry', 'Custom']) {
+      await expect(sourceSelect.locator('option', { hasText: name })).toHaveCount(1)
+    }
   })
 
   test('shows sort dropdown', async ({ page }) => {
@@ -49,32 +52,23 @@ test.describe('Plugins Marketplace', () => {
     await expect(page.getByText('0 entries')).toBeVisible()
   })
 
-  test('filter chips are clickable', async ({ page }) => {
-    // Click on a filter chip
-    const skillsChip = page.getByRole('button', { name: 'Skills' })
-    await skillsChip.click()
-
-    // Verify it becomes active (background color changes)
-    // The active chip has bg-primary class
-    await expect(skillsChip).toHaveClass(/bg-primary/)
+  test('trust filter dropdown is changeable', async ({ page }) => {
+    const trustSelect = page.getByLabel('Trust', { exact: true })
+    await trustSelect.selectOption('verified')
+    await expect(trustSelect).toHaveValue('verified')
   })
 
-  test('can switch between filter chips', async ({ page }) => {
-    const skillsChip = page.getByRole('button', { name: 'Skills' })
-    const mcpChip = page.getByRole('button', { name: 'MCP Servers' })
+  test('can switch between source filter values', async ({ page }) => {
+    const sourceSelect = page.getByLabel('Source', { exact: true })
+    await sourceSelect.selectOption('native')
+    await expect(sourceSelect).toHaveValue('native')
 
-    // Click Skills
-    await skillsChip.click()
-    await expect(skillsChip).toHaveClass(/bg-primary/)
-
-    // Click MCP
-    await mcpChip.click()
-    await expect(mcpChip).toHaveClass(/bg-primary/)
-    await expect(skillsChip).not.toHaveClass(/bg-primary/)
+    await sourceSelect.selectOption('git_hub_repo')
+    await expect(sourceSelect).toHaveValue('git_hub_repo')
   })
 
   test('sort dropdown has all options', async ({ page }) => {
-    const sortSelect = page.locator('select').first()
+    const sortSelect = page.getByLabel('Sort by', { exact: true })
 
     // Verify the select exists and has options by checking its value can be changed
     await expect(sortSelect).toHaveValue('trust')
@@ -89,7 +83,7 @@ test.describe('Plugins Marketplace', () => {
   })
 
   test('can change sort mode', async ({ page }) => {
-    const sortSelect = page.locator('select').first()
+    const sortSelect = page.getByLabel('Sort by', { exact: true })
 
     // Default should be "trust" (Trust Level)
     await expect(sortSelect).toHaveValue('trust')
@@ -103,18 +97,16 @@ test.describe('Plugins Marketplace', () => {
     await expect(sortSelect).toHaveValue('name')
   })
 
-  test('can reset filter by clicking "All" chip', async ({ page }) => {
-    const allChip = page.getByRole('button', { name: 'All' })
-    const skillsChip = page.getByRole('button', { name: 'Skills' })
+  test('can reset filters with the reset button', async ({ page }) => {
+    const sourceSelect = page.getByLabel('Source', { exact: true })
 
-    // Click Skills first
-    await skillsChip.click()
-    await expect(skillsChip).toHaveClass(/bg-primary/)
+    // Activate a filter first — the reset button only renders then
+    await sourceSelect.selectOption('native')
+    const resetButton = page.getByRole('button', { name: /Reset filters/i })
+    await expect(resetButton).toBeVisible()
 
-    // Click All to reset
-    await allChip.click()
-    await expect(allChip).toHaveClass(/bg-primary/)
-    await expect(skillsChip).not.toHaveClass(/bg-primary/)
+    await resetButton.click()
+    await expect(sourceSelect).toHaveValue('all')
   })
 
   test('page structure matches design', async ({ page }) => {
