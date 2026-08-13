@@ -6,6 +6,22 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 _No entries yet._
 
+## v0.10.0 (2026-08-13) — memory curated layer (ADR-0010), ADR-0005 provider tail closed
+
+### Added
+
+- **Memory storage upgrade to append-only JSONL (ADR-0010, C2'-C5').** Memories now persist as append-only JSONL (`~/.shannon/memories/<project>.jsonl`) under a process-wide flock, replacing the single-shot JSON read/write. Injection is scoped per-project/per-category instead of search-based; write-time Jaccard dedup avoids near-duplicate entries; and a periodic compaction trigger (~24h wall-clock or ≥5 sessions) dedupes, drops stale entries, enforces per-category caps, and prunes the injected prompt to a ~2000-token budget. Compaction is multi-agent-safe — concurrent appends from other agents are reconciled under flock and preserved, and deliberately-deleted ids are not resurrected. (#62)
+- **`fallback_models` editor in the Add Provider modal (ADR-0005 G4).** The desktop Add Provider modal's advanced section now has a list editor for `fallback_models`, mirroring the existing `extra_headers` editor; wired through `ProviderInput` → `apply_provider_update` + the `save_provider` insert branch. (#63)
+
+### Changed
+
+- **Retired the `switch_provider` desktop shim (ADR-0005 G6).** The vestigial `switch_provider` Tauri command is removed; the three frontend model-switch surfaces (`Header`, `CommandPalette`, `ModelsSettings`) now route to `configure({ key: 'model', value })`, the canonical store-mutating path. This also fixes a latent bug — `switch_provider` discarded its request argument, so picking a model from those dropdowns had been a no-op since P1.2-B. (#63)
+- **Removed the legacy `providers.json` → `providers.toml` migration code (ADR-0005 G2/G3).** Shannon never shipped a release carrying the `providers.json` wire format externally, so the one-shot `migrate_providers_to_toml` startup migration, the `LegacyProviderConnection`/`LegacyProvidersFile` wire types, the `list_providers` empty-store stale-check, and the `IsolatedHome` test fixture are all deleted. No code path reads or writes `providers.json` now. (#61)
+
+### Internal
+
+- Silenced `lru` advisory RUSTSEC-2026-0253 (pop use-after-free on an unreachable code path) in `.cargo/audit.toml` so `cargo audit` stays green. (#59)
+
 ## v0.9.0 (2026-08-10) — file-history snapshots + unified `/rewind`, provider read facade + wire alignment
 
 ### Added
