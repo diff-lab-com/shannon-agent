@@ -51,6 +51,35 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 })
 
+// Node >= 24's undici brand-checks the `signal` passed to `new Request()`
+// against the Node-global AbortSignal. Vitest's jsdom environment swaps in
+// jsdom's realm-local AbortController/AbortSignal, so react-router v7's
+// navigation Request construction throws
+// "Expected signal to be an instance of AbortSignal" and the navigation
+// never happens (Node 22's undici skipped the check, which is why this
+// only surfaced once CI moved to Node 24).
+//
+// The Node-native classes are unreachable from inside the vm context
+// (process.getBuiltinModule returns undefined here, and Vite cannot
+// externalize node:abort-controller in this setup file), so instead wrap
+// the global Request and drop cross-realm signals. Tests never abort
+// navigations mid-flight, so an inert abort path is equivalent.
+const NativeRequest = globalThis.Request
+if (NativeRequest) {
+  class RequestWithoutCrossRealmSignal extends NativeRequest {
+    constructor(input: RequestInfo | URL, init?: RequestInit) {
+      const signal = init?.signal as unknown as { aborted?: boolean } | null | undefined
+      if (signal && typeof signal.aborted === 'boolean') {
+        const { signal: _crossRealm, ...rest } = init
+        super(input, { ...rest, signal: undefined })
+        return
+      }
+      super(input, init)
+    }
+  }
+  globalThis.Request = RequestWithoutCrossRealmSignal as typeof Request
+}
+
 class ResizeObserverMock {
   observe = vi.fn()
   unobserve = vi.fn()
