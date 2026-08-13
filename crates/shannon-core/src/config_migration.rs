@@ -54,6 +54,10 @@ impl std::fmt::Debug for SecretBinding {
 
 /// Default location for the persisted secrets file: `~/.shannon/secrets.env`.
 /// `None` if the user's home directory cannot be determined.
+#[deprecated(
+    note = "superseded by CredentialRef::Store (ADR-0005 Phase 1); secrets.env is write-only — new credential flows should target Store",
+    since = "0.11.0"
+)]
 pub fn default_secrets_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".shannon").join("secrets.env"))
 }
@@ -67,6 +71,10 @@ pub fn default_secrets_path() -> Option<PathBuf> {
 ///   with `dotenvy` regardless of special characters.
 /// - The file (and its parent directory) is created with restrictive
 ///   permissions (`0600` / `0700`) on Unix.
+#[deprecated(
+    note = "superseded by CredentialRef::Store (ADR-0005 Phase 1); secrets.env is write-only — new credential flows should target Store",
+    since = "0.11.0"
+)]
 pub fn persist_secrets(bindings: &[SecretBinding], path: &Path) -> std::io::Result<()> {
     // Load existing KEY=value entries, preserving order.
     let mut entries: Vec<(String, String)> = Vec::new();
@@ -171,6 +179,8 @@ fn restrict_dir(_path: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
+// exercises the deprecated secrets.env write-path until it is removed
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
