@@ -835,9 +835,7 @@ fn should_enable_tools(provider: shannon_engine::api::LlmProvider) -> bool {
 ///
 /// The CLI temporarily injects the resolved api-key value into the
 /// `SHANNON_API_KEY` env var so `resolve_credential` can pick it up. This is
-/// restored before returning. **N2 will replace this with proper secrets.env
-/// plumbing** via `crate::config_migration::persist_secrets` —
-/// pre-N1 the same `unsafe std::env` pattern was used by
+/// restored before returning. pre-N1 the same `unsafe std::env` pattern was used by
 /// `apply_env_overrides`, so this preserves A1 and the same overall behaviour.
 fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
     // 1. Resolve the canonical api-key value: SHANNON_API_KEY (or

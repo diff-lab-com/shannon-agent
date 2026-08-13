@@ -44,7 +44,6 @@ pub mod away_summary;
 pub mod bridge_service;
 pub mod checkpoint;
 pub mod compact;
-pub mod config_migration;
 pub mod config_persist;
 pub mod config_watcher;
 pub mod diagnostics;
@@ -138,9 +137,6 @@ pub use bridge_service::{
     SessionMessage,
 };
 pub use checkpoint::{Checkpoint, CheckpointManager, TurnCheckpoint};
-#[allow(deprecated)]
-// re-export retained for the deprecation grace period; new code should use CredentialRef::Store
-pub use config_migration::{SecretBinding, default_secrets_path, persist_secrets};
 pub use diagnostics::{
     DiagnosticCategory, DiagnosticEvent, DiagnosticLevel, DiagnosticSummary, DiagnosticTracker,
     ErrorPattern,

@@ -18,8 +18,8 @@
 //! `provider_model`, synthesized from CLI/TOML/env inputs by
 //! [`crate::provider_resolver::synthesize_default_profile`]. Credentials are
 //! A1-strict: only [`CredentialRef::Env`](shannon_types::provider_config::CredentialRef::Env)
-//! references, never plaintext in the config (plaintext values live in
-//! `~/.shannon/secrets.env` via [`crate::config_migration::persist_secrets`]).
+//! references, never plaintext in the config (plaintext values live in the
+//! process environment, resolved by `resolve_credential`).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
