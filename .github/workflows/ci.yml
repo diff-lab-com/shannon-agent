@@ -49,6 +49,12 @@ jobs:
         run: cargo test --workspace --no-run
       - name: Test
         run: cargo nextest run --workspace --config-file .config/nextest.toml
+      - name: Doctests
+        # nextest does not execute doctests, so a doctest-only regression
+        # (e.g. an example that relies on opt-in configuration) stays green
+        # in `Test` and only fails here. Lib targets are already compiled by
+        # the steps above; this only builds the doctest binaries.
+        run: cargo test --workspace --doc
 
   vscode:
     name: VS Code Extension
@@ -64,6 +70,34 @@ jobs:
         run: cd editors/vscode && npm run compile
       - name: Test
         run: cd editors/vscode && npm test
+
+  desktop-e2e:
+    name: Desktop E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
+        with:
+          node-version: "24"
+      # pnpm/action-setup v6.0.10, pinned by commit SHA (see header note).
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
+        with:
+          version: 10
+      - name: Install UI deps
+        working-directory: desktop/ui
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright browsers
+        working-directory: desktop/ui
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run e2e tests
+        # playwright.config.ts starts the dev server via `pnpm demo`
+        # (VITE_MOCK_MODE=1) so the suite runs without the Tauri backend.
+        # CI=1 keeps Playwright from reusing a local server instance.
+        working-directory: desktop/ui
+        env:
+          CI: "1"
+        run: pnpm exec playwright test
 
   clippy:
     name: Clippy
