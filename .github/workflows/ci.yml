@@ -332,6 +332,13 @@ jobs:
         # test of the public Rust API surface. shannon-desktop is
         # built fully in release.yml under each platform's matrix leg.
         run: cargo check --workspace --exclude shannon-desktop
+      - name: Check landlock feature (Linux only)
+        # The optional landlock feature is off by default, so nothing else
+        # compiles it — it rotted for months with 12 errors before #71.
+        # landlock is a Linux-only LSM; the feature is meaningless on the
+        # other matrix legs.
+        if: runner.os == 'Linux'
+        run: cargo check -p shannon-core --features landlock
 
   check-linux-musl:
     # Linux-only musl smoke test. Renamed from `check-cross-platform` so
