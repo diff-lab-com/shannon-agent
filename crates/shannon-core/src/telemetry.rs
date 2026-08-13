@@ -21,7 +21,10 @@
 //! ```rust
 //! use shannon_core::telemetry::{TelemetryManager, TelemetryConfig};
 //!
-//! let mgr = TelemetryManager::new(TelemetryConfig::default());
+//! // Recording is a no-op unless telemetry is enabled (opt-in), so the
+//! // config must explicitly opt in rather than rely on the environment.
+//! let config = TelemetryConfig { enabled: true, ..TelemetryConfig::default() };
+//! let mgr = TelemetryManager::new(config);
 //! mgr.record_query_start("q-1", "claude-sonnet");
 //! mgr.record_query_end("q-1", std::time::Duration::from_millis(120), 512);
 //!

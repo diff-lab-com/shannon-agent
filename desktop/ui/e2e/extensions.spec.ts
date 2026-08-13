@@ -64,14 +64,16 @@ test.describe('OPC pages', () => {
 })
 
 test.describe('Goals and Scheduled pages', () => {
-  test('goals page shows task management heading', async ({ page }) => {
+  // /goals is a legacy route that redirects to /tasks (see App.tsx).
+  test('goals page redirects to the tasks page', async ({ page }) => {
     await page.goto('/goals')
-    await expect(page.getByRole('heading', { name: /Task Management/i })).toBeVisible()
+    await expect(page).toHaveURL(/\/tasks$/)
+    await expect(page.getByRole('heading', { name: 'Scheduled Tasks' })).toBeVisible()
   })
 
-  test('goals page shows search input', async ({ page }) => {
+  test('redirected goals page shows the new task button', async ({ page }) => {
     await page.goto('/goals')
-    await expect(page.getByPlaceholder(/Search tasks/i)).toBeVisible()
+    await expect(page.getByRole('button', { name: /New Background Task/i })).toBeVisible()
   })
 
   test('tasks page shows scheduled tasks heading', async ({ page }) => {
