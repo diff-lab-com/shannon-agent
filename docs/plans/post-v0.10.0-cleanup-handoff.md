@@ -3,6 +3,8 @@
 > **日期**: 2026-08-13
 > **分支族**: `chore/ci-semver-baseline-and-pnpm-v6` (#65)、`chore/deprecate-secrets-env-store` (#66)
 > **背景**: v0.10.0 已发版(tag `v0.10.0` → `0c57ef92`,21 assets)。本 hand-off 记录发版后的清理工作成果、一项被否决的任务及其根因分析,以及交接到下一波(Wave 7)的剩余任务。
+>
+> **🔄 二次核查更新(2026-08-13)**:§3 任务规划已据实修订 —— #65/#66 确认已合并;secrets.env 删除项去掉宽限期(项目未上线、无外部消费者);sandbox landlock bug 重新定性为大面积编译失败(非低成本);per-model 定价/models.dev 降级为「待评估」(ADR-0005 已标记落地)。详见各节 `🔄` 标注。
 
 ---
 
@@ -19,10 +21,12 @@
 
 另:NSIS 下载 flake 的持久修复已合入(PR #64,`f5a2b329`)—— 在 `tauri-action` 前用 `pwsh` 预缓存 NSIS toolchain(`curl --retry` + SHA1 校验 + 解压到 `%LOCALAPPDATA%\tauri\NSIS\`),忠实复刻 `get_and_extract_nsis`。
 
-### 待合并 PR
+### 🔄 PR 合并状态确认(2026-08-13 二次核查)
 
-- **#65** `chore(ci): bump semver baseline + pnpm/action-setup v6`
-- **#66** `chore(core): deprecate secrets.env write-path`
+- **#65** ✅ **已合并**(`ff61072b` 前序 `48e3fd91`,2026-08-13 08:22 UTC)。`SEMVER_BASELINE` 现为 `v0.10.0`(`ci.yml:326` 已生效)。
+- **#66** ✅ **已合并**(`ff61072b`,2026-08-13 08:36 UTC)。`persist_secrets` / `default_secrets_path` 已标 `#[deprecated]`。
+
+> 本 hand-off 文档通过 `1342d93a` 直接 commit 到 `dev`(关联 PR #67 已 CLOSED,非 merge —— 文档内容已落地,无需再处理)。
 
 ---
 
@@ -55,16 +59,28 @@ ADR-0005 G5 明确标记完成:`getProviderAllowlist()` TS wrapper + `ModelsSett
 
 ## 3. 剩余任务(交接 Wave 7)
 
+> **🔄 核查后修订(2026-08-13)**:下表已据实调整优先级与定性。判定标准:真实性(代码/编译证据)、必要性(项目未上线,无外部消费者 ⇒ 可省去宽限期)、成本(据 `cargo check` 实测而非推测)。
+
 ### 3.1 本轮衍生(小,确定)
 
-- **[#5 跟进] 删除已废弃的 secrets.env 项**:过一个发版宽限期(≥ 一个 minor)后,可整体删除 `persist_secrets` / `default_secrets_path` / `SecretBinding` + `lib.rs` 的 `pub use`。**删 public API = semver-breaking**,0.x 需要一次 minor bump(见 `[[semver-check-baseline-version-bump]]`)。删前确认无外部消费者(当前 grep 仅命中文档注释)。
-- **[#2 跟进] 下次发版后再 bump baseline**:每次切新 baseline release 后把 `SEMVER_BASELINE` 往前推到最新 tag(现在 v0.10.0;v0.11.0 发版后推到 v0.11.0)。这是例行维护,不是一次性。
+- **[#5 跟进] ✅ 已实施 —— 删除废弃的 secrets.env 项(2026-08-13)**:删 `config_migration.rs` 整个模块(274 行;模块仅剩 deprecated primitives)+ `lib.rs` 的 `pub mod` / `pub use` + `main.rs` / `unified_config.rs` 两处文档注释引用。**验证全绿**:`cargo check --workspace` ✅(28s)、CI-exact `cargo clippy --workspace -- -D warnings -A unknown-lints -A clippy::collapsible_if` ✅(exit 0,41s)、`cargo fmt --all -- --check` ✅、`cargo test -p shannon-core --lib` ✅(2601 passed,较 2606 少 5 = 删除的 tests)。
+  - **semver 状态**:删 public item = breaking;baseline `v0.10.0` 的 semver-check 会报(预期)。下次发版须为 **0.11.0**(workspace version bump 跨 3 处:workspace.package + 8 内部依赖 + desktop hardcoded,见 `[[semver-check-baseline-version-bump]]`)。**本次未擅自动版本号**(发版决策),改动留 dev 待发版时一并 bump;若现在开 PR,semver-check job 会红(预期)。
+- **[#2 跟进] 🔄 baseline bump —— 已部分完成,剩余为例行维护**:`SEMVER_BASELINE` 现已是 `v0.10.0`(#65 已合并生效)。剩余仅为「v0.11.0 发版后推到 v0.11.0」的例行操作,**非一次性任务**,可从 Wave 7 清单移出,纳入发版 SOP。
 
 ### 3.2 既有未决(中大)
 
-- **[W7-1 / P3-7] 沙盒执行后端**:`docs/spikes/p3-7-sandbox-s0.md` 状态 **Draft**(待 ericdong 评审),4 阶段路线(~7w)。spike 已标注一个具体 bug:`crates/shannon-core/src/sandbox.rs:38` 的 `Bitflags` 应为 `BitFlags`(`use landlock::{…, Bitflags, …}`),在 `--features landlock` 下触发 E0432。**这是低成本可立刻修的**,但建议随沙盒方向定稿一起做(评审可能重构该模块)。
-- **[W7-2 / P3-1] per-model 定价 + models.dev 动态刷新**:ADR-0005 的 parity 评估(行 337–339)指出 P0-1 / P0-2 / P1-6 的桌面表面已通过 `list_models` + `ModelInfo` wire type 基本落地;剩余 gap 需在评审 ADR-0005 尾部后明确具体子项再排期。**不要假设这整块没做** —— 先核对 ADR 当前措辞。
-- **[OAuth provider 接入]** `crates/shannon-core/src/oauth.rs` 已存在(`OAuthClient` / `OAuthService` / `OAuthToken` / `TokenEncryption`),但 OAuth 流尚未接入 provider 添加 UX(Add Provider modal 目前只支持 API key / base URL)。需要设计:哪些 provider 走 OAuth(Google Gemini / Azure / Bedrock 是典型候选)、desktop 端的回调/深链接如何收口。
+- **[W7-1 / P3-7] 沙盒执行后端**:`docs/spikes/p3-7-sandbox-s0.md` 状态 **Draft**(待 ericdong 评审),4 阶段路线(~7w)。
+  - 🔄 **bug 重新定性(非低成本)**:实测 `cargo check -p shannon-core --features landlock` 暴露**大面积编译失败**,不止 `sandbox.rs:38` 一处。错误清单:`Bitflags`→`BitFlags`(E0432)、`Ruleset` 未声明类型(E0433)、`handle_access` 方法找不到(E0599)、`AccessFs::from_bitflags` 变体不存在(E0599)、`Access` 是 trait 不是类型(E0782,涉 `sandbox.rs:~1600`)。**整块 landlock 后端需按 landlock 0.4.5 API 重写**,原 hand-off「低成本可立刻修的一行拼写」判断**失真**。该 feature 默认关闭、CI 不跑,故长期未暴露。结论:不单独修,随 spike P3-7 方向定稿一起重构(评审很可能重写该模块)。
+- **[W7-2 / P3-1] ✅ 评估完成 —— 主体已落地,移出 Wave 7**:核查 ADR-0005(行 337–339)明确标记「Per-model pricing (P0-1/P0-2)、models.dev 动态刷新 + LiteLLM 定价 (P1-6)、tiers + `/model --tier auto` (P2-7)**all land in the desktop now via `list_models` + `ModelInfo`**」。代码侧完整:`model_registry/`(静态 catalog 定价 + `tier.rs` 按成本排序)、`query_engine/litellm.rs`(24h TTL 社区定价 overlay)、`model_registry/dynamic.rs`(models.dev 动态模型层,显式不携定价 → 依赖 litellm overlay 补)、`shannon-api-protocol::ModelInfo`、`shannon-commands/builtin/cost.rs`。**无 P0 gap**;唯一设计取舍:models.dev 动态模型不带定价,无 litellm overlay 时为 `0.0`(已知,非 bug)。**移出 Wave 7 清单**。
+- **[OAuth provider 接入] 🔄 评估完成 —— 多阶段工程,本次给出分阶段计划(未写接入代码)**:
+  - **关键发现(比原 hand-off 更深)**:`oauth.rs`(1026 行,18 测试)是**模拟骨架**,非可用客户端 —— 模块自承「In a real implementation, the user would visit this URL」:`authorization_url` 自生成 code 存内存 `pending_codes`,`exchange_code` 从内存取(**无真实 HTTP token exchange**)、无持久化、XOR 加密(弱)、无 PKCE、无 state 校验。`CredentialRef`(`shannon-types`)**无 OAuth 变体**(仅 Env/Store/Keyring/InlineLegacy/Ephemeral);provider 认证经 `provider_resolver::resolve_credential` 完全不经 OAuth。codebase 另有两套独立 OAuth:`shannon-tools/mcp_auth.rs`(MCP server)、`shannon-mcp-saas/jira/auth.rs`(Jira)。
+  - **分阶段(~2-3 周)**:
+    - **S0 — oauth.rs 生产化(不依赖决策)**:真实 code→token exchange(reqwest POST token_url)、PKCE、state 校验、持久化 token store(复用 `~/.shannon/credentials/`)、真实 refresh。~3-5d。
+    - **S1 — `CredentialRef::OAuth` + resolver**:新增变体(semver-breaking,随 0.11.0)+ `resolve_credential` 处理(加载 token → 过期则 refresh → 返回 access_token)。~2-3d。
+    - **S2 — CLI `/connect` OAuth 流(依赖决策 B)**:loopback callback server + 浏览器开 authorize URL + exchange + 存 token。~2-3d。
+    - **S3 — desktop Add Provider modal(依赖决策 A+B)**:OAuth button + `shannon://oauth/callback` 深链接 + Tauri 收口。~3-5d。
+    - **S4 — token 生命周期**:后台刷新、过期告警、撤销。~2d。
+  - **需决策(写接入代码前必须定,否则返工)**:**A. 首个 OAuth provider**(Google Gemini / Azure OpenAI / 其他?);**B. callback 收口**(CLI loopback HTTP server vs desktop 深链接 `shannon://oauth/callback`,是否统一?)。
 
 ---
 
