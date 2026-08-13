@@ -99,6 +99,35 @@ jobs:
           CI: "1"
         run: pnpm exec playwright test
 
+  desktop-unit:
+    name: Desktop Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
+        with:
+          node-version: "24"
+      # pnpm/action-setup v6.0.10, pinned by commit SHA (see header note).
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
+        with:
+          version: 10
+      - name: Install UI deps
+        working-directory: desktop/ui
+        run: pnpm install --frozen-lockfile
+      - name: Type-check
+        # `pnpm lint` is tsc --noEmit (the UI's only lint step) — this is
+        # the strict-TS gate for desktop/ui.
+        working-directory: desktop/ui
+        run: pnpm lint
+      - name: Run unit tests
+        # `pnpm test` is vitest in watch mode; `vitest run` is the one-shot
+        # form. CI=1 keeps workers deterministic.
+        working-directory: desktop/ui
+        env:
+          CI: "1"
+        run: pnpm exec vitest run
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
