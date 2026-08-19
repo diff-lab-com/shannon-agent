@@ -141,3 +141,7 @@ docs-mdbook/book/
 
 .astro/
 node_modules/
+
+# Staged Tauri externalBin CLI binaries (release.yml downloads the matching
+# shannon-<target-triple> here right before `tauri build`; never committed).
+desktop/binaries/
