@@ -13,7 +13,7 @@ AI-powered code assistant for VS Code with multi-provider LLM support, MCP exten
 
 ## Getting Started
 
-1. Install the [Shannon Code CLI](https://github.com/shannon-agent/shannon-agent)
+1. Install the [Shannon Code CLI](https://github.com/diff-lab-com/shannon-agent)
 2. Install this extension
 3. Set your API key: `SHANNON_API_KEY` env var or in extension settings
 4. Open the chat with `Ctrl+Shift+S` or the status bar icon

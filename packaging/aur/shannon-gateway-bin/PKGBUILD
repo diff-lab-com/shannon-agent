@@ -9,12 +9,12 @@ pkgver=${_pkgver}
 pkgrel=1
 pkgdesc="Gateway service for the Shannon Agent (prebuilt binary)"
 arch=('x86_64')
-url="https://github.com/shannon-agent/shannon-agent"
+url="https://github.com/diff-lab-com/shannon-agent"
 license=('Apache-2.0')
 provides=('shannon-gateway')
 conflicts=('shannon-gateway')
 options=('!strip')
-source=("$pkgname-$pkgver::https://github.com/shannon-agent/shannon-agent/releases/download/v$pkgver/shannon-gateway-linux-x64")
+source=("$pkgname-$pkgver::https://github.com/diff-lab-com/shannon-agent/releases/download/v$pkgver/shannon-gateway-linux-x64")
 sha256sums=('SKIP')  # REPLACE AT RELEASE TIME with the real sha256 of the gateway binary.
 
 pkgver() {

@@ -139,18 +139,21 @@ A companion extension for VS Code is available in `editors/vscode/`:
 Download the latest release for your platform:
 
 ```bash
-# Linux / macOS (from GitHub Releases)
-curl -fsSL https://github.com/shannon-agent/shannon-agent/releases/latest/download/shannon-$(uname -s)-$(uname -m).tar.gz | tar xz
-sudo mv shannon /usr/local/bin/
+# Linux / macOS — one line, detects platform (CLI + gateway + desktop)
+curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | sh
+
+# Server / headless — CLI only, no sudo
+curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | SHANNON_COMPONENTS=cli sh
 
 # Or with cargo (requires Rust 1.88+)
-cargo install --git https://github.com/shannon-agent/shannon-agent.git
+cargo install --git https://github.com/diff-lab-com/shannon-agent.git
 ```
 
 <details>
 <summary>Other platforms</summary>
 
-- **Windows**: Download `.zip` from [Releases](https://github.com/shannon-agent/shannon-agent/releases)
+- **Windows**: `irm https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.ps1 | iex`
+  (or download `.zip` from [Releases](https://github.com/diff-lab-com/shannon-agent/releases))
 - **From source**: See [Developer Guide](#developer-guide) below
 
 </details>

@@ -24,8 +24,8 @@ edition = "2024"
 rust-version = "1.88"
 authors = ["Shannon Contributors"]
 license = "Apache-2.0"
-repository = "https://github.com/shannon-agent/shannon-agent"
-homepage = "https://github.com/shannon-agent/shannon-agent"
+repository = "https://github.com/diff-lab-com/shannon-agent"
+homepage = "https://github.com/diff-lab-com/shannon-agent"
 
 [workspace.dependencies]
 # ---- Async runtime ----

@@ -7,12 +7,12 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/shannon-agent/shannon-agent.git"
+    "url": "https://github.com/diff-lab-com/shannon-agent.git"
   },
   "bugs": {
-    "url": "https://github.com/shannon-agent/shannon-agent/issues"
+    "url": "https://github.com/diff-lab-com/shannon-agent/issues"
   },
-  "homepage": "https://github.com/shannon-agent/shannon-agent#readme",
+  "homepage": "https://github.com/diff-lab-com/shannon-agent#readme",
   "icon": "media/icon.png",
   "galleryBanner": {
     "color": "#1a1a2e",

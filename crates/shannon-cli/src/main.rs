@@ -2787,7 +2787,7 @@ fn run_update_command() -> Result<()> {
     let current = current_version();
     println!("Current version: {current}");
     println!(
-        "Checking for updates at https://api.github.com/repos/shannon-agent/shannon-agent/releases/latest ..."
+        "Checking for updates at https://api.github.com/repos/diff-lab-com/shannon-agent/releases/latest ..."
     );
 
     // Best-effort: shell out to `curl` (already referenced by the install flow).
@@ -2798,7 +2798,7 @@ fn run_update_command() -> Result<()> {
             "Accept: application/vnd.github+json",
             "-H",
             "User-Agent: shannon-cli",
-            "https://api.github.com/repos/shannon-agent/shannon-agent/releases/latest",
+            "https://api.github.com/repos/diff-lab-com/shannon-agent/releases/latest",
         ])
         .output();
 
@@ -2810,13 +2810,13 @@ fn run_update_command() -> Result<()> {
                 o.status.code().unwrap_or(-1)
             );
             println!(
-                "Visit https://github.com/shannon-agent/shannon-agent/releases to update manually."
+                "Visit https://github.com/diff-lab-com/shannon-agent/releases to update manually."
             );
             return Ok(());
         }
         Err(e) => {
             println!("WARN: could not run curl ({e}). Install curl or update manually at");
-            println!("https://github.com/shannon-agent/shannon-agent/releases");
+            println!("https://github.com/diff-lab-com/shannon-agent/releases");
             return Ok(());
         }
     };
@@ -2845,10 +2845,10 @@ fn run_update_command() -> Result<()> {
         println!();
         println!("A newer version is available: {latest}");
         println!("To upgrade, run:");
-        println!("    curl -fsSL https://get.shannon.ai/install.sh | sh");
+        println!("    curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | sh");
         println!();
         println!(
-            "Or download from: https://github.com/shannon-agent/shannon-agent/releases/{latest}"
+            "Or download from: https://github.com/diff-lab-com/shannon-agent/releases/{latest}"
         );
     } else {
         println!("You are already on the latest version.");
