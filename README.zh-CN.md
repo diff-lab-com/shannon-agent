@@ -137,18 +137,20 @@ VS Code 配套扩展（`editors/vscode/`）：
 下载适用于您平台的最新版本：
 
 ```bash
-# Linux / macOS（从 GitHub Releases 下载）
-curl -fsSL https://github.com/shannon-agent/shannon-agent/releases/latest/download/shannon-$(uname -s)-$(uname -m).tar.gz | tar xz
-sudo mv shannon /usr/local/bin/
+# Linux / macOS —— 一行命令，自动识别平台（CLI + gateway + 桌面端）
+curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | sh
+
+# 服务器 / 无头环境 —— 只装 CLI，不需要 sudo
+curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | SHANNON_COMPONENTS=cli sh
 
 # 或使用 cargo（需要 Rust 1.88+）
-cargo install --git https://github.com/shannon-agent/shannon-agent.git
+cargo install --git https://github.com/diff-lab-com/shannon-agent.git
 ```
 
 <details>
 <summary>其他平台</summary>
 
-- **Windows**：从 [Releases](https://github.com/shannon-agent/shannon-agent/releases) 下载 `.zip`
+- **Windows**：`irm https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.ps1 | iex`（或从 [Releases](https://github.com/diff-lab-com/shannon-agent/releases) 下载 `.zip`）
 - **从源码构建**：见下方[开发者指南](#开发者指南)
 
 </details>

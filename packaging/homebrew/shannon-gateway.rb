@@ -7,18 +7,18 @@
 class ShannonGateway < Formula
   version "0.7.0" # REPLACE AT RELEASE TIME — CI fills the real version.
   desc "Gateway service for the Shannon Agent"
-  homepage "https://github.com/shannon-agent/shannon-agent"
+  homepage "https://github.com/diff-lab-com/shannon-agent"
   license "Apache-2.0"
-  url "https://github.com/shannon-agent/shannon-agent/releases/download/v#{version}/shannon-gateway-darwin-x64"
+  url "https://github.com/diff-lab-com/shannon-agent/releases/download/v#{version}/shannon-gateway-darwin-x64"
   sha256 "" # REPLACE AT RELEASE TIME with the real sha256 of the downloaded binary.
 
   # Linux/Windows variants (pick one `url`/`sha256` per platform at release time):
-  #   linux-x64:   https://github.com/shannon-agent/shannon-agent/releases/download/v#{version}/shannon-gateway-linux-x64
-  #   linux-arm64: https://github.com/shannon-agent/shannon-agent/releases/download/v#{version}/shannon-gateway-linux-arm64
-  #   darwin-arm64: https://github.com/shannon-agent/shannon-agent/releases/download/v#{version}/shannon-gateway-darwin-arm64
+  #   linux-x64:   https://github.com/diff-lab-com/shannon-agent/releases/download/v#{version}/shannon-gateway-linux-x64
+  #   linux-arm64: https://github.com/diff-lab-com/shannon-agent/releases/download/v#{version}/shannon-gateway-linux-arm64
+  #   darwin-arm64: https://github.com/diff-lab-com/shannon-agent/releases/download/v#{version}/shannon-gateway-darwin-arm64
 
   livecheck do
-    url "https://github.com/shannon-agent/shannon-agent/releases/latest"
+    url "https://github.com/diff-lab-com/shannon-agent/releases/latest"
     regex(/v?(\d+(?:\.\d+)+)/i)
   end
 

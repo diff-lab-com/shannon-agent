@@ -6,8 +6,8 @@ rust-version = "1.88"
 description = "Shannon — your AI workspace (Tauri desktop app)"
 license = "Apache-2.0"
 authors = ["Shannon Agent Contributors"]
-repository = "https://github.com/shannon-agent/shannon-agent"
-homepage = "https://github.com/shannon-agent/shannon-agent"
+repository = "https://github.com/diff-lab-com/shannon-agent"
+homepage = "https://github.com/diff-lab-com/shannon-agent"
 
 [features]
 default = ["tauri"]

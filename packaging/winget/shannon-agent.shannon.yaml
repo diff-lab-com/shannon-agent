@@ -6,11 +6,11 @@ PackageVersion: 0.7.0
 PackageName: Shannon Agent CLI
 Publisher: Shannon Agent
 License: Apache-2.0
-Homepage: https://github.com/shannon-agent/shannon-agent
-ReleaseNotesUrl: https://github.com/shannon-agent/shannon-agent/releases/tag/v0.7.0
+Homepage: https://github.com/diff-lab-com/shannon-agent
+ReleaseNotesUrl: https://github.com/diff-lab-com/shannon-agent/releases/tag/v0.7.0
 Installers:
   - InstallerType: zip
-    InstallerUrl: https://github.com/shannon-agent/shannon-agent/releases/download/v0.7.0/shannon-x86_64-pc-windows-msvc.zip
+    InstallerUrl: https://github.com/diff-lab-com/shannon-agent/releases/download/v0.7.0/shannon-x86_64-pc-windows-msvc.zip
     InstallerSha256: REPLACE_AT_RELEASE_TIME_WITH_REAL_SHA256
     Architecture: x64
     NestedInstallerType: portable
