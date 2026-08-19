@@ -24,7 +24,7 @@ import { dirname, join } from "node:path";
 import { createConnection } from "node:net";
 
 import { loadConfig, resolveConfigPath } from "../config/loader.js";
-import { type Platform, buildUnit } from "./units.js";
+import { type Platform, buildEngineUnit, buildUnit } from "./units.js";
 
 export type { Platform } from "./units.js";
 
@@ -44,6 +44,12 @@ export interface ServiceStatus {
   configured: boolean;
   /** OS service manager "active" string (platform-specific semantics). */
   serviceState: string;
+  /**
+   * State of the ENGINE unit (`shannon serve`). The gateway is a WS client —
+   * "gateway up, engine down" means chat commands have nothing to talk to,
+   * so this is surfaced next to the gateway's own state.
+   */
+  engineServiceState: string;
   /** Best-effort TCP health probe result. */
   health: {
     /** True when the gateway accepted a TCP connection on its port. */
@@ -113,6 +119,19 @@ function whichBinary(name: string): string | null {
   }
 }
 
+/**
+ * Resolve the absolute path to the `shannon` CLI (the engine host) for the
+ * engine unit: `$SHANNON_ENGINE_BIN` → `which shannon`. Unlike
+ * {@link resolveBinary} this returns null on failure — the caller skips the
+ * engine unit with a clear warning rather than writing a unit whose
+ * ExecStart cannot resolve.
+ */
+export function resolveEngineBinary(): string | null {
+  const fromEnv = process.env.SHANNON_ENGINE_BIN;
+  if (fromEnv && fromEnv.length > 0) return fromEnv;
+  return whichBinary("shannon");
+}
+
 /* ------------------------------------------------------------------ */
 /* Low-level OS service-manager control                               */
 /* ------------------------------------------------------------------ */
@@ -178,6 +197,13 @@ export function listProfiles(): string[] {
 /* Public API: install / uninstall / start / stop / restart          */
 /* ------------------------------------------------------------------ */
 
+export interface EngineInstallResult {
+  /** Path the engine (`shannon serve`) unit file was written to. */
+  unitPath: string;
+  /** Whether the engine unit's enable+start succeeded. */
+  started: boolean;
+}
+
 export interface InstallResult {
   /** Platform the unit was built for. */
   platform: Platform;
@@ -185,9 +211,19 @@ export interface InstallResult {
   unitPath: string;
   /** Whether enable+start succeeded. */
   started: boolean;
+  /**
+   * Engine (`shannon serve`) unit outcome, or null when no `shannon` binary
+   * was found — in that case the gateway installs but has nothing to talk
+   * to until the engine is installed and running.
+   */
+  engine: EngineInstallResult | null;
 }
 
-/** Write the user-level unit and enable+start it. */
+/**
+ * Write the user-level unit and enable+start it. Also registers the engine
+ * unit (`shannon serve`) when the `shannon` binary is resolvable: the
+ * gateway is a WS client and needs a running engine to connect to.
+ */
 export function install(profile?: string): InstallResult {
   const plat = osPlatform() as Platform;
   const binary = resolveBinary();
@@ -197,8 +233,37 @@ export function install(profile?: string): InstallResult {
   writeFileSync(unit.path, unit.contents, "utf8");
   log(`wrote service unit: ${unit.path}`);
 
+  let engine: EngineInstallResult | null = null;
+  const engineBinary = resolveEngineBinary();
+  if (engineBinary) {
+    const engineUnit = buildEngineUnit(plat, engineBinary);
+    mkdirSync(dirname(engineUnit.path), { recursive: true });
+    writeFileSync(engineUnit.path, engineUnit.contents, "utf8");
+    log(`wrote engine unit: ${engineUnit.path}`);
+    const engineStarted = enableAndStartEngine(plat, engineUnit.path);
+    engine = { unitPath: engineUnit.path, started: engineStarted };
+  } else {
+    warn(
+      "`shannon` not found on PATH — engine unit NOT installed. The gateway " +
+        "connects to a running engine (`shannon serve`); install the CLI " +
+        "(e.g. via install.sh) or set SHANNON_ENGINE_BIN, then re-run " +
+        "`shannon gateway install`.",
+    );
+  }
+
+  // Keep the user manager alive after logout on headless servers — without
+  // lingering, systemd --user units stop when the installing SSH session ends.
+  if (plat === "linux") {
+    const linger = run("loginctl", ["enable-linger"], { allowFail: true });
+    log(
+      linger.ok
+        ? "enabled login lingering (units survive logout on headless servers)"
+        : "could not enable login lingering — units may stop when you log out (run: loginctl enable-linger)",
+    );
+  }
+
   const started = enableAndStart(plat, unit.path);
-  return { platform: plat, unitPath: unit.path, started };
+  return { platform: plat, unitPath: unit.path, started, engine };
 }
 
 /** Stop, disable, and remove the service unit. */
@@ -215,6 +280,15 @@ export function uninstall(profile?: string): void {
   } catch (err) {
     warn(`failed to remove ${unit.path}: ${(err as Error).message}`);
   }
+  // The engine unit is deliberately LEFT RUNNING: the desktop app and mobile
+  // pairing attach to the same `shannon serve` instance.
+  log(
+    "note: the engine unit (shannon-serve) was left installed — the desktop " +
+      "and mobile surfaces attach to the same engine. Disable it too " +
+      "(systemctl --user disable --now shannon-serve / launchctl unload " +
+      "~/Library/LaunchAgents/com.shannon-agent.serve.plist / schtasks /end " +
+      "+ /delete /tn shannon-serve) only if nothing else uses it.",
+  );
 }
 
 export function start(_profile?: string): ServiceControlResult {
@@ -247,6 +321,7 @@ export async function status(profile?: string): Promise<ServiceStatus> {
   const cfgPath = configPathForProfile(profile);
   const configured = existsSync(cfgPath);
   const svcState = queryServiceState(plat);
+  const engineSvcState = queryEngineServiceState(plat);
   const pid = queryPid(plat);
   let health: ServiceStatus["health"] = null;
   if (configured) {
@@ -255,7 +330,14 @@ export async function status(profile?: string): Promise<ServiceStatus> {
       ? await probeTcpAsync(endpoint)
       : { reachable: false, endpoint: null, error: "no health endpoint in config" };
   }
-  return { profile: profile ?? "default", configured, serviceState: svcState, health, pid };
+  return {
+    profile: profile ?? "default",
+    configured,
+    serviceState: svcState,
+    engineServiceState: engineSvcState,
+    health,
+    pid,
+  };
 }
 
 /** Enumerate profiles and the running state of each. */
@@ -368,6 +450,27 @@ function enableAndStart(plat: Platform, unitPath: string): boolean {
   }
 }
 
+/** Enable+start the ENGINE unit (`shannon-serve`), mirroring enableAndStart. */
+function enableAndStartEngine(plat: Platform, unitPath: string): boolean {
+  switch (plat) {
+    case "linux": {
+      const r1 = run("systemctl", ["--user", "daemon-reload"], { allowFail: true });
+      const r2 = run("systemctl", ["--user", "enable", "--now", "shannon-serve"], { allowFail: true });
+      return r1.ok && r2.ok;
+    }
+    case "darwin": {
+      return run("launchctl", ["load", unitPath], { allowFail: true }).ok;
+    }
+    case "win32": {
+      return run(
+        "schtasks",
+        ["/create", "/tn", "shannon-serve", "/xml", unitPath, "/f"],
+        { allowFail: true },
+      ).ok;
+    }
+  }
+}
+
 function disable(plat: Platform): void {
   switch (plat) {
     case "linux":
@@ -422,6 +525,24 @@ function queryServiceState(plat: Platform): string {
     }
     case "win32": {
       const r = run("schtasks", ["/query", "/tn", "shannon-gateway", "/fo", "LIST"], { allowFail: true });
+      return r.ok ? "registered" : "not-registered";
+    }
+  }
+}
+
+/** Query the ENGINE (`shannon serve`) unit state — best-effort, like above. */
+function queryEngineServiceState(plat: Platform): string {
+  switch (plat) {
+    case "linux": {
+      const r = run("systemctl", ["--user", "is-active", "shannon-serve"], { allowFail: true });
+      return (r.stdout || r.stderr || "unknown").trim() || "unknown";
+    }
+    case "darwin": {
+      const r = run("launchctl", ["list"], { allowFail: true });
+      return r.stdout.includes("com.shannon-agent.serve") ? "loaded" : "unloaded";
+    }
+    case "win32": {
+      const r = run("schtasks", ["/query", "/tn", "shannon-serve", "/fo", "LIST"], { allowFail: true });
       return r.ok ? "registered" : "not-registered";
     }
   }

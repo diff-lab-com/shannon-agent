@@ -47,6 +47,34 @@ export function buildUnit(
   }
 }
 
+/**
+ * Build the user-level service unit for the ENGINE (`shannon serve`).
+ *
+ * The gateway is a WebSocket *client* — it connects to a running engine and
+ * never spawns one. Registering the engine alongside the gateway closes the
+ * "installed the gateway, nothing to talk to" gap: `install` writes both
+ * units, and on systemd the gateway unit additionally orders itself after
+ * the engine (After=/Wants=). Platforms without inter-unit ordering
+ * (launchd, schtasks) rely on both units' keep-alive plus the gateway's
+ * reconnect loop.
+ *
+ * @param platform      `linux` | `darwin` | `win32`.
+ * @param engineBinary  Absolute path to the `shannon` CLI binary.
+ */
+export function buildEngineUnit(
+  platform: Platform,
+  engineBinary: string,
+): ServiceUnit {
+  switch (platform) {
+    case "linux":
+      return buildSystemdEngineUnit(engineBinary);
+    case "darwin":
+      return buildLaunchdEngineUnit(engineBinary);
+    case "win32":
+      return buildWindowsEngineUnit(engineBinary);
+  }
+}
+
 function runArgs(profile?: string): string[] {
   return profile ? ["run", "--profile", profile] : ["run"];
 }
@@ -60,8 +88,11 @@ function buildSystemdUnit(binary: string, profile?: string): ServiceUnit {
   const contents = [
     "[Unit]",
     "Description=Shannon Gateway (chat platform bridge to the Shannon engine)",
-    "After=network-online.target",
-    "Wants=network-online.target",
+    // Order after the engine unit so `systemctl --user start shannon-gateway`
+    // (or a login-session start) brings the engine up first; Wants= pulls it
+    // in even when only the gateway is started explicitly.
+    "After=network-online.target shannon-serve.service",
+    "Wants=network-online.target shannon-serve.service",
     "",
     "[Service]",
     "Type=simple",
@@ -162,6 +193,113 @@ function buildWindowsUnit(binary: string, profile?: string): ServiceUnit {
 </Task>
 `;
   const path = join(homedir(), ".shannon", "gateway", "shannon-gateway.task.xml");
+  return { path, contents };
+}
+
+/** systemd user service: ~/.config/systemd/user/shannon-serve.service */
+function buildSystemdEngineUnit(engineBinary: string): ServiceUnit {
+  const execStart = engineBinary.includes(" ")
+    ? `"${engineBinary}" serve`
+    : `${engineBinary} serve`;
+  const contents = [
+    "[Unit]",
+    "Description=Shannon Engine (shannon serve — local API/WebSocket server on :33420)",
+    "After=network-online.target",
+    "Wants=network-online.target",
+    "",
+    "[Service]",
+    "Type=simple",
+    `ExecStart=${execStart}`,
+    "Restart=on-failure",
+    "RestartSec=2",
+    "",
+    "[Install]",
+    "WantedBy=default.target",
+    "",
+  ].join("\n");
+  const path = join(
+    homedir(),
+    ".config",
+    "systemd",
+    "user",
+    "shannon-serve.service",
+  );
+  return { path, contents };
+}
+
+/** launchd agent: ~/Library/LaunchAgents/com.shannon-agent.serve.plist */
+function buildLaunchdEngineUnit(engineBinary: string): ServiceUnit {
+  const programArgs = [
+    `<string>${escapeXml(engineBinary)}</string>`,
+    "<string>serve</string>",
+  ].join("\n      ");
+  const contents = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.shannon-agent.serve</string>
+  <key>ProgramArguments</key>
+  <array>
+      ${programArgs}
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${escapeXml(join(homedir(), ".shannon", "serve.log"))}</string>
+  <key>StandardErrorPath</key>
+  <string>${escapeXml(join(homedir(), ".shannon", "serve.err.log"))}</string>
+</dict>
+</plist>
+`;
+  const path = join(
+    homedir(),
+    "Library",
+    "LaunchAgents",
+    "com.shannon-agent.serve.plist",
+  );
+  return { path, contents };
+}
+
+/**
+ * Windows scheduled task for the engine, mirroring buildWindowsUnit: the task
+ * is registered imperatively via `schtasks /create /tn shannon-serve /xml`;
+ * the XML is kept on disk for inspection and uninstall/status reference.
+ */
+function buildWindowsEngineUnit(engineBinary: string): ServiceUnit {
+  const command = engineBinary.includes(" ")
+    ? `"${engineBinary}" serve`
+    : `${engineBinary} serve`;
+  const contents = `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Shannon Engine (shannon serve — local API/WebSocket server on :33420)</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure>
+      <Interval>PT2M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions>
+    <Exec>
+      <Command>${escapeXml(command)}</Command>
+    </Exec>
+  </Actions>
+</Task>
+`;
+  const path = join(homedir(), ".shannon", "shannon-serve.task.xml");
   return { path, contents };
 }
 
