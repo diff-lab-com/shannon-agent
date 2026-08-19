@@ -113,6 +113,15 @@ async function runServiceCommand(sub: string): Promise<number> {
       process.stdout.write(
         `installed (${r.platform}) unit at ${r.unitPath}; started=${r.started}\n`,
       );
+      if (r.engine) {
+        process.stdout.write(
+          `engine unit (shannon serve) at ${r.engine.unitPath}; started=${r.engine.started}\n`,
+        );
+      } else {
+        process.stdout.write(
+          "engine unit NOT installed — no `shannon` binary on PATH; the gateway will have nothing to connect to (install the CLI, then re-run install)\n",
+        );
+      }
       return r.started ? 0 : 1;
     }
     case "uninstall":
@@ -138,6 +147,7 @@ async function runServiceCommand(sub: string): Promise<number> {
       const s = await status(profile);
       process.stdout.write(
         `profile=${s.profile} configured=${s.configured} state=${s.serviceState} ` +
+          `engine=${s.engineServiceState} ` +
           `pid=${s.pid ?? "-"} health=${s.health ? (s.health.reachable ? "reachable" : "down") : "n/a"}\n`,
       );
       return 0;
@@ -147,6 +157,7 @@ async function runServiceCommand(sub: string): Promise<number> {
       for (const s of all) {
         process.stdout.write(
           `profile=${s.profile} configured=${s.configured} state=${s.serviceState} ` +
+            `engine=${s.engineServiceState} ` +
             `health=${s.health ? (s.health.reachable ? "reachable" : "down") : "n/a"}\n`,
         );
       }

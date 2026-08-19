@@ -257,7 +257,7 @@ kpi-clean-build:
 # ---------- Release prep: bump every version source, commit, tag ----------
 # Usage: just release-prep 0.7.0
 #   then: git push && git push origin v0.7.0   (triggers release.yml)
-# Bumps the 4 independent version sources so cargo-dist + tauri + gateway
+# Bumps the 4 independent version sources so tauri + gateway
 # + `shannon --version` all agree with the tag:
 #   1) Cargo.toml workspace.package.version  (crates with version.workspace=true inherit)
 #   2) desktop/tauri.conf.json  "version"  (Tauri does NOT read the cargo workspace)
@@ -289,3 +289,27 @@ release-prep version:
     git commit -m "chore(release): v{{version}}"
     git tag v{{version}}
     echo "✅ tagged v{{version}} — run: git push origin dev && git push origin v{{version}}"
+
+# ---------- Release rollback: re-point the R2 `latest/` mirror at a good version ----------
+# Usage: just release-rollback 0.10.0
+# Requires: gh (authenticated), wrangler, and env R2_BUCKET / CLOUDFLARE_API_TOKEN /
+# CLOUDFLARE_ACCOUNT_ID (same secrets the release.yml publish job uses).
+# GitHub's releases/latest pointer needs a manual step — see
+# docs/RELEASE-ROLLBACK.md for the full runbook.
+release-rollback version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${R2_BUCKET:?set R2_BUCKET=<bucket> (repo variables → R2_BUCKET)}"
+    command -v wrangler >/dev/null 2>&1 || npm install -g wrangler@4.98.0
+    TAG="v{{version}}"
+    TMP="$(mktemp -d)"
+    trap 'rm -rf "$TMP"' EXIT
+    echo "downloading all assets of $TAG from GitHub..."
+    gh release download "$TAG" -D "$TMP" --repo diff-lab-com/shannon-agent --clobber
+    echo "re-uploading $(ls "$TMP" | wc -l) assets to R2 latest/ ..."
+    for f in "$TMP"/*; do
+        [ -f "$f" ] || continue
+        wrangler r2 object put "$R2_BUCKET/latest/$(basename "$f")" --file "$f"
+    done
+    echo "✅ R2 latest/ now mirrors $TAG"
+    echo "next (manual): draft-or-delete the bad GitHub release so releases/latest moves back — see docs/RELEASE-ROLLBACK.md"
