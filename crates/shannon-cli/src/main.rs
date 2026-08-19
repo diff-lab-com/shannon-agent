@@ -754,6 +754,10 @@ enum GatewaySubcommand {
     MigrateLegacy,
     /// Enroll this device with the gateway control plane.
     Enroll,
+    /// Update the `shannon-gateway` binary from the latest release
+    /// (download + sha256 verify + replace + restart). Handled by the CLI,
+    /// not delegated.
+    Update,
 }
 
 /// Subcommands for `shannon mcp`.
@@ -3106,6 +3110,9 @@ fn run_gateway_command(command: GatewaySubcommand) -> Result<()> {
         GatewaySubcommand::Setup => "setup",
         GatewaySubcommand::MigrateLegacy => "migrate-legacy",
         GatewaySubcommand::Enroll => "enroll",
+        // `update` is implemented here (C3): download → verify → replace →
+        // restart. Never delegated to the gateway binary.
+        GatewaySubcommand::Update => return run_gateway_update(),
     };
 
     eprintln!("Delegating to shannon-gateway: {sub}");
@@ -3119,6 +3126,140 @@ fn run_gateway_command(command: GatewaySubcommand) -> Result<()> {
         }
         Err(e) => anyhow::bail!("Failed to run shannon-gateway {sub}: {e}"),
     }
+}
+
+/// Gateway release asset name for a platform — `linux-x64` etc. `None` when
+/// the platform has no gateway build (e.g. Windows).
+fn gateway_asset_name(os: &str, arch: &str) -> Option<String> {
+    let os = match os {
+        "linux" => "linux",
+        "darwin" => "darwin",
+        _ => return None,
+    };
+    let arch = match arch {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        _ => return None,
+    };
+    Some(format!("shannon-gateway-{os}-{arch}"))
+}
+
+/// `shannon gateway update`: fetch the latest release, verify sha256,
+/// atomically replace the gateway binary, then restart the service.
+///
+/// The staging file is written next to the target so the final swap is a
+/// same-filesystem `rename` (atomic). On unix, replacing a running binary
+/// this way is safe — the running service keeps the old inode until the
+/// restart at the end picks up the new one.
+fn run_gateway_update() -> Result<()> {
+    if cfg!(windows) {
+        anyhow::bail!("the gateway is not built for Windows — nothing to update");
+    }
+    let binary = match find_gateway_binary() {
+        Some(b) => b,
+        None => anyhow::bail!(
+            "shannon-gateway not found on PATH. Install it first: \
+             curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | sh"
+        ),
+    };
+    let asset = gateway_asset_name(os_kind(), std::env::consts::ARCH)
+        .ok_or_else(|| anyhow::anyhow!("no gateway build for this platform"))?;
+
+    println!("Fetching latest release info...");
+    let release = fetch_latest_release_json()?;
+    let tag = release
+        .get("tag_name")
+        .and_then(|t| t.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if tag.is_empty() {
+        anyhow::bail!("no tag_name in latest release metadata");
+    }
+
+    println!("shannon-gateway: {}", binary.display());
+    let current = probe_version(&binary);
+    if let Some(cur) = &current {
+        println!("Current version: {cur}");
+    }
+    println!("Latest release:  {tag}");
+    if let Some(cur) = &current {
+        if !version_is_newer(cur, &tag) {
+            println!("Already up to date.");
+            return Ok(());
+        }
+    }
+
+    let assets = release
+        .get("assets")
+        .and_then(|a| a.as_array())
+        .ok_or_else(|| anyhow::anyhow!("no assets in latest release metadata"))?;
+    let asset_url = |name: &str| {
+        assets
+            .iter()
+            .find(|a| a.get("name").and_then(|n| n.as_str()) == Some(name))
+            .and_then(|a| a.get("browser_download_url"))
+            .and_then(|u| u.as_str())
+            .map(str::to_string)
+    };
+    let url = asset_url(&asset)
+        .ok_or_else(|| anyhow::anyhow!("asset {asset} not found in release {tag}"))?;
+
+    // sha256 from the release-level SHA256SUMS (same fallback rule as
+    // `shannon desktop --install`): mismatch is fatal, absence is a warning.
+    let mut expected: Option<String> = None;
+    match asset_url("SHA256SUMS") {
+        Some(sums_url) => match curl_to_string(&sums_url) {
+            Ok(body) => expected = sha256_for_asset(&body, &asset),
+            Err(e) => println!("WARN: could not fetch SHA256SUMS ({e}) — skipping verification"),
+        },
+        None => println!("WARN: no SHA256SUMS in release {tag} — skipping verification"),
+    }
+
+    let staging = binary.with_extension("download");
+    println!("Downloading {url}...");
+    curl_to_file(&url, &staging)?;
+
+    if let Some(exp) = &expected {
+        let actual = file_sha256(&staging)?;
+        if !actual.eq_ignore_ascii_case(exp) {
+            let _ = std::fs::remove_file(&staging);
+            anyhow::bail!("sha256 mismatch for {asset}: expected {exp}, got {actual}");
+        }
+        println!("sha256 verified.");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    if let Err(e) = std::fs::rename(&staging, &binary) {
+        let _ = std::fs::remove_file(&staging);
+        anyhow::bail!(
+            "could not replace {} ({e}) — the install dir may need elevated rights; \
+             re-run with sudo or reinstall via install.sh",
+            binary.display()
+        );
+    }
+    println!("Updated shannon-gateway to {tag}.");
+
+    println!("Restarting gateway service...");
+    match std::process::Command::new(&binary).arg("restart").status() {
+        Ok(s) if s.success() => println!("Gateway restarted."),
+        s => println!(
+            "WARN: restart failed{} — run `shannon gateway restart` manually",
+            s.ok()
+                .and_then(|st| st.code())
+                .map(|c| format!(" (exit {c})"))
+                .unwrap_or_default()
+        ),
+    }
+    Ok(())
+}
+
+/// OS name matching Rust's `std::env::consts::OS` (testable seam).
+fn os_kind() -> &'static str {
+    std::env::consts::OS
 }
 
 /// Current version of the `shannon` CLI crate.
@@ -4106,6 +4247,30 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
         );
         assert_eq!(version_token_from_output("no digits here\n"), None);
         assert_eq!(version_token_from_output(""), None);
+    }
+
+    // ── gateway update: asset naming ─────────────────────────────────
+
+    #[test]
+    fn test_gateway_asset_name() {
+        assert_eq!(
+            gateway_asset_name("linux", "x86_64"),
+            Some("shannon-gateway-linux-x64".to_string())
+        );
+        assert_eq!(
+            gateway_asset_name("linux", "aarch64"),
+            Some("shannon-gateway-linux-arm64".to_string())
+        );
+        assert_eq!(
+            gateway_asset_name("darwin", "x86_64"),
+            Some("shannon-gateway-darwin-x64".to_string())
+        );
+        assert_eq!(
+            gateway_asset_name("darwin", "aarch64"),
+            Some("shannon-gateway-darwin-arm64".to_string())
+        );
+        // No Windows gateway builds exist.
+        assert_eq!(gateway_asset_name("windows", "x86_64"), None);
     }
 
     // ── parse_cli_env tests ──────────────────────────────────────────
