@@ -2,6 +2,11 @@ name: CI
 on:
   push:
     branches: [main, dev]
+    # Release tags must pass the full CI gate too — release.yml itself only
+    # typechecks/tests the gateway, so without this a tag on an un-CI'd
+    # commit ships straight to production.
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
   pull_request:
     branches: [main, dev]
 

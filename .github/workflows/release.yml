@@ -13,13 +13,14 @@
 # Why no cargo-dist `host`/`announce`: its release-ownership model wants to
 # CREATE+PUBLISH the GitHub release itself, which fights our "one draft,
 # collect every asset, then flip to published" model. With `release = false`
-# in dist-workspace.toml, `dist host --steps=upload` actually skips the
-# GitHub upload entirely (it printed only the "may not exist yet" NOTE and
-# uploaded nothing — that's why rc2's releases had zero CLI binaries). We
-# still let cargo-dist *build* the CLI nowhere; cargo-dist is now unused for
-# the release path. Building with `cargo build -p shannon-cli` directly is
-# fully under our control and the shannon-cli closure contains no
-# desktop/tauri/gtk deps, so the CLI job needs no system GUI libraries.
+# configured, `dist host --steps=upload` actually skipped the GitHub upload
+# entirely (it printed only the "may not exist yet" NOTE and uploaded nothing
+# — that's why rc2's releases had zero CLI binaries). cargo-dist has been
+# fully unused for the release path ever since (its config file was deleted
+# 2026-08-19; the homebrew installer it declared never produced a formula).
+# Building with `cargo build -p shannon-cli` directly is fully under our
+# control and the shannon-cli closure contains no desktop/tauri/gtk deps, so
+# the CLI job needs no system GUI libraries.
 #
 # Release-ordering contract:
 #   - `create-release` is the ONLY job that creates the release. It runs
@@ -74,14 +75,17 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Tag:      $TAG"
           echo "Expected: $VERSION"
-          # Extract workspace.package.version from the root Cargo.toml.
-          CARGO_VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
-          echo "Cargo:    $CARGO_VERSION"
-          if [ "$CARGO_VERSION" != "$VERSION" ]; then
-            echo "::error::workspace.package.version ($CARGO_VERSION) does not match tag ($VERSION)"
-            exit 1
-          fi
-          echo "Version guard passed: $VERSION"
+          # Guard ALL FOUR version sources against tag drift (v0.7.0-rc1
+          # root cause: only the root Cargo.toml was checked, so the desktop
+          # and gateway manifests drifted silently).
+          fail() { echo "::error::$1 ($2) does not match tag ($VERSION)"; exit 1; }
+          v_cargo() { grep -m1 '^version' "$1" | sed -E 's/.*"([^"]+)".*/\1/'; }
+          v_json()  { grep -m1 '"version"' "$1" | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'; }
+          V="$(v_cargo Cargo.toml)";             echo "workspace Cargo.toml:  $V"; [ "$V" = "$VERSION" ] || fail workspace.package.version "$V"
+          V="$(v_cargo desktop/Cargo.toml)";     echo "desktop/Cargo.toml:    $V"; [ "$V" = "$VERSION" ] || fail "desktop package version" "$V"
+          V="$(v_json desktop/tauri.conf.json)"; echo "tauri.conf.json:       $V"; [ "$V" = "$VERSION" ] || fail "tauri.conf.json version" "$V"
+          V="$(v_json gateway/package.json)";    echo "gateway/package.json:  $V"; [ "$V" = "$VERSION" ] || fail "gateway package.json version" "$V"
+          echo "Version guard passed: $VERSION (4/4 sources)"
 
   # ──────────────────────────── Create draft release ───────────────────────
   # The SINGLE owner of the release. Idempotently guarantees exactly one
@@ -408,6 +412,42 @@ jobs:
           gh release download "${{ github.ref_name }}" -D release-assets --repo "$GITHUB_REPOSITORY"
           ls -la release-assets
 
+      - name: Smoke-test release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Build success ≠ shippable assets. Assert the load-bearing assets
+          # exist with the expected (versioned) names, then run what can run
+          # natively on this runner.
+          for a in \
+            shannon-x86_64-unknown-linux-gnu.tar.gz \
+            shannon-x86_64-pc-windows-msvc.zip \
+            shannon-x86_64-apple-darwin.tar.gz \
+            shannon-aarch64-apple-darwin.tar.gz \
+            shannon-gateway-linux-x64 \
+            shannon-gateway-darwin-arm64 \
+            shannon-gateway-windows-x64.exe \
+            "shannon-desktop_${VERSION}_amd64.deb" \
+            "shannon-desktop_${VERSION}_x64-setup.exe" \
+            "shannon-desktop_${VERSION}_x64.dmg"; do
+            [ -f "release-assets/$a" ] || { echo "::error::missing expected asset: $a"; exit 1; }
+          done
+          echo "asset presence: OK (10/10)"
+          # CLI: the linux-x64 tarball runs natively here.
+          mkdir -p /tmp/smoke
+          tar -C /tmp/smoke -xzf release-assets/shannon-x86_64-unknown-linux-gnu.tar.gz
+          GOT="$(/tmp/smoke/shannon --version)"
+          echo "shannon --version → $GOT"
+          echo "$GOT" | grep -F "$VERSION" || {
+            echo "::error::CLI reports wrong version (want $VERSION)"; exit 1; }
+          # Desktop: deb metadata must carry the same version.
+          DEB_VER="$(dpkg-deb -f "release-assets/shannon-desktop_${VERSION}_amd64.deb" Version)"
+          echo "deb Version → $DEB_VER"
+          echo "$DEB_VER" | grep -F "$VERSION" || {
+            echo "::error::deb reports wrong version (want $VERSION)"; exit 1; }
+          echo "smoke tests passed"
+
       - name: Generate SHA256SUMS
         shell: bash
         run: |
@@ -449,13 +489,26 @@ jobs:
           npm install -g wrangler@4.98.0
           VERSION="${{ github.ref_name }}"
           BUCKET="${{ vars.R2_BUCKET }}"
+          # Prerelease tags (anything with a dash: -rc/-beta/…) must NOT
+          # overwrite the stable latest/ mirror — GitHub's releases/latest
+          # skips prereleases, but R2 has no such semantics.
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease tag $VERSION — mirroring under \$VERSION/ only (latest/ untouched)"
+            UPDATE_LATEST=""
+          else
+            UPDATE_LATEST=1
+          fi
           for f in release-assets/*; do
             [ -f "$f" ] || continue
             base=$(basename "$f")
             wrangler r2 object put "$BUCKET/$VERSION/$base" --file "$f"
-            wrangler r2 object put "$BUCKET/latest/$base" --file "$f"
+            if [ -n "$UPDATE_LATEST" ]; then
+              wrangler r2 object put "$BUCKET/latest/$base" --file "$f"
+            fi
           done
           wrangler r2 object put "$BUCKET/$VERSION/install.sh" --file scripts/install.sh
           wrangler r2 object put "$BUCKET/$VERSION/install.ps1" --file scripts/install.ps1
-          wrangler r2 object put "$BUCKET/latest/install.sh" --file scripts/install.sh
-          wrangler r2 object put "$BUCKET/latest/install.ps1" --file scripts/install.ps1
+          if [ -n "$UPDATE_LATEST" ]; then
+            wrangler r2 object put "$BUCKET/latest/install.sh" --file scripts/install.sh
+            wrangler r2 object put "$BUCKET/latest/install.ps1" --file scripts/install.ps1
+          fi
