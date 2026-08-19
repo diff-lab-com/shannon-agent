@@ -206,7 +206,7 @@ jobs:
   # releaseName so the unified release keeps its tag-name title.
   desktop:
     name: shannon-desktop (${{ matrix.target }}-${{ matrix.ext }})
-    needs: [create-release]
+    needs: [create-release, cli]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -262,6 +262,47 @@ jobs:
       - name: Install UI deps
         working-directory: desktop/ui
         run: pnpm install --frozen-lockfile
+
+      # ── B1 (ADR-0011): stage the CLI binary as a Tauri externalBin ───────
+      # Every desktop bundle ships `shannon` alongside the GUI. The cli job
+      # has already uploaded the platform archive into the draft release;
+      # pull the one matching this matrix target and place it at
+      # desktop/binaries/shannon-<target-triple>[.exe] — the naming that
+      # bundle.externalBin ("binaries/shannon") expects. Running --version
+      # doubles as a smoke check on the exact bytes being bundled.
+      - name: Stage bundled CLI (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          TMP="$(mktemp -d)"
+          gh release download "${GITHUB_REF_NAME}" -D "$TMP" \
+            -p "shannon-${TARGET}.tar.gz" --repo "$GITHUB_REPOSITORY"
+          tar -C "$TMP" -xzf "$TMP/shannon-${TARGET}.tar.gz"
+          mkdir -p desktop/binaries
+          cp "$TMP/shannon" "desktop/binaries/shannon-${TARGET}"
+          chmod +x "desktop/binaries/shannon-${TARGET}"
+          "./desktop/binaries/shannon-${TARGET}" --version
+
+      - name: Stage bundled CLI (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Target = "${{ matrix.target }}"
+          $Tmp = Join-Path $env:TEMP "cli-bundle"
+          New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
+          gh release download $env:GITHUB_REF_NAME -D $Tmp `
+            -p "shannon-$Target.zip" --repo $env:GITHUB_REPOSITORY
+          Expand-Archive -Path "$Tmp\shannon-$Target.zip" -DestinationPath $Tmp -Force
+          New-Item -ItemType Directory -Force -Path desktop\binaries | Out-Null
+          Copy-Item "$Tmp\shannon.exe" "desktop\binaries\shannon-$Target.exe" -Force
+          & "desktop\binaries\shannon-$Target.exe" --version
 
       # tauri-bundler downloads NSIS on-demand with NO retry — a transient
       # "io: Peer disconnected" mid-build sinks the whole release job (cost

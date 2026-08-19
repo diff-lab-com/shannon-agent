@@ -112,6 +112,12 @@ test: test-rust test-ui test-gateway
 deny:
     cargo deny check
 
+# ADR-0011 red line 1: the CLI must never link GUI libs (tauri/webkit2gtk).
+# Optional arg: path to a built linux `shannon` binary to also ldd-check,
+#   just guard-headless target/release/shannon
+guard-headless *args:
+    scripts/check-headless-purity.sh {{args}}
+
 # ---------- Full CI gate ----------
 
 ci: fmt lint deny gen-protocol test

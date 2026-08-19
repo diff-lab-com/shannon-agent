@@ -175,6 +175,20 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
+  # ADR-0011 red line 1: the headless `shannon` CLI must never link GUI
+  # libraries. Metadata-only check (no compile) — fails the moment
+  # shannon-cli grows a tauri/webkit dependency edge.
+  guard-headless:
+    name: Headless purity (ADR-0011)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - name: Headless purity check
+        run: scripts/check-headless-purity.sh
+
   audit:
     name: Dependency Audit
     # Required-for-merge gate on `dev` and `main`. Tracks `deny.toml`:
