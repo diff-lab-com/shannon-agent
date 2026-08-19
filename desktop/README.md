@@ -7,6 +7,11 @@ coders. Same Rust engine that writes code also drafts email, researches
 topics, summarizes docs, and runs on schedules. One product, many jobs to
 be done.
 
+> **Desktop surface of the single `shannon` product** ([ADR-0011](../docs/adr/0011-single-product-multi-surface-distribution.md)):
+> every desktop bundle ships the `shannon` CLI alongside the GUI — `/usr/bin`
+> via deb/rpm, user PATH via the NSIS installer, and on macOS via
+> Settings → Advanced → Command line. Diagnose both with `shannon doctor`.
+
 ## For users
 
 | What | Where |

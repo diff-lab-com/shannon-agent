@@ -11,7 +11,7 @@ import { VoiceSttSettings } from '@/components/settings/VoiceSttSettings'
 import { VoiceLocalSettings } from '@/components/settings/VoiceLocalSettings'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
-import type { SkillCandidate } from '@/lib/tauri-api'
+import type { SkillCandidate, CliInstallStatus } from '@/lib/tauri-api'
 
 export default function AdvancedSettings() {
   const intl = useIntl()
@@ -34,9 +34,16 @@ export default function AdvancedSettings() {
   const [candidateIndex, setCandidateIndex] = useState(0)
   const [approvalOpen, setApprovalOpen] = useState(false)
 
+  // ADR-0011 B3 — bundled `shannon` CLI exposure (non-shadowing install).
+  const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null)
+  const [installingCli, setInstallingCli] = useState(false)
+
   useEffect(() => {
     let cancelled = false
     listSkillCandidatesSafe(!cancelled)
+    api.getCliInstallStatus()
+      .then((s) => { if (!cancelled) setCliStatus(s) })
+      .catch(() => { if (!cancelled) setCliStatus(null) })
     return () => { cancelled = true }
 
     function listSkillCandidatesSafe(active: boolean) {
@@ -66,6 +73,22 @@ export default function AdvancedSettings() {
     try { await api.configure({ key: 'factory_reset', value: 'true' }); toast.success(t('settings.advanced.resetComplete')) } catch (e) { toastError(t('settings.advanced.resetFailed'), e) }
     setResetting(false)
     setShowResetConfirm(false)
+  }
+
+  const handleInstallCli = async () => {
+    setInstallingCli(true)
+    try {
+      const result = await api.installCliToPath()
+      setCliStatus(result.status)
+      if (result.installedLink) {
+        toast.success(intl.formatMessage({ id: 'settings.advanced.cliInstalledToast' }, { link: result.installedLink }))
+      } else {
+        toast.message(result.message)
+      }
+    } catch (e) {
+      toastError(t('settings.advanced.cliInstallFailed'), e)
+    }
+    setInstallingCli(false)
   }
 
   function advanceCandidate() {
@@ -184,6 +207,42 @@ export default function AdvancedSettings() {
 
         {/* Voice / Local (P2-5e whisper-rs) — opt-in offline STT */}
         <VoiceLocalSettings />
+
+        {/* Command line — expose the bundled `shannon` CLI (ADR-0011 B3) */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+              <span className="material-symbols-outlined">terminal</span>
+            </div>
+            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.cliTitle')}</h3>
+            <span
+              className={`ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold whitespace-nowrap ${
+                cliStatus?.onPath
+                  ? 'bg-tertiary-container text-on-tertiary-container'
+                  : 'bg-error/10 text-error'
+              }`}
+            >
+              {cliStatus?.onPath
+                ? (cliStatus.onPathVersion ?? t('settings.advanced.cliInstalled'))
+                : t('settings.advanced.cliNotOnPath')}
+            </span>
+          </div>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-lg">
+            <div className="flex-1">
+              <p className="text-on-surface-variant text-body-sm mb-md">{t('settings.advanced.cliDesc')}</p>
+              {cliStatus?.handledByInstaller && !cliStatus?.onPath && (
+                <p className="text-on-surface-variant text-label-sm">{t('settings.advanced.cliInstallerHint')}</p>
+              )}
+            </div>
+            <Button
+              className="px-xl py-md bg-primary text-on-primary rounded-xl font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-md active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
+              onClick={handleInstallCli}
+              disabled={installingCli || !cliStatus || cliStatus.onPath}
+            >
+              {installingCli ? t('settings.advanced.cliInstalling') : t('settings.advanced.cliInstallButton')}
+            </Button>
+          </div>
+        </div>
 
         {/* Developer Options */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">

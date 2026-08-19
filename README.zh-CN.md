@@ -155,6 +155,15 @@ cargo install --git https://github.com/diff-lab-com/shannon-agent.git
 
 </details>
 
+一次安装，四个入口（每个桌面安装器同时内含 `shannon` CLI）：
+
+| 入口 | 用途 |
+|---|---|
+| `shannon` | 交互式 TUI / REPL（默认） |
+| `shannon -p "…"` | 无头脚本化 —— NDJSON 流式输出，`--schema` 结构化输出 |
+| `shannon serve` | 引擎守护进程（:33420）—— gateway / 移动端连接的 API 面 |
+| `shannon desktop` | 桌面应用 —— `--install` 可按需下载当前平台安装包 |
+
 ### 2. 配置
 
 设置 API 密钥和首选模型：

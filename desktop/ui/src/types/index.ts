@@ -238,6 +238,27 @@ export interface GatewayProcessState {
   status: GatewaySupervisorStatus
 }
 
+/// ADR-0011 B7: every surface self-identifies (routing / telemetry / support).
+export interface SurfaceInfo {
+  surface: string
+  version: string
+}
+
+/// ADR-0011 B3: is the bundled `shannon` CLI reachable from a shell?
+export interface CliInstallStatus {
+  onPath: boolean
+  onPathVersion: string | null
+  bundledPath: string | null
+  handledByInstaller: boolean
+}
+
+/// ADR-0011 B3: `install_cli_to_path` result.
+export interface CliInstallResult {
+  status: CliInstallStatus
+  installedLink: string | null
+  message: string
+}
+
 /// A managed provider connection kind. `openai-compatible` covers any
 /// OpenAI-style endpoint (GLM/Zhipu, Moonshot/Kimi, MiniMax, Together, Groq…).
 export type ProviderKind =
