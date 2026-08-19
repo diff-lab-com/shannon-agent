@@ -24,6 +24,7 @@ fn main() {
     use shannon_desktop::commands_sessions;
     use shannon_desktop::commands_skill_candidates;
     use shannon_desktop::commands_skill_loop;
+    use shannon_desktop::commands_surface;
     use shannon_desktop::commands_tasks;
     use shannon_desktop::commands_usage;
     use shannon_desktop::commands_voice;
@@ -98,6 +99,10 @@ fn main() {
             commands_connections::gateway_set_managed,
             // Q4-A — engine discovery probe result (Hosted vs External)
             commands_engine_discovery::engine_discovery_get_mode,
+            // ADR-0011 Phase B B3/B7 — surface identity + in-app CLI install
+            commands_surface::get_surface_info,
+            commands_surface::get_cli_install_status,
+            commands_surface::install_cli_to_path,
             // P1.3 — mobile device pairing (Design D shared-file channel)
             commands_mobile_pairing::mobile_generate_pair_token,
             commands_mobile_pairing::mobile_list_paired_devices,

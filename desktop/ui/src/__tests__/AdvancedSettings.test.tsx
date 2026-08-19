@@ -61,6 +61,18 @@ describe('AdvancedSettings', () => {
     expect(screen.getByText('Manage API Keys')).toBeInTheDocument()
   })
 
+  // ADR-0011 B3 — command line card
+  it('renders command line section', () => {
+    render(wrap(<AdvancedSettings />))
+    expect(screen.getByText('Command line')).toBeInTheDocument()
+  })
+
+  it('shows CLI not-on-path badge and install button by default', async () => {
+    render(wrap(<AdvancedSettings />))
+    await waitFor(() => expect(screen.getByText('Install `shannon` command')).toBeInTheDocument())
+    expect(screen.getByText('not on PATH')).toBeInTheDocument()
+  })
+
   // US-SET-04: System Logs modal
   it('opens system logs modal on View System Logs click', () => {
     render(wrap(<AdvancedSettings />))

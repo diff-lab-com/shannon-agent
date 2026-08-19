@@ -123,6 +123,10 @@ pub mod engine_discovery;
 #[cfg(feature = "tauri")]
 pub mod engine_discovery_commands;
 
+// ADR-0011 Phase B B3/B7 — surface identity + in-app CLI installation.
+#[cfg(feature = "tauri")]
+pub mod commands_surface;
+
 #[cfg(feature = "tauri")]
 pub mod commands_memory;
 

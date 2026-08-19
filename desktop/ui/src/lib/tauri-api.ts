@@ -11,6 +11,9 @@ import type {
   DesktopConfig,
   GatewayConfig,
   GatewayProcessState,
+  SurfaceInfo,
+  CliInstallStatus,
+  CliInstallResult,
   MobileDeviceEntry,
   MobilePairToken,
   SttConfig,
@@ -149,6 +152,20 @@ export async function gatewaySetManaged(managed: boolean): Promise<GatewayProces
 // --- P1.3 mobile device pairing (Design D shared-file channel) ---
 
 /** Mint a one-time 75s pair token + QR (LAN endpoint + token) for the phone. */
+// ── ADR-0011 Phase B B3/B7 — surface identity + bundled CLI install ────────
+
+export async function getSurfaceInfo(): Promise<SurfaceInfo> {
+  return invoke('get_surface_info')
+}
+
+export async function getCliInstallStatus(): Promise<CliInstallStatus> {
+  return invoke('get_cli_install_status')
+}
+
+export async function installCliToPath(): Promise<CliInstallResult> {
+  return invoke('install_cli_to_path')
+}
+
 export async function mobileGeneratePairToken(): Promise<MobilePairToken> {
   return invoke('mobile_generate_pair_token')
 }
@@ -288,6 +305,7 @@ export async function setActiveProvider(id: string): Promise<void> {
 }
 
 export type { ProviderConnection, ProvidersFile, ProviderInput }
+export type { SurfaceInfo, CliInstallStatus, CliInstallResult }
 
 // --- Models & Status ---
 

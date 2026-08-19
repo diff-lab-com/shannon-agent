@@ -158,6 +158,15 @@ cargo install --git https://github.com/diff-lab-com/shannon-agent.git
 
 </details>
 
+One install, four ways in (every desktop installer bundles the `shannon` CLI too):
+
+| Entry | What |
+|---|---|
+| `shannon` | Interactive TUI / REPL (default) |
+| `shannon -p "..."` | Headless scripting — NDJSON streaming, `--schema` structured output |
+| `shannon serve` | Engine daemon on `:33420` — the API surface gateway/mobile connect to |
+| `shannon desktop` | Desktop app — `--install` downloads the platform bundle on demand |
+
 ### 2. Configure
 
 Set your API key and preferred model:

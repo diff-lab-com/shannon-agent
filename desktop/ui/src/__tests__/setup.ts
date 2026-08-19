@@ -134,6 +134,19 @@ vi.mock('@/lib/tauri-api', () => ({
     approval_mode: 'normal',
   }),
   configure: vi.fn().mockResolvedValue(undefined),
+  // ADR-0011 B3/B7 — surface identity + bundled CLI install.
+  getSurfaceInfo: vi.fn().mockResolvedValue({ surface: 'desktop', version: '0.11.0' }),
+  getCliInstallStatus: vi.fn().mockResolvedValue({
+    onPath: false,
+    onPathVersion: null,
+    bundledPath: '/Applications/shannon-desktop.app/Contents/MacOS/shannon',
+    handledByInstaller: false,
+  }),
+  installCliToPath: vi.fn().mockResolvedValue({
+    status: { onPath: true, onPathVersion: '0.11.0', bundledPath: null, handledByInstaller: false },
+    installedLink: '/usr/local/bin/shannon',
+    message: 'linked',
+  }),
   gatewaySetSecret: vi.fn().mockResolvedValue(undefined),
   gatewayGetSecret: vi.fn().mockResolvedValue(null),
   gatewayHasSecret: vi.fn().mockResolvedValue(false),
