@@ -206,7 +206,16 @@ install_desktop() {
         if [ -n "$VOL" ]; then
           APP="$(find "$VOL" -maxdepth 2 -name '*.app' | head -1)"
           if [ -n "$APP" ]; then
-            cp -R "$APP" /Applications/ && ok "Installed $(basename "$APP") to /Applications"
+            if cp -R "$APP" /Applications/; then
+              ok "Installed $(basename "$APP") to /Applications"
+              # C4 mitigation: Gatekeeper blocks quarantined, unsigned apps.
+              # curl never sets the xattr, but a re-run over an app copied
+              # from a browser-downloaded dmg would inherit it — clear it
+              # unconditionally (best-effort; xattr ships with macOS).
+              if command -v xattr >/dev/null 2>&1; then
+                xattr -dr com.apple.quarantine "/Applications/$(basename "$APP")" 2>/dev/null || true
+              fi
+            fi
           fi
           hdiutil detach "$VOL" >/dev/null 2>&1 || true
         fi
