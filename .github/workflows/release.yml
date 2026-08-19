@@ -72,6 +72,11 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
+          # rc/beta tags (v0.11.0-rc1) validate the upcoming core version —
+          # the four sources carry 0.11.0, the tag appends a pre-release
+          # suffix. Compare against the core; a truly drifted tag
+          # (v0.11.1-rc1 vs 0.11.0 sources) still fails.
+          VERSION="${VERSION%%-*}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Tag:      $TAG"
           echo "Expected: $VERSION"
@@ -458,6 +463,9 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
+          # rc tags ship core-version binaries (see the prep guard) — asset
+          # names and version greps use the numeric core.
+          CORE="${VERSION%%-*}"
           # Build success ≠ shippable assets. Assert the load-bearing assets
           # exist with the expected (versioned) names, then run what can run
           # natively on this runner.
@@ -469,9 +477,9 @@ jobs:
             shannon-gateway-linux-x64 \
             shannon-gateway-darwin-arm64 \
             shannon-gateway-windows-x64.exe \
-            "shannon-desktop_${VERSION}_amd64.deb" \
-            "shannon-desktop_${VERSION}_x64-setup.exe" \
-            "shannon-desktop_${VERSION}_x64.dmg"; do
+            "shannon-desktop_${CORE}_amd64.deb" \
+            "shannon-desktop_${CORE}_x64-setup.exe" \
+            "shannon-desktop_${CORE}_x64.dmg"; do
             [ -f "release-assets/$a" ] || { echo "::error::missing expected asset: $a"; exit 1; }
           done
           echo "asset presence: OK (10/10)"
@@ -480,13 +488,13 @@ jobs:
           tar -C /tmp/smoke -xzf release-assets/shannon-x86_64-unknown-linux-gnu.tar.gz
           GOT="$(/tmp/smoke/shannon --version)"
           echo "shannon --version → $GOT"
-          echo "$GOT" | grep -F "$VERSION" || {
-            echo "::error::CLI reports wrong version (want $VERSION)"; exit 1; }
+          echo "$GOT" | grep -F "$CORE" || {
+            echo "::error::CLI reports wrong version (want $CORE)"; exit 1; }
           # Desktop: deb metadata must carry the same version.
-          DEB_VER="$(dpkg-deb -f "release-assets/shannon-desktop_${VERSION}_amd64.deb" Version)"
+          DEB_VER="$(dpkg-deb -f "release-assets/shannon-desktop_${CORE}_amd64.deb" Version)"
           echo "deb Version → $DEB_VER"
-          echo "$DEB_VER" | grep -F "$VERSION" || {
-            echo "::error::deb reports wrong version (want $VERSION)"; exit 1; }
+          echo "$DEB_VER" | grep -F "$CORE" || {
+            echo "::error::deb reports wrong version (want $CORE)"; exit 1; }
           echo "smoke tests passed"
 
       - name: Generate SHA256SUMS
