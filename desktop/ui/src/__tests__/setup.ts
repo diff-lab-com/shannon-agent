@@ -147,6 +147,15 @@ vi.mock('@/lib/tauri-api', () => ({
     installedLink: '/usr/local/bin/shannon',
     message: 'linked',
   }),
+  // C1① — semi-automatic update check.
+  checkAppUpdate: vi.fn().mockResolvedValue({
+    currentVersion: '0.11.0',
+    latestVersion: 'v0.11.0',
+    updateAvailable: false,
+    releaseUrl: 'https://github.com/diff-lab-com/shannon-agent/releases',
+    error: null,
+  }),
+  openReleasePage: vi.fn().mockResolvedValue(undefined),
   gatewaySetSecret: vi.fn().mockResolvedValue(undefined),
   gatewayGetSecret: vi.fn().mockResolvedValue(null),
   gatewayHasSecret: vi.fn().mockResolvedValue(false),

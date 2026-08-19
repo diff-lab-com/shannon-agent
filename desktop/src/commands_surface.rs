@@ -196,3 +196,151 @@ fn try_link_on_unix(bundled: &std::path::Path) -> Result<std::path::PathBuf, Str
 fn try_link_on_unix(_bundled: &std::path::Path) -> Result<std::path::PathBuf, String> {
     Err("handled by the installer (open a new terminal, or re-run the setup)".to_string())
 }
+
+// ── C1①: semi-automatic update check ────────────────────────────────
+//
+// The full in-place updater needs signing + a latest.json channel
+// (ADR-0011 open question, scheduled with C4). Until then the app offers
+// a check-then-open-the-download-page flow that only needs the public
+// GitHub API.
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdateInfo {
+    pub current_version: String,
+    /// Latest release tag (`vX.Y.Z`), when the check succeeded.
+    pub latest_version: Option<String>,
+    pub update_available: bool,
+    /// The release page to open in a browser.
+    pub release_url: String,
+    /// Why the check failed, when it did (rendered as a hint, not an error).
+    pub error: Option<String>,
+}
+
+/// Numeric dot-version compare — `latest > current`. Same lenient parsing
+/// as the CLI's `version_is_newer`: strips a leading `v`, ignores
+/// non-numeric suffixes, missing components count as 0.
+fn version_is_newer(current: &str, latest: &str) -> bool {
+    fn parse(v: &str) -> Vec<u64> {
+        v.split('.')
+            .map(|p| {
+                p.trim_start_matches('v')
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("")
+                    .parse::<u64>()
+                    .unwrap_or(0)
+            })
+            .collect()
+    }
+    let a = parse(current);
+    let b = parse(latest);
+    let len = a.len().max(b.len());
+    for i in 0..len {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        if y > x {
+            return true;
+        }
+        if y < x {
+            return false; // first differing component decides
+        }
+    }
+    false
+}
+
+/// C1①: check GitHub for a newer release. Never fails the command —
+/// network problems land in `error` so the UI can show a soft hint.
+#[tauri::command]
+pub async fn check_app_update() -> Result<AppUpdateInfo, String> {
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let mut info = AppUpdateInfo {
+        current_version: current.clone(),
+        latest_version: None,
+        update_available: false,
+        release_url: "https://github.com/diff-lab-com/shannon-agent/releases".to_string(),
+        error: None,
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+    let resp = match client
+        .get("https://api.github.com/repos/diff-lab-com/shannon-agent/releases/latest")
+        .header("User-Agent", "shannon-desktop")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            info.error = Some(format!("network error: {e}"));
+            return Ok(info);
+        }
+    };
+    if !resp.status().is_success() {
+        info.error = Some(format!("GitHub returned HTTP {}", resp.status()));
+        return Ok(info);
+    }
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            info.error = Some(format!("bad release metadata: {e}"));
+            return Ok(info);
+        }
+    };
+    if let Some(url) = body.get("html_url").and_then(|u| u.as_str()) {
+        info.release_url = url.to_string();
+    }
+    match body.get("tag_name").and_then(|t| t.as_str()) {
+        Some(tag) => {
+            info.update_available = version_is_newer(&current, tag);
+            info.latest_version = Some(tag.to_string());
+        }
+        None => info.error = Some("no tag_name in release metadata".to_string()),
+    }
+    Ok(info)
+}
+
+/// C1①: open the release page in the system browser — same shell-open
+/// precedent as the OAuth flow in extensions_commands.rs.
+#[tauri::command]
+pub async fn open_release_page(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_shell::ShellExt;
+    #[allow(deprecated)]
+    app.shell()
+        .open(url, None)
+        .map_err(|e| format!("failed to open browser: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version_is_newer;
+
+    #[test]
+    fn detects_newer_patch_minor_major() {
+        assert!(version_is_newer("0.11.0", "0.11.1"));
+        assert!(version_is_newer("0.11.0", "0.12.0"));
+        assert!(version_is_newer("0.11.0", "1.0.0"));
+    }
+
+    #[test]
+    fn equal_or_older_is_not_newer() {
+        assert!(!version_is_newer("0.11.0", "0.11.0"));
+        assert!(!version_is_newer("0.11.1", "0.11.0"));
+        // A higher major must dominate later components (1.0 > 0.9).
+        assert!(!version_is_newer("1.0", "0.9"));
+        // Lenient parse (same as the CLI): "-rc.1" reads as an extra `.1`
+        // component, so prerelease tags compare as newer. Acceptable —
+        // /releases/latest never serves prereleases.
+        assert!(version_is_newer("0.11.0", "0.11.0-rc.1"));
+    }
+
+    #[test]
+    fn tolerates_v_prefix_and_ragged_lengths() {
+        assert!(version_is_newer("0.11", "v0.12"));
+        assert!(version_is_newer("0.11.0", "0.12")); // missing parts are 0
+        assert!(!version_is_newer("0.11.0", "0.11.0.0"));
+    }
+}

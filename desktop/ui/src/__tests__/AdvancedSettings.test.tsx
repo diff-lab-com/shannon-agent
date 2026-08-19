@@ -73,12 +73,46 @@ describe('AdvancedSettings', () => {
     expect(screen.getByText('not on PATH')).toBeInTheDocument()
   })
 
+  // C1① — version & updates card
+  it('renders version & updates section with a check button', () => {
+    render(wrap(<AdvancedSettings />))
+    expect(screen.getByText('Version & updates')).toBeInTheDocument()
+    expect(screen.getByText('Check for updates')).toBeInTheDocument()
+  })
+
+  it('shows up-to-date badge and download page link after a check', async () => {
+    render(wrap(<AdvancedSettings />))
+    fireEvent.click(screen.getByText('Check for updates'))
+    await waitFor(() => expect(screen.getByText('up to date')).toBeInTheDocument())
+    expect(screen.getByText('Open download page')).toBeInTheDocument()
+    expect(screen.getByText('Current version: 0.11.0')).toBeInTheDocument()
+  })
+
+  it('announces an available update and opens the release page', async () => {
+    vi.mocked(api.checkAppUpdate).mockResolvedValueOnce({
+      currentVersion: '0.11.0',
+      latestVersion: 'v0.12.0',
+      updateAvailable: true,
+      releaseUrl: 'https://github.com/diff-lab-com/shannon-agent/releases/tag/v0.12.0',
+      error: null,
+    })
+    render(wrap(<AdvancedSettings />))
+    fireEvent.click(screen.getByText('Check for updates'))
+    await waitFor(() => expect(screen.getByText('v0.12.0 available')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Open download page'))
+    await waitFor(() =>
+      expect(api.openReleasePage).toHaveBeenCalledWith(
+        'https://github.com/diff-lab-com/shannon-agent/releases/tag/v0.12.0'
+      )
+    )
+  })
+
   // US-SET-04: System Logs modal
   it('opens system logs modal on View System Logs click', () => {
     render(wrap(<AdvancedSettings />))
     fireEvent.click(screen.getByText('View System Logs'))
     expect(screen.getByText('System Logs')).toBeInTheDocument()
-    expect(screen.getByText(/Shannon Desktop/)).toBeInTheDocument()
+    expect(screen.getByText('Shannon Desktop v0.1.0')).toBeInTheDocument()
   })
 
   it('closes system logs modal via close button', () => {
