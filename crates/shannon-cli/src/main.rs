@@ -590,9 +590,20 @@ enum Commands {
 
     /// Launch the Shannon desktop application (Tauri GUI)
     Desktop {
-        /// Do not attempt to build the desktop app if the binary isn't found.
+        /// Build the desktop app from the workspace `desktop/` dir when the
+        /// binary isn't found (developer flow; needs the Tauri toolchain).
         #[arg(long)]
+        build: bool,
+
+        /// Deprecated: accepted for compatibility. Auto-building is no longer
+        /// the default fallback (install guidance is) — see `--build`.
+        #[arg(long, hide = true)]
         no_build: bool,
+
+        /// Download and install the desktop bundle for this platform when
+        /// the binary isn't found, then launch it.
+        #[arg(long, conflicts_with_all = ["build", "no_build"])]
+        install: bool,
 
         /// Run in the foreground and wait for the desktop app to exit.
         #[arg(long)]
@@ -609,7 +620,14 @@ enum Commands {
     Update,
 
     /// Run diagnostics: check toolchain, ports, and services.
-    Doctor,
+    ///
+    /// With `--json`, emit machine-readable diagnostics: surface identity,
+    /// checks, and dual-install detection (scripting / telemetry / support).
+    Doctor {
+        /// Emit JSON instead of the human-readable report.
+        #[arg(long)]
+        json: bool,
+    },
 
     /// List provider profiles configured in `~/.shannon/providers.toml`.
     ///
@@ -2590,75 +2608,107 @@ fn handle_url_scheme_registration(register: bool, unregister: bool) -> Result<()
 /// Resolve the path to the `shannon-desktop` binary.
 ///
 /// Order: (a) PATH `shannon-desktop`, (b) known install dirs, (c) None.
+///
+/// Install-dir candidates follow the productName "shannon-desktop" bundle:
+/// NSIS currentUser → `%LOCALAPPDATA%\shannon-desktop`, perMachine → Program
+/// Files; macOS drag-install → `shannon-desktop.app` (the productName, NOT
+/// "Shannon Desktop.app") under /Applications and ~/Applications; the
+/// workspace `desktop/target/release` dir covers the `--build` dev flow.
 fn find_desktop_binary() -> Option<std::path::PathBuf> {
     if let Ok(path) = which_desktop_on_path() {
         return Some(path);
     }
-    let candidates = [
+    let mut candidates: Vec<std::path::PathBuf> = vec![
         std::path::PathBuf::from("/usr/local/bin/shannon-desktop"),
         dirs::home_dir()
             .map(|h| h.join(".local").join("bin").join("shannon-desktop"))
             .unwrap_or_default(),
-        std::path::PathBuf::from(
-            "/Applications/Shannon Desktop.app/Contents/MacOS/shannon-desktop",
-        ),
     ];
+    if cfg!(target_os = "macos") {
+        candidates.push(std::path::PathBuf::from(
+            "/Applications/shannon-desktop.app/Contents/MacOS/shannon-desktop",
+        ));
+        if let Some(home) = dirs::home_dir() {
+            candidates.push(
+                home.join("Applications")
+                    .join("shannon-desktop.app")
+                    .join("Contents/MacOS/shannon-desktop"),
+            );
+        }
+    }
+    if cfg!(windows) {
+        // NSIS currentUser install (Tauri default): %LOCALAPPDATA%.
+        if let Some(local) = dirs::data_local_dir() {
+            candidates.push(local.join("shannon-desktop").join("shannon-desktop.exe"));
+        }
+        // perMachine install ("all users" checkbox).
+        candidates.push(std::path::PathBuf::from(
+            r"C:\Program Files\shannon-desktop\shannon-desktop.exe",
+        ));
+        // `shannon desktop --build` output.
+        candidates.push(std::path::PathBuf::from(
+            r"desktop\target\release\shannon-desktop.exe",
+        ));
+    } else {
+        // `shannon desktop --build` output (unix layout).
+        candidates.push(std::path::PathBuf::from(
+            "desktop/target/release/shannon-desktop",
+        ));
+    }
     candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
 /// Probe only the system PATH for `shannon-desktop` and return its path if found.
 fn which_desktop_on_path() -> Result<std::path::PathBuf, ()> {
-    let out = std::process::Command::new("command")
-        .args(["-v", "shannon-desktop"])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() {
-                Err(())
-            } else {
-                Ok(std::path::PathBuf::from(s))
-            }
-        }
-        _ => Err(()),
-    }
+    find_on_path("shannon-desktop").ok_or(())
+}
+
+/// Resolve `exe` on PATH by walking PATH directly. No shell-out: `command -v`
+/// is a shell builtin and `Command::new("command")` fails outright on
+/// distros without a /usr/bin/command shim (stock Ubuntu), which used to
+/// make every doctor probe report a false WARN on Linux.
+fn find_on_path(exe: &str) -> Option<std::path::PathBuf> {
+    let name = if cfg!(windows) && !exe.ends_with(".exe") {
+        format!("{exe}.exe")
+    } else {
+        exe.to_string()
+    };
+    let path_var = std::env::var_os("PATH")?;
+    std::env::split_paths(&path_var)
+        .map(|dir| dir.join(&name))
+        .find(|p| p.is_file())
 }
 
 /// Launch the Shannon desktop application.
 ///
-/// Best-effort: resolves the binary, optionally builds it via `cargo tauri
-/// build`, then spawns it. If `foreground` is false the process is detached
-/// (spawn only); otherwise we wait for it to exit.
-fn run_desktop_command(no_build: bool, foreground: bool) -> Result<()> {
+/// Resolution order when the binary is missing (Phase B B5):
+///   `--install` → download + verify + install the platform bundle;
+///   `--build`   → developer flow, `cargo tauri build` from `desktop/`;
+///   default     → print install guidance (auto-build removed: it is a dev
+///                 behavior, not a product behavior).
+/// `--no-build` is accepted for compatibility and ignored.
+///
+/// If `foreground` is false the process is detached (spawn only); otherwise
+/// we wait for it to exit.
+fn run_desktop_command(build: bool, no_build: bool, install: bool, foreground: bool) -> Result<()> {
+    let _ = no_build; // deprecated — guidance is the default fallback now
     let binary = match find_desktop_binary() {
         Some(b) => b,
         None => {
-            if no_build {
-                anyhow::bail!(
-                    "shannon-desktop not found on PATH or in known install dirs. \
-                     Install it or run without --no-build to build it from desktop/."
-                );
-            }
-            // Try to build the desktop app from the workspace `desktop/` dir.
-            let desktop_dir = std::path::PathBuf::from("desktop");
-            eprintln!("shannon-desktop not found; building via `cargo tauri build`...");
-            let status = std::process::Command::new("cargo")
-                .arg("tauri")
-                .arg("build")
-                .current_dir(&desktop_dir)
-                .status();
-            match status {
-                Ok(s) if s.success() => {
-                    // Search known dirs again after a successful build.
-                    match find_desktop_binary() {
-                        Some(b) => b,
-                        None => anyhow::bail!(
-                            "Built the desktop app but could not locate the shannon-desktop binary."
-                        ),
-                    }
-                }
-                Ok(s) => anyhow::bail!("`cargo tauri build` failed (exit status: {s})."),
-                Err(e) => anyhow::bail!("Failed to run `cargo tauri build`: {e}"),
+            if install {
+                install_desktop_bundle()?;
+                find_desktop_binary().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "installation finished but shannon-desktop still not found — \
+                         start it once from the Applications / Start menu to complete \
+                         first-run setup"
+                    )
+                })?
+            } else if build {
+                build_desktop_from_workspace()?
+            } else {
+                print_desktop_install_guidance();
+                anyhow::bail!("shannon-desktop not found on PATH or in known install dirs");
             }
         }
     };
@@ -2688,22 +2738,349 @@ fn run_desktop_command(no_build: bool, foreground: bool) -> Result<()> {
     }
 }
 
-/// Find the external `shannon-gateway` binary on the system PATH.
-fn find_gateway_binary() -> Option<std::path::PathBuf> {
-    let out = std::process::Command::new("command")
-        .args(["-v", "shannon-gateway"])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() {
-                None
-            } else {
-                Some(std::path::PathBuf::from(s))
+/// The guidance block printed when the desktop binary is missing (the default
+/// fallback — source auto-build was removed as a product behavior in B5).
+fn print_desktop_install_guidance() {
+    println!("Shannon Desktop is not installed.");
+    println!();
+    println!("One-line install:");
+    println!(
+        "    curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | SHANNON_COMPONENTS=desktop sh"
+    );
+    println!("Windows (PowerShell):");
+    println!(
+        "    irm https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.ps1 | iex"
+    );
+    println!();
+    println!("Or let this command do it:      shannon desktop --install");
+    println!("Developer build from this repo: shannon desktop --build");
+    println!("Bundles: https://github.com/diff-lab-com/shannon-agent/releases/latest");
+}
+
+/// Developer flow: build the desktop app from the workspace `desktop/` dir.
+fn build_desktop_from_workspace() -> Result<std::path::PathBuf> {
+    let desktop_dir = std::path::PathBuf::from("desktop");
+    eprintln!("shannon-desktop not found; building via `cargo tauri build`...");
+    let status = std::process::Command::new("cargo")
+        .arg("tauri")
+        .arg("build")
+        .current_dir(&desktop_dir)
+        .status();
+    match status {
+        Ok(s) if s.success() => find_desktop_binary().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Built the desktop app but could not locate the shannon-desktop binary."
+            )
+        }),
+        Ok(s) => anyhow::bail!("`cargo tauri build` failed (exit status: {s})."),
+        Err(e) => anyhow::bail!("Failed to run `cargo tauri build`: {e}"),
+    }
+}
+
+// ── `shannon desktop --install` support ───────────────────────────────────
+//
+// Downloads the platform bundle from the latest GitHub release, verifies it
+// against the release-level SHA256SUMS (best-effort — mirrors install.sh),
+// asks for confirmation, and installs:
+//   macOS   → mount dmg, copy shannon-desktop.app to /Applications
+//             (fallback ~/Applications — no sudo either way)
+//   linux   → sudo dpkg -i <deb> / sudo rpm -Uvh <rpm>
+//   windows → run the NSIS setup with /S (silent)
+
+const SHANNON_REPO: &str = "diff-lab-com/shannon-agent";
+
+/// Pick the desktop asset filename for `(os, arch)` from a release's asset
+/// names. tauri-action naming:
+///   nsis `shannon-desktop_<ver>_<x64|aarch64>-setup.exe`
+///   deb  `shannon-desktop_<ver>_<amd64|arm64>.deb`
+///   rpm  `shannon-desktop_<ver>_<x86_64|aarch64>.rpm`
+///   dmg  `shannon-desktop_<ver>_<x64|aarch64>.dmg`
+fn pick_desktop_asset_for(
+    os: &str,
+    arch: &str,
+    prefer_rpm: bool,
+    assets: &[String],
+) -> Option<String> {
+    let (arch_tokens, suffixes): (&[&str], &[&str]) = match (os, arch) {
+        ("windows", "x86_64") => (&["_x64"], &["-setup.exe"]),
+        ("windows", "aarch64") => (&["_aarch64"], &["-setup.exe"]),
+        ("macos", "x86_64") => (&["_x64"], &[".dmg"]),
+        ("macos", "aarch64") => (&["_aarch64"], &[".dmg"]),
+        ("linux", "x86_64") => (
+            &["_amd64", "_x86_64"],
+            if prefer_rpm { &[".rpm"] } else { &[".deb"] },
+        ),
+        ("linux", "aarch64") => (
+            &["_arm64", "_aarch64"],
+            if prefer_rpm { &[".rpm"] } else { &[".deb"] },
+        ),
+        _ => return None,
+    };
+    assets
+        .iter()
+        .find(|name| {
+            name.starts_with("shannon-desktop_")
+                && suffixes.iter().any(|s| name.ends_with(s))
+                && arch_tokens.iter().any(|t| name.contains(t))
+        })
+        .cloned()
+}
+
+/// Find `asset`'s sha256 in a release-level SHA256SUMS body
+/// (sha256sum format: `<hash>  <name>` per line).
+fn sha256_for_asset(sums_body: &str, asset: &str) -> Option<String> {
+    sums_body.lines().find_map(|line| {
+        let mut it = line.split_whitespace();
+        let hash = it.next()?;
+        let name = it.next()?;
+        (name == asset).then(|| hash.to_ascii_lowercase())
+    })
+}
+
+/// Lowercase hex sha256 of a file, streamed (bundles are tens of MB).
+fn file_sha256(path: &std::path::Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// curl a URL into a string (same transport `shannon update` uses).
+fn curl_to_string(url: &str) -> Result<String> {
+    let out = std::process::Command::new("curl")
+        .args(["-fsSL", "--retry", "3"])
+        .arg(url)
+        .output()
+        .map_err(|e| anyhow::anyhow!("failed to run curl ({e}) — install curl first"))?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "curl failed for {url} (exit {})",
+            out.status.code().unwrap_or(-1)
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// curl a URL to a file (streamed to disk, not buffered in memory).
+fn curl_to_file(url: &str, dest: &std::path::Path) -> Result<()> {
+    let status = std::process::Command::new("curl")
+        .args(["-fL", "--retry", "3", "-o"])
+        .arg(dest)
+        .arg(url)
+        .status()
+        .map_err(|e| anyhow::anyhow!("failed to run curl ({e}) — install curl first"))?;
+    if !status.success() {
+        anyhow::bail!(
+            "curl failed for {url} (exit {})",
+            status.code().unwrap_or(-1)
+        );
+    }
+    Ok(())
+}
+
+/// Best-effort `is this tool on PATH` probe.
+fn which_tool(tool: &str) -> bool {
+    find_on_path(tool).is_some()
+}
+
+/// Fetch the latest release JSON from the GitHub API.
+fn fetch_latest_release_json() -> Result<serde_json::Value> {
+    let body = curl_to_string(&format!(
+        "https://api.github.com/repos/{SHANNON_REPO}/releases/latest"
+    ))?;
+    serde_json::from_str(&body)
+        .map_err(|e| anyhow::anyhow!("failed to parse release metadata: {e}"))
+}
+
+/// `shannon desktop --install`: download + verify + install the platform
+/// desktop bundle from the latest release.
+fn install_desktop_bundle() -> Result<()> {
+    println!("Fetching latest release info...");
+    let release = fetch_latest_release_json()?;
+    let tag = release["tag_name"].as_str().unwrap_or("latest").to_string();
+
+    let mut assets: Vec<(String, String)> = Vec::new(); // (name, download url)
+    if let Some(list) = release["assets"].as_array() {
+        for asset in list {
+            if let (Some(name), Some(url)) = (
+                asset["name"].as_str(),
+                asset["browser_download_url"].as_str(),
+            ) {
+                assets.push((name.to_string(), url.to_string()));
             }
         }
-        _ => None,
     }
+    if assets.is_empty() {
+        anyhow::bail!("release {tag} has no assets to install from");
+    }
+    let names: Vec<String> = assets.iter().map(|(n, _)| n.clone()).collect();
+    let prefer_rpm = !which_tool("dpkg") && which_tool("rpm");
+    let asset = pick_desktop_asset_for(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        prefer_rpm,
+        &names,
+    )
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "no desktop bundle for {}/{} in {tag} (assets: {})",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            names.join(", ")
+        )
+    })?;
+    let url = assets
+        .iter()
+        .find(|(n, _)| *n == asset)
+        .map(|(_, u)| u.clone())
+        .expect("asset tuple exists");
+
+    let tmp = std::env::temp_dir().join(format!("shannon-desktop-install-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp)?;
+    let bundle = tmp.join(&asset);
+    println!("Downloading {asset} ({tag})...");
+    curl_to_file(&url, &bundle)?;
+
+    // Verify against the release-level SHA256SUMS — best-effort, mirroring
+    // install.sh (a hard failure on mismatch, a warning when unavailable).
+    match curl_to_string(&format!(
+        "https://github.com/{SHANNON_REPO}/releases/latest/download/SHA256SUMS"
+    )) {
+        Ok(sums) => match sha256_for_asset(&sums, &asset) {
+            Some(expected) => {
+                let got = file_sha256(&bundle)?;
+                if got != expected {
+                    anyhow::bail!("sha256 mismatch for {asset}: expected {expected}, got {got}");
+                }
+                println!("sha256 verified: {expected}");
+            }
+            None => println!("WARN: {asset} not listed in SHA256SUMS — skipping verification."),
+        },
+        Err(e) => println!("WARN: could not fetch SHA256SUMS ({e}) — skipping verification."),
+    }
+
+    println!();
+    print!("Install Shannon Desktop {tag} ({asset})? [y/N] ");
+    use std::io::Write;
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    if !answer.trim().eq_ignore_ascii_case("y") {
+        anyhow::bail!("aborted; bundle left at {}", bundle.display());
+    }
+
+    install_desktop_bundle_file(&bundle)?;
+    let _ = std::fs::remove_file(&bundle);
+    let _ = std::fs::remove_dir(&tmp);
+    println!("Shannon Desktop {tag} installed.");
+    Ok(())
+}
+
+/// Platform dispatch for the downloaded bundle file.
+fn install_desktop_bundle_file(bundle: &std::path::Path) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        install_desktop_dmg(bundle)
+    } else if cfg!(target_os = "linux") {
+        // dpkg systems got the .deb, rpm-only systems the .rpm (asset pick).
+        let (program, flag) = if bundle.extension().is_some_and(|e| e == "rpm") {
+            ("rpm", "-Uvh")
+        } else {
+            ("dpkg", "-i")
+        };
+        let status = std::process::Command::new("sudo")
+            .arg(program)
+            .arg(flag)
+            .arg(bundle)
+            .status()
+            .map_err(|e| anyhow::anyhow!("failed to run sudo {program} ({e})"))?;
+        if !status.success() {
+            anyhow::bail!("{program} failed (exit {:?})", status.code());
+        }
+        Ok(())
+    } else if cfg!(target_os = "windows") {
+        // NSIS silent install; currentUser mode does not elevate.
+        let status = std::process::Command::new(bundle)
+            .arg("/S")
+            .status()
+            .map_err(|e| anyhow::anyhow!("failed to run the installer ({e})"))?;
+        if !status.success() {
+            anyhow::bail!("installer failed (exit {:?})", status.code());
+        }
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "unsupported platform for --install: {}",
+            std::env::consts::OS
+        );
+    }
+}
+
+/// macOS: mount the dmg read-only, copy `shannon-desktop.app` into
+/// /Applications (fallback ~/Applications when not writable — no sudo path),
+/// then detach.
+fn install_desktop_dmg(dmg: &std::path::Path) -> Result<()> {
+    let out = std::process::Command::new("hdiutil")
+        .args(["attach", "-nobrowse", "-readonly", "-plist"])
+        .arg(dmg)
+        .output()
+        .map_err(|e| anyhow::anyhow!("failed to run hdiutil ({e})"))?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "hdiutil attach failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let plist: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| anyhow::anyhow!("failed to parse hdiutil output: {e}"))?;
+    let mount = plist["system-entities"]
+        .as_array()
+        .and_then(|entities| entities.iter().find_map(|e| e["mount-point"].as_str()))
+        .ok_or_else(|| anyhow::anyhow!("no mount point in hdiutil output"))?
+        .to_string();
+
+    let app_src = std::path::PathBuf::from(&mount).join("shannon-desktop.app");
+    if !app_src.is_dir() {
+        let _ = std::process::Command::new("hdiutil")
+            .args(["detach", &mount])
+            .status();
+        anyhow::bail!("no shannon-desktop.app found in the mounted dmg");
+    }
+
+    let mut targets: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from("/Applications")];
+    if let Some(home) = dirs::home_dir() {
+        targets.push(home.join("Applications"));
+    }
+    let mut installed: Option<std::path::PathBuf> = None;
+    for dir in targets {
+        let dest = dir.join("shannon-desktop.app");
+        // cp -R onto an existing .app merges trees badly — remove first.
+        let _ = std::fs::remove_dir_all(&dest);
+        let ok = std::process::Command::new("cp")
+            .args(["-R"])
+            .arg(&app_src)
+            .arg(&dest)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok && dest.is_dir() {
+            installed = Some(dest);
+            break;
+        }
+        let _ = std::fs::remove_dir_all(&dest);
+    }
+    let _ = std::process::Command::new("hdiutil")
+        .args(["detach", &mount])
+        .status();
+
+    installed.map(|_| ()).ok_or_else(|| {
+        anyhow::anyhow!("could not copy shannon-desktop.app into /Applications or ~/Applications")
+    })
+}
+
+/// Find the external `shannon-gateway` binary on the system PATH.
+fn find_gateway_binary() -> Option<std::path::PathBuf> {
+    find_on_path("shannon-gateway")
 }
 
 /// Delegate a gateway subcommand to the external `shannon-gateway` binary.
@@ -2845,7 +3222,9 @@ fn run_update_command() -> Result<()> {
         println!();
         println!("A newer version is available: {latest}");
         println!("To upgrade, run:");
-        println!("    curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | sh");
+        println!(
+            "    curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | sh"
+        );
         println!();
         println!(
             "Or download from: https://github.com/diff-lab-com/shannon-agent/releases/{latest}"
@@ -2861,21 +3240,187 @@ fn is_port_free(port: u16) -> bool {
     std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
+// ── doctor: dual-install detection (Phase B B7) ────────────────────────────
+//
+// After Phase B a machine commonly holds TWO `shannon` binaries: the one on
+// PATH (install.sh / package manager) and the one bundled inside the desktop
+// installer (deb/rpm /usr/bin, macOS .app, NSIS $INSTDIR). Both are fine —
+// the rule is PATH WINS (desktop installers only ever append to PATH) — but
+// version drift between them deserves a warning.
+
+/// A located `shannon` installation.
+struct ShannonInstallation {
+    path: std::path::PathBuf,
+    version: Option<String>,
+    source: &'static str,
+}
+
+/// Every `shannon` binary reachable from PATH, in PATH order (first wins).
+fn shannon_on_path_list() -> Vec<std::path::PathBuf> {
+    let exe = if cfg!(windows) {
+        "shannon.exe"
+    } else {
+        "shannon"
+    };
+    let Some(path_var) = std::env::var_os("PATH") else {
+        return Vec::new();
+    };
+    std::env::split_paths(&path_var)
+        .map(|dir| dir.join(exe))
+        .filter(|p| p.is_file())
+        .collect()
+}
+
+/// Known locations where a desktop installer drops the bundled CLI.
+fn known_bundle_shannon_locations() -> Vec<(&'static str, std::path::PathBuf)> {
+    let mut locations = Vec::new();
+    if cfg!(target_os = "linux") {
+        locations.push((
+            "desktop deb/rpm bundle",
+            std::path::PathBuf::from("/usr/bin/shannon"),
+        ));
+    }
+    if cfg!(target_os = "macos") {
+        locations.push((
+            "desktop .app bundle",
+            std::path::PathBuf::from("/Applications/shannon-desktop.app/Contents/MacOS/shannon"),
+        ));
+    }
+    if cfg!(target_os = "windows") {
+        if let Some(local) = dirs::data_local_dir() {
+            locations.push((
+                "desktop NSIS bundle",
+                local.join("shannon-desktop").join("shannon.exe"),
+            ));
+        }
+    }
+    locations
+}
+
+/// First whitespace-separated token that starts with a digit — `shannon
+/// 0.11.0`-style `--version` output → `0.11.0`.
+fn version_token_from_output(output: &str) -> Option<String> {
+    output
+        .split_whitespace()
+        .find(|t| t.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .map(String::from)
+}
+
+/// Ask a binary its version (CLI binaries only — never the desktop app).
+fn probe_version(binary: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new(binary)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    version_token_from_output(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// PATH hits + known bundle locations, deduped (a bundle dir can also be on
+/// PATH), with versions probed.
+fn resolve_shannon_installations() -> Vec<ShannonInstallation> {
+    let mut installs: Vec<ShannonInstallation> = shannon_on_path_list()
+        .into_iter()
+        .map(|path| ShannonInstallation {
+            path,
+            version: None,
+            source: "PATH",
+        })
+        .collect();
+    for (label, path) in known_bundle_shannon_locations() {
+        if !path.is_file() {
+            continue;
+        }
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+        let already = installs
+            .iter()
+            .any(|i| i.path.canonicalize().unwrap_or_else(|_| i.path.clone()) == canonical);
+        if !already {
+            installs.push(ShannonInstallation {
+                path,
+                version: None,
+                source: label,
+            });
+        }
+    }
+    for install in &mut installs {
+        install.version = probe_version(&install.path);
+    }
+    installs
+}
+
 /// Run diagnostics: toolchain, ports, services, and config.
 ///
 /// Never blocks — every check reports OK/WARN/INFO and continues.
-fn run_doctor_command() -> Result<()> {
-    println!("Shannon Doctor — diagnostics");
+/// With `--json` the report is machine-readable (surface identity + checks +
+/// dual-install detection; ADR-0011 Phase B B7).
+fn run_doctor_command(json: bool) -> Result<()> {
+    // ── Identity (every surface self-identifies — routing/telemetry/support)
+    let surface = "cli";
+    let version = current_version();
 
-    // Toolchain probes (PATH via `command -v`).
+    // Toolchain probes (direct PATH walk — see find_on_path).
     let tools = ["cargo", "rustc", "node", "bun"];
+    let mut tool_presence = std::collections::BTreeMap::new();
     for tool in tools {
-        let present = std::process::Command::new("command")
-            .args(["-v", tool])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if present {
+        tool_presence.insert(tool, which_tool(tool));
+    }
+
+    // Gateway service on PATH.
+    let gateway = find_gateway_binary();
+
+    // Port 33420 free (the default api_server port).
+    let port_free = is_port_free(33420);
+
+    // Configured engine URL.
+    let engine_url = std::env::var("SHANNON_BASE_URL")
+        .ok()
+        .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok());
+
+    // Dual-install detection.
+    let installs = resolve_shannon_installations();
+    let dual_detected = installs.len() > 1;
+    let versions_differ = dual_detected
+        && installs
+            .iter()
+            .filter_map(|i| i.version.as_deref())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            > 1;
+
+    if json {
+        let report = serde_json::json!({
+            "surface": surface,
+            "version": version,
+            "checks": {
+                "tools": tool_presence,
+                "gateway_on_path": gateway.as_ref().map(|p| p.display().to_string()),
+                "port_33420_free": port_free,
+                "engine_url": engine_url,
+                "desktop_binary": find_desktop_binary().map(|p| p.display().to_string()),
+            },
+            "shannon_installations": installs.iter().map(|i| serde_json::json!({
+                "path": i.path.display().to_string(),
+                "version": i.version,
+                "source": i.source,
+            })).collect::<Vec<_>>(),
+            "dual_install": {
+                "detected": dual_detected,
+                "versions_differ": versions_differ,
+                "rule": "PATH wins",
+            },
+        });
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("Shannon Doctor — diagnostics");
+    println!("[INFO]  surface: {surface} (version {version})");
+
+    for (tool, present) in &tool_presence {
+        if *present {
             println!("[OK]    found '{tool}' on PATH");
         } else {
             // `bun` is optional; only WARN. `cargo`/`rustc`/`node` are WARN too
@@ -2884,26 +3429,46 @@ fn run_doctor_command() -> Result<()> {
         }
     }
 
-    // Gateway service on PATH.
-    match find_gateway_binary() {
+    match &gateway {
         Some(p) => println!("[OK]    shannon-gateway found: {}", p.display()),
         None => println!("[INFO]  shannon-gateway not found on PATH (run `shannon gateway setup`)"),
     }
 
-    // Port 33420 free (the default api_server port).
-    if is_port_free(33420) {
+    if port_free {
         println!("[OK]    port 33420 is free");
     } else {
         println!("[WARN]  port 33420 is already in use (api_server may be running)");
     }
 
-    // Configured engine URL.
-    let engine_url = std::env::var("SHANNON_BASE_URL")
-        .ok()
-        .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok());
     match engine_url {
         Some(url) => println!("[OK]    engine URL configured: {url}"),
         None => println!("[INFO]  no engine URL configured (using provider default)"),
+    }
+
+    match find_desktop_binary() {
+        Some(p) => println!("[OK]    shannon-desktop found: {}", p.display()),
+        None => println!("[INFO]  shannon-desktop not found (run `shannon desktop --install`)"),
+    }
+
+    // `shannon` installations (PATH first — that is the one that wins).
+    println!("[INFO]  shannon installations ({}):", installs.len());
+    for install in &installs {
+        let ver = install.version.as_deref().unwrap_or("unknown version");
+        println!(
+            "        - {} ({}) — {ver}",
+            install.path.display(),
+            install.source
+        );
+    }
+    if dual_detected {
+        if versions_differ {
+            println!("[WARN]  dual install with DIFFERENT versions — PATH wins: the first");
+            println!("        PATH hit is what `shannon` resolves to. Keep them in sync:");
+            println!("        `shannon update` updates the PATH copy; reinstalling the");
+            println!("        desktop app updates its bundled copy.");
+        } else {
+            println!("[INFO]  dual install detected (same version) — PATH wins; nothing to do.");
+        }
     }
 
     println!("Doctor finished.");
@@ -3140,7 +3705,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         | Some(Commands::Desktop { .. })
         | Some(Commands::Gateway { .. })
         | Some(Commands::Update)
-        | Some(Commands::Doctor)
+        | Some(Commands::Doctor { .. })
         | Some(Commands::ListProviders { .. })
         | Some(Commands::Providers { .. }) => CliConfig::default(),
     };
@@ -3394,10 +3959,12 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             }
         },
         Some(Commands::Desktop {
+            build,
             no_build,
+            install,
             foreground,
         }) => {
-            run_desktop_command(no_build, foreground)?;
+            run_desktop_command(build, no_build, install, foreground)?;
         }
         Some(Commands::Gateway { command }) => {
             run_gateway_command(command)?;
@@ -3405,8 +3972,8 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         Some(Commands::Update) => {
             run_update_command()?;
         }
-        Some(Commands::Doctor) => {
-            run_doctor_command()?;
+        Some(Commands::Doctor { json }) => {
+            run_doctor_command(json)?;
         }
         Some(Commands::ListProviders { json }) => {
             // Engine store reads from `~/.shannon/providers.toml`. The CLI
@@ -3463,6 +4030,83 @@ fn run_with_cli(cli: Cli) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── desktop --install: asset picking ─────────────────────────────
+
+    #[test]
+    fn test_pick_desktop_asset_linux_deb_default() {
+        let assets = vec![
+            "shannon-desktop_0.11.0_amd64.deb".to_string(),
+            "shannon-desktop_0.11.0_x86_64.rpm".to_string(),
+            "shannon-x86_64-unknown-linux-gnu.tar.gz".to_string(),
+        ];
+        assert_eq!(
+            pick_desktop_asset_for("linux", "x86_64", false, &assets),
+            Some("shannon-desktop_0.11.0_amd64.deb".to_string())
+        );
+    }
+
+    #[test]
+    fn test_pick_desktop_asset_linux_rpm_preferred() {
+        let assets = vec![
+            "shannon-desktop_0.11.0_amd64.deb".to_string(),
+            "shannon-desktop_0.11.0_x86_64.rpm".to_string(),
+        ];
+        assert_eq!(
+            pick_desktop_asset_for("linux", "x86_64", true, &assets),
+            Some("shannon-desktop_0.11.0_x86_64.rpm".to_string())
+        );
+    }
+
+    #[test]
+    fn test_pick_desktop_asset_windows_and_mac() {
+        let win = vec!["shannon-desktop_0.11.0_x64-setup.exe".to_string()];
+        assert_eq!(
+            pick_desktop_asset_for("windows", "x86_64", false, &win),
+            Some("shannon-desktop_0.11.0_x64-setup.exe".to_string())
+        );
+        let mac = vec![
+            "shannon-desktop_0.11.0_x64.dmg".to_string(),
+            "shannon-desktop_0.11.0_aarch64.dmg".to_string(),
+        ];
+        assert_eq!(
+            pick_desktop_asset_for("macos", "aarch64", false, &mac),
+            Some("shannon-desktop_0.11.0_aarch64.dmg".to_string())
+        );
+        // Wrong arch → none.
+        assert_eq!(pick_desktop_asset_for("macos", "x86_64", false, &[]), None);
+    }
+
+    // ── desktop --install: SHA256SUMS parsing ────────────────────────
+
+    #[test]
+    fn test_sha256_for_asset() {
+        let sums = "\
+abc123  shannon-desktop_0.11.0_amd64.deb
+def456  shannon-x86_64-unknown-linux-gnu.tar.gz
+";
+        assert_eq!(
+            sha256_for_asset(sums, "shannon-desktop_0.11.0_amd64.deb"),
+            Some("abc123".to_string())
+        );
+        assert_eq!(sha256_for_asset(sums, "missing.deb"), None);
+    }
+
+    // ── doctor: version probe parsing ────────────────────────────────
+
+    #[test]
+    fn test_version_token_from_output() {
+        assert_eq!(
+            version_token_from_output("shannon 0.11.0\n"),
+            Some("0.11.0".to_string())
+        );
+        assert_eq!(
+            version_token_from_output("0.10.0\n"),
+            Some("0.10.0".to_string())
+        );
+        assert_eq!(version_token_from_output("no digits here\n"), None);
+        assert_eq!(version_token_from_output(""), None);
+    }
 
     // ── parse_cli_env tests ──────────────────────────────────────────
 
