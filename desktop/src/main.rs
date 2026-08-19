@@ -103,6 +103,9 @@ fn main() {
             commands_surface::get_surface_info,
             commands_surface::get_cli_install_status,
             commands_surface::install_cli_to_path,
+            // C1① — semi-automatic update check (GitHub latest → open page)
+            commands_surface::check_app_update,
+            commands_surface::open_release_page,
             // P1.3 — mobile device pairing (Design D shared-file channel)
             commands_mobile_pairing::mobile_generate_pair_token,
             commands_mobile_pairing::mobile_list_paired_devices,

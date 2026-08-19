@@ -11,7 +11,7 @@ import { VoiceSttSettings } from '@/components/settings/VoiceSttSettings'
 import { VoiceLocalSettings } from '@/components/settings/VoiceLocalSettings'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
-import type { SkillCandidate, CliInstallStatus } from '@/lib/tauri-api'
+import type { SkillCandidate, CliInstallStatus, AppUpdateInfo } from '@/lib/tauri-api'
 
 export default function AdvancedSettings() {
   const intl = useIntl()
@@ -37,6 +37,10 @@ export default function AdvancedSettings() {
   // ADR-0011 B3 — bundled `shannon` CLI exposure (non-shadowing install).
   const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null)
   const [installingCli, setInstallingCli] = useState(false)
+
+  // C1① — semi-automatic update check (GitHub latest → open download page).
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -89,6 +93,29 @@ export default function AdvancedSettings() {
       toastError(t('settings.advanced.cliInstallFailed'), e)
     }
     setInstallingCli(false)
+  }
+
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true)
+    try {
+      const info = await api.checkAppUpdate()
+      setUpdateInfo(info)
+      if (info.updateAvailable && info.latestVersion) {
+        toast.success(intl.formatMessage({ id: 'settings.advanced.updateAvailableBadge' }, { version: info.latestVersion }))
+      }
+    } catch (e) {
+      toastError(t('settings.advanced.updateCheckFailed'), e)
+    }
+    setCheckingUpdate(false)
+  }
+
+  const handleOpenReleasePage = async () => {
+    if (!updateInfo) return
+    try {
+      await api.openReleasePage(updateInfo.releaseUrl)
+    } catch (e) {
+      toastError(t('settings.advanced.updateOpenFailed'), e)
+    }
   }
 
   function advanceCandidate() {
@@ -241,6 +268,63 @@ export default function AdvancedSettings() {
             >
               {installingCli ? t('settings.advanced.cliInstalling') : t('settings.advanced.cliInstallButton')}
             </Button>
+          </div>
+        </div>
+
+        {/* Version & updates — semi-automatic update check (C1①) */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+              <span className="material-symbols-outlined">system_update_alt</span>
+            </div>
+            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.updateTitle')}</h3>
+            {updateInfo && (
+              <span
+                className={`ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold whitespace-nowrap ${
+                  updateInfo.updateAvailable
+                    ? 'bg-tertiary-container text-on-tertiary-container'
+                    : 'bg-surface-container-high text-on-surface-variant'
+                }`}
+              >
+                {updateInfo.error
+                  ? t('settings.advanced.updateCheckFailed')
+                  : updateInfo.updateAvailable && updateInfo.latestVersion
+                    ? intl.formatMessage({ id: 'settings.advanced.updateAvailableBadge' }, { version: updateInfo.latestVersion })
+                    : t('settings.advanced.updateUpToDate')}
+              </span>
+            )}
+          </div>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-lg">
+            <div className="flex-1">
+              <p className="text-on-surface-variant text-body-sm mb-md">{t('settings.advanced.updateDesc')}</p>
+              {updateInfo && (
+                <p className="text-on-surface-variant text-label-sm">
+                  {intl.formatMessage({ id: 'settings.advanced.updateCurrent' }, { version: updateInfo.currentVersion })}
+                </p>
+              )}
+              {updateInfo?.error && (
+                <p className="text-error text-label-sm mt-xs">{updateInfo.error}</p>
+              )}
+            </div>
+            <div className="flex items-center gap-md shrink-0">
+              {updateInfo && !updateInfo.error && (
+                <Button
+                  variant="ghost"
+                  className="flex items-center gap-xs text-primary font-label-md text-[14px] hover:underline cursor-pointer"
+                  onClick={handleOpenReleasePage}
+                >
+                  <span className="material-symbols-outlined icon-sm">open_in_new</span>
+                  {t('settings.advanced.updateOpenPage')}
+                </Button>
+              )}
+              <Button
+                className="px-xl py-md bg-primary text-on-primary rounded-xl font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-md active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
+                onClick={handleCheckUpdate}
+                disabled={checkingUpdate}
+              >
+                {checkingUpdate ? t('settings.advanced.updateChecking') : t('settings.advanced.updateCheckButton')}
+              </Button>
+            </div>
           </div>
         </div>
 

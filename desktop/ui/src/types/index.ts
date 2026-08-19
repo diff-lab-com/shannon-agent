@@ -259,6 +259,15 @@ export interface CliInstallResult {
   message: string
 }
 
+/// C1①: semi-automatic update check (GitHub latest vs. this build).
+export interface AppUpdateInfo {
+  currentVersion: string
+  latestVersion: string | null
+  updateAvailable: boolean
+  releaseUrl: string
+  error: string | null
+}
+
 /// A managed provider connection kind. `openai-compatible` covers any
 /// OpenAI-style endpoint (GLM/Zhipu, Moonshot/Kimi, MiniMax, Together, Groq…).
 export type ProviderKind =

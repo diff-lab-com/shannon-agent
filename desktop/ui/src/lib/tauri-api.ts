@@ -13,6 +13,7 @@ import type {
   GatewayProcessState,
   SurfaceInfo,
   CliInstallStatus,
+  AppUpdateInfo,
   CliInstallResult,
   MobileDeviceEntry,
   MobilePairToken,
@@ -166,6 +167,16 @@ export async function installCliToPath(): Promise<CliInstallResult> {
   return invoke('install_cli_to_path')
 }
 
+// ── C1① — semi-automatic update check ────────────────────────────────
+
+export async function checkAppUpdate(): Promise<AppUpdateInfo> {
+  return invoke('check_app_update')
+}
+
+export async function openReleasePage(url: string): Promise<void> {
+  return invoke('open_release_page', { url })
+}
+
 export async function mobileGeneratePairToken(): Promise<MobilePairToken> {
   return invoke('mobile_generate_pair_token')
 }
@@ -305,7 +316,7 @@ export async function setActiveProvider(id: string): Promise<void> {
 }
 
 export type { ProviderConnection, ProvidersFile, ProviderInput }
-export type { SurfaceInfo, CliInstallStatus, CliInstallResult }
+export type { SurfaceInfo, CliInstallStatus, CliInstallResult, AppUpdateInfo }
 
 // --- Models & Status ---
 
