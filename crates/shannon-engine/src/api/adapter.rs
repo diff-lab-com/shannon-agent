@@ -1773,6 +1773,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_anthropic_signature_delta_parses() {
+        // Regression: MiniMax (Anthropic-compatible) emits signature_delta
+        // after thinking deltas; an unknown variant used to kill the stream.
+        let event_json = r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"EqMC..."}}"#;
+        let result = normalize_sse_event(event_json, &LlmProvider::Anthropic, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(
+                    delta,
+                    &ContentDelta::SignatureDelta {
+                        signature: "EqMC...".to_string()
+                    }
+                );
+            }
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_anthropic_unknown_delta_tolerated() {
+        let event_json = r#"{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":"x"}}"#;
+        let result = normalize_sse_event(event_json, &LlmProvider::Anthropic, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::Unknown);
+            }
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
+        }
+    }
+
     // -- OpenAI SSE normalization --
 
     #[test]
