@@ -149,3 +149,6 @@ desktop/binaries/
 # Dogfood loop artifacts + fixer worktrees (docs/plans/autonomous-improvement-loop.md)
 artifacts/
 .dogfood-worktrees/
+
+# Python bytecode (dogfood supervisor)
+__pycache__/

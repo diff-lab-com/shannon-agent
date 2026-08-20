@@ -173,6 +173,21 @@ def recent_summaries(artifacts_dir: Path, limit: int = 10) -> list[dict]:
     return out[-limit:]
 
 
+def history_for_streaks(artifacts_dir: Path, run_id: str, iter_id: str,
+                        summary: dict) -> list[dict]:
+    """All prior summaries (this run's earlier iterations included) with the
+    in-progress summary appended in place.
+
+    The current iteration's summary.json is NOT on disk yet on a fresh run's
+    first iteration — an unconditional `[:-1]` slice would silently drop the
+    most recent *previous* summary instead (observed: inflated all-green
+    streak → premature loop exit). Exclude by (run_id, iter_id), append exact.
+    """
+    prior = [h for h in recent_summaries(artifacts_dir)
+             if (h.get("run_id"), h.get("iter_id")) != (run_id, iter_id)]
+    return prior + [summary]
+
+
 def streaks(history: list[dict], stop_cfg: dict) -> dict:
     green = 0
     for s in reversed(history):
@@ -323,6 +338,13 @@ def run_iteration(n: int, run_id: str, tasks_all: list[dict], cfg: dict,
 
     ran = {m["task_id"] for m in metas if m.get("started")}
     passed = {m["task_id"] for m in metas if m["outcome_grade"] == "pass"}
+    if perf_result.get("ran"):
+        # Perf signatures have task_id "perf"; a clean suite run marks them
+        # fixed, a regressed one keeps them open (tracker treats "perf" as
+        # ran+not-passed when regressions exist).
+        ran.add("perf")
+        if not perf_result.get("regressions"):
+            passed.add("perf")
     findings = tracker.update(findings, ran, passed, iter_id)
     triage_doc = {"findings": findings,
                   "open_signatures": tracker.open_count()}
@@ -331,7 +353,7 @@ def run_iteration(n: int, run_id: str, tasks_all: list[dict], cfg: dict,
     gate_state = ledger.check(iter_id, cfg["budget"])
     summary = build_summary(run_id, iter_id, metas, findings, perf_result,
                             gate={}, ledger_state=gate_state, fix_sessions=[])
-    history = recent_summaries(ARTIFACTS_DIR)[:-1] + [summary]
+    history = history_for_streaks(ARTIFACTS_DIR, run_id, iter_id, summary)
     summary["timing_trends"] = timing_trends(
         [{**h, "iter_id": h["iter_id"]} for h in history])
     summary["streaks"] = streaks(history, cfg["stop"])
