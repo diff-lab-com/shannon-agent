@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 import unittest
 from pathlib import Path
 
@@ -45,15 +46,19 @@ class TestLedger(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.ledger = Ledger(Path(self.tmp.name))
+        # Gate windows are derived from the real clock; fixtures must use the
+        # actual today (a hardcoded date rots the day-gate test overnight).
+        self.today = datetime.now().strftime("%Y-%m-%d")
+        self.this_month = datetime.now().strftime("%Y-%m")
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def _fill(self):
-        self.ledger.append(Entry(ts="2026-08-20T10:00:00", run_id="r1",
+        self.ledger.append(Entry(ts=f"{self.today}T10:00:00", run_id="r1",
                                  iter_id="iter-01", source="task", ref="t1",
                                  tokens_out=1_000_000))
-        self.ledger.append(Entry(ts="2026-08-20T11:00:00", run_id="r1",
+        self.ledger.append(Entry(ts=f"{self.today}T11:00:00", run_id="r1",
                                  iter_id="iter-01", source="fix", ref="s1",
                                  tokens_in=500_000, tokens_out=500_000))
 
@@ -68,7 +73,7 @@ class TestLedger(unittest.TestCase):
 
     def test_iteration_gate_trips_at_cap(self):
         self._fill()
-        self.ledger.append(Entry(ts="2026-08-20T12:00:00", run_id="r1",
+        self.ledger.append(Entry(ts=f"{self.today}T12:00:00", run_id="r1",
                                  iter_id="iter-01", source="fix", ref="s2",
                                  tokens_out=2_000_000))
         budget = {"per_iteration_tokens": 4_000_000,
@@ -79,7 +84,7 @@ class TestLedger(unittest.TestCase):
 
     def test_daily_gate_hard_stops(self):
         self._fill()
-        self.ledger.append(Entry(ts="2026-08-20T13:00:00", run_id="r1",
+        self.ledger.append(Entry(ts=f"{self.today}T13:00:00", run_id="r1",
                                  iter_id="iter-02", source="task", ref="t9",
                                  tokens_out=8_000_000))
         budget = {"per_iteration_tokens": 4_000_000,
@@ -93,12 +98,12 @@ class TestLedger(unittest.TestCase):
         self.ledger.append(Entry(ts="2025-01-01T00:00:00", run_id="old",
                                  iter_id="iter-00", source="task", ref="old",
                                  tokens_out=1_000_000))
-        self.assertEqual(self.ledger.month_total("2026-08"), 2_000_000)
+        self.assertEqual(self.ledger.month_total(self.this_month), 2_000_000)
 
     def test_persistence_reloads(self):
         self._fill()
         reloaded = Ledger(Path(self.tmp.name))
-        self.assertEqual(reloaded.day_total("2026-08-20"), 2_000_000)
+        self.assertEqual(reloaded.day_total(self.today), 2_000_000)
 
 
 class TestParseNdjson(unittest.TestCase):
