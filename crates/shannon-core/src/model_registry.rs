@@ -1267,6 +1267,7 @@ mod tests {
             "moonshot-v1-8k",
             "moonshot-v1-32k",
             "moonshot-v1-128k",
+            "MiniMax-M3",
             "MiniMax-M2.7",
             "MiniMax-M2.5",
             "MiniMax-M2.7-highspeed",
@@ -1443,6 +1444,14 @@ mod tests {
     }
 
     // ── MiniMax tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_minimax_m3_registered() {
+        let info = model_info_for("MiniMax-M3").expect("MiniMax-M3 should be registered");
+        assert_eq!(info.context_window, 1_000_000);
+        assert!(info.capabilities.has(ModelCapabilities::coding()));
+        assert!(info.capabilities.has(ModelCapabilities::reasoning()));
+    }
 
     #[test]
     fn test_minimax_m27_registered() {
