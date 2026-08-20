@@ -925,6 +925,18 @@ fn normalize_openai_event(
     // calls (including those opened earlier in this same chunk above) and
     // emit MessageDelta with the normalized stop reason.
     if let Some(ref reason) = choice.finish_reason {
+        // Some providers (MiniMax M-series again) pack the FINAL text
+        // content into the same chunk as finish_reason — non-exclusively,
+        // like tool_calls above. Emit it before the terminal events or the
+        // answer after a closing `</think>` is silently dropped.
+        if let Some(ref content) = choice.delta.content {
+            events.push(Ok(StreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: ContentDelta::TextDelta {
+                    text: content.clone(),
+                },
+            }));
+        }
         for idx in state.open_tool_indices.drain(..) {
             events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
         }
@@ -1790,6 +1802,60 @@ mod tests {
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
+    }
+
+    fn collect_stream_text(
+        chunk: &str,
+        provider: &LlmProvider,
+        state: &mut OpenaiStreamState,
+        out: &mut String,
+    ) {
+        for ev in normalize_sse_event(chunk, provider, state) {
+            if let Ok(StreamEvent::ContentBlockDelta { delta, .. }) = ev {
+                if let ContentDelta::TextDelta { text: t } = delta {
+                    out.push_str(&t);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_minimax_m3_content_after_think_close_survives() {
+        // MiniMax M3 (OpenAI wire) streams inline reasoning: text chunks
+        // opening with `<think>`, then the closer `</think>\n\n` glued to the
+        // final answer. The final content may arrive in its own chunk OR
+        // packed with `finish_reason` — regression: the same-chunk form was
+        // dropped, truncating the response to just the think prefix.
+        let expected = "<think>The user wants me to reply with exactly \"ok\".</think>\n\nok";
+
+        let separate = [
+            r#"{"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"<think>The user wants","role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":" me to reply with","role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":" exactly \"ok\".","role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"</think>\n\nok","role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"role":"assistant"},"finish_reason":"stop"}]}"#,
+        ];
+        let mut text = String::new();
+        let state = &mut fresh_state();
+        for c in separate {
+            collect_stream_text(c, &LlmProvider::Minimax, state, &mut text);
+        }
+        assert_eq!(text, expected);
+
+        // Recorded live shape (short answers): content + finish_reason in
+        // ONE chunk, usage in a trailing choices-less chunk.
+        let same_chunk = [
+            r#"{"choices":[{"delta":{"content":"<think>The user wants me to reply with exactly \"ok\".","role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"</think>\n\nok","role":"assistant"},"finish_reason":"stop"}]}"#,
+            r#"{"choices":[{"delta":null}],"usage":{"prompt_tokens":1,"completion_tokens":2}}"#,
+        ];
+        let mut text = String::new();
+        let state = &mut fresh_state();
+        for c in same_chunk {
+            collect_stream_text(c, &LlmProvider::Minimax, state, &mut text);
+        }
+        assert_eq!(text, expected);
     }
 
     #[test]
