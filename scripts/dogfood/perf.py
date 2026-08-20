@@ -17,7 +17,9 @@ from pathlib import Path
 
 from common import REPO_ROOT, atomic_write_json, read_json
 
-LINE_RE = re.compile(r"^\s*(PASS|FAIL)\s+\[[^\]]*\]\s+(\S+)$")
+# nextest result lines: `PASS [   0.004s] ( 4/13) shannon-core api::tests::x`
+# — optional (n/m) progress counter, then a crate-qualified name WITH spaces.
+LINE_RE = re.compile(r"^\s*(PASS|FAIL)\s+\[[^\]]*\](?:\s+\([^)]*\))?\s+(.+?)\s*$")
 
 
 def run_perf(baseline_path: Path, enabled: bool = True,
