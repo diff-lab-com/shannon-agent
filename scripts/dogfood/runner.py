@@ -27,6 +27,15 @@ CHECK_CMD_TIMEOUT_S = 120
 HANG_NO_OUTPUT_S = 900
 KILL_GRACE_S = 10
 
+# Ambient LLM env vars scrubbed from task processes (see run_process): any of
+# these silently reroutes the headless client away from the connected
+# providers.toml profile that the loop is supposed to be validating.
+AMBIENT_LLM_ENV = (
+    "SHANNON_API_KEY", "SHANNON_MODEL", "SHANNON_PROVIDER", "SHANNON_BASE_URL",
+    "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
+    "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
+)
+
 WORKSPACE_READONLY = "readonly-main"
 
 
@@ -108,7 +117,14 @@ def run_process(cmd: list[str], task_dir: Path, ws: Path, env: dict,
     state = {"last_line_ms": 0, "lines": 0, "eof": False}
     t0 = time.monotonic()
 
+    # Hermetic provider env: ambient credential/endpoint vars from the
+    # operator's shell (ANTHROPIC_BASE_URL etc.) otherwise leak into the
+    # headless runs and silently reroute traffic away from the connected
+    # providers.toml profile. Task env re-adds what a task needs (s6's
+    # invalid key, SHANNON_MODEL tier overrides).
     merged_env = os.environ.copy()
+    for k in AMBIENT_LLM_ENV:
+        merged_env.pop(k, None)
     merged_env.update({k: str(v) for k, v in env.items()})
 
     with open(stderr_path, "wb") as errf:
