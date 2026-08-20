@@ -72,6 +72,7 @@ Things deferred to future work.
 | [0008](0008-provider-model-command-architecture-remediation.md) | Provider/Model Command Architecture Remediation | Proposed | 2026-08-01 |
 | [0009](0009-provider-store-read-facade.md) | Provider Store Read Facade (desktop read-path consolidation) | Accepted | 2026-08-06 |
 | [0010](0010-memory-curated-layer-jsonl-injection.md) | Memory Curated-Layer Alignment to JSONL-Append + Scoped Injection | Accepted | 2026-08-12 |
+| [0011](0011-single-product-multi-surface-distribution.md) | Single Product, Multiple Surfaces — Identity & Distribution Unification | Accepted | 2026-08-19 |
 
 ## Numbering
 
