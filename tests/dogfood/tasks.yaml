@@ -121,6 +121,10 @@ tasks:
     provider_tier: fast
     timeout_s: 120
     env:
+      # SHANNON_PROVIDER forces the env-credential path; without it the
+      # connected providers.toml profile would win over the ambient
+      # SHANNON_API_KEY (ADR-0005 Phase 4) and the task would not fail.
+      SHANNON_PROVIDER: "anthropic"
       SHANNON_API_KEY: "sk-dogfood-invalid-on-purpose"
     prompt: "reply with the single word: ok"
     expect:
