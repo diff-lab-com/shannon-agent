@@ -6,7 +6,9 @@ matrix:
   # Progressive ramp (plan §5.2): [S] -> [S,M] -> [S,M,L]. Graduation and
   # rollback are judged by the supervisor from summary history; bump manually
   # until the auto-ramp lands.
-  task_tiers: [S]
+  # Promoted to [S, M] 2026-08-21: two consecutive all-green full-S iterations
+  # on MiniMax-M3 with zero new signatures (artifacts 2026-08-21T01*).
+  task_tiers: [S, M]
   parallel_s: 3
   parallel_m: 1
 
@@ -22,7 +24,7 @@ timing:
   hang_no_output_s: 900
 
 perf:
-  enabled: false              # flip to true at P1b graduation
+  enabled: true               # P1b graduation 2026-08-21 (baseline: 77 green)
   baseline_file: artifacts/perf-baseline.json
   timeout_s: 1800
 
