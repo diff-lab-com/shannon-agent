@@ -1067,6 +1067,18 @@ pub enum ContentDelta {
     /// Thinking delta for extended thinking mode (Anthropic-specific)
     #[serde(rename = "thinking_delta")]
     ThinkingDelta { thinking: String },
+
+    /// Thinking signature delta (Anthropic extended thinking). Follows
+    /// `thinking_delta` in the block stream. Anthropic-compatible providers
+    /// (e.g. MiniMax) emit these; the signature is not consumed yet, but the
+    /// stream must parse through it instead of dying on an unknown variant.
+    #[serde(rename = "signature_delta")]
+    SignatureDelta { signature: String },
+
+    /// Unknown delta type from a future API revision — tolerated so one new
+    /// event kind cannot kill an in-flight stream.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Message delta event data

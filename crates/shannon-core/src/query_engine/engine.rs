@@ -2000,6 +2000,10 @@ impl QueryEngine {
                                                         }
                                                     );
                                                 }
+                                                // Signature/unknown deltas: parsed for
+                                                // stream compatibility, nothing to emit.
+                                                ContentDelta::SignatureDelta { .. }
+                                                | ContentDelta::Unknown => {}
                                             }
                                         }
                                         StreamEvent::ContentBlockStop { index } => {
