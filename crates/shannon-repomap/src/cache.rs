@@ -48,7 +48,9 @@ struct DiskCache {
 }
 
 /// Bumped whenever the on-disk schema changes incompatibly.
-const CACHE_SCHEMA_VERSION: u32 = 1;
+/// v2: walks prune `.git`/`node_modules`/`target`/`dist` — caches written
+/// before that carry vendor symbols and must be discarded.
+const CACHE_SCHEMA_VERSION: u32 = 2;
 
 /// Persistent, incrementally updatable cache for [`RepoMap`].
 ///
@@ -380,7 +382,11 @@ pub enum CacheError {
 pub(crate) fn walk_and_parse(root: &Path) -> Result<Vec<(PathBuf, Vec<SymbolNode>)>> {
     use walkdir::WalkDir;
     let mut out = Vec::new();
-    for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| !crate::is_ignored_dir(e))
+        .filter_map(|e| e.ok())
+    {
         let path = entry.path();
         if !path.is_file() {
             continue;

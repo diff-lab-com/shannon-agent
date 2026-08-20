@@ -70,7 +70,24 @@ pub use watcher::{RepoMapWatcher, WatcherEvent, WatcherEventKind};
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
+
+/// Well-known dependency and build-output directories that never hold the
+/// user's own source. Walking them floods the map — this monorepo's
+/// `desktop/ui/node_modules` alone contributed 1.6MB of `.d.ts` headers to
+/// the system prompt (588k prompt tokens per headless query).
+pub(crate) const IGNORED_DIRS: [&str; 4] = [".git", "node_modules", "target", "dist"];
+
+/// `true` for directory entries the repo map walk should prune (never the
+/// walk root itself, so a repo literally named `target` still works).
+pub(crate) fn is_ignored_dir(entry: &DirEntry) -> bool {
+    entry.depth() > 0
+        && entry.file_type().is_dir()
+        && entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| IGNORED_DIRS.contains(&name))
+}
 
 /// Concrete repo map wrapper. Owns a [`SymbolMap`] plus the `root` the walk
 /// started from (useful for rendering relative paths in the markdown view).
@@ -97,7 +114,11 @@ impl RepoMap {
     /// language. See [`LanguageParser::from_extension`] for the list.
     pub fn from_dir(cwd: &Path) -> Result<Self> {
         let mut files = Vec::new();
-        for entry in WalkDir::new(cwd).into_iter().filter_map(|e| e.ok()) {
+        for entry in WalkDir::new(cwd)
+            .into_iter()
+            .filter_entry(|e| !is_ignored_dir(e))
+            .filter_map(|e| e.ok())
+        {
             let path = entry.path();
             if !path.is_file() {
                 continue;
@@ -215,3 +236,32 @@ fn relative_path(root: &Path, path: &Path) -> PathBuf {
 
 /// Re-export so call sites don't need to know the module path.
 pub use budget::estimate_tokens;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn walk_skips_node_modules_and_target() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("main.rs"), "fn main() {}\n").expect("write main.rs");
+        for ignored in IGNORED_DIRS {
+            let sub = root.join(ignored);
+            std::fs::create_dir_all(&sub).expect("mkdir");
+            std::fs::write(sub.join("vendor.rs"), "fn vendor_only() {}\n")
+                .expect("write vendor.rs");
+        }
+        let map = RepoMap::from_dir(root).expect("walk");
+        let paths: Vec<String> = map
+            .map
+            .files
+            .iter()
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        // Only the user's own source file: vendor trees pruned at the dir
+        // level (regression: desktop/ui/node_modules flooded the system
+        // prompt with 1.6MB of .d.ts headers).
+        assert_eq!(paths, vec!["main.rs".to_string()]);
+    }
+}
