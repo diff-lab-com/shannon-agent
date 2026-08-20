@@ -21,6 +21,7 @@ use shannon_core::{
 use shannon_engine::{api::LlmClientConfig, state::StateManager};
 use shannon_tools::register_default_tools_with_project_dir_ex;
 use shannon_types::model_ref::ModelRef;
+use shannon_types::provider_config::ProviderModelConfig;
 use shannon_ui::Repl;
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
@@ -847,6 +848,30 @@ fn should_enable_tools(provider: shannon_engine::api::LlmProvider) -> bool {
 /// Priority (highest → lowest):
 ///   CLI overrides > env vars (`SHANNON_*`) > local `.shannon.toml` > global `~/.shannon/config.toml`
 ///
+/// Copy the connected provider profile (`~/.shannon/providers.toml`) and
+/// point the default profile's active target at `model_id`.
+///
+/// A model-only override (`--model`, or a `model = "…"` in a TOML config)
+/// changes which model the connected provider serves — it must not replace
+/// the provider, base_url, or credential (a `CredentialRef::Store` from
+/// `/connect` survives; ADR-0005 Phase 4). Returns `None` when nothing is
+/// connected, in which case the caller synthesises from scratch.
+///
+/// The copy is in-memory only: the store file is never written back.
+fn graft_model_onto_connected(model_id: &str) -> Option<ProviderModelConfig> {
+    let mut pm = shannon_core::provider_config_store::load(None)?;
+    let profile = pm.profiles.get_mut("default")?;
+    profile.active_target.model_id = model_id.to_string();
+    // Match `ConfigBuilder::load_connected_profile`, which runs env-var
+    // substitution over the connected layer before merging.
+    let mut wrapped = ShannonConfig {
+        provider_model: pm,
+        ..ShannonConfig::empty()
+    };
+    shannon_core::substitute::substitute_config(&mut wrapped);
+    Some(wrapped.provider_model)
+}
+
 /// N1/C-fields: the legacy `ShannonConfig { model, provider, api_key,
 /// base_url, … }` literal is gone. CLI options feed
 /// [`shannon_core::provider_resolver::synthesize_default_profile`] (with
@@ -855,6 +880,13 @@ fn should_enable_tools(provider: shannon_engine::api::LlmProvider) -> bool {
 /// a `CredentialRef::Env` pointing at `SHANNON_API_KEY`). The plaintext
 /// api-key value never enters the config (A1-strict); at `From`-time the
 /// value is sourced from the process environment via `resolve_credential`.
+///
+/// ADR-0005 Phase 4 precedence inside the CLI layer: a provider/base_url
+/// override synthesises a fresh profile, a model-only override grafts the
+/// model onto the connected profile ([`graft_model_onto_connected`]), and no
+/// overrides leaves the layer empty so the connected profile wins over
+/// ambient `SHANNON_*` env vars (the `/connect` "works without env vars"
+/// contract).
 ///
 /// The CLI temporarily injects the resolved api-key value into the
 /// `SHANNON_API_KEY` env var so `resolve_credential` can pick it up. This is
@@ -887,15 +919,41 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
     unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
     unsafe { std::env::remove_var("OPENAI_API_KEY") };
 
-    // 3. Synthesize the v2 default profile now that SHANNON_API_KEY is the
-    //    chosen cred var.
-    let provider_model = synthesize_default_profile(
-        cli_config.model().as_deref(),
-        cli_config.provider().as_deref(),
-        cli_config.get_env("SHANNON_BASE_URL").as_deref(),
-        Some("SHANNON_API_KEY"),
-    )
-    .unwrap_or_default();
+    // 3. Build the CLI-layer provider_model (highest precedence in
+    //    `ShannonConfig::merge`). ADR-0005 Phase 4: the connected profile
+    //    (~/.shannon/providers.toml) wins over ambient env when the user
+    //    gave no provider inputs, so the layer must stay EMPTY in that case
+    //    — synthesising unconditionally would clobber /connect with an
+    //    Anthropic+Env profile even with no flags.
+    //      - provider/base_url override → full synthesis (explicit provider
+    //        switch, pre-N1 behaviour).
+    //      - model-only override → graft the model onto a copy of the
+    //        connected profile: a per-invocation --model changes the model,
+    //        not the provider/credential.
+    //      - no overrides → empty layer; the connected (or env) layer below
+    //        supplies the profile.
+    let provider_input = cli_config.provider();
+    let base_url_input = cli_config.get_env("SHANNON_BASE_URL");
+    let model_input = cli_config.model();
+    let provider_model = if provider_input.is_some() || base_url_input.is_some() {
+        synthesize_default_profile(
+            model_input.as_deref(),
+            provider_input.as_deref(),
+            base_url_input.as_deref(),
+            Some("SHANNON_API_KEY"),
+        )
+        .unwrap_or_default()
+    } else if let Some(ref model_id) = model_input {
+        match graft_model_onto_connected(model_id) {
+            Some(pm) => pm,
+            // Nothing connected: fall back to synthesis so a bare --model
+            // with an env key still works (pre-N1 behaviour).
+            None => synthesize_default_profile(Some(model_id), None, None, Some("SHANNON_API_KEY"))
+                .unwrap_or_default(),
+        }
+    } else {
+        shannon_types::provider_config::ProviderModelConfig::default()
+    };
 
     let cli_overrides = ShannonConfig {
         max_tokens: cli_config.max_tokens(),
@@ -5404,6 +5462,143 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
 
         let llm_config = build_llm_config_from_builder(&config);
         assert!(!llm_config.provider.requires_auth());
+    }
+
+    // ── ADR-0005 Phase 4: CLI layer vs connected profile ─────────────────
+
+    /// Stand up a temp HOME with a connected `providers.toml` (minimax,
+    /// openai-compatible wire, Store credential) plus the matching store
+    /// credential file, and point `HOME` at it. Returns the TempDir (keep
+    /// it alive for the test) and the previous `HOME` for restoration.
+    fn temp_home_with_connected_minimax() -> (tempfile::TempDir, Option<String>) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shannon = dir.path().join(".shannon");
+        std::fs::create_dir_all(shannon.join("credentials")).expect("mkdir credentials");
+        std::fs::write(
+            shannon.join("providers.toml"),
+            r#"version = 2
+
+[profiles.default]
+name = "default"
+credential_scope = "shared"
+
+[profiles.default.active_target]
+provider_id = "minimax"
+model_id = "MiniMax-M3"
+scope = "global"
+
+[[profiles.default.providers]]
+id = "minimax"
+kind = "openai-compatible"
+display_name = "minimax"
+base_url = "https://api.minimax.chat"
+
+[profiles.default.providers.credential]
+backend = "store"
+service = "minimax"
+
+[profiles.default.providers.quirks]
+temperature_strategy = "default"
+send_temperature = true
+
+[profiles.default.providers.tiers]
+
+[gateway]
+multiplex_profiles = false
+profile_routes = []
+"#,
+        )
+        .expect("write providers.toml");
+        std::fs::write(
+            shannon.join("credentials").join("minimax.json"),
+            r#"{"id":"t1","name":"minimax","service":"minimax","value":"sk-test-minimax","created_at":"2026-08-21T00:00:00Z","updated_at":"2026-08-21T00:00:00Z","metadata":{}}"#,
+        )
+        .expect("write credential");
+        let saved = std::env::var("HOME").ok();
+        // SAFETY: test setup, before any assertion that reads HOME.
+        unsafe { std::env::set_var("HOME", dir.path()) };
+        (dir, saved)
+    }
+
+    fn restore_home(saved: Option<String>) {
+        // SAFETY: test teardown, symmetric with temp_home_with_connected_minimax.
+        match saved {
+            Some(h) => unsafe { std::env::set_var("HOME", h) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
+
+    #[test]
+    fn test_connected_profile_wins_without_cli_overrides() {
+        // Regression (ADR-0005 Phase 4): with no --model/--provider and no
+        // SHANNON_BASE_URL, the CLI layer must stay empty so the connected
+        // profile wins over ambient env — not synthesise an Anthropic+Env
+        // profile that clobbers it.
+        let (_dir, saved) = temp_home_with_connected_minimax();
+        let config = build_cli_config(None, None, None, None, None, false, HashMap::new());
+        let llm = build_llm_config_from_builder(&config);
+        restore_home(saved);
+        assert_eq!(
+            llm.provider,
+            shannon_engine::api::LlmProvider::Minimax,
+            "connected provider must survive the CLI layer"
+        );
+        assert_eq!(llm.base_url, "https://api.minimax.chat");
+        assert_eq!(llm.model, "MiniMax-M3");
+        assert_eq!(
+            llm.api_key, "sk-test-minimax",
+            "Store credential must resolve"
+        );
+    }
+
+    #[test]
+    fn test_model_only_override_grafts_onto_connected_profile() {
+        // A per-invocation --model changes the model, not the provider:
+        // base_url and the Store credential must survive (graft, not
+        // synthesis).
+        let (_dir, saved) = temp_home_with_connected_minimax();
+        let config = build_cli_config(
+            Some("MiniMax-M2.7"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            HashMap::new(),
+        );
+        let llm = build_llm_config_from_builder(&config);
+        restore_home(saved);
+        assert_eq!(
+            llm.provider,
+            shannon_engine::api::LlmProvider::Minimax,
+            "--model alone must not switch provider"
+        );
+        assert_eq!(llm.base_url, "https://api.minimax.chat");
+        assert_eq!(llm.model, "MiniMax-M2.7");
+        assert_eq!(
+            llm.api_key, "sk-test-minimax",
+            "Store credential must survive"
+        );
+    }
+
+    #[test]
+    fn test_provider_override_still_synthesises() {
+        // --provider is an explicit provider switch: full synthesis wins
+        // over the connected profile (pre-existing contract).
+        let (_dir, saved) = temp_home_with_connected_minimax();
+        let config = build_cli_config(
+            Some("llama3"),
+            Some("ollama"),
+            None,
+            None,
+            None,
+            false,
+            HashMap::new(),
+        );
+        let llm = build_llm_config_from_builder(&config);
+        restore_home(saved);
+        assert_eq!(llm.provider, shannon_engine::api::LlmProvider::Ollama);
+        assert!(!llm.provider.requires_auth());
     }
 
     // ── TOML config loading ──────────────────────────────────────────────
