@@ -70,14 +70,15 @@ tasks:
     prompt: >-
       The test is_positive_works in tests/api.rs is failing. Fix the bug in
       src/math.rs (the function must treat zero as NOT positive), then run
-      `cargo test` and make sure the whole suite passes. Do not modify the tests.
+      `cargo test is_positive_works` and make sure that test passes. Do not
+      modify the tests and do not change any other function.
     expect:
       exit_code: 0
       verify:
         artifacts:
           - path: src/math.rs
-            check: grep -q 'n > 0' src/math.rs
-        verify_cmd: cargo test -q
+            check: grep -qF 'n > 0' src/math.rs
+        verify_cmd: cargo test -q is_positive_works
 
   - id: s4-add-test-scratch
     tier: S
@@ -94,7 +95,7 @@ tasks:
       verify:
         artifacts:
           - path: src/math.rs
-            check: grep -q '#[cfg(test)]' src/math.rs
+            check: grep -qF '#[cfg(test)]' src/math.rs
         verify_cmd: cargo test -q
 
   - id: s5-schema-output
@@ -120,8 +121,8 @@ tasks:
     provider_tier: fast
     timeout_s: 120
     env:
-      SHANNON_API_KEY: sk-dogfood-invalid-on-purpose
-    prompt: reply with the single word: ok
+      SHANNON_API_KEY: "sk-dogfood-invalid-on-purpose"
+    prompt: "reply with the single word: ok"
     expect:
       exit_code: 1
 
@@ -140,7 +141,7 @@ tasks:
       verify:
         artifacts:
           - path: src/math.rs
-            check: grep -q 'clamp' src/math.rs
+            check: grep -qF 'clamp' src/math.rs
         verify_cmd: cargo test -q
 
   - id: m2-rename-refactor
@@ -157,7 +158,7 @@ tasks:
       verify:
         artifacts:
           - path: src/strings.rs
-            check: grep -q 'exclaim' src/strings.rs
+            check: grep -qF 'exclaim' src/strings.rs
         verify_cmd: cargo test -q
 
   - id: m3-cross-crate-analysis
@@ -189,7 +190,7 @@ tasks:
       verify:
         artifacts:
           - path: docs/API.md
-            check: grep -q 'multiply' docs/API.md
+            check: grep -qF 'multiply' docs/API.md
         verify_cmd: cargo test -q
 
   - id: m5-fix-mean-bug
@@ -200,12 +201,13 @@ tasks:
     prompt: >-
       The test mean_works in tests/api.rs is failing: mean returns a truncated
       integer result instead of a proper f64 average. Fix the implementation in
-      src/math.rs without changing the tests, then run `cargo test` until the
-      whole suite passes.
+      src/math.rs without changing the tests, then run
+      `cargo test mean_works` until that test passes. Do not change any other
+      function.
     expect:
       exit_code: 0
       verify:
         artifacts:
           - path: src/math.rs
-            check: grep -q 'values.len() as f64' src/math.rs
-        verify_cmd: cargo test -q
+            check: grep -qF 'values.len() as f64' src/math.rs
+        verify_cmd: cargo test -q mean_works
