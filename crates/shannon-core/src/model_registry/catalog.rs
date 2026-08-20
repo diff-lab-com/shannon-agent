@@ -574,6 +574,18 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     },
     // ── MiniMax ───────────────────────────────────────────────
     ModelInfo {
+        id: "MiniMax-M3",
+        display_name: "MiniMax M3",
+        aliases: &["MiniMax-M3.0"],
+        provider: LlmProvider::Minimax,
+        context_window: 1_000_000,
+        max_output: 64_000,
+        // Official M3 pricing not published at catalog time; mirrors M2.7.
+        cost_per_m_input: 0.29,
+        cost_per_m_output: 1.18,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
         id: "MiniMax-M2.7",
         display_name: "MiniMax M2.7",
         aliases: &[],
