@@ -4,6 +4,7 @@ use clap::Subcommand;
 use futures::StreamExt;
 
 mod commands_providers;
+mod crash_hook;
 mod loop_command;
 mod mcp_install;
 mod notifications;
@@ -1276,7 +1277,10 @@ fn run_noninteractive_query(
 /// Emit an NDJSON event to stdout (newline-delimited JSON).
 fn emit_ci_event(event: &CiEvent) {
     match serde_json::to_string(event) {
-        Ok(json) => println!("{json}"),
+        Ok(json) => {
+            crash_hook::record(&json);
+            println!("{json}");
+        }
         Err(e) => eprintln!("Warning: failed to serialize CI event: {e}"),
     }
 }
@@ -1319,6 +1323,7 @@ impl OutputEvent {
 fn emit_output_event(event: &OutputEvent) {
     let line = event.to_ndjson();
     if !line.is_empty() {
+        crash_hook::record(line.trim_end());
         print!("{line}");
         std::io::stdout().flush().ok();
     }
@@ -1367,6 +1372,9 @@ fn run_headless_query(
     schema_config: Option<&shannon_core::StructuredOutputConfig>,
     notify: bool,
 ) -> Result<()> {
+    // Arm structured crash capture when the dogfood loop (or any CI harness)
+    // points SHANNON_CRASH_DIR at a scratch directory; no-op otherwise.
+    crash_hook::install_from_env();
     let rt = tokio::runtime::Runtime::new()?;
     let exit_code: HeadlessExitCode = rt.block_on(async {
         let start = Instant::now();
