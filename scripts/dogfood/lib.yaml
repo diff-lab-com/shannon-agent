@@ -1,0 +1,46 @@
+# Dogfood loop configuration — plan §5.3/§6. CLI flags override these values.
+paths:
+  shannon_bin: target/release/shannon
+
+matrix:
+  # Progressive ramp (plan §5.2): [S] -> [S,M] -> [S,M,L]. Graduation and
+  # rollback are judged by the supervisor from summary history; bump manually
+  # until the auto-ramp lands.
+  task_tiers: [S]
+  parallel_s: 3
+  parallel_m: 1
+
+build:
+  command: [cargo, build, --release, -p, shannon-cli]
+
+budget:                       # token three-layer gate (plan §6)
+  per_iteration_tokens: 4000000
+  daily_tokens: 10000000
+  monthly_tokens: 50000000
+
+timing:
+  hang_no_output_s: 900
+
+perf:
+  enabled: false              # flip to true at P1b graduation
+  baseline_file: artifacts/perf-baseline.json
+  timeout_s: 1800
+
+fixer:
+  max_sessions_per_iter: 3
+  max_turns: 40
+  session_timeout_s: 3600
+  tier_models:                # provider_tier -> SHANNON_MODEL (null = default)
+    fast: null
+    standard: null
+
+gate:
+  rerun_count: 2
+
+stop:
+  consecutive_all_green: 3
+  consecutive_no_new: 2
+  max_iters: 50
+
+artifacts:
+  keep_runs: 10

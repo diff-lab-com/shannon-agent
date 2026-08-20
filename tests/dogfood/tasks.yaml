@@ -1,0 +1,211 @@
+# Dogfood task manifest v1 (P1a S-tier + P1b M-tier).
+# Spec: docs/plans/autonomous-improvement-loop.md §5.2. Task definitions are an
+# asset: the S->M->L enablement ramp lives in scripts/dogfood/lib.yaml
+# (task_tiers), not here. Every task runs headless via
+# `shannon -p ... --output-format json-stream`.
+#
+# Fields:
+#   tier            S | M | L (L reserved for P2)
+#   kind            cli (desktop reserved for P2)
+#   workspace       readonly-main | scratch:<fixture> | temp
+#                   - readonly-main: detached git worktree of HEAD; write tools
+#                     withheld via allowed_tools so the main tree stays clean
+#                   - scratch:<fixture>: fresh copy of tests/dogfood/fixtures/<fixture>
+#                     (git init'd) — write tasks live here
+#                   - temp: empty scratch dir
+#   allowed_tools   passed to --allowed-tools (omit = all tools)
+#   env             extra env for the task process (e.g. failure injection)
+#   schema          inline JSON Schema or path (headless --schema)
+#   max_turns       headless --max-turns
+#   provider_tier   fast | standard | pro (mapped to SHANNON_MODEL via lib.yaml)
+#   expect.exit_code      required process exit code (default 0)
+#   expect.contains       substrings asserted on the concatenated text_delta
+#   expect.ndjson_terminal require a terminal {"type":"done"} event (default true)
+#   expect.verify.artifacts  [{path, check}] — file must exist; optional shell
+#                            `check` run in the workspace (non-zero = fail)
+#   expect.verify.golden     path to golden file, whitespace-normalized diff
+#   expect.verify.verify_cmd shell command run in the workspace; non-zero = fail
+#
+# Deliberate failures (expected to fail and be triaged, not fixed):
+#   s6-invalid-key (api_error via injected bad credential)
+
+tasks:
+  # ---------- S tier (P1a) ----------
+  - id: s1-read-analyze
+    tier: S
+    kind: cli
+    workspace: readonly-main
+    allowed_tools: [Read, Grep, Glob]
+    provider_tier: fast
+    timeout_s: 240
+    prompt: >-
+      Read crates/shannon-types/src/model_ref.rs and
+      crates/shannon-types/src/events.rs, then list every exported struct or
+      enum from those two files, one name per line, no prose.
+    expect:
+      exit_code: 0
+      contains: ["ModelRef", "EventEnvelope"]
+
+  - id: s2-grep-locate
+    tier: S
+    kind: cli
+    workspace: readonly-main
+    allowed_tools: [Read, Grep, Glob]
+    provider_tier: fast
+    timeout_s: 240
+    prompt: >-
+      Find where the PermissionDenied exit-code variant for headless mode is
+      defined in this repository (crates/). Answer with the file path and line
+      number only.
+    expect:
+      exit_code: 0
+      contains: ["main.rs"]
+
+  - id: s3-fix-buggy-scratch
+    tier: S
+    kind: cli
+    workspace: scratch:scratch-buggy
+    provider_tier: fast
+    timeout_s: 600
+    prompt: >-
+      The test is_positive_works in tests/api.rs is failing. Fix the bug in
+      src/math.rs (the function must treat zero as NOT positive), then run
+      `cargo test` and make sure the whole suite passes. Do not modify the tests.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: src/math.rs
+            check: grep -q 'n > 0' src/math.rs
+        verify_cmd: cargo test -q
+
+  - id: s4-add-test-scratch
+    tier: S
+    kind: cli
+    workspace: scratch:scratch-clean
+    provider_tier: fast
+    timeout_s: 600
+    prompt: >-
+      Add a `#[cfg(test)] mod tests` with unit tests for `multiply` inside
+      src/math.rs (cover positive, negative and zero), then run `cargo test`
+      and make sure everything passes.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: src/math.rs
+            check: grep -q '#[cfg(test)]' src/math.rs
+        verify_cmd: cargo test -q
+
+  - id: s5-schema-output
+    tier: S
+    kind: cli
+    workspace: temp
+    allowed_tools: []          # pure generation, no tools
+    provider_tier: fast
+    timeout_s: 240
+    schema: >-
+      {"type":"object","required":["primes"],"properties":{"primes":
+      {"type":"array","items":{"type":"integer"},"minItems":5,"maxItems":5}}}
+    prompt: >-
+      Return a JSON object {"primes": [...]} with the first five prime numbers.
+    expect:
+      exit_code: 0
+
+  - id: s6-invalid-key          # deliberate failure: api_error
+    tier: S
+    kind: cli
+    workspace: temp
+    allowed_tools: []
+    provider_tier: fast
+    timeout_s: 120
+    env:
+      SHANNON_API_KEY: sk-dogfood-invalid-on-purpose
+    prompt: reply with the single word: ok
+    expect:
+      exit_code: 1
+
+  # ---------- M tier (P1b) ----------
+  - id: m1-scratch-feature
+    tier: M
+    kind: cli
+    workspace: scratch:scratch-clean
+    timeout_s: 900
+    prompt: >-
+      Add a `pub fn clamp(n: i32, lo: i32, hi: i32) -> i32` function to
+      src/math.rs (documented, clamped to [lo, hi]) with unit tests in the same
+      file, and export it from the crate. Run `cargo test` until green.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: src/math.rs
+            check: grep -q 'clamp' src/math.rs
+        verify_cmd: cargo test -q
+
+  - id: m2-rename-refactor
+    tier: M
+    kind: cli
+    workspace: scratch:scratch-clean
+    timeout_s: 900
+    prompt: >-
+      Rename the function `shout` to `exclaim` everywhere in this crate
+      (definition, re-export, tests). Run `cargo test` until green. No other
+      behavior changes.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: src/strings.rs
+            check: grep -q 'exclaim' src/strings.rs
+        verify_cmd: cargo test -q
+
+  - id: m3-cross-crate-analysis
+    tier: M
+    kind: cli
+    workspace: readonly-main
+    allowed_tools: [Read, Grep, Glob]
+    provider_tier: fast
+    timeout_s: 900
+    prompt: >-
+      Find every definition and call site of
+      inject_cache_control_on_last_block in crates/. Report each as
+      `path:line` followed by a one-line note on what happens there.
+    expect:
+      exit_code: 0
+      contains: ["inject_cache_control_on_last_block"]
+
+  - id: m4-write-docs
+    tier: M
+    kind: cli
+    workspace: scratch:scratch-clean
+    timeout_s: 900
+    prompt: >-
+      Write docs/API.md documenting the public functions of this crate
+      (signature + one-line description each). Do not change any code. Then run
+      `cargo test` to confirm nothing broke.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: docs/API.md
+            check: grep -q 'multiply' docs/API.md
+        verify_cmd: cargo test -q
+
+  - id: m5-fix-mean-bug
+    tier: M
+    kind: cli
+    workspace: scratch:scratch-buggy
+    timeout_s: 900
+    prompt: >-
+      The test mean_works in tests/api.rs is failing: mean returns a truncated
+      integer result instead of a proper f64 average. Fix the implementation in
+      src/math.rs without changing the tests, then run `cargo test` until the
+      whole suite passes.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: src/math.rs
+            check: grep -q 'values.len() as f64' src/math.rs
+        verify_cmd: cargo test -q

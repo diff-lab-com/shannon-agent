@@ -133,6 +133,20 @@ ci: fmt lint deny gen-protocol test
 metrics:
     bash scripts/gen-metrics.sh
 
+# ---------- Dogfood loop (docs/plans/autonomous-improvement-loop.md) ----------
+
+# Autonomous improvement loop supervisor. Common invocations:
+#   just dogfood --once --task-filter S          # single iteration, S tier
+#   just dogfood --once --fix-mode manual        # briefs + worktree, human fixes
+#   just dogfood --gate iter-01                  # gate a manually-fixed worktree
+#   just dogfood --refresh-perf-baseline
+dogfood *args:
+    python3 scripts/dogfood/run.py {{args}}
+
+# Supervisor machinery unit tests (no LLM, no network).
+dogfood-selftest:
+    python3 -m unittest discover -s scripts/dogfood/tests -v
+
 # ── Recording / Replay (ADR 0003, Phase 1 本地 harness) ──
 #
 # 录制需要:SHANNON_API_KEY + 网络访问 provider + 选定 model

@@ -145,3 +145,7 @@ node_modules/
 # Staged Tauri externalBin CLI binaries (release.yml downloads the matching
 # shannon-<target-triple> here right before `tauri build`; never committed).
 desktop/binaries/
+
+# Dogfood loop artifacts + fixer worktrees (docs/plans/autonomous-improvement-loop.md)
+artifacts/
+.dogfood-worktrees/
