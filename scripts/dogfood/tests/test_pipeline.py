@@ -6,6 +6,7 @@ Run: `just dogfood-selftest` or
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tempfile
 
 from ledger import Entry, Ledger
+from run import history_for_streaks, streaks
 from runner import parse_ndjson, run_verify
 from triage import (SignatureTracker, build_fail_signature, classify_task)
 
@@ -226,6 +228,52 @@ class TestSignatureTracker(unittest.TestCase):
         # Reappears in iter-04 -> regressed.
         out = self.tracker.update(f, {"t1"}, set(), "iter-04")
         self.assertEqual(out[0]["status"], "regressed")
+
+
+class TestStreakHistory(unittest.TestCase):
+    """Regression: a fresh run's first iteration must not drop the previous
+    run's most-recent summary (inflated all-green streak -> premature exit)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.artifacts = Path(self.tmp.name)
+        self.stop = {"consecutive_all_green": 3, "consecutive_no_new": 2}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write_summary(self, run: str, it: str, all_green, new_sig=False):
+        d = self.artifacts / run / it
+        d.mkdir(parents=True)
+        (d / "summary.json").write_text(json.dumps(
+            {"run_id": run, "iter_id": it, "all_green": all_green,
+             "new_signatures": [{"signature": "x"}] if new_sig else []}),
+            encoding="utf-8")
+
+    def test_failed_tail_prior_run_not_dropped(self):
+        # run1 green, run2 green, run3 FAILED, then a fresh green run4.
+        self._write_summary("run1", "iter-01", True)
+        self._write_summary("run2", "iter-01", True)
+        self._write_summary("run3", "iter-01", False)
+        current = {"run_id": "run4", "iter_id": "iter-01",
+                   "all_green": True, "new_signatures": []}
+        history = history_for_streaks(self.artifacts, "run4", "iter-01",
+                                      current)
+        self.assertEqual(len(history), 4,
+                         "the failed run3 summary must be kept")
+        s = streaks(history, self.stop)
+        self.assertEqual(s["consecutive_all_green"], 1)
+        self.assertFalse(s["consecutive_all_green"] >= s["target_green"])
+
+    def test_same_run_earlier_iters_kept_current_replaced(self):
+        self._write_summary("run1", "iter-01", True)
+        self._write_summary("run1", "iter-02", False)  # replaced by re-run
+        current = {"run_id": "run1", "iter_id": "iter-02",
+                   "all_green": True, "new_signatures": []}
+        history = history_for_streaks(self.artifacts, "run1", "iter-02",
+                                      current)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[-1]["all_green"], True)
 
 
 if __name__ == "__main__":

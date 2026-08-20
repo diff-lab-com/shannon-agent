@@ -34,7 +34,10 @@ def build_summary(run_id: str, iter_id: str, metas: list[dict],
         "gate": gate,
         "budget": ledger_state,
         "fix_sessions": fix_sessions,
-        "all_green": all(m["outcome_grade"] == "pass" for m in metas) and metas,
+        # bool, never the metas list (`all(...) and metas` evaluates to the
+        # list — truthy forever — when green).
+        "all_green": bool(metas) and all(m["outcome_grade"] == "pass"
+                                         for m in metas),
         "new_signatures": [f for f in findings
                            if f.get("status") == "new"
                            and f.get("note") != "expected-failure"],
