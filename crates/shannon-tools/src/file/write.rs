@@ -40,6 +40,16 @@ pub async fn execute(input: WriteInput) -> Result<ToolOutput, ToolError> {
 
     let bytes = input.content.len();
 
+    // Create missing parent directories up front. `validate_for_write` already
+    // approved the full path (nearest-existing-ancestor canonicalization), so
+    // this cannot create directories the sandbox would reject. Without it a
+    // Write into a not-yet-existing subdirectory fails with ENOENT.
+    if let Some(parent) = std::path::Path::new(&input.file_path).parent() {
+        fs::create_dir_all(parent)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create directory: {e}")))?;
+    }
+
     // Atomic write: write to temp file then rename to avoid partial writes on crash.
     // Use UUID suffix to prevent symlink race attacks on predictable temp paths.
     let temp_path = format!(
@@ -142,10 +152,9 @@ mod tests {
     #[tokio::test]
     async fn test_write_creates_parent_dirs() {
         let dir = tempfile::tempdir().unwrap();
+        // Note: parent dirs are deliberately NOT pre-created — the tool must
+        // create them (Claude Code Write semantics; dogfood m4 regression).
         let path = dir.path().join("sub/dir/file.txt");
-        tokio::fs::create_dir_all(path.parent().unwrap())
-            .await
-            .unwrap();
 
         let input = WriteInput {
             file_path: path.to_str().unwrap().to_string(),

@@ -223,23 +223,53 @@ impl PathSandbox {
             return Ok(canonical);
         }
 
-        // File doesn't exist — canonicalize parent and append filename
+        // File doesn't exist — canonicalize the nearest EXISTING ancestor and
+        // re-append the missing components. Write creates missing parent dirs
+        // (see `write::execute`'s `create_dir_all`), so a not-yet-existing
+        // parent is legitimate. Components below an existing ancestor cannot
+        // be symlinks, so resolving only the ancestor keeps the same TOCTOU
+        // posture as canonicalizing the full path; every check below still
+        // runs against the complete reconstructed path.
         let parent = path.parent().ok_or_else(|| {
             SandboxError::ResolutionFailed(format!("Cannot resolve path '{path_str}': no parent"))
-        })?;
-
-        let canonical_parent = tokio::fs::canonicalize(parent).await.map_err(|e| {
-            SandboxError::ResolutionFailed(format!(
-                "Cannot resolve parent directory '{}': {e}",
-                parent.display()
-            ))
         })?;
 
         let file_name = path.file_name().ok_or_else(|| {
             SandboxError::ResolutionFailed(format!("Cannot resolve path '{path_str}': no filename"))
         })?;
 
-        let canonical = canonical_parent.join(file_name);
+        // Walk up until an ancestor canonicalizes; collect the missing tail.
+        let mut missing: Vec<std::ffi::OsString> = Vec::new();
+        let mut cur = parent;
+        let canonical_parent = loop {
+            match tokio::fs::canonicalize(cur).await {
+                Ok(c) => break c,
+                Err(_) => {
+                    let Some(name) = cur.file_name() else {
+                        return Err(SandboxError::ResolutionFailed(format!(
+                            "Cannot resolve parent directory '{}': no existing ancestor",
+                            parent.display()
+                        )));
+                    };
+                    missing.push(name.to_os_string());
+                    match cur.parent() {
+                        Some(p) => cur = p,
+                        None => {
+                            return Err(SandboxError::ResolutionFailed(format!(
+                                "Cannot resolve parent directory '{}': no existing ancestor",
+                                parent.display()
+                            )));
+                        }
+                    }
+                }
+            }
+        };
+
+        let mut canonical = canonical_parent;
+        for comp in missing.iter().rev() {
+            canonical.push(comp);
+        }
+        canonical.push(file_name);
         let canonical_str = canonical.to_string_lossy().to_string();
 
         self.check_denied_patterns(&canonical_str)?;
@@ -1130,6 +1160,38 @@ mod tests {
             result.is_ok(),
             "Should allow creating new file in existing subdir: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_validate_for_write_new_file_in_missing_subdirectory() {
+        // Dogfood m4 regression: `Write ws/docs/API.md` where neither `ws/`
+        // nor `ws/docs/` exists yet. The nearest existing ancestor is the
+        // task root itself; the canonical path must still land inside it.
+        let td = TestDir::new();
+
+        let sandbox = PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![td.path().to_path_buf()],
+            denied_patterns: vec![],
+            strict_mode: true,
+        });
+
+        let new_file = td.file("ws/docs/API.md");
+        assert!(
+            !new_file.parent().unwrap().exists(),
+            "Parent dirs should not exist yet"
+        );
+
+        let result = sandbox.validate_for_write(&new_file).await;
+        assert!(
+            result.is_ok(),
+            "Should allow creating new file in not-yet-existing subdir: {result:?}"
+        );
+        let canonical = result.unwrap();
+        assert!(
+            canonical.starts_with(td.path()),
+            "Canonical path must stay inside the allowed root: {canonical:?}"
+        );
+        assert!(canonical.ends_with("ws/docs/API.md"));
     }
 
     #[tokio::test]
