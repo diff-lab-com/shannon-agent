@@ -145,6 +145,11 @@ def run_session(worktree: Path, brief_path: Path, max_turns: int = 40,
     cmd = [
         "claude", "-p", brief,
         "--settings", str(settings),
+        # Load ONLY project-level settings: --settings merges with rather
+        # than replaces the user layer, and the user-level auto-commit-on-
+        # Edit hook fired inside an iter-01 session, committing its WIP as
+        # a generic "feat: update N files" before the contract was met.
+        "--setting-sources", "project",
         "--permission-mode", "acceptEdits",
         # Full Bash: iter-01 brief-02 burned all 40 turns on denials —
         # `Bash(cargo *:*,just *)` rejects even `ls <artifacts-dir>`, so the
