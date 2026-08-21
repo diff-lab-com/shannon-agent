@@ -137,8 +137,9 @@ impl StructuredOutputConfig {
         &self,
         response: &str,
     ) -> Result<serde_json::Value, StructuredOutputError> {
-        // Strip markdown code fences if present
-        let trimmed = response
+        // Strip inline reasoning blocks, then markdown code fences if present
+        let stripped = strip_reasoning_blocks(response);
+        let trimmed = stripped
             .trim()
             .trim_start_matches("```json")
             .trim_start_matches("```")
@@ -226,6 +227,29 @@ pub enum StructuredOutputError {
     InvalidJson(String),
     #[error("Schema validation failed: {0}")]
     SchemaMismatch(String),
+}
+
+/// Strip inline reasoning blocks (`<think>...</think>`) from a response.
+///
+/// Reasoning models (MiniMax M-series, DeepSeek-R1) wrap their chain of
+/// thought in `<think>` tags inside the content stream; the final answer
+/// follows the closing tag. An unclosed `<think>` swallows the remainder —
+/// nothing after it is part of the answer.
+fn strip_reasoning_blocks(response: &str) -> String {
+    let mut out = response.to_string();
+    while let Some(start) = out.find("<think>") {
+        match out[start..].find("</think>") {
+            Some(end_rel) => {
+                let end = start + end_rel + "</think>".len();
+                out.replace_range(start..end, "");
+            }
+            None => {
+                out.truncate(start);
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// Get a human-readable type name for a JSON value.
@@ -524,5 +548,62 @@ mod tests {
         assert_eq!(super::json_type_name(&serde_json::json!("hi")), "string");
         assert_eq!(super::json_type_name(&serde_json::json!([])), "array");
         assert_eq!(super::json_type_name(&serde_json::json!({})), "object");
+    }
+
+    // ── reasoning-block stripping (MiniMax M-series `<think>` in content) ──
+
+    fn primes_schema() -> StructuredOutputConfig {
+        StructuredOutputConfig::new(serde_json::json!({
+            "type": "object",
+            "properties": {"primes": {"type": "array"}},
+            "required": ["primes"]
+        }))
+    }
+
+    #[test]
+    fn test_validate_response_strips_reasoning_block() {
+        // Live MiniMax-M3 shape: chain-of-thought glued onto the JSON answer.
+        let response = "<think>The user wants the first five primes: 2, 3, 5, 7, 11.\n\n\
+                        Respond with only the JSON object.</think>\n\n{\"primes\":[2,3,5,7,11]}";
+        let value = primes_schema().validate_response(response).unwrap();
+        assert_eq!(value["primes"].as_array().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn test_validate_response_strips_reasoning_block_and_fence() {
+        let response = "<think>reasoning</think>\n```json\n{\"primes\":[2]}\n```";
+        let value = primes_schema().validate_response(response).unwrap();
+        assert_eq!(value["primes"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_validate_response_multiple_reasoning_blocks() {
+        let response = "<think>a</think>\n<think>b</think>\n{\"primes\":[]}";
+        let value = primes_schema().validate_response(response).unwrap();
+        assert!(value["primes"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_validate_response_prose_prefix_still_invalid() {
+        // Scope note: only reasoning blocks and fences are stripped — a bare
+        // prose prefix (no <think> wrapper) still fails validation.
+        let result = primes_schema().validate_response("Sure! {\"primes\":[]}");
+        assert!(matches!(result, Err(StructuredOutputError::InvalidJson(_))));
+    }
+
+    #[test]
+    fn test_validate_response_unclosed_reasoning_swallows_rest() {
+        // No closing tag: nothing after <think> is the answer, so validation
+        // must fail with InvalidJson rather than parse reasoning as JSON.
+        let result = primes_schema().validate_response("<think>never closed {\"primes\":[]}");
+        assert!(matches!(result, Err(StructuredOutputError::InvalidJson(_))));
+    }
+
+    #[test]
+    fn test_strip_reasoning_blocks_plain_passthrough() {
+        assert_eq!(
+            super::strip_reasoning_blocks("no tags here"),
+            "no tags here"
+        );
     }
 }
