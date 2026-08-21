@@ -176,6 +176,8 @@ tasks:
       Find every definition and call site of
       inject_cache_control_on_last_block in crates/. Report each as
       `path:line` followed by a one-line note on what happens there.
+      Use only the Read, Grep, and Glob tools — the Bash tool is not
+      available in this environment.
     expect:
       exit_code: 0
       contains: ["inject_cache_control_on_last_block"]
