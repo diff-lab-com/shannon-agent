@@ -342,6 +342,10 @@ def run_task(task: dict, task_dir: Path, shannon_bin: Path,
     env = {
         "RUST_LOG": "shannon_cli=info,shannon_core=info",
         "SHANNON_CRASH_DIR": str(crash_dir),
+        # Wire-level evidence: record/replay fixtures land under the task's
+        # artifacts dir so api_error findings can be replayed offline
+        # (SHANNON_RECORD_DIR is read by the API client).
+        "SHANNON_RECORD_DIR": str(task_dir / "record"),
     }
     tier_model = (model_for_tier or {}).get(task.get("provider_tier", ""))
     if tier_model:

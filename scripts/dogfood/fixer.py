@@ -35,6 +35,16 @@ def prepare_worktree(iter_id: str, worktrees_dir: Path) -> Path:
     wt = worktrees_dir / iter_id
     if (wt / ".git").exists():
         logging.info("fixer: reusing worktree %s", wt)
+        # Iteration ids repeat across runs (every --once run starts at
+        # iter-01), so a reused worktree can carry a stale base and
+        # leftovers from the previous run's session. Refresh to the
+        # current HEAD before briefing: fix sessions must patch today's
+        # code and the gate must test today's code. Untracked session
+        # debris is swept; ignored files (node_modules) survive.
+        head = git(REPO_ROOT, "rev-parse", "HEAD").stdout.strip()
+        git(wt, "reset", "--hard", head, check=False)
+        git(wt, "clean", "-fd", check=False)
+        _prepare_worktree_js_deps(wt)
         return wt
     branch = f"dogfood/{iter_id}"
     r = git(REPO_ROOT, "worktree", "add", str(wt), "-b", branch, "HEAD")
