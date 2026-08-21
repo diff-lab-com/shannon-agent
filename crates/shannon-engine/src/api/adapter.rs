@@ -799,6 +799,12 @@ pub struct OpenaiStreamState {
     /// must synthesize it. Without this, the engine's tool execution loop
     /// never sees a stop event and skips running the tools.
     pub open_tool_indices: Vec<usize>,
+    /// Tool-call ids already started in this stream. MiniMax M-series
+    /// echoes the id on continuation fragments; re-emitting
+    /// `ContentBlockStart` for the echo duplicates the tool_use id in the
+    /// assistant history and the provider rejects the next request with
+    /// `invalid params, duplicate tool_call id` (2013).
+    pub seen_tool_ids: Vec<String>,
 }
 
 impl OpenaiStreamState {
@@ -806,6 +812,7 @@ impl OpenaiStreamState {
         Self {
             tool_index: 0,
             open_tool_indices: Vec::new(),
+            seen_tool_ids: Vec::new(),
         }
     }
 
@@ -818,6 +825,7 @@ impl OpenaiStreamState {
     pub fn reset(&mut self) {
         self.tool_index = 0;
         self.open_tool_indices.clear();
+        self.seen_tool_ids.clear();
     }
 }
 
@@ -884,27 +892,45 @@ fn normalize_openai_event(
     // opened index so the (possibly same-chunk) finish_reason can close it.
     if let Some(ref tool_calls) = choice.delta.tool_calls {
         for tc in tool_calls {
-            let idx = tc.index.unwrap_or_else(|| state.next_tool_index());
+            // Continuation fragments may omit `index` (seen on MiniMax
+            // M-series). Attaching them to a fresh index synthesizes a whole
+            // new tool block — with the echoed id that is a duplicate-id
+            // tool_use in history and the next request dies with
+            // `duplicate tool_call id` (2013). Route them to the most
+            // recent open call instead.
+            let idx = match tc.index {
+                Some(i) => i,
+                None => match state.open_tool_indices.last() {
+                    Some(last) => *last,
+                    None => state.next_tool_index(),
+                },
+            };
 
             if let Some(ref id) = tc.id {
-                // New tool call starting
-                let name = tc
-                    .function
-                    .as_ref()
-                    .and_then(|f| f.name.clone())
-                    .unwrap_or_default();
-                events.push(Ok(StreamEvent::ContentBlockStart {
-                    index: idx,
-                    content_block: ContentBlock::ToolUse {
-                        id: id.clone(),
-                        name,
-                        input: serde_json::Value::Null,
-                    },
-                }));
-                // Track so we can emit a synthesized ContentBlockStop when
-                // the finish_reason chunk arrives (same chunk or later).
-                if !state.open_tool_indices.contains(&idx) {
-                    state.open_tool_indices.push(idx);
+                // A repeated id is a continuation echo, not a new call:
+                // suppress the duplicate ContentBlockStart.
+                if !state.seen_tool_ids.iter().any(|s| s == id) {
+                    state.seen_tool_ids.push(id.clone());
+                    // New tool call starting
+                    let name = tc
+                        .function
+                        .as_ref()
+                        .and_then(|f| f.name.clone())
+                        .unwrap_or_default();
+                    events.push(Ok(StreamEvent::ContentBlockStart {
+                        index: idx,
+                        content_block: ContentBlock::ToolUse {
+                            id: id.clone(),
+                            name,
+                            input: serde_json::Value::Null,
+                        },
+                    }));
+                    // Track so we can emit a synthesized ContentBlockStop
+                    // when the finish_reason chunk arrives (same chunk or
+                    // later).
+                    if !state.open_tool_indices.contains(&idx) {
+                        state.open_tool_indices.push(idx);
+                    }
                 }
             }
 
@@ -2131,6 +2157,57 @@ mod tests {
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_minimax_fragment_echo_does_not_duplicate_tool_start() {
+        // MiniMax M-series (dogfood 2026-08-22 s3/m4): argument fragments can
+        // arrive with the id echoed and no index. Each echo used to mint a
+        // fresh ContentBlockStart with a duplicate id, and the next request
+        // was rejected with `duplicate tool_call id` (2013).
+        let mut state = fresh_state();
+        let start = r#"{"choices":[{"delta":{"tool_calls":[{"id":"call_x","type":"function","function":{"name":"Read","arguments":""},"index":0}]},"index":0}]}"#;
+        let frag1 = r#"{"choices":[{"delta":{"tool_calls":[{"id":"call_x","function":{"arguments":"{\"file_path\""}}]},"index":0}]}"#;
+        let frag2 = r#"{"choices":[{"delta":{"tool_calls":[{"id":"call_x","function":{"arguments":":\"lib.rs\"}"}}]},"index":0}]}"#;
+        let finish = r#"{"choices":[{"delta":{},"finish_reason":"tool_calls","index":0}]}"#;
+
+        let events: Vec<_> = [start, frag1, frag2, finish]
+            .iter()
+            .flat_map(|c| normalize_sse_event(c, &LlmProvider::OpenAI, &mut state))
+            .collect();
+
+        let starts = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Ok(StreamEvent::ContentBlockStart {
+                        content_block: ContentBlock::ToolUse { .. },
+                        ..
+                    })
+                )
+            })
+            .count();
+        assert_eq!(starts, 1, "echoed id must not re-emit ContentBlockStart");
+
+        let mut args = String::new();
+        for e in &events {
+            if let Ok(StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::InputJsonDelta { partial_json },
+                ..
+            }) = e
+            {
+                args.push_str(partial_json);
+            }
+        }
+        assert_eq!(args, r#"{"file_path":"lib.rs"}"#);
+
+        // Exactly one synthesized stop for the single open index.
+        let stops = events
+            .iter()
+            .filter(|e| matches!(e, Ok(StreamEvent::ContentBlockStop { .. })))
+            .count();
+        assert_eq!(stops, 1);
     }
 
     #[test]
