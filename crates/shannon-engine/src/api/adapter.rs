@@ -892,45 +892,61 @@ fn normalize_openai_event(
     // opened index so the (possibly same-chunk) finish_reason can close it.
     if let Some(ref tool_calls) = choice.delta.tool_calls {
         for tc in tool_calls {
-            // Continuation fragments may omit `index` (seen on MiniMax
-            // M-series). Attaching them to a fresh index synthesizes a whole
-            // new tool block — with the echoed id that is a duplicate-id
-            // tool_use in history and the next request dies with
-            // `duplicate tool_call id` (2013). Route them to the most
-            // recent open call instead.
+            // Classify the fragment first. MiniMax M-series emits two
+            // continuation quirks (dogfood 2026-08-22 s3/m4):
+            //   1. the tool-call slot repeated with an EMPTY id while
+            //      streaming argument deltas,
+            //   2. fragments echoing a non-empty id already started.
+            // Either way a naive ContentBlockStart mints a phantom tool
+            // block; the finish chunk synthesizes a Stop per open index,
+            // history ends up with duplicate tool_use ids, and the NEXT
+            // request is rejected with `duplicate tool_call id` (2013).
+            // An empty id is never a new call; a non-empty id not yet
+            // seen in this stream is.
+            let call_id = tc.id.clone().filter(|id| !id.is_empty());
+            let is_new_call = call_id
+                .as_ref()
+                .is_some_and(|id| !state.seen_tool_ids.iter().any(|s| s == id));
+
             let idx = match tc.index {
                 Some(i) => i,
-                None => match state.open_tool_indices.last() {
-                    Some(last) => *last,
-                    None => state.next_tool_index(),
-                },
+                None => {
+                    if is_new_call {
+                        state.next_tool_index()
+                    } else {
+                        // Continuation without index: attach to the most
+                        // recent open call rather than allocating a fresh
+                        // index (which would duplicate the tool block).
+                        state
+                            .open_tool_indices
+                            .last()
+                            .copied()
+                            .unwrap_or_else(|| state.next_tool_index())
+                    }
+                }
             };
 
-            if let Some(ref id) = tc.id {
-                // A repeated id is a continuation echo, not a new call:
-                // suppress the duplicate ContentBlockStart.
-                if !state.seen_tool_ids.iter().any(|s| s == id) {
-                    state.seen_tool_ids.push(id.clone());
-                    // New tool call starting
-                    let name = tc
-                        .function
-                        .as_ref()
-                        .and_then(|f| f.name.clone())
-                        .unwrap_or_default();
-                    events.push(Ok(StreamEvent::ContentBlockStart {
-                        index: idx,
-                        content_block: ContentBlock::ToolUse {
-                            id: id.clone(),
-                            name,
-                            input: serde_json::Value::Null,
-                        },
-                    }));
-                    // Track so we can emit a synthesized ContentBlockStop
-                    // when the finish_reason chunk arrives (same chunk or
-                    // later).
-                    if !state.open_tool_indices.contains(&idx) {
-                        state.open_tool_indices.push(idx);
-                    }
+            if let (Some(ref id), true) = (call_id.as_ref(), is_new_call) {
+                state.seen_tool_ids.push(id.to_string());
+                // New tool call starting
+                let name = tc
+                    .function
+                    .as_ref()
+                    .and_then(|f| f.name.clone())
+                    .unwrap_or_default();
+                events.push(Ok(StreamEvent::ContentBlockStart {
+                    index: idx,
+                    content_block: ContentBlock::ToolUse {
+                        id: id.to_string(),
+                        name,
+                        input: serde_json::Value::Null,
+                    },
+                }));
+                // Track so we can emit a synthesized ContentBlockStop
+                // when the finish_reason chunk arrives (same chunk or
+                // later).
+                if !state.open_tool_indices.contains(&idx) {
+                    state.open_tool_indices.push(idx);
                 }
             }
 
@@ -2157,6 +2173,61 @@ mod tests {
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_minimax_empty_id_continuation_does_not_start_tool() {
+        // MiniMax M-series fragments long tool-call arguments across chunks,
+        // repeating the tool-call slot with an EMPTY id on continuation
+        // fragments (dogfood 2026-08-22 s3/m4; isolated independently by
+        // the fixer session from the id-echo shape below). Only the first
+        // fragment (non-empty id + name) may open a call; empty-id
+        // fragments are continuations. Treating them as starts mints a
+        // phantom ToolUse with an empty id, and the provider rejects the
+        // next request with 2013 `duplicate tool_call id`.
+        let mut state = fresh_state();
+        let start = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_mm_1","type":"function","function":{"name":"Read","arguments":"{\"file_pa"}}]},"index":0}]}"#;
+        let cont1 = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"arguments":"th\":\"/tmp/a.rs\""}}]},"index":0}]}"#;
+        let cont2 = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"arguments":"}"}}]},"index":0,"finish_reason":"tool_calls"}]}"#;
+
+        let events: Vec<_> = [start, cont1, cont2]
+            .iter()
+            .flat_map(|c| normalize_sse_event(c, &LlmProvider::Minimax, &mut state))
+            .collect();
+
+        let starts: Vec<&ContentBlock> = events
+            .iter()
+            .filter_map(|e| match e {
+                Ok(StreamEvent::ContentBlockStart { content_block, .. }) => Some(content_block),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            starts.len(),
+            1,
+            "empty-id fragments must not open tool calls"
+        );
+        match starts[0] {
+            ContentBlock::ToolUse { id, name, .. } => {
+                assert_eq!(id, "call_mm_1");
+                assert_eq!(name, "Read");
+            }
+            other => panic!("Expected ToolUse block, got {other:?}"),
+        }
+
+        let json: String = events
+            .iter()
+            .filter_map(|e| match e {
+                Ok(StreamEvent::ContentBlockDelta { index, delta }) => match delta {
+                    ContentDelta::InputJsonDelta { partial_json } if *index == 0 => {
+                        Some(partial_json.clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(json, r#"{"file_path":"/tmp/a.rs"}"#);
     }
 
     #[test]
