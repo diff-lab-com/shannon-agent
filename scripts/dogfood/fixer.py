@@ -43,7 +43,26 @@ def prepare_worktree(iter_id: str, worktrees_dir: Path) -> Path:
         r2 = git(REPO_ROOT, "worktree", "add", str(wt), branch)
         if r2.returncode != 0:
             raise RuntimeError(f"worktree add failed: {r.stderr}\n{r2.stderr}")
+    _prepare_worktree_js_deps(wt)
     return wt
+
+
+def _prepare_worktree_js_deps(wt: Path) -> None:
+    """Install desktop/ui node_modules so `just ci` (tsc lint) can run.
+
+    A fresh git worktree does not carry gitignored node_modules, and the
+    gate's `just ci` fails at `desktop/ui lint` without them (iter-01).
+    Best-effort: missing pnpm or a network failure only logs — the gate
+    will surface the failure with its own diagnostics.
+    """
+    ui = wt / "desktop" / "ui"
+    if not (ui / "package.json").exists() or (ui / "node_modules").exists():
+        return
+    logging.info("fixer: installing desktop/ui deps in worktree")
+    r = run_cmd(["pnpm", "install", "--prefer-offline"], cwd=ui, timeout_s=600)
+    if r.returncode != 0:
+        logging.warning("fixer: pnpm install failed (gate may fail on ui lint): %s",
+                        (r.stderr or r.stdout)[-300:])
 
 
 def remove_worktree(wt: Path) -> None:
@@ -71,6 +90,8 @@ def brief_header(iter_id: str, worktree: Path) -> str:
         f"- No public API changes; no new dependencies without justification.\n"
         f"- Only touch crates/ tests/ docs/ (the gate audits the diff).\n"
         f"- Keep the fix minimal and idiomatic with surrounding code.\n"
+        f"- Use the built-in Read/Grep/Glob/Edit/Write/Bash tools. MCP plugin\n"
+        f"  tools are NOT available in this session; attempts are denied.\n"
     )
 
 
@@ -115,8 +136,17 @@ def run_session(worktree: Path, brief_path: Path, max_turns: int = 40,
         "claude", "-p", brief,
         "--settings", str(settings),
         "--permission-mode", "acceptEdits",
+        # Full Bash: iter-01 brief-02 burned all 40 turns on denials —
+        # `Bash(cargo *:*,just *)` rejects even `ls <artifacts-dir>`, so the
+        # session could not gather evidence. The worktree is the isolation
+        # boundary; the gate audits the diff.
         "--allowedTools",
-        "Read,Grep,Glob,Bash(cargo *:*,just *),Edit,Write",
+        "Read,Grep,Glob,Edit,Write,Bash",
+        # Hide MCP/plugin tools entirely: iter-01 sessions drifted to
+        # serena/python_repl/playwright (all denied) and concluded no tools
+        # were granted, BLOCKING all three briefs. Without MCP servers the
+        # model must use the built-ins allowed above.
+        "--strict-mcp-config",
         "--max-turns", str(max_turns),
         "--output-format", "json",
     ]
