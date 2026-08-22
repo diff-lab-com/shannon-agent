@@ -126,16 +126,13 @@ def run_matrix(tasks: list[dict], iter_dir: Path, shannon_bin: Path, cfg: dict,
                 if meta is None:
                     meta = _skipped_meta(task, "budget-iteration-gate")
                 metas.append(meta)
-                terminal = meta.get("terminal") or {}
-                # Prefer split in/out from the (current) CLI; fall back to
-                # the legacy tokens_used (=in+out) by assigning the whole
-                # thing to tokens_out so historical ledger math still works.
-                if terminal.get("_has_split"):
-                    t_in = int(terminal.get("_tokens_in") or 0)
-                    t_out = int(terminal.get("_tokens_out") or 0)
-                else:
-                    t_in = 0
-                    t_out = int(meta.get("tokens_used") or 0)
+                # L-tier resume: tokens_*_total sums every attempt's
+                # terminal (non-split attempts fold tokens_used into out,
+                # matching the historical convention; single-attempt runs
+                # reduce to the terminal's own numbers). The runner always
+                # emits these; a zero means unmetered or budget-skipped.
+                t_in = int(meta.get("tokens_in_total") or 0)
+                t_out = int(meta.get("tokens_out_total") or 0)
                 ledger.append(Entry(
                     ts=now_iso(), run_id=iter_dir.parent.name, iter_id=iter_id,
                     source="task", ref=task["id"],

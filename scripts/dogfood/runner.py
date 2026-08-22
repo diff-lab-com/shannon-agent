@@ -27,6 +27,16 @@ CHECK_CMD_TIMEOUT_S = 120
 HANG_NO_OUTPUT_S = 900
 KILL_GRACE_S = 10
 
+# Continuation prompt for --resume retry attempts (plan §5.2 L-tier). The
+# original prompt is embedded so the resumed process is self-contained even
+# though the session history already contains turn 1.
+DEFAULT_RESUME_PROMPT = (
+    "You were interrupted while working on the task below. First re-check the "
+    "current state of the workspace (files may already contain partial "
+    "progress), then continue and complete the original task. "
+    "Original task: {original}"
+)
+
 # Ambient LLM env vars scrubbed from task processes (see run_process): any of
 # these silently reroutes the headless client away from the connected
 # providers.toml profile that the loop is supposed to be validating.
@@ -109,11 +119,17 @@ def _stream_reader(stream, out_path: Path, index_path: Path, t0: float,
 
 
 def run_process(cmd: list[str], task_dir: Path, ws: Path, env: dict,
-                timeout_s: int, hang_s: int = HANG_NO_OUTPUT_S) -> dict:
-    """Run one headless process; returns {"exit_code","signal","timed_out","hang"}."""
-    stdout_path = task_dir / "stdout.ndjson"
-    stderr_path = task_dir / "stderr.log"
-    index_path = task_dir / "events-index.jsonl"
+                timeout_s: int, hang_s: int = HANG_NO_OUTPUT_S,
+                suffix: str = "") -> dict:
+    """Run one headless process; returns {"exit_code","signal","timed_out","hang"}.
+
+    `suffix` separates retry attempts' artifacts ("" for attempt 1,
+    "-r2"/"-r3"... for --resume attempts) so each attempt keeps its own
+    stdout/stderr/timing files.
+    """
+    stdout_path = task_dir / f"stdout{suffix}.ndjson"
+    stderr_path = task_dir / f"stderr{suffix}.log"
+    index_path = task_dir / f"events-index{suffix}.jsonl"
     state = {"last_line_ms": 0, "lines": 0, "eof": False}
     t0 = time.monotonic()
 
@@ -245,10 +261,11 @@ def _first_event_ms(index_path: Path) -> int | None:
 # --------------------------------------------------------------------------
 
 def parse_ndjson(path: Path) -> dict:
-    """Extract terminal done event, error events, and concatenated text."""
-    terminal, errors, text = None, [], []
+    """Extract session id, terminal done event, error events, and text."""
+    terminal, errors, text, session_id = None, [], [], None
     if not path.exists():
-        return {"terminal": None, "errors": [], "text": ""}
+        return {"terminal": None, "errors": [], "text": "",
+                "session_id": None}
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -259,7 +276,13 @@ def parse_ndjson(path: Path) -> dict:
             except json.JSONDecodeError:
                 continue
             etype = ev.get("type")
-            if etype == "done" and "tokens_used" in ev:
+            if etype == "start":
+                # CiEvent::Start carries the engine session UUID — the
+                # cross-link for --resume retry attempts (plan §5.2 L-tier).
+                sid = ev.get("session_id")
+                if sid:
+                    session_id = sid
+            elif etype == "done" and "tokens_used" in ev:
                 terminal = ev  # CiEvent::Done carries the token/turn summary
             elif etype == "done":
                 terminal = terminal or ev
@@ -275,7 +298,8 @@ def parse_ndjson(path: Path) -> dict:
         terminal["_tokens_in"] = int(terminal.get("tokens_in") or 0)
         terminal["_tokens_out"] = int(terminal.get("tokens_out") or 0)
         terminal["_has_split"] = True
-    return {"terminal": terminal, "errors": errors, "text": "".join(text)}
+    return {"terminal": terminal, "errors": errors, "text": "".join(text),
+            "session_id": session_id}
 
 
 # --------------------------------------------------------------------------
@@ -369,26 +393,44 @@ def snapshot_workspace(ws: Path, snap_dir: Path, max_bytes: int = 5_000_000) -> 
 # top-level task entry
 # --------------------------------------------------------------------------
 
-def run_task(task: dict, task_dir: Path, shannon_bin: Path,
-             model_for_tier: dict | None = None,
-             extra_env: dict | None = None,
-             hang_s: int = HANG_NO_OUTPUT_S) -> dict:
-    """Execute one task end-to-end; returns meta dict (also written to disk)."""
-    task_dir.mkdir(parents=True, exist_ok=True)
-    ws = task_dir / "ws"
-    crash_dir = task_dir / "crashes"
-    crash_dir.mkdir(exist_ok=True)
-
-    wsinfo = materialize_workspace(task, ws)
-
-    cmd = [str(shannon_bin), "-p", task["prompt"],
-           "--output-format", "json-stream"]
+def _build_task_cmd(task: dict, shannon_bin: Path, attempt: int,
+                    session_id: str | None) -> list[str]:
+    """Assemble the headless command for one attempt. Attempts > 1 resume the
+    captured session with a continuation prompt (plan §5.2 L-tier resume)."""
+    prompt = task["prompt"]
+    if attempt > 1:
+        prompt = (task.get("resume_prompt")
+                  or DEFAULT_RESUME_PROMPT.format(original=task["prompt"]))
+    cmd = [str(shannon_bin), "-p", prompt, "--output-format", "json-stream"]
     if task.get("allowed_tools") is not None:
         cmd += ["--allowed-tools", ",".join(task["allowed_tools"])]
     if task.get("max_turns"):
         cmd += ["--max-turns", str(task["max_turns"])]
     if task.get("schema"):
         cmd += ["--schema", str(task["schema"])]
+    if attempt > 1:
+        cmd += ["--resume", str(session_id)]
+    return cmd
+
+
+def run_task(task: dict, task_dir: Path, shannon_bin: Path,
+             model_for_tier: dict | None = None,
+             extra_env: dict | None = None,
+             hang_s: int = HANG_NO_OUTPUT_S) -> dict:
+    """Execute one task end-to-end; returns meta dict (also written to disk).
+
+    Attempts loop (plan §5.2 L-tier): a task with `retries: N` gets up to
+    N+1 attempts. Only supervisor kills (timeout / hang) retry, and only via
+    `--resume <session_id>` against the same workspace — the session is
+    checkpointed per turn by the CLI when SHANNON_SESSIONS_DIR is redirected
+    (below). Exit-code / verify failures never retry: they are signals.
+    """
+    task_dir.mkdir(parents=True, exist_ok=True)
+    ws = task_dir / "ws"
+    crash_dir = task_dir / "crashes"
+    crash_dir.mkdir(exist_ok=True)
+
+    wsinfo = materialize_workspace(task, ws)
 
     env = {
         "RUST_LOG": "shannon_cli=info,shannon_core=info",
@@ -397,6 +439,11 @@ def run_task(task: dict, task_dir: Path, shannon_bin: Path,
         # artifacts dir so api_error findings can be replayed offline
         # (SHANNON_RECORD_DIR is read by the API client).
         "SHANNON_RECORD_DIR": str(task_dir / "record"),
+        # Per-task session dir (plan §5.2 resume): the CLI checkpoints the
+        # session here every turn, so a run killed mid-flight leaves a
+        # resumable <uuid>.json inside the task's artifacts, and dogfood
+        # traffic never touches the operator's ~/.shannon/sessions.
+        "SHANNON_SESSIONS_DIR": str(task_dir / "sessions"),
     }
     tier_model = (model_for_tier or {}).get(task.get("provider_tier", ""))
     if tier_model:
@@ -404,11 +451,51 @@ def run_task(task: dict, task_dir: Path, shannon_bin: Path,
     env.update(task.get("env") or {})
     env.update(extra_env or {})
 
+    max_attempts = 1 + int(task.get("retries", 0) or 0)
+    attempts_meta: list[dict] = []
+    session_id: str | None = None
+    cmd: list[str] = []
+    proc_info: dict = {}
+    parsed: dict = {"terminal": None, "errors": [], "text": "",
+                    "session_id": None}
+    stdout_name = "stdout.ndjson"
+
     try:
-        proc_info = run_process(cmd, task_dir, ws, env,
-                                int(task.get("timeout_s", 600)),
-                                hang_s=int(hang_s))
-        parsed = parse_ndjson(task_dir / "stdout.ndjson")
+        for attempt in range(1, max_attempts + 1):
+            suffix = "" if attempt == 1 else f"-r{attempt}"
+            cmd = _build_task_cmd(task, shannon_bin, attempt, session_id)
+            proc_info = run_process(cmd, task_dir, ws, env,
+                                    int(task.get("timeout_s", 600)),
+                                    hang_s=int(hang_s), suffix=suffix)
+            stdout_name = f"stdout{suffix}.ndjson"
+            parsed = parse_ndjson(task_dir / stdout_name)
+            if parsed["session_id"]:
+                session_id = parsed["session_id"]
+            attempts_meta.append({
+                "attempt": attempt,
+                "resumed": attempt > 1,
+                "cmd": cmd,
+                "exit_code": proc_info["exit_code"],
+                "signal": proc_info["signal"],
+                "timed_out": proc_info["timed_out"],
+                "hang_suspected": proc_info["hang_suspected"],
+                "wall_s": proc_info["wall_s"],
+                "ttft_ms": proc_info["ttft_ms"],
+                "session_id": session_id,
+                "tokens_used": (parsed["terminal"] or {}).get("tokens_used"),
+                "terminal": parsed["terminal"],
+                "error_events": parsed["errors"],
+            })
+            killed = proc_info["timed_out"] or proc_info["hang_suspected"]
+            if not killed or attempt >= max_attempts:
+                break
+            session_file = (task_dir / "sessions" / f"{session_id}.json"
+                            if session_id else None)
+            if not session_file or not session_file.exists():
+                # No checkpoint survived the kill (no turn completed before
+                # it) — nothing to resume from, don't burn the attempt.
+                break
+
         verify = run_verify(task, ws)
         snap = snapshot_workspace(ws, task_dir / "workspace-snapshot")
 
@@ -426,6 +513,20 @@ def run_task(task: dict, task_dir: Path, shannon_bin: Path,
         else:
             grade = verify["grade"] if verify["grade"] != "skipped" else "pass"
 
+        # Token totals across attempts: each attempt's terminal reports the
+        # tokens that process actually consumed from the provider (a resumed
+        # attempt re-pays the loaded history as input), so the sum is the
+        # honest billing figure the ledger consumes.
+        t_in_total = t_out_total = 0
+        for a in attempts_meta:
+            t = a.get("terminal") or {}
+            if t.get("_has_split"):
+                t_in_total += int(t.get("_tokens_in") or 0)
+                t_out_total += int(t.get("_tokens_out") or 0)
+            else:
+                t_out_total += int(t.get("tokens_used") or 0)
+        tokens_used_total = t_in_total + t_out_total
+
         meta = {
             "task_id": task["id"], "tier": task.get("tier", "S"),
             "workspace": {"spec": task.get("workspace"), "type": wsinfo["type"]},
@@ -436,7 +537,7 @@ def run_task(task: dict, task_dir: Path, shannon_bin: Path,
             "timed_out": proc_info["timed_out"],
             "hang_suspected": proc_info["hang_suspected"],
             "wall_s": proc_info["wall_s"], "ttft_ms": proc_info["ttft_ms"],
-            "ndjson_lines": _count_lines(task_dir / "stdout.ndjson"),
+            "ndjson_lines": _count_lines(task_dir / stdout_name),
             "terminal": terminal,
             "error_events": parsed["errors"],
             "final_text_chars": len(text),
@@ -445,8 +546,18 @@ def run_task(task: dict, task_dir: Path, shannon_bin: Path,
             "verify": verify,
             "snapshot_files": snap["files"],
             "crash_files": [p.name for p in crash_dir.glob("*.crash.json")],
-            "tokens_used": (terminal or {}).get("tokens_used"),
+            "tokens_used": tokens_used_total,
+            "tokens_in_total": t_in_total,
+            "tokens_out_total": t_out_total,
             "unmetered": terminal is None or "tokens_used" not in (terminal or {}),
+            # L-tier resume bookkeeping (plan §5.2): which attempts ran, what
+            # each consumed, and the session the resume chain belongs to.
+            "attempts": attempts_meta,
+            "attempt_count": len(attempts_meta),
+            "resumed": len(attempts_meta) > 1,
+            "session_id": session_id,
+            "unmetered_attempts": sum(
+                1 for a in attempts_meta if a.get("terminal") is None),
             "proc_stats": proc_info.get("proc_stats", {}),
             "outcome_grade": grade,
         }
