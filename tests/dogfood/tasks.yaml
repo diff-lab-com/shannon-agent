@@ -238,6 +238,18 @@ tasks:
     timeout_s: 7200
     retries: 1              # supervisor-kill only (timeout/hang) -> --resume
     max_turns: 150
+    # The agent must run `cargo test` via the sandboxed Bash tool to
+    # self-verify. The default sandbox image (ubuntu:22.04) ships no
+    # toolchain, and 512m/1cpu/300s cannot compile — so in the 2026-08-23
+    # rerun the model could never close its verification loop. Point the
+    # auto-detected docker sandbox at a rust image with headroom (engine
+    # env overrides: crates/shannon-core/src/sandbox.rs
+    # apply_env_overrides).
+    env:
+      SHANNON_SANDBOX_IMAGE: rust:1.88-slim
+      SHANNON_SANDBOX_MEMORY: 4g
+      SHANNON_SANDBOX_CPUS: "2.0"
+      SHANNON_SANDBOX_TIMEOUT_SECS: "1200"
     prompt: >-
       Restructure this crate from its flat module layout into domain
       submodules, keeping the public API exactly as re-exported from lib.rs:
@@ -276,6 +288,10 @@ tasks:
     # the JSON mid-string, which no extraction can repair. Raise the cap for
     # this answer-heavy task (env reaches the engine via CliConfig's
     # SHANNON_MAX_TOKENS fallback; no runner change needed).
+    # Rerun (2026-08-23): with the cap raised the model derailed instead —
+    # finish_reason=stop at 408 tokens, four unclosed <think> tags, tool
+    # calls written as pseudo-syntax in prose. Countered with the explicit
+    # output-discipline lines in the prompt below.
     env:
       SHANNON_MAX_TOKENS: "16384"
     schema: >-
@@ -289,6 +305,10 @@ tasks:
       implementations of the Tool trait. For each tool report its name, the
       path of the file that defines it, and whether it is read-only. Use only
       the Read, Grep, and Glob tools — the Bash tool is not available in this
-      environment. Return JSON matching the schema.
+      environment. Output discipline: request files ONLY through tool calls
+      (never write tool-call syntax as text), and after gathering evidence
+      emit the final JSON object as the last thing in your response — no
+      prose and no open reasoning tags after it. Return JSON matching the
+      schema.
     expect:
       exit_code: 0
