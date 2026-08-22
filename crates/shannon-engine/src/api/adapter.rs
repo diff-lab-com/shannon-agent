@@ -848,29 +848,46 @@ fn normalize_openai_event(
         }
     };
 
-    // If we have usage info, emit a MessageDelta with usage
-    if let Some(usage) = chunk.usage {
-        let raw_reason = chunk.choices.first().and_then(|c| c.finish_reason.clone());
-        let normalized_reason = raw_reason.map(|r| match r.as_str() {
-            "stop" | "STOP" => "end_turn".to_string(),
-            other => other.to_string(),
-        });
-        return vec![Ok(StreamEvent::MessageDelta {
-            delta: MessageDeltaDelta {
-                stop_reason: normalized_reason,
-                stop_sequence: None,
-            },
-            usage: Usage {
-                input_tokens: usage.prompt_tokens.unwrap_or(0),
-                output_tokens: usage.completion_tokens.unwrap_or(0),
-                cache_read_input_tokens: usage
-                    .prompt_tokens_details
-                    .as_ref()
-                    .and_then(|d| d.cached_tokens)
-                    .unwrap_or(0),
-                ..Default::default()
-            },
-        })];
+    // If we have usage info, emit a MessageDelta with usage.
+    //
+    // Some providers (notably MiniMax M-series) emit a sentinel chunk with
+    // `"usage": {}` where every field is `None`; unwrap_or(0) would yield
+    // (0, 0, 0) and forward a MessageDelta with empty usage. If the engine
+    // processes that as the terminal event (no tool uses), it returns
+    // early and never reads the real-usage chunk that follows in a SEPARATE
+    // later SSE frame (`choices:[]`, real usage). Skip emission when no
+    // usage field carries real data — fall through so the finish_reason
+    // branch below can decide; if there's no finish_reason either, the
+    // trailing branches return an empty event list (the real usage chunk
+    // arrives separately).
+    if let Some(ref usage) = chunk.usage {
+        let input = usage.prompt_tokens.unwrap_or(0);
+        let output = usage.completion_tokens.unwrap_or(0);
+        let cached = usage
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens)
+            .unwrap_or(0);
+        if input > 0 || output > 0 || cached > 0 {
+            let raw_reason = chunk.choices.first().and_then(|c| c.finish_reason.clone());
+            let normalized_reason = raw_reason.map(|r| match r.as_str() {
+                "stop" | "STOP" => "end_turn".to_string(),
+                other => other.to_string(),
+            });
+            return vec![Ok(StreamEvent::MessageDelta {
+                delta: MessageDeltaDelta {
+                    stop_reason: normalized_reason,
+                    stop_sequence: None,
+                },
+                usage: Usage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    cache_read_input_tokens: cached,
+                    ..Default::default()
+                },
+            })];
+        }
+        // usage is present but all-zero (M3 sentinel): fall through.
     }
 
     let choice = match chunk.choices.first() {

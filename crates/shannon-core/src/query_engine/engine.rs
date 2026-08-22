@@ -3046,6 +3046,35 @@ impl QueryEngine {
                                                         message: "Model produced no text output — context window may be too small for this turn.".to_string(),
                                                     });
                                                 }
+                                                // Sentinel-usage guard: some providers
+                                                // (notably MiniMax M-series) emit a
+                                                // MessageDelta with usage={0,0,0} at the
+                                                // finish_reason chunk and forward the real
+                                                // usage in a SEPARATE later SSE frame. If
+                                                // we finalize here on the zero-usage chunk,
+                                                // the real numbers never reach the Cost
+                                                // event. Defer when no tokens have been
+                                                // seen yet on this turn — let the stream
+                                                // keep going. When the real usage chunk
+                                                // arrives (or MessageStop signals end of
+                                                // stream) the safety-net path below will
+                                                // catch up.
+                                                let usage_had_real_tokens = usage.input_tokens > 0
+                                                    || usage.output_tokens > 0;
+                                                if !usage_had_real_tokens
+                                                    && total_input_tokens == 0
+                                                    && total_output_tokens == 0
+                                                {
+                                                    // Drop the empty-usage MessageDelta
+                                                    // and keep reading. If the real usage
+                                                    // chunk arrives, this arm will run
+                                                    // again with real values and finalize
+                                                    // normally. If the stream ends here
+                                                    // (legacy OpenAI without usage), the
+                                                    // safety net below will fire with
+                                                    // totals=0.
+                                                    continue;
+                                                }
                                                 if !assistant_text.is_empty() {
                                                     conversation.messages.push(Message {
                                                         role: "assistant".to_string(),

@@ -93,14 +93,14 @@ def select_tasks(tasks: list[dict], cfg: dict, task_filter: str | None,
 
 
 def run_matrix(tasks: list[dict], iter_dir: Path, shannon_bin: Path, cfg: dict,
-               ledger: Ledger, iter_id: str) -> list[dict]:
+               ledger: Ledger, run_id: str, iter_id: str) -> list[dict]:
     metas: list[dict] = []
     budget = cfg["budget"]
     models = cfg["fixer"]["tier_models"]
     hang_s = cfg["timing"]["hang_no_output_s"]
 
     def guard(task: dict) -> dict | None:
-        g = ledger.check(iter_id, budget)
+        g = ledger.check(run_id, iter_id, budget)
         if g["hard_stop"]:
             logging.warning("budget: day/month gate tripped — aborting matrix")
             raise _HardStop(g)
@@ -126,11 +126,21 @@ def run_matrix(tasks: list[dict], iter_dir: Path, shannon_bin: Path, cfg: dict,
                 if meta is None:
                     meta = _skipped_meta(task, "budget-iteration-gate")
                 metas.append(meta)
-                tokens = int(meta.get("tokens_used") or 0)
+                terminal = meta.get("terminal") or {}
+                # Prefer split in/out from the (current) CLI; fall back to
+                # the legacy tokens_used (=in+out) by assigning the whole
+                # thing to tokens_out so historical ledger math still works.
+                if terminal.get("_has_split"):
+                    t_in = int(terminal.get("_tokens_in") or 0)
+                    t_out = int(terminal.get("_tokens_out") or 0)
+                else:
+                    t_in = 0
+                    t_out = int(meta.get("tokens_used") or 0)
                 ledger.append(Entry(
                     ts=now_iso(), run_id=iter_dir.parent.name, iter_id=iter_id,
                     source="task", ref=task["id"],
-                    tokens_out=tokens, unmetered=meta.get("unmetered", True)))
+                    tokens_in=t_in, tokens_out=t_out,
+                    unmetered=meta.get("unmetered", True)))
     except _HardStop:
         pass
     return metas
@@ -220,7 +230,7 @@ def brief_evidence_paths(iter_dir: Path, finding: dict) -> list[str]:
 
 
 def fix_stage(findings: list[dict], cfg: dict, iter_dir: Path, iter_id: str,
-              ledger: Ledger, fix_mode: str, auto_merge: bool,
+              ledger: Ledger, run_id: str, fix_mode: str, auto_merge: bool,
               rerun_defs: list[dict]) -> dict:
     fixable = [f for f in findings if f.get("note") != "expected-failure"]
     if not fixable:
@@ -242,7 +252,7 @@ def fix_stage(findings: list[dict], cfg: dict, iter_dir: Path, iter_id: str,
         if fix_mode == "manual":
             sessions.append({"brief": str(brief_path), "prepared": True})
             continue
-        g = ledger.check(iter_id, cfg["budget"])
+        g = ledger.check(run_id, iter_id, cfg["budget"])
         if g["hard_stop"] or g["iteration_exceeded"]:
             logging.warning("fix: budget gate blocks further sessions")
             break
@@ -321,7 +331,7 @@ def run_iteration(n: int, run_id: str, tasks_all: list[dict], cfg: dict,
         selected = select_tasks(tasks_all, cfg, args.task_filter, args.task_id)
         if not selected:
             fail("no tasks selected (check task_tiers / --task-filter / --task-id)")
-        metas = run_matrix(selected, iter_dir, shannon_bin, cfg, ledger, iter_id)
+        metas = run_matrix(selected, iter_dir, shannon_bin, cfg, ledger, run_id, iter_id)
 
     for m in metas:
         if m["outcome_grade"] != "pass" or m.get("crash_files"):
@@ -350,7 +360,7 @@ def run_iteration(n: int, run_id: str, tasks_all: list[dict], cfg: dict,
                   "open_signatures": tracker.open_count()}
     atomic_write_json(iter_dir / "triage.json", triage_doc)
 
-    gate_state = ledger.check(iter_id, cfg["budget"])
+    gate_state = ledger.check(run_id, iter_id, cfg["budget"])
     summary = build_summary(run_id, iter_id, metas, findings, perf_result,
                             gate={}, ledger_state=gate_state, fix_sessions=[])
     history = history_for_streaks(ARTIFACTS_DIR, run_id, iter_id, summary)
@@ -363,7 +373,7 @@ def run_iteration(n: int, run_id: str, tasks_all: list[dict], cfg: dict,
         rerun_defs = [t for t in tasks_all
                       if t["id"] in {f["task_id"] for f in findings}
                       and not t.get("expected_failure")]
-        fix_out = fix_stage(findings, cfg, iter_dir, iter_id, ledger,
+        fix_out = fix_stage(findings, cfg, iter_dir, iter_id, ledger, run_id,
                             args.fix_mode, args.auto_merge, rerun_defs)
         summary["gate"] = fix_out["gate"]
         summary["fix_sessions"] = fix_out["sessions"]
@@ -455,7 +465,7 @@ def main() -> None:
         if (ARTIFACTS_DIR / "STOP").exists():
             exit_reason = "STOP file"
             break
-        if ledger.check(f"iter-{n:02d}", cfg["budget"])["hard_stop"]:
+        if ledger.check(run_id, f"iter-{n:02d}", cfg["budget"])["hard_stop"]:
             exit_reason = "budget day/month gate"
             break
         summary = run_iteration(n, run_id, tasks_all, cfg, args, ledger,
@@ -469,7 +479,7 @@ def main() -> None:
             exit_reason = ("quality水位 reached: all-green x"
                            f"{s['target_green']} + no-new x{s['target_no_new']}")
             break
-        if ledger.check(summary["iter_id"], cfg["budget"])["hard_stop"]:
+        if ledger.check(run_id, summary["iter_id"], cfg["budget"])["hard_stop"]:
             exit_reason = "budget day/month gate"
             break
         time.sleep(2)
