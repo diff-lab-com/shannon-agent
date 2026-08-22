@@ -118,6 +118,21 @@ def generate_brief(finding: dict, iter_dir: Path, worktree: Path,
     body.append("Artifacts (absolute paths; read them for full context):\n")
     for p in evidence_paths:
         body.append(f"- {p}")
+    # P3-9: explicit wire-fixture hint so the fixer knows the HTTP frames
+    # are available and how to replay them. Without this hint, fixers in
+    # past iterations only consulted stdout.ndjson and missed provider-
+    # level anomalies (truncated SSE, missing Content-Length, malformed
+    # usage blocks) that the wire fixture is the only place to see.
+    has_wire = any("/record/" in p or p.endswith("/record") for p in evidence_paths)
+    if has_wire:
+        body.append("\n## Wire-level evidence (HTTP frames)\n"
+                    "The path(s) above under `record/` contain the raw "
+                    "provider request/response JSON captured by "
+                    "`SHANNON_RECORD_DIR`. Inspect them before guessing — "
+                    "they are the only place the actual SSE byte stream "
+                    "lives. To replay offline: copy one fixture under "
+                    "`tests/fixtures/real_tasks/` and reference it via the "
+                    "`record_replay` harness.\n")
     if finding["category"] == "perf_regress":
         body.append("\nReproduce with: `just perf` (failing threshold test is "
                     "in the signature). Localize with "

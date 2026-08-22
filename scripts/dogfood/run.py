@@ -226,7 +226,35 @@ def brief_evidence_paths(iter_dir: Path, finding: dict) -> list[str]:
              str(iter_dir / finding.get("task_id", "n/a") / "stderr.log")]
     if finding["category"] == "perf_regress":
         paths.append(str(iter_dir / "perf.json"))
-    return [p for p in paths if Path(p).exists()]
+    # P3-9: surface wire-level evidence so the fixer can replay offline.
+    # SHANNON_RECORD_DIR (set by the runner) writes per-request JSON to
+    # <task_dir>/record/<provider>_<hash>.json — these are the actual HTTP
+    # frames the LLM client saw, invaluable for diagnosing 4xx/5xx and
+    # provider quirks that the NDJSON stream can't show. Glob the directory
+    # so briefs stay under the contract's "first three lines" budget even
+    # for chatty multi-turn tasks.
+    record_dir = iter_dir / finding.get("task_id", "n/a") / "record"
+    if record_dir.is_dir():
+        all_recs = sorted(record_dir.glob("*.json"),
+                           key=lambda p: p.stat().st_mtime, reverse=True)
+        if all_recs:
+            # Directory summary line (filtered to existing dirs only).
+            paths.append(str(record_dir))
+            # Cap at 5 newest to keep briefs readable; annotate the count
+            # so the fixer knows how many more exist beyond the listed slice.
+            # The annotation is appended as a "(...)" comment so the path
+            # itself remains a real filesystem path (the comment is stripped
+            # by the fixer when reading the file).
+            paths.extend(f"{p}  # {len(all_recs)} wire fixtures total"
+                        for p in all_recs[:5])
+    # Strip our count annotation before stat'ing; ordinary paths pass through.
+    def _real_path(p: str) -> str:
+        sep = "  # "
+        if sep in p:
+            return p.split(sep, 1)[0]
+        return p
+
+    return [p for p in paths if Path(_real_path(p)).exists()]
 
 
 def fix_stage(findings: list[dict], cfg: dict, iter_dir: Path, iter_id: str,
