@@ -271,6 +271,13 @@ tasks:
     provider_tier: fast
     timeout_s: 3600
     max_turns: 120
+    # Calibration run (2026-08-22): the schema answer (~8-60 entries) died at
+    # the engine's 4096-token default output cap — finish_reason=length cut
+    # the JSON mid-string, which no extraction can repair. Raise the cap for
+    # this answer-heavy task (env reaches the engine via CliConfig's
+    # SHANNON_MAX_TOKENS fallback; no runner change needed).
+    env:
+      SHANNON_MAX_TOKENS: "16384"
     schema: >-
       {"type":"object","required":["tools"],"properties":{"tools":
       {"type":"array","minItems":8,"items":{"type":"object",
