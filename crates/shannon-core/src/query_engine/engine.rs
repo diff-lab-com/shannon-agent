@@ -248,6 +248,19 @@ enum StreamingPhase {
     Finalized,
 }
 
+/// `stop_reason` values meaning "output was cut off by the output token
+/// limit before the model finished": OpenAI-compatible `length`,
+/// Anthropic/Gemini `max_tokens`.
+fn is_truncation_stop(reason: Option<&str>) -> bool {
+    matches!(reason, Some("length" | "max_tokens"))
+}
+
+/// Re-prompt sent when a response is truncated by the output token limit:
+/// the model must resume mid-task rather than restart or restate itself.
+const TRUNCATION_CONTINUATION_PROMPT: &str = "Your previous response was cut off by the \
+     output token limit before you finished. Continue exactly where you left off and \
+     complete the task. Do not repeat what you already wrote.";
+
 // ── Query complexity classification ──────────────────────────────────
 
 /// Query complexity level for model routing.
@@ -1398,6 +1411,14 @@ impl QueryEngine {
             const DENIAL_SOFT_LIMIT: u32 = 3; // inject warning to LLM
             const DENIAL_HARD_LIMIT: u32 = 5; // abort the agent loop
 
+            // Truncation continuations: a response cut off by the output
+            // token limit (stop_reason `length`/`max_tokens`) before any
+            // tool call is re-prompted instead of ending the query. Bounded
+            // independently of max_turns so a model that always overruns
+            // its output budget cannot monopolize the loop.
+            let mut truncation_continuations: u32 = 0;
+            const MAX_TRUNCATION_CONTINUATIONS: u32 = 5;
+
             // Auto-test loop state (P1-5). Initialized lazily inside the loop body
             // because `AutoLoopState` is only needed when `config.auto_test` is `Some`.
             // We keep the struct default-constructible so this declaration is cheap.
@@ -1944,6 +1965,10 @@ impl QueryEngine {
                         // Accumulate the full assistant response for conversation tracking
                         let mut assistant_text = String::new();
                         let mut assistant_tool_uses: Vec<ContentBlock> = Vec::new();
+                        // Terminal stop reason for this response, latched from
+                        // whichever MessageDelta carried it (providers split
+                        // finish_reason and real usage across separate frames).
+                        let mut assistant_stop_reason: Option<String> = None;
                         let mut phase = StreamingPhase::Receiving;
                         // Cache tokens arrive in MessageStart (Anthropic), merge with MessageDelta
                         let mut start_cache_read: u64 = 0;
@@ -2157,7 +2182,10 @@ impl QueryEngine {
                                                 }
                                             }
                                         }
-                                        StreamEvent::MessageDelta { usage, .. } => {
+                                        StreamEvent::MessageDelta { delta, usage } => {
+                                            if delta.stop_reason.is_some() {
+                                                assistant_stop_reason = delta.stop_reason.clone();
+                                            }
                                             let input_tokens = usage.input_tokens as u64;
                                             let output_tokens = usage.output_tokens as u64;
                                             let cost_usd = CostTracker::calculate_cost(
@@ -3251,6 +3279,60 @@ impl QueryEngine {
                                                     // totals=0.
                                                     continue;
                                                 }
+                                                // Truncated before finishing (output
+                                                // token limit): reasoning-heavy models
+                                                // (MiniMax M-series stream `<think>` in
+                                                // content) can burn the entire output
+                                                // budget on reasoning and get cut off
+                                                // with zero tool calls, which used to
+                                                // end the query as a silent no-op —
+                                                // exit 0, nothing done (dogfood
+                                                // 2026-08-23 l1-bulk-migrate). Keep the
+                                                // partial response and ask the model to
+                                                // pick up where it stopped instead.
+                                                if is_truncation_stop(
+                                                    assistant_stop_reason.as_deref(),
+                                                ) && truncation_continuations
+                                                    < MAX_TRUNCATION_CONTINUATIONS
+                                                    && turn + 1 < config.max_turns
+                                                {
+                                                    truncation_continuations += 1;
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Warning {
+                                                            query_id,
+                                                            message: format!(
+                                                                "Response cut off by the output token \
+                                                             limit — continuing ({truncation_continuations}/{MAX_TRUNCATION_CONTINUATIONS})"
+                                                            ),
+                                                        }
+                                                    );
+                                                    if !assistant_text.is_empty() {
+                                                        conversation.messages.push(Message {
+                                                            role: "assistant".to_string(),
+                                                            content: MessageContent::Text(
+                                                                std::mem::take(&mut assistant_text),
+                                                            ),
+                                                        });
+                                                    }
+                                                    conversation.messages.push(Message {
+                                                        role: "user".to_string(),
+                                                        content: MessageContent::Text(
+                                                            TRUNCATION_CONTINUATION_PROMPT
+                                                                .to_string(),
+                                                        ),
+                                                    });
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::ConversationUpdate {
+                                                            query_id,
+                                                            messages: conversation.messages.clone(),
+                                                        }
+                                                    );
+                                                    turn += 1;
+                                                    phase = StreamingPhase::Finalized;
+                                                    break;
+                                                }
                                                 if !assistant_text.is_empty() {
                                                     conversation.messages.push(Message {
                                                         role: "assistant".to_string(),
@@ -3613,6 +3695,41 @@ impl QueryEngine {
                                         content: MessageContent::Blocks(blocks),
                                     });
                                 }
+                            }
+                            // Same truncation recovery as the MessageDelta
+                            // finalize path above, for providers whose stream
+                            // ends without a usable usage frame (finalized
+                            // here by the safety net instead).
+                            if is_truncation_stop(assistant_stop_reason.as_deref())
+                                && truncation_continuations < MAX_TRUNCATION_CONTINUATIONS
+                                && turn + 1 < config.max_turns
+                            {
+                                truncation_continuations += 1;
+                                send_event!(
+                                    tx,
+                                    QueryEvent::Warning {
+                                        query_id,
+                                        message: format!(
+                                            "Response cut off by the output token limit — \
+                                         continuing ({truncation_continuations}/{MAX_TRUNCATION_CONTINUATIONS})"
+                                        ),
+                                    }
+                                );
+                                conversation.messages.push(Message {
+                                    role: "user".to_string(),
+                                    content: MessageContent::Text(
+                                        TRUNCATION_CONTINUATION_PROMPT.to_string(),
+                                    ),
+                                });
+                                send_event!(
+                                    tx,
+                                    QueryEvent::ConversationUpdate {
+                                        query_id,
+                                        messages: conversation.messages.clone(),
+                                    }
+                                );
+                                turn += 1;
+                                continue;
                             }
                             let total_cost = CostTracker::calculate_cost(
                                 &client_model,
@@ -4210,6 +4327,18 @@ mod tests {
     use std::env;
     use std::fs;
     use uuid::Uuid;
+
+    #[test]
+    fn truncation_stop_reason_detection() {
+        // OpenAI-compatible and Anthropic/Gemini spell the output-limit
+        // cutoff differently; everything else is a normal stop.
+        assert!(is_truncation_stop(Some("length")));
+        assert!(is_truncation_stop(Some("max_tokens")));
+        assert!(!is_truncation_stop(Some("end_turn")));
+        assert!(!is_truncation_stop(Some("stop")));
+        assert!(!is_truncation_stop(Some("tool_use")));
+        assert!(!is_truncation_stop(None));
+    }
 
     #[tokio::test]
     async fn abort_on_drop_stream_forwards_items_and_aborts_producer_on_drop() {
