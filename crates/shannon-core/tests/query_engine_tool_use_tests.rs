@@ -774,3 +774,238 @@ mod openai_trailing_usage_tests {
         );
     }
 }
+
+mod openai_truncation_continuation_tests {
+    //! Regression (dogfood 2026-08-23 l1-bulk-migrate, outcome_fail): the
+    //! model spent the entire 4096-token output budget on `<think>`
+    //! reasoning; the stream closed with `finish_reason: "length"`, zero
+    //! visible answer and no tool calls. The engine treated that truncated
+    //! no-op message as a final turn — the headless run exited 0 without
+    //! writing any of the expected artifacts. A truncation stop with no
+    //! tool calls must re-prompt the model to continue instead of
+    //! completing the query.
+
+    use futures::StreamExt;
+    use mockito::{Mock, Server};
+    use shannon_core::query_engine::{
+        QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
+    };
+    use shannon_core::tools::ToolRegistry;
+    use shannon_engine::api::{LlmClientConfig, LlmProvider, MessageContent};
+    use shannon_engine::permissions::PermissionManager;
+    use shannon_engine::state::StateManager;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    /// Truncated turn: `<think>` reasoning in content, then a
+    /// `finish_reason: "length"` chunk WITHOUT usage, then the trailing
+    /// usage-only frame (empty `choices`), then [DONE]. This is the
+    /// recorded MiniMax-M3 wire shape: 4095 reasoning tokens, no visible
+    /// answer, no tool calls.
+    fn openai_sse_think_truncated_then_usage(prompt: u64, completion: u64) -> String {
+        let chunks = [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":"<think>Now I have a complete picture. Let me plan the restructure: move customer.rs into src/people/, pricing.rs into src/sales/, update the module declarations"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}"#,
+        ];
+        let usage = format!(
+            r#"{{"choices":[],"usage":{{"prompt_tokens":{},"completion_tokens":{},"total_tokens":{},"prompt_tokens_details":{{"cached_tokens":0}}}}}}"#,
+            prompt,
+            completion,
+            prompt + completion
+        );
+        let mut body = String::new();
+        for c in chunks.iter().chain(std::iter::once(&usage.as_str())) {
+            body.push_str("data: ");
+            body.push_str(c);
+            body.push_str("\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    /// Completed text turn after the continuation re-prompt.
+    fn openai_sse_text_then_usage(prompt: u64, completion: u64) -> String {
+        let chunks = [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":"all done"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+        ];
+        let usage = format!(
+            r#"{{"choices":[],"usage":{{"prompt_tokens":{},"completion_tokens":{},"total_tokens":{},"prompt_tokens_details":{{"cached_tokens":0}}}}}}"#,
+            prompt,
+            completion,
+            prompt + completion
+        );
+        let mut body = String::new();
+        for c in chunks.iter().chain(std::iter::once(&usage.as_str())) {
+            body.push_str("data: ");
+            body.push_str(c);
+            body.push_str("\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    async fn setup_openai_engine(
+        bodies: Vec<String>,
+    ) -> (QueryEngine, Vec<Mock>, mockito::ServerGuard) {
+        let mut server = Server::new_async().await;
+        let mut mocks = Vec::new();
+        for body in bodies {
+            mocks.push(
+                server
+                    .mock("POST", "/v1/chat/completions")
+                    .with_status(200)
+                    .with_header("content-type", "text/event-stream")
+                    .with_body(body)
+                    .expect(1)
+                    .create(),
+            );
+        }
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.url(),
+            model: "test-model".to_string(),
+            max_tokens: 4096,
+            timeout_seconds: 10,
+            api_version: "2023-06-01".to_string(),
+            provider: LlmProvider::OpenAI,
+            extra_headers: HashMap::new(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 0,
+            budget_tokens: None,
+            reasoning_effort: None,
+        };
+        let engine = QueryEngine::new(
+            shannon_engine::api::LlmClient::new(config),
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+            QueryEngineConfig::default(),
+        );
+        (engine, mocks, server)
+    }
+
+    async fn run_query(engine: &QueryEngine) -> Vec<QueryEvent> {
+        let ctx = QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message: "restructure the crate".to_string(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: Some(4096),
+                model: "test-model".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        };
+        let stream = engine.process_query(ctx, None).await;
+        let mut events = Vec::new();
+        let mut s = Box::pin(stream);
+        while let Some(Ok(event)) = s.next().await {
+            events.push(event);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn length_truncation_without_tool_calls_continues_instead_of_completing() {
+        let (engine, mocks, _server) = setup_openai_engine(vec![
+            openai_sse_think_truncated_then_usage(300, 4096),
+            openai_sse_text_then_usage(400, 120),
+        ])
+        .await;
+        let events = run_query(&engine).await;
+
+        // The truncated response must NOT have ended the query: a second
+        // request (the continuation re-prompt) went out and completed it.
+        for m in &mocks {
+            m.assert();
+        }
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, QueryEvent::Completed { .. })),
+            "query must complete via the continuation, not the truncation"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, QueryEvent::Failed { .. })),
+            "continuation is not a failure"
+        );
+
+        // The truncation is surfaced to the user, not silent.
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                QueryEvent::Warning { message, .. } if message.contains("output token limit")
+            )),
+            "expected a truncation warning event"
+        );
+
+        // Metering covers BOTH requests (trailing usage frames drained).
+        let cost = events.iter().rev().find_map(|e| match e {
+            QueryEvent::Cost {
+                input_tokens,
+                output_tokens,
+                ..
+            } => Some((*input_tokens, *output_tokens)),
+            _ => None,
+        });
+        assert_eq!(cost, Some((700, 4216)));
+
+        // Conversation keeps the truncated reasoning for context, the
+        // continuation re-prompt, and the final answer.
+        let history: Vec<_> = events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                QueryEvent::ConversationUpdate { messages, .. } => Some(messages.clone()),
+                _ => None,
+            })
+            .expect("at least one ConversationUpdate event");
+        assert!(
+            history
+                .iter()
+                .any(|m| matches!(&m.content, MessageContent::Text(t) if t.contains("<think>"))),
+            "truncated reasoning must stay in context"
+        );
+        assert!(
+            history
+                .iter()
+                .any(|m| m.role == "user" && matches!(&m.content, MessageContent::Text(t) if t.contains("cut off by the output token limit"))),
+            "continuation re-prompt must be in the conversation"
+        );
+        assert!(
+            history
+                .iter()
+                .any(|m| matches!(&m.content, MessageContent::Text(t) if t.contains("all done"))),
+            "final answer must be in the conversation"
+        );
+    }
+
+    #[tokio::test]
+    async fn perpetual_truncation_is_bounded_and_still_completes() {
+        // A model that overruns its output budget on EVERY response must
+        // not loop forever: after MAX_TRUNCATION_CONTINUATIONS re-prompts
+        // the query ends as a normal (truncated) completion.
+        let bodies: Vec<String> = (0..6)
+            .map(|i| openai_sse_think_truncated_then_usage(100 * (i + 1), 4096))
+            .collect();
+        let (engine, mocks, _server) = setup_openai_engine(bodies).await;
+        let events = run_query(&engine).await;
+
+        for m in &mocks {
+            m.assert();
+        }
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, QueryEvent::Completed { .. })),
+            "query must terminate with Completed once continuations are exhausted"
+        );
+    }
+}

@@ -905,6 +905,22 @@ fn normalize_openai_event(
     // events into one vector and return at the end.
     let mut events: Vec<Result<StreamEvent, ApiError>> = Vec::new();
 
+    // Text content is likewise non-exclusive with `tool_calls` and
+    // `finish_reason`: MiniMax M-series packs it into those chunks (e.g. the
+    // closing `</think>` glued onto the tool-call delta, or the final answer
+    // onto the finish delta). Emit it first — before tool blocks and terminal
+    // events — or the text is silently dropped. Dropped closes strand an
+    // unclosed `<think>` that swallows every later answer downstream
+    // (dogfood l2-deep-analysis 2026-08-23).
+    if let Some(ref content) = choice.delta.content {
+        events.push(Ok(StreamEvent::ContentBlockDelta {
+            index: 0,
+            delta: ContentDelta::TextDelta {
+                text: content.clone(),
+            },
+        }));
+    }
+
     // Tool calls — emit ContentBlockStart + ContentBlockDelta; track each
     // opened index so the (possibly same-chunk) finish_reason can close it.
     if let Some(ref tool_calls) = choice.delta.tool_calls {
@@ -982,20 +998,9 @@ fn normalize_openai_event(
 
     // Finish reason → synthesize ContentBlockStop for any in-progress tool
     // calls (including those opened earlier in this same chunk above) and
-    // emit MessageDelta with the normalized stop reason.
+    // emit MessageDelta with the normalized stop reason. (Any final text
+    // content packed into this chunk was already emitted above.)
     if let Some(ref reason) = choice.finish_reason {
-        // Some providers (MiniMax M-series again) pack the FINAL text
-        // content into the same chunk as finish_reason — non-exclusively,
-        // like tool_calls above. Emit it before the terminal events or the
-        // answer after a closing `</think>` is silently dropped.
-        if let Some(ref content) = choice.delta.content {
-            events.push(Ok(StreamEvent::ContentBlockDelta {
-                index: 0,
-                delta: ContentDelta::TextDelta {
-                    text: content.clone(),
-                },
-            }));
-        }
         for idx in state.open_tool_indices.drain(..) {
             events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
         }
@@ -1018,18 +1023,11 @@ fn normalize_openai_event(
         return events;
     }
 
+    // Content-only chunks already pushed their event above; chunks with
+    // neither content, tool_calls, nor finish_reason (role-only deltas,
+    // usage sentinels) fall through empty.
     if !events.is_empty() {
         return events;
-    }
-
-    // Text content
-    if let Some(ref content) = choice.delta.content {
-        return vec![Ok(StreamEvent::ContentBlockDelta {
-            index: 0,
-            delta: ContentDelta::TextDelta {
-                text: content.clone(),
-            },
-        })];
     }
 
     vec![]
@@ -1915,6 +1913,42 @@ mod tests {
             collect_stream_text(c, &LlmProvider::Minimax, state, &mut text);
         }
         assert_eq!(text, expected);
+    }
+
+    #[test]
+    fn test_minimax_think_close_on_tool_call_chunk_survives() {
+        // Regression (dogfood l2-deep-analysis 2026-08-23, wire fixture
+        // minimax_b4a41957c1d58a26): MiniMax M-series glues the reasoning
+        // close tag onto the SAME delta that opens the tool call —
+        // `"content":"</think>\n\n","tool_calls":[...]`. The tool_calls
+        // branch used to return without emitting that content, so the
+        // assembled text kept an unclosed `<think>`; downstream reasoning
+        // stripping then swallowed every later answer and `--schema`
+        // validation parsed an empty string ("EOF while parsing a value at
+        // line 1 column 0"). Content must survive the tool-call chunk.
+        let chunks = [
+            r#"{"choices":[{"delta":{"content":"<think>Planning the search.","role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"</think>\n\n","role":"assistant","tool_calls":[{"id":"call_01a02a9c6f7a7940a57b2368","type":"function","function":{"name":"Read","arguments":"{\"file_path\":\"/lib.rs\"}"},"index":0}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ];
+        let mut text = String::new();
+        let state = &mut fresh_state();
+        for c in chunks {
+            collect_stream_text(c, &LlmProvider::Minimax, state, &mut text);
+        }
+        assert_eq!(text, "<think>Planning the search.</think>\n\n");
+
+        // The same chunk must still open the tool call: content and
+        // tool_calls are processed non-exclusively.
+        let mut state = fresh_state();
+        let events = normalize_sse_event(chunks[1], &LlmProvider::Minimax, &mut state);
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Ok(StreamEvent::ContentBlockStart {
+                content_block: ContentBlock::ToolUse { id, name, .. },
+                ..
+            }) if *id == "call_01a02a9c6f7a7940a57b2368" && *name == "Read"
+        )));
     }
 
     #[test]
