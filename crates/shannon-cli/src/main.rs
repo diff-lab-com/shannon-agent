@@ -1664,6 +1664,16 @@ fn run_headless_query(
                     response_text.push_str(&content);
                 }
                 Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
+                    // A tool call supersedes the preceding text as this turn's
+                    // contribution: keep only the text of the FINAL answer
+                    // turn in `response_text`. Schema validation and the
+                    // `response` output field must see that answer alone, not
+                    // the whole multi-turn transcript with intermediate
+                    // reasoning glued on (dogfood l2-deep-analysis
+                    // 2026-08-23: an unclosed turn-1 `<think>` swallowed
+                    // every later answer and validation parsed an empty
+                    // string). The delta events above still stream ALL text.
+                    response_text.clear();
                     // Check tool permission against allowed list
                     if let Some(ref allowed) = allowed_set {
                         if !allowed.contains(&tool_name) {

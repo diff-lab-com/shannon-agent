@@ -1,70 +1,87 @@
-# Dogfood fix report — iter-01
+# Fix report — `api_error:l2-deep-analysis:Schema validation failed: Invalid JSON in response: EOF while parsing a value at`
 
-**Signature:** `outcome_fail:l1-bulk-migrate:artifact:src/people/customer.rs,artifact:src/sales/pricing.rs,…`
+## Signature
+
+```
+Schema validation failed: Invalid JSON in response: EOF while parsing a value at line 1 column 0
+```
+
+Task `l2-deep-analysis` (26 turns, 2.5M tokens in) ended with exit code 1 **even though the
+model's final turn contained a complete, valid, fenced JSON object** matching the requested
+`--schema`.
 
 ## Root cause
 
-The `l1-bulk-migrate` run (session `5d4ef25b`, 6 turns, exit 0, `cargo test` green)
-migrated nothing: all four expected artifacts were missing. The wire fixtures under
-`record/minimax_d388385b5f4938fd.json` show why the session ended after six turns
-having only ever called Read/Bash:
+Two bugs compounded; the failure needs both.
 
-1. Shannon sent `max_completion_tokens: 4096` (the `LlmClientConfig` default — no
-   user/provider override was configured).
-2. MiniMax-M3 streams its reasoning as `<think>…</think>` **inside `content`**. On
-   the final request the model spent the entire budget there: the usage frame
-   reports `completion_tokens: 4096, reasoning_tokens: 4095` — zero visible answer.
-3. The stream closed with `finish_reason: "length"` (truncation), no tool calls.
-4. The engine's agent loop matched the no-tool-use branch of the `MessageDelta`
-   handler and finalized the query as a **normal completion** — `Completed`, exit 0.
-   `stop_reason` was destructured away (`MessageDelta { usage, .. }`) and never
-   consulted, so a truncated no-op message was indistinguishable from "the model
-   is done".
+**1. Adapter drops `delta.content` on chunks that also carry `tool_calls`**
+(`crates/shannon-engine/src/api/adapter.rs`, `normalize_openai_event`).
 
-So a mid-reasoning cutoff ended the whole headless run silently. The artifacts
-were never written because the model never got another turn.
+Wire fixture `record/minimax_b4a41957c1d58a26.json` shows MiniMax-M3 gluing the reasoning
+close tag onto the same delta that opens the tool call:
+
+```json
+{"delta":{"content":"</think>\n\n","role":"assistant","tool_calls":[{"id":"call_01a02a9c...","function":{"name":"Read",...},"index":0}]}}
+```
+
+The tool_calls branch populated the event vector and returned early
+(`if !events.is_empty() { return events; }`), never emitting the chunk's `content`. The
+assembled text stream therefore opened `<think>` (turn 1) with **no `</think>` anywhere**
+— verified against the reconstructed NDJSON text: 1 open, 0 closes. A previous fix had
+already made `content` non-exclusive with `finish_reason`; the `tool_calls` case was missed.
+
+**2. Headless `--schema` validation ran on the whole conversation transcript**
+(`crates/shannon-cli/src/main.rs`, `run_headless_query`).
+
+`response_text` accumulated `QueryEvent::Text` from **every** turn (15854 chars; the final
+answer is only 5487). `StructuredOutputConfig::validate_response` → `strip_reasoning_blocks`
+saw the unclosed `<think>` from turn 1 and truncated at position 0 → empty string →
+`serde_json::from_str("")` → `EOF while parsing a value at line 1 column 0` → exit 1.
+
+Either bug alone was masked: with the close tag intact, the last-balanced-JSON fallback in
+`output_format.rs` rescued the glued transcript; with final-turn-only validation, the
+unclosed `<think>` never reached the validator. Together they produced the observed hard
+failure.
 
 ## What changed
 
-`crates/shannon-core/src/query_engine/engine.rs` — truncation-aware turn
-continuation:
+- `crates/shannon-engine/src/api/adapter.rs` — `normalize_openai_event` now emits
+  `choice.delta.content` **before** the tool_calls/finish_reason handling (non-exclusive
+  with both). The duplicate emission formerly inside the finish_reason branch and the
+  now-dead tail fallback were removed. The engine's `ContentBlockDelta`→`QueryEvent::Text`
+  path is index-agnostic, so a text delta sharing a chunk with tool blocks is safe.
+- `crates/shannon-cli/src/main.rs` — `run_headless_query` clears `response_text` on
+  `ToolUseRequest`: a tool call supersedes the preceding text as the turn's contribution,
+  so schema validation and the `response` output field see only the final answer turn.
+  NDJSON `text_delta` events still stream all text from every turn.
 
-- `is_truncation_stop()` helper: recognizes the output-limit stop reasons across
-  wire formats (OpenAI-compatible `length`, Anthropic/Gemini `max_tokens`), plus
-  the `TRUNCATION_CONTINUATION_PROMPT` re-prompt constant.
-- The `MessageDelta` arm now latches `delta.stop_reason` per turn (providers split
-  `finish_reason` and real usage across separate SSE frames, so the reason must
-  survive the sentinel-usage deferral).
-- No-tool-use finalize path: when the response was truncated, keep the partial
-  assistant message, append the continuation re-prompt, emit a `Warning` +
-  `ConversationUpdate`, and run another turn instead of completing the query.
-- Same recovery in the post-stream safety net (providers whose stream ends
-  without a usable usage frame).
-- Bounded: `MAX_TRUNCATION_CONTINUATIONS = 5` per query **and** the existing
-  `max_turns` cap (`turn` is incremented per continuation), so a model that always
-  overruns its output budget cannot monopolize the loop — the query then completes
-  as before (visible, bounded truncation instead of a silent first-cut no-op).
+No public API changes; no new dependencies.
 
-Deliberately **not** changed: the 4096 default `max_tokens` and the per-provider
-`default_max_tokens` knob. Raising the default only hides the defect for one
-budget size and risks 400s against models with lower output ceilings; the robust
-fix is making truncation recoverable regardless of cap size.
+## Regression tests
+
+- `crates/shannon-engine/src/api/adapter.rs` —
+  `test_minimax_think_close_on_tool_call_chunk_survives`: exact fixture shape
+  (`"content":"</think>\n\n","tool_calls":[...]`); asserts the close tag reaches the
+  assembled text **and** the tool call still opens. Fails pre-fix with
+  `left: "<think>Planning the search."` (close dropped).
+- `crates/shannon-cli/tests/cli_mock_tests.rs` —
+  `schema_minimax_think_close_on_tool_chunk_validates`: two-turn mockito replay of the
+  dogfood run (reasoning+tool turn, then fenced-JSON answer) under `--schema`. With both
+  fixes reverted it fails with the **exact** signature error (`EOF while parsing a value
+  at line 1 column 0`); passes with either fix, so it guards the end-to-end signature.
+  `schema_validation_targets_final_turn_not_transcript`: plain preamble + tool turn, then
+  fenced JSON; asserts validation targets the final answer only and `response` excludes
+  intermediate-turn prose. Fails pre-CLI-fix with `Schema validation failed: Invalid JSON
+  in response: expected value at line 1 column 1`.
+
+Deliverable note: instead of copying a wire fixture under `tests/fixtures/real_tasks/`,
+the tests replay the recorded provider shapes through mockito (deterministic, keyless,
+runs in CI) — the SSE bodies are transcribed from the actual fixtures.
 
 ## How verified
 
-- `crates/shannon-core/tests/query_engine_tool_use_tests.rs` — new
-  `openai_truncation_continuation_tests` module replaying the recorded MiniMax-M3
-  wire shape (think-content chunks → `finish_reason: "length"` → trailing usage
-  frame → `[DONE]`):
-  - `length_truncation_without_tool_calls_continues_instead_of_completing` — a
-    second HTTP request must go out (mockito `expect(1)` on both), the query
-    reaches `Completed` via the continuation, a truncation `Warning` is emitted,
-    Cost totals cover both requests (700 in / 4216 out), and the conversation
-    keeps the truncated reasoning, the re-prompt, and the final answer.
-  - `perpetual_truncation_is_bounded_and_still_completes` — six consecutive
-    truncated responses produce exactly six requests and a normal `Completed`.
-- Unit test `truncation_stop_reason_detection` for the stop-reason classifier.
-- `cargo nextest run -p shannon-core`: 3584 passed / 0 failed.
-- `cargo nextest run --workspace`: full suite green.
-- `cargo clippy -p shannon-core --all-targets`: warning count identical to the
-  pre-change baseline (74, all pre-existing); `cargo fmt --all -- --check` clean.
+- Pre-fix failure modes confirmed by reverting each fix individually (see above).
+- `cargo nextest run -p shannon-engine` — 1138 passed.
+- `cargo nextest run -p shannon-cli` — 398 passed (includes the new tests).
+- `cargo clippy --workspace -- -D warnings …` (exact CI allowlist) — clean.
+- `cargo fmt --all -- --check` — clean.
