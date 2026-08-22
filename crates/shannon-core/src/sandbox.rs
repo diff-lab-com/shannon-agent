@@ -1052,12 +1052,18 @@ impl SandboxExecutor {
             .map(|a| a.to_string_lossy().to_string())
             .collect();
 
-        // Build the full command string
-        let full_cmd = if original_args.is_empty() {
-            original_program
-        } else {
-            format!("{} {}", original_program, original_args.join(" "))
-        };
+        // Build the full command string. Every argument must be shell-quoted:
+        // the string is re-parsed by `sh -c` on the host and again inside the
+        // container, so a plain `join(" ")` loses word boundaries. For the
+        // `bash -c "<command>"` shape the Bash tool uses, that re-parsed as
+        // bare `bash -c mkdir …` — bash ran `mkdir` with the rest as
+        // positional parameters, so every sandboxed multi-word command
+        // degenerated to its first word (dogfood l1, 2026-08-23).
+        let full_cmd = std::iter::once(original_program)
+            .chain(original_args)
+            .map(|part| shell_escape(&part))
+            .collect::<Vec<_>>()
+            .join(" ");
 
         let wrapped = docker.wrap_command(&full_cmd, &self.config)?;
 
@@ -2526,6 +2532,88 @@ mod tests {
             result.contains(&format!("--user '{uid}:{gid}'"))
                 || result.contains(&format!("--user {uid}:{gid}")),
             "docker wrap must set --user to the invoking uid:gid, got: {result}"
+        );
+    }
+
+    /// Dogfood l1 (2026-08-23): `wrap_command_docker` rebuilt the command
+    /// with a plain `join(" ")`, so `bash -c "<command>"` reached the
+    /// container as `bash -c mkdir -p …` — re-parsed there as bare `mkdir`
+    /// with the rest as positional parameters. Every multi-word sandboxed
+    /// command degenerated to its first word (`BASH_EXECUTION_STRING=set`).
+    /// The command must survive as one shell-quoted word.
+    #[test]
+    fn test_docker_executor_wrap_preserves_command_quoting() {
+        // Forces the Docker code path; no docker daemon needed.
+        let executor = SandboxExecutor::with_docker(
+            SandboxConfig::new("/tmp/project"),
+            DockerSandboxConfig::new("ubuntu:22.04"),
+        );
+
+        let command = "mkdir -p src/people src/sales src/logistics src/billing && ls src/";
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg("-c").arg(command);
+        executor.wrap_command(&mut cmd).unwrap();
+
+        assert_eq!(cmd.get_program(), "sh");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(args[0], "-c");
+        let payload = &args[1];
+        assert!(payload.starts_with("docker run"));
+
+        // Post-fix the command travels quoted, as a single shell word.
+        assert!(
+            payload.contains(&shell_escape(command)),
+            "command must stay one quoted word in the docker payload, got: {payload}"
+        );
+        // Pre-fix the unquoted join put the bare first word after `bash -c `.
+        assert!(
+            !payload.contains(&format!("bash -c {command}")),
+            "unquoted `bash -c <command>` join must not appear, got: {payload}"
+        );
+    }
+
+    /// End-to-end variant of the quoting fix: runs the wrapped command
+    /// through a real container (skipped when docker is unavailable) and
+    /// checks both the word boundaries and the on-disk ownership.
+    #[test]
+    #[cfg(unix)]
+    fn test_docker_executor_wrap_executes_full_command() {
+        if !DockerSandbox::docker_available() {
+            return;
+        }
+        let project = tempfile::tempdir().unwrap();
+        let executor = SandboxExecutor::with_docker(
+            SandboxConfig::new(project.path()),
+            DockerSandboxConfig::new("ubuntu:22.04"),
+        );
+
+        let command = "mkdir -p 'src/a b' && printf 'hello world' > 'src/a b/x y.txt'";
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg("-c").arg(command);
+        executor.wrap_command(&mut cmd).unwrap();
+
+        let out = cmd.output().unwrap();
+        assert!(
+            out.status.success(),
+            "sandboxed command failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let created = project.path().join("src/a b/x y.txt");
+        let content = std::fs::read_to_string(&created)
+            .unwrap_or_else(|e| panic!("quoted-path artifact missing ({e}): {created:?}"));
+        assert_eq!(content, "hello world");
+
+        use std::os::unix::fs::MetadataExt;
+        let uid = std::fs::metadata(project.path().join("src/a b"))
+            .unwrap()
+            .uid();
+        assert_eq!(
+            uid,
+            unsafe { libc::getuid() },
+            "sandbox-created dirs must carry the invoking user's uid"
         );
     }
 
