@@ -25,6 +25,7 @@ def build_summary(run_id: str, iter_id: str, metas: list[dict],
                    "grade": m["outcome_grade"], "exit_code": m["exit_code"],
                    "wall_s": m["wall_s"], "ttft_ms": m.get("ttft_ms"),
                    "tokens_used": m.get("tokens_used"),
+                   "proc_stats": m.get("proc_stats", {}),
                    "verify_grade": (m.get("verify") or {}).get("grade")}
                   for m in metas],
         "by_tier": by_tier,
@@ -52,16 +53,28 @@ def build_summary(run_id: str, iter_id: str, metas: list[dict],
 _GRADE_ICON = {"pass": "PASS", "partial": "PART", "fail": "FAIL"}
 
 
+def _proc_cell(proc_stats: dict) -> str:
+    """Compact RSS / threads / IO cell for the report table."""
+    if not proc_stats or not proc_stats.get("available"):
+        return "-"
+    rss_mb = (proc_stats.get("peak_rss_kb") or 0) / 1024
+    threads = proc_stats.get("peak_threads") or 0
+    io_mb = ((proc_stats.get("io_rbytes") or 0)
+             + (proc_stats.get("io_wbytes") or 0)) / (1024 * 1024)
+    return f"{rss_mb:.0f}M/{threads}t/{io_mb:.1f}MiB"
+
+
 def write_report(iter_dir: Path, summary: dict, fix_mode: str) -> Path:
     lines: list[str] = [f"# Dogfood report — {summary['iter_id']}",
                         f"run `{summary['run_id']}` · fix-mode `{fix_mode}`", ""]
     lines += ["## Tasks", "",
-              "| task | tier | grade | exit | wall_s | tokens | verify |",
-              "|------|------|-------|------|--------|--------|--------|"]
+              "| task | tier | grade | exit | wall_s | tokens | rss/thr/io | verify |",
+              "|------|------|-------|------|--------|--------|------------|--------|"]
     for t in summary["tasks"]:
         lines.append(
             f"| {t['task_id']} | {t['tier']} | {_GRADE_ICON.get(t['grade'], '?')}"
             f" | {t['exit_code']} | {t['wall_s']} | {t.get('tokens_used') or '-'}"
+            f" | {_proc_cell(t.get('proc_stats') or {})}"
             f" | {t.get('verify_grade') or '-'} |")
     lines += ["", f"All green: **{summary['all_green']}**"]
 
@@ -79,6 +92,25 @@ def write_report(iter_dir: Path, summary: dict, fix_mode: str) -> Path:
                   f"- passed: {len(summary['perf'].get('passed', []))}",
                   f"- failed: {summary['perf'].get('failed', [])}",
                   f"- regressions: {summary['perf'].get('regressions', [])}"]
+
+    # P2-6: highlight tasks whose RSS or IO looks anomalous (peak RSS > 1 GiB
+    # or total IO > 256 MiB). Cheap heuristic; surfaces signal in report.md
+    # without dumping every task's stats.
+    notable = [t for t in summary["tasks"]
+               if (t.get("proc_stats") or {}).get("peak_rss_kb", 0) > 1024 * 1024
+               or ((t.get("proc_stats") or {}).get("io_rbytes", 0)
+                   + (t.get("proc_stats") or {}).get("io_wbytes", 0))
+                   > 256 * 1024 * 1024]
+    if notable:
+        lines += ["", "## Process stats (notable — P2-6)", ""]
+        for t in notable:
+            ps = t["proc_stats"]
+            lines.append(
+                f"- `{t['task_id']}`: peak RSS {ps.get('peak_rss_kb', 0)/1024:.0f} MiB, "
+                f"peak threads {ps.get('peak_threads', 0)}, "
+                f"IO {(ps.get('io_rbytes', 0) + ps.get('io_wbytes', 0))/(1024*1024):.1f} MiB, "
+                f"{ps.get('samples', 0)} samples — "
+                f"see `{iter_dir}/{t['task_id']}/proc-stats.jsonl`")
 
     b = summary.get("budget") or {}
     lines += ["", "## Budget (token three-layer gate)", "",
