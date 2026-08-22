@@ -2061,7 +2061,9 @@ impl QueryEngine {
                                                         // next request which
                                                         // rejects with `duplicate
                                                         // tool_call id`.
-                                                        if !seen_tool_use_ids_query.insert(id.clone()) {
+                                                        if !seen_tool_use_ids_query
+                                                            .insert(id.clone())
+                                                        {
                                                             tracing::warn!(
                                                                 "tool_use_id dedup: \
                                                                  dropping duplicate \
@@ -2069,13 +2071,13 @@ impl QueryEngine {
                                                                  (id={id})"
                                                             );
                                                             continue; // do NOT
-                                                                      // push to
-                                                                      // tool_inputs
-                                                                      // either —
-                                                                      // the tool
-                                                                      // loop only
-                                                                      // runs each
-                                                                      // id once
+                                                            // push to
+                                                            // tool_inputs
+                                                            // either —
+                                                            // the tool
+                                                            // loop only
+                                                            // runs each
+                                                            // id once
                                                         }
                                                         // P3-8: emit ToolUseRequest
                                                         // with the FULLY PARSED
