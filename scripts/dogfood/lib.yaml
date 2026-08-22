@@ -34,9 +34,16 @@ build:
   command: [cargo, build, --release, -p, shannon-cli]
 
 budget:                       # token three-layer gate (plan §6)
-  per_iteration_tokens: 4000000
-  daily_tokens: 10000000
-  monthly_tokens: 50000000
+  # Recalibrated 2026-08-23 against EXACT metering (engine fix 2beb17b6):
+  # the pre-2beb17b6 ledger under-counted MiniMax ~48x, so the old 4M/10M
+  # numbers were calibrated to a fiction. Measured gross (95% cache-read,
+  # ~10x cheaper than billable): S+M = 5.85M (run 2026-08-23T034558 — L
+  # starved at the old 4M gate), L = ~3M, fixer <=3x0.8M, gate ×2 reruns
+  # ~4.7M → worst-case iteration ~16M. Day 35M ≈ two full iterations
+  # including gates; month is a runaway backstop only (loop is manual).
+  per_iteration_tokens: 16000000
+  daily_tokens: 35000000
+  monthly_tokens: 200000000
 
 timing:
   hang_no_output_s: 900
