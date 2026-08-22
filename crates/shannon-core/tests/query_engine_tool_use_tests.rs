@@ -584,3 +584,193 @@ mod tool_use_tests {
         );
     }
 }
+
+// ── OpenAI-compat trailing usage frame regression (dogfood 2026-08-23) ──
+
+mod openai_trailing_usage_tests {
+    //! MiniMax/DeepSeek-style SSE: the real usage arrives in a separate
+    //! `choices: []` frame AFTER the `finish_reason` chunk. On tool turns
+    //! the engine breaks out of the stream to execute tools, so that frame
+    //! must be drained before abandoning the stream — otherwise the whole
+    //! request is metered as zero tokens (dogfood 2026-08-23 l1 lost 62 of
+    //! 63 requests this way).
+
+    use async_trait::async_trait;
+    use futures::StreamExt;
+    use mockito::Server;
+    use serde_json::{Value, json};
+    use shannon_core::query_engine::{
+        QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
+    };
+    use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
+    use shannon_engine::api::{LlmClientConfig, LlmProvider};
+    use shannon_engine::permissions::PermissionManager;
+    use shannon_engine::state::StateManager;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    struct EchoTool;
+    #[async_trait]
+    impl Tool for EchoTool {
+        async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+            Ok(ToolOutput::success("echo-ok".to_string()))
+        }
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn description(&self) -> &str {
+            "echo test tool"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object", "properties": {}})
+        }
+    }
+
+    /// Tool-call turn: tool_calls chunk, then a `finish_reason: "tool_calls"`
+    /// chunk WITHOUT usage, then the trailing usage-only frame (empty
+    /// `choices`), then [DONE]. This is the recorded MiniMax M-series shape.
+    fn openai_sse_tool_then_usage(prompt: u64, completion: u64) -> String {
+        let chunks = [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"echo","arguments":"{}"}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ];
+        let usage = format!(
+            r#"{{"choices":[],"usage":{{"prompt_tokens":{},"completion_tokens":{},"total_tokens":{},"prompt_tokens_details":{{"cached_tokens":0}}}}}}"#,
+            prompt,
+            completion,
+            prompt + completion
+        );
+        let mut body = String::new();
+        for c in chunks.iter().chain(std::iter::once(&usage.as_str())) {
+            body.push_str("data: ");
+            body.push_str(c);
+            body.push_str("\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    /// Final text turn: content delta, `finish_reason: "stop"` chunk without
+    /// usage, then the trailing usage-only frame, then [DONE].
+    fn openai_sse_text_then_usage(prompt: u64, completion: u64) -> String {
+        let chunks = [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":"all done"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+        ];
+        let usage = format!(
+            r#"{{"choices":[],"usage":{{"prompt_tokens":{},"completion_tokens":{},"total_tokens":{},"prompt_tokens_details":{{"cached_tokens":0}}}}}}"#,
+            prompt,
+            completion,
+            prompt + completion
+        );
+        let mut body = String::new();
+        for c in chunks.iter().chain(std::iter::once(&usage.as_str())) {
+            body.push_str("data: ");
+            body.push_str(c);
+            body.push_str("\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    async fn setup_openai_engine(bodies: Vec<String>) -> (QueryEngine, mockito::ServerGuard) {
+        let mut server = Server::new_async().await;
+        for body in bodies {
+            server
+                .mock("POST", "/v1/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(body)
+                .expect(1)
+                .create();
+        }
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.url(),
+            model: "test-model".to_string(),
+            max_tokens: 4096,
+            timeout_seconds: 10,
+            api_version: "2023-06-01".to_string(),
+            provider: LlmProvider::OpenAI,
+            extra_headers: HashMap::new(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 0,
+            budget_tokens: None,
+            reasoning_effort: None,
+        };
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool)).unwrap();
+        let engine = QueryEngine::new(
+            shannon_engine::api::LlmClient::new(config),
+            registry,
+            PermissionManager::new(),
+            StateManager::new(),
+            QueryEngineConfig::default(),
+        );
+        (engine, server)
+    }
+
+    async fn run_query(engine: &QueryEngine) -> Vec<QueryEvent> {
+        let ctx = QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message: "use the echo tool".to_string(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: Some(4096),
+                model: "test-model".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        };
+        let stream = engine.process_query(ctx, None).await;
+        let mut events = Vec::new();
+        let mut s = Box::pin(stream);
+        while let Some(Ok(event)) = s.next().await {
+            events.push(event);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn test_openai_trailing_usage_frame_counted_on_tool_turn() {
+        let (engine, _server) = setup_openai_engine(vec![
+            openai_sse_tool_then_usage(100, 10),
+            openai_sse_text_then_usage(200, 20),
+        ])
+        .await;
+        let events = run_query(&engine).await;
+
+        // Tool turn must count the trailing frame, not zero.
+        let turn_tokens: Vec<u64> = events
+            .iter()
+            .filter_map(|e| match e {
+                QueryEvent::TurnCompleted { tokens_used, .. } => Some(*tokens_used),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            turn_tokens.first(),
+            Some(&110),
+            "tool turn tokens must come from the trailing usage frame"
+        );
+
+        // Cost must accumulate BOTH requests: 100+200 in, 10+20 out.
+        let cost = events.iter().rev().find_map(|e| match e {
+            QueryEvent::Cost {
+                input_tokens,
+                output_tokens,
+                ..
+            } => Some((*input_tokens, *output_tokens)),
+            _ => None,
+        });
+        assert_eq!(
+            cost,
+            Some((300, 30)),
+            "Cost totals must include the tool request's trailing usage frame"
+        );
+    }
+}
