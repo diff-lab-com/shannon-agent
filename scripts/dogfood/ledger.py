@@ -70,7 +70,11 @@ class Ledger:
     def _save_state(self) -> None:
         state = {
             "totals": {
-                "iteration": self._by(lambda e: e.iter_id),
+                # Iteration aggregation must be (run_id, iter_id) keyed: every
+                # `--once` invocation restarts at iter-01 and accumulates into
+                # the same bucket otherwise, masking the per-iteration budget
+                # and corrupting the state file's iter-01 totals.
+                "iteration": self._by(lambda e: f"{e.run_id}/{e.iter_id}"),
                 "day": self._by(lambda e: e.ts[:10]),
                 "month": self._by(lambda e: e.ts[:7]),
             },
@@ -90,8 +94,10 @@ class Ledger:
 
     # ---------- queries ----------
 
-    def iteration_total(self, iter_id: str) -> int:
-        return sum(e.total for e in self.entries if e.iter_id == iter_id)
+    def iteration_total(self, run_id: str, iter_id: str) -> int:
+        """Sum tokens for one (run_id, iter_id) pair — see _save_state."""
+        return sum(e.total for e in self.entries
+                   if e.run_id == run_id and e.iter_id == iter_id)
 
     def day_total(self, day: str | None = None) -> int:
         day = day or day_key()
@@ -103,10 +109,10 @@ class Ledger:
 
     # ---------- gate ----------
 
-    def check(self, iter_id: str, budget: dict) -> dict:
-        """Return gate state; `allow_new_work` false => stop opening
+    def check(self, run_id: str, iter_id: str, budget: dict) -> dict:
+        """Return gate state; `hard_stop` true => stop opening
         tasks/sessions (iteration cap => wind down; day/month => hard stop)."""
-        it = self.iteration_total(iter_id)
+        it = self.iteration_total(run_id, iter_id)
         day = self.day_total()
         mon = self.month_total()
         return {

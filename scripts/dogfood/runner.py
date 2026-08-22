@@ -224,6 +224,14 @@ def parse_ndjson(path: Path) -> dict:
                 errors.append(ev.get("message", "")[:500])
             elif etype == "text_delta":
                 text.append(ev.get("content", ""))
+    # Prefer split in/out fields when present so the ledger doesn't double-
+    # count (Bug: tokens_used is the sum; storing it as tokens_out inflated
+    # both totals). Older CLIs emit only tokens_used; in that case treat the
+    # whole thing as output to preserve historical behaviour.
+    if terminal is not None and "tokens_in" in terminal:
+        terminal["_tokens_in"] = int(terminal.get("tokens_in") or 0)
+        terminal["_tokens_out"] = int(terminal.get("tokens_out") or 0)
+        terminal["_has_split"] = True
     return {"terminal": terminal, "errors": errors, "text": "".join(text)}
 
 

@@ -147,7 +147,14 @@ enum CiEvent {
     Done {
         exit_code: i32,
         turns_used: u32,
+        /// Total tokens used (input + output). Kept for backward compat
+        /// with existing CI parsers; split fields below are preferred for
+        /// budget accounting so the ledger doesn't double-count.
         tokens_used: u64,
+        /// Prompt (input) tokens consumed — split for ledger accounting.
+        tokens_in: u64,
+        /// Completion (output) tokens consumed — split for ledger accounting.
+        tokens_out: u64,
     },
 }
 
@@ -1593,6 +1600,12 @@ fn run_headless_query(
         let mut tool_calls: Vec<ToolCallSummary> = Vec::new();
         let mut total_tokens: u64 = 0;
         let mut _pending_tool_name: Option<String> = None;
+        // Split counters for ledger accounting (TaskBudget). TurnCompleted
+        // reports cumulative session tokens; Usage reports per-call. We
+        // take the max cumulative (input, output) from Usage events so the
+        // Done event carries the actual in/out split, not a synthetic sum.
+        let mut total_input_tokens: u64 = 0;
+        let mut total_output_tokens: u64 = 0;
         let mut exit_code = HeadlessExitCode::Success;
         let mut _turn_count: usize = 0;
         let mut changed_files: Vec<(String, String, String)> = Vec::new(); // (path, old, new)
@@ -1748,6 +1761,15 @@ fn run_headless_query(
                 }
                 Ok(QueryEvent::Usage { input_tokens, output_tokens, .. }) => {
                     total_tokens = total_tokens.max(input_tokens + output_tokens);
+                    // Per-call input/output are also cumulative on the
+                    // session, so take the running max — same semantics as
+                    // total_tokens above, just split. Headless mode is
+                    // single-session so this is reliable. Adapter skips
+                    // zero-valued usage chunks (some providers emit a
+                    // `usage: {}` sentinel alongside finish_reason), so the
+                    // max always reflects the real final accounting.
+                    total_input_tokens = total_input_tokens.max(input_tokens);
+                    total_output_tokens = total_output_tokens.max(output_tokens);
                 }
                 Ok(QueryEvent::Completed { .. }) => {
                     if output_format == OutputFormat::Text && !response_text.is_empty() {
@@ -1831,6 +1853,8 @@ fn run_headless_query(
                     exit_code: i32::from(exit_code),
                     turns_used: _turn_count as u32,
                     tokens_used: total_tokens,
+                    tokens_in: total_input_tokens,
+                    tokens_out: total_output_tokens,
                 });
                 emit_output_event(&OutputEvent::Done {
                     exit_code: i32::from(exit_code),

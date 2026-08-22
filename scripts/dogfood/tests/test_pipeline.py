@@ -66,7 +66,7 @@ class TestLedger(unittest.TestCase):
         self._fill()
         budget = {"per_iteration_tokens": 4_000_000,
                   "daily_tokens": 10_000_000, "monthly_tokens": 50_000_000}
-        g = self.ledger.check("iter-01", budget)
+        g = self.ledger.check("r1", "iter-01", budget)
         self.assertEqual(g["iteration_used"], 2_000_000)
         self.assertFalse(g["iteration_exceeded"])
         self.assertFalse(g["hard_stop"])
@@ -78,7 +78,7 @@ class TestLedger(unittest.TestCase):
                                  tokens_out=2_000_000))
         budget = {"per_iteration_tokens": 4_000_000,
                   "daily_tokens": 10_000_000, "monthly_tokens": 50_000_000}
-        g = self.ledger.check("iter-01", budget)
+        g = self.ledger.check("r1", "iter-01", budget)
         self.assertTrue(g["iteration_exceeded"])
         self.assertFalse(g["hard_stop"], "iteration cap winds down, not hard stop")
 
@@ -89,9 +89,27 @@ class TestLedger(unittest.TestCase):
                                  tokens_out=8_000_000))
         budget = {"per_iteration_tokens": 4_000_000,
                   "daily_tokens": 10_000_000, "monthly_tokens": 50_000_000}
-        g = self.ledger.check("iter-02", budget)
+        g = self.ledger.check("r1", "iter-02", budget)
         self.assertTrue(g["day_exceeded"])
         self.assertTrue(g["hard_stop"])
+
+    def test_iteration_total_isolates_by_run_id(self):
+        """Bug B: same (iter_id, day) across runs must NOT accumulate."""
+        self.ledger.append(Entry(ts=f"{self.today}T09:00:00", run_id="runA",
+                                 iter_id="iter-01", source="task", ref="t1",
+                                 tokens_out=3_500_000))
+        self.ledger.append(Entry(ts=f"{self.today}T10:00:00", run_id="runB",
+                                 iter_id="iter-01", source="task", ref="t2",
+                                 tokens_out=3_500_000))
+        budget = {"per_iteration_tokens": 4_000_000,
+                  "daily_tokens": 10_000_000, "monthly_tokens": 50_000_000}
+        # Each run separately: not exceeded
+        self.assertEqual(self.ledger.iteration_total("runA", "iter-01"), 3_500_000)
+        self.assertEqual(self.ledger.iteration_total("runB", "iter-01"), 3_500_000)
+        # Cross-run aggregate would be 7M but only one run is in the gate
+        self.assertEqual(self.ledger.day_total(self.today), 7_000_000)
+        self.assertFalse(
+            self.ledger.check("runA", "iter-01", budget)["iteration_exceeded"])
 
     def test_month_window_counts_only_same_month(self):
         self._fill()
@@ -121,6 +139,30 @@ class TestParseNdjson(unittest.TestCase):
             self.assertEqual(parsed["terminal"]["tokens_used"], 42)
             self.assertEqual(parsed["text"], "hello world")
             self.assertEqual(parsed["errors"], ["boom"])
+
+    def test_split_in_out_preserved_for_ledger(self):
+        """Bug A: Done events with split tokens_in/out must surface as
+        _tokens_in / _tokens_out so the ledger does not double-count."""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "out.ndjson"
+            p.write_text(
+                '{"type":"done","exit_code":0,"turns_used":1,'
+                '"tokens_used":1500,"tokens_in":1000,"tokens_out":500}\n',
+                encoding="utf-8")
+            parsed = parse_ndjson(p)
+            self.assertEqual(parsed["terminal"]["_tokens_in"], 1000)
+            self.assertEqual(parsed["terminal"]["_tokens_out"], 500)
+            self.assertTrue(parsed["terminal"]["_has_split"])
+
+    def test_legacy_done_event_without_split(self):
+        """Pre-fix CLI emits only tokens_used; ledger must still work."""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "out.ndjson"
+            p.write_text(
+                '{"type":"done","exit_code":0,"turns_used":1,"tokens_used":42}\n',
+                encoding="utf-8")
+            parsed = parse_ndjson(p)
+            self.assertFalse(parsed["terminal"].get("_has_split", False))
 
     def test_missing_terminal(self):
         with tempfile.TemporaryDirectory() as tmp:
