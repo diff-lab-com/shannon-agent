@@ -15,10 +15,17 @@ matrix:
   #                              accumulates correctly (Bug A/B/C fixed
   #                              in commit 47e94a94), so the day-total
   #                              reached 1.65M tokens without the
-  #                              previous zero-pollution masking. L-tier
-  #                              promotion gated on the L-tier task set
-  #                              (P2-5) and the perf-channel enhancement
-  #                              (P2-6) — see docs/plans/...
+  #                              previous zero-pollution masking.
+  # L-tier gate: P2-6 perf channel landed (7761e4d2); only P2-5 (the L
+  # task set) remains. Cost policy (plan §6.2, decided 2026-08-22):
+  #   - first live L run is a CALIBRATION run — read ledger in/out +
+  #     cache_read share before any budget tuning;
+  #   - if still tight after calibration, add l_cadence (live-L every N
+  #     iters, default 3) rather than replay substitution;
+  #   - replay is the regression channel only (local replay_agent-style
+  #     suite + leak bench + chaos injection); it NEVER counts toward
+  #     the §6 all-green-with-L graduation evidence, and gate reruns ×2
+  #     stay live.
   task_tiers: [S, M]
   parallel_s: 3
   parallel_m: 1
