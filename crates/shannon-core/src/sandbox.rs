@@ -650,6 +650,24 @@ impl DockerSandbox {
     }
 }
 
+/// `uid:gid` of the current process (e.g. "1000:1000") for docker
+/// `--user`, so sandbox-created files match host-side tool ownership.
+/// `None` on non-Unix or when the ids cannot be determined — the flag is
+/// then omitted and the container falls back to the image default.
+fn current_user_group() -> Option<String> {
+    #[cfg(unix)]
+    {
+        // SAFETY: getuid/getgid have no failure mode.
+        let uid = unsafe { libc::getuid() };
+        let gid = unsafe { libc::getgid() };
+        Some(format!("{uid}:{gid}"))
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 impl SandboxProvider for DockerSandbox {
     fn is_available(&self) -> bool {
         Self::docker_available()
@@ -660,6 +678,18 @@ impl SandboxProvider for DockerSandbox {
 
         // Run with limited privileges
         args.push("run".to_string());
+
+        // Run as the invoking user so files created inside the bind-mounted
+        // project dir carry that user's ownership on the host. Without this
+        // the container runs as root (image default) and the host-side file
+        // tools — Edit/Write run as the real user — get EACCES on every
+        // sandbox-created file or directory (dogfood l1, 2026-08-23:
+        // root-owned src/sales/ next to user-owned src/lib.rs in the same
+        // task workspace).
+        if let Some(user) = current_user_group() {
+            args.push("--user".to_string());
+            args.push(user);
+        }
 
         // Auto-remove container after execution
         if self.config.auto_remove {
@@ -2477,6 +2507,26 @@ mod tests {
         assert!(result.contains("--network none"));
         assert!(result.contains("ubuntu:22.04"));
         assert!(result.contains("cargo test"));
+    }
+
+    /// Dogfood l1 (2026-08-23): sandboxed Bash ran as root and created
+    /// root-owned files/dirs in the bind mount; host-side Edit/Write then
+    /// hit EACCES. The wrap must carry the invoking user's uid:gid.
+    #[test]
+    #[cfg(unix)]
+    fn test_docker_sandbox_wrap_command_runs_as_invoking_user() {
+        // wrap_command only builds the command string; no docker needed.
+        let docker = DockerSandbox::new(DockerSandboxConfig::new("ubuntu:22.04"));
+        let config = SandboxConfig::new("/tmp/project");
+
+        let result = docker.wrap_command("mkdir -p src/sales", &config).unwrap();
+        let uid = unsafe { libc::getuid() };
+        let gid = unsafe { libc::getgid() };
+        assert!(
+            result.contains(&format!("--user '{uid}:{gid}'"))
+                || result.contains(&format!("--user {uid}:{gid}")),
+            "docker wrap must set --user to the invoking uid:gid, got: {result}"
+        );
     }
 
     #[test]
