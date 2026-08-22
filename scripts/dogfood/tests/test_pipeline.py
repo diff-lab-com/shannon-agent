@@ -907,6 +907,12 @@ class TestLTierManifest(unittest.TestCase):
         self.assertTrue(l2.get("schema"),
                         "L2 must produce schema-validated JSON")
         self.assertEqual(l2.get("allowed_tools"), ["Read", "Grep", "Glob"])
+        # Calibration (2026-08-22): the schema answer died at the engine's
+        # 4096-token default output cap (finish_reason=length mid-JSON).
+        # The cap override is part of the task contract.
+        l2_cap = int((l2.get("env") or {}).get("SHANNON_MAX_TOKENS", "0"))
+        self.assertGreater(l2_cap, 4096,
+                           "L2 must raise the output cap above the 4096 default")
 
     def test_scratch_big_fixture_offline_and_standalone(self):
         fixture = REPO_ROOT / "tests" / "dogfood" / "fixtures" / "scratch-big"
