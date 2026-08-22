@@ -25,7 +25,7 @@ class Entry:
     ts: str
     run_id: str
     iter_id: str
-    source: str            # "task" | "fix"
+    source: str            # "task" | "fix" | "gate"
     ref: str               # task id / session id
     tokens_in: int = 0
     tokens_out: int = 0

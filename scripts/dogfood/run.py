@@ -288,9 +288,11 @@ def fix_stage(findings: list[dict], cfg: dict, iter_dir: Path, iter_id: str,
                             iter_id=iter_id, source="fix", ref=f"session-{i}",
                             tokens_in=result["usage"]["tokens_in"],
                             tokens_out=result["usage"]["tokens_out"]))
-        sessions.append({"brief": str(brief_path), **{k: result[k] for k in
-                                                      ("ok", "blocked",
-                                                       "result_tail")}})
+        sessions.append({"brief": str(brief_path),
+                         "tokens_in": result["usage"]["tokens_in"],
+                         "tokens_out": result["usage"]["tokens_out"],
+                         **{k: result[k] for k in ("ok", "blocked",
+                                                   "result_tail")}})
         if result["blocked"]:
             logging.info("fix: session BLOCKED -> human queue")
 
@@ -310,7 +312,9 @@ def fix_stage(findings: list[dict], cfg: dict, iter_dir: Path, iter_id: str,
             raise RuntimeError("worktree build failed")
         return wt / cfg["paths"]["shannon_bin"]
 
-    gate = fixer.run_gate(worktree, cfg, rerun_defs, bin_builder)
+    gate = fixer.run_gate(worktree, cfg, rerun_defs, bin_builder,
+                          ledger=ledger, run_id=iter_dir.parent.name,
+                          iter_id=iter_id)
     merged = False
     if gate["passed"] and auto_merge:
         # Reuse the contract run_gate already evaluated (avoid a second git
@@ -432,7 +436,9 @@ def cmd_gate(iter_id: str, cfg: dict, tasks_all: list[dict]) -> None:
     ids = {f["task_id"] for f in triage_doc.get("findings", [])
            if f.get("task_id") not in ("build", "perf")}
     defs = [t for t in tasks_all if t["id"] in ids]
-    gate = fixer.run_gate(worktree, cfg, defs, bin_builder)
+    ledger = Ledger(ARTIFACTS_DIR)
+    gate = fixer.run_gate(worktree, cfg, defs, bin_builder, ledger=ledger,
+                          run_id=iter_dirs[-1].parent.name, iter_id=iter_id)
     atomic_write_json(iter_dirs[-1] / "gate.json", gate)
     print(json.dumps({"passed": gate["passed"],
                       "steps": {k: v.get("ok") for k, v in gate["steps"].items()}},
