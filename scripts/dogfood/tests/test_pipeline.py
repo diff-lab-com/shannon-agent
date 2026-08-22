@@ -587,5 +587,105 @@ def _read_peak_from_jsonl(path: Path) -> int:
     return peak
 
 
+class TestBriefWireEvidence(unittest.TestCase):
+    """P3-9: triage briefs must surface wire-level fixtures (the HTTP
+    request/response JSON captured under <task_dir>/record/) so fixers
+    can replay provider quirks offline instead of guessing from NDJSON."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.iter_dir = Path(self.tmp.name) / "artifacts" / "run-x" / "iter-01"
+        self.task_id = "m1-scratch-feature"
+        self.task_dir = self.iter_dir / self.task_id
+        self.task_dir.mkdir(parents=True)
+        # Mimic the layout runner.py leaves behind.
+        (self.task_dir / "meta.json").write_text("{}")
+        (self.task_dir / "stdout.ndjson").write_text("")
+        (self.task_dir / "stderr.log").write_text("")
+        # 7 wire fixtures, mtimes spread so the sort is deterministic.
+        self.record_dir = self.task_dir / "record"
+        self.record_dir.mkdir()
+        import time
+        for i in range(7):
+            p = self.record_dir / f"minimax_{i:02d}abcdef.json"
+            p.write_text(f'{{"hash": "{i:02d}"}}')
+            time.sleep(0.01)
+            # bump mtime explicitly so the sort isn't flaky
+            import os
+            os.utime(p, (i, i))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_brief_evidence_paths_includes_record_glob(self):
+        from run import brief_evidence_paths
+        finding = {"category": "outcome_fail", "task_id": self.task_id}
+        paths = brief_evidence_paths(self.iter_dir, finding)
+        # meta + ndjson + stderr are always present.
+        for needle in ("meta.json", "stdout.ndjson", "stderr.log"):
+            self.assertTrue(any(needle in p for p in paths),
+                            f"missing {needle} in {paths}")
+        # Summary line = the record dir (filtered through Path.exists()).
+        summary = [p for p in paths if p.endswith("record")]
+        self.assertEqual(len(summary), 1,
+                         f"expected 1 summary line (the dir); got {summary}")
+        # 5 newest fixture lines (each annotated with total N).
+        fixtures = [p for p in paths
+                    if "minimax_" in p and "abcdef.json  # 7 wire fixtures" in p]
+        self.assertEqual(len(fixtures), 5,
+                         f"expected 5 newest fixtures; got {fixtures}")
+        # Each annotated line must report the total fixture count.
+        self.assertTrue(all("7 wire fixtures total" in p for p in fixtures),
+                        f"every fixture line must annotate total; got {fixtures}")
+        # The newest (mtime=6, file name suffix '06abcdef') must be first.
+        self.assertIn("06abcdef", fixtures[0],
+                      f"newest fixture should sort first; got {fixtures[0]}")
+
+    def test_brief_evidence_paths_no_record_dir(self):
+        """If record/ is absent (recording disabled), brief must not
+        error — the contract is optional, not mandatory."""
+        import shutil
+        shutil.rmtree(self.record_dir)
+        from run import brief_evidence_paths
+        finding = {"category": "outcome_fail", "task_id": self.task_id}
+        paths = brief_evidence_paths(self.iter_dir, finding)
+        self.assertFalse(any("/record/" in p for p in paths),
+                         f"record dir is absent; no record paths expected; "
+                         f"got {paths}")
+        # meta + ndjson + stderr still present.
+        self.assertTrue(any("meta.json" in p for p in paths))
+
+    def test_generate_brief_calls_out_wire_evidence(self):
+        """The brief markdown must include a wire-fixture hint when record/
+        exists — without this hint, fixers consult only stdout.ndjson and
+        miss provider-level SSE anomalies."""
+        from run import brief_evidence_paths
+        from fixer import generate_brief
+        finding = {"category": "outcome_fail", "signature": "outcome_fail:test",
+                    "task_id": self.task_id, "status": "new"}
+        paths = brief_evidence_paths(self.iter_dir, finding)
+        wt = Path(self.tmp.name) / "wt"
+        wt.mkdir()
+        brief = generate_brief(finding, self.iter_dir, wt, paths)
+        self.assertIn("Wire-level evidence", brief,
+                      "brief must surface wire-fixture hint when record/ exists")
+        self.assertIn("record_replay", brief,
+                      "brief must explain how to replay fixtures offline")
+
+    def test_generate_brief_omits_wire_hint_without_record(self):
+        """No record/ → no wire hint, keeps the brief lean."""
+        import shutil
+        shutil.rmtree(self.record_dir)
+        from run import brief_evidence_paths
+        from fixer import generate_brief
+        finding = {"category": "outcome_fail", "signature": "outcome_fail:test",
+                    "task_id": self.task_id, "status": "new"}
+        paths = brief_evidence_paths(self.iter_dir, finding)
+        wt = Path(self.tmp.name) / "wt"
+        brief = generate_brief(finding, self.iter_dir, wt, paths)
+        self.assertNotIn("Wire-level evidence", brief,
+                         "brief should NOT advertise wire evidence when absent")
+
+
 if __name__ == "__main__":
     unittest.main()
