@@ -588,9 +588,46 @@ impl DockerSandboxConfig {
         }
     }
 
+    /// Apply `SHANNON_SANDBOX_*` environment overrides to the
+    /// auto-detected Docker backend's default config.
+    ///
+    /// The auto-detected backend starts from `Default` (ubuntu:22.04,
+    /// 512m, 1.0 cpu, 300s) — a minimal image with no toolchain. Callers
+    /// whose sandboxed commands need a real toolchain (e.g. dogfood L
+    /// tasks where the agent must run `cargo test` to self-verify) can
+    /// point the sandbox at a rust image with more headroom, per task,
+    /// without touching machine-level config:
+    ///
+    /// - `SHANNON_SANDBOX_IMAGE` (e.g. `rust:1.88-slim`)
+    /// - `SHANNON_SANDBOX_MEMORY` (docker `-m` value, e.g. `4g`)
+    /// - `SHANNON_SANDBOX_CPUS` (e.g. `2.0`)
+    /// - `SHANNON_SANDBOX_TIMEOUT_SECS` (e.g. `1200`)
+    ///
+    /// Overrides are best-effort: empty or malformed values are ignored.
+    /// Explicitly constructed configs (`with_docker`) are not affected —
+    /// this only feeds the auto-detected path.
+    pub fn apply_env_overrides(&mut self) {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        apply_env_overrides_impl(
+            self,
+            var("SHANNON_SANDBOX_IMAGE"),
+            var("SHANNON_SANDBOX_MEMORY"),
+            var("SHANNON_SANDBOX_CPUS"),
+            std::env::var("SHANNON_SANDBOX_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+        );
+    }
+
     /// Set CPU limit.
     pub fn with_cpus(mut self, cpus: impl Into<String>) -> Self {
         self.cpus = Some(cpus.into());
+        self
+    }
+
+    /// Set the container timeout in seconds.
+    pub fn with_timeout_secs(mut self, secs: u64) -> Self {
+        self.timeout_secs = Some(secs);
         self
     }
 
@@ -1042,7 +1079,18 @@ impl SandboxExecutor {
     // -- Docker implementation -------------------------------------------
 
     fn wrap_command_docker(&self, command: &mut std::process::Command) -> Result<(), SandboxError> {
-        let docker_config = self.docker_config.as_ref().cloned().unwrap_or_default();
+        // Auto-detected backend (no explicit docker_config): start from the
+        // default image and honor SHANNON_SANDBOX_* env overrides — callers
+        // like dogfood L tasks point this at a rust toolchain image.
+        // Explicitly configured executors keep their config untouched.
+        let docker_config = match self.docker_config.clone() {
+            Some(config) => config,
+            None => {
+                let mut config = DockerSandboxConfig::default();
+                config.apply_env_overrides();
+                config
+            }
+        };
         let docker = DockerSandbox::new(docker_config);
 
         // Collect original program and args
@@ -1325,6 +1373,29 @@ pub fn detect_sandbox_provider() -> Box<dyn SandboxProvider> {
 // ============================================================================
 
 /// Minimal shell escaping for a string.
+/// Pure core of [`DockerSandboxConfig::apply_env_overrides`] — kept free of
+/// `std::env` so it is testable without process-global env mutation.
+fn apply_env_overrides_impl(
+    cfg: &mut DockerSandboxConfig,
+    image: Option<String>,
+    memory: Option<String>,
+    cpus: Option<String>,
+    timeout_secs: Option<u64>,
+) {
+    if let Some(image) = image {
+        cfg.image = image;
+    }
+    if let Some(memory) = memory {
+        cfg.memory = Some(memory);
+    }
+    if let Some(cpus) = cpus {
+        cfg.cpus = Some(cpus);
+    }
+    if let Some(secs) = timeout_secs {
+        cfg.timeout_secs = Some(secs);
+    }
+}
+
 fn shell_escape(s: &str) -> String {
     if s.is_empty() {
         return "''".to_string();
@@ -1939,6 +2010,93 @@ mod tests {
         let sandbox = NoSandbox;
         assert!(sandbox.is_available());
         assert_eq!(sandbox.name(), "none");
+    }
+
+    // ------------------------------------------------------------------
+    // Env-override tests (SHANNON_SANDBOX_*)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_env_overrides_apply_each_field() {
+        let mut cfg = DockerSandboxConfig::default();
+        apply_env_overrides_impl(
+            &mut cfg,
+            Some("rust:1.88-slim".to_string()),
+            Some("4g".to_string()),
+            Some("2.0".to_string()),
+            Some(1200),
+        );
+        assert_eq!(cfg.image, "rust:1.88-slim");
+        assert_eq!(cfg.memory.as_deref(), Some("4g"));
+        assert_eq!(cfg.cpus.as_deref(), Some("2.0"));
+        assert_eq!(cfg.timeout_secs, Some(1200));
+    }
+
+    #[test]
+    fn test_env_overrides_none_keep_defaults() {
+        let mut cfg = DockerSandboxConfig::default();
+        apply_env_overrides_impl(&mut cfg, None, None, None, None);
+        assert_eq!(cfg.image, "ubuntu:22.04");
+        assert_eq!(cfg.memory.as_deref(), Some("512m"));
+        assert_eq!(cfg.cpus.as_deref(), Some("1.0"));
+        assert_eq!(cfg.timeout_secs, Some(300));
+    }
+
+    #[test]
+    fn test_env_overrides_partial() {
+        let mut cfg = DockerSandboxConfig::default();
+        apply_env_overrides_impl(
+            &mut cfg,
+            Some("rust:1.88-slim".to_string()),
+            None,
+            None,
+            None,
+        );
+        // Only the image changes; resource limits stay at defaults.
+        assert_eq!(cfg.image, "rust:1.88-slim");
+        assert_eq!(cfg.memory.as_deref(), Some("512m"));
+    }
+
+    /// The auto-detected executor path must honor SHANNON_SANDBOX_IMAGE:
+    /// the wrapped docker command should carry the overridden image
+    /// instead of the ubuntu default. Skipped without a docker daemon;
+    /// env-var tests are process-global — this crate runs single-threaded
+    /// under nextest (see .config/nextest.toml).
+    #[test]
+    #[cfg(unix)]
+    fn test_executor_env_override_changes_docker_image() {
+        if !DockerSandbox::docker_available() {
+            return;
+        }
+        struct EnvGuard(&'static str);
+        impl EnvGuard {
+            fn set(k: &'static str, v: &str) -> Self {
+                unsafe { std::env::set_var(k, v) };
+                Self(k)
+            }
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                unsafe { std::env::remove_var(self.0) };
+            }
+        }
+        let _guard = EnvGuard::set("SHANNON_SANDBOX_IMAGE", "rust:1.88-slim");
+
+        // SandboxExecutor::new auto-detects the backend (docker here) and
+        // leaves docker_config empty — the path env overrides apply to.
+        let executor = SandboxExecutor::new(SandboxConfig::new("/tmp/project"));
+        let mut cmd = std::process::Command::new("echo");
+        cmd.arg("hi");
+        executor.wrap_command(&mut cmd).unwrap();
+        let payload = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            payload.contains("rust:1.88-slim"),
+            "auto-detected image override must reach the docker payload, got: {payload}"
+        );
     }
 
     // ------------------------------------------------------------------
