@@ -1404,6 +1404,17 @@ impl QueryEngine {
             let mut auto_test_state: crate::auto_test::AntiLoopState =
                 crate::auto_test::AntiLoopState::new();
 
+            // P3-10: query-scoped dedup of `tool_use_id` echoes. Each per-
+            // stream HashSet below only sees one HTTP response; but the
+            // agent loop runs many API calls per query (default max_turns=20)
+            // and a misbehaving provider/model can replay the same
+            // `tool_use_id` across turns. Anthropic rejects duplicate
+            // tool_use_ids with HTTP 400 (`duplicate tool_call id`), so
+            // re-emitting them breaks the next request. Track every id we
+            // have already emitted this query and drop later duplicates.
+            let mut seen_tool_use_ids_query: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+
             loop {
                 if turn >= config.max_turns {
                     let total_cost = CostTracker::calculate_cost(
@@ -1918,6 +1929,17 @@ impl QueryEngine {
                             (String, String, String),
                         > = std::collections::HashMap::new();
                         let mut tool_inputs: Vec<(String, String, serde_json::Value)> = Vec::new();
+                        // P3-10: dedup `tool_use_id` echoes is query-scoped
+                        // (declared above the agent loop). It catches both
+                        // within-stream echoes (MiniMax streaming reconnect
+                        // replays the same ContentBlockStop+ToolUseRequest
+                        // pair) and cross-turn replays (a misbehaving model
+                        // returning the same id in successive API calls).
+                        // Without this guard the tool runs twice, the
+                        // conversation accumulates two `tool_result`
+                        // entries for one assistant message, and downstream
+                        // TUI/clients double-charge the tool's side effect
+                        // (Write tool emits two files, Bash runs twice).
                         let mut has_content = false;
                         // Accumulate the full assistant response for conversation tracking
                         let mut assistant_text = String::new();
@@ -2016,6 +2038,45 @@ impl QueryEngine {
                                                     &raw,
                                                 ) {
                                                     Ok(json_val) => {
+                                                        // P3-10: dedup at query
+                                                        // scope (HashSet declared
+                                                        // above the agent loop).
+                                                        // Catches both within-
+                                                        // stream ContentBlockStop
+                                                        // echoes (provider
+                                                        // reconnect replays the
+                                                        // same stop event) and
+                                                        // cross-turn replays (a
+                                                        // misbehaving model
+                                                        // returning the same id
+                                                        // in successive API
+                                                        // calls). If we already
+                                                        // emitted this id this
+                                                        // query, drop the
+                                                        // duplicate — re-emitting
+                                                        // would either double-run
+                                                        // the tool or, worse, send
+                                                        // a second `tool_use_id`
+                                                        // to Anthropic in the
+                                                        // next request which
+                                                        // rejects with `duplicate
+                                                        // tool_call id`.
+                                                        if !seen_tool_use_ids_query.insert(id.clone()) {
+                                                            tracing::warn!(
+                                                                "tool_use_id dedup: \
+                                                                 dropping duplicate \
+                                                                 emission for '{name}' \
+                                                                 (id={id})"
+                                                            );
+                                                            continue; // do NOT
+                                                                      // push to
+                                                                      // tool_inputs
+                                                                      // either —
+                                                                      // the tool
+                                                                      // loop only
+                                                                      // runs each
+                                                                      // id once
+                                                        }
                                                         // P3-8: emit ToolUseRequest
                                                         // with the FULLY PARSED
                                                         // input now that the input
