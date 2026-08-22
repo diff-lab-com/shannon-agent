@@ -1818,6 +1818,80 @@ mod query_pipeline_tests {
         mock.assert();
     }
 
+    /// Regression (P3-10): when a provider (notably MiniMax streaming on
+    /// reconnect) sends two `content_block_stop` events for the same
+    /// `tool_use_id`, the engine must emit exactly ONE ToolUseRequest and
+    /// push exactly one entry into the tool loop. Otherwise the tool runs
+    /// twice and the API rejects the second `tool_result` for an unknown
+    /// tool_use_id (or worse, the assistant sees two duplicate results).
+    #[tokio::test]
+    async fn test_query_pipeline_dedup_duplicate_tool_use_id() {
+        let _guard = AnthropicKeyGuard::set();
+        let mut server = Server::new_async().await;
+
+        // SSE: tool block followed by a *duplicate* content_block_stop with
+        // the same id, plus a message_delta + message_stop. Without P3-10
+        // the engine would emit two ToolUseRequest events and push two
+        // entries into tool_inputs.
+        let sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_p310\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":15,\"output_tokens\":0}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_p310\",\"name\":\"Bash\",\"input\":null}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\\\"echo\\\",\\\"x\\\":1}\"}}\n\n",
+            // First stop — legitimate.
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            // Duplicate stop with same id — would normally re-emit.
+            "data: {\"type\":\"content_block_stop\",\"index\":0,\"id\":\"toolu_p310\"}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"input_tokens\":15,\"output_tokens\":12}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        let mock = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse)
+            // The engine makes >=2 API calls here: turn 0 receives the
+            // tool_use, processes it (emits one ToolUseRequest, then
+            // synthesizes an error tool_result since ToolRegistry is
+            // empty), turn 1 re-asks with the tool_result appended. The
+            // dedup guard is what we're testing — it must keep the
+            // ToolUseRequest count at exactly 1 regardless of how many
+            // times the mock body is replayed.
+            .expect_at_least(1)
+            .create();
+
+        let client = make_client(&server);
+        let engine = QueryEngine::with_defaults(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+        );
+
+        let ctx = make_context("Run bash echo");
+        let mut stream = engine.process_query(ctx, None).await;
+
+        // Count ToolUseRequest events; the dedup guard must reduce 2 → 1.
+        let mut tool_requests: Vec<(String, serde_json::Value)> = Vec::new();
+        while let Some(result) = stream.next().await {
+            if let Ok(QueryEvent::ToolUseRequest { tool_use_id, tool_input, .. }) = result {
+                tool_requests.push((tool_use_id, tool_input));
+            }
+        }
+
+        assert_eq!(
+            tool_requests.len(), 1,
+            "P3-10 regression: duplicate tool_use_id must be deduped; \
+             got {tool_requests:?}"
+        );
+        let (id, input) = &tool_requests[0];
+        assert_eq!(id, "toolu_p310");
+        assert_eq!(input["command"], "echo");
+        assert_eq!(input["x"], 1);
+
+        mock.assert();
+    }
+
     /// Test: multi-turn conversation with context preservation.
     #[tokio::test]
     async fn test_query_pipeline_multi_turn() {
