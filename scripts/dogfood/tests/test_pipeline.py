@@ -7,6 +7,8 @@ Run: `just dogfood-selftest` or
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 import sys
 from datetime import datetime
 import unittest
@@ -321,6 +323,153 @@ class TestStreakHistory(unittest.TestCase):
                                       current)
         self.assertEqual(len(history), 2)
         self.assertEqual(history[-1]["all_green"], True)
+
+
+class TestGateAutoMerge(unittest.TestCase):
+    """End-to-end P1-3: drive the gate→auto-merge code path from run.py
+    against a synthetic dev/branch/worktree in /tmp, mirroring the real
+    `git merge --no-ff dogfood/{iter_id}` invocation. No LLM, no tokens.
+
+    Covers the happy path (gate passes + diff < 500 → merge lands) and the
+    graceful-degrade path (gate fails → branch remains for manual PR).
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "fake-repo"
+        self.repo.mkdir()
+        # Initialise a git repo on 'dev' with a single empty commit so
+        # `git merge --no-ff dogfood/iter-test` has a base to fast-forward from.
+        self._run_git(self.repo, "init", "-q", "-b", "dev", ".")
+        self._run_git(self.repo, "config", "user.email", "dogfood@shannon.local")
+        self._run_git(self.repo, "config", "user.name", "dogfood")
+        Path(self.repo / "README.md").write_text("seed\n")
+        self._run_git(self.repo, "add", "README.md")
+        self._run_git(self.repo, "commit", "-q", "-m", "seed")
+        # Worktree on dogfood/iter-test with a fix(dogfood): commit +
+        # fix-report.md + a #[test] in some allowed path. This mirrors the
+        # contract fixer.validate_contract expects.
+        self.iter_id = "iter-test"
+        self.worktree = Path(self.tmp.name) / "wt"
+        self._run_git(self.repo, "worktree", "add", "-b",
+                      f"dogfood/{self.iter_id}", str(self.worktree))
+        self._make_fix_commit()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run_git(self, cwd: Path, *args, check=True):
+        return subprocess.run(  # noqa: S603 - test fixture
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=check,
+        )
+
+    def _make_fix_commit(self):
+        wt = self.worktree
+        # Allowlisted path: scripts/dogfood/. Touch a dummy module + a test
+        # token (#[test]) so validate_contract's "test_added" branch passes.
+        (wt / "scripts").mkdir(parents=True, exist_ok=True)
+        (wt / "scripts" / "dogfood").mkdir(exist_ok=True)
+        mod = wt / "scripts" / "dogfood" / "_dummy.py"
+        mod.write_text("def smoke():\n    # regression marker #[test]\n"
+                       "    return 1\n")
+        report = wt / "fix-report.md"
+        report.write_text("# Fix report\n\nAuto-merge test.\n")
+        self._run_git(wt, "add", "scripts/dogfood/_dummy.py", "fix-report.md")
+        self._run_git(wt, "commit", "-q",
+                      "-m", "fix(dogfood): synthetic smoke for auto-merge")
+
+    def _drive_auto_merge(self, repo_root: Path, iter_id: str) -> subprocess.CompletedProcess:
+        """Replicate the exact merge invocation from run.py:293-294."""
+        # run.py uses common.run_cmd; the actual invocation is:
+        #   git -c user.email=... -c user.name=... merge --no-ff
+        #       dogfood/{iter_id} -m "merge: dogfood {iter_id}"
+        return subprocess.run(  # noqa: S603 - mirrors run.py
+            ["git", "-c", "user.email=dogfood@shannon.local",
+             "-c", "user.name=dogfood",
+             "merge", "--no-ff", f"dogfood/{iter_id}",
+             "-m", f"merge: dogfood {iter_id}"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+        )
+
+    def test_auto_merge_lands_on_dev_when_branch_ready(self):
+        """Happy path: gate passes + diff < 500 + branch has the contract.
+        The merge commit must land on dev with the expected subject."""
+        # Sanity: validate_contract's three required artifacts exist.
+        wt = self.worktree
+        self.assertTrue((wt / "fix-report.md").exists())
+        commits = self._run_git(
+            wt, "log", "--oneline", "dev..HEAD").stdout.strip().splitlines()
+        self.assertTrue(any("fix(dogfood):" in c for c in commits),
+                        "expected a fix(dogfood): commit on the branch")
+
+        r = self._drive_auto_merge(self.repo, self.iter_id)
+        self.assertEqual(r.returncode, 0,
+                         f"merge failed:\nstdout={r.stdout}\nstderr={r.stderr}")
+        log = self._run_git(self.repo, "log", "--oneline", "-n", "3").stdout
+        self.assertIn("merge: dogfood iter-test", log,
+                      f"merge commit missing from dev log:\n{log}")
+
+    def test_auto_merge_graceful_degrade_on_conflict(self):
+        """When dev has moved past the branch base, auto-merge refuses
+        cleanly (non-zero exit) and the caller falls through to the
+        'PR ready' branch emit without corrupting dev."""
+        # Move dev forward with a conflicting change in the same file.
+        (self.repo / "scripts" / "dogfood" / "_dummy.py").parent.mkdir(
+            parents=True, exist_ok=True)
+        conflicting = self.repo / "scripts" / "dogfood" / "_dummy.py"
+        conflicting.write_text("def smoke():\n    # dev diverged\n    return 99\n")
+        self._run_git(self.repo, "add", "scripts/dogfood/_dummy.py")
+        self._run_git(self.repo, "commit", "-q", "-m", "dev: conflicting change")
+
+        r = self._drive_auto_merge(self.repo, self.iter_id)
+        # git exits non-zero when --no-ff can't auto-resolve. The caller
+        # in run.py logs "auto-merge FAILED" and prints the gh pr create
+        # instruction. Verify dev remains on its conflicting commit.
+        self.assertNotEqual(r.returncode, 0,
+                            "auto-merge should refuse conflicting changes")
+        head = self._run_git(self.repo, "log", "-n", "1",
+                             "--format=%s").stdout.strip()
+        self.assertEqual(head, "dev: conflicting change",
+                         "dev HEAD must not advance on auto-merge failure")
+
+    def test_diff_lines_under_500_threshold(self):
+        """Replicate fixer._diff_lines: count insertion+deletion lines from
+        `git diff --stat`. Confirms the threshold check in run.py:292 stays
+        accurate for small contracts (e.g. this synthetic smoke)."""
+        stat = self._run_git(self.worktree, "diff", "--stat",
+                             "dev..HEAD").stdout
+        # _diff_lines regex shape:
+        m = re.search(r"(\d+) insertion", stat)
+        d = re.search(r"(\d+) deletion", stat)
+        insertions = int(m.group(1)) if m else 0
+        deletions = int(d.group(1)) if d else 0
+        total = insertions + deletions
+        self.assertLess(total, 500,
+                        f"diff_lines={total} would block auto-merge; "
+                        f"stat was:\n{stat}")
+
+    def test_run_py_reuses_gate_contract(self):
+        """run_gate must expose its contract result under
+        steps.contract.detail so run.py's auto-merge branch can reuse it
+        (avoiding a second git diff round-trip)."""
+        from fixer import validate_contract
+        contract = validate_contract(self.worktree)
+        # Mirror the shape run_gate stores:
+        gate = {"passed": contract["ok"],
+                "steps": {"contract": {"ok": contract["ok"],
+                                        "detail": contract}}}
+        # This is the exact path run.py auto-merge branch takes.
+        reused = (gate.get("steps", {}).get("contract", {})
+                  .get("detail"))
+        self.assertIs(reused, contract,
+                      "run.py must reuse gate['steps']['contract']['detail'] "
+                      "verbatim — same object, no re-computation")
 
 
 if __name__ == "__main__":

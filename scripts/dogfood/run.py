@@ -288,7 +288,11 @@ def fix_stage(findings: list[dict], cfg: dict, iter_dir: Path, iter_id: str,
     gate = fixer.run_gate(worktree, cfg, rerun_defs, bin_builder)
     merged = False
     if gate["passed"] and auto_merge:
-        contract = fixer.validate_contract(worktree)
+        # Reuse the contract run_gate already evaluated (avoid a second git
+        # diff round-trip) — falls back to a fresh evaluation if the gate
+        # skipped the contract step (older gate result, missing key).
+        contract = (gate.get("steps", {}).get("contract", {})
+                    .get("detail")) or fixer.validate_contract(worktree)
         if contract["diff_lines"] < 500:
             r = run_cmd(["git", "merge", "--no-ff", f"dogfood/{iter_id}",
                          "-m", f"merge: dogfood {iter_id}"],
