@@ -1626,12 +1626,16 @@ fn run_headless_query(
         let mut tool_calls: Vec<ToolCallSummary> = Vec::new();
         let mut total_tokens: u64 = 0;
         let mut _pending_tool_name: Option<String> = None;
-        // Split counters for ledger accounting (TaskBudget). TurnCompleted
-        // reports cumulative session tokens; Usage reports per-call. We
-        // take the max cumulative (input, output) from Usage events so the
-        // Done event carries the actual in/out split, not a synthetic sum.
+        // Split counters for ledger accounting (TaskBudget). Usage events
+        // carry PER-REQUEST usage (not cumulative despite the old comment),
+        // so the max-locals below only ever observe the LAST request — a
+        // multi-request query undercounts by everything before it (13× on
+        // the dogfood l1 run). The authoritative accounting is the engine's
+        // Cost event, which sums every request in the query; the locals
+        // stay as a fallback for paths where Cost never arrives (errors).
         let mut total_input_tokens: u64 = 0;
         let mut total_output_tokens: u64 = 0;
+        let mut engine_usage: Option<(u64, u64)> = None;
         let mut exit_code = HeadlessExitCode::Success;
         let mut _turn_count: usize = 0;
         let mut changed_files: Vec<(String, String, String)> = Vec::new(); // (path, old, new)
@@ -1812,15 +1816,22 @@ fn run_headless_query(
                 }
                 Ok(QueryEvent::Usage { input_tokens, output_tokens, .. }) => {
                     total_tokens = total_tokens.max(input_tokens + output_tokens);
-                    // Per-call input/output are also cumulative on the
-                    // session, so take the running max — same semantics as
-                    // total_tokens above, just split. Headless mode is
-                    // single-session so this is reliable. Adapter skips
-                    // zero-valued usage chunks (some providers emit a
-                    // `usage: {}` sentinel alongside finish_reason), so the
-                    // max always reflects the real final accounting.
+                    // Fallback accounting only — see the engine_usage
+                    // declaration for why max-per-request undershoots
+                    // multi-request queries. Adapter skips zero-valued
+                    // usage chunks (some providers emit a `usage: {}`
+                    // sentinel alongside finish_reason).
                     total_input_tokens = total_input_tokens.max(input_tokens);
                     total_output_tokens = total_output_tokens.max(output_tokens);
+                }
+                Ok(QueryEvent::Cost { input_tokens, output_tokens, .. }) => {
+                    // Engine-side totals, accumulated across every request
+                    // in this query (engine.rs sums per-request usage) and
+                    // emitted exactly once at query exit, including the
+                    // max-turns path. Headless runs a single query per
+                    // process, so this IS the session total. Last-wins in
+                    // case a provider emits more than one.
+                    engine_usage = Some((input_tokens, output_tokens));
                 }
                 Ok(QueryEvent::Completed { .. }) => {
                     if output_format == OutputFormat::Text && !response_text.is_empty() {
@@ -1859,6 +1870,14 @@ fn run_headless_query(
         }
 
         let duration_ms = start.elapsed().as_millis() as u64;
+
+        // Authoritative accounting for the ledger: prefer the engine's Cost
+        // totals (sum of every request in the query) over the max-locals,
+        // which only see the last request. total_tokens from TurnCompleted
+        // has the same hole (no event on the final text-only turn).
+        let (tokens_in, tokens_out) =
+            engine_usage.unwrap_or((total_input_tokens, total_output_tokens));
+        let total_tokens = engine_usage.map_or(total_tokens, |(i, o)| i + o);
 
         // Validate structured output schema if provided
         if let Some(schema) = schema_config {
@@ -1904,8 +1923,8 @@ fn run_headless_query(
                     exit_code: i32::from(exit_code),
                     turns_used: _turn_count as u32,
                     tokens_used: total_tokens,
-                    tokens_in: total_input_tokens,
-                    tokens_out: total_output_tokens,
+                    tokens_in,
+                    tokens_out,
                 });
                 emit_output_event(&OutputEvent::Done {
                     exit_code: i32::from(exit_code),

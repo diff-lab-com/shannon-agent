@@ -642,6 +642,113 @@ async fn test_task_write_then_verify() {
     cleanup_workspace(&workspace);
 }
 
+// ── Test: Done-event token accounting accumulates every request ────────
+
+/// Regression (dogfood l1, 2026-08-22): the headless loop used to take
+/// `max()` over per-request Usage events, which for multi-request queries
+/// only ever reflected the LAST request (13× undercount vs the wire
+/// fixtures). The done event must report the engine's Cost totals — the
+/// sum of usage across all requests in the query.
+///
+/// The SSE helpers hardcode usage (input=50 each; output 20/30/15), so a
+/// correct ledger shows tokens_in=150, tokens_out=65, tokens_used=215 —
+/// the old code reported 50/30/50.
+#[serial]
+#[tokio::test]
+async fn test_done_event_tokens_accumulate_across_requests() {
+    let workspace = create_workspace("token_accum");
+
+    let file_path = workspace.join("output.txt");
+    fs::write(&file_path, "").unwrap();
+
+    let mut server = mockito::Server::new_async().await;
+
+    // FIFO mocks: Write (in 50/out 20) -> text+Bash (50/30) -> text (50/15)
+    let write_input = serde_json::json!({
+        "file_path": "output.txt",
+        "content": "hi"
+    });
+    let _m1 = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_header("anthropic-version", "2023-06-01")
+        .with_body(anthropic_tool_use_sse("toolu_1", "Write", write_input))
+        .expect(1)
+        .create();
+
+    let bash_input = serde_json::json!({"command": "cat output.txt"});
+    let _m2 = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_header("anthropic-version", "2023-06-01")
+        .with_body(anthropic_text_and_tool_sse(
+            "Written. Verifying...",
+            "toolu_2",
+            "Bash",
+            bash_input,
+        ))
+        .expect(1)
+        .create();
+
+    let _m3 = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_header("anthropic-version", "2023-06-01")
+        .with_body(anthropic_text_sse("Done."))
+        .expect(1)
+        .create();
+
+    let result = shannon_with_mock(&server.url(), &workspace)
+        .args([
+            "--prompt",
+            "write hi then verify",
+            "--output-format",
+            "json-stream",
+            "--max-turns",
+            "5",
+        ])
+        .timeout(std::time::Duration::from_secs(45))
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let events: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid NDJSON: {line}\n{e}"))
+        })
+        .collect();
+
+    let done = events
+        .iter()
+        .find(|e| e["type"] == "done" && e.get("turns_used").is_some())
+        .expect("CiEvent::Done with turns_used");
+
+    assert_eq!(
+        done["tokens_in"].as_u64(),
+        Some(150),
+        "tokens_in must SUM all requests (50×3), got {}",
+        done["tokens_in"]
+    );
+    assert_eq!(
+        done["tokens_out"].as_u64(),
+        Some(65),
+        "tokens_out must SUM all requests (20+30+15), got {}",
+        done["tokens_out"]
+    );
+    assert_eq!(
+        done["tokens_used"].as_u64(),
+        Some(215),
+        "tokens_used must equal in+out, got {}",
+        done["tokens_used"]
+    );
+
+    cleanup_workspace(&workspace);
+}
+
 // ── Test: Tool error handling — Bash command that fails ───────────────
 
 #[serial]
