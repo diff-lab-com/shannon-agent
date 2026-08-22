@@ -250,6 +250,13 @@ tasks:
       SHANNON_SANDBOX_MEMORY: 4g
       SHANNON_SANDBOX_CPUS: "2.0"
       SHANNON_SANDBOX_TIMEOUT_SECS: "1200"
+      # 2026-08-23 gate rerun: with the 4096 default the model burns the
+      # whole output budget on <think>, finish_reason=length, and the
+      # engine's truncation continuation then re-sends the conversation
+      # per continuation — 31 turns / 2.1M input for one l1 attempt
+      # (6x the 337K of a capped-at-planning run). A 16384 ceiling lets
+      # the plan + execution fit one response most turns.
+      SHANNON_MAX_TOKENS: "16384"
     prompt: >-
       Restructure this crate from its flat module layout into domain
       submodules, keeping the public API exactly as re-exported from lib.rs:
