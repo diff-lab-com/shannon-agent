@@ -379,6 +379,27 @@ claude -p "$(cat artifacts/.../fix/brief-01.md)" \
 
 **渐进收紧策略**:全绿不是终点——达到后自动延长任务时长/加大 `--max-turns`/加入混沌注入(P3),直到再次稳定,防止"任务太简单导致假绿"。
 
+### 6.1 晋级证据(M-tier,2026-08-22)
+
+`task_tiers: [S, M]` 启用后首个完整跑通周期,真实账目(commit 47e94a94 修了 ledger 三处 bug:in/out 分账、run_id 隔离、M3 wire 零值污染,所以下面的数字是可靠的):
+
+| 迭代 | S+M 任务通过 | 全部任务 | new sigs | 累计 token (in+out) |
+|------|--------------|----------|----------|---------------------|
+| iter-01 | 10/11 (m1-scratch-feature verify-fail) | 11 | 1 | 518,528 |
+| iter-02 | 11/11 ✓ | 11 | 0 | 298,990 |
+| iter-03 | 11/11 ✓ | 11 | 0 | 362,987 |
+| iter-04 | 11/11 ✓ | 11 | 0 | 467,895 |
+
+streaks: all-green ×3、no-new ×3 — 达到 §6 双停条件,Supervisor 自停。
+
+日累计 1,648,400 token(in 1.62M / out 25.9K),远低于 10M 日闸门;迭代 cap 4M 仅 iter-01 占 13% 触发后续收紧,余下均 8–12%。每个 M 任务(含多轮 bash + scratch repo 端到端)约 50–75K token,与 P1b 估算一致。
+
+iter-01 的 1 个新签名是 m1-scratch-feature 的 verify 失败(task 跑了但产物不对)— fixer session 产出 PR-ready 分支(`fix: branch dogfood/iter-01 ready — open a PR: gh pr create`),后续三轮同任务全部 pass,说明 fixer 一次写穿。
+
+artifacts: `artifacts/2026-08-22T194847+0800/iter-{01..04}/{summary.json,report.md,triage.json}`;ledger `artifacts/ledger.jsonl` 17+ 条入账均带正确 in/out 拆分。
+
+P2 L-tier 启用前置条件(P2-5 设计 L 任务集 + P2-6 perf 通道增强)尚未完成,本晋级证据仅证明 [S, M] 段稳定。
+
 ---
 
 ## 7. 分阶段实施计划

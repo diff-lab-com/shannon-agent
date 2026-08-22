@@ -6,8 +6,19 @@ matrix:
   # Progressive ramp (plan §5.2): [S] -> [S,M] -> [S,M,L]. Graduation and
   # rollback are judged by the supervisor from summary history; bump manually
   # until the auto-ramp lands.
-  # Promoted to [S, M] 2026-08-21: two consecutive all-green full-S iterations
-  # on MiniMax-M3 with zero new signatures (artifacts 2026-08-21T01*).
+  #
+  # Promotion history (artifacts/2026-08-22T194847+0800/iter-*):
+  #   2026-08-21  [S]            2× all-green full-S, 0 new sigs
+  #   2026-08-22  [S, M]         3× consecutive all-green over 4 iters
+  #                              (iter-02/03/04 = 11/11 pass each), zero
+  #                              new signatures; ledger in/out split now
+  #                              accumulates correctly (Bug A/B/C fixed
+  #                              in commit 47e94a94), so the day-total
+  #                              reached 1.65M tokens without the
+  #                              previous zero-pollution masking. L-tier
+  #                              promotion gated on the L-tier task set
+  #                              (P2-5) and the perf-channel enhancement
+  #                              (P2-6) — see docs/plans/...
   task_tiers: [S, M]
   parallel_s: 3
   parallel_m: 1
