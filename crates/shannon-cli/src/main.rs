@@ -117,7 +117,13 @@ struct HeadlessOutput {
 enum CiEvent {
     /// Session started.
     #[serde(rename = "start")]
-    Start { prompt: String, model: String },
+    Start {
+        prompt: String,
+        model: String,
+        /// Engine session UUID — cross-links the NDJSON stream to the
+        /// persisted session file (needed for `--resume` checkpointing).
+        session_id: String,
+    },
     /// Tool was invoked.
     #[serde(rename = "tool_call")]
     ToolCall {
@@ -1006,6 +1012,23 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
     out
 }
 
+/// Build the headless sessions-dir state manager, honoring the
+/// `SHANNON_SESSIONS_DIR` override.
+///
+/// The dogfood supervisor points this at the task's artifacts dir so session
+/// checkpoints are isolated per task (and a killed run can be resumed with
+/// `--resume <session_id>`). Unset => default `~/.shannon/sessions`, i.e.
+/// exactly the previous behaviour.
+fn headless_state_manager() -> Result<shannon_engine::state::StateManager> {
+    match std::env::var("SHANNON_SESSIONS_DIR") {
+        Ok(dir) if !dir.is_empty() => {
+            shannon_engine::state::StateManager::with_sessions_dir(std::path::PathBuf::from(dir))
+                .map_err(|e| anyhow::anyhow!("invalid SHANNON_SESSIONS_DIR: {e}"))
+        }
+        _ => Ok(shannon_engine::state::StateManager::new()),
+    }
+}
+
 /// Load a session for resumption.
 ///
 /// If `session_id_str` is provided, loads that specific session by UUID.
@@ -1013,8 +1036,7 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
 ///
 /// Returns the loaded `SessionData` on success.
 fn load_resume_session(session_id_str: Option<&str>) -> Result<shannon_engine::state::SessionData> {
-    use shannon_engine::state::StateManager;
-    let state_mgr = StateManager::new();
+    let state_mgr = headless_state_manager()?;
 
     if let Some(id_str) = session_id_str {
         let uuid = uuid::Uuid::parse_str(id_str).map_err(|e| {
@@ -1540,7 +1562,11 @@ fn run_headless_query(
         // Permissions: FullAuto in headless mode (auto-approve non-critical, deny critical)
         let mut permissions = shannon_engine::permissions::PermissionManager::new();
         permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
-        let state = StateManager::new();
+        let state = headless_state_manager()?;
+        // Separate handle for per-turn checkpoints: the engine takes `state`
+        // by value; both managers write the same (possibly redirected) dir,
+        // and save_session is a plain file write, so this is race-free.
+        let checkpoint_state = headless_state_manager().ok();
 
         let mut engine = QueryEngine::with_defaults(client, tools, permissions, state)
             .with_plan_mode_active(plan_mode_flag);
@@ -1618,6 +1644,7 @@ fn run_headless_query(
             emit_ci_event(&CiEvent::Start {
                 prompt: prompt.to_string(),
                 model: model_name,
+                session_id: engine.session_id().to_string(),
             });
         }
 
@@ -1748,6 +1775,30 @@ fn run_headless_query(
                     _turn_count = turn_number;
                     total_tokens += tokens_used;
                     eprintln!("[headless: turn {turn_number}, {tokens_used} tokens]");
+                    // Session checkpoint (dogfood L-tier resume): persist the
+                    // conversation after every turn when SHANNON_SESSIONS_DIR
+                    // redirected the sessions dir, so a run killed mid-flight
+                    // (supervisor timeout/hang) can be resumed with
+                    // `--resume <session_id>`. Unset env => no-op, previous
+                    // behaviour (engine saves once at completion).
+                    if let Some(state) = checkpoint_state.as_ref() {
+                        let metadata = shannon_engine::state::SessionPersistMetadata {
+                            model: config
+                                .model()
+                                .unwrap_or_else(|| "default".to_string()),
+                            turn_count: turn_number,
+                            total_input_tokens,
+                            total_output_tokens,
+                            ..Default::default()
+                        };
+                        if let Err(e) = state.save_session(
+                            &engine.session_id(),
+                            engine.conversation_messages(),
+                            &metadata,
+                        ) {
+                            eprintln!("Warning: session checkpoint failed: {e}");
+                        }
+                    }
                     // Check max turns
                     if let Some(max) = max_turns {
                         if turn_number >= max as usize {
@@ -5959,6 +6010,22 @@ profile_routes = []
         for line in &lines {
             let _: serde_json::Value = serde_json::from_str(line).unwrap();
         }
+    }
+
+    // ── CiEvent::Start session_id (dogfood L-tier resume cross-link) ──
+
+    #[test]
+    fn test_ci_event_start_carries_session_id() {
+        let event = CiEvent::Start {
+            prompt: "hello".into(),
+            model: "test-model".into(),
+            session_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&event).unwrap()).unwrap();
+        assert_eq!(parsed["type"], "start");
+        assert_eq!(parsed["session_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(parsed["model"], "test-model");
     }
 
     #[test]

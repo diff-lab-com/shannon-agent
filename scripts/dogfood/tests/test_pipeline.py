@@ -22,8 +22,9 @@ import tempfile
 
 from ledger import Entry, Ledger
 from run import history_for_streaks, streaks
-from runner import parse_ndjson, run_verify
+from runner import _build_task_cmd, parse_ndjson, run_verify
 from triage import (SignatureTracker, build_fail_signature, classify_task)
+from common import REPO_ROOT, load_tasks
 
 
 def make_meta(**over):
@@ -685,6 +686,238 @@ class TestBriefWireEvidence(unittest.TestCase):
         brief = generate_brief(finding, self.iter_dir, wt, paths)
         self.assertNotIn("Wire-level evidence", brief,
                          "brief should NOT advertise wire evidence when absent")
+
+
+class TestSessionResume(unittest.TestCase):
+    """P2-5 L-tier resume machinery: --resume retry on supervisor kills
+    only (never on exit/verify failures, never without a surviving
+    checkpoint), session isolation under the task dir, and honest
+    multi-attempt token accounting. run_process is faked — no LLM, no
+    process spawn; each scripted attempt writes the NDJSON the real CLI
+    would have streamed."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.task_dir = Path(self.tmp.name) / "task"
+        self.task_dir.mkdir(parents=True)
+        # One dict per fake run_process call (popped in order).
+        self.script: list[dict] = []
+        self.calls: list[dict] = []
+        import runner
+        self.runner = runner
+        self._saved = (runner.run_process, runner.run_verify,
+                       runner.snapshot_workspace,
+                       runner.materialize_workspace,
+                       runner.release_workspace)
+
+        def fake_run_process(cmd, task_dir, ws, env, timeout_s,
+                             hang_s=30, suffix=""):
+            step = self.script.pop(0)
+            self.calls.append({"cmd": cmd, "suffix": suffix, "env": env,
+                               "timeout_s": timeout_s})
+            events = []
+            if step.get("session_id"):
+                events.append({"type": "start", "prompt": "p", "model": "m",
+                               "session_id": step["session_id"]})
+            events.append({"type": "text_delta", "content": "work"})
+            if step.get("terminal"):
+                events.append(step["terminal"])
+            (task_dir / f"stdout{suffix}.ndjson").write_text(
+                "\n".join(json.dumps(e) for e in events) + "\n",
+                encoding="utf-8")
+            if step.get("checkpoint"):
+                sdir = task_dir / "sessions"
+                sdir.mkdir(exist_ok=True)
+                (sdir / f'{step["session_id"]}.json').write_text("{}")
+            return {"exit_code": step.get("exit_code", 0), "signal": None,
+                    "timed_out": bool(step.get("timed_out")),
+                    "hang_suspected": bool(step.get("hang_suspected")),
+                    "wall_s": 1.0, "ttft_ms": 5, "proc_stats": {}}
+
+        runner.run_process = fake_run_process
+        runner.run_verify = lambda task, ws: {"grade": "skipped",
+                                              "checks": []}
+        runner.snapshot_workspace = lambda ws, dest: {"files": []}
+        runner.materialize_workspace = (
+            lambda task, ws: {"type": task.get("workspace", "temp")})
+        runner.release_workspace = lambda ws, info: None
+
+    def tearDown(self):
+        (run_process, run_verify, snapshot_workspace,
+         materialize_workspace, release_workspace) = self._saved
+        self.runner.run_process = run_process
+        self.runner.run_verify = run_verify
+        self.runner.snapshot_workspace = snapshot_workspace
+        self.runner.materialize_workspace = materialize_workspace
+        self.runner.release_workspace = release_workspace
+        self.tmp.cleanup()
+
+    def _task(self, **over):
+        task = {"id": "t-resume", "tier": "L", "kind": "cli",
+                "workspace": "temp", "timeout_s": 60, "retries": 1,
+                "prompt": "migrate the crate"}
+        task.update(over)
+        return task
+
+    @staticmethod
+    def _done(tokens_in, tokens_out):
+        return {"type": "done", "exit_code": 0, "turns_used": 2,
+                "tokens_used": tokens_in + tokens_out,
+                "tokens_in": tokens_in, "tokens_out": tokens_out}
+
+    def test_kill_retries_with_resume(self):
+        self.script = [
+            # Attempt 1 killed by the supervisor, but a turn completed and
+            # was checkpointed before the kill.
+            {"session_id": "uuid-1", "timed_out": True, "checkpoint": True,
+             "terminal": self._done(800, 400)},
+            {"session_id": "uuid-1",
+             "terminal": self._done(1000, 500)},
+        ]
+        meta = self.runner.run_task(self._task(), self.task_dir,
+                                    Path("/bin/true"))
+        self.assertEqual(meta["attempt_count"], 2)
+        self.assertTrue(meta["resumed"])
+        self.assertEqual(meta["session_id"], "uuid-1")
+        second = meta["attempts"][1]
+        self.assertTrue(second["resumed"])
+        self.assertEqual(second["cmd"][second["cmd"].index("--resume") + 1],
+                         "uuid-1")
+        # Continuation prompt replaces the original on the retry attempt.
+        resume_prompt = second["cmd"][second["cmd"].index("-p") + 1]
+        self.assertIn("interrupted", resume_prompt)
+        self.assertIn("Original task:", resume_prompt)
+        # Honest accounting: split tokens from BOTH attempts are summed —
+        # the resumed process re-pays the loaded history as input.
+        self.assertEqual(meta["tokens_in_total"], 1800)
+        self.assertEqual(meta["tokens_out_total"], 900)
+        self.assertEqual(meta["tokens_used"], 2700)
+        # Sessions are isolated per task, never in the operator's ~/.shannon.
+        self.assertEqual(self.calls[0]["env"]["SHANNON_SESSIONS_DIR"],
+                         str(self.task_dir / "sessions"))
+        # Each attempt's stdout is suffixed, so the killed stream survives.
+        self.assertEqual(self.calls[0]["suffix"], "")
+        self.assertEqual(self.calls[1]["suffix"], "-r2")
+
+    def test_kill_without_checkpoint_does_not_retry(self):
+        self.script = [
+            # Killed mid-first-turn: no session file survived, nothing to
+            # resume from — the retry budget must not be burned.
+            {"session_id": "uuid-2", "timed_out": True},
+        ]
+        meta = self.runner.run_task(self._task(), self.task_dir,
+                                    Path("/bin/true"))
+        self.assertEqual(meta["attempt_count"], 1)
+        self.assertFalse(meta["resumed"])
+        self.assertEqual(meta["unmetered_attempts"], 1)
+
+    def test_exit_failure_never_retries(self):
+        self.script = [
+            {"session_id": "uuid-3", "exit_code": 1, "checkpoint": True,
+             "terminal": self._done(100, 50)},
+        ]
+        meta = self.runner.run_task(self._task(), self.task_dir,
+                                    Path("/bin/true"))
+        self.assertEqual(meta["attempt_count"], 1)
+        self.assertFalse(meta["resumed"])
+        self.assertEqual(meta["exit_code"], 1)
+        self.assertEqual(meta["outcome_grade"], "fail")
+
+    def test_success_single_attempt(self):
+        self.script = [
+            {"session_id": "uuid-4", "terminal": self._done(300, 120)},
+        ]
+        meta = self.runner.run_task(self._task(retries=2), self.task_dir,
+                                    Path("/bin/true"))
+        self.assertEqual(meta["attempt_count"], 1)
+        self.assertFalse(meta["resumed"])
+        self.assertEqual(meta["tokens_in_total"], 300)
+        self.assertEqual(meta["tokens_out_total"], 120)
+        self.assertFalse(meta["unmetered"])
+
+
+class TestBuildTaskCmd(unittest.TestCase):
+    def test_first_attempt_is_plain(self):
+        cmd = _build_task_cmd(
+            {"prompt": "do it", "max_turns": 10, "schema": "{}"},
+            Path("/bin/shannon"), 1, None)
+        self.assertEqual(cmd[:3], ["/bin/shannon", "-p", "do it"])
+        self.assertIn("--max-turns", cmd)
+        self.assertIn("--schema", cmd)
+        self.assertNotIn("--resume", cmd)
+
+    def test_resume_attempt_flags_and_prompt(self):
+        # Custom resume_prompt is used verbatim ({original} formatting
+        # applies only to DEFAULT_RESUME_PROMPT — a custom prompt may
+        # contain literal braces, so .format() would be unsafe).
+        task = {"prompt": "original task",
+                "resume_prompt": "pick up where you left off"}
+        cmd = _build_task_cmd(task, Path("/bin/s"), 2, "sid-9")
+        self.assertEqual(cmd[cmd.index("--resume") + 1], "sid-9")
+        self.assertEqual(cmd[cmd.index("-p") + 1],
+                         "pick up where you left off")
+
+    def test_allowed_tools_joined(self):
+        cmd = _build_task_cmd({"prompt": "x",
+                               "allowed_tools": ["Read", "Grep"]},
+                              Path("/bin/s"), 1, None)
+        self.assertEqual(cmd[cmd.index("--allowed-tools") + 1], "Read,Grep")
+
+
+class TestNdjsonSessionCapture(unittest.TestCase):
+    def test_start_event_carries_session_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "out.ndjson"
+            p.write_text(json.dumps({"type": "start", "prompt": "p",
+                                     "session_id": "abc-123"}) + "\n"
+                         + json.dumps({"type": "text_delta",
+                                       "content": "hi"}) + "\n"
+                         + json.dumps({"type": "done", "tokens_used": 5})
+                         + "\n", encoding="utf-8")
+            parsed = parse_ndjson(p)
+        self.assertEqual(parsed["session_id"], "abc-123")
+        self.assertEqual(parsed["text"], "hi")
+        self.assertIsNotNone(parsed["terminal"])
+
+    def test_absent_session_id_is_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "out.ndjson"
+            p.write_text('{"type": "done", "tokens_used": 5}\n',
+                         encoding="utf-8")
+            self.assertIsNone(parse_ndjson(p)["session_id"])
+
+
+class TestLTierManifest(unittest.TestCase):
+    """The L tasks and their fixture are contract: ids, budgets, resume
+    knobs, and an offline standalone crate. If someone renames or waters
+    these down, the P2-5 calibration run silently stops measuring."""
+
+    def test_l_tasks_present(self):
+        tasks = {t["id"]: t for t in load_tasks()}
+        l1 = tasks["l1-bulk-migrate"]
+        l2 = tasks["l2-deep-analysis"]
+        self.assertEqual(l1["tier"], "L")
+        self.assertEqual(l1["workspace"], "scratch:scratch-big")
+        self.assertGreaterEqual(l1["timeout_s"], 3600)
+        self.assertGreaterEqual(int(l1.get("retries", 0)), 1,
+                                "L1 must exercise the --resume path")
+        self.assertGreaterEqual(int(l1.get("max_turns", 0)), 100)
+        self.assertEqual(l2["tier"], "L")
+        self.assertEqual(l2["workspace"], "readonly-main")
+        self.assertTrue(l2.get("schema"),
+                        "L2 must produce schema-validated JSON")
+        self.assertEqual(l2.get("allowed_tools"), ["Read", "Grep", "Glob"])
+
+    def test_scratch_big_fixture_offline_and_standalone(self):
+        fixture = REPO_ROOT / "tests" / "dogfood" / "fixtures" / "scratch-big"
+        for rel in ("Cargo.toml", "src/lib.rs", "tests/integration.rs"):
+            self.assertTrue((fixture / rel).exists(), f"missing {rel}")
+        cargo = (fixture / "Cargo.toml").read_text(encoding="utf-8")
+        # Standalone: the parent workspace must not adopt the fixture.
+        self.assertRegex(cargo, r"\[workspace\]\s*$")
+        # Offline: nothing after the (empty) dependencies header.
+        self.assertNotIn("=", cargo[cargo.index("[dependencies]"):],
+                         "fixture must stay dependency-free")
 
 
 if __name__ == "__main__":

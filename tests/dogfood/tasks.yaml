@@ -5,7 +5,9 @@
 # `shannon -p ... --output-format json-stream`.
 #
 # Fields:
-#   tier            S | M | L (L reserved for P2)
+#   tier            S | M | L (L landed at P2-5; enabled by the task_tiers
+#                   ramp in lib.yaml — see §6.2: L stays dormant until the
+#                   user-approved calibration run)
 #   kind            cli (desktop reserved for P2)
 #   workspace       readonly-main | scratch:<fixture> | temp
 #                   - readonly-main: detached git worktree of HEAD; write tools
@@ -224,3 +226,62 @@ tasks:
           - path: src/math.rs
             check: grep -qF 'values.len() as f64' src/math.rs
         verify_cmd: cargo test -q mean_works
+
+  # ---------- L tier (P2-5; dormant until lib.yaml task_tiers adds L) ----------
+  # Cost & replay policy: plan §6.2 — graduation evidence is live-only,
+  # replay never counts; calibration run gates enablement.
+  - id: l1-bulk-migrate
+    tier: L
+    kind: cli
+    workspace: scratch:scratch-big
+    provider_tier: standard
+    timeout_s: 7200
+    retries: 1              # supervisor-kill only (timeout/hang) -> --resume
+    max_turns: 150
+    prompt: >-
+      Restructure this crate from its flat module layout into domain
+      submodules, keeping the public API exactly as re-exported from lib.rs:
+      src/people/ gets customer; src/sales/ gets order and pricing;
+      src/logistics/ gets inventory and shipping; src/billing/ gets currency
+      and report. Move each src/<mod>.rs file into its group directory, add
+      the module declarations, and update internal `use crate::...` paths.
+      Every existing test must keep passing untouched: do NOT modify
+      tests/integration.rs or any test code. Run `cargo test` until green.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: src/people/customer.rs
+            check: grep -qF 'CustomerTier' src/people/customer.rs
+          - path: src/sales/pricing.rs
+            check: grep -qF 'price_order' src/sales/pricing.rs
+          - path: src/logistics/shipping.rs
+            check: grep -qF 'shipping_cost' src/logistics/shipping.rs
+          - path: src/billing/report.rs
+            check: grep -qF 'Invoice' src/billing/report.rs
+        # tests/integration.rs consumes only the lib.rs re-exports, so green
+        # here proves the public API survived the migration.
+        verify_cmd: cargo test -q
+
+  - id: l2-deep-analysis
+    tier: L
+    kind: cli
+    workspace: readonly-main
+    allowed_tools: [Read, Grep, Glob]
+    provider_tier: fast
+    timeout_s: 3600
+    max_turns: 120
+    schema: >-
+      {"type":"object","required":["tools"],"properties":{"tools":
+      {"type":"array","minItems":8,"items":{"type":"object",
+      "required":["name","file"],"properties":{"name":{"type":"string"},
+      "file":{"type":"string"},"read_only":{"type":"boolean"}}}}}}
+    prompt: >-
+      Build a catalog of every tool this engine can expose to a model.
+      Search crates/shannon-tools and crates/shannon-tool-interface for
+      implementations of the Tool trait. For each tool report its name, the
+      path of the file that defines it, and whether it is read-only. Use only
+      the Read, Grep, and Glob tools — the Bash tool is not available in this
+      environment. Return JSON matching the schema.
+    expect:
+      exit_code: 0
