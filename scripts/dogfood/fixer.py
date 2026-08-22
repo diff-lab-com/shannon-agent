@@ -277,8 +277,15 @@ def _adds_test_call(worktree: Path, base: str) -> bool:
 
 
 def run_gate(worktree: Path, cfg: dict, rerun_failed: list[dict] | None = None,
-             shannon_bin_builder=None) -> dict:
-    """Full quality gate (plan §5.7). Returns {"passed": bool, "steps": {...}}."""
+             shannon_bin_builder=None, ledger=None, run_id: str = "",
+             iter_id: str = "") -> dict:
+    """Full quality gate (plan §5.7). Returns {"passed": bool, "steps": {...}}.
+
+    When a `ledger` is passed, every ×2 rerun attempt is appended to it
+    (source="gate") so day/month budget totals reflect the real spend —
+    gate reruns are live API calls and used to bypass the ledger entirely
+    (2026-08-23: +4.7M gross tokens unaccounted in one gate run).
+    """
     steps: dict[str, dict] = {}
 
     r = run_cmd(["just", "ci"], cwd=worktree, timeout_s=7200)
@@ -321,6 +328,13 @@ def run_gate(worktree: Path, cfg: dict, rerun_failed: list[dict] | None = None,
                 detail.append({"task": task["id"], "attempt": attempt,
                                "grade": meta["outcome_grade"]})
                 ok_all = ok_all and ok
+                if ledger is not None:
+                    from ledger import Entry  # local: avoids import cycle at module load
+                    ledger.append(Entry(
+                        ts=now_iso(), run_id=run_id, iter_id=iter_id,
+                        source="gate", ref=f"{task['id']}-attempt{attempt}",
+                        tokens_in=meta.get("tokens_in_total", 0),
+                        tokens_out=meta.get("tokens_out_total", 0)))
         # A non-empty rerun list that executed nothing is a wiring defect,
         # not a pass — fail the gate instead of blessing it vacuously.
         steps["rerun_x2"] = {"ok": ok_all and bool(detail), "detail": detail}
