@@ -1796,14 +1796,19 @@ mod query_pipeline_tests {
 
         let mut tool_request: Option<(String, serde_json::Value)> = None;
         while let Some(result) = stream.next().await {
-            if let Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) = result {
+            if let Ok(QueryEvent::ToolUseRequest {
+                tool_name,
+                tool_input,
+                ..
+            }) = result
+            {
                 tool_request = Some((tool_name, tool_input));
                 break; // first tool request is enough
             }
         }
 
-        let (name, input) = tool_request.expect(
-            "engine must emit at least one ToolUseRequest before stopping");
+        let (name, input) =
+            tool_request.expect("engine must emit at least one ToolUseRequest before stopping");
         assert_eq!(name, "Bash", "tool name should round-trip");
         assert_ne!(
             input,
@@ -1874,13 +1879,19 @@ mod query_pipeline_tests {
         // Count ToolUseRequest events; the dedup guard must reduce 2 → 1.
         let mut tool_requests: Vec<(String, serde_json::Value)> = Vec::new();
         while let Some(result) = stream.next().await {
-            if let Ok(QueryEvent::ToolUseRequest { tool_use_id, tool_input, .. }) = result {
+            if let Ok(QueryEvent::ToolUseRequest {
+                tool_use_id,
+                tool_input,
+                ..
+            }) = result
+            {
                 tool_requests.push((tool_use_id, tool_input));
             }
         }
 
         assert_eq!(
-            tool_requests.len(), 1,
+            tool_requests.len(),
+            1,
             "P3-10 regression: duplicate tool_use_id must be deduped; \
              got {tool_requests:?}"
         );
