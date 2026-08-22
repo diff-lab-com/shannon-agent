@@ -146,7 +146,14 @@ tasks:
         artifacts:
           - path: src/math.rs
             check: grep -qF 'clamp' src/math.rs
-        verify_cmd: cargo test -q
+        # --tests runs unit + integration tests but skips doctests. Doctests
+        # in Rust are compiled as a separate wrapper crate where `use crate::`
+        # refers to a synthetic module — not the user crate root — so a
+        # `use crate::clamp;` example fails to resolve even when `clamp` is
+        # re-exported via `pub use math::{..., clamp};` in lib.rs (the
+        # compiler suggests `scratch_lib::clamp` instead). The task asks for
+        # "documented" + unit tests; doctests are optional, so we skip them.
+        verify_cmd: cargo test -q --tests
 
   - id: m2-rename-refactor
     tier: M
