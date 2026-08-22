@@ -26,7 +26,7 @@ matrix:
   #     suite + leak bench + chaos injection); it NEVER counts toward
   #     the §6 all-green-with-L graduation evidence, and gate reruns ×2
   #     stay live.
-  task_tiers: [S, M]
+  task_tiers: [S, M, L]
   parallel_s: 3
   parallel_m: 1
 
