@@ -1943,7 +1943,18 @@ impl QueryEngine {
                                             content_block,
                                         } => {
                                             match &content_block {
-                                                ContentBlock::ToolUse { id, name, input } => {
+                                                ContentBlock::ToolUse { id, name, input: _ } => {
+                                                    // P3-8: do NOT emit ToolUseRequest
+                                                    // here — the adapter sends
+                                                    // `input: Value::Null` at
+                                                    // ContentBlockStart because the
+                                                    // tool arguments haven't streamed
+                                                    // yet. We accumulate the input
+                                                    // JSON deltas into `raw` (see
+                                                    // ContentDelta::InputJsonDelta
+                                                    // below) and emit ToolUseRequest
+                                                    // once on ContentBlockStop with
+                                                    // the fully parsed input.
                                                     let entry = tool_call_state
                                                         .entry(index)
                                                         .or_insert_with(|| {
@@ -1955,15 +1966,6 @@ impl QueryEngine {
                                                         });
                                                     entry.0 = id.clone();
                                                     entry.1 = name.clone();
-                                                    send_event!(
-                                                        tx,
-                                                        QueryEvent::ToolUseRequest {
-                                                            query_id,
-                                                            tool_use_id: id.clone(),
-                                                            tool_name: name.clone(),
-                                                            tool_input: input.clone(),
-                                                        }
-                                                    );
                                                 }
                                                 ContentBlock::Thinking { .. } => {
                                                     // Thinking block started — deltas will arrive via ThinkingDelta
@@ -2014,6 +2016,28 @@ impl QueryEngine {
                                                     &raw,
                                                 ) {
                                                     Ok(json_val) => {
+                                                        // P3-8: emit ToolUseRequest
+                                                        // with the FULLY PARSED
+                                                        // input now that the input
+                                                        // JSON deltas have been
+                                                        // accumulated. Emitting on
+                                                        // ContentBlockStart gave
+                                                        // downstream consumers
+                                                        // (NDJSON `--output-format
+                                                        // json-stream`, recorder)
+                                                        // a `tool_input: null`
+                                                        // because the adapter only
+                                                        // knows the args AFTER
+                                                        // InputJsonDelta lands.
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::ToolUseRequest {
+                                                                query_id,
+                                                                tool_use_id: id.clone(),
+                                                                tool_name: name.clone(),
+                                                                tool_input: json_val.clone(),
+                                                            }
+                                                        );
                                                         tool_inputs.push((
                                                             id.clone(),
                                                             name.clone(),

@@ -1749,6 +1749,75 @@ mod query_pipeline_tests {
         assert!(has_failed, "Expected Failed event for auth error");
     }
 
+    /// Regression (P3-8): ToolUseRequest.tool_input must carry the parsed
+    /// JSON args, NOT `Value::Null`. Pre-fix, the engine emitted the event
+    /// on `ContentBlockStart` when the adapter only had `input: Null` (the
+    /// args stream in via `input_json_delta` chunks). Downstream consumers
+    /// (NDJSON `--output-format json-stream`, WsServerMessage::ToolUse,
+    /// recorder) all observed `tool_input: null`, killing forensics for
+    /// tool-call triage. Fix moves the emission to `ContentBlockStop` where
+    /// the accumulated `raw` JSON has been parsed.
+    #[tokio::test]
+    async fn test_query_pipeline_tool_use_request_has_parsed_input() {
+        let _guard = AnthropicKeyGuard::set();
+        let mut server = Server::new_async().await;
+
+        // Single tool_use block with input arriving as 3 input_json_delta
+        // chunks: {"command":"ls","cwd":"/tmp","recursive":true}
+        let sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_p38\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":15,\"output_tokens\":0}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_p38\",\"name\":\"Bash\",\"input\":null}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"ls\\\",\\\"cwd\\\":\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"/tmp\\\",\\\"recursive\\\":true}\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"input_tokens\":15,\"output_tokens\":12}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        let mock = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse)
+            .expect_at_least(1)
+            .create();
+
+        let client = make_client(&server);
+        let engine = QueryEngine::with_defaults(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+        );
+
+        let ctx = make_context("Run bash ls");
+        let mut stream = engine.process_query(ctx, None).await;
+
+        let mut tool_request: Option<(String, serde_json::Value)> = None;
+        while let Some(result) = stream.next().await {
+            if let Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) = result {
+                tool_request = Some((tool_name, tool_input));
+                break; // first tool request is enough
+            }
+        }
+
+        let (name, input) = tool_request.expect(
+            "engine must emit at least one ToolUseRequest before stopping");
+        assert_eq!(name, "Bash", "tool name should round-trip");
+        assert_ne!(
+            input,
+            serde_json::Value::Null,
+            "P3-8 regression: ToolUseRequest.tool_input must NOT be null \
+             after the input_json_delta stream completes; got {input:?}"
+        );
+        assert_eq!(input["command"], "ls");
+        assert_eq!(input["cwd"], "/tmp");
+        assert_eq!(input["recursive"], true);
+
+        mock.assert();
+    }
+
     /// Test: multi-turn conversation with context preservation.
     #[tokio::test]
     async fn test_query_pipeline_multi_turn() {
