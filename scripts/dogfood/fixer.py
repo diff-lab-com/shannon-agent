@@ -304,7 +304,13 @@ def run_gate(worktree: Path, cfg: dict, rerun_failed: list[dict] | None = None,
         ok_all = True
         detail = []
         for finding in rerun_failed:
-            task = finding.get("task_def")
+            # Callers pass either a finding ({"task_def": {...}}) or a bare
+            # task def ({"id": ...}) — both shapes come from run.py. Looking
+            # up only `task_def` silently skipped every entry (rerun_x2 was
+            # vacuously true with detail: [], so the ×2 live verification
+            # never ran; gate 2026-08-23T015039 iter-01).
+            task = finding.get("task_def") or (finding
+                                               if finding.get("id") else None)
             if not task:
                 continue
             for attempt in range(1, cfg.get("gate", {}).get("rerun_count", 2) + 1):
@@ -315,7 +321,9 @@ def run_gate(worktree: Path, cfg: dict, rerun_failed: list[dict] | None = None,
                 detail.append({"task": task["id"], "attempt": attempt,
                                "grade": meta["outcome_grade"]})
                 ok_all = ok_all and ok
-        steps["rerun_x2"] = {"ok": ok_all, "detail": detail}
+        # A non-empty rerun list that executed nothing is a wiring defect,
+        # not a pass — fail the gate instead of blessing it vacuously.
+        steps["rerun_x2"] = {"ok": ok_all and bool(detail), "detail": detail}
         if not ok_all:
             return {"passed": False, "steps": steps}
 
