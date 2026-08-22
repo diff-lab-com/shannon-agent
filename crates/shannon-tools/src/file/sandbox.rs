@@ -17,6 +17,10 @@
 
 use std::path::{Path, PathBuf};
 
+/// Mount alias the command sandbox backends use for the project dir
+/// (bwrap/Docker bind `<project_dir>` here — see shannon-core sandbox.rs).
+const SANDBOX_BIND_ALIAS: &str = "/workspace";
+
 /// Configuration for the path sandbox
 #[derive(Debug, Clone)]
 pub struct SandboxConfig {
@@ -117,6 +121,50 @@ impl PathSandbox {
         Self { config, home_dir }
     }
 
+    /// Remap a `/workspace/<rest>` path onto the allowed roots, in order,
+    /// without any existence check.
+    ///
+    /// The command sandbox backends (bwrap and Docker in shannon-core's
+    /// sandbox.rs) bind-mount the project dir at `/workspace`, so a model
+    /// that has run a sandboxed command legitimately addresses files as
+    /// `/workspace/<rest>` while the file tools canonicalize on the host.
+    /// Without this remap the model's world-view splits: Bash succeeds on
+    /// `/workspace/src/x.rs` and Read on the same path fails with
+    /// "No such file" (dogfood l1, 2026-08-22).
+    ///
+    /// Only called after direct canonicalization failed, so a real host
+    /// `/workspace` always wins. The mapped candidate is never returned
+    /// as-is: callers re-canonicalize it and run the full check pipeline,
+    /// so traversal (`/workspace/../etc`) still dies in
+    /// `check_allowed_roots` / denied-pattern checks.
+    fn remap_bind_alias(&self, path: &Path) -> Option<Vec<PathBuf>> {
+        // Component-based, so "/workspacefoo" does not match.
+        let rest = path.strip_prefix(SANDBOX_BIND_ALIAS).ok()?;
+        if self.config.allowed_roots.is_empty() {
+            return None;
+        }
+        Some(
+            self.config
+                .allowed_roots
+                .iter()
+                .map(|root| root.join(rest))
+                .collect(),
+        )
+    }
+
+    /// Async companion of `remap_bind_alias` that also canonicalizes the
+    /// candidate — the value read paths substitute for the failed direct
+    /// canonicalization. First existing candidate wins.
+    async fn resolve_bind_alias(&self, path: &Path) -> Option<PathBuf> {
+        let candidates = self.remap_bind_alias(path)?;
+        for candidate in candidates {
+            if let Ok(c) = tokio::fs::canonicalize(&candidate).await {
+                return Some(c);
+            }
+        }
+        None
+    }
+
     /// Validate a path against the sandbox rules.
     ///
     /// Returns the canonicalized (resolved) path if access is allowed.
@@ -150,9 +198,15 @@ impl PathSandbox {
         // Canonicalize: resolve symlinks, `.` and `..` components
         // This is the primary TOCTOU protection - we resolve the actual
         // target immediately before checking it against allowed roots.
-        let canonical = tokio::fs::canonicalize(path).await.map_err(|e| {
-            SandboxError::ResolutionFailed(format!("Cannot resolve path '{path_str}': {e}"))
-        })?;
+        // On failure, retry through the sandbox bind alias (`/workspace`),
+        // which the command sandbox uses for the project dir — see
+        // `remap_bind_alias`. Every check below still runs on the result.
+        let canonical = match tokio::fs::canonicalize(path).await {
+            Ok(c) => c,
+            Err(e) => self.resolve_bind_alias(path).await.ok_or_else(|| {
+                SandboxError::ResolutionFailed(format!("Cannot resolve path '{path_str}': {e}"))
+            })?,
+        };
 
         let canonical_str = canonical.to_string_lossy().to_string();
 
@@ -183,9 +237,22 @@ impl PathSandbox {
 
         self.check_raw_traversal(&path_str)?;
 
-        let canonical = std::fs::canonicalize(path).map_err(|e| {
-            SandboxError::ResolutionFailed(format!("Cannot resolve path '{path_str}': {e}"))
-        })?;
+        let canonical = match std::fs::canonicalize(path) {
+            Ok(c) => c,
+            Err(e) => {
+                // Bind-alias fallback — see `remap_bind_alias`. Checks below
+                // still run on the resolved candidate.
+                let mut resolved = None;
+                if let Some(candidates) = self.remap_bind_alias(path) {
+                    resolved = candidates
+                        .into_iter()
+                        .find_map(|c| std::fs::canonicalize(&c).ok());
+                }
+                resolved.ok_or_else(|| {
+                    SandboxError::ResolutionFailed(format!("Cannot resolve path '{path_str}': {e}"))
+                })?
+            }
+        };
 
         let canonical_str = canonical.to_string_lossy().to_string();
 
@@ -230,6 +297,24 @@ impl PathSandbox {
         // be symlinks, so resolving only the ancestor keeps the same TOCTOU
         // posture as canonicalizing the full path; every check below still
         // runs against the complete reconstructed path.
+        //
+        // Bind alias first: a `/workspace/<rest>` write with missing parents
+        // must be remapped to the host project root BEFORE the ancestor
+        // walk — otherwise the walk escapes to the filesystem root `/`,
+        // reconstructs the literal /workspace path, and the allowed-roots
+        // check correctly rejects it. Remap needs no existence check here;
+        // the walk below resolves whichever ancestors do exist.
+        let remapped: PathBuf;
+        let path: &Path = if let Some(mut candidates) = self.remap_bind_alias(path) {
+            // First root wins for creation semantics; read paths
+            // (`resolve_bind_alias`) prefer the first existing candidate.
+            remapped = candidates.remove(0);
+            &remapped
+        } else {
+            path
+        };
+        let path_str = path.to_string_lossy().to_string();
+
         let parent = path.parent().ok_or_else(|| {
             SandboxError::ResolutionFailed(format!("Cannot resolve path '{path_str}': no parent"))
         })?;
@@ -715,6 +800,105 @@ mod tests {
         assert!(sandbox.validate(&td2_file).await.is_ok());
 
         let _ = fs::remove_dir_all(&td2_dir);
+    }
+
+    // --- Sandbox bind alias (/workspace) tests ---
+    //
+    // bwrap/Docker bind the project dir at /workspace (shannon-core
+    // sandbox.rs), so after a sandboxed Bash command the model addresses
+    // files as /workspace/<rest>. The file tools run on the host and must
+    // remap that prefix onto the allowed root (dogfood l1, 2026-08-22).
+
+    fn alias_sandbox(root: &Path) -> PathSandbox {
+        PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![root.to_path_buf()],
+            denied_patterns: SandboxConfig::default_denied_patterns(),
+            strict_mode: true,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_bind_alias_read_maps_to_project_root() {
+        let td = TestDir::new();
+        let file = td.create_file("src/lib.rs", "pub fn f() {}");
+        let expected = fs::canonicalize(&file).expect("canonicalize fixture");
+
+        let sandbox = alias_sandbox(td.path());
+        let result = sandbox.validate(Path::new("/workspace/src/lib.rs")).await;
+        assert_eq!(
+            result.expect("alias path should resolve"),
+            expected,
+            "alias path must canonicalize to the same host file"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bind_alias_sync_read_maps_to_project_root() {
+        let td = TestDir::new();
+        let file = td.create_file("src/main.rs", "fn main() {}");
+        let expected = fs::canonicalize(&file).expect("canonicalize fixture");
+
+        let sandbox = alias_sandbox(td.path());
+        let result = sandbox.validate_sync(Path::new("/workspace/src/main.rs"));
+        assert_eq!(result.expect("alias path should resolve"), expected);
+    }
+
+    #[tokio::test]
+    async fn test_bind_alias_write_with_missing_parents_maps() {
+        let td = TestDir::new();
+        let root = fs::canonicalize(td.path()).expect("canonicalize root");
+        let expected = root.join("newdir/nested/file.rs");
+
+        let sandbox = alias_sandbox(td.path());
+        let result = sandbox
+            .validate_for_write(Path::new("/workspace/newdir/nested/file.rs"))
+            .await;
+        assert_eq!(result.expect("alias write should resolve"), expected);
+    }
+
+    #[tokio::test]
+    async fn test_bind_alias_unknown_path_still_fails() {
+        let td = TestDir::new();
+        let sandbox = alias_sandbox(td.path());
+        let result = sandbox
+            .validate(Path::new("/workspace/no-such-file.rs"))
+            .await;
+        assert!(result.is_err(), "missing target under root must fail");
+    }
+
+    #[tokio::test]
+    async fn test_bind_alias_traversal_escape_denied() {
+        let td = TestDir::new();
+        // Existing sibling directory OUTSIDE the allowed root, reached via
+        // `/workspace/../<sibling>`.
+        let sibling =
+            std::env::temp_dir().join(format!("sandbox_alias_sib_{}", std::process::id()));
+        fs::create_dir_all(&sibling).expect("create sibling dir");
+
+        let sandbox = alias_sandbox(td.path());
+        let alias_escape = Path::new("/workspace")
+            .join("..")
+            .join(sibling.file_name().expect("sibling name"));
+        let result = sandbox.validate(&alias_escape).await;
+
+        let _ = fs::remove_dir_all(&sibling);
+        assert!(
+            result.is_err(),
+            "alias remap must not bypass allowed-roots: got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bind_alias_root_itself_maps() {
+        let td = TestDir::new();
+        let expected = fs::canonicalize(td.path()).expect("canonicalize root");
+
+        let sandbox = alias_sandbox(td.path());
+        let result = sandbox.validate(Path::new("/workspace")).await;
+        assert_eq!(
+            result.expect("/workspace maps to the project root"),
+            expected
+        );
     }
 
     // --- Symlink tests ---
