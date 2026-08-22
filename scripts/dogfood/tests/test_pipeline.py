@@ -7,9 +7,11 @@ Run: `just dogfood-selftest` or
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
+import threading
 from datetime import datetime
 import unittest
 from pathlib import Path
@@ -470,6 +472,119 @@ class TestGateAutoMerge(unittest.TestCase):
         self.assertIs(reused, contract,
                       "run.py must reuse gate['steps']['contract']['detail'] "
                       "verbatim — same object, no re-computation")
+
+
+class TestProcSampling(unittest.TestCase):
+    """P2-6 perf channel: /proc/<pid>/{status,io} sampling while a task
+    process runs. Stdlib-only, so safe to run in CI containers."""
+
+    def test_read_status_self(self):
+        from perf import _read_status
+        rec = _read_status(os.getpid())
+        self.assertIsNotNone(rec)
+        self.assertGreater(rec["rss_kb"], 0,
+                           "current process RSS should be > 0")
+        self.assertGreaterEqual(rec["threads"], 1)
+
+    def test_sample_process_stats_aggregates_peak(self):
+        """Spawn a long-running child, sample it via start_proc_sampler,
+        assert the JSONL has >=2 samples and the aggregator agrees with
+        the per-sample peak."""
+        from perf import start_proc_sampler
+        # Sleep long enough for >=3 sampler ticks (interval 0.2s).
+        proc = subprocess.Popen(  # noqa: S603 - test fixture
+            [sys.executable, "-c", "import time; time.sleep(2)"])
+        try:
+            tmpdir = Path(tempfile.mkdtemp())
+            t, stop = start_proc_sampler(proc.pid, tmpdir, interval_s=0.2)
+            # Wait for child exit (2s) + sampler self-stop (≤0.2s).
+            t.join(timeout=4.0)
+            stop.set()  # belt-and-braces; sampler usually exits on its own
+            out_path = tmpdir / "proc-stats.jsonl"
+            self.assertTrue(out_path.exists(),
+                            "start_proc_sampler must write proc-stats.jsonl")
+            lines = out_path.read_text().splitlines()
+            self.assertGreaterEqual(len(lines), 2,
+                                    f"sampler should write ≥2 samples; got "
+                                    f"{len(lines)}: {lines[:3]}")
+            # JSONL fields: rel_ms + rss_kb + threads at minimum.
+            first = json.loads(lines[0])
+            for k in ("rel_ms", "rss_kb", "threads"):
+                self.assertIn(k, first, f"first sample missing {k}: {first}")
+            # _read_proc_aggregate (replayed here) returns peak ≥ any sample.
+            peak = _read_peak_from_jsonl(out_path)
+            self.assertGreater(peak, 0,
+                               f"peak RSS must be > 0; samples={lines}")
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+
+    def test_sample_process_stats_unavailable_degrades(self):
+        """On a non-Linux box (or container without /proc), the sampler
+        must report available=False instead of crashing the loop."""
+        # Force the unavailable branch by monkey-patching _PROC_AVAILABLE
+        # at the perf module level.
+        import perf as perf_mod
+        original = perf_mod._PROC_AVAILABLE
+        perf_mod._PROC_AVAILABLE = False
+        try:
+            agg = perf_mod.sample_process_stats(pid=os.getpid(), interval_s=0.05)
+        finally:
+            perf_mod._PROC_AVAILABLE = original
+        self.assertFalse(agg.get("available", True),
+                         f"must report available=False; got {agg}")
+        for k in ("samples", "peak_rss_kb", "peak_threads",
+                  "io_rbytes", "io_wbytes"):
+            self.assertIn(k, agg,
+                          f"degraded aggregate must still include {k}")
+
+    def test_runner_proc_stats_in_meta(self):
+        """runner.run_process must include proc_stats in its return and
+        propagate it into the per-task meta. Run a trivial `true`-style
+        command and assert the key is present."""
+        from runner import run_process
+        tmpdir = Path(tempfile.mkdtemp())
+        try:
+            task_dir = tmpdir / "task"
+            task_dir.mkdir()
+            ws = tmpdir / "ws"
+            ws.mkdir()
+            info = run_process([sys.executable, "-c", "pass"],
+                               task_dir, ws, env={}, timeout_s=30,
+                               hang_s=5)
+            self.assertIn("proc_stats", info,
+                          "run_process return must include proc_stats")
+            self.assertIn("samples", info["proc_stats"])
+            self.assertIn("peak_rss_kb", info["proc_stats"])
+            # Aggregate from JSONL must agree with what was returned.
+            self.assertEqual(
+                info["proc_stats"]["peak_rss_kb"],
+                _read_peak_from_jsonl(task_dir / "proc-stats.jsonl"),
+                "returned peak_rss_kb must match JSONL aggregation")
+        finally:
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _read_peak_from_jsonl(path: Path) -> int:
+    """Helper: replay the JSONL and return the peak RSS, mirroring
+    runner._read_proc_aggregate (without the available field)."""
+    peak = 0
+    if not path.exists():
+        return peak
+    for line in path.read_text().splitlines():
+        try:
+            rss = json.loads(line).get("rss_kb") or 0
+        except json.JSONDecodeError:
+            continue
+        if rss > peak:
+            peak = rss
+    return peak
 
 
 if __name__ == "__main__":

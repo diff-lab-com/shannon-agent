@@ -140,6 +140,12 @@ def run_process(cmd: list[str], task_dir: Path, ws: Path, env: dict,
         )
         reader.start()
 
+        # /proc sampler (P2-6): one background thread, /1s. Aggregates peak
+        # RSS, peak threads, total IO bytes into proc-stats.jsonl for
+        # postmortem localisation of perf regressions.
+        from perf import start_proc_sampler
+        sampler, sampler_stop = start_proc_sampler(proc.pid, task_dir)
+
         deadline = t0 + timeout_s
         timed_out = hang = False
         while True:
@@ -167,6 +173,12 @@ def run_process(cmd: list[str], task_dir: Path, ws: Path, env: dict,
         reader.join(timeout=5)
         time.sleep(0.2)
 
+        # Stop sampler last so it catches the SIGKILL tail (RSS may spike
+        # during dealloc; we want the peak, not the post-cleanup floor).
+        sampler_stop.set()
+        sampler.join(timeout=2)
+        proc_stats = _read_proc_aggregate(task_dir)
+
     rc = proc.returncode
     sig = None
     if rc is not None and rc < 0:
@@ -178,7 +190,38 @@ def run_process(cmd: list[str], task_dir: Path, ws: Path, env: dict,
         "hang_suspected": hang,
         "wall_s": round(time.monotonic() - t0, 1),
         "ttft_ms": _first_event_ms(index_path),
+        "proc_stats": proc_stats,
     }
+
+
+def _read_proc_aggregate(task_dir: Path) -> dict:
+    """Read the sampler JSONL tail and return last non-empty aggregate line,
+    or a stub if the file is empty (process too short to sample / no /proc).
+    """
+    path = task_dir / "proc-stats.jsonl"
+    if not path.exists():
+        return {"available": False, "samples": 0, "peak_rss_kb": 0,
+                "peak_threads": 0, "io_rbytes": 0, "io_wbytes": 0}
+    peak_rss = peak_threads = 0
+    io_rbytes = io_wbytes = 0
+    samples = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        samples += 1
+        rss = rec.get("rss_kb") or 0
+        thr = rec.get("threads") or 0
+        if rss > peak_rss:
+            peak_rss = rss
+        if thr > peak_threads:
+            peak_threads = thr
+        io_rbytes = max(io_rbytes, rec.get("rss_io_r") or 0)
+        io_wbytes = max(io_wbytes, rec.get("rss_io_w") or 0)
+    return {"available": samples > 0, "samples": samples,
+            "peak_rss_kb": peak_rss, "peak_threads": peak_threads,
+            "io_rbytes": io_rbytes, "io_wbytes": io_wbytes}
 
 
 def _signal_group(proc: subprocess.Popen, sig: int) -> None:
@@ -404,6 +447,7 @@ def run_task(task: dict, task_dir: Path, shannon_bin: Path,
             "crash_files": [p.name for p in crash_dir.glob("*.crash.json")],
             "tokens_used": (terminal or {}).get("tokens_used"),
             "unmetered": terminal is None or "tokens_used" not in (terminal or {}),
+            "proc_stats": proc_info.get("proc_stats", {}),
             "outcome_grade": grade,
         }
     finally:
