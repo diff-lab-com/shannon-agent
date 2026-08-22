@@ -1948,6 +1948,14 @@ impl QueryEngine {
                         // Cache tokens arrive in MessageStart (Anthropic), merge with MessageDelta
                         let mut start_cache_read: u64 = 0;
                         let mut start_cache_creation: u64 = 0;
+                        // Per-REQUEST usage (reset when a new stream is opened
+                        // for the next turn). The sentinel-usage guard below
+                        // must defer on "no usage seen for THIS request", not
+                        // on the query-wide totals — once tool turns drain
+                        // their trailing usage frames, the totals are non-zero
+                        // at the final request too.
+                        let mut request_input_tokens: u64 = 0;
+                        let mut request_output_tokens: u64 = 0;
 
                         // Process streaming events
                         while let Some(event_result) = stream.next().await {
@@ -2160,6 +2168,8 @@ impl QueryEngine {
 
                                             total_input_tokens += input_tokens;
                                             total_output_tokens += output_tokens;
+                                            request_input_tokens += input_tokens;
+                                            request_output_tokens += output_tokens;
 
                                             // Update shared cost tracker
                                             {
@@ -3100,14 +3110,93 @@ impl QueryEngine {
                                                     }.await;
                                                 }
 
+                                                // OpenAI-compatible providers (MiniMax
+                                                // M-series, DeepSeek) deliver the real
+                                                // usage in a separate SSE frame AFTER
+                                                // the finish_reason chunk. Tool turns
+                                                // break out of the stream below, so
+                                                // without draining the tail that frame
+                                                // is dropped and the whole request
+                                                // counts as zero tokens (dogfood
+                                                // 2026-08-23 l1: 62 of 63 requests
+                                                // lost their usage this way). The
+                                                // no-tool path already defers via the
+                                                // sentinel guard; this mirrors it for
+                                                // tool turns. Bounded so a server that
+                                                // holds the connection open cannot
+                                                // stall the agent loop; providers that
+                                                // inline usage into the finish chunk
+                                                // skip the drain entirely.
+                                                let mut turn_tokens_used = (usage.input_tokens
+                                                    as u64)
+                                                    + (usage.output_tokens as u64);
+                                                if turn_tokens_used == 0 {
+                                                    let deadline = tokio::time::Instant::now()
+                                                        + std::time::Duration::from_millis(2000);
+                                                    while let Ok(Some(Ok(trailing_event))) =
+                                                        tokio::time::timeout_at(
+                                                            deadline,
+                                                            stream.next(),
+                                                        )
+                                                        .await
+                                                    {
+                                                        let StreamEvent::MessageDelta {
+                                                            usage: trailing,
+                                                            ..
+                                                        } = trailing_event
+                                                        else {
+                                                            continue;
+                                                        };
+                                                        if trailing.input_tokens == 0
+                                                            && trailing.output_tokens == 0
+                                                        {
+                                                            continue;
+                                                        }
+                                                        let trailing_in =
+                                                            trailing.input_tokens as u64;
+                                                        let trailing_out =
+                                                            trailing.output_tokens as u64;
+                                                        total_input_tokens += trailing_in;
+                                                        total_output_tokens += trailing_out;
+                                                        turn_tokens_used =
+                                                            trailing_in + trailing_out;
+                                                        cost_tracker
+                                                            .write()
+                                                            .unwrap_or_else(|e| e.into_inner())
+                                                            .record_usage(
+                                                                &client_model,
+                                                                trailing_in,
+                                                                trailing_out,
+                                                            );
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::Usage {
+                                                                query_id,
+                                                                input_tokens: trailing_in,
+                                                                output_tokens: trailing_out,
+                                                                cost_usd:
+                                                                    CostTracker::calculate_cost(
+                                                                        &client_model,
+                                                                        trailing_in,
+                                                                        trailing_out,
+                                                                    ),
+                                                                cache_creation_tokens: trailing
+                                                                    .cache_creation_input_tokens
+                                                                    as u64,
+                                                                cache_read_tokens: trailing
+                                                                    .cache_read_input_tokens
+                                                                    as u64,
+                                                            }
+                                                        );
+                                                        break;
+                                                    }
+                                                }
                                                 send_event!(
                                                     tx,
                                                     QueryEvent::TurnCompleted {
                                                         query_id,
                                                         turn_number: turn,
-                                                        tokens_used: (usage.input_tokens
-                                                            + usage.output_tokens)
-                                                            as u64,
+                                                        tokens_used: turn_tokens_used,
                                                     }
                                                 );
                                                 // Mark finalized so the post-loop safety net
@@ -3149,8 +3238,8 @@ impl QueryEngine {
                                                 let usage_had_real_tokens = usage.input_tokens > 0
                                                     || usage.output_tokens > 0;
                                                 if !usage_had_real_tokens
-                                                    && total_input_tokens == 0
-                                                    && total_output_tokens == 0
+                                                    && request_input_tokens == 0
+                                                    && request_output_tokens == 0
                                                 {
                                                     // Drop the empty-usage MessageDelta
                                                     // and keep reading. If the real usage
