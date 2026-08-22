@@ -96,6 +96,15 @@ def brief_header(iter_id: str, worktree: Path) -> str:
         f"3. A regression test for the fixed signature (CI will run it).\n"
         f"4. If you cannot fix it, output `BLOCKED: <reason>` as the final\n"
         f"   line instead of forcing a patch.\n\n"
+        f"## Before finishing — self-check (sessions are rejected without this)\n"
+        f"Run `git log --oneline` and `git status`. If your commits do NOT\n"
+        f"include one whose message starts with `fix(dogfood):`, fix it now:\n"
+        f"`git reset --soft <merge-base with dev> && git commit -m\n"
+        f"'fix(dogfood): <signature> <one-line summary>'`. Working commits\n"
+        f"with generic messages (e.g. `feat: update X`) are the #1 rejection\n"
+        f"cause (iter-01 2026-08-23: a complete fix was rejected solely for\n"
+        f"this). Also confirm fix-report.md exists and the diff contains a\n"
+        f"`#[test]`.\n\n"
         f"## Constraints\n"
         f"- No public API changes; no new dependencies without justification.\n"
         f"- Only touch crates/ tests/ docs/ (the gate audits the diff).\n"
@@ -161,9 +170,11 @@ def run_session(worktree: Path, brief_path: Path, max_turns: int = 40,
         "claude", "-p", brief,
         "--settings", str(settings),
         # Load ONLY project-level settings: --settings merges with rather
-        # than replaces the user layer, and the user-level auto-commit-on-
-        # Edit hook fired inside an iter-01 session, committing its WIP as
-        # a generic "feat: update N files" before the contract was met.
+        # than replaces the user layer, so user-level hooks/permissions
+        # would leak into the session. (Generic working commits like
+        # "feat: update X" observed in iter-01 2026-08-23 were model-
+        # authored, not hook-authored — countered by the self-check
+        # section in the brief, not by settings.)
         "--setting-sources", "project",
         "--permission-mode", "acceptEdits",
         # Full Bash: iter-01 brief-02 burned all 40 turns on denials —

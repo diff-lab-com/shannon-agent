@@ -48,13 +48,16 @@ perf:
 
 fixer:
   max_sessions_per_iter: 3
-  # Calibration (2026-08-22, artifacts/2026-08-22T231159+0800): both briefs
-  # died at max_turns=40 with zero commits (terminal_reason=max_turns, 41
-  # turns, $2.4-2.8 each, 8-16 min — nowhere near the session timeout), i.e.
-  # the cap, not time or cost, was the binding constraint for P0-grade
-  # engine bugs. Doubling to 80: worst case ~32 min (< session_timeout_s)
-  # and ~$5-6/brief.
-  max_turns: 80
+  # Calibration history:
+  #   2026-08-22 (231159 run): 40 cap — both briefs 41 turns, zero commits.
+  #   2026-08-23 (003130 run): 80 cap — BOTH briefs again exhausted at 81
+  #     turns ($5.5 / $5.1, 22.5 / 23 min). brief-01 had fully delivered
+  #     (fix + report + tests committed by ~turn 80) but committed under a
+  #     generic message; brief-02 died mid-implementation of an engine
+  #     change. The cap, not time/cost, remains the binding constraint for
+  #     P0-grade engine bugs. 150 turns: worst case ~42 min (< 3600s
+  #     timeout) and ~$10/brief.
+  max_turns: 150
   session_timeout_s: 3600
   tier_models:                # provider_tier -> SHANNON_MODEL (null = default)
     fast: null
