@@ -138,7 +138,7 @@ impl StructuredOutputConfig {
         response: &str,
     ) -> Result<serde_json::Value, StructuredOutputError> {
         // Strip inline reasoning blocks, then markdown code fences if present
-        let stripped = strip_reasoning_blocks(response);
+        let (stripped, had_reasoning) = strip_reasoning_blocks(response);
         let trimmed = stripped
             .trim()
             .trim_start_matches("```json")
@@ -146,8 +146,25 @@ impl StructuredOutputConfig {
             .trim_end_matches("```")
             .trim();
 
-        let value: serde_json::Value = serde_json::from_str(trimmed)
-            .map_err(|e| StructuredOutputError::InvalidJson(e.to_string()))?;
+        let value: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(e) => {
+                // Reasoning models (MiniMax M-series) routinely glue prose
+                // around the final JSON even after `</think>` (dogfood
+                // l2-deep-analysis, 2026-08-22). When reasoning markers
+                // were present, fall back to the last complete top-level
+                // JSON value — the answer the model ended on. Tag-free
+                // responses stay strict: prose-wrapping without reasoning
+                // is a prompt-compliance failure, not extraction noise.
+                if !had_reasoning {
+                    return Err(StructuredOutputError::InvalidJson(e.to_string()));
+                }
+                let candidate = extract_last_balanced_json(trimmed)
+                    .ok_or_else(|| StructuredOutputError::InvalidJson(e.to_string()))?;
+                serde_json::from_str(candidate)
+                    .map_err(|e| StructuredOutputError::InvalidJson(e.to_string()))?
+            }
+        };
 
         self.validate_value(&value)
     }
@@ -233,23 +250,79 @@ pub enum StructuredOutputError {
 ///
 /// Reasoning models (MiniMax M-series, DeepSeek-R1) wrap their chain of
 /// thought in `<think>` tags inside the content stream; the final answer
-/// follows the closing tag. An unclosed `<think>` swallows the remainder —
-/// nothing after it is part of the answer.
-fn strip_reasoning_blocks(response: &str) -> String {
-    let mut out = response.to_string();
-    while let Some(start) = out.find("<think>") {
-        match out[start..].find("</think>") {
-            Some(end_rel) => {
-                let end = start + end_rel + "</think>".len();
-                out.replace_range(start..end, "");
-            }
-            None => {
+/// follows the closing tag. Returns `(answer_text, had_reasoning)`.
+///
+/// Observed MiniMax-M3 shape (dogfood l2 wire fixtures): several `<think>`
+/// opens across the response, one `</think>` near the end, answer after.
+/// So when ANY close exists, the answer is everything after the LAST
+/// close — everything before it is chain-of-thought, interleaved or not.
+///
+/// When no close exists at all, an unclosed `<think>` swallows the
+/// remainder — nothing after it is part of the answer (keep the legacy
+/// truncate-at-first-open stance rather than parse CoT as the answer).
+fn strip_reasoning_blocks(response: &str) -> (String, bool) {
+    let had_reasoning = response.contains("<think>") || response.contains("</think>");
+    if !had_reasoning {
+        return (response.to_string(), false);
+    }
+    match response.rfind("</think>") {
+        Some(close) => (response[close + "</think>".len()..].to_string(), true),
+        None => {
+            // Unclosed reasoning only: no answer boundary was ever signalled.
+            let mut out = response.to_string();
+            if let Some(start) = out.find("<think>") {
                 out.truncate(start);
-                break;
             }
+            (out, true)
         }
     }
-    out
+}
+
+/// Find the last complete top-level JSON value (object or array) in free
+/// text, via brace-depth scanning that is string/escape aware. Returns
+/// `None` when no balanced group exists — e.g. the value itself was
+/// truncated by an output-token cap, in which case the answer is simply
+/// not there and must not be fabricated.
+fn extract_last_balanced_json(text: &str) -> Option<&str> {
+    let mut depth: i64 = 0;
+    let mut start: Option<usize> = None;
+    let mut last: Option<(usize, usize)> = None;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, b) in text.bytes().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' | b'[' => {
+                if depth == 0 {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
+            b'}' | b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(s) = start.take() {
+                        last = Some((s, i));
+                    }
+                } else if depth < 0 {
+                    // Stray closer (prose like ":-]"); resync.
+                    depth = 0;
+                }
+            }
+            _ => {}
+        }
+    }
+    last.map(|(s, e)| &text[s..=e])
 }
 
 /// Get a human-readable type name for a JSON value.
@@ -601,9 +674,59 @@ mod tests {
 
     #[test]
     fn test_strip_reasoning_blocks_plain_passthrough() {
+        let (out, had_reasoning) = super::strip_reasoning_blocks("no tags here");
+        assert_eq!(out, "no tags here");
+        assert!(!had_reasoning);
+    }
+
+    #[test]
+    fn test_strip_reasoning_blocks_answer_after_last_close() {
+        // l2-deep-analysis shape (2026-08-22 wire fixture): several unclosed
+        // opens, one close near the end, answer after it.
+        let response = "intro <think>a <think>b <think>c </think>\nanswer";
+        let (out, had_reasoning) = super::strip_reasoning_blocks(response);
+        assert_eq!(out, "\nanswer");
+        assert!(had_reasoning);
+    }
+
+    #[test]
+    fn test_validate_response_prose_after_think_close_rescued() {
+        // l2 direct shape: prose glued between </think> and the JSON answer.
+        let response = "<think>planning {\"draft\": 1}</think>\n\n\
+                        I have all the data. The answer:\n{\"primes\":[2,3,5]}";
+        let value = primes_schema().validate_response(response).unwrap();
+        assert_eq!(value["primes"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_validate_response_truncated_json_still_invalid() {
+        // finish_reason=length mid-string (l2 wire fixture): the JSON is
+        // incomplete at the source; extraction must not fabricate a tail.
+        let response = "<think>planning</think> {\"primes\":[2,";
+        let result = primes_schema().validate_response(response);
+        assert!(matches!(result, Err(StructuredOutputError::InvalidJson(_))));
+    }
+
+    #[test]
+    fn test_extract_last_balanced_json_last_group_wins() {
+        let text = "Sure: {\"a\":1} then more prose [\"x\",\"y\"] trailing";
         assert_eq!(
-            super::strip_reasoning_blocks("no tags here"),
-            "no tags here"
+            super::extract_last_balanced_json(text),
+            Some("[\"x\",\"y\"]")
         );
+    }
+
+    #[test]
+    fn test_extract_last_balanced_json_nested_and_strings() {
+        assert_eq!(
+            super::extract_last_balanced_json(r#"{"k": "brace } inside", "n": [1,2]}"#),
+            Some(r#"{"k": "brace } inside", "n": [1,2]}"#)
+        );
+    }
+
+    #[test]
+    fn test_extract_last_balanced_json_truncated_returns_none() {
+        assert_eq!(super::extract_last_balanced_json("{\"a\": [1,"), None);
+        assert_eq!(super::extract_last_balanced_json("no json at all"), None);
     }
 }
