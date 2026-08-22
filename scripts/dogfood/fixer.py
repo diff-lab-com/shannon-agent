@@ -57,22 +57,31 @@ def prepare_worktree(iter_id: str, worktrees_dir: Path) -> Path:
     return wt
 
 
-def _prepare_worktree_js_deps(wt: Path) -> None:
-    """Install desktop/ui node_modules so `just ci` (tsc lint) can run.
+def _install_js_deps(pkg_dir: Path, label: str) -> None:
+    if (pkg_dir / "node_modules").exists():
+        return
+    logging.info("fixer: installing %s deps in worktree", label)
+    r = run_cmd(["pnpm", "install", "--prefer-offline"], cwd=pkg_dir, timeout_s=600)
+    if r.returncode != 0:
+        logging.warning("fixer: pnpm install failed in %s (gate may fail on lint): %s",
+                        label, (r.stderr or r.stdout)[-300:])
 
-    A fresh git worktree does not carry gitignored node_modules, and the
-    gate's `just ci` fails at `desktop/ui lint` without them (iter-01).
+
+def _prepare_worktree_js_deps(wt: Path) -> None:
+    """Install JS deps so `just ci` (tsc lint steps) can run in the worktree.
+
+    A fresh git worktree does not carry gitignored node_modules. The lint
+    recipe typechecks BOTH desktop/ui and gateway with tsc; a missing
+    install fails the gate before any Rust check runs (desktop/ui: run
+    2026-08-22; gateway `tsc: not found`: run 2026-08-23T015039, gate
+    just_ci failed in 51s with the fixer's fmt+clippy already green).
     Best-effort: missing pnpm or a network failure only logs — the gate
     will surface the failure with its own diagnostics.
     """
-    ui = wt / "desktop" / "ui"
-    if not (ui / "package.json").exists() or (ui / "node_modules").exists():
-        return
-    logging.info("fixer: installing desktop/ui deps in worktree")
-    r = run_cmd(["pnpm", "install", "--prefer-offline"], cwd=ui, timeout_s=600)
-    if r.returncode != 0:
-        logging.warning("fixer: pnpm install failed (gate may fail on ui lint): %s",
-                        (r.stderr or r.stdout)[-300:])
+    for rel, label in (("desktop/ui", "desktop/ui"), ("gateway", "gateway")):
+        pkg = wt / rel
+        if (pkg / "package.json").exists():
+            _install_js_deps(pkg, label)
 
 
 def remove_worktree(wt: Path) -> None:
