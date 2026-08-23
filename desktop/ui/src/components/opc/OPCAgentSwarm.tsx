@@ -6,8 +6,8 @@ import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
+import { Modal } from '@/components/ui/modal'
 import { useSessions } from '@/context/SessionContext'
-import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import type { AgentInfo, TaskItem } from '@/types'
 
@@ -237,9 +237,6 @@ function SpawnAgentModal({ open, onClose }: { open: boolean; onClose: () => void
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  const containerRef = useRef<HTMLDivElement>(null)
-  useModalFocus(open, containerRef)
-
   const reset = () => {
     setName(''); setModel(''); setPrompt('')
     setTools({ bash: true, read: true, write: true })
@@ -265,21 +262,15 @@ function SpawnAgentModal({ open, onClose }: { open: boolean; onClose: () => void
     }
   }
 
-  if (!open) return null
-
   return (
-    <div
-      ref={containerRef}
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm p-md"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="spawn-agent-title"
-      onClick={onClose}
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="md"
+      // Custom header (icon + close button) is rendered inside children below.
+      showCloseButton={false}
     >
-      <div
-        className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/30 w-full max-w-md p-xl space-y-md"
-        onClick={e => e.stopPropagation()}
-      >
+      <div className="p-xl space-y-md">
         <div className="flex items-center justify-between">
           <h3 id="spawn-agent-title" className="font-headline-md text-[20px] font-bold flex items-center gap-2">
             <span className="material-symbols-outlined text-primary">smart_toy</span>
@@ -368,7 +359,7 @@ function SpawnAgentModal({ open, onClose }: { open: boolean; onClose: () => void
           </Button>
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -387,9 +378,6 @@ function ReassignModal({
   const [pick, setPick] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  const containerRef = useRef<HTMLDivElement>(null)
-  useModalFocus(!!target, containerRef)
 
   useEffect(() => {
     if (target) { setPick(''); setError(null) }
@@ -417,18 +405,14 @@ function ReassignModal({
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm p-md"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="reassign-title"
-      onClick={onClose}
+    <Modal
+      open={!!target}
+      onClose={onClose}
+      size="md"
+      // Custom header (icon + close button) is rendered inside children below.
+      showCloseButton={false}
     >
-      <div
-        className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/30 w-full max-w-md p-xl space-y-md"
-        onClick={e => e.stopPropagation()}
-      >
+      <div className="p-xl space-y-md">
         <div className="flex items-center justify-between">
           <h3 id="reassign-title" className="font-headline-md text-[20px] font-bold flex items-center gap-2">
             <span className="material-symbols-outlined text-primary">swap_horiz</span>
@@ -487,6 +471,6 @@ function ReassignModal({
           </Button>
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }
