@@ -3,8 +3,8 @@ import { useIntl, type PrimitiveType } from 'react-intl';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { useCatalog } from '@/context/CatalogContext';
-import { useModalFocus } from '@/hooks/useModalFocus';
 import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates';
 import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal';
 import { useSidebar } from './Layout';
@@ -43,9 +43,6 @@ export function Header() {
   const [modelOpen, setModelOpen] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);
   const [modelFocus, setModelFocus] = useState(-1);
-
-  const permissionRef = useRef<HTMLDivElement>(null);
-  useModalFocus(!!permissionRequest, permissionRef);
 
   const { candidates, refetch } = usePendingSkillCandidates();
   const [approvalOpen, setApprovalOpen] = useState(false);
@@ -170,10 +167,17 @@ export function Header() {
         </div>
       </header>
 
-      {/* Permission Modal */}
+      {/* Permission Modal — alertdialog because it demands immediate attention */}
       {permissionRequest && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 backdrop-blur-sm" onKeyDown={e => { if (e.key === 'Escape') respondPermission(permissionRequest.request_id, false) }}>
-          <div ref={permissionRef} className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/20 p-xl max-w-md w-full mx-md" role="dialog" aria-modal="true">
+      <Modal
+        open
+        onClose={() => respondPermission(permissionRequest.request_id, false)}
+        size="md"
+        role="alertdialog"
+        showCloseButton={false}
+        className="bg-black/30 backdrop-blur-sm"
+      >
+        <div className="p-xl">
             <div className="flex items-center gap-md mb-lg">
               <div className="h-10 w-10 rounded-full bg-tertiary-container flex items-center justify-center">
                 <span className="material-symbols-outlined text-on-tertiary-container">shield</span>
@@ -211,7 +215,7 @@ export function Header() {
               </Button>
             </div>
           </div>
-        </div>
+      </Modal>
       )}
 
       <SkillApprovalModal
