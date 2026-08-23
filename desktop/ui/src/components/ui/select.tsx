@@ -2,7 +2,6 @@ import * as React from "react"
 import { Select as SelectPrimitive } from "@base-ui/react/select"
 
 import { cn } from "@/lib/utils"
-import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
 const Select = SelectPrimitive.Root
 
@@ -47,7 +46,12 @@ function SelectTrigger({
       {children}
       <SelectPrimitive.Icon
         render={
-          <ChevronDownIcon className="pointer-events-none size-4 text-muted-foreground" />
+          <span
+            className="material-symbols-outlined icon-sm pointer-events-none text-muted-foreground"
+            aria-hidden="true"
+          >
+            expand_more
+          </span>
         }
       />
     </SelectPrimitive.Trigger>
@@ -128,7 +132,12 @@ function SelectItem({
           <span className="pointer-events-none absolute right-2 flex size-4 items-center justify-center" />
         }
       >
-        <CheckIcon className="pointer-events-none" />
+        <span
+          className="material-symbols-outlined icon-sm pointer-events-none"
+          aria-hidden="true"
+        >
+          check
+        </span>
       </SelectPrimitive.ItemIndicator>
     </SelectPrimitive.Item>
   )
@@ -160,8 +169,9 @@ function SelectScrollUpButton({
       )}
       {...props}
     >
-      <ChevronUpIcon
-      />
+      <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+        expand_less
+      </span>
     </SelectPrimitive.ScrollUpArrow>
   )
 }
@@ -179,8 +189,9 @@ function SelectScrollDownButton({
       )}
       {...props}
     >
-      <ChevronDownIcon
-      />
+      <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+        expand_more
+      </span>
     </SelectPrimitive.ScrollDownArrow>
   )
 }
