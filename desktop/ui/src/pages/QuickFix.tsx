@@ -5,6 +5,7 @@
 
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
 import LspQuickFixPanel, {
   type LspQuickFixDiagnostic,
 } from '@/components/lsp/LspQuickFixPanel'
@@ -112,13 +113,13 @@ export default function QuickFix() {
           </select>
         </label>
 
-        <button
+        <Button
           type="submit"
           disabled={!canSubmit}
           className="self-start font-label-md bg-primary text-on-primary rounded-lg px-md py-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
         >
           {t('quickFix.askLSP')}
-        </button>
+        </Button>
       </form>
 
       {submitted ? (

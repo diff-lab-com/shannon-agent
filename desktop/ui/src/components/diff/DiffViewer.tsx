@@ -10,6 +10,7 @@
 
 import { Fragment, useMemo } from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
 import type { FileDiff } from '@/types'
 import { computeHunks, type HunkDecision } from '@/lib/diff-merge'
 import { highlightLines, resolveDiffLang } from '@/lib/diff-highlight'

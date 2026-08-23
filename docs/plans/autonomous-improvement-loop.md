@@ -410,6 +410,17 @@ P2-5 启用 L 段前定下的成本策略。核心原则:**回放(record/replay)
 | 2 | **校准先行**:首个 live L 任务跑完先读 ledger 的 in/out + cache_read 占比,再谈任何优化 | 2h 多轮任务是 provider prompt cache 的最佳命中形态,命中率 70%+ 时预算压力可能根本不存在(`just cache-stats` 可复核);粗估口径(冷缓存 0.5–2M/任务)偏悲观 |
 | 3 | **降频优先于回放替代**:若校准后仍有压力,lib.yaml 加 `l_cadence`(默认 3 = 每 3 迭代 1 次 live L,日常迭代 S+M) | tier 过滤机制现成、零新代码;代价仅毕业墙钟拉长(毕业本就需夜间无人值守,§10.5) |
 | 4 | **回放通道是 L fixture 的附加复用,不阻塞 P2-5、不进毕业口径**:① 本地回归套件(`replay_agent_*` 式,skip-on-drift);② 泄漏 bench(录制长会话全速回放 + P2-6 /proc 采样 → RSS/千事件斜率,分钟级零 token);③ 混沌注入(改写 fixture 注入 429/断流,确定性测限流恢复——P3 原计划,有 L fixture 即具备条件) | wire fixture 每任务已自动录制(runner 设 `SHANNON_RECORD_DIR`);事件驱动型泄漏随事件数不随墙钟,可压缩回放测——wall-clock 型(重连/心跳/hang/resume)只能 live |
+
+#### 校准结果(2026-08-22 首跑,artifacts/2026-08-22T231159+0800)
+
+- **cache_read 90.9%**(l1 92% / l2 90%;wire fixture 口径,25 请求合计 prompt 1.60M、cached 1.45M、plain 145K)→ 远超 70% 门槛,决策 3 的 l_cadence **不需要**,[S,M,L] 保持启用(commit 939aca2e)。
+- 首跑两 L 任务双 FAIL,但失败本身即产出——三个非注入真实 bug(见 §10.11):
+  1. **沙盒路径分裂**(l1 死因):Bash 在 Docker 沙盒内 cwd=`/workspace`,Read/Write 路径沙箱在宿主机解析 → `/workspace/src/*` No such file。模型世界观分裂,13 轮自救后放弃。
+  2. **token 计量只记末次请求**:engine 终态 in=51,768 vs wire 真实 682,947(13×)。三层预算闸门对 L 漏计 ~90%,修复前不可作为放行依据(wire fixture 对账是唯一可信口径)。
+  3. **`<think>` 泄漏到非 schema 路径**(l2 死因):final_text 以 `<think>` 开头(10 块),`--schema` JSON 提取在 column 1 失败——而工具目录 JSON 实际已完整生成。8a7aa290 只修了 schema 校验路径。
+- **fixer max_turns 40 不够修 P0 级引擎 bug**:两个 brief 都在 41 轮耗尽($2.77+$2.35,~26K out/个),零提交。后续:L 迭代 brief 需更高上限或拆分简报。
+- 附带发现:report.md 的 fix session tokens 显示 0+0(claude session.json 的 usage 在 `usage.` 嵌套层,提取字段错)——小 bug。
+- perf 通道 77 通过 0 回归;/proc 采样工作正常(l2 512 样本,peak RSS 48M 无泄漏信号)。
 | 5 | **gate 复跑 ×2 保持 live** | 修复改变请求体 → 旧录制匹配即漂移,回放验证不了修复本身(漂移语义是 skip 不是 fail) |
 
 已知约束(ADR 0003 Phase 1 实测教训):exact-match 回放对 CI 环境过脆,`replay_agent_*` 仅本地跑、CI 只跑结构校验;L 任务 git/glob/search 密集(volatile 型),帧匹配率按"大部分 skip"预期——回放通道定位是"白捡的回归信号",不是可依赖的门。

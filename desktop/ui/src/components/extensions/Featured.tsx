@@ -8,6 +8,8 @@ import {
   installMcpStdio,
   type FeaturedVendor,
 } from "@/lib/tauri-api";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 /**
  * Featured tab — curated list of verified MCP vendors Shannon ships with.
@@ -193,11 +195,14 @@ export default function Featured() {
                 )}
 
                 {!showTokenPrompt && (
-                  <button
+                  <Button
                     type="button"
                     onClick={() => handleConnect(vendor)}
                     disabled={isBusy}
-                    className={`w-full inline-flex items-center justify-center gap-xs px-md py-sm rounded-xl bg-gradient-to-r ${accent.button} text-white text-label-md font-bold shadow-sm hover:shadow-md hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:brightness-100 transition-all`}
+                    className={cn(
+                      "w-full px-md py-sm rounded-xl bg-gradient-to-r text-white text-label-md font-bold shadow-sm hover:shadow-md hover:brightness-110 disabled:cursor-not-allowed disabled:hover:brightness-100 transition-all",
+                      accent.button,
+                    )}
                   >
                     {isBusy ? (
                       <>
@@ -217,7 +222,7 @@ export default function Featured() {
                         {t('extensions.featured.install')}
                       </>
                     )}
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
@@ -297,22 +302,25 @@ function TokenPasteForm({
         disabled={disabled}
       />
       <div className="flex gap-xs">
-        <button
+        <Button
           type="button"
+          size="sm"
           onClick={() => token && onSubmit(token)}
           disabled={disabled || !token}
-          className="flex-1 px-sm py-xs rounded bg-primary text-on-primary text-label-xs font-bold disabled:opacity-50"
+          className="flex-1 rounded"
         >
           {t('extensions.featured.tokenSubmit')}
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
           type="button"
           onClick={onCancel}
           disabled={disabled}
-          className="px-sm py-xs rounded bg-surface-container-high text-on-surface text-label-xs font-bold"
+          className="rounded"
         >
           {t('extensions.featured.tokenCancel')}
-        </button>
+        </Button>
       </div>
     </div>
   );

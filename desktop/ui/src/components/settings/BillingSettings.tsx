@@ -9,6 +9,7 @@ import { useCatalog } from '@/context/CatalogContext'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { cn } from '@/lib/utils'
 import type { BillingPlan, CostRecord, BillingHistory } from '@/types'
 
 export default function BillingSettings() {
@@ -284,8 +285,8 @@ export default function BillingSettings() {
           <p className="font-body-sm text-[14px] text-on-surface-variant">{intl.formatMessage({ id: 'settings.billing.enterpriseCta' }, { team: t('settings.billing.enterpriseTeam') })}</p>
         </div>
         <div className="flex items-center justify-center gap-6">
-          <button className="font-label-sm text-[12px] text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer" onClick={() => setShowLegal(true)}>{t('settings.billing.legalTerms')}</button>
-          <button className="font-label-sm text-[12px] text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer" onClick={() => setShowLegal(true)}>{t('settings.billing.privacyPolicy')}</button>
+          <Button variant="link" className="font-label-sm text-[12px] text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer" onClick={() => setShowLegal(true)}>{t('settings.billing.legalTerms')}</Button>
+          <Button variant="link" className="font-label-sm text-[12px] text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer" onClick={() => setShowLegal(true)}>{t('settings.billing.privacyPolicy')}</Button>
         </div>
       </footer>
 
@@ -307,10 +308,10 @@ export default function BillingSettings() {
       <Modal open={showChangePlan} onClose={() => setShowChangePlan(false)} title={t('settings.billing.changePlanTitle')}>
         <div className="px-xl pb-xl pt-md space-y-md">
           {(['Free', 'Pro', 'Enterprise'] as const).map(p => (
-            <button key={p} disabled={changingPlan !== null} className={`w-full p-md rounded-xl border text-left cursor-pointer transition-all disabled:opacity-50 ${plan?.name?.toLowerCase() === p.toLowerCase() ? 'border-2 border-primary bg-primary/5' : 'border-outline-variant/30 hover:border-primary/50'}`} onClick={() => handleChangePlan(p)}>
+            <Button key={p} variant="outline" disabled={changingPlan !== null} className={cn('h-auto w-full p-md rounded-xl border text-left cursor-pointer transition-all disabled:opacity-50 whitespace-normal', plan?.name?.toLowerCase() === p.toLowerCase() ? 'border-2 border-primary bg-primary/5' : 'border-outline-variant/30 hover:border-primary/50')} onClick={() => handleChangePlan(p)}>
               <div className="font-label-md font-bold text-on-surface">{p}</div>
               <div className="font-label-sm text-on-surface-variant">{p === 'Free' ? t('settings.billing.planFreeDesc') : p === 'Pro' ? t('settings.billing.planProDesc') : t('settings.billing.planEnterpriseDesc')}</div>
-            </button>
+            </Button>
           ))}
         </div>
       </Modal>

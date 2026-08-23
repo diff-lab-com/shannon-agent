@@ -89,10 +89,10 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
 
   return (
     <>
-      <button
-        type="button"
+      <Button
+        variant="outline"
         onClick={handleClick}
-        className="group/att inline-flex items-center gap-xs px-sm py-xs bg-surface-container-low hover:bg-surface-container border border-outline-variant/30 rounded-lg text-on-surface-variant hover:text-primary transition-colors cursor-pointer"
+        className="group/att inline-flex items-center gap-xs px-sm py-xs h-auto bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-primary"
         title={attachment.path}
         aria-label={t('chat.message.attachment.open')}
       >
@@ -107,7 +107,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
           <span className="material-symbols-outlined text-[18px]">description</span>
         )}
         <span className="font-label-sm max-w-[160px] truncate">{attachment.name}</span>
-      </button>
+      </Button>
 
       <Modal
         open={open}
@@ -145,14 +145,14 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
             </Button>
           </div>
         )}
-        <button
-          type="button"
+        <Button
+          variant="ghost"
           onClick={() => setOpen(false)}
           aria-label={t('chat.message.attachment.close')}
           className="absolute top-md right-md text-on-surface-variant hover:text-on-surface bg-surface-container-lowest/80 rounded-full p-sm"
         >
           <span className="material-symbols-outlined">close</span>
-        </button>
+        </Button>
       </Modal>
     </>
   )
@@ -296,14 +296,15 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                       </span>
                     </div>
                     {uniquePaths.length > 1 && (
-                      <button
-                        type="button"
-                        className="shrink-0 flex items-center gap-xs px-sm py-xs rounded-md text-tertiary hover:bg-tertiary/10 font-label-sm transition-colors"
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="shrink-0 gap-xs px-sm py-xs text-tertiary hover:bg-tertiary/10"
                         onClick={() => onViewDiffMulti?.(uniquePaths)}
                       >
                         <span className="material-symbols-outlined icon-sm">open_in_new</span>
                         {t('chat.message.reviewAll')}
-                      </button>
+                      </Button>
                     )}
                   </div>
                 ) : null
@@ -390,15 +391,16 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
         <span className={`material-symbols-outlined icon-sm ${statusColor} ${toolCall.status === 'running' ? 'animate-spin' : ''}`}>{statusIcon}</span>
         <span className="font-label-md text-on-surface flex-1 truncate">{toolCall.tool_name}</span>
         {canDiff && (
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             aria-label={intl.formatMessage({ id: 'chat.message.diff.aria' }, { path: filePath })}
-            className="flex items-center gap-xs px-xs py-[2px] rounded-md text-tertiary hover:bg-tertiary-container/40 font-label-sm cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            className="gap-xs px-xs py-[2px] text-tertiary hover:bg-tertiary-container/40"
             onClick={(e) => { e.stopPropagation(); onViewDiff(filePath!) }}
           >
             <span className="material-symbols-outlined icon-sm">difference</span>
             {t('chat.message.diff')}
-          </button>
+          </Button>
         )}
         <span className="material-symbols-outlined icon-sm text-on-surface-variant" aria-hidden="true">{expanded ? 'expand_less' : 'expand_more'}</span>
       </ToolHeader>

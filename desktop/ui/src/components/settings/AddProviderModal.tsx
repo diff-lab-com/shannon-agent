@@ -196,15 +196,16 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
           <p className="font-label-sm text-on-surface-variant mb-xs">{t('settings.models.providers.quickFill')}</p>
           <div className="flex flex-wrap gap-xs">
             {QUICK_FILL.map(qf => (
-              <button
+              <Button
                 key={qf.id}
                 type="button"
+                variant="outline"
                 onClick={() => applyQuickFill(qf)}
                 className="inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low/40 hover:border-primary/40 hover:bg-primary/5 text-on-surface-variant hover:text-primary font-label-sm text-[12px] cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[14px]">{qf.icon}</span>
                 {qf.id === 'custom' ? t(qf.label) : qf.label}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
@@ -249,8 +250,9 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
               bare fields above are the 90% path; advanced is for users who
               need to tweak per-provider behavior. */}
           <div className="pt-xs">
-            <button
+            <Button
               type="button"
+              variant="ghost"
               onClick={() => setAdvancedOpen((v) => !v)}
               className="inline-flex items-center gap-xs font-label-sm text-on-surface-variant hover:text-primary cursor-pointer"
               aria-expanded={advancedOpen}
@@ -258,7 +260,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
             >
               <span className="material-symbols-outlined text-[18px]">{advancedOpen ? 'expand_less' : 'expand_more'}</span>
               {t('settings.models.providers.advanced')}
-            </button>
+            </Button>
             {advancedOpen ? (
               <div className="mt-sm space-y-md p-md rounded-lg border border-outline-variant/30 bg-surface-container-low/40">
                 <HeaderRowsEditor

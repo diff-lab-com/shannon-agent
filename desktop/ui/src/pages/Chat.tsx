@@ -410,15 +410,15 @@ export default function Chat() {
                       <HighlightText text={session.title || untitled} query={sessionSearch} />
                     </p>
                     <div className="flex items-center gap-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                      <button className="p-xs rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); togglePin(session.id) }} title={pinnedIds.has(session.id) ? t('chat.session.unpin') : t('chat.session.pin')} aria-pressed={pinnedIds.has(session.id)}>
+                      <Button variant="ghost" size="icon-xs" className="rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); togglePin(session.id) }} title={pinnedIds.has(session.id) ? t('chat.session.unpin') : t('chat.session.pin')} aria-pressed={pinnedIds.has(session.id)}>
                         <span className="material-symbols-outlined text-[14px]">{pinnedIds.has(session.id) ? 'push_pin' : 'keep'}</span>
-                      </button>
-                      <button className="p-xs rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); handleExport(session.id) }} title={t('chat.session.export')} aria-label={intl.formatMessage({ id: 'chat.session.export.aria' }, { title: session.title || untitled })}>
+                      </Button>
+                      <Button variant="ghost" size="icon-xs" className="rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); handleExport(session.id) }} title={t('chat.session.export')} aria-label={intl.formatMessage({ id: 'chat.session.export.aria' }, { title: session.title || untitled })}>
                         <span className="material-symbols-outlined text-[14px]">download</span>
-                      </button>
-                      <button className="p-xs rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); handlePrint(session.id) }} title={t('chat.session.print')} aria-label={intl.formatMessage({ id: 'chat.session.print.aria' }, { title: session.title || untitled })}>
+                      </Button>
+                      <Button variant="ghost" size="icon-xs" className="rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); handlePrint(session.id) }} title={t('chat.session.print')} aria-label={intl.formatMessage({ id: 'chat.session.print.aria' }, { title: session.title || untitled })}>
                         <span className="material-symbols-outlined text-[14px]">print</span>
-                      </button>
+                      </Button>
                     </div>
                   </div>
                   <p className="text-body-sm text-on-surface-variant opacity-70 truncate">
@@ -453,20 +453,22 @@ export default function Chat() {
                 {currentSession?.title || untitled || t('chat.empty.start')}
               </h2>
               {sessionWorkingDir && (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={handleChangeWorkingDir}
                   className="mt-[2px] flex items-center gap-xs text-label-sm text-on-surface-variant hover:text-primary transition-colors max-w-full"
                   title={sessionWorkingDir}
                 >
                   <span className="material-symbols-outlined text-[14px] opacity-70 shrink-0">folder</span>
                   <span className="truncate font-mono">{formatDirBreadcrumb(sessionWorkingDir)}</span>
-                </button>
+                </Button>
               )}
             </div>
           </div>
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={() => setContextPanelOpen(v => !v)}
             className="p-xs rounded-lg text-on-surface-variant hover:text-primary hover:bg-surface-container focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none shrink-0"
             title={t('chat.header.contextPanel.toggle')}
@@ -475,7 +477,7 @@ export default function Chat() {
             aria-pressed={contextPanelOpen}
           >
             <span className="material-symbols-outlined icon-md">{contextPanelOpen ? 'right_panel_close' : 'right_panel_open'}</span>
-          </button>
+          </Button>
         </header>
 
         {showApiKeyBanner && (
@@ -490,13 +492,13 @@ export default function Chat() {
               <p className="font-label-md text-on-surface">{t('chat.banner.apiKeyMissing.title')}</p>
               <p className="font-body-sm text-on-surface-variant mt-xs">{t('chat.banner.apiKeyMissing.body')}</p>
             </div>
-            <button
+            <Button
               type="button"
               onClick={() => navigate('/settings/models')}
               className="shannon-apikey-banner-cta shrink-0 px-md py-xs bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
             >
               {t('chat.banner.apiKeyMissing.cta')}
-            </button>
+            </Button>
           </Banner>
         )}
 
@@ -581,8 +583,9 @@ export default function Chat() {
               />
             </div>
             <div className="mt-xs flex items-center justify-between gap-md px-sm text-label-sm text-on-surface-variant">
-              <button
+              <Button
                 type="button"
+                variant="ghost"
                 onClick={handleChangeWorkingDir}
                 disabled={!currentSessionId}
                 className="flex items-center gap-xs min-w-0 hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -593,7 +596,7 @@ export default function Chat() {
                 <span className="truncate font-mono">
                   {sessionWorkingDir ? formatDirBreadcrumb(sessionWorkingDir) : t('chat.input.footer.workingDir.unset')}
                 </span>
-              </button>
+              </Button>
               {status && (
                 <span
                   className="flex items-center gap-xs shrink-0 font-mono"

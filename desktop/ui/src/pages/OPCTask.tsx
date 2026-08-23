@@ -6,6 +6,7 @@ import { useIntl, type PrimitiveType } from 'react-intl'
 import { toast } from 'sonner'
 import AgentMessagesPanel from '@/components/tasks/AgentMessagesPanel'
 import AgentLoadPanel from '@/components/tasks/AgentLoadPanel'
+import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
@@ -156,27 +157,29 @@ export default function OPCTask() {
                 </p>
 
                 <div className="flex flex-col gap-sm">
-                  <button
+                  <Button
                     className="w-full px-md py-sm rounded-xl bg-primary text-on-primary font-label-md hover:brightness-110 transition-all flex items-center justify-center gap-sm"
                     onClick={() => setPendingAction('approve')}
                   >
                     <span className="material-symbols-outlined text-[18px]">check_circle</span>
                     {t('opcTask.approveFinalMerge')}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="destructive"
                     className="w-full px-md py-sm rounded-xl border border-error/30 text-error font-label-md hover:bg-error/10 transition-all flex items-center justify-center gap-sm"
                     onClick={() => setPendingAction('rollback')}
                   >
                     <span className="material-symbols-outlined text-[18px]">undo</span>
                     {t('opcTask.rollback')}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="outline"
                     className="w-full px-md py-sm rounded-xl border border-outline-variant/50 text-on-surface-variant font-label-md hover:bg-surface-container-high/60 transition-all flex items-center justify-center gap-sm"
                     onClick={() => setShowRevisionInput(showRevisionInput === taskId ? null : taskId)}
                   >
                     <span className="material-symbols-outlined text-[18px]">rate_review</span>
                     {t('opcTask.requestRevision')}
-                  </button>
+                  </Button>
 
                   {showRevisionInput === taskId && (
                     <div className="mt-sm flex flex-col gap-sm">
@@ -187,7 +190,7 @@ export default function OPCTask() {
                         value={revisionNote}
                         onChange={e => setRevisionNote(e.target.value)}
                       />
-                      <button
+                      <Button
                         className="self-end px-md py-xs rounded-lg bg-primary/10 text-primary font-label-sm hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         disabled={!revisionNote.trim()}
                         onClick={() => {
@@ -198,7 +201,7 @@ export default function OPCTask() {
                         }}
                       >
                         {t('opcTask.submitRevision')}
-                      </button>
+                      </Button>
                     </div>
                   )}
                 </div>

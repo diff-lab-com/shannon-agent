@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import * as api from "@/lib/tauri-api";
 import { isValidPackageName, safeErrorMessage } from "@/lib/packageValidation";
 import { Modal, ModalBody } from "@/components/ui/modal";
+import { Button } from "@/components/ui/button";
 import type { AddonKind, CatalogEntry } from "@/types";
 
 const KIND_ROUTE: Record<AddonKind, string> = {
@@ -243,14 +244,14 @@ export default function InstallDialog({
                 )}
               </div>
             </label>
-            <button
+            <Button
               type="button"
               onClick={handleOAuthConnect}
-              className="px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 disabled:opacity-60 inline-flex items-center justify-center gap-xs cursor-pointer"
+              className="px-md py-sm rounded-lg hover:bg-primary/90 disabled:opacity-60 cursor-pointer"
             >
               <span className="material-symbols-outlined icon-sm">link</span>
               <FormattedMessage id="extensions.installDialog.connect" />
-            </button>
+            </Button>
           </div>
         );
       }
@@ -284,11 +285,11 @@ export default function InstallDialog({
                 {t("extensions.installDialog.floatingBranchHelp")}
               </p>
             )}
-            <button
+            <Button
               type="button"
               onClick={handleGitHubInstall}
               disabled={installing}
-              className="px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 disabled:opacity-60 inline-flex items-center justify-center gap-xs cursor-pointer"
+              className="px-md py-sm rounded-lg hover:bg-primary/90 disabled:opacity-60 cursor-pointer"
             >
               <span className="material-symbols-outlined icon-sm">
                 {installing ? "progress_activity" : "download"}
@@ -298,7 +299,7 @@ export default function InstallDialog({
               ) : (
                 <FormattedMessage id="extensions.installDialog.install" />
               )}
-            </button>
+            </Button>
           </div>
         );
       }

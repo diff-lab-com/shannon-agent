@@ -274,15 +274,16 @@ export default function ChatInput({
         >
           <span className="material-symbols-outlined icon-sm shrink-0">route</span>
           <span className="font-label-sm truncate flex-1">{t('chat.input.planMode.banner')}</span>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-xs"
             onClick={handlePlanToggle}
             aria-label={t('chat.input.planMode.exit')}
             title={t('chat.input.planMode.exit')}
-            className="p-xs rounded hover:bg-tertiary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0"
+            className="rounded hover:bg-tertiary/20 shrink-0"
           >
             <span className="material-symbols-outlined icon-sm">close</span>
-          </button>
+          </Button>
         </div>
       )}
 
@@ -299,9 +300,9 @@ export default function ChatInput({
               <AttachmentChip key={path} path={path} onRemove={() => onAttach(attachedFiles.filter((_, idx) => idx !== i))} />
             ))}
             {attachedFiles.length > 1 && (
-              <button type="button" className="text-xs text-on-surface-variant hover:text-error cursor-pointer underline ml-xs" onClick={onDetachAll}>
+              <Button variant="link" size="sm" className="text-xs h-auto px-0 text-on-surface-variant hover:text-error ml-xs" onClick={onDetachAll}>
                 {t('chat.input.attach.detachAll')}
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -325,32 +326,34 @@ export default function ChatInput({
 
         <div className="flex items-center justify-between gap-xs px-sm py-xs border-t border-outline-variant/20">
           <div className="flex items-center gap-xs flex-wrap min-w-0">
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={handleChangeWorkingDir}
               disabled={!currentSessionId}
               aria-label={t('chat.input.wd.aria')}
               title={sessionWorkingDir || t('chat.input.wd.title')}
-              className={`group/wd flex items-center gap-xs px-sm py-xs rounded-full text-label-sm border transition-all shrink-0 ${
+              className={`group/wd h-auto gap-xs px-sm py-xs rounded-full text-label-sm shrink-0 ${
                 sessionWorkingDir
                   ? 'border-primary/30 bg-primary/5 text-on-surface hover:bg-primary/10 hover:border-primary/50'
                   : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
-              } disabled:opacity-50 disabled:cursor-not-allowed`}
+              }`}
             >
               <span className="material-symbols-outlined icon-sm">folder_open</span>
               <span className="max-w-[120px] truncate font-mono">
                 {workingDirBasename || t('chat.input.wd.title')}
               </span>
               <span className="material-symbols-outlined text-[14px] opacity-50 group-hover/wd:opacity-100 group-hover/wd:text-primary transition-opacity">change_folder</span>
-            </button>
+            </Button>
 
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={handlePlanToggle}
               aria-pressed={planModeActive}
               aria-label={t('chat.input.planMode.aria')}
               title={t('chat.input.planMode.tooltip')}
-              className={`flex items-center gap-xs px-sm py-xs rounded-full text-label-sm border transition-all shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
+              className={`h-auto gap-xs px-sm py-xs rounded-full text-label-sm shrink-0 ${
                 planModeActive
                   ? 'border-primary bg-primary/10 text-primary'
                   : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
@@ -358,7 +361,7 @@ export default function ChatInput({
             >
               <span className="material-symbols-outlined icon-sm">route</span>
               <span>{t('chat.input.planMode.label')}</span>
-            </button>
+            </Button>
 
             <Select value={currentMode} onValueChange={handleModeChange}>
               <SelectTrigger

@@ -7,6 +7,7 @@ import {
 } from "@/lib/tauri-api";
 import type { DataSourceResult, DataSourceItem } from "@/types";
 import LoadingState from "@/components/ui/loading-state";
+import { Button } from "@/components/ui/button";
 
 /**
  * Query panel for installed data sources.
@@ -64,14 +65,14 @@ export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAda
           <span className="material-symbols-outlined icon-2xl text-outline mb-md">database_off</span>
           <p className="mb-md">{t('extensions.datasources.query.noDataSourcesInstalled')}</p>
           {onSwitchToAdapters && (
-            <button
+            <Button
               type="button"
               onClick={onSwitchToAdapters}
-              className="inline-flex items-center gap-xs px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 cursor-pointer"
+              className="cursor-pointer"
             >
               <span className="material-symbols-outlined text-[18px]">addon</span>
               {t('extensions.datasources.query.installCta')}
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -123,13 +124,13 @@ export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAda
           />
         </div>
 
-        <button
+        <Button
           type="submit"
           disabled={!selectedSlug || !query || loading}
-          className="px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="disabled:cursor-not-allowed"
         >
           {loading ? t('extensions.datasources.query.searching') : t('extensions.datasources.query.searchButton')}
-        </button>
+        </Button>
       </form>
 
       {error && (

@@ -172,14 +172,14 @@ interface SessionRowProps {
 function SessionRow({ id, title, messageCount, active, onSelect }: SessionRowProps) {
   const intl = useIntl()
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
       onClick={() => onSelect(id)}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'group flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors',
+        'h-auto justify-start items-start whitespace-normal text-left rounded-md px-2 py-2',
         active
-          ? 'bg-primary/15 text-primary font-bold'
+          ? 'bg-primary/15 text-primary font-bold hover:bg-primary/15'
           : 'hover:bg-on-surface-variant/10 text-on-surface',
       )}
     >
@@ -201,7 +201,7 @@ function SessionRow({ id, title, messageCount, active, onSelect }: SessionRowPro
           )}
         </span>
       </span>
-    </button>
+    </Button>
   )
 }
 
