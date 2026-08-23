@@ -18,6 +18,7 @@ import type { TaskItem, BackgroundTaskInfo, UpdateTaskPayload } from '@/types'
 import * as api from '@/lib/tauri-api'
 import { useCatalog } from '@/context/CatalogContext'
 import { normalizePriority } from '@/lib/task-status'
+import { Button } from '@/components/ui/button'
 import { SidePanel, SidePanelBody, SidePanelCloseButton, SidePanelHeader, SidePanelTitle } from '@/components/ui/side-panel'
 
 type TaskLike = TaskItem | BackgroundTaskInfo
@@ -252,21 +253,17 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                   {(['serial', 'parallel'] as const).map(mode => {
                     const active = executionMode === mode
                     return (
-                      <button
+                      <Button
                         key={mode}
                         type="button"
                         role="radio"
+                        variant={active ? 'default' : 'outline'}
                         aria-checked={active}
                         onClick={() => setExecutionMode(mode)}
-                        className={
-                          'flex-1 px-md py-xs rounded-lg border font-label-md capitalize cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ' +
-                          (active
-                            ? 'bg-primary text-on-primary border-primary'
-                            : 'border-outline-variant/50 text-on-surface-variant hover:bg-surface-container')
-                        }
+                        className="flex-1 capitalize"
                       >
                         {mode}
-                      </button>
+                      </Button>
                     )
                   })}
                 </div>
@@ -304,7 +301,8 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
             <div className="flex justify-end gap-sm pt-md border-t border-outline-variant/20">
               {editing ? (
                 <>
-                  <button
+                  <Button
+                    variant="ghost"
                     onClick={() => {
                       setEditing(false)
                       // reset to current task values
@@ -315,26 +313,24 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                       setExecutionMode(task.execution_mode === 'parallel' ? 'parallel' : 'serial')
                     }}
                     disabled={saving}
-                    className="px-md py-xs rounded-lg text-on-surface-variant font-label-md hover:bg-surface-container cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50"
                   >
                     {t('tasks.taskDetailDrawer.cancel')}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     onClick={() => void handleSave()}
                     disabled={saving}
-                    className="px-md py-xs rounded-lg bg-primary text-on-primary font-label-md hover:brightness-110 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50"
                   >
                     {saving ? t('tasks.taskDetailDrawer.saving') : t('tasks.taskDetailDrawer.save')}
-                  </button>
+                  </Button>
                 </>
               ) : (
-                <button
+                <Button
+                  variant="secondary"
                   onClick={() => setEditing(true)}
-                  className="px-md py-xs rounded-lg bg-primary/10 text-primary font-label-md hover:bg-primary/20 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                 >
                   <span className="material-symbols-outlined icon-sm align-middle mr-xs">edit</span>
                   {t('tasks.taskDetailDrawer.edit')}
-                </button>
+                </Button>
               )}
             </div>
           )}

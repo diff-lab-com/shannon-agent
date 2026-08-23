@@ -16,6 +16,7 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
 import DiffViewer from '@/components/diff/DiffViewer'
 import FileDiffList, { type FileFilter } from '@/components/diff/FileDiffList'
@@ -235,14 +236,15 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
             </span>
           )}
         </div>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon-sm"
           aria-label={t('diff.dialog.close.aria')}
           onClick={onClose}
-          className="p-xs rounded-lg hover:bg-surface-container-high text-on-surface-variant cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          className="rounded-lg hover:bg-surface-container-high text-on-surface-variant"
         >
           <span className="material-symbols-outlined" aria-hidden="true">close</span>
-        </button>
+        </Button>
       </header>
 
       <div className="flex-1 flex min-h-0">
@@ -269,28 +271,29 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
                 <span className="font-label-sm text-on-surface-variant">
                   {currentDecisions.size} / {currentHunks.length}
                 </span>
-                <button
-                  type="button"
+                <Button
+                  size="sm"
                   onClick={handleAcceptAll}
-                  className="px-md py-xs rounded-lg font-label-md bg-tertiary-container/40 text-tertiary hover:bg-tertiary-container/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                  className="h-auto px-md py-xs rounded-lg font-label-md bg-tertiary-container/40 text-tertiary hover:bg-tertiary-container/60"
                 >
                   {t('diff.review.acceptAll')}
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
+                  size="sm"
                   onClick={handleRejectAll}
-                  className="px-md py-xs rounded-lg font-label-md bg-error-container/40 text-error hover:bg-error-container/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                  className="h-auto px-md py-xs rounded-lg font-label-md bg-error-container/40 text-error hover:bg-error-container/60"
                 >
                   {t('diff.review.rejectAll')}
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
                   onClick={handleReset}
                   disabled={currentDecisions.size === 0}
-                  className="px-md py-xs rounded-lg font-label-md bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                  className="h-auto px-md py-xs rounded-lg font-label-md"
                 >
                   {t('diff.review.resetAll')}
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -327,19 +330,20 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
       </div>
 
       <footer className="flex items-center justify-end gap-sm px-lg py-md border-t border-outline-variant/30 bg-surface-container-low">
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={onClose}
           disabled={applying}
-          className="px-md py-xs rounded-lg font-label-md bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          className="h-auto px-md py-xs rounded-lg font-label-md"
         >
           {t('diff.dialog.cancel')}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          size="sm"
           onClick={handleApplyAll}
           disabled={applying || filesWithAccepts.length === 0}
-          className="px-md py-xs rounded-lg font-label-md bg-primary text-on-primary hover:bg-primary/90 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          className="h-auto px-md py-xs rounded-lg font-label-md bg-primary text-on-primary hover:bg-primary/90"
           aria-label={t('diff.dialog.apply.aria')}
         >
           {applying ? (
@@ -350,7 +354,7 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
           ) : (
             t('diff.multi.applyAll', { count: filesWithAccepts.length })
           )}
-        </button>
+        </Button>
       </footer>
     </Modal>
   )

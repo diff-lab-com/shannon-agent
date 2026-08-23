@@ -142,16 +142,18 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
     <div className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="font-body-lg font-bold text-on-surface">{t('tasks.scheduleForm.title')}</h3>
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           type="button"
-          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs gap-1"
           onClick={() => setShowPolicy(!showPolicy)}
           aria-expanded={showPolicy}
           aria-controls="schedule-policy"
         >
           <span className="material-symbols-outlined text-[14px]">{showPolicy ? 'remove' : 'settings'}</span>
           {showPolicy ? t('tasks.scheduleForm.hidePolicy') : t('tasks.scheduleForm.policyOptions')}
-        </button>
+        </Button>
       </div>
 
       <ScheduleTemplates onApply={applyTemplate} />
@@ -173,14 +175,14 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); tryParseNl() } }}
             className="flex-1 bg-surface-container-lowest rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
-          <button
+          <Button
             type="button"
             onClick={tryParseNl}
             disabled={!nlInput.trim()}
-            className="px-md py-sm rounded-lg border border-primary/40 bg-primary text-on-primary font-label-md text-[12px] hover:bg-primary/90 disabled:opacity-40 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            className="px-md py-sm rounded-lg font-label-md text-[12px] hover:bg-primary/90"
           >
             {t('tasks.scheduleForm.parse')}
-          </button>
+          </Button>
         </div>
         {nlError ? (
           <div className="font-label-sm text-[11px] text-error flex items-center gap-xs">
@@ -223,15 +225,16 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
           {TRIGGER_OPTIONS.map(opt => {
             const selected = triggerType === opt.value
             return (
-              <button
+              <Button
                 key={opt.value}
+                variant="outline"
                 type="button"
                 role="radio"
                 aria-checked={selected}
                 onClick={() => setTriggerType(opt.value)}
-                className={`flex flex-col items-start gap-xs p-sm rounded-lg border text-left cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
+                className={`h-auto flex-col items-start gap-xs p-sm rounded-lg text-left whitespace-normal ${
                   selected
-                    ? 'border-primary bg-primary/10 text-on-surface'
+                    ? 'border-primary bg-primary/10 text-on-surface hover:bg-primary/10'
                     : 'border-outline-variant/30 bg-surface-container-low text-on-surface-variant hover:bg-surface-container-low/60'
                 }`}
               >
@@ -240,7 +243,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
                   <span className="font-label-md font-bold">{opt.label}</span>
                 </span>
                 <span className="font-label-sm text-[11px] text-on-surface-variant">{opt.hint}</span>
-              </button>
+              </Button>
             )
           })}
         </div>

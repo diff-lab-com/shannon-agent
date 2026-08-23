@@ -184,11 +184,11 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
                     {renderHeader && hunkId !== null && (
                       <tr className={decisionHeaderStyle(decision)}>
                         <td colSpan={4} className="px-md py-xs">
-                          <button
-                            type="button"
+                          <Button
+                            variant="ghost"
                             onClick={() => onToggleHunk?.(hunkId)}
                             disabled={!onToggleHunk}
-                            className="flex items-center gap-sm w-full text-left cursor-pointer disabled:cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded"
+                            className="justify-start gap-sm w-full text-left cursor-pointer disabled:cursor-default h-auto"
                             aria-label={intl.formatMessage(
                               { id: 'diff.review.hunk.aria' },
                               { state: stateLabel(decision) },
@@ -201,7 +201,7 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
                             <span className="font-label-sm opacity-60 ml-auto">
                               {hunks.find(h => h.id === hunkId)?.lines.length ?? 0} lines
                             </span>
-                          </button>
+                          </Button>
                         </td>
                       </tr>
                     )}

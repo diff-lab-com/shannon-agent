@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import EmptyState from '@/components/ui/empty-state'
 import { ListSkeleton } from '@/components/SkeletonLoader'
+import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
 import type { AgentMessageEntry } from '@/types'
 
@@ -134,14 +135,15 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
             />
             {t('tasks.agentMessagesPanel.autoRefresh')}
           </label>
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={() => void reload()}
             disabled={loading}
             aria-label={t('tasks.agentMessagesPanel.reloadAria')}
-            className="p-xs rounded-lg hover:bg-surface-container text-on-surface-variant cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50"
           >
             <span className="material-symbols-outlined text-[18px]">refresh</span>
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -193,20 +195,22 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
             className="px-md py-sm rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface resize-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
           <div className="flex justify-end gap-sm">
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setContent('')}
-              className="px-md py-xs rounded-lg text-on-surface-variant font-label-md hover:bg-surface-container cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
               disabled={injecting}
             >
               {t('tasks.agentMessagesPanel.clear')}
-            </button>
-            <button
+            </Button>
+            <Button
+              size="sm"
               onClick={() => void handleInject()}
               disabled={injecting || !content.trim()}
-              className="px-md py-xs rounded-lg bg-primary text-on-primary font-label-md hover:brightness-110 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="disabled:cursor-not-allowed"
             >
               {injecting ? t('tasks.agentMessagesPanel.sending') : t('tasks.agentMessagesPanel.send')}
-            </button>
+            </Button>
           </div>
         </div>
       </details>

@@ -117,15 +117,16 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
       <div className="flex items-center gap-3">
         <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant">{intl.formatMessage({ id: 'opc.agentSwarm.activeAgents' })}</h3>
         <span className="bg-secondary text-on-secondary text-[11px] font-bold px-2 py-0.5 rounded-full">{agents.length} {intl.formatMessage({ id: 'opc.agentSwarm.active' })}</span>
-        <button
-          type="button"
-          className="ml-auto flex items-center gap-1 text-[11px] font-bold text-primary hover:bg-primary/10 rounded-md px-2 py-1 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto h-auto gap-1 text-[11px] font-bold text-primary hover:bg-primary/10 rounded-md px-2 py-1"
           onClick={() => setSpawnOpen(true)}
           aria-label={intl.formatMessage({ id: 'opc.agentSwarm.spawnAgent.aria' })}
         >
           <span className="material-symbols-outlined text-[14px]">add_circle</span>
           {intl.formatMessage({ id: 'opc.agentSwarm.spawn' })}
-        </button>
+        </Button>
       </div>
 
       {agents.length === 0 ? (
@@ -164,16 +165,17 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                   </div>
                   <div className="flex items-center gap-1">
                     <span className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-tertiary animate-pulse' : 'bg-outline-variant'}`} />
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
                       aria-label={intl.formatMessage({ id: 'opc.agentSwarm.actions.name' }, { name: agent.name })}
                       aria-haspopup="menu"
                       aria-expanded={isMenuOpen}
-                      className="w-6 h-6 flex items-center justify-center rounded text-on-surface-variant hover:bg-surface-container-high/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 cursor-pointer"
+                      className="rounded text-on-surface-variant hover:bg-surface-container-high/60"
                       onClick={e => { e.stopPropagation(); setOpenMenuId(isMenuOpen ? null : agent.id) }}
                     >
                       <span className="material-symbols-outlined icon-sm">more_vert</span>
-                    </button>
+                    </Button>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -197,18 +199,18 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                     className="absolute right-2 top-12 z-50 w-40 bg-surface-container-lowest border border-outline-variant/30 rounded-lg shadow-lg py-1 text-on-surface"
                     onClick={e => e.stopPropagation()}
                   >
-                    <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handleStopAgent(agent.id, agent.name)}>
+                    <Button variant="ghost" size="sm" role="menuitem" className="w-full justify-start h-auto px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 gap-2" onClick={() => handleStopAgent(agent.id, agent.name)}>
                       <span className="material-symbols-outlined text-[14px] text-error">stop_circle</span> {intl.formatMessage({ id: 'opc.agentSwarm.actions.stop' })}
-                    </button>
-                    <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handlePauseAgent(agent.name)}>
+                    </Button>
+                    <Button variant="ghost" size="sm" role="menuitem" className="w-full justify-start h-auto px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 gap-2" onClick={() => handlePauseAgent(agent.name)}>
                       <span className="material-symbols-outlined text-[14px]">pause_circle</span> {intl.formatMessage({ id: 'opc.agentSwarm.actions.pause' })}
-                    </button>
-                    <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handleViewLogs(agent.id, agent.session_id)}>
+                    </Button>
+                    <Button variant="ghost" size="sm" role="menuitem" className="w-full justify-start h-auto px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 gap-2" onClick={() => handleViewLogs(agent.id, agent.session_id)}>
                       <span className="material-symbols-outlined text-[14px]">description</span> {intl.formatMessage({ id: 'opc.agentSwarm.actions.viewLogs' })}
-                    </button>
-                    <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handleReassignOpen({ id: agent.id, name: agent.name })}>
+                    </Button>
+                    <Button variant="ghost" size="sm" role="menuitem" className="w-full justify-start h-auto px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 gap-2" onClick={() => handleReassignOpen({ id: agent.id, name: agent.name })}>
                       <span className="material-symbols-outlined text-[14px]">swap_horiz</span> {intl.formatMessage({ id: 'opc.agentSwarm.actions.reassign' })}
-                    </button>
+                    </Button>
                   </div>
                 ) : null}
               </div>
@@ -276,14 +278,15 @@ function SpawnAgentModal({ open, onClose }: { open: boolean; onClose: () => void
             <span className="material-symbols-outlined text-primary">smart_toy</span>
             {intl.formatMessage({ id: 'opc.agentSwarm.spawnNewAgent' })}
           </h3>
-          <button
-            type="button"
-            className="text-on-surface-variant hover:text-on-surface cursor-pointer"
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-on-surface-variant hover:text-on-surface"
             onClick={onClose}
             aria-label={intl.formatMessage({ id: 'opc.agentSwarm.spawnAgent.close.aria' })}
           >
             <span className="material-symbols-outlined">close</span>
-          </button>
+          </Button>
         </div>
 
         <div className="space-y-sm">
@@ -418,14 +421,15 @@ function ReassignModal({
             <span className="material-symbols-outlined text-primary">swap_horiz</span>
             {intl.formatMessage({ id: 'opc.agentSwarm.reassign.title' })}
           </h3>
-          <button
-            type="button"
-            className="text-on-surface-variant hover:text-on-surface cursor-pointer"
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-on-surface-variant hover:text-on-surface"
             onClick={onClose}
             aria-label={intl.formatMessage({ id: 'opc.agentSwarm.reassign.close.aria' })}
           >
             <span className="material-symbols-outlined">close</span>
-          </button>
+          </Button>
         </div>
         <p className="font-body-md text-on-surface-variant">
           {intl.formatMessage({ id: 'opc.agentSwarm.reassign.moveOff' }, {

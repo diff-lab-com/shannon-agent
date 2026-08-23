@@ -14,6 +14,7 @@
 
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
 
 export type RoutingKind = 'email' | 'notification' | 'log'
 
@@ -87,14 +88,16 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
                 <span className="font-label-md text-on-surface flex-1 truncate">
                   {kind === 'email' ? `${kind}: ${target}` : opt?.label ?? kind}
                 </span>
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
                   type="button"
                   aria-label={intl.formatMessage({ id: 'tasks.resultRoutingEditor.removeAria' }, { entry })}
-                  className="text-on-surface-variant hover:text-error cursor-pointer p-xs rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                  className="text-on-surface-variant hover:text-error p-xs rounded"
                   onClick={() => removeChannel(entry)}
                 >
                   <span className="material-symbols-outlined text-[14px]">close</span>
-                </button>
+                </Button>
               </li>
             )
           })}
@@ -126,14 +129,14 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
             className="flex-1 bg-surface-container-low rounded-md border border-outline-variant/30 px-sm py-xs font-label-md focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
         ) : null}
-        <button
+        <Button
           type="button"
-          className="px-md py-xs bg-primary text-on-primary rounded-md font-label-md cursor-pointer disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          className="px-md py-xs rounded-md font-label-md"
           onClick={addChannel}
           disabled={pendingKind !== 'notification' && pendingKind !== 'log' && !pendingTarget.trim()}
         >
           {t('tasks.resultRoutingEditor.add')}
-        </button>
+        </Button>
       </div>
     </div>
   )

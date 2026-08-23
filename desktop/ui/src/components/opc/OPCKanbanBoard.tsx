@@ -140,12 +140,14 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
 
       {Object.keys(overrides).length > 0 ? (
         <div className="mt-sm flex justify-end">
-          <button
-            className="text-label-sm text-on-surface-variant hover:text-primary cursor-pointer underline"
+          <Button
+            variant="link"
+            size="sm"
+            className="text-label-sm h-auto px-0 text-on-surface-variant hover:text-primary underline"
             onClick={() => { setOverrides({}); void refreshTasks() }}
           >
             {t('opc.kanban.resetOverrides')}
-          </button>
+          </Button>
         </div>
       ) : null}
     </div>
