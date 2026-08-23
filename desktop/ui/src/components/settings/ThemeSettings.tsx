@@ -1,4 +1,6 @@
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { useTheme } from '@/context/ThemeContext'
 
 export default function ThemeSettings() {
@@ -26,14 +28,16 @@ export default function ThemeSettings() {
           <h3 className="font-headline-md text-headline-md mb-md">{t('settings.theme.themeLabel')}</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
             {themes.map(opt => (
-              <button
+              <Button
                 key={opt.id}
+                variant="outline"
                 onClick={() => setTheme(opt.id)}
-                className={`cursor-pointer p-md rounded-xl border-2 transition-all text-left ${
+                className={cn(
+                  'h-auto cursor-pointer p-md rounded-xl border-2 transition-all text-left whitespace-normal',
                   theme === opt.id
                     ? 'border-primary bg-primary-fixed/20 shadow-sm'
-                    : 'border-outline-variant/30 hover:border-primary/50'
-                }`}
+                    : 'border-outline-variant/30 hover:border-primary/50',
+                )}
               >
                 <div className="aspect-video rounded-md mb-sm border border-outline-variant/20 overflow-hidden bg-background p-xs space-y-xs">
                   <div className="flex items-center gap-xs mb-xs">
@@ -57,11 +61,11 @@ export default function ThemeSettings() {
                     </div>
                   </div>
                 </div>
-                <p className={`text-center font-label-md ${theme === opt.id ? 'text-primary font-bold' : 'text-on-surface'}`}>
+                <p className={cn('text-center font-label-md', theme === opt.id ? 'text-primary font-bold' : 'text-on-surface')}>
                   {opt.id === 'system' && <span className="material-symbols-outlined text-[14px] align-middle mr-xs">monitor</span>}
                   {opt.label}
                 </p>
-              </button>
+              </Button>
             ))}
           </div>
         </section>
@@ -73,17 +77,19 @@ export default function ThemeSettings() {
 
           <div className="flex gap-md mb-lg">
             {fontSizes.map(size => (
-              <button
+              <Button
                 key={size.value}
+                variant="outline"
                 onClick={() => setFontScale(size.value)}
-                className={`flex-1 py-md px-sm rounded-lg border-2 transition-all font-label-md ${
+                className={cn(
+                  'flex-1 py-md px-sm rounded-lg border-2 transition-all font-label-md',
                   Math.abs(fontScale - size.value) < 0.01
                     ? 'border-primary bg-primary-fixed/30 shadow-sm'
-                    : 'border-outline-variant/30 hover:border-primary/50'
-                }`}
+                    : 'border-outline-variant/30 hover:border-primary/50',
+                )}
               >
                 {size.label}
-              </button>
+              </Button>
             ))}
           </div>
 

@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
+import { cn } from '@/lib/utils';
 import { useCatalog } from '@/context/CatalogContext';
 import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates';
 import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal';
@@ -131,17 +132,21 @@ export function Header() {
                 else if (e.key === 'Escape') { setModelOpen(false) }
               }}>
                 {models.map((m, i) => (
-                  <button
+                  <Button
                     key={m.id}
+                    variant="ghost"
                     role="option"
                     aria-selected={m.id === status?.model}
-                    className={`w-full text-left px-md py-sm flex items-center justify-between transition-colors ${i === modelFocus ? 'bg-primary/10 text-primary' : m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5'}`}
+                    className={cn(
+                      'w-full justify-between px-md py-sm h-auto rounded-none',
+                      i === modelFocus ? 'bg-primary/10 text-primary' : m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5'
+                    )}
                     onClick={() => handleModelSwitch(m.id)}
                     onMouseEnter={() => setModelFocus(i)}
                   >
                     <span className="font-label-md truncate">{m.name}</span>
                     <span className="text-label-sm text-on-surface-variant">{m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : ''}</span>
-                  </button>
+                  </Button>
                 ))}
               </div>
             )}

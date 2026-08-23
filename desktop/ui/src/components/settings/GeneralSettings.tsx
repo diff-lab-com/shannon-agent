@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { useCatalog } from '@/context/CatalogContext'
 import { useI18n, SUPPORTED_LOCALES, type Locale } from '@/i18n'
 import { useNotification } from '@/hooks/useNotification'
@@ -106,14 +108,18 @@ export default function GeneralSettings() {
             />
             <div className="flex justify-between font-label-sm text-outline px-1">
               {APPROVAL_MODE_KEYS.map((m, i) => (
-                <button
+                <Button
                   key={m.value}
+                  variant="ghost"
                   onClick={() => handleModeChange(i)}
-                  className={`text-center cursor-pointer transition-colors ${i === approvalMode ? 'text-primary font-bold' : 'text-on-surface-variant hover:text-primary'}`}
+                  className={cn(
+                    'h-auto px-0 text-center cursor-pointer transition-colors whitespace-normal',
+                    i === approvalMode ? 'text-primary font-bold' : 'text-on-surface-variant hover:text-primary',
+                  )}
                 >
                   <p className="font-bold">{t(m.labelKey)}</p>
                   <p className="text-[10px]">{t(m.descriptionKey)}</p>
-                </button>
+                </Button>
               ))}
             </div>
           </div>
@@ -128,18 +134,20 @@ export default function GeneralSettings() {
           <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.language.help' })}</p>
           <div className="flex gap-sm">
             {SUPPORTED_LOCALES.map(opt => (
-              <button
+              <Button
                 key={opt.id}
+                variant={locale === opt.id ? 'default' : 'outline'}
                 onClick={() => handleLocaleChange(opt.id)}
                 aria-pressed={locale === opt.id}
-                className={`px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${
+                className={cn(
+                  'px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
                   locale === opt.id
                     ? 'bg-primary text-on-primary'
-                    : 'bg-surface-container-low text-on-surface hover:bg-surface-container-high border border-outline-variant/50'
-                }`}
+                    : 'bg-surface-container-low text-on-surface hover:bg-surface-container-high border border-outline-variant/50',
+                )}
               >
                 {intl.formatMessage({ id: opt.labelKey })}
-              </button>
+              </Button>
             ))}
           </div>
         </section>
@@ -170,7 +178,7 @@ export default function GeneralSettings() {
             <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.notifications.label' })}</h3>
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.notifications.help' })}</p>
-          <button
+          <Button
             onClick={handleTestNotification}
             disabled={testingNotification}
             className="px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all bg-primary text-on-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
@@ -178,7 +186,7 @@ export default function GeneralSettings() {
             {testingNotification
               ? intl.formatMessage({ id: 'settings.notifications.sending' })
               : intl.formatMessage({ id: 'settings.notifications.testButton' })}
-          </button>
+          </Button>
         </section>
 
         {/* Re-run setup wizard */}
@@ -188,12 +196,13 @@ export default function GeneralSettings() {
             <h3 className="font-headline-md text-headline-md">{t('settings.general.rerunWizard.title')}</h3>
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.general.rerunWizard.description')}</p>
-          <button
+          <Button
+            variant="outline"
             onClick={handleRerunWizard}
             className="px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
           >
             {t('settings.general.rerunWizard.button')}
-          </button>
+          </Button>
         </section>
       </div>
     </div>

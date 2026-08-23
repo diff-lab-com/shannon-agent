@@ -3,6 +3,7 @@ import { useIntl } from 'react-intl'
 import { Markdown } from '@/components/chat/Markdown'
 import { ToolCallDisplay } from '@/components/chat/MessageBubble'
 import { Reasoning } from '@/components/ai-elements'
+import { Button } from '@/components/ui/button'
 import type { ToolCall } from '@/types'
 
 interface StreamingResponseProps {
@@ -125,15 +126,16 @@ export default function StreamingResponse({
 
       {/* Smart jump-to-bottom — appears only when the user scrolled away. */}
       {showJumpToBottom && (
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => scrollToBottom(true)}
           aria-label={t('chat.streaming.jumpToBottom')}
-          className="absolute bottom-xs right-sm flex items-center gap-xs px-sm py-xs rounded-full bg-surface-container-high border border-outline-variant/30 text-on-surface-variant hover:text-primary shadow-e3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition-colors"
+          className="absolute bottom-xs right-sm gap-xs px-sm py-xs rounded-full bg-surface-container-high border-outline-variant/30 text-on-surface-variant hover:text-primary shadow-e3 h-auto"
         >
           <span className="material-symbols-outlined icon-sm">arrow_downward</span>
           <span className="text-label-sm">{t('chat.streaming.jumpToBottom')}</span>
-        </button>
+        </Button>
       )}
     </div>
   )

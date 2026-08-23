@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { toastError } from '@/lib/errorToast'
 import { open } from '@tauri-apps/plugin-dialog'
 import * as api from '@/lib/tauri-api'
@@ -302,13 +304,14 @@ export default function Welcome() {
           <span className="material-symbols-outlined text-primary">auto_awesome</span>
           <span className="font-headline-md text-on-surface">{intl.formatMessage({ id: 'app.name' })}</span>
         </div>
-        <button
+        <Button
+          variant="ghost"
           onClick={finish}
           className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded px-xs"
           aria-label={intl.formatMessage({ id: 'welcome.skipAria' })}
         >
           {intl.formatMessage({ id: 'welcome.skip' })}
-        </button>
+        </Button>
       </header>
 
       <main className="flex-1 flex items-center justify-center px-xl py-xl">
@@ -323,7 +326,7 @@ export default function Welcome() {
               footer={
                 <>
                   <span />
-                  <button
+                  <Button
                     onClick={() => {
                       // Default provider to the task recommendation when advancing.
                       setProvider(currentTask.recommendedProvider)
@@ -332,21 +335,23 @@ export default function Welcome() {
                     className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   >
                     {intl.formatMessage({ id: 'welcome.task.continue' })}
-                  </button>
+                  </Button>
                 </>
               }
             >
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm mb-lg">
                 {TASKS.map(t => (
-                  <button
+                  <Button
                     key={t.id}
+                    variant="outline"
                     onClick={() => setTask(t.id)}
                     aria-pressed={task === t.id}
-                    className={`text-left p-md rounded-xl border cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${
+                    className={cn(
+                      'h-auto text-left p-md rounded-xl border cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary whitespace-normal',
                       task === t.id
                         ? 'border-2 border-primary bg-primary-container/5'
-                        : 'border-outline-variant/50 hover:border-primary/50'
-                    }`}
+                        : 'border-outline-variant/50 hover:border-primary/50',
+                    )}
                   >
                     <div className="flex items-start gap-sm">
                       <span className="material-symbols-outlined text-primary shrink-0">{t.icon}</span>
@@ -354,9 +359,9 @@ export default function Welcome() {
                         <div className="font-headline-md text-on-surface">{intl.formatMessage({ id: t.labelKey })}</div>
                         <div className="font-body-sm text-on-surface-variant mt-xs">{intl.formatMessage({ id: t.blurbKey })}</div>
                       </div>
-                      <div className={`w-5 h-5 rounded-full border-2 shrink-0 ${task === t.id ? 'border-primary bg-primary' : 'border-outline-variant'}`} />
+                      <div className={cn('w-5 h-5 rounded-full border-2 shrink-0', task === t.id ? 'border-primary bg-primary' : 'border-outline-variant')} />
                     </div>
-                  </button>
+                  </Button>
                 ))}
               </div>
             </Card>
@@ -376,17 +381,17 @@ export default function Welcome() {
               }
               footer={
                 <>
-                  <button onClick={() => setStep(0)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
+                  <Button variant="ghost" onClick={() => setStep(0)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
                     {intl.formatMessage({ id: 'welcome.model.back' })}
-                  </button>
+                  </Button>
                   <div className="flex flex-col items-end gap-xs">
-                    <button
+                    <Button
                       onClick={handleModelSubmit}
                       disabled={saving || (!providerSaved && !(envHasKey && provider === currentTask.recommendedProvider))}
                       className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                     >
                       {intl.formatMessage({ id: 'welcome.model.continue' })}
-                    </button>
+                    </Button>
                     {!providerSaved && !(envHasKey && provider === currentTask.recommendedProvider) ? (
                       <span className="font-label-sm text-on-surface-variant">
                         {intl.formatMessage({ id: 'welcome.model.continue.hint' })}
@@ -401,8 +406,9 @@ export default function Welcome() {
                   canonical AddProviderModal (also used in Settings → Models).
                   The modal handles saving to ~/.shannon/credentials/<id>.json
                   (A1 — no plaintext key in config.json). */}
-              <button
+              <Button
                 type="button"
+                variant="outline"
                 onClick={() => setShowAddProviderModal(true)}
                 className="w-full p-md rounded-xl border border-outline-variant/50 hover:border-primary/50 bg-surface-container-low cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary flex items-center gap-md"
                 data-testid="welcome-add-provider"
@@ -417,7 +423,7 @@ export default function Welcome() {
                   </div>
                 </span>
                 <span className="material-symbols-outlined text-on-surface-variant">arrow_forward</span>
-              </button>
+              </Button>
               <p className="font-body-sm text-on-surface-variant mt-md">
                 {intl.formatMessage({ id: 'welcome.model.addProvider.testHint' })}
               </p>
@@ -431,15 +437,15 @@ export default function Welcome() {
               subtitle={intl.formatMessage({ id: 'welcome.tools.subtitle' })}
               footer={
                 <>
-                  <button onClick={() => setStep(1)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
+                  <Button variant="ghost" onClick={() => setStep(1)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
                     {intl.formatMessage({ id: 'welcome.model.back' })}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     onClick={() => setStep(3)}
                     className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   >
                     {intl.formatMessage({ id: 'welcome.tools.continue' })}
-                  </button>
+                  </Button>
                 </>
               }
             >
@@ -483,12 +489,13 @@ export default function Welcome() {
                   { id: 'welcome.tools.workingDir.help' },
                   {
                     link: (chunks: React.ReactNode) => (
-                      <button
+                      <Button
+                        variant="link"
                         onClick={() => { markWelcomeSeen(); navigate('/settings/general') }}
-                        className="text-primary hover:underline cursor-pointer"
+                        className="text-primary hover:underline cursor-pointer p-0 h-auto"
                       >
                         {chunks}
-                      </button>
+                      </Button>
                     ),
                   },
                 )}
@@ -503,15 +510,15 @@ export default function Welcome() {
               subtitle={intl.formatMessage({ id: 'welcome.done.subtitle' })}
               footer={
                 <>
-                  <button onClick={() => setStep(2)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
+                  <Button variant="ghost" onClick={() => setStep(2)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
                     {intl.formatMessage({ id: 'welcome.done.back' })}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     onClick={finish}
                     className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   >
                     {intl.formatMessage({ id: 'welcome.done.start' })}
-                  </button>
+                  </Button>
                 </>
               }
             >
@@ -540,7 +547,8 @@ export default function Welcome() {
                 <div className="font-mono text-on-surface text-sm break-all mb-sm">
                   {pickedDir ?? config?.working_dir ?? intl.formatMessage({ id: 'welcome.done.workingDir.default' })}
                 </div>
-                <button
+                <Button
+                  variant="outline"
                   onClick={pickDirectory}
                   className="px-md py-sm bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 rounded-lg font-label-md text-on-surface cursor-pointer transition-colors flex items-center gap-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                 >
@@ -548,7 +556,7 @@ export default function Welcome() {
                   {pickedDir
                     ? intl.formatMessage({ id: 'welcome.done.workingDir.chooseOther' })
                     : intl.formatMessage({ id: 'welcome.done.workingDir.choose' })}
-                </button>
+                </Button>
               </div>
 
               {/* Shortcuts */}
@@ -626,8 +634,9 @@ export default function Welcome() {
                             <div className="font-body-sm text-error mt-xs">{state.error}</div>
                           )}
                         </div>
-                        <button
+                        <Button
                           type="button"
+                          variant="outline"
                           onClick={() => installDocumentsSkill(skill)}
                           disabled={state.status === 'installing' || state.status === 'installed'}
                           className="shrink-0 px-md py-xs rounded-lg font-label-md text-label-sm bg-surface-container-high hover:bg-surface-container-highest border border-outline-variant/50 text-on-surface cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-xs"
@@ -643,7 +652,7 @@ export default function Welcome() {
                           ) : (
                             intl.formatMessage({ id: 'welcome.skills.install' })
                           )}
-                        </button>
+                        </Button>
                       </li>
                     )
                   })}
@@ -653,12 +662,13 @@ export default function Welcome() {
                     { id: 'welcome.skills.later' },
                     {
                       link: (chunks: React.ReactNode) => (
-                        <button
+                        <Button
+                          variant="link"
                           onClick={() => { markWelcomeSeen(); navigate('/extensions/featured') }}
-                          className="text-primary hover:underline cursor-pointer"
+                          className="text-primary hover:underline cursor-pointer p-0 h-auto"
                         >
                           {chunks}
-                        </button>
+                        </Button>
                       ),
                     },
                   )}

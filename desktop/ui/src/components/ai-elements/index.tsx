@@ -1,4 +1,5 @@
 import { type ReactNode, useState, memo } from 'react'
+import { Button } from '@/components/ui/button'
 
 // Minimal AI-Elements–style primitives, vendored locally.
 // Inspired by Vercel AI Elements (MIT). No runtime deps beyond React.
@@ -70,16 +71,16 @@ export function Reasoning({ defaultOpen = false, className = '', header, childre
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div className={`rounded-lg border border-outline-variant/20 ${className}`}>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
-        className="flex w-full items-center gap-xs px-sm py-xs text-on-surface-variant hover:bg-surface-container-low/60 transition-colors"
+        className="w-full justify-start gap-xs px-sm py-xs h-auto text-on-surface-variant hover:bg-surface-container-low/60"
       >
         <span className="material-symbols-outlined icon-sm">{open ? 'expand_less' : 'expand_more'}</span>
         <span className="material-symbols-outlined icon-sm">psychology</span>
         <span className="font-label-md flex-1 text-left">{header ?? 'Reasoning'}</span>
-      </button>
+      </Button>
       {open && <div className="px-md pb-md text-body-sm text-on-surface-variant prose prose-sm max-w-none">{children}</div>}
     </div>
   )

@@ -7,6 +7,7 @@ import AddProviderModal from '@/components/settings/AddProviderModal'
 import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { cn } from '@/lib/utils'
 import type {
   ProviderConnection,
   ProvidersFile,
@@ -72,17 +73,19 @@ export default function ModelsSettings() {
           <h3 className="font-headline-md text-on-surface mb-md">{t('settings.models.perfStrategy')}</h3>
           <div className="flex bg-surface-container-low p-xs rounded-xl gap-xs max-w-2xl">
             {(['balanced', 'speed', 'high-quality'] as const).map(s => (
-              <button
+              <Button
                 key={s}
+                variant="ghost"
                 onClick={() => setStrategy(s)}
-                className={`flex-1 py-sm font-label-md rounded-lg transition-all cursor-pointer ${
+                className={cn(
+                  'flex-1 py-sm font-label-md rounded-lg transition-all cursor-pointer',
                   strategy === s
                     ? 'bg-surface-container-lowest text-primary shadow-sm ring-1 ring-black/5 font-bold'
-                    : 'text-on-surface-variant hover:bg-surface-container-high'
-                }`}
+                    : 'text-on-surface-variant hover:bg-surface-container-high',
+                )}
               >
                 {s === 'high-quality' ? t('settings.models.stratLabel.highQuality') : s === 'speed' ? t('settings.models.stratLabel.speed') : t('settings.models.stratLabel.balanced')}
-              </button>
+              </Button>
             ))}
           </div>
           <p className="mt-md text-label-sm text-on-surface-variant opacity-70 flex items-center gap-xs">
@@ -131,16 +134,24 @@ export default function ModelsSettings() {
         <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl shadow-sm overflow-hidden">
           <div className="border-b border-outline-variant/30 bg-surface-container-low/30 px-lg pt-md">
             <div className="flex gap-lg overflow-x-auto">
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => setActiveProvider(null)}
-                className={`pb-sm px-xs border-b-2 font-label-md whitespace-nowrap cursor-pointer transition-colors ${!activeProvider ? 'border-primary text-primary font-bold' : 'border-transparent text-on-surface-variant hover:text-primary'}`}
-              >{t('settings.models.tabAll')}</button>
+                className={cn(
+                  'h-auto pb-sm px-xs border-b-2 font-label-md whitespace-nowrap cursor-pointer transition-colors rounded-none',
+                  !activeProvider ? 'border-primary text-primary font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
+                )}
+              >{t('settings.models.tabAll')}</Button>
               {providers.map(p => (
-                <button
+                <Button
                   key={p}
+                  variant="ghost"
                   onClick={() => setActiveProvider(activeProvider === p ? null : p)}
-                  className={`pb-sm px-xs border-b-2 font-label-md whitespace-nowrap cursor-pointer transition-colors ${activeProvider === p ? 'border-primary text-primary font-bold' : 'border-transparent text-on-surface-variant hover:text-primary'}`}
-                >{p}</button>
+                  className={cn(
+                    'h-auto pb-sm px-xs border-b-2 font-label-md whitespace-nowrap cursor-pointer transition-colors rounded-none',
+                    activeProvider === p ? 'border-primary text-primary font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
+                  )}
+                >{p}</Button>
               ))}
               {providers.length === 0 && <span className="pb-sm px-xs text-on-surface-variant font-label-md">{t('settings.models.noProviders')}</span>}
             </div>
@@ -162,13 +173,15 @@ export default function ModelsSettings() {
             ) : (
               <div className="grid grid-cols-1 gap-md">
                 {filteredModels.map(m => (
-                  <button
+                  <Button
                     key={m.id}
+                    variant="outline"
                     onClick={() => handleModelSwitch(m.id)}
                     disabled={switching !== null}
-                    className={`p-md rounded-xl border flex items-center justify-between hover:border-primary/50 transition-all group cursor-pointer text-left w-full ${
-                      m.id === currentModel ? 'border-2 border-primary bg-primary-container/5' : 'border-outline-variant/50'
-                    }`}
+                    className={cn(
+                      'h-auto p-md rounded-xl border flex items-center justify-between hover:border-primary/50 transition-all group cursor-pointer text-left w-full whitespace-normal',
+                      m.id === currentModel ? 'border-2 border-primary bg-primary-container/5' : 'border-outline-variant/50',
+                    )}
                   >
                     <div className="flex items-center gap-md">
                       <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
@@ -218,7 +231,7 @@ export default function ModelsSettings() {
                     {switching === m.id ? (
                       <span className="material-symbols-outlined text-primary animate-spin text-[20px]">progress_activity</span>
                     ) : null}
-                  </button>
+                  </Button>
                 ))}
               </div>
             )}

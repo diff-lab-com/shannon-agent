@@ -206,15 +206,15 @@ function CitationMarkdown({ children, onCitationClick }: CitationMarkdownProps) 
         seg.kind === 'text' ? (
           <Markdown key={i}>{seg.value}</Markdown>
         ) : (
-          <button
+          <Button
             key={i}
-            type="button"
+            variant="ghost"
             onClick={() => onCitationClick(seg.id)}
-            className="inline-flex items-center align-super mx-[1px] px-[3px] h-[16px] rounded-full bg-primary-container text-on-primary-container text-[10px] font-bold leading-none hover:bg-primary hover:text-on-primary transition-colors cursor-pointer"
+            className="inline-flex items-center align-super mx-[1px] px-[3px] h-[16px] rounded-full bg-primary-container text-on-primary-container text-[10px] font-bold leading-none hover:bg-primary hover:text-on-primary"
             aria-label={`Citation ${seg.id}`}
           >
             {seg.id}
-          </button>
+          </Button>
         ),
       )}
     </>

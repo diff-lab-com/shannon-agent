@@ -1,4 +1,6 @@
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import type { VoiceState } from '@/hooks/useVoice'
 
 interface MicButtonProps {
@@ -22,18 +24,19 @@ export function MicButton({ state, disabled, onStart, onStop }: MicButtonProps) 
     : 'voice.mic.start.aria'
 
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
       onClick={isActive ? onStop : onStart}
       disabled={disabled || state === 'transcribing'}
       aria-pressed={isActive}
       aria-label={t(labelKey)}
       title={t(labelKey)}
-      className={`relative flex items-center justify-center w-10 h-10 rounded-xl transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
+      className={cn(
+        'relative w-10 h-10 rounded-xl p-0',
         isActive
-          ? 'bg-error text-on-error shadow-md shadow-error/30'
+          ? 'bg-error text-on-error shadow-md shadow-error/30 hover:bg-error/90'
           : 'text-on-surface-variant hover:text-primary hover:bg-surface-container'
-      } disabled:opacity-40 disabled:cursor-not-allowed`}
+      )}
     >
       <span
         aria-hidden="true"
@@ -47,6 +50,6 @@ export function MicButton({ state, disabled, onStart, onStop }: MicButtonProps) 
           className="absolute inset-0 rounded-xl ring-2 ring-error/40 animate-ping"
         />
       )}
-    </button>
+    </Button>
   )
 }

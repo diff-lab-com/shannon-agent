@@ -6,6 +6,7 @@ import rehypeHighlight from 'rehype-highlight'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Chart, parseChartSpec } from '@/components/chat/Chart'
+import { Button } from '@/components/ui/button'
 
 // Extend the default sanitize schema so syntax-highlight classes from
 // rehype-highlight (e.g. `hljs-keyword`) survive sanitization. Keep the
@@ -139,25 +140,27 @@ function CodeBlock(props: { children?: ReactNode } & React.HTMLAttributes<HTMLPr
         </span>
         <div className="flex items-center gap-xs">
           {lineCount > 5 && (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setShowLines(v => !v)}
               aria-pressed={showLines}
               aria-label={t(showLines ? 'chat.code.lineNumbers.hide' : 'chat.code.lineNumbers.show')}
-              className="px-xs py-[2px] rounded text-on-surface-variant hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+              className="h-auto px-xs py-[2px] text-on-surface-variant hover:text-primary"
             >
               <span className="material-symbols-outlined text-[14px] align-middle">format_list_numbered</span>
-            </button>
+            </Button>
           )}
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={handleCopy}
             aria-label={t('chat.copyCode.aria')}
-            className="px-xs py-[2px] rounded text-on-surface-variant hover:text-primary flex items-center gap-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition-colors"
+            className="h-auto px-xs py-[2px] gap-xs text-on-surface-variant hover:text-primary"
           >
             <span className="material-symbols-outlined text-[14px]">{copied ? 'check' : 'content_copy'}</span>
             <span>{copied ? t('chat.copyCode.copied') : t('chat.copyCode.copy')}</span>
-          </button>
+          </Button>
         </div>
       </div>
       <pre {...props} className={`hljs text-body-sm overflow-x-auto p-md bg-surface-container-lowest ${showLines ? 'line-numbers' : ''}`}>

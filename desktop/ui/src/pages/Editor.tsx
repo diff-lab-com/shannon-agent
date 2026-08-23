@@ -10,6 +10,8 @@ import { useNavigate } from 'react-router-dom'
 import { useIntl, type PrimitiveType } from 'react-intl'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import CodeEditor, {
   type EditorDiagnostic,
 } from '@/components/editor/CodeEditor'
@@ -275,8 +277,9 @@ export default function Editor() {
               placeholder={t('editor.filePath.placeholder')}
               className="flex-1 font-mono font-label-md bg-surface-container-low text-on-surface border border-outline-variant/40 rounded-lg px-sm py-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             />
-            <button
+            <Button
               type="button"
+              variant="outline"
               onClick={onBrowse}
               aria-label={t('editor.browse')}
               className="flex items-center gap-xs px-md py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
@@ -285,16 +288,16 @@ export default function Editor() {
                 folder_open
               </span>
               <span className="font-label-md">{t('editor.browse')}</span>
-            </button>
+            </Button>
           </div>
         </label>
-        <button
+        <Button
           type="submit"
           disabled={!filePath.trim() || loading}
           className="self-start font-label-md bg-primary text-on-primary rounded-lg px-md py-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
         >
           {loading ? t('editor.loading') : t('editor.loadFile')}
-        </button>
+        </Button>
         {loadError ? (
           <div
             className="bg-error/10 border border-error/30 rounded-lg p-sm font-label-sm text-error"
@@ -316,8 +319,9 @@ export default function Editor() {
             </span>
             <span>·</span>
             <span>{diagCount} {t(`editor.diagnostics`, { count: diagCount })}</span>
-            <button
+            <Button
               type="button"
+              variant="outline"
               onClick={() => void fetchDiagnostics(file)}
               disabled={diagLoading}
               className="flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
@@ -333,11 +337,11 @@ export default function Editor() {
                 {diagLoading ? 'progress_activity' : 'refresh'}
               </span>
               <span>{diagLoading ? t('editor.running') : t('editor.reRun')}</span>
-            </button>
+            </Button>
             <div className="ml-auto flex items-center gap-xs">
               {editMode ? (
                 <>
-                  <button
+                  <Button
                     type="button"
                     onClick={onSave}
                     disabled={saving}
@@ -347,9 +351,10 @@ export default function Editor() {
                       {saving ? 'progress_activity' : 'save'}
                     </span>
                     <span>{saving ? t('editor.saving') : t('editor.save')}</span>
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
+                    variant="outline"
                     onClick={onToggleEdit}
                     disabled={saving}
                     className="flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
@@ -358,18 +363,19 @@ export default function Editor() {
                       close
                     </span>
                     <span>{t('editor.cancel')}</span>
-                  </button>
+                  </Button>
                 </>
               ) : (
-                <button
+                <Button
                   type="button"
+                  variant="outline"
                   onClick={onToggleEdit}
                   className="flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
                   aria-label={t('editor.editMode')}
                 >
                   <span className="material-symbols-outlined text-[14px]">edit</span>
                   <span>{t('editor.editMode')}</span>
-                </button>
+                </Button>
               )}
             </div>
           </div>
@@ -464,13 +470,13 @@ export default function Editor() {
                 className="font-label-md bg-surface-container-low text-on-surface border border-outline-variant/40 rounded-lg px-sm py-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
               />
             </label>
-            <button
+            <Button
               type="submit"
               disabled={!newMessage.trim()}
               className="self-start font-label-md bg-primary text-on-primary rounded-lg px-md py-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               {t('editor.addSquiggleBtn')}
-            </button>
+            </Button>
           </form>
 
           {diagCount > 0 ? (
@@ -479,10 +485,13 @@ export default function Editor() {
               <ul className="flex flex-col gap-xs">
                 {diags.map((d, i) => (
                   <li key={i}>
-                    <button
+                    <Button
                       type="button"
+                      variant="outline"
                       onClick={() => onSquiggleClick(d)}
-                      className="w-full text-left flex items-start gap-sm px-sm py-sm rounded-lg border border-outline-variant/30 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
+                      className={cn(
+                        'h-auto w-full text-left flex items-start gap-sm px-sm py-sm rounded-lg border border-outline-variant/30 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer whitespace-normal',
+                      )}
                     >
                       <span
                         className="font-label-sm uppercase text-[10px] mt-0.5 tracking-wider"
@@ -524,9 +533,10 @@ export default function Editor() {
                       <span className="material-symbols-outlined text-[14px] text-primary">
                         build
                       </span>
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      variant="outline"
                       onClick={() => onAskAi(d)}
                       aria-label={t('editor.askAi')}
                       title={t('editor.askAi')}
@@ -536,7 +546,7 @@ export default function Editor() {
                         chat
                       </span>
                       <span className="font-label-sm">{t('editor.askAi')}</span>
-                    </button>
+                    </Button>
                   </li>
                 ))}
               </ul>
@@ -551,11 +561,12 @@ export default function Editor() {
           role="dialog"
           aria-label={t('editor.quickFixDrawer')}
         >
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={() => setDrawer(null)}
             aria-label={t('editor.closeDrawer')}
-            className="flex-1 bg-black/30"
+            className="flex-1 bg-black/30 hover:bg-black/40 rounded-none border-none"
           />
           <aside ref={drawerRef} className="w-[420px] max-w-[90vw] bg-surface-container-lowest h-full overflow-auto p-md border-l border-outline-variant/30 shadow-lg flex flex-col gap-sm">
             <LspQuickFixPanel
