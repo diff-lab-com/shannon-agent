@@ -143,8 +143,8 @@ export const handlers: Record<string, MockHandler> = {
   async get_file_diff(args: { path: string }) {
     await delay()
     return {
-      old_content: `// old content of ${args.path}\nfn main() { println!(\"hi\"); }`,
-      new_content: `// new content of ${args.path}\nfn main() { println!(\"hello world\"); }`,
+      old_content: `// old content of ${args.path}\nfn main() { println!("hi"); }`,
+      new_content: `// new content of ${args.path}\nfn main() { println!("hello world"); }`,
       file_name: args.path.split('/').pop() ?? args.path,
       language: 'rust',
     }
@@ -398,7 +398,7 @@ export const handlers: Record<string, MockHandler> = {
     await delay()
     return {
       path: args.path,
-      content: `// Source for ${args.path}\n\nfn main() {\n    println!(\"hello\");\n}\n`,
+      content: `// Source for ${args.path}\n\nfn main() {\n    println!("hello");\n}\n`,
       language_id: 'rust',
     }
   },

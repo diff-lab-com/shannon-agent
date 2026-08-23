@@ -33,7 +33,6 @@ function flushCaptured(event: string, payload: unknown) {
 
 describe('RealShannonTauriBridge (mocked Tauri event module)', () => {
   it('subscribes to all 9 query:* events before invoking send_message', async () => {
-    captured // type guard
     const bridge = new RealShannonTauriBridge({ mock: false })
     const events: string[] = []
     vi.mocked(listen).mockImplementation(((event: string, handler: (e: { payload: unknown }) => void) => {
