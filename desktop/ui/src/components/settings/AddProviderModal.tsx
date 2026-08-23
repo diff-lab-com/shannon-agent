@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Modal } from '@/components/ui/modal'
 import * as api from '@/lib/tauri-api'
 import type {
   ProviderConnection,
@@ -180,20 +181,15 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-md" onClick={onClose}>
-      <div
-        className="bg-surface-container-lowest border border-outline-variant/40 rounded-2xl shadow-xl w-full max-w-lg p-lg space-y-md max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-        data-testid="add-provider-modal"
-      >
-        <div className="flex items-center justify-between">
-          <h3 className="font-headline-md text-on-surface">
-            {editing ? t('settings.models.providers.editTitle') : t('settings.models.providers.addTitle')}
-          </h3>
-          <Button variant="ghost" className="text-on-surface-variant hover:text-primary cursor-pointer" onClick={onClose} aria-label={t('settings.models.providers.cancel')}>
-            <span className="material-symbols-outlined">close</span>
-          </Button>
-        </div>
+    <Modal
+      open
+      onClose={onClose}
+      size="2xl"
+      title={editing ? t('settings.models.providers.editTitle') : t('settings.models.providers.addTitle')}
+      className="max-h-[90vh] overflow-y-auto p-lg space-y-md"
+    >
+      <div data-testid="add-provider-modal" className="space-y-md">
+
 
         {/* Quick fill */}
         <div>
@@ -301,7 +297,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
           </Button>
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }
 
