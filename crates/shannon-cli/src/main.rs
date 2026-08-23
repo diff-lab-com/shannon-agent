@@ -1674,16 +1674,23 @@ fn run_headless_query(
                     // every later answer and validation parsed an empty
                     // string). The delta events above still stream ALL text.
                     response_text.clear();
-                    // Check tool permission against allowed list
+                    // A tool outside --allowed-tools is soft-denied
+                    // downstream: the registry's allowed-tools filter turns
+                    // the call into an is_error tool result ("Tool not
+                    // found: X (not in this session's allowed-tools list)")
+                    // that the model can recover from by switching tools.
+                    // Fatal-exiting here (old exit 6 / PermissionDenied)
+                    // killed otherwise recoverable runs — dogfood m3
+                    // 2026-08-23: one turn held a parallel Glob+Bash call,
+                    // Bash was never advertised, and the break discarded the
+                    // in-flight Glob after a single turn.
                     if let Some(ref allowed) = allowed_set {
                         if !allowed.contains(&tool_name) {
                             eprintln!(
-                                "Error: tool '{}' not in allowed list: {}",
+                                "[headless: tool '{}' outside allowed list (soft-denied): {}]",
                                 tool_name,
                                 allowed.iter().cloned().collect::<Vec<_>>().join(",")
                             );
-                            exit_code = HeadlessExitCode::PermissionDenied;
-                            break;
                         }
                     }
                     let input_summary = match serde_json::to_string(&tool_input) {
