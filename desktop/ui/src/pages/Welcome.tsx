@@ -3,140 +3,20 @@ import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
 import { toastError } from '@/lib/errorToast'
 import { open } from '@tauri-apps/plugin-dialog'
 import * as api from '@/lib/tauri-api'
 import { useCatalog } from '@/context/CatalogContext'
 import { SIDEBAR_MODE_KEY } from '@/components/Sidebar'
-import { formatShortcut } from '@/lib/platform'
 import AddProviderModal from '@/components/settings/AddProviderModal'
 import { GradientText } from '@/components/reactbits/GradientText'
+import { Stepper } from './welcome/components'
+import { TaskStep } from './welcome/TaskStep'
+import { ModelStep } from './welcome/ModelStep'
+import { ToolsStep } from './welcome/ToolsStep'
+import { DoneStep } from './welcome/DoneStep'
+import { TASKS, type TaskId, type DocumentsSkill } from './welcome/constants'
 import type { ProvidersFile } from '@/types'
-
-// ─── Task taxonomy ──────────────────────────────────────────────────────────
-// Drives Step 0 (primary use case). Each task carries a model recommendation
-// and a tool preset surfaced in Step 2.
-//
-// `labelKey` / `blurbKey` resolve via react-intl; provider names and tool
-// names are deliberately left untranslated (proper nouns).
-type TaskId = 'code' | 'writing' | 'research' | 'general'
-
-interface TaskOption {
-  id: TaskId
-  labelKey: string
-  blurbKey: string
-  icon: string
-  recommendedProvider: string
-  tools: string[]
-}
-
-const TASKS: TaskOption[] = [
-  {
-    id: 'code',
-    labelKey: 'welcome.task.code.label',
-    blurbKey: 'welcome.task.code.blurb',
-    icon: 'code',
-    recommendedProvider: 'anthropic',
-    tools: ['filesystem', 'git', 'playwright'],
-  },
-  {
-    id: 'writing',
-    labelKey: 'welcome.task.writing.label',
-    blurbKey: 'welcome.task.writing.blurb',
-    icon: 'edit_note',
-    recommendedProvider: 'anthropic',
-    tools: ['web_search'],
-  },
-  {
-    id: 'research',
-    labelKey: 'welcome.task.research.label',
-    blurbKey: 'welcome.task.research.blurb',
-    icon: 'search',
-    recommendedProvider: 'openai',
-    tools: ['web_search', 'tavily'],
-  },
-  {
-    id: 'general',
-    labelKey: 'welcome.task.general.label',
-    blurbKey: 'welcome.task.general.blurb',
-    icon: 'auto_awesome',
-    recommendedProvider: 'anthropic',
-    tools: ['filesystem', 'web_search'],
-  },
-]
-
-const PROVIDERS = [
-  { id: 'anthropic', label: 'Anthropic', descKey: 'welcome.model.anthropic.desc' },
-  { id: 'openai', label: 'OpenAI', descKey: 'welcome.model.openai.desc' },
-  { id: 'ollama', label: 'Ollama', descKey: 'welcome.model.ollama.desc' },
-  { id: 'deepseek', label: 'DeepSeek', descKey: 'welcome.model.deepseek.desc' },
-] as const
-
-const TOOL_CATALOG: Record<string, { labelKey: string; icon: string; descKey: string }> = {
-  filesystem: { labelKey: 'welcome.tools.filesystem.label', icon: 'folder', descKey: 'welcome.tools.filesystem.desc' },
-  git: { labelKey: 'welcome.tools.git.label', icon: 'commit', descKey: 'welcome.tools.git.desc' },
-  playwright: { labelKey: 'welcome.tools.playwright.label', icon: 'web', descKey: 'welcome.tools.playwright.desc' },
-  web_search: { labelKey: 'welcome.tools.webSearch.label', icon: 'travel_explore', descKey: 'welcome.tools.webSearch.desc' },
-  tavily: { labelKey: 'welcome.tools.tavily.label', icon: 'menu_book', descKey: 'welcome.tools.tavily.desc' },
-}
-
-const SHORTCUT_ROWS = [
-  { keys: () => `${formatShortcut('K')}`, actionKey: 'shortcuts.openPalette' },
-  { keys: () => `${formatShortcut('N')}`, actionKey: 'shortcuts.newChat' },
-  { keys: () => `${formatShortcut('1')} / ${formatShortcut('2')} / ${formatShortcut('3')}`, actionKey: 'shortcuts.jumpTabs' },
-  { keys: () => '?', actionKey: 'shortcuts.showAll' },
-  { keys: () => 'Esc', actionKey: 'shortcuts.cancel' },
-] as const
-
-// ─── Documents skill recommendations (P2.4) ─────────────────────────────────
-// Instead of building a Documents engine inside Shannon (Phase D's MVP), we
-// surface host-side Documents skills the user can install with one click.
-// Each entry maps to a GitHub repo that `install_skill_from_repo` clones into
-// `~/.shannon/skills/`. The catalog is deliberately short — only the most
-// universally useful Documents skills.
-//
-// AVAILABILITY GATE: the shannon-skills-docs repos are not yet published, so
-// one-click install would fail for every new user on first run. The whole
-// section is hidden until DOCUMENTS_SKILLS_AVAILABLE is flipped true (a real
-// repo-existence probe can replace this once a backend check / open CSP path
-// exists). See claudedocs/comprehensive-audit-2026-06-29.md P1-1.
-const DOCUMENTS_SKILLS_AVAILABLE = false
-interface DocumentsSkill {
-  id: string
-  labelKey: string
-  descKey: string
-  icon: string
-  repo: string
-  ref: string
-}
-
-const DOCUMENTS_SKILLS: DocumentsSkill[] = [
-  {
-    id: 'pandoc-docx',
-    labelKey: 'welcome.skills.pandoc.label',
-    descKey: 'welcome.skills.pandoc.desc',
-    icon: 'description',
-    repo: 'shannon-agent/shannon-skills-docs',
-    ref: 'main',
-  },
-  {
-    id: 'python-docx',
-    labelKey: 'welcome.skills.pydocx.label',
-    descKey: 'welcome.skills.pydocx.desc',
-    icon: 'data_object',
-    repo: 'shannon-agent/shannon-skills-docs',
-    ref: 'main',
-  },
-  {
-    id: 'markdown-beautify',
-    labelKey: 'welcome.skills.beautify.label',
-    descKey: 'welcome.skills.beautify.desc',
-    icon: 'auto_fix_high',
-    repo: 'shannon-agent/shannon-skills-docs',
-    ref: 'main',
-  },
-]
 
 export const WELCOME_SEEN_KEY = 'shannon.hasSeenWelcome'
 
@@ -150,14 +30,6 @@ export function shouldShowWelcome(loading: boolean, hasProvider: boolean): boole
 export function markWelcomeSeen() {
   window.localStorage.setItem(WELCOME_SEEN_KEY, '1')
 }
-
-// Display labels for the Stepper (Step 0..3). Order matches STEPS_INDEX.
-const STEP_LABEL_KEYS = [
-  'welcome.step.task',
-  'welcome.step.model',
-  'welcome.step.tools',
-  'welcome.step.done',
-] as const
 
 export default function Welcome() {
   const intl = useIntl()
@@ -179,7 +51,9 @@ export default function Welcome() {
   >({})
 
   const currentTask = TASKS.find(t => t.id === task)!
-  const recommendedProvider = PROVIDERS.find(p => p.id === currentTask.recommendedProvider)
+  const canAdvanceFromModel =
+    providerSaved || (envHasKey && provider === currentTask.recommendedProvider)
+  const enabledToolCount = Object.values(enabledTools).filter(Boolean).length
 
   // On mount, probe the shell for a pre-configured provider so the user can
   // skip the API-key entry step. Only fires once — the ref guards against
@@ -195,8 +69,7 @@ export default function Welcome() {
           toast.info(intl.formatMessage({ id: 'welcome.envDetected.ollama' }))
         } else if (detected.has_api_key) {
           setEnvHasKey(true)
-          const label = PROVIDERS.find(p => p.id === detected.provider)?.label ?? detected.provider
-          toast.success(intl.formatMessage({ id: 'welcome.envDetected.toast' }, { provider: label }))
+          toast.success(intl.formatMessage({ id: 'welcome.envDetected.toast' }, { provider: detected.provider }))
         }
       })
       .catch(e => console.warn('detectProviderFromEnv failed:', e))
@@ -212,7 +85,6 @@ export default function Welcome() {
     try {
       await api.setActiveProvider(targetId)
       await Promise.all([refreshConfig(), refreshStatus()])
-      // Mirror the active kind back into local state for the Done summary.
       const active = f.providers.find(p => p.id === targetId)
       if (active) {
         setProvider(active.kind)
@@ -264,14 +136,14 @@ export default function Welcome() {
     }
   }
 
-  const handleModelSubmit = async () => {
-    // Step 1 → Step 2 transition. In the new modal-launcher flow the actual
-    // provider save happens inside AddProviderModal; here we only advance
-    // when the user has either (a) saved via the modal in this session, or
-    // (b) confirmed the env-detected provider is enough. `providerSaved`
-    // is set true by `handleAddProviderSaved`; `envHasKey` covers the
-    // pre-existing Ollama/ANTHROPIC/OPENAI key case.
-    if (!providerSaved && !(envHasKey && provider === currentTask.recommendedProvider)) return
+  const advanceFromTask = () => {
+    // Default provider to the task recommendation when advancing.
+    setProvider(currentTask.recommendedProvider)
+    setStep(1)
+  }
+
+  const advanceFromModel = () => {
+    if (!canAdvanceFromModel) return
     // Pre-check tools recommended for this task so the user can opt in/out.
     const initial: Record<string, boolean> = {}
     for (const t of currentTask.tools) initial[t] = true
@@ -282,8 +154,6 @@ export default function Welcome() {
   const toggleTool = (id: string) => {
     setEnabledTools(prev => ({ ...prev, [id]: !prev[id] }))
   }
-
-  const enabledToolCount = Object.values(enabledTools).filter(Boolean).length
 
   const installDocumentsSkill = async (skill: DocumentsSkill) => {
     setSkillState(prev => ({ ...prev, [skill.id]: { status: 'installing' } }))
@@ -296,6 +166,16 @@ export default function Welcome() {
       setSkillState(prev => ({ ...prev, [skill.id]: { status: 'failed', error: msg } }))
       toastError(intl.formatMessage({ id: 'welcome.skills.toast.failed' }, { name: intl.formatMessage({ id: skill.labelKey }) }), e)
     }
+  }
+
+  const openSettingsGeneral = () => {
+    markWelcomeSeen()
+    navigate('/settings/general')
+  }
+
+  const openFeaturedSkills = () => {
+    markWelcomeSeen()
+    navigate('/extensions/featured')
   }
 
   return (
@@ -322,372 +202,52 @@ export default function Welcome() {
         <div className="w-full max-w-xl">
           <Stepper step={step} />
 
-          {/* Step 0: Task */}
           {step === 0 && (
-            <Card
-              title={intl.formatMessage({ id: 'welcome.task.title' })}
-              subtitle={intl.formatMessage({ id: 'welcome.task.subtitle' })}
-              footer={
-                <>
-                  <span />
-                  <Button
-                    onClick={() => {
-                      // Default provider to the task recommendation when advancing.
-                      setProvider(currentTask.recommendedProvider)
-                      setStep(1)
-                    }}
-                    className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                  >
-                    {intl.formatMessage({ id: 'welcome.task.continue' })}
-                  </Button>
-                </>
-              }
-            >
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm mb-lg">
-                {TASKS.map(t => (
-                  <Button
-                    key={t.id}
-                    variant="outline"
-                    onClick={() => setTask(t.id)}
-                    aria-pressed={task === t.id}
-                    className={cn(
-                      'h-auto text-left p-md rounded-xl border cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary whitespace-normal',
-                      task === t.id
-                        ? 'border-2 border-primary bg-primary-container/5'
-                        : 'border-outline-variant/50 hover:border-primary/50',
-                    )}
-                  >
-                    <div className="flex items-start gap-sm">
-                      <span className="material-symbols-outlined text-primary shrink-0">{t.icon}</span>
-                      <div className="flex-1">
-                        <div className="font-headline-md text-on-surface">{intl.formatMessage({ id: t.labelKey })}</div>
-                        <div className="font-body-sm text-on-surface-variant mt-xs">{intl.formatMessage({ id: t.blurbKey })}</div>
-                      </div>
-                      <div className={cn('w-5 h-5 rounded-full border-2 shrink-0', task === t.id ? 'border-primary bg-primary' : 'border-outline-variant')} />
-                    </div>
-                  </Button>
-                ))}
-              </div>
-            </Card>
+            <TaskStep task={task} setTask={setTask} onContinue={advanceFromTask} />
           )}
 
-          {/* Step 1: Model */}
           {step === 1 && (
-            <Card
-              title={intl.formatMessage({ id: 'welcome.model.title' })}
-              subtitle={
-                recommendedProvider
-                  ? intl.formatMessage(
-                      { id: 'welcome.model.subtitle.recommended' },
-                      { task: intl.formatMessage({ id: currentTask.labelKey }), provider: recommendedProvider.label },
-                    )
-                  : intl.formatMessage({ id: 'welcome.model.subtitle.default' })
-              }
-              footer={
-                <>
-                  <Button variant="ghost" onClick={() => setStep(0)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
-                    {intl.formatMessage({ id: 'welcome.model.back' })}
-                  </Button>
-                  <div className="flex flex-col items-end gap-xs">
-                    <Button
-                      onClick={handleModelSubmit}
-                      disabled={saving || (!providerSaved && !(envHasKey && provider === currentTask.recommendedProvider))}
-                      className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                    >
-                      {intl.formatMessage({ id: 'welcome.model.continue' })}
-                    </Button>
-                    {!providerSaved && !(envHasKey && provider === currentTask.recommendedProvider) ? (
-                      <span className="font-label-sm text-on-surface-variant">
-                        {intl.formatMessage({ id: 'welcome.model.continue.hint' })}
-                      </span>
-                    ) : null}
-                  </div>
-                </>
-              }
-            >
-              {/* P1.2-C: replaced the legacy provider picker + bare <input
-                  type="password"> with a single launcher that opens the
-                  canonical AddProviderModal (also used in Settings → Models).
-                  The modal handles saving to ~/.shannon/credentials/<id>.json
-                  (A1 — no plaintext key in config.json). */}
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setShowAddProviderModal(true)}
-                className="w-full p-md rounded-xl border border-outline-variant/50 hover:border-primary/50 bg-surface-container-low cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary flex items-center gap-md"
-                data-testid="welcome-add-provider"
-              >
-                <span className="material-symbols-outlined text-primary">add_circle</span>
-                <span className="flex-1 text-left">
-                  <div className="font-headline-md text-on-surface">
-                    {intl.formatMessage({ id: 'welcome.model.addProvider.label' })}
-                  </div>
-                  <div className="font-body-sm text-on-surface-variant mt-xs">
-                    {intl.formatMessage({ id: 'welcome.model.addProvider.help' })}
-                  </div>
-                </span>
-                <span className="material-symbols-outlined text-on-surface-variant">arrow_forward</span>
-              </Button>
-              <p className="font-body-sm text-on-surface-variant mt-md">
-                {intl.formatMessage({ id: 'welcome.model.addProvider.testHint' })}
-              </p>
-            </Card>
+            <ModelStep
+              task={task}
+              saving={saving}
+              canContinue={canAdvanceFromModel}
+              onOpenAddProvider={() => setShowAddProviderModal(true)}
+              onBack={() => setStep(0)}
+              onContinue={advanceFromModel}
+            />
           )}
 
-          {/* Step 2: Tools */}
           {step === 2 && (
-            <Card
-              title={intl.formatMessage({ id: 'welcome.tools.title' })}
-              subtitle={intl.formatMessage({ id: 'welcome.tools.subtitle' })}
-              footer={
-                <>
-                  <Button variant="ghost" onClick={() => setStep(1)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
-                    {intl.formatMessage({ id: 'welcome.model.back' })}
-                  </Button>
-                  <Button
-                    onClick={() => setStep(3)}
-                    className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                  >
-                    {intl.formatMessage({ id: 'welcome.tools.continue' })}
-                  </Button>
-                </>
-              }
-            >
-              <div className="space-y-sm mb-lg">
-                {Object.entries(TOOL_CATALOG).map(([id, meta]) => {
-                  const enabled = !!enabledTools[id]
-                  const recommended = currentTask.tools.includes(id)
-                  const toolLabel = intl.formatMessage({ id: meta.labelKey })
-                  return (
-                    <label
-                      key={id}
-                      className={`flex items-start gap-md p-md rounded-xl border cursor-pointer transition-all ${
-                        enabled ? 'border-2 border-primary bg-primary-container/5' : 'border-outline-variant/50 hover:border-primary/50'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={enabled}
-                        onChange={() => toggleTool(id)}
-                        className="mt-xs accent-primary"
-                        aria-label={intl.formatMessage({ id: 'welcome.tools.enableAria' }, { label: toolLabel })}
-                      />
-                      <span className="material-symbols-outlined text-on-surface-variant shrink-0">{meta.icon}</span>
-                      <div className="flex-1">
-                        <div className="flex items-center gap-xs">
-                          <span className="font-headline-md text-on-surface">{toolLabel}</span>
-                          {recommended && (
-                            <span className="text-[10px] uppercase tracking-wider font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded">
-                              {intl.formatMessage({ id: 'welcome.tools.recommended' })}
-                            </span>
-                          )}
-                        </div>
-                        <div className="font-body-sm text-on-surface-variant mt-xs">{intl.formatMessage({ id: meta.descKey })}</div>
-                      </div>
-                    </label>
-                  )
-                })}
-              </div>
-              <p className="font-body-sm text-on-surface-variant">
-                {intl.formatMessage(
-                  { id: 'welcome.tools.workingDir.help' },
-                  {
-                    link: (chunks: React.ReactNode) => (
-                      <Button
-                        variant="link"
-                        onClick={() => { markWelcomeSeen(); navigate('/settings/general') }}
-                        className="text-primary hover:underline cursor-pointer p-0 h-auto"
-                      >
-                        {chunks}
-                      </Button>
-                    ),
-                  },
-                )}
-              </p>
-            </Card>
+            <ToolsStep
+              task={task}
+              enabledTools={enabledTools}
+              toggleTool={toggleTool}
+              onBack={() => setStep(1)}
+              onContinue={() => setStep(3)}
+              onOpenSettings={openSettingsGeneral}
+            />
           )}
 
-          {/* Step 3: Done */}
           {step === 3 && (
-            <Card
-              title={intl.formatMessage({ id: 'welcome.done.title' })}
-              subtitle={intl.formatMessage({ id: 'welcome.done.subtitle' })}
-              footer={
-                <>
-                  <Button variant="ghost" onClick={() => setStep(2)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
-                    {intl.formatMessage({ id: 'welcome.done.back' })}
-                  </Button>
-                  <Button
-                    onClick={finish}
-                    className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                  >
-                    {intl.formatMessage({ id: 'welcome.done.start' })}
-                  </Button>
-                </>
-              }
-            >
-              {/* Summary */}
-              <div className="bg-surface-container-low rounded-xl p-md mb-md">
-                <div className="font-label-sm text-on-surface-variant mb-xs">{intl.formatMessage({ id: 'welcome.done.setup.label' })}</div>
-                <ul className="space-y-xs text-body-sm text-on-surface">
-                  <li className="flex items-center gap-sm">
-                    <span className="material-symbols-outlined text-[18px] text-primary">{currentTask.icon}</span>
-                    <span>{intl.formatMessage({ id: currentTask.labelKey })}</span>
-                  </li>
-                  <li className="flex items-center gap-sm">
-                    <span className="material-symbols-outlined text-[18px] text-primary">memory</span>
-                    <span>{PROVIDERS.find(p => p.id === provider)?.label ?? provider}</span>
-                  </li>
-                  <li className="flex items-center gap-sm">
-                    <span className="material-symbols-outlined text-[18px] text-primary">build</span>
-                    <span>{intl.formatMessage({ id: 'welcome.done.setup.tools' }, { count: enabledToolCount })}</span>
-                  </li>
-                </ul>
-              </div>
-
-              {/* Optional workspace picker */}
-              <div className="bg-surface-container-low rounded-xl p-md mb-md">
-                <div className="font-label-sm text-on-surface-variant mb-xs">{intl.formatMessage({ id: 'welcome.done.workingDir.label' })}</div>
-                <div className="font-mono text-on-surface text-sm break-all mb-sm">
-                  {pickedDir ?? config?.working_dir ?? intl.formatMessage({ id: 'welcome.done.workingDir.default' })}
-                </div>
-                <Button
-                  variant="outline"
-                  onClick={pickDirectory}
-                  className="px-md py-sm bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 rounded-lg font-label-md text-on-surface cursor-pointer transition-colors flex items-center gap-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-                >
-                  <span className="material-symbols-outlined text-[18px]">folder_open</span>
-                  {pickedDir
-                    ? intl.formatMessage({ id: 'welcome.done.workingDir.chooseOther' })
-                    : intl.formatMessage({ id: 'welcome.done.workingDir.choose' })}
-                </Button>
-              </div>
-
-              {/* Shortcuts */}
-              <div className="space-y-sm">
-                <div className="font-label-md text-on-surface-variant mb-xs">{intl.formatMessage({ id: 'welcome.done.shortcuts.label' })}</div>
-                {SHORTCUT_ROWS.map(s => {
-                  const keys = s.keys()
-                  return (
-                  <div key={s.actionKey} className="flex items-center justify-between py-xs">
-                    <span className="font-body-sm text-on-surface-variant">{intl.formatMessage({ id: s.actionKey })}</span>
-                    <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono shrink-0">{keys}</kbd>
-                  </div>
-                  )
-                })}
-              </div>
-              <p className="font-body-sm text-on-surface-variant mt-md">
-                {intl.formatMessage(
-                  { id: 'welcome.done.shortcuts.help' },
-                  {
-                    key: (chunks: React.ReactNode) => (
-                      <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono">{chunks}</kbd>
-                    ),
-                  },
-                )}
-              </p>
-
-              {/* Developer mode opt-in */}
-              <label className="mt-md flex items-start gap-sm p-md rounded-xl border border-outline-variant/50 hover:border-primary/50 cursor-pointer transition-all">
-                <input
-                  type="checkbox"
-                  checked={devMode}
-                  onChange={() => setDevMode(v => !v)}
-                  className="mt-xs accent-primary"
-                  aria-label={intl.formatMessage({ id: 'welcome.done.devMode.aria' })}
-                />
-                <div>
-                  <div className="font-headline-md text-on-surface">{intl.formatMessage({ id: 'welcome.done.devMode.title' })}</div>
-                  <div className="font-body-sm text-on-surface-variant mt-xs">
-                    {intl.formatMessage({ id: 'welcome.done.devMode.desc' })}
-                  </div>
-                </div>
-              </label>
-
-              {/* P2.4 — Documents skill recommendations. Gated behind
-                  DOCUMENTS_SKILLS_AVAILABLE (see top of file) — the section is
-                  hidden until the skill repos are published. */}
-              {DOCUMENTS_SKILLS_AVAILABLE && (
-              <div className="mt-md p-md rounded-xl border border-outline-variant/50 bg-surface-container-low">
-                <div className="flex items-center gap-xs mb-xs">
-                  <span className="material-symbols-outlined text-primary text-[20px]">extension</span>
-                  <span className="font-headline-md text-on-surface">
-                    {intl.formatMessage({ id: 'welcome.skills.title' })}
-                  </span>
-                </div>
-                <p className="font-body-sm text-on-surface-variant mb-md">
-                  {intl.formatMessage({ id: 'welcome.skills.subtitle' })}
-                </p>
-                <ul className="space-y-sm">
-                  {DOCUMENTS_SKILLS.map(skill => {
-                    const state = skillState[skill.id] ?? { status: 'idle' as const }
-                    return (
-                      <li
-                        key={skill.id}
-                        className="flex items-start gap-sm p-sm rounded-lg bg-surface-container-lowest border border-outline-variant/30"
-                      >
-                        <span className="material-symbols-outlined text-on-surface-variant text-[20px] mt-[2px] shrink-0">
-                          {skill.icon}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-label-md text-on-surface">{intl.formatMessage({ id: skill.labelKey })}</div>
-                          <div className="font-body-sm text-on-surface-variant mt-[2px]">
-                            {intl.formatMessage({ id: skill.descKey })}
-                          </div>
-                          {state.status === 'failed' && state.error && (
-                            <div className="font-body-sm text-error mt-xs">{state.error}</div>
-                          )}
-                        </div>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => installDocumentsSkill(skill)}
-                          disabled={state.status === 'installing' || state.status === 'installed'}
-                          className="shrink-0 px-md py-xs rounded-lg font-label-md text-label-sm bg-surface-container-high hover:bg-surface-container-highest border border-outline-variant/50 text-on-surface cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-xs"
-                          aria-label={intl.formatMessage({ id: 'welcome.skills.install.aria' }, { name: intl.formatMessage({ id: skill.labelKey }) })}
-                        >
-                          {state.status === 'installing' && (
-                            <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
-                          )}
-                          {state.status === 'installed' ? (
-                            <span className="material-symbols-outlined text-[14px]">check</span>
-                          ) : state.status === 'installing' ? (
-                            intl.formatMessage({ id: 'welcome.skills.installing' })
-                          ) : (
-                            intl.formatMessage({ id: 'welcome.skills.install' })
-                          )}
-                        </Button>
-                      </li>
-                    )
-                  })}
-                </ul>
-                <p className="font-body-sm text-on-surface-variant mt-md">
-                  {intl.formatMessage(
-                    { id: 'welcome.skills.later' },
-                    {
-                      link: (chunks: React.ReactNode) => (
-                        <Button
-                          variant="link"
-                          onClick={() => { markWelcomeSeen(); navigate('/extensions/featured') }}
-                          className="text-primary hover:underline cursor-pointer p-0 h-auto"
-                        >
-                          {chunks}
-                        </Button>
-                      ),
-                    },
-                  )}
-                </p>
-              </div>
-              )}
-            </Card>
+            <DoneStep
+              task={task}
+              provider={provider}
+              enabledToolCount={enabledToolCount}
+              pickedDir={pickedDir}
+              fallbackWorkingDir={config?.working_dir ?? null}
+              devMode={devMode}
+              setDevMode={setDevMode}
+              skillState={skillState}
+              onPickDirectory={pickDirectory}
+              onBack={() => setStep(2)}
+              onFinish={finish}
+              onInstallSkill={installDocumentsSkill}
+              onBrowseFeaturedSkills={openFeaturedSkills}
+            />
           )}
         </div>
       </main>
 
-      {/* P1.2-C: Step 1 now launches the canonical AddProviderModal instead
-          of authoring a bespoke provider picker + bare API-key input. The
-          modal calls saveProvider internally; handleAddProviderSaved
-          activates the new profile and advances to Step 2. */}
       {showAddProviderModal && (
         <AddProviderModal
           editing={null}
@@ -696,43 +256,5 @@ export default function Welcome() {
         />
       )}
     </div>
-  )
-}
-
-function Stepper({ step }: { step: number }) {
-  const intl = useIntl()
-  const stepLabel = intl.formatMessage({ id: STEP_LABEL_KEYS[step] })
-  return (
-    <div
-      className="flex items-center justify-center gap-sm mb-xl"
-      aria-label={intl.formatMessage(
-        { id: 'welcome.stepper.step' },
-        { current: step + 1, total: STEP_LABEL_KEYS.length, label: stepLabel },
-      )}
-    >
-      {STEP_LABEL_KEYS.map((key, i) => (
-        <div key={key} className="flex items-center gap-sm">
-          <div className={`w-2 h-2 rounded-full ${i <= step ? 'bg-primary' : 'bg-outline-variant'}`} />
-          {i === step && <span className="font-label-sm text-primary">{stepLabel}</span>}
-          {i < STEP_LABEL_KEYS.length - 1 && <div className="w-8 h-px bg-outline-variant" aria-hidden="true" />}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function Card({ title, subtitle, footer, children }: {
-  title: string
-  subtitle: string
-  footer: React.ReactNode
-  children: React.ReactNode
-}) {
-  return (
-    <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-xl shadow-sm">
-      <h1 className="font-headline-lg text-on-surface mb-xs">{title}</h1>
-      <p className="font-body-md text-on-surface-variant mb-xl">{subtitle}</p>
-      {children}
-      <div className="flex justify-between items-center mt-xl">{footer}</div>
-    </section>
   )
 }
