@@ -3,12 +3,12 @@
 // Displays proposal details (name, description, triggers, workflow) with
 // Approve/Reject buttons. Fetches proposals on mount and refreshes after actions.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { skillLoop } from '@/lib/tauri-api'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import { Modal } from '@/components/ui/modal'
 import type { SkillProposal } from '@/types'
 
 interface SkillProposalReviewPanelProps {
@@ -26,19 +26,6 @@ export default function SkillProposalReviewPanel({
   const [currentIndex, setCurrentIndex] = useState(0)
   const [loading, setLoading] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
-
-  const containerRef = useRef<HTMLDivElement>(null)
-  useModalFocus(open, containerRef)
-
-  useEffect(() => {
-    if (!open) return
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [open, onClose])
 
   useEffect(() => {
     if (!open) {
@@ -133,19 +120,15 @@ export default function SkillProposalReviewPanel({
   if (!open) return null
 
   return (
-    <div
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm"
-      onClick={onClose}
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="2xl"
+      showCloseButton={false}
+      className="max-h-[80vh] flex flex-col overflow-hidden"
     >
-      <div
-        ref={containerRef}
-        className="bg-surface-container-lowest rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col border border-outline-variant/30"
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-outline-variant">
+      {/* Header */}
+      <div className="flex items-center justify-between p-6 border-b border-outline-variant">
           <h2 className="text-xl font-semibold text-on-surface">
             {t('skillProposals.review.title')}
           </h2>
@@ -283,7 +266,6 @@ export default function SkillProposalReviewPanel({
             </div>
           </>
         )}
-      </div>
-    </div>
+    </Modal>
   )
 }

@@ -20,7 +20,7 @@ import StreamingResponse from '@/components/chat/StreamingResponse'
 import { useChat } from '@/context/ChatContext'
 import { useSessions } from '@/context/SessionContext'
 import { useCatalog } from '@/context/CatalogContext'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import { Modal, ModalBody, ModalFooter } from '@/components/ui/modal'
 import * as api from '@/lib/tauri-api'
 import { buildPrintStyles } from '@/lib/printStyles'
 import type { SessionInfo } from '@/types'
@@ -136,10 +136,6 @@ export default function Chat() {
   const [quickFixOpen, setQuickFixOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
 
-  const quickFixRef = useRef<HTMLDivElement>(null)
-  useModalFocus(quickFixOpen, quickFixRef)
-  const editorRef = useRef<HTMLDivElement>(null)
-  useModalFocus(editorOpen, editorRef)
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -614,81 +610,67 @@ export default function Chat() {
       </section>
 
       {/* Delete Confirmation Modal */}
-      {deleteTarget && (
-        <div className="fixed inset-0 z-[80] bg-black/30 backdrop-blur-sm flex items-center justify-center" onClick={() => setDeleteTarget(null)} onKeyDown={e => { if (e.key === 'Escape') setDeleteTarget(null) }}>
-          <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-sm mb-md">
-              <span className="material-symbols-outlined text-error text-[24px]">delete</span>
-              <h3 className="font-headline-md text-on-surface">{t('chat.delete.title')}</h3>
-            </div>
-            <p className="text-body-md text-on-surface-variant mb-lg">{t('chat.delete.confirm')}</p>
-            <div className="flex justify-end gap-sm">
-              <Button className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container" onClick={() => setDeleteTarget(null)}>{t('chat.delete.cancel')}</Button>
-              <Button className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90" onClick={() => { deleteSession(deleteTarget); setDeleteTarget(null) }}>{t('chat.delete.confirmButton')}</Button>
-            </div>
+      <Modal
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        role="alertdialog"
+        size="sm"
+        showCloseButton={false}
+      >
+        <ModalBody>
+          <div className="flex items-center gap-sm mb-md">
+            <span className="material-symbols-outlined text-error text-[24px]">delete</span>
+            <h3 className="font-headline-md text-on-surface">{t('chat.delete.title')}</h3>
           </div>
-        </div>
-      )}
+          <p className="text-body-md text-on-surface-variant mb-lg">{t('chat.delete.confirm')}</p>
+        </ModalBody>
+        <ModalFooter>
+          <Button className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container" onClick={() => setDeleteTarget(null)}>{t('chat.delete.cancel')}</Button>
+          <Button className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90" onClick={() => { if (deleteTarget) { deleteSession(deleteTarget); setDeleteTarget(null) } }}>{t('chat.delete.confirmButton')}</Button>
+        </ModalFooter>
+      </Modal>
 
       {/* Inline QuickFix panel — opened from the chat input toolbar. */}
-      {quickFixOpen && (
-        <div
-          ref={quickFixRef}
-          role="dialog"
-          aria-modal="true"
-          aria-label={t('nav.quickFix')}
-          className="fixed inset-0 z-[85] bg-black/40 backdrop-blur-sm flex items-center justify-center p-lg"
-          onClick={() => setQuickFixOpen(false)}
-          onKeyDown={e => { if (e.key === 'Escape') setQuickFixOpen(false) }}
-        >
-          <div
-            className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/30 w-full max-w-3xl max-h-[85vh] overflow-y-auto"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="sticky top-0 z-10 flex items-center justify-between px-lg py-md bg-surface-container-lowest/95 backdrop-blur-md border-b border-outline-variant/20">
-              <h3 className="font-headline-md text-on-surface">{t('nav.quickFix')}</h3>
-              <Button variant="ghost" aria-label={t('chat.delete.cancel')} onClick={() => setQuickFixOpen(false)}>
-                <span className="material-symbols-outlined">close</span>
-              </Button>
-            </div>
-            <div className="p-lg">
-              <Suspense fallback={<div className="flex items-center justify-center py-xl"><span className="material-symbols-outlined animate-spin text-primary">progress_activity</span></div>}>
-                <QuickFixPanel />
-              </Suspense>
-            </div>
-          </div>
+      <Modal
+        open={quickFixOpen}
+        onClose={() => setQuickFixOpen(false)}
+        size="2xl"
+        showCloseButton={false}
+        className="max-w-3xl max-h-[85vh] overflow-y-auto"
+      >
+        <div className="sticky top-0 z-10 flex items-center justify-between px-lg py-md bg-surface-container-lowest/95 backdrop-blur-md border-b border-outline-variant/20">
+          <h3 className="font-headline-md text-on-surface">{t('nav.quickFix')}</h3>
+          <Button variant="ghost" aria-label={t('chat.delete.cancel')} onClick={() => setQuickFixOpen(false)}>
+            <span className="material-symbols-outlined">close</span>
+          </Button>
         </div>
-      )}
+        <div className="p-lg">
+          <Suspense fallback={<div className="flex items-center justify-center py-xl"><span className="material-symbols-outlined animate-spin text-primary">progress_activity</span></div>}>
+            <QuickFixPanel />
+          </Suspense>
+        </div>
+      </Modal>
 
       {/* Inline Editor panel — opened from the chat input toolbar. */}
-      {editorOpen && (
-        <div
-          ref={editorRef}
-          role="dialog"
-          aria-modal="true"
-          aria-label={t('nav.editor')}
-          className="fixed inset-0 z-[85] bg-black/40 backdrop-blur-sm flex items-center justify-center p-md"
-          onClick={() => setEditorOpen(false)}
-          onKeyDown={e => { if (e.key === 'Escape') setEditorOpen(false) }}
-        >
-          <div
-            className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/30 w-full max-w-5xl h-[90vh] flex flex-col"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-lg py-md bg-surface-container-lowest/95 backdrop-blur-md border-b border-outline-variant/20">
-              <h3 className="font-headline-md text-on-surface">{t('nav.editor')}</h3>
-              <Button variant="ghost" aria-label={t('chat.delete.cancel')} onClick={() => setEditorOpen(false)}>
-                <span className="material-symbols-outlined">close</span>
-              </Button>
-            </div>
-            <div className="flex-1 overflow-hidden">
-              <Suspense fallback={<div className="flex items-center justify-center py-xl"><span className="material-symbols-outlined animate-spin text-primary">progress_activity</span></div>}>
-                <EditorPanel />
-              </Suspense>
-            </div>
-          </div>
+      <Modal
+        open={editorOpen}
+        onClose={() => setEditorOpen(false)}
+        size="2xl"
+        showCloseButton={false}
+        className="max-w-5xl h-[90vh] flex flex-col"
+      >
+        <div className="flex items-center justify-between px-lg py-md bg-surface-container-lowest/95 backdrop-blur-md border-b border-outline-variant/20">
+          <h3 className="font-headline-md text-on-surface">{t('nav.editor')}</h3>
+          <Button variant="ghost" aria-label={t('chat.delete.cancel')} onClick={() => setEditorOpen(false)}>
+            <span className="material-symbols-outlined">close</span>
+          </Button>
         </div>
-      )}
+        <div className="flex-1 overflow-hidden">
+          <Suspense fallback={<div className="flex items-center justify-center py-xl"><span className="material-symbols-outlined animate-spin text-primary">progress_activity</span></div>}>
+            <EditorPanel />
+          </Suspense>
+        </div>
+      </Modal>
 
       {/* Right Sidebar - Context (collapsible) */}
       <aside
