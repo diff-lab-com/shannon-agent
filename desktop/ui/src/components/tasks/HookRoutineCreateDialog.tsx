@@ -3,10 +3,15 @@
 // Persists new routines to `.shannon/routines.toml` via the
 // `create_triggered_routine` Tauri command. On success, callers should refresh
 // their routine list (the dialog calls onCreated with the new routine DTO).
+//
+// T1.2 — migrated onto the shared <Modal> primitive. The hand-rolled
+// `fixed inset-0 z-50 flex items-center justify-center` overlay, focus
+// containerRef, `useModalFocus` hook, and backdrop click handler are
+// all gone: Modal owns them.
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useIntl } from 'react-intl'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import { Modal, ModalBody, ModalFooter } from '@/components/ui/modal'
 import * as api from '@/lib/tauri-api'
 import type { TriggeredRoutineDto } from '@/types'
 
@@ -40,9 +45,6 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const containerRef = useRef<HTMLDivElement>(null)
-  useModalFocus(open, containerRef)
-
   useEffect(() => {
     if (open) {
       setName('')
@@ -55,8 +57,6 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
       setError(null)
     }
   }, [open])
-
-  if (!open) return null
 
   const nameOk = name.trim().length >= 1 && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(name.trim())
   const commandOk = command.trim().length > 0
@@ -88,121 +88,111 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
   const selectedHint = TRIGGER_OPTIONS.find(o => o.value === trigger)?.hint ?? ''
 
   return (
-    <div
-      ref={containerRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-md"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="hook-routine-create-title"
-      onClick={onClose}
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="lg"
+      // Modal renders its own header (with close button) when title is set.
+      // closeLabel supplies the close button's aria-label = "Close dialog"
+      // (test contract in HookRoutineCreateDialog.test.tsx). The built-in
+      // header h2 satisfies the "role=dialog" + aria-labelledby semantic
+      // and gives Modal the close button so the backdrop-click + Esc
+      // primitive behavior is consistent with the rest of the dialogs.
+      title={t('tasks.hookRoutineCreateDialog.title')}
+      closeLabel={t('tasks.hookRoutineCreateDialog.closeAria')}
+      busy={submitting}
+      className="max-h-[90vh] flex flex-col"
     >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={onSubmit}
-        className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/40 w-full max-w-lg max-h-[90vh] overflow-y-auto p-lg flex flex-col gap-md"
-      >
-        <div className="flex items-center justify-between">
-          <h2 id="hook-routine-create-title" className="font-headline-md text-[18px] font-bold text-on-surface flex items-center gap-sm">
-            <span className="material-symbols-outlined icon-md text-primary">add_link</span>
-            {t('tasks.hookRoutineCreateDialog.title')}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('tasks.hookRoutineCreateDialog.closeAria')}
-            className="text-on-surface-variant hover:bg-surface-container-high rounded-full p-xs cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-          >
-            <span className="material-symbols-outlined text-[18px]">close</span>
-          </button>
-        </div>
+      <form onSubmit={onSubmit} className="flex flex-col gap-md">
+        <ModalBody className="pt-0 space-y-md">
+          {error ? (
+            <div className="bg-error/10 border border-error/30 rounded-lg p-sm font-label-sm text-error flex items-start gap-sm" role="alert">
+              <span className="material-symbols-outlined text-[14px] mt-0.5" aria-hidden="true">error</span>
+              <span className="flex-1 break-words">{error}</span>
+            </div>
+          ) : null}
 
-        {error ? (
-          <div className="bg-error/10 border border-error/30 rounded-lg p-sm font-label-sm text-error flex items-start gap-sm" role="alert">
-            <span className="material-symbols-outlined text-[14px] mt-0.5">error</span>
-            <span className="flex-1 break-words">{error}</span>
+          <label className="flex flex-col gap-xs">
+            <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.name')}</span>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={t('tasks.hookRoutineCreateDialog.namePlaceholder')}
+              required
+              aria-invalid={!nameOk && name.length > 0}
+              className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            />
+            <span className="font-label-sm text-[11px] text-on-surface-variant">
+              {t('tasks.hookRoutineCreateDialog.nameHint')}
+            </span>
+          </label>
+
+          <label className="flex flex-col gap-xs">
+            <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.hookEvent')}</span>
+            <select
+              value={trigger}
+              onChange={(e) => setTrigger(e.target.value)}
+              className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            >
+              {TRIGGER_OPTIONS.map(o => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            <span className="font-label-sm text-[11px] text-on-surface-variant">{selectedHint}</span>
+          </label>
+
+          <label className="flex flex-col gap-xs">
+            <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.command')}</span>
+            <input
+              type="text"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              placeholder={t('tasks.hookRoutineCreateDialog.commandPlaceholder')}
+              required
+              className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md font-mono text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            />
+            <span className="font-label-sm text-[11px] text-on-surface-variant">
+              {t('tasks.hookRoutineCreateDialog.commandHint')}
+            </span>
+          </label>
+
+          <div className="grid grid-cols-2 gap-md">
+            <label className="flex flex-col gap-xs">
+              <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.matcher')}</span>
+              <input
+                type="text"
+                value={matcher}
+                onChange={(e) => setMatcher(e.target.value)}
+                placeholder={t('tasks.hookRoutineCreateDialog.matcherPlaceholder')}
+                className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md font-mono text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              />
+            </label>
+            <label className="flex flex-col gap-xs">
+              <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.pattern')}</span>
+              <input
+                type="text"
+                value={pattern}
+                onChange={(e) => setPattern(e.target.value)}
+                placeholder={t('tasks.hookRoutineCreateDialog.patternPlaceholder')}
+                className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md font-mono text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              />
+            </label>
           </div>
-        ) : null}
 
-        <label className="flex flex-col gap-xs">
-          <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.name')}</span>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={t('tasks.hookRoutineCreateDialog.namePlaceholder')}
-            required
-            aria-invalid={!nameOk && name.length > 0}
-            className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-          />
-          <span className="font-label-sm text-[11px] text-on-surface-variant">
-            {t('tasks.hookRoutineCreateDialog.nameHint')}
-          </span>
-        </label>
-
-        <label className="flex flex-col gap-xs">
-          <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.hookEvent')}</span>
-          <select
-            value={trigger}
-            onChange={(e) => setTrigger(e.target.value)}
-            className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-          >
-            {TRIGGER_OPTIONS.map(o => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-          <span className="font-label-sm text-[11px] text-on-surface-variant">{selectedHint}</span>
-        </label>
-
-        <label className="flex flex-col gap-xs">
-          <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.command')}</span>
-          <input
-            type="text"
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
-            placeholder={t('tasks.hookRoutineCreateDialog.commandPlaceholder')}
-            required
-            className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md font-mono text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-          />
-          <span className="font-label-sm text-[11px] text-on-surface-variant">
-            {t('tasks.hookRoutineCreateDialog.commandHint')}
-          </span>
-        </label>
-
-        <div className="grid grid-cols-2 gap-md">
           <label className="flex flex-col gap-xs">
-            <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.matcher')}</span>
-            <input
-              type="text"
-              value={matcher}
-              onChange={(e) => setMatcher(e.target.value)}
-              placeholder={t('tasks.hookRoutineCreateDialog.matcherPlaceholder')}
-              className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md font-mono text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.description')}</span>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder={t('tasks.hookRoutineCreateDialog.descriptionPlaceholder')}
+              rows={2}
+              className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 resize-none"
             />
           </label>
-          <label className="flex flex-col gap-xs">
-            <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.pattern')}</span>
-            <input
-              type="text"
-              value={pattern}
-              onChange={(e) => setPattern(e.target.value)}
-              placeholder={t('tasks.hookRoutineCreateDialog.patternPlaceholder')}
-              className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md font-mono text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-            />
-          </label>
-        </div>
+        </ModalBody>
 
-        <label className="flex flex-col gap-xs">
-          <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.description')}</span>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder={t('tasks.hookRoutineCreateDialog.descriptionPlaceholder')}
-            rows={2}
-            className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 resize-none"
-          />
-        </label>
-
-        <div className="flex justify-end gap-sm pt-sm border-t border-outline-variant/20">
+        <ModalFooter className="pt-sm border-t border-outline-variant/20">
           <button
             type="button"
             onClick={onClose}
@@ -216,11 +206,11 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
             disabled={!canSubmit}
             className="px-md py-sm rounded-lg font-label-md text-on-primary bg-primary hover:bg-primary/90 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
           >
-            <span className="material-symbols-outlined text-[14px]">{submitting ? 'hourglass_top' : 'add'}</span>
+            <span className="material-symbols-outlined text-[14px]" aria-hidden="true">{submitting ? 'hourglass_top' : 'add'}</span>
             {submitting ? t('tasks.hookRoutineCreateDialog.creating') : t('tasks.hookRoutineCreateDialog.createRoutine')}
           </button>
-        </div>
+        </ModalFooter>
       </form>
-    </div>
+    </Modal>
   )
 }
