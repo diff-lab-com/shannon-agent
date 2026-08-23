@@ -453,7 +453,9 @@ impl PathSandbox {
         }
 
         Err(SandboxError::OutsideAllowedRoots(format!(
-            "Path '{}' is not within any allowed root. Allowed roots: {:?}",
+            "Path '{}' is not within any allowed root. Allowed roots: {:?}. \
+             Address files relative to the current working directory or under \
+             an allowed root.",
             canonical_str, self.config.allowed_roots
         )))
     }

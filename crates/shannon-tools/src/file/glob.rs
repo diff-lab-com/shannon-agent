@@ -65,6 +65,14 @@ const MATCH_OPTS: glob::MatchOptions = glob::MatchOptions {
     require_literal_leading_dot: false,
 };
 
+/// Whether a glob pattern addresses outside its base directory. Absolute
+/// patterns can never match (matching runs on base-relative paths) and `..`
+/// segments only ever produce empty results; both previously surfaced as a
+/// silent "No files found".
+fn pattern_is_escaping(pattern: &str) -> bool {
+    Path::new(pattern).is_absolute() || pattern.split(['/', '\\']).any(|seg| seg == "..")
+}
+
 /// Check whether `candidate` (a relative path) matches any of the given
 /// exclude patterns.
 fn matches_any_exclude(candidate: &Path, excludes: &[String]) -> bool {
@@ -147,6 +155,27 @@ pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
 
     let excludes = input.exclude_pattern.as_deref().unwrap_or(&[]);
     let pattern = &input.pattern;
+
+    // A pattern that addresses outside its base directory can never match:
+    // matching runs against paths RELATIVE to the base, so absolute or
+    // `..`-containing patterns silently returned "No files found" — which
+    // reads as "wrong pattern" and invites the model to keep guessing escape
+    // depths (dogfood l2 2026-08-23: ../../../../../../ tried at two wrong
+    // depths, then the task gave up without producing its answer). Report
+    // the confinement so the model can switch to a relative pattern.
+    if pattern_is_escaping(pattern) {
+        return Ok(ToolOutput {
+            content: format!(
+                "Glob pattern '{pattern}' cannot match here: patterns are \
+                 applied to paths relative to the search directory, and this \
+                 one addresses outside it. Use a relative pattern (e.g. \
+                 'src/**/*.rs') or set the 'path' parameter to a \
+                 subdirectory."
+            ),
+            is_error: true,
+            metadata: HashMap::new(),
+        });
+    }
 
     // Compile the glob pattern once.
     let glob_pattern = glob::Pattern::new(pattern)
@@ -284,6 +313,48 @@ mod tests {
             .iter()
             .map(|v| v["path"].as_str().unwrap().to_string())
             .collect()
+    }
+
+    #[tokio::test]
+    async fn test_escaping_pattern_reports_confinement_not_silence() {
+        let tmp = TempDir::new().unwrap();
+        let root = setup_test_tree(&tmp);
+
+        // `..` prefix: previously a silent "No files found", which the model
+        // read as "wrong pattern" and kept guessing escape depths (dogfood
+        // l2 2026-08-23). Must surface as a confinement error instead.
+        let input = GlobInput {
+            pattern: "../../**/*.rs".to_string(),
+            path: Some(root.display().to_string()),
+            exclude_pattern: None,
+        };
+        let output = execute(input).await.unwrap();
+        assert!(output.is_error, "escape pattern must be an error");
+        assert!(
+            output.content.contains("relative pattern"),
+            "error must point at the recovery: {}",
+            output.content
+        );
+
+        // Absolute pattern: matching is base-relative, so it can never match
+        // either — same confinement error, not silence.
+        let input = GlobInput {
+            pattern: format!("{}/*.rs", root.display()),
+            path: None,
+            exclude_pattern: None,
+        };
+        let output = execute(input).await.unwrap();
+        assert!(output.is_error, "absolute pattern must be an error");
+
+        // Sanity: ordinary relative patterns are unaffected.
+        let input = GlobInput {
+            pattern: "*.rs".to_string(),
+            path: Some(root.display().to_string()),
+            exclude_pattern: None,
+        };
+        let output = execute(input).await.unwrap();
+        assert!(!output.is_error);
+        assert_eq!(extract_paths(&output).len(), 2);
     }
 
     #[tokio::test]
