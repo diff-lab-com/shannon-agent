@@ -7,16 +7,18 @@
 // Apply: computes merged content client-side via mergeFile, writes via
 // save_text_file, toasts success/failure, and closes the modal on success.
 //
-// Click outside / Esc / Close button dismisses. Errors surface as a
-// friendly inline message rather than throwing.
+// T1.2 — migrated onto the shared Modal primitive. Focus management,
+// Esc-to-close, body scroll lock, and backdrop click are now handled
+// by the primitive instead of hand-rolled hooks/listeners. The close
+// button's aria-label is supplied via Modal's `closeLabel` prop so the
+// existing test contract ("Close diff") keeps working.
 
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
-import { Button } from '@/components/ui/button'
+import { Modal, ModalBody, ModalFooter } from '@/components/ui/modal'
 import DiffViewer from '@/components/diff/DiffViewer'
 import { useDiffKeyboard } from '@/hooks/useDiffKeyboard'
-import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import { computeHunks, mergeFile, type HunkDecision } from '@/lib/diff-merge'
 import type { FileDiff } from '@/types'
@@ -37,13 +39,13 @@ function cycleDecision(d: HunkDecision): HunkDecision {
 
 export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps) {
   const intl = useIntl()
+  const t = (id: string, values?: Record<string, string | number>) =>
+    intl.formatMessage({ id }, values)
   const [diff, setDiff] = useState<FileDiff | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [decisions, setDecisions] = useState<Map<string, HunkDecision>>(new Map())
-
-  const containerRef = useRef<HTMLDivElement>(null)
-  useModalFocus(open, containerRef)
+  const [applying, setApplying] = useState(false)
 
   useEffect(() => {
     if (!open || !filePath) {
@@ -67,13 +69,6 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
     return () => { cancelled = true }
   }, [open, filePath])
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [open, onClose])
-
   const hunks = useMemo(
     () => diff ? computeHunks(diff.old_content, diff.new_content) : [],
     [diff],
@@ -85,7 +80,6 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
     [decisions],
   )
   const hasHunks = hunks.length > 0
-  const [applying, setApplying] = useState(false)
 
   const handleToggleHunk = (hunkId: string) => {
     setDecisions(prev => {
@@ -132,13 +126,13 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
       const merged = mergeFile(diff.old_content, diff.new_content, decisions)
       await api.saveTextFile(filePath, merged)
       toast.success(
-        intl.formatMessage({ id: 'diff.dialog.applied' }, { count: acceptedCount }),
-        { description: intl.formatMessage({ id: 'diff.dialog.applied.desc' }, { count: acceptedCount, path: filePath }) },
+        t('diff.dialog.applied'),
+        { description: t('diff.dialog.applied.desc') },
       )
       onClose()
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      toast.error(intl.formatMessage({ id: 'diff.dialog.applyFailed' }), { description: msg })
+      toast.error(t('diff.dialog.applyFailed'), { description: msg })
     } finally {
       setApplying(false)
     }
@@ -152,127 +146,104 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
   })
   void currentHunkId
 
-  if (!open) return null
-
   return (
-    <div
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm p-lg"
-      onClick={onClose}
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="2xl"
+      title={t('diff.dialog.title')}
+      description={filePath ?? undefined}
+      closeLabel={t('diff.dialog.close.aria')}
+      busy={applying}
+      className="max-w-5xl flex flex-col max-h-[90vh]"
     >
-      <div
-        ref={containerRef}
-        className="bg-surface-container-lowest rounded-2xl border border-outline-variant/20 shadow-2xl w-full max-w-5xl max-h-[85vh] flex flex-col"
-        role="dialog"
-        aria-modal="true"
-        aria-label={intl.formatMessage({ id: 'diff.dialog.file' }, { path: filePath ?? 'file' })}
-        onClick={e => e.stopPropagation()}
-      >
-        <header className="flex items-center justify-between px-lg py-md border-b border-outline-variant/30">
-          <div className="flex items-center gap-md min-w-0">
-            <span className="material-symbols-outlined icon-md text-on-surface-variant">difference</span>
-            <h3 className="font-headline-md text-on-surface truncate">{intl.formatMessage({ id: 'diff.dialog.title' })}</h3>
-            {filePath ? (
-              <code className="font-label-sm text-on-surface-variant bg-surface-container-low px-sm py-xs rounded truncate">{filePath}</code>
-            ) : null}
+      {diff && hasHunks && (
+        <div className="flex items-center gap-md px-lg py-sm border-b border-outline-variant/30 bg-surface-container-low">
+          <div className="flex-1 min-w-0">
+            <div className="font-label-md text-on-surface">{t('diff.review.title')}</div>
+            <div className="font-label-sm text-on-surface-variant">{t('diff.review.subtitle')}</div>
           </div>
-          <Button
-            className="p-xs rounded-lg hover:bg-surface-container-high text-on-surface-variant cursor-pointer"
-            aria-label={intl.formatMessage({ id: 'diff.dialog.close.aria' })}
-            onClick={onClose}
-          >
-            <span className="material-symbols-outlined">close</span>
-          </Button>
-        </header>
-
-        {/* Review toolbar — only render when we have a diff with hunks. */}
-        {diff && hasHunks && (
-          <div className="flex items-center gap-md px-lg py-sm border-b border-outline-variant/30 bg-surface-container-low">
-            <div className="flex-1 min-w-0">
-              <div className="font-label-md text-on-surface">{intl.formatMessage({ id: 'diff.review.title' })}</div>
-              <div className="font-label-sm text-on-surface-variant">{intl.formatMessage({ id: 'diff.review.subtitle' })}</div>
-            </div>
-            <div className="flex items-center gap-xs shrink-0">
-              <span className="font-label-sm text-on-surface-variant">
-                {decidedCount} / {hunks.length}
-              </span>
-              <button
-                type="button"
-                onClick={handleAcceptAll}
-                className="px-md py-xs rounded-lg font-label-md bg-tertiary-container/40 text-tertiary hover:bg-tertiary-container/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-              >
-                {intl.formatMessage({ id: 'diff.review.acceptAll' })}
-              </button>
-              <button
-                type="button"
-                onClick={handleRejectAll}
-                className="px-md py-xs rounded-lg font-label-md bg-error-container/40 text-error hover:bg-error-container/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-              >
-                {intl.formatMessage({ id: 'diff.review.rejectAll' })}
-              </button>
-              <button
-                type="button"
-                onClick={handleReset}
-                disabled={decidedCount === 0}
-                className="px-md py-xs rounded-lg font-label-md bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-              >
-                {intl.formatMessage({ id: 'diff.review.resetAll' })}
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div className="flex-1 overflow-auto p-lg">
-          {loading ? (
-            <div className="flex items-center justify-center py-xl">
-              <span className="material-symbols-outlined animate-spin text-primary">progress_activity</span>
-              <span className="ml-md text-body-sm text-on-surface-variant">{intl.formatMessage({ id: 'diff.dialog.loading' })}</span>
-            </div>
-          ) : error ? (
-            <div className="flex items-start gap-sm p-md bg-error/10 border border-error/20 rounded-xl text-error">
-              <span className="material-symbols-outlined text-[18px] mt-[2px]">error</span>
-              <div>
-                <p className="font-label-md">{intl.formatMessage({ id: 'diff.dialog.loadFailed' })}</p>
-                <p className="font-body-sm mt-xs opacity-80">{error}</p>
-              </div>
-            </div>
-          ) : diff ? (
-            <DiffViewer
-              diff={diff}
-              decisions={decisions}
-              onToggleHunk={handleToggleHunk}
-            />
-          ) : null}
-        </div>
-
-        {diff && hasHunks && (
-          <footer className="flex items-center justify-end gap-sm px-lg py-md border-t border-outline-variant/30 bg-surface-container-low">
+          <div className="flex items-center gap-xs shrink-0">
+            <span className="font-label-sm text-on-surface-variant">
+              {decidedCount} / {hunks.length}
+            </span>
             <button
               type="button"
-              onClick={onClose}
-              disabled={applying}
+              onClick={handleAcceptAll}
+              className="px-md py-xs rounded-lg font-label-md bg-tertiary-container/40 text-tertiary hover:bg-tertiary-container/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            >
+              {t('diff.review.acceptAll')}
+            </button>
+            <button
+              type="button"
+              onClick={handleRejectAll}
+              className="px-md py-xs rounded-lg font-label-md bg-error-container/40 text-error hover:bg-error-container/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            >
+              {t('diff.review.rejectAll')}
+            </button>
+            <button
+              type="button"
+              onClick={handleReset}
+              disabled={decidedCount === 0}
               className="px-md py-xs rounded-lg font-label-md bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
             >
-              {intl.formatMessage({ id: 'diff.dialog.cancel' })}
+              {t('diff.review.resetAll')}
             </button>
-            <button
-              type="button"
-              onClick={handleApply}
-              disabled={applying || acceptedCount === 0}
-              className="px-md py-xs rounded-lg font-label-md bg-primary text-on-primary hover:bg-primary/90 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-              aria-label={intl.formatMessage({ id: 'diff.dialog.apply.aria' })}
-            >
-              {applying ? (
-                <span className="flex items-center gap-xs">
-                  <span className="material-symbols-outlined animate-spin text-[16px]">progress_activity</span>
-                  {intl.formatMessage({ id: 'diff.dialog.apply' }, { count: acceptedCount })}
-                </span>
-              ) : (
-                intl.formatMessage({ id: 'diff.dialog.apply' }, { count: acceptedCount })
-              )}
-            </button>
-          </footer>
-        )}
-      </div>
-    </div>
+          </div>
+        </div>
+      )}
+
+      <ModalBody className="flex-1 overflow-auto p-lg">
+        {loading ? (
+          <div className="flex items-center justify-center py-xl">
+            <span className="material-symbols-outlined animate-spin text-primary" aria-hidden="true">progress_activity</span>
+            <span className="ml-md text-body-sm text-on-surface-variant">{t('diff.dialog.loading')}</span>
+          </div>
+        ) : error ? (
+          <div className="flex items-start gap-sm p-md bg-error/10 border border-error/20 rounded-xl text-error">
+            <span className="material-symbols-outlined text-[18px] mt-[2px]" aria-hidden="true">error</span>
+            <div>
+              <p className="font-label-md">{t('diff.dialog.loadFailed')}</p>
+              <p className="font-body-sm mt-xs opacity-80">{error}</p>
+            </div>
+          </div>
+        ) : diff ? (
+          <DiffViewer
+            diff={diff}
+            decisions={decisions}
+            onToggleHunk={handleToggleHunk}
+          />
+        ) : null}
+      </ModalBody>
+
+      {diff && hasHunks && (
+        <ModalFooter className="pt-md">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={applying}
+            className="px-md py-xs rounded-lg font-label-md bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          >
+            {t('diff.dialog.cancel')}
+          </button>
+          <button
+            type="button"
+            onClick={handleApply}
+            disabled={applying || acceptedCount === 0}
+            className="px-md py-xs rounded-lg font-label-md bg-primary text-on-primary hover:bg-primary/90 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            aria-label={t('diff.dialog.apply.aria')}
+          >
+            {applying ? (
+              <span className="flex items-center gap-xs">
+                <span className="material-symbols-outlined animate-spin text-[16px]" aria-hidden="true">progress_activity</span>
+                {t('diff.dialog.apply', { count: acceptedCount })}
+              </span>
+            ) : (
+              t('diff.dialog.apply', { count: acceptedCount })
+            )}
+          </button>
+        </ModalFooter>
+      )}
+    </Modal>
   )
 }
