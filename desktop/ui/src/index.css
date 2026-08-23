@@ -216,6 +216,17 @@
     animation: pulse-amber 2s infinite;
 }
 
+/* Used by <GradientText> to pan the bg-position for a slow gradient shift.
+   Slow (6s) and low-contrast so it reads as ambient, not decorative. */
+@utility animate-gradient-pan {
+    animation: gradient-pan 6s ease-in-out infinite;
+}
+
+@keyframes gradient-pan {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
 @keyframes pulse-amber {
     0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-tertiary) 40%, transparent); }
     70% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--color-tertiary) 0%, transparent); }
