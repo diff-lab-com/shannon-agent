@@ -1,12 +1,12 @@
-import { useState, useRef, memo } from 'react'
+import { useState, memo } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
+import { Modal } from '@/components/ui/modal'
 import { useChat } from '@/context/ChatContext'
 import { useSessions } from '@/context/SessionContext'
-import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import { Markdown } from '@/components/chat/Markdown'
 import { FootnoteMarkdown } from '@/components/chat/FootnoteMarkdown'
@@ -83,8 +83,6 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const [open, setOpen] = useState(false)
-  const modalRef = useRef<HTMLDivElement>(null)
-  useModalFocus(open, modalRef)
   const isImage = isImagePath(attachment.path)
 
   const handleClick = () => setOpen(true)
@@ -111,52 +109,51 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
         <span className="font-label-sm max-w-[160px] truncate">{attachment.name}</span>
       </button>
 
-      {open && (
-        <div
-          ref={modalRef}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-lg"
-          onClick={() => setOpen(false)}
-          role="dialog"
-          aria-modal="true"
-          aria-label={attachment.name}
-        >
-          {isImage ? (
-            <img
-              src={convertFileSrc(attachment.path)}
-              alt={attachment.name}
-              className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            />
-          ) : (
-            <div
-              className="bg-surface-container-lowest rounded-xl p-lg shadow-2xl max-w-md"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center gap-sm mb-md">
-                <span className="material-symbols-outlined text-on-surface-variant">description</span>
-                <span className="font-label-md text-on-surface truncate">{attachment.name}</span>
-              </div>
-              <p className="text-body-sm text-on-surface-variant mb-md break-all">{attachment.path}</p>
-              <Button
-                onClick={() => {
-                  window.open(convertFileSrc(attachment.path), '_blank')
-                }}
-              >
-                <span className="material-symbols-outlined text-[18px] mr-xs">open_in_new</span>
-                {t('chat.message.attachment.openExternally')}
-              </Button>
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            aria-label={t('chat.message.attachment.close')}
-            className="absolute top-md right-md text-on-surface-variant hover:text-on-surface bg-surface-container-lowest/80 rounded-full p-sm"
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        size="full"
+        showCloseButton={false}
+        title={attachment.name}
+        closeLabel={t('chat.message.attachment.close')}
+        className="bg-black/70 backdrop-blur-sm p-lg"
+      >
+        {isImage ? (
+          <img
+            src={convertFileSrc(attachment.path)}
+            alt={attachment.name}
+            className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <div
+            className="bg-surface-container-lowest rounded-xl p-lg shadow-2xl max-w-md"
+            onClick={(e) => e.stopPropagation()}
           >
-            <span className="material-symbols-outlined">close</span>
-          </button>
-        </div>
-      )}
+            <div className="flex items-center gap-sm mb-md">
+              <span className="material-symbols-outlined text-on-surface-variant">description</span>
+              <span className="font-label-md text-on-surface truncate">{attachment.name}</span>
+            </div>
+            <p className="text-body-sm text-on-surface-variant mb-md break-all">{attachment.path}</p>
+            <Button
+              onClick={() => {
+                window.open(convertFileSrc(attachment.path), '_blank')
+              }}
+            >
+              <span className="material-symbols-outlined text-[18px] mr-xs">open_in_new</span>
+              {t('chat.message.attachment.openExternally')}
+            </Button>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          aria-label={t('chat.message.attachment.close')}
+          className="absolute top-md right-md text-on-surface-variant hover:text-on-surface bg-surface-container-lowest/80 rounded-full p-sm"
+        >
+          <span className="material-symbols-outlined">close</span>
+        </button>
+      </Modal>
     </>
   )
 }
