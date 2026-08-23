@@ -1,5 +1,7 @@
 import { useMemo } from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { computeHunks, type HunkDecision } from '@/lib/diff-merge'
 import type { FileDiff } from '@/types'
 
@@ -102,18 +104,20 @@ export default function FileDiffList({
       <div className="px-md py-sm border-b border-outline-variant/30">
         <div className="flex items-center gap-xs overflow-x-auto">
           {FILTERS.map(f => (
-            <button
+            <Button
               key={f}
-              type="button"
+              variant={filter === f ? 'default' : 'secondary'}
+              size="sm"
               onClick={() => onFilterChange(f)}
-              className={`px-xs py-[2px] rounded-full font-label-sm whitespace-nowrap cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${
+              className={cn(
+                'h-auto px-xs py-[2px] rounded-full font-label-sm whitespace-nowrap',
                 filter === f
                   ? 'bg-primary text-on-primary'
                   : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'
-              }`}
+              )}
             >
               {intl.formatMessage({ id: `diff.multi.filter.${f}` })}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
@@ -131,12 +135,13 @@ export default function FileDiffList({
             const dels = diff ? computeRemovedCount(diff) : 0
             return (
               <li key={path}>
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
                   onClick={() => onSelectPath(path)}
-                  className={`w-full text-left px-md py-sm border-b border-outline-variant/20 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${
-                    isActive ? 'bg-secondary-container/40' : 'hover:bg-surface-container-high'
-                  }`}
+                  className={cn(
+                    'w-full justify-start items-start text-left px-md py-sm h-auto rounded-none border-b border-outline-variant/20',
+                    isActive ? 'bg-secondary-container/40 hover:bg-secondary-container/40' : 'hover:bg-surface-container-high'
+                  )}
                   aria-label={intl.formatMessage({ id: 'diff.multi.file.aria' }, { path })}
                   aria-current={isActive ? 'true' : undefined}
                 >
@@ -157,7 +162,7 @@ export default function FileDiffList({
                       {status.label}
                     </span>
                   </div>
-                </button>
+                </Button>
               </li>
             )
           })

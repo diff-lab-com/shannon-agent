@@ -12,6 +12,7 @@
 import { useState, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { Modal, ModalBody, ModalFooter } from '@/components/ui/modal'
+import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
 import type { TriggeredRoutineDto } from '@/types'
 
@@ -193,22 +194,22 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
         </ModalBody>
 
         <ModalFooter className="pt-sm border-t border-outline-variant/20">
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={onClose}
             disabled={submitting}
-            className="px-md py-sm rounded-lg font-label-md text-on-surface-variant hover:bg-surface-container-high cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40"
           >
             {t('tasks.hookRoutineCreateDialog.cancel')}
-          </button>
-          <button
+          </Button>
+          <Button
             type="submit"
             disabled={!canSubmit}
-            className="px-md py-sm rounded-lg font-label-md text-on-primary bg-primary hover:bg-primary/90 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
+            className="disabled:cursor-not-allowed"
           >
             <span className="material-symbols-outlined text-[14px]" aria-hidden="true">{submitting ? 'hourglass_top' : 'add'}</span>
             {submitting ? t('tasks.hookRoutineCreateDialog.creating') : t('tasks.hookRoutineCreateDialog.createRoutine')}
-          </button>
+          </Button>
         </ModalFooter>
       </form>
     </Modal>

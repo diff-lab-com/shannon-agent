@@ -16,6 +16,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
 import { Modal, ModalBody, ModalFooter } from '@/components/ui/modal'
 import DiffViewer from '@/components/diff/DiffViewer'
 import { useDiffKeyboard } from '@/hooks/useDiffKeyboard'
@@ -167,28 +168,29 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
             <span className="font-label-sm text-on-surface-variant">
               {decidedCount} / {hunks.length}
             </span>
-            <button
-              type="button"
+            <Button
+              size="sm"
               onClick={handleAcceptAll}
-              className="px-md py-xs rounded-lg font-label-md bg-tertiary-container/40 text-tertiary hover:bg-tertiary-container/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+              className="h-auto px-md py-xs rounded-lg font-label-md bg-tertiary-container/40 text-tertiary hover:bg-tertiary-container/60"
             >
               {t('diff.review.acceptAll')}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              size="sm"
               onClick={handleRejectAll}
-              className="px-md py-xs rounded-lg font-label-md bg-error-container/40 text-error hover:bg-error-container/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+              className="h-auto px-md py-xs rounded-lg font-label-md bg-error-container/40 text-error hover:bg-error-container/60"
             >
               {t('diff.review.rejectAll')}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
               onClick={handleReset}
               disabled={decidedCount === 0}
-              className="px-md py-xs rounded-lg font-label-md bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+              className="h-auto px-md py-xs rounded-lg font-label-md"
             >
               {t('diff.review.resetAll')}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -218,19 +220,20 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
 
       {diff && hasHunks && (
         <ModalFooter className="pt-md">
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={onClose}
             disabled={applying}
-            className="px-md py-xs rounded-lg font-label-md bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            className="h-auto px-md py-xs rounded-lg font-label-md"
           >
             {t('diff.dialog.cancel')}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            size="sm"
             onClick={handleApply}
             disabled={applying || acceptedCount === 0}
-            className="px-md py-xs rounded-lg font-label-md bg-primary text-on-primary hover:bg-primary/90 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            className="h-auto px-md py-xs rounded-lg font-label-md bg-primary text-on-primary hover:bg-primary/90"
             aria-label={t('diff.dialog.apply.aria')}
           >
             {applying ? (
@@ -241,7 +244,7 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
             ) : (
               t('diff.dialog.apply', { count: acceptedCount })
             )}
-          </button>
+          </Button>
         </ModalFooter>
       )}
     </Modal>

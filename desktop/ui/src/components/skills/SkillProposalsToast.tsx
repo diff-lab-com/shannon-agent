@@ -5,6 +5,7 @@
 
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
 import { useTauriEventValidated } from '@/hooks/useTauriEventValidated'
 import type { SkillProposalCountPayload } from '@/types'
 
@@ -52,18 +53,19 @@ export default function SkillProposalsToast({ onOpenReview }: SkillProposalsToas
               {t('skillProposals.toast.description')}
             </p>
             <div className="flex gap-2 mt-3">
-              <button
+              <Button
                 onClick={handleView}
-                className="px-3 py-1.5 bg-primary hover:bg-primary/90 text-on-primary text-sm rounded-md transition-colors"
+                size="sm"
               >
                 {t('skillProposals.toast.viewButton')}
-              </button>
-              <button
+              </Button>
+              <Button
                 onClick={handleDismiss}
-                className="px-3 py-1.5 text-on-surface-variant text-sm hover:bg-surface-container rounded-md transition-colors"
+                variant="ghost"
+                size="sm"
               >
                 {t('skillProposals.toast.closeButton')}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

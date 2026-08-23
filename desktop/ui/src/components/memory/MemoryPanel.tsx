@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type React from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Modal } from '@/components/ui/modal'
 import { toast } from 'sonner'
@@ -190,12 +191,14 @@ export default function MemoryPanel() {
           <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/20 text-error font-label-md mb-lg">
             <span className="material-symbols-outlined text-[18px]">error</span>
             {errorMsg}
-            <button
-              className="ml-auto text-error/60 hover:text-error cursor-pointer"
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="ml-auto text-error/60 hover:text-error"
               onClick={() => setErrorMsg(null)}
             >
               <span className="material-symbols-outlined text-[18px]">close</span>
-            </button>
+            </Button>
           </div>
         )}
 
@@ -238,13 +241,13 @@ export default function MemoryPanel() {
             />
           </div>
 
-          <button
+          <Button
             onClick={() => setCreating(true)}
-            className="inline-flex items-center gap-xs px-md py-sm rounded-xl bg-primary text-on-primary text-label-md font-bold hover:brightness-110"
+            className="gap-xs px-md py-sm rounded-xl text-label-md font-bold hover:brightness-110"
           >
             <span className="material-symbols-outlined text-[18px]">add</span>
             {t('memory.action.create')}
-          </button>
+          </Button>
         </div>
 
         <div className="text-label-sm text-on-surface-variant mb-md">
@@ -261,13 +264,13 @@ export default function MemoryPanel() {
               psychology
             </span>
             <p className="text-on-surface-variant mb-lg">{t('memory.empty')}</p>
-            <button
+            <Button
               onClick={() => setCreating(true)}
-              className="inline-flex items-center gap-xs px-md py-sm rounded-xl bg-primary text-on-primary text-label-md font-bold"
+              className="gap-xs px-md py-sm rounded-xl text-label-md font-bold"
             >
               <span className="material-symbols-outlined text-[18px]">add</span>
               {t('memory.action.createFirst')}
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="space-y-md">
@@ -377,20 +380,24 @@ function MemoryCard({
           )}
         </div>
         <div className="flex gap-xs">
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={onEdit}
-            className="p-xs rounded-lg hover:bg-surface-container-high cursor-pointer"
             aria-label={t('memory.action.edit')}
+            className="rounded-lg hover:bg-surface-container-high"
           >
             <span className="material-symbols-outlined text-[18px] text-on-surface-variant">edit</span>
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={onDelete}
-            className="p-xs rounded-lg hover:bg-error/10 cursor-pointer"
             aria-label={t('memory.action.delete')}
+            className="rounded-lg hover:bg-error/10"
           >
             <span className="material-symbols-outlined text-[18px] text-error/70">delete</span>
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -471,14 +478,16 @@ function MemoryEditor({
           <h2 className="text-label-lg font-bold text-on-surface">
             {initial ? t('memory.editor.edit') : t('memory.editor.create')}
           </h2>
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             type="button"
             onClick={attemptCancel}
-            className="p-xs rounded hover:bg-surface-container-high cursor-pointer"
+            className="rounded hover:bg-surface-container-high"
             aria-label={t('memory.action.close')}
           >
             <span className="material-symbols-outlined icon-md text-on-surface-variant">close</span>
-          </button>
+          </Button>
         </header>
 
         <div className="p-lg space-y-md max-h-[60vh] overflow-y-auto">
@@ -544,20 +553,21 @@ function MemoryEditor({
         </div>
 
         <footer className="flex justify-end gap-sm px-lg py-md border-t border-outline-variant/30 bg-surface-container-lowest">
-          <button
+          <Button
+            variant="secondary"
             type="button"
             onClick={attemptCancel}
-            className="px-md py-sm rounded-lg bg-surface-container-high text-on-surface text-label-md font-bold"
+            className="px-md py-sm rounded-lg text-label-md font-bold"
           >
             {t('memory.editor.cancel')}
-          </button>
-          <button
+          </Button>
+          <Button
             type="submit"
             disabled={saving || !content.trim() || !project.trim()}
-            className="px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold disabled:opacity-50"
+            className="px-md py-sm rounded-lg text-label-md font-bold"
           >
             {saving ? t('memory.editor.saving') : t('memory.editor.save')}
-          </button>
+          </Button>
         </footer>
 
         {confirmDiscard && (
@@ -576,23 +586,24 @@ function MemoryEditor({
                 {t('memory.editor.discard.message')}
               </p>
               <div className="flex justify-end gap-sm">
-                <button
+                <Button
+                  variant="secondary"
                   type="button"
                   onClick={() => setConfirmDiscard(false)}
-                  className="px-md py-sm rounded-lg bg-surface-container-high text-on-surface text-label-md font-bold cursor-pointer"
+                  className="px-md py-sm rounded-lg text-label-md font-bold"
                 >
                   {t('memory.editor.discard.keep')}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
                   onClick={() => {
                     setConfirmDiscard(false)
                     onCancel()
                   }}
-                  className="px-md py-sm rounded-lg bg-error text-on-error text-label-md font-bold cursor-pointer"
+                  className="px-md py-sm rounded-lg bg-error text-on-error text-label-md font-bold hover:bg-error/90"
                 >
                   {t('memory.editor.discard.confirm')}
-                </button>
+                </Button>
               </div>
             </div>
           </div>

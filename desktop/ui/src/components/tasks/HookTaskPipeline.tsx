@@ -10,6 +10,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
 import type { TriggeredRoutineDto } from '@/types'
 import LoadingState from '@/components/ui/loading-state'
@@ -90,24 +91,26 @@ export default function HookTaskPipeline() {
           ) : null}
         </div>
         <div className="flex items-center gap-xs">
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setCreateOpen(true)}
-            className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             aria-label={t('routines.create.aria')}
+            className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs gap-1"
           >
             <span className="material-symbols-outlined text-[14px]">add</span>
             {t('tasks.hookTaskPipeline.add')}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={refresh}
             disabled={loading}
-            className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40"
+            className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs gap-1"
           >
             <span className="material-symbols-outlined text-[14px]">{loading ? 'hourglass_top' : 'refresh'}</span>
             {t('tasks.hookTaskPipeline.refresh')}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -165,19 +168,20 @@ export default function HookTaskPipeline() {
                     $ {r.command}
                   </code>
                 </div>
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   role="switch"
                   aria-checked={r.enabled}
                   aria-label={intl.formatMessage({ id: 'tasks.hookTaskPipeline.toggleAria' }, { name: r.name })}
                   disabled={isToggling}
                   onClick={() => onToggle(r.name, !r.enabled)}
-                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 ${
-                    r.enabled ? 'bg-primary' : 'bg-outline-variant'
+                  className={`relative inline-flex h-5 w-9 shrink-0 p-0 cursor-pointer rounded-full ${
+                    r.enabled ? 'bg-primary hover:bg-primary/80' : 'bg-outline-variant hover:bg-outline-variant/80'
                   }`}
                 >
                   <span className={`inline-block h-4 w-4 bg-white rounded-full shadow transition-transform absolute top-0.5 ${r.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                </button>
+                </Button>
               </li>
             )
           })}

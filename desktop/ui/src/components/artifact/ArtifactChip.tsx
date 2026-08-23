@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import type { DetectedArtifact } from './detectArtifact'
 import { artifactIcon, artifactKindLabel } from './detectArtifact'
 import { useArtifact } from './ArtifactContext'
@@ -21,16 +23,18 @@ export function ArtifactChip({ artifact }: ArtifactChipProps) {
   }, [autoOpen, artifact, open])
 
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
+      size="sm"
       onClick={() => open(artifact)}
-      className="inline-flex items-center gap-xs px-sm py-xs rounded-md border border-primary/30 bg-primary/5 text-primary hover:bg-primary/10 hover:border-primary/50 transition-colors font-label-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+      className={cn('gap-xs border-primary/30 bg-primary/5 text-primary hover:bg-primary/10 hover:border-primary/50 font-label-sm')}
       aria-label={intl.formatMessage({ id: 'chat.artifact.open.aria' }, { kind: artifactKindLabel(artifact.kind), title: artifact.title })}
     >
       <span className="material-symbols-outlined icon-sm shrink-0">{artifactIcon(artifact.kind)}</span>
       <span className="truncate max-w-[260px]">{artifact.title}</span>
       <span className="material-symbols-outlined icon-sm shrink-0 opacity-70">open_in_new</span>
-    </button>
+    </Button>
   )
 }
 
