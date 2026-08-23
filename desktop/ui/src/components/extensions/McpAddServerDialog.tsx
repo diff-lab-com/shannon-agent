@@ -30,6 +30,8 @@ import {
 } from "@/lib/packageValidation";
 import { Modal, ModalBody } from "@/components/ui/modal";
 import LoadingState from "@/components/ui/loading-state";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 export interface McpAddServerDialogProps {
   open: boolean;
@@ -245,20 +247,22 @@ export default function McpAddServerDialog({
           className="flex gap-xs border-b border-outline-variant/30"
         >
           {tabs.map((tb) => (
-            <button
+            <Button
               key={tb.key}
               role="tab"
               type="button"
+              variant="ghost"
               aria-selected={tab === tb.key}
               onClick={() => setTab(tb.key)}
-              className={`px-md py-sm text-label-sm font-bold border-b-2 -mb-px transition-colors cursor-pointer ${
+              className={cn(
+                "px-md py-sm rounded-none text-label-sm font-bold border-b-2 -mb-px transition-colors",
                 tab === tb.key
-                  ? "border-primary text-primary"
-                  : "border-transparent text-on-surface-variant hover:text-on-surface"
-              }`}
+                  ? "border-primary text-primary hover:bg-transparent"
+                  : "border-transparent text-on-surface-variant hover:text-on-surface hover:bg-transparent",
+              )}
             >
               {tb.label}
-            </button>
+            </Button>
           ))}
         </div>
 
@@ -440,18 +444,19 @@ function SearchTab({
                     </p>
                   )}
                 </div>
-                <button
+                <Button
                   type="button"
+                  size="sm"
                   onClick={() => handleInstall(server)}
                   disabled={isBusy || isInstalled}
-                  className="shrink-0 px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="shrink-0 disabled:cursor-not-allowed"
                 >
                   {isBusy
                     ? "…"
                     : isInstalled
                       ? t("extensions.mcp.installed")
                       : t("extensions.mcp.install")}
-                </button>
+                </Button>
               </div>
             );
           })}
@@ -560,17 +565,17 @@ function PasteJsonTab({ onInstalled }: { onInstalled: () => void }) {
               </li>
             ))}
           </ul>
-          <button
+          <Button
             type="button"
             onClick={handleInstallAll}
             disabled={installing}
-            className="shrink-0 px-md py-sm rounded-lg bg-primary text-on-primary text-label-sm font-bold hover:bg-primary/90 disabled:opacity-50 inline-flex items-center gap-xs cursor-pointer"
+            className="shrink-0 px-md py-sm rounded-lg hover:bg-primary/90 cursor-pointer"
           >
             <span className="material-symbols-outlined icon-sm">
               {installing ? "progress_activity" : "download"}
             </span>
             {t("extensions.mcp.addDialog.paste.install", { count: parsed.length })}
-          </button>
+          </Button>
         </div>
       )}
     </div>
@@ -710,11 +715,11 @@ function ManualTab({ onInstalled }: { onInstalled: () => void }) {
           disabled={busy}
         />
       </label>
-      <button
+      <Button
         type="button"
         onClick={handleSubmit}
         disabled={busy}
-        className="inline-flex items-center gap-xs px-md py-sm rounded-lg bg-primary text-on-primary text-label-sm font-bold hover:bg-primary/90 disabled:opacity-50 cursor-pointer"
+        className="px-md py-sm rounded-lg hover:bg-primary/90 cursor-pointer"
       >
         <span className="material-symbols-outlined icon-sm">
           {busy ? "progress_activity" : "add"}
@@ -722,7 +727,7 @@ function ManualTab({ onInstalled }: { onInstalled: () => void }) {
         {busy
           ? t("extensions.mcp.installing")
           : t("extensions.mcp.install")}
-      </button>
+      </Button>
     </div>
   );
 }

@@ -325,11 +325,11 @@ export default function InstallDialog({
                 {spec ? [spec.command, ...spec.args].join(" ") : "—"}
               </code>
             </label>
-            <button
+            <Button
               type="button"
               onClick={handleStdioInstall}
               disabled={installing || !spec}
-              className="px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 disabled:opacity-60 inline-flex items-center justify-center gap-xs cursor-pointer"
+              className="px-md py-sm rounded-lg hover:bg-primary/90 disabled:opacity-60 cursor-pointer"
             >
               <span className="material-symbols-outlined icon-sm">
                 {installing ? "progress_activity" : "download"}
@@ -339,7 +339,7 @@ export default function InstallDialog({
               ) : (
                 <FormattedMessage id="extensions.installDialog.install" />
               )}
-            </button>
+            </Button>
           </div>
         );
       }
@@ -356,14 +356,14 @@ export default function InstallDialog({
           <FormattedMessage id="extensions.installDialog.manualHint" />
         </p>
         {route ? (
-          <button
+          <Button
             type="button"
             onClick={handleOpenTab}
-            className="px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 inline-flex items-center justify-center gap-xs cursor-pointer"
+            className="px-md py-sm rounded-lg hover:bg-primary/90 cursor-pointer"
           >
             <span className="material-symbols-outlined icon-sm">tab</span>
             <FormattedMessage id="extensions.installDialog.openTab" />
-          </button>
+          </Button>
         ) : null}
       </div>
     );
