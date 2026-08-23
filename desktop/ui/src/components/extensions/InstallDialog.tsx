@@ -16,14 +16,14 @@
 // On a successful install the dialog dispatches `shannon:extension-installed`
 // (same contract Plugins.tsx used before) so the Extensions shell can refresh.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import * as api from "@/lib/tauri-api";
 import { isValidPackageName, safeErrorMessage } from "@/lib/packageValidation";
+import { Modal, ModalBody } from "@/components/ui/modal";
 import type { AddonKind, CatalogEntry } from "@/types";
-import { useModalFocus } from "@/hooks/useModalFocus";
 
 const KIND_ROUTE: Record<AddonKind, string> = {
   skill: "/extensions/skills",
@@ -93,26 +93,14 @@ export default function InstallDialog({
 
   const [installing, setInstalling] = useState(false);
 
-  const modalRef = useRef<HTMLDivElement>(null);
-  useModalFocus(open, modalRef);
-
   // Reset local state each time the dialog opens.
   useEffect(() => {
     if (open) setInstalling(false);
   }, [open]);
 
-  // Escape closes the dialog.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [open, onClose]);
-
-  if (!open || !entry) return null;
-
+  // Compute render-time data only when we have an entry. Modal also
+  // returns null when !open, so the inner render never runs without it.
+  if (!entry) return null;
   const meta = readMeta(entry);
   const route = KIND_ROUTE[entry.kind as AddonKind];
 
@@ -381,42 +369,16 @@ export default function InstallDialog({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-md"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="install-dialog-title"
-      onClick={onClose}
+    <Modal
+      open={open && !!entry}
+      onClose={onClose}
+      size="lg"
+      title={t("extensions.installDialog.title", { name: entry.name })}
+      closeLabel={t("extensions.installDialog.closeAria")}
+      busy={installing}
+      className="max-h-[90vh] overflow-y-auto"
     >
-      <div
-        ref={modalRef}
-        onClick={(e) => e.stopPropagation()}
-        className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/40 w-full max-w-lg max-h-[90vh] overflow-y-auto p-lg flex flex-col gap-md"
-      >
-        <div className="flex items-center justify-between">
-          <h2
-            id="install-dialog-title"
-            className="font-headline-md text-[18px] font-bold text-on-surface flex items-center gap-sm"
-          >
-            <span className="material-symbols-outlined icon-md text-primary">
-              download
-            </span>
-            <FormattedMessage
-              id="extensions.installDialog.title"
-              values={{ name: entry.name }}
-            />
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={installing}
-            aria-label={t("extensions.installDialog.closeAria")}
-            className="text-on-surface-variant hover:bg-surface-container-high rounded-full p-xs cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40"
-          >
-            <span className="material-symbols-outlined text-[18px]">close</span>
-          </button>
-        </div>
-
+      <ModalBody className="flex flex-col gap-md">
         {entry.description ? (
           <p className="text-label-sm text-on-surface-variant">
             {entry.description}
@@ -426,8 +388,8 @@ export default function InstallDialog({
         {renderBody()}
 
         <MetadataTable metadata={entry.metadata} />
-      </div>
-    </div>
+      </ModalBody>
+    </Modal>
   );
 }
 

@@ -14,7 +14,7 @@
 // `onInstalled` and call it after every successful install so the page
 // refreshes.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useIntl } from "react-intl";
 import { toast } from "sonner";
 import {
@@ -28,7 +28,7 @@ import {
   isValidVersion,
   safeErrorMessage,
 } from "@/lib/packageValidation";
-import { useModalFocus } from "@/hooks/useModalFocus";
+import { Modal, ModalBody } from "@/components/ui/modal";
 import LoadingState from "@/components/ui/loading-state";
 
 export interface McpAddServerDialogProps {
@@ -213,25 +213,13 @@ export default function McpAddServerDialog({
 
   const [tab, setTab] = useState<TabKey>("search");
 
-  const modalRef = useRef<HTMLDivElement>(null);
-  useModalFocus(open, modalRef);
-
   // Reset to the first tab whenever the dialog is opened.
   useEffect(() => {
     if (open) setTab("search");
   }, [open]);
 
-  // Escape closes the dialog (mirrors InstallDialog.tsx).
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [open, onClose]);
-
-  if (!open) return null;
+  // Modal owns the close-on-Escape + focus + scroll-lock + backdrop-click
+  // primitives; we just supply the title/aria-label via props.
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: "search", label: t("extensions.mcp.addDialog.tab.search") },
@@ -240,37 +228,15 @@ export default function McpAddServerDialog({
   ];
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-md"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="mcp-add-dialog-title"
-      onClick={onClose}
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="2xl"
+      title={t("extensions.mcp.addDialog.title")}
+      closeLabel={t("extensions.installDialog.closeAria")}
+      className="max-w-3xl max-h-[90vh] overflow-y-auto"
     >
-      <div
-        ref={modalRef}
-        onClick={(e) => e.stopPropagation()}
-        className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/40 w-full max-w-3xl max-h-[90vh] overflow-y-auto p-lg flex flex-col gap-md"
-      >
-        <div className="flex items-center justify-between">
-          <h2
-            id="mcp-add-dialog-title"
-            className="font-headline-md text-[18px] font-bold text-on-surface flex items-center gap-sm"
-          >
-            <span className="material-symbols-outlined icon-md text-primary">
-              add_circle
-            </span>
-            {t("extensions.mcp.addDialog.title")}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t("extensions.installDialog.closeAria")}
-            className="text-on-surface-variant hover:bg-surface-container-high rounded-full p-xs cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-          >
-            <span className="material-symbols-outlined text-[18px]">close</span>
-          </button>
-        </div>
+      <ModalBody className="flex flex-col gap-md">
 
         {/* Tab strip */}
         <div
@@ -309,8 +275,8 @@ export default function McpAddServerDialog({
         {tab === "manual" && (
           <ManualTab onInstalled={onInstalled} />
         )}
-      </div>
-    </div>
+      </ModalBody>
+    </Modal>
   );
 }
 

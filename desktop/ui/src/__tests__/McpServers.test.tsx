@@ -290,7 +290,7 @@ describe('McpServers (Cursor-style UX)', () => {
     await waitFor(() => {
       expect(screen.getByText('Add MCP Server')).toBeInTheDocument()
     })
-    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => {
       expect(screen.queryByText('Add MCP Server')).not.toBeInTheDocument()
     })
