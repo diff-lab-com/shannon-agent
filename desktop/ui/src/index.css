@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-/* @import "shadcn/tailwind.css"; — broken: package not installed, pre-existing */
+@import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 /* P2-5d design-token reference (documented inventory of every token
  * used across the app; "how to add a token" lives in
