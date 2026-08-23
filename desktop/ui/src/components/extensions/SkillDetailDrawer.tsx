@@ -1,6 +1,7 @@
 import { useIntl } from 'react-intl'
 import type { SkillCatalogEntry } from '@/lib/tauri-api'
 import { SidePanel, SidePanelBody, SidePanelCloseButton, SidePanelHeader, SidePanelTitle } from '@/components/ui/side-panel'
+import { Button } from '@/components/ui/button'
 
 interface SkillDetailDrawerProps {
   entry: SkillCatalogEntry | null
@@ -176,14 +177,14 @@ export default function SkillDetailDrawer({
         </dl>
 
         <div className="mt-xl flex gap-sm">
-          <button
+          <Button
             type="button"
             onClick={onInstall}
             disabled={busy || installed}
-            className="flex-1 px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 px-md py-sm rounded-lg hover:bg-primary/90 disabled:cursor-not-allowed"
           >
             {busy ? '…' : installed ? t('extensions.skills.installedBtn') : t('extensions.skills.installBtn')}
-          </button>
+          </Button>
         </div>
       </SidePanelBody>
     </SidePanel>

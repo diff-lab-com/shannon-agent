@@ -175,30 +175,32 @@ export default function DataSources() {
       </header>
 
       <div className="flex gap-md border-b border-outline-variant/30">
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={() => setActiveTab('adapters')}
           className={cn(
-            "px-md py-sm font-bold text-label-md transition-colors",
+            "px-md py-sm rounded-none font-bold text-label-md transition-colors border-b-2 -mb-px",
             activeTab === 'adapters'
-              ? 'text-primary border-b-2 border-primary'
-              : 'text-on-surface-variant hover:text-on-surface',
+              ? 'text-primary border-primary hover:bg-transparent'
+              : 'text-on-surface-variant hover:text-on-surface border-transparent hover:bg-transparent',
           )}
         >
           {t('extensions.datasources.tab.adapters')}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
           onClick={() => setActiveTab('query')}
           className={cn(
-            "px-md py-sm font-bold text-label-md transition-colors",
+            "px-md py-sm rounded-none font-bold text-label-md transition-colors border-b-2 -mb-px",
             activeTab === 'query'
-              ? 'text-primary border-b-2 border-primary'
-              : 'text-on-surface-variant hover:text-on-surface',
+              ? 'text-primary border-primary hover:bg-transparent'
+              : 'text-on-surface-variant hover:text-on-surface border-transparent hover:bg-transparent',
           )}
         >
           {t('extensions.datasources.tab.query')}
-        </button>
+        </Button>
       </div>
 
       {activeTab === 'query' ? (
