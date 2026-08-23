@@ -258,6 +258,20 @@ impl ToolRegistry {
         }
     }
 
+    /// Lookup error distinguishing "no such tool" from "registered but
+    /// filtered out by the allowed-tools list". The latter message tells the
+    /// model to switch to an allowed tool instead of retrying what looks
+    /// like a broken tool (dogfood m3 2026-08-23: a hallucinated `Bash`
+    /// call inside a Read/Grep/Glob-restricted session).
+    fn lookup_error(&self, name: &str) -> ToolError {
+        let registered = Self::recover_lock(self.tools.read()).contains_key(name);
+        if registered && !self.is_allowed(name) {
+            ToolError::NotFound(format!("{name} (not in this session's allowed-tools list)"))
+        } else {
+            ToolError::NotFound(name.to_string())
+        }
+    }
+
     /// Bump the version counter to invalidate schema/defs caches.
     fn invalidate_cache(&self) {
         self.version
@@ -417,9 +431,7 @@ impl ToolRegistry {
     /// will return the cached result without re-executing the tool,
     /// as long as the entry has not expired.
     pub async fn execute(&self, name: &str, input: Value) -> ToolResult<ToolOutput> {
-        let tool = self
-            .get(name)
-            .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
+        let tool = self.get(name).ok_or_else(|| self.lookup_error(name))?;
 
         let is_read_only = tool.is_read_only();
 
@@ -536,9 +548,7 @@ impl ToolRegistry {
         input: Value,
         progress: shannon_tool_interface::BoxedProgressSender,
     ) -> ToolResult<ToolOutput> {
-        let tool = self
-            .get(name)
-            .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
+        let tool = self.get(name).ok_or_else(|| self.lookup_error(name))?;
 
         let is_read_only = tool.is_read_only();
 
@@ -1170,6 +1180,42 @@ mod tests {
         registry.set_allowed_tools(Some(vec!["Bash".into()]));
         assert!(registry.get("Bash").is_some());
         assert!(registry.get("Read").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_filtered_tool_error_names_the_allowed_tools_list() {
+        // A registered-but-filtered tool must say so: the model then switches
+        // to an allowed tool instead of retrying what looks broken (dogfood
+        // m3 2026-08-23 — hallucinated Bash inside a Read/Grep/Glob session).
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Box::new(DummyTool {
+                name: "Bash".into(),
+            }))
+            .unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "Read".into(),
+            }))
+            .unwrap();
+        registry.set_allowed_tools(Some(vec!["Read".into()]));
+
+        let err = registry
+            .execute("Bash", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)));
+        assert!(
+            err.to_string().contains("allowed-tools list"),
+            "message should name the restriction: {err}"
+        );
+
+        // A genuinely unknown tool keeps the plain message.
+        let err = registry
+            .execute("NoSuchTool", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Tool not found: NoSuchTool");
     }
 
     #[tokio::test]
