@@ -22,7 +22,8 @@ import tempfile
 
 from ledger import Entry, Ledger
 from run import history_for_streaks, streaks
-from runner import _build_task_cmd, parse_ndjson, run_verify
+from runner import (_build_task_cmd, external_ws_path, materialize_workspace,
+                    parse_ndjson, release_workspace, run_verify)
 from triage import (SignatureTracker, build_fail_signature, classify_task)
 from common import REPO_ROOT, load_tasks
 
@@ -214,6 +215,40 @@ class TestVerifyGrading(unittest.TestCase):
             "verify_cmd": "false"}}}
         v = run_verify(task, self.ws)
         self.assertEqual(v["grade"], "fail")
+
+
+class TestWorkspacePlacement(unittest.TestCase):
+    """Task ws must live OUTSIDE the repo tree.
+
+    artifacts/ sits inside the repo, and the engine's project-instruction
+    loader walks parent directories from the process cwd — a ws under
+    artifacts inherits the real repo's CLAUDE.md printed with its ABSOLUTE
+    path, splitting the model's world-view (sandbox root = ws) and killing
+    absolute-path Grep/Read calls as "outside allowed roots" (run
+    2026-08-23T040554: m3 exit 6 in one turn, l2 dead without an answer).
+    """
+
+    def test_external_ws_path_outside_repo_and_deterministic(self):
+        task_dir = (REPO_ROOT / "artifacts" / "X" / "iter-01"
+                    / "m3-cross-crate-analysis")
+        p1 = external_ws_path(task_dir, "m3-cross-crate-analysis")
+        p2 = external_ws_path(task_dir, "m3-cross-crate-analysis")
+        self.assertEqual(p1, p2)
+        self.assertIn("shannon-dogfood-ws", p1.parts)
+        self.assertFalse(p1.is_relative_to(REPO_ROOT))
+
+    def test_readonly_main_roundtrip_outside_repo(self):
+        task_dir = REPO_ROOT / "artifacts" / "ws-placement-test" / "iter-01" / "t"
+        ws = external_ws_path(task_dir, "t")
+        info = materialize_workspace({"workspace": "readonly-main"}, ws)
+        try:
+            self.assertEqual(info["type"], "readonly-main")
+            self.assertFalse(ws.is_relative_to(REPO_ROOT))
+            # the ws is its own checkout of the repo root, not a view of it
+            self.assertTrue((ws / "CLAUDE.md").exists())
+        finally:
+            release_workspace(ws, info)
+        self.assertFalse(ws.exists())
 
 
 class TestTriage(unittest.TestCase):

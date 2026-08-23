@@ -8,12 +8,14 @@ a pipe, per the known piped-exit-code pitfall).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -93,6 +95,26 @@ def release_workspace(ws: Path, wsinfo: dict) -> None:
         git(REPO_ROOT, "worktree", "prune", check=False)
     else:
         shutil.rmtree(ws, ignore_errors=True)
+
+
+def external_ws_path(task_dir: Path, task_id: str) -> Path:
+    """Deterministic per-task workspace path OUTSIDE the repo tree.
+
+    Task workspaces used to live at <task_dir>/ws, i.e. INSIDE the repo under
+    artifacts/. The engine's project-instruction loader walks parent
+    directories from the process cwd, so every task inherited the real repo's
+    CLAUDE.md — printed with its ABSOLUTE path once the file was outside the
+    ws — plus the workspace overview above it. Sandboxed tasks then split
+    their world-view: the system prompt said the repo lives at the main tree
+    while the path sandbox confined tools to the ws, and absolute-path
+    Grep/Read calls died as "outside allowed roots" (run 2026-08-23T040554:
+    m3 exit 6 after one turn, l2 derailed into ../-escape guesses and never
+    produced its JSON). Under the system temp dir the parent walk finds
+    nothing but the ws's own checkout, displayed as a relative "CLAUDE.md".
+    """
+    digest = hashlib.sha1(str(task_dir.resolve()).encode()).hexdigest()[:10]
+    return (Path(tempfile.gettempdir()) / "shannon-dogfood-ws"
+            / f"{task_id}-{digest}" / "ws")
 
 
 # --------------------------------------------------------------------------
@@ -426,7 +448,13 @@ def run_task(task: dict, task_dir: Path, shannon_bin: Path,
     (below). Exit-code / verify failures never retry: they are signals.
     """
     task_dir.mkdir(parents=True, exist_ok=True)
-    ws = task_dir / "ws"
+    ws = external_ws_path(task_dir, task.get("id", "task"))
+    # Deterministic paths can collide with a crashed run's leftover; sweep it
+    # so `git worktree add` / copytree always get a clean target.
+    if ws.exists():
+        git(REPO_ROOT, "worktree", "remove", "--force", str(ws), check=False)
+        git(REPO_ROOT, "worktree", "prune", check=False)
+        shutil.rmtree(ws, ignore_errors=True)
     crash_dir = task_dir / "crashes"
     crash_dir.mkdir(exist_ok=True)
 
