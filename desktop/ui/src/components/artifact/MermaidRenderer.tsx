@@ -37,7 +37,7 @@ function buildSrcDoc(source: string, loadingLabel: string, failedLabel: string):
     "  const msg = (err?.message || String(err)).replace(/[<>&]/g, c => ({ '<':'&lt;','>':'&gt;','&':'&amp;' }[c]));",
     `  document.getElementById('target').innerHTML = '<div class="error">${failedLabel}' + msg + '</div>';`,
     '}',
-    '<\/script>',
+    '</script>',
     '</body>',
     '</html>',
   ].join('\n')
