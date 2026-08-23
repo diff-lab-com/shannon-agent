@@ -11,6 +11,7 @@ import { useCatalog } from '@/context/CatalogContext'
 import { SIDEBAR_MODE_KEY } from '@/components/Sidebar'
 import { formatShortcut } from '@/lib/platform'
 import AddProviderModal from '@/components/settings/AddProviderModal'
+import { GradientText } from '@/components/reactbits/GradientText'
 import type { ProvidersFile } from '@/types'
 
 // ─── Task taxonomy ──────────────────────────────────────────────────────────
@@ -302,7 +303,10 @@ export default function Welcome() {
       <header className="flex items-center justify-between px-xl py-lg">
         <div className="flex items-center gap-sm">
           <span className="material-symbols-outlined text-primary">auto_awesome</span>
-          <span className="font-headline-md text-on-surface">{intl.formatMessage({ id: 'app.name' })}</span>
+          <GradientText
+            text={intl.formatMessage({ id: 'app.name' })}
+            className="font-headline-md"
+          />
         </div>
         <Button
           variant="ghost"
