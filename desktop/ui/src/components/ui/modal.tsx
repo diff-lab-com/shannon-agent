@@ -1,6 +1,5 @@
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
-import { X } from "lucide-react"
 import { useIntl } from "react-intl"
 
 import { cn } from "@/lib/utils"
@@ -116,7 +115,7 @@ export function Modal({
                 onClick={onClose}
                 className="shrink-0 p-xs rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors disabled:opacity-50 disabled:pointer-events-none"
               >
-                <X className="size-4" />
+                <span className="material-symbols-outlined icon-sm" aria-hidden="true">close</span>
               </button>
             )}
           </div>
