@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type React from 'react'
 import { useIntl } from 'react-intl'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Modal } from '@/components/ui/modal'
 import { toast } from 'sonner'
 import {
   createMemory,
@@ -457,15 +458,15 @@ function MemoryEditor({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-md"
-      onClick={attemptCancel}
+    <Modal
+      open
+      onClose={attemptCancel}
+      size="2xl"
+      title={initial ? t('memory.editor.edit') : t('memory.editor.create')}
+      showCloseButton={false}
+      className="overflow-hidden"
     >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={handleSubmit}
-        className="w-full max-w-2xl bg-surface rounded-2xl border border-outline-variant shadow-2xl overflow-hidden"
-      >
+      <form onSubmit={handleSubmit}>
         <header className="flex items-center justify-between px-lg py-md border-b border-outline-variant/30">
           <h2 className="text-label-lg font-bold text-on-surface">
             {initial ? t('memory.editor.edit') : t('memory.editor.create')}
@@ -597,7 +598,7 @@ function MemoryEditor({
           </div>
         )}
       </form>
-    </div>
+    </Modal>
   )
 }
 
