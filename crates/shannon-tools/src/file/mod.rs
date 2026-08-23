@@ -152,7 +152,7 @@ impl Tool for ReadTool {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Absolute path to the file"
+                    "description": "Path to the file — absolute, or relative to the working directory"
                 },
                 "offset": {
                     "type": "integer",
