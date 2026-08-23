@@ -32,7 +32,7 @@
 
 import { useCallback, useEffect, useMemo } from 'react'
 import { useIntl } from 'react-intl'
-import { Plus, MessageSquare } from 'lucide-react'
+import { Icon } from '@/components/ui/icon'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
@@ -135,7 +135,7 @@ export function SessionsPanel({ className, titleId }: SessionsPanelProps) {
             defaultMessage: 'Start a new thread',
           })}
         >
-          <Plus className="w-4 h-4" />
+          <Icon name="add" />
         </Button>
       </div>
       <ScrollArea className="flex-1 min-h-0">
@@ -183,12 +183,13 @@ function SessionRow({ id, title, messageCount, active, onSelect }: SessionRowPro
           : 'hover:bg-on-surface-variant/10 text-on-surface',
       )}
     >
-      <MessageSquare
+      <Icon
+        name="chat"
+        size="sm"
         className={cn(
-          'mt-0.5 h-4 w-4 shrink-0',
+          'mt-0.5 shrink-0',
           active ? 'text-primary' : 'text-on-surface-variant',
         )}
-        aria-hidden="true"
       />
       <span className="flex-1 min-w-0">
         <span className="block truncate text-sm" title={title}>
@@ -209,7 +210,7 @@ function EmptyState() {
   const intl = useIntl()
   return (
     <div className="flex flex-col items-center justify-center px-4 py-8 text-center">
-      <MessageSquare className="h-6 w-6 text-on-surface-variant/50 mb-2" aria-hidden="true" />
+      <Icon name="chat" size="md" className="text-on-surface-variant/50 mb-2" />
       <p className="text-sm text-on-surface-variant">
         {intl.formatMessage({
           id: 'sessionsPanel.empty',

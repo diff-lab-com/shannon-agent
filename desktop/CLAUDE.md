@@ -220,3 +220,11 @@ behavior is delegated to the engine crates.
 - **CHANGELOG.md** is per-sprint, grouped by category (Features, Fixes,
   Accessibility, i18n, Dependencies). When bumping the engine pin, record
   what changed in the engine and why.
+- **Icon policy**: every icon uses Material Symbols (outlined). Render via
+  the `<Icon name="..." />` wrapper at `ui/src/components/ui/icon.tsx` —
+  never hand-write `<span class="material-symbols-outlined">` and never
+  import from the `lucide` package. Size uses the `icon-xs|sm|md|lg|xl|2xl`
+  utility classes (12/16/20/24/32/48 px) defined in `ui/src/index.css`. The
+  font (`@fontsource-variable/material-symbols-outlined`) is loaded once at
+  `src/index.css`. shadcn-generated components ship with lucide imports by
+  default — strip them and route through `<Icon>` before merging.
