@@ -11,6 +11,7 @@
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 export type Priority = 'low' | 'medium' | 'high'
 
@@ -59,7 +60,7 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
         </Button>
       </div>
       <textarea
-        className={`w-full h-20 p-sm bg-surface-container-low rounded-lg border text-body-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 ${!value.trim() ? 'border-outline-variant/30' : 'border-primary/30'}`}
+        className={cn('w-full h-20 p-sm bg-surface-container-low rounded-lg border text-body-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/30', !value.trim() ? 'border-outline-variant/30' : 'border-primary/30')}
         placeholder={t('tasks.newTaskForm.placeholder')}
         value={value}
         onChange={e => onChange(e.target.value)}

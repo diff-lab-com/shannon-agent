@@ -10,6 +10,7 @@ import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 import type { GatewayConfig } from '@/types'
 import { PLATFORMS, PLATFORM_LABEL, SECRET_MODEL, type Platform } from './types'
+import { cn } from '@/lib/utils'
 
 interface PlatformsCardProps {
   config: GatewayConfig
@@ -144,7 +145,7 @@ export function PlatformsCard({
                       />
                       <span
                         aria-hidden="true"
-                        className={`h-2 w-2 shrink-0 rounded-full ${present ? 'bg-primary' : 'bg-outline-variant/50'}`}
+                        className={cn("h-2 w-2 shrink-0 rounded-full", present ? 'bg-primary' : 'bg-outline-variant/50')}
                         title={present ? t('settings.connections.connected') : t('settings.connections.notConnected')}
                       />
                       <code className="font-label-sm text-on-surface-variant whitespace-nowrap">

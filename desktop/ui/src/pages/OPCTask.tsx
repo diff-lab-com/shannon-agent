@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import AgentMessagesPanel from '@/components/tasks/AgentMessagesPanel'
 import AgentLoadPanel from '@/components/tasks/AgentLoadPanel'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
@@ -53,9 +54,9 @@ export default function OPCTask() {
                       const isActive = agent.status === 'active' || agent.status === 'running'
                       return (
                         <div key={agent.id} className="relative z-10 flex flex-col items-center gap-2 shrink-0">
-                          <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${
+                          <div className={cn('w-12 h-12 rounded-full flex items-center justify-center shrink-0',
                             isActive ? 'bg-primary/10' : 'border border-outline-variant bg-surface-container-lowest'
-                          }`}>
+                          )}>
                             {isActive ? (
                               <div className="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-md">
                                 <span className="material-symbols-outlined icon-md">smart_toy</span>
@@ -64,7 +65,7 @@ export default function OPCTask() {
                               <span className="material-symbols-outlined icon-md text-on-surface-variant">smart_toy</span>
                             )}
                           </div>
-                          <span className={`font-label-sm text-[12px] ${isActive ? 'text-primary font-bold' : 'text-on-surface-variant'}`}>{agent.name}</span>
+                          <span className={cn('font-label-sm text-[12px]', isActive ? 'text-primary font-bold' : 'text-on-surface-variant')}>{agent.name}</span>
                         </div>
                       )
                     })}
@@ -121,15 +122,15 @@ export default function OPCTask() {
                     const isActive = agent.status === 'active' || agent.status === 'running'
                     return (
                     <div key={agent.id} className="relative flex items-start gap-4">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 relative z-10 md:ml-2 ${
+                      <div className={cn('w-8 h-8 rounded-full flex items-center justify-center shrink-0 relative z-10 md:ml-2',
                         isActive ? 'bg-primary text-on-primary shadow-sm ring-4 ring-primary/10' : 'border-2 border-outline-variant/40 bg-surface-container-lowest text-on-surface-variant'
-                      }`}>
+                      )}>
                         <span className="material-symbols-outlined icon-sm">smart_toy</span>
                       </div>
                       <div className="flex-1 -mt-1">
                         <div className="flex justify-between items-start mb-1">
-                          <h4 className={`font-label-md text-[14px] ${isActive ? 'text-primary font-bold' : 'text-on-surface'}`}>{agent.name}</h4>
-                          <span className={`font-label-sm text-[10px] uppercase tracking-wider ${isActive ? 'text-primary font-bold' : 'text-on-surface-variant'}`}>{agent.status}</span>
+                          <h4 className={cn('font-label-md text-[14px]', isActive ? 'text-primary font-bold' : 'text-on-surface')}>{agent.name}</h4>
+                          <span className={cn('font-label-sm text-[10px] uppercase tracking-wider', isActive ? 'text-primary font-bold' : 'text-on-surface-variant')}>{agent.status}</span>
                         </div>
                         {agent.task ? <p className="text-body-sm text-[14px] mt-1 text-on-surface-variant">{agent.task}</p> : null}
                       </div>

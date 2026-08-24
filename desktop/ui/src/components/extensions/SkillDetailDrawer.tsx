@@ -2,6 +2,7 @@ import { useIntl } from 'react-intl'
 import type { SkillCatalogEntry } from '@/lib/tauri-api'
 import { SidePanel, SidePanelBody, SidePanelCloseButton, SidePanelHeader, SidePanelTitle } from '@/components/ui/side-panel'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 interface SkillDetailDrawerProps {
   entry: SkillCatalogEntry | null
@@ -68,7 +69,7 @@ export default function SkillDetailDrawer({
       <SidePanelHeader className="items-start">
         <div className="min-w-0 flex-1">
           <SidePanelTitle>{entry.name}</SidePanelTitle>
-          <span className={`inline-block mt-xs text-label-xs px-sm py-[2px] rounded-full font-bold ${trust.cls}`}>
+          <span className={cn("inline-block mt-xs text-label-xs px-sm py-[2px] rounded-full font-bold", trust.cls)}>
             {intl.formatMessage({ id: trustTextKey })}
           </span>
         </div>

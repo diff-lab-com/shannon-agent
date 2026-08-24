@@ -11,6 +11,7 @@ import { useSessions } from '@/context/SessionContext';
 import { useCatalog } from '@/context/CatalogContext';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { shouldShowWelcome } from '@/pages/Welcome';
+import { cn } from '@/lib/utils';
 
 interface SidebarContextValue {
   open: boolean
@@ -82,7 +83,7 @@ export function Layout() {
               </>
             ) : status ? (
               <>
-                <span className={`w-2 h-2 rounded-full shrink-0 ${status.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary'}`} />
+                <span className={cn('w-2 h-2 rounded-full shrink-0', status.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary')} />
                 <span>{status.provider}</span>
                 <span className="text-outline-variant">·</span>
                 <span className="truncate max-w-[140px]">{status.model}</span>

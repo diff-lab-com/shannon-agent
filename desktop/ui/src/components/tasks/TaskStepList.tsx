@@ -6,6 +6,7 @@
 
 import { useIntl } from 'react-intl'
 import { useTaskStreaming } from '@/hooks/useTaskStreaming'
+import { cn } from '@/lib/utils'
 
 interface TaskStepListProps {
   taskId: string
@@ -63,7 +64,7 @@ export default function TaskStepList({ taskId, active = true }: TaskStepListProp
             key={`${step.stepIndex}-${idx}`}
             className="flex items-start gap-sm p-sm bg-surface-container-low rounded-lg"
           >
-            <span className={`material-symbols-outlined text-[18px] ${STATUS_COLOR[step.status]}`}>
+            <span className={cn('material-symbols-outlined text-[18px]', STATUS_COLOR[step.status])}>
               {step.status === 'started' ? 'progress_activity' : STATUS_ICON[step.status]}
             </span>
             <div className="flex-1 min-w-0">

@@ -12,6 +12,7 @@ import ScheduleTemplates from './ScheduleTemplates'
 import { weekdayName } from './shared'
 import { parseNlCron, type CronDescription } from '@/lib/nl-cron'
 import * as api from '@/lib/tauri-api'
+import { cn } from '@/lib/utils'
 import type {
   TriggerType,
   ExecutionPolicy,
@@ -232,11 +233,11 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
                 role="radio"
                 aria-checked={selected}
                 onClick={() => setTriggerType(opt.value)}
-                className={`h-auto flex-col items-start gap-xs p-sm rounded-lg text-left whitespace-normal ${
+                className={cn('h-auto flex-col items-start gap-xs p-sm rounded-lg text-left whitespace-normal',
                   selected
                     ? 'border-primary bg-primary/10 text-on-surface hover:bg-primary/10'
                     : 'border-outline-variant/30 bg-surface-container-low text-on-surface-variant hover:bg-surface-container-low/60'
-                }`}
+                )}
               >
                 <span className="flex items-center gap-xs">
                   <span className="material-symbols-outlined icon-sm">{opt.icon}</span>

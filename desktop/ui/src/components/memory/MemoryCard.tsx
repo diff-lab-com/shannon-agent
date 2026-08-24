@@ -4,6 +4,7 @@ import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import type { MemoryEntry } from '@/lib/tauri-api'
 import { CATEGORY_COLOR, CATEGORY_ICON } from './constants'
+import { cn } from '@/lib/utils'
 
 interface MemoryCardProps {
   entry: MemoryEntry
@@ -24,7 +25,7 @@ export function MemoryCard({ entry, onEdit, onDelete }: MemoryCardProps) {
     <div className="px-md py-md rounded-xl bg-surface-container-low border border-outline-variant/30 shadow-sm hover:shadow-md hover:border-primary/30 transition-all">
       <div className="flex items-start gap-md">
         <span
-          className={`material-symbols-outlined icon-md mt-[2px] px-sm py-xs rounded-lg ${CATEGORY_COLOR[entry.category]}`}
+          className={cn('material-symbols-outlined icon-md mt-[2px] px-sm py-xs rounded-lg', CATEGORY_COLOR[entry.category])}
         >
           {CATEGORY_ICON[entry.category]}
         </span>

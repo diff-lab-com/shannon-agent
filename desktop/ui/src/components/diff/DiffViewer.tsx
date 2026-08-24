@@ -11,6 +11,7 @@
 import { Fragment, useMemo } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import type { FileDiff } from '@/types'
 import { computeHunks, type HunkDecision } from '@/lib/diff-merge'
 import { highlightLines, resolveDiffLang } from '@/lib/diff-highlight'
@@ -148,7 +149,7 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
   }
 
   return (
-    <div className={`rounded-xl border border-outline-variant/30 overflow-hidden bg-surface-container-lowest ${className ?? ''}`}>
+    <div className={cn("rounded-xl border border-outline-variant/30 overflow-hidden bg-surface-container-lowest", className)}>
       <header className="flex items-center justify-between px-md py-sm border-b border-outline-variant/30 bg-surface-container-low">
         <div className="flex items-center gap-md min-w-0">
           <span className="material-symbols-outlined text-[18px] text-on-surface-variant">difference</span>
@@ -205,8 +206,8 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
                         </td>
                       </tr>
                     )}
-                    <tr className={`${bgClass} ${line.hunkId !== null ? decisionBorderStyle(decision) : ''}`}>
-                      <td className={`w-[1ch] px-xs text-center select-none ${style.signColor}`}>{style.sign}</td>
+                    <tr className={cn(bgClass, line.hunkId !== null && decisionBorderStyle(decision))}>
+                      <td className={cn("w-[1ch] px-xs text-center select-none", style.signColor)}>{style.sign}</td>
                       <td className="px-xs text-right text-outline select-none" style={{ width: `${gutterWidth + 1}ch` }}>
                         {line.oldNo ?? ''}
                       </td>

@@ -5,6 +5,7 @@
 import { Button } from '@/components/ui/button'
 import { useIntl } from 'react-intl'
 import type { FilterStatus } from './shared'
+import { cn } from '@/lib/utils'
 
 interface TasksFiltersProps {
   active: FilterStatus
@@ -28,7 +29,7 @@ export default function TasksFilters({ active, onChange }: TasksFiltersProps) {
           key={value}
           variant="ghost"
           onClick={() => onChange(value)}
-          className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${active === value ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
+          className={cn('px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer', active === value ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10')}
         >
           {t(`tasks.tasksFilters.${label}`)}
         </Button>

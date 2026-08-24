@@ -1,5 +1,6 @@
 import { type ReactNode, useState, memo } from 'react'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 // Minimal AI-Elements–style primitives, vendored locally.
 // Inspired by Vercel AI Elements (MIT). No runtime deps beyond React.
@@ -28,7 +29,7 @@ export function MessageAvatar({ from, icon = 'smart_toy', className = '' }: Mess
   const bg = from === 'user' ? 'bg-primary' : 'bg-primary-container'
   const fg = from === 'user' ? 'text-on-primary' : 'text-on-primary-container'
   return (
-    <div className={`h-10 w-10 rounded-full ${bg} ${fg} flex items-center justify-center shrink-0 shadow-md ${className}`}>
+    <div className={cn('h-10 w-10 rounded-full', bg, fg, 'flex items-center justify-center shrink-0 shadow-md', className)}>
       <span className="material-symbols-outlined" aria-hidden="true">{icon}</span>
     </div>
   )
@@ -70,7 +71,7 @@ interface ReasoningProps {
 export function Reasoning({ defaultOpen = false, className = '', header, children }: ReasoningProps) {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className={`rounded-lg border border-outline-variant/20 ${className}`}>
+    <div className={cn('rounded-lg border border-outline-variant/20', className)}>
       <Button
         variant="ghost"
         onClick={() => setOpen(o => !o)}
@@ -95,7 +96,7 @@ interface ToolProps {
 
 export function Tool({ name, status, className = '', children }: ToolProps) {
   return (
-    <div data-tool-name={name} data-tool-status={status} className={`rounded-xl border border-outline-variant/10 bg-surface-container-low ${className}`}>
+    <div data-tool-name={name} data-tool-status={status} className={cn('rounded-xl border border-outline-variant/10 bg-surface-container-low', className)}>
       {children}
     </div>
   )
@@ -110,7 +111,7 @@ interface ToolHeaderProps {
 export function ToolHeader({ onClick, className = '', children }: ToolHeaderProps) {
   return (
     <div
-      className={`flex items-center gap-sm ${onClick ? 'cursor-pointer' : ''} ${className}`}
+      className={cn('flex items-center gap-sm', onClick ? 'cursor-pointer' : '', className)}
       onClick={onClick}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
@@ -126,7 +127,7 @@ interface ToolContentProps {
 }
 
 export function ToolContent({ className = '', children }: ToolContentProps) {
-  return <div className={`mt-sm space-y-xs ${className}`}>{children}</div>
+  return <div className={cn('mt-sm space-y-xs', className)}>{children}</div>
 }
 
 interface ActionToolbarProps {
@@ -135,5 +136,5 @@ interface ActionToolbarProps {
 }
 
 export function ActionToolbar({ className = '', children }: ActionToolbarProps) {
-  return <div className={`flex gap-sm ${className}`}>{children}</div>
+  return <div className={cn('flex gap-sm', className)}>{children}</div>
 }

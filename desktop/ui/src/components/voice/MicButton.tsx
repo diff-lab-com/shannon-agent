@@ -40,7 +40,7 @@ export function MicButton({ state, disabled, onStart, onStop }: MicButtonProps) 
     >
       <span
         aria-hidden="true"
-        className={`material-symbols-outlined icon-md ${state === 'recording' ? 'animate-pulse' : ''}`}
+        className={cn("material-symbols-outlined icon-md", state === 'recording' && 'animate-pulse')}
       >
         {state === 'recording' ? 'stop_circle' : state === 'transcribing' ? 'hourglass_empty' : state === 'speaking' ? 'graphic_eq' : 'mic'}
       </span>

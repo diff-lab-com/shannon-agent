@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { PROVIDER_KINDS_FOR_VISIBILITY, kindLabel } from './types'
+import { cn } from '@/lib/utils'
 
 export function ProviderVisibilitySection({
   onChanged,
@@ -116,11 +117,12 @@ export function ProviderVisibilitySection({
           return (
             <label
               key={kind}
-              className={`flex items-center gap-md p-sm rounded-lg border cursor-pointer transition-colors ${
+              className={cn(
+                "flex items-center gap-md p-sm rounded-lg border cursor-pointer transition-colors",
                 checked
                   ? 'border-primary/50 bg-primary-container/5'
-                  : 'border-outline-variant/30 hover:border-outline-variant'
-              }`}
+                  : 'border-outline-variant/30 hover:border-outline-variant',
+              )}
             >
               <input
                 type="checkbox"

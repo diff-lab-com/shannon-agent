@@ -21,6 +21,7 @@ import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 import * as api from '@/lib/tauri-api'
 import type { TaskItem } from '@/types'
 import { KanbanBoard } from '@/components/shared/KanbanBoard'
@@ -186,13 +187,14 @@ function DefaultDraggableCard({ task, intl, openTask }: { task: TaskItem; intl: 
       <div className="flex justify-between items-start mb-2">
         <span className="font-label-sm text-[10px] font-bold text-on-surface-variant tracking-wider">{task.id.slice(0, 8)}</span>
         {task.priority ? (
-          <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${
+          <span className={cn(
+            "text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider",
             normalizePriority(task.priority) === 'critical' ? 'bg-error/20 text-error' :
             normalizePriority(task.priority) === 'high' ? 'bg-error/10 text-error' :
             normalizePriority(task.priority) === 'medium' ? 'bg-secondary/10 text-secondary' :
             normalizePriority(task.priority) === 'low' ? 'bg-surface-container text-on-surface-variant' :
             'bg-surface-container text-on-surface-variant'
-          }`}>{task.priority}</span>
+          )}>{task.priority}</span>
         ) : null}
       </div>
       <h4 className="font-label-md text-[15px] font-bold mb-3 leading-tight group-hover/card:text-primary transition-colors">{task.title}</h4>

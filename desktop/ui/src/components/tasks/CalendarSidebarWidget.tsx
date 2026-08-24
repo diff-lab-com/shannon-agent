@@ -10,6 +10,7 @@ import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import type { TaskItem, ScheduledRoutine } from '@/types'
 import { monthName, weekdayName } from './shared'
+import { cn } from '@/lib/utils'
 
 interface CalendarSidebarWidgetProps {
   viewMonth: number
@@ -95,7 +96,7 @@ export default function CalendarSidebarWidget({
           return (
             <span
               key={day}
-              className={`py-2 rounded-lg cursor-pointer relative ${isToday ? 'bg-primary text-on-primary font-bold' : hasFire ? 'bg-primary-container/20 text-primary font-bold' : 'hover:bg-surface-container'}`}
+              className={cn('py-2 rounded-lg cursor-pointer relative', isToday ? 'bg-primary text-on-primary font-bold' : hasFire ? 'bg-primary-container/20 text-primary font-bold' : 'hover:bg-surface-container')}
             >
               {day}
             </span>
@@ -109,7 +110,7 @@ export default function CalendarSidebarWidget({
           {activeTasks.map(task => (
             <div
               key={task.id}
-              className={`flex items-start gap-md ${onSelectTask ? 'cursor-pointer' : ''}`}
+              className={cn('flex items-start gap-md', onSelectTask ? 'cursor-pointer' : '')}
               onClick={() => onSelectTask?.(task.id)}
             >
               <div className="w-1 bg-primary h-8 rounded-full" />

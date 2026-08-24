@@ -2,6 +2,7 @@ import type { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import type { ProviderConnection } from '@/types'
 import { KIND_INFO, kindLabel } from './types'
+import { cn } from '@/lib/utils'
 
 export function ProviderCard({
   conn,
@@ -30,12 +31,13 @@ export function ProviderCard({
   const info = KIND_INFO[conn.kind]
   return (
     <div
-      className={`p-md rounded-xl border flex items-center justify-between transition-colors ${
-        isActive ? 'border-2 border-primary bg-primary-container/5' : 'border-outline-variant/50'
-      }`}
+      className={cn(
+        "p-md rounded-xl border flex items-center justify-between transition-colors",
+        isActive ? 'border-2 border-primary bg-primary-container/5' : 'border-outline-variant/50',
+      )}
     >
       <div className="flex items-center gap-md min-w-0">
-        <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${isActive ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant'}`}>
+        <div className={cn("w-9 h-9 rounded-lg flex items-center justify-center shrink-0", isActive ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant')}>
           <span className="material-symbols-outlined icon-md">{info?.icon ?? 'hub'}</span>
         </div>
         <div className="min-w-0">
@@ -51,7 +53,7 @@ export function ProviderCard({
               <span className="font-label-xs text-[11px] text-on-surface-variant font-mono truncate max-w-[260px]" title={conn.base_url ?? undefined}>{conn.base_url}</span>
             ) : null}
             <span
-              className={`inline-flex items-center gap-[2px] font-label-xs text-[10px] ${hasKey ? 'text-primary' : 'text-on-surface-variant opacity-60'}`}
+              className={cn("inline-flex items-center gap-[2px] font-label-xs text-[10px]", hasKey ? 'text-primary' : 'text-on-surface-variant opacity-60')}
               title={hasKey ? t('settings.models.providers.keySet') : t('settings.models.providers.keyMissing')}
             >
               <span className="material-symbols-outlined text-[12px]">{hasKey ? 'key' : 'key_off'}</span>

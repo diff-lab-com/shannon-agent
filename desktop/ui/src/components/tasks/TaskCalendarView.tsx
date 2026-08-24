@@ -12,6 +12,7 @@
 import { useIntl } from 'react-intl'
 import type { TaskItem, AgentInfo, ScheduledRoutine } from '@/types'
 import { monthName, weekdayName, statusBadge } from './shared'
+import { cn } from '@/lib/utils'
 import EfficiencyCard from './EfficiencyCard'
 import AgentAllocation from './AgentAllocation'
 
@@ -78,14 +79,14 @@ export default function TaskCalendarView({
               <div
                 key={day}
                 title={dayFires.length > 0 ? intl.formatMessage({ id: 'tasks.taskCalendarView.scheduledRuns' }, { count: dayFires.length }) : undefined}
-                className={`min-h-[80px] p-xs rounded-lg border cursor-pointer transition-all ${
+                className={cn('min-h-[80px] p-xs rounded-lg border cursor-pointer transition-all',
                   isSelected ? 'border-primary bg-primary/5 ring-1 ring-primary/20' :
                   isToday ? 'border-primary/30 bg-primary/5' :
                   'border-outline-variant/10 hover:bg-surface-container-low'
-                }`}
+                )}
                 onClick={() => onSelectDay(isSelected ? null : day)}
               >
-                <div className={`text-[12px] font-bold mb-xs ${isToday ? 'w-6 h-6 rounded-full bg-primary text-on-primary flex items-center justify-center' : 'text-on-surface-variant'}`}>
+                <div className={cn('text-[12px] font-bold mb-xs', isToday ? 'w-6 h-6 rounded-full bg-primary text-on-primary flex items-center justify-center' : 'text-on-surface-variant')}>
                   {day}
                 </div>
                 <div className="space-y-0.5">
@@ -130,8 +131,8 @@ export default function TaskCalendarView({
                           {task.assignee ? <span className="font-label-sm text-on-surface-variant">{task.assignee}</span> : null}
                         </div>
                       </div>
-                      <div title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={`flex items-center gap-xs px-sm py-1 rounded-full border ${badge.bg}`}>
-                        <span className={`w-2 h-2 rounded-full ${badge.dot}`} />
+                      <div title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={cn('flex items-center gap-xs px-sm py-1 rounded-full border', badge.bg)}>
+                        <span className={cn('w-2 h-2 rounded-full', badge.dot)} />
                         <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">{intl.formatMessage({ id: badge.labelId }, badge.values)}</span>
                       </div>
                     </div>

@@ -365,7 +365,7 @@ function SkillCard({
         >
           <h4 className="font-bold text-label-md text-on-surface hover:underline truncate">{entry.name}</h4>
         </Button>
-        <span className={`text-label-xs px-xs py-[1px] rounded-full font-bold ${trustLabel.cls} shrink-0`}>
+        <span className={cn("text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0", trustLabel.cls)}>
           {t(trustLabel.key)}
         </span>
       </div>
@@ -387,7 +387,7 @@ function SkillCard({
         </div>
       )}
       {feedback && (
-        <div className={`text-label-xs mb-xs ${feedback.ok ? "text-primary" : "text-error"}`}>
+        <div className={cn("text-label-xs mb-xs", feedback.ok ? "text-primary" : "text-error")}>
           {feedback.msg}
         </div>
       )}

@@ -1,5 +1,7 @@
+import { cn } from '@/lib/utils'
+
 export function Skeleton({ className = '' }: { className?: string }) {
-  return <div className={`animate-pulse bg-outline-variant/20 rounded-md ${className}`} />
+  return <div className={cn('animate-pulse bg-outline-variant/20 rounded-md', className)} />
 }
 
 export function CardSkeleton() {

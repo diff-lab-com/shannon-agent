@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Pagination } from '@/components/ui/pagination'
+import { cn } from '@/lib/utils'
 import type { SessionInfo } from '@/types'
 import { formatDirBreadcrumb, formatTime } from './utils'
 import HighlightText from './HighlightText'
@@ -91,11 +92,12 @@ export default function SessionSidebar({
             role="button"
             tabIndex={0}
             aria-label={intl.formatMessage({ id: 'chat.session.aria' }, { title: session.title || untitled })}
-            className={`p-sm rounded-lg cursor-pointer group border-l-2 ${
+            className={cn(
+              "p-sm rounded-lg cursor-pointer group border-l-2",
               session.id === currentSessionId
                 ? 'bg-surface-container-high/60 border-primary'
-                : 'border-transparent hover:bg-surface-container-high/40'
-            }`}
+                : 'border-transparent hover:bg-surface-container-high/40',
+            )}
             onClick={() => switchSession(session.id)}
             onKeyDown={e => { if (e.key === 'Enter') switchSession(session.id); if (e.key === 'Delete') setDeleteTarget(session.id) }}
             onContextMenu={e => {
@@ -127,7 +129,7 @@ export default function SessionSidebar({
             ) : (
               <>
                 <div className="flex items-center justify-between">
-                  <p className={`font-label-md truncate flex-1 ${session.id === currentSessionId ? 'text-primary font-bold' : 'text-on-surface group-hover:text-primary transition-colors'}`}>
+                  <p className={cn("font-label-md truncate flex-1", session.id === currentSessionId ? 'text-primary font-bold' : 'text-on-surface group-hover:text-primary transition-colors')}>
                     {pinnedIds.has(session.id) && <span className="material-symbols-outlined text-[14px] text-primary mr-xs align-text-bottom">push_pin</span>}
                     <HighlightText text={session.title || untitled} query={sessionSearch} />
                   </p>

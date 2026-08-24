@@ -1,4 +1,5 @@
 import type { ToolCall, UsagePayload } from '@/types'
+import { cn } from '@/lib/utils'
 
 interface ContextPanelProps {
   t: (id: string) => string
@@ -50,7 +51,7 @@ export default function ContextPanel({ t, open, usage, activeToolCalls }: Contex
                       <span className="font-bold">{pct.toFixed(0)}%</span>
                     </div>
                     <div className="w-full h-1.5 bg-surface-container-high rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${pct}%` }} />
+                      <div className={cn("h-full rounded-full transition-all duration-500", barColor)} style={{ width: `${pct}%` }} />
                     </div>
                     <p className="text-label-sm text-on-surface-variant mt-xs">{total.toLocaleString()} / {max.toLocaleString()}</p>
                   </div>
@@ -70,7 +71,7 @@ export default function ContextPanel({ t, open, usage, activeToolCalls }: Contex
             <div className="space-y-sm">
               {activeToolCalls.map(tc => (
                 <div key={tc.tool_use_id} className="p-sm bg-surface-container rounded-xl flex items-center gap-sm border border-outline-variant/10">
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${tc.status === 'running' ? 'bg-secondary animate-pulse' : tc.status === 'error' ? 'bg-error' : 'bg-tertiary'}`}></span>
+                  <span className={cn("w-2 h-2 rounded-full shrink-0", tc.status === 'running' ? 'bg-secondary animate-pulse' : tc.status === 'error' ? 'bg-error' : 'bg-tertiary')}></span>
                   <p className="text-label-md truncate">{tc.tool_name}</p>
                 </div>
               ))}

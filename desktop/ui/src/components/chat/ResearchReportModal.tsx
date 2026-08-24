@@ -6,6 +6,7 @@ import { Markdown } from '@/components/chat/Markdown'
 import { Button } from '@/components/ui/button'
 import { buildPrintStyles } from '@/lib/printStyles'
 import type { ResearchReport } from '@/types'
+import { cn } from '@/lib/utils'
 
 interface ResearchReportModalProps {
   report: ResearchReport
@@ -131,11 +132,11 @@ export const ResearchReportModal = memo(function ResearchReportModal({
                   <li
                     key={c.id}
                     data-citation-id={c.id}
-                    className={`rounded-lg p-sm border transition-colors ${
+                    className={cn('rounded-lg p-sm border transition-colors',
                       activeCitation === c.id
                         ? 'border-primary/50 bg-primary-container/20'
                         : 'border-outline-variant/20 bg-surface-container-lowest/60'
-                    }`}
+                    )}
                   >
                     <div className="flex items-start gap-xs">
                       <span className="shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary-container text-on-primary-container text-label-xs font-bold">

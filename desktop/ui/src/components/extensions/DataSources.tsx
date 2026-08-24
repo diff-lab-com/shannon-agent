@@ -343,10 +343,10 @@ function AdapterCard({
   const isQueryPending = CONFIG_ONLY_KINDS.has(kind);
   return (
     <div className="relative overflow-hidden rounded-2xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-lg transition-all flex flex-col group">
-      <div className={`h-1 w-full bg-gradient-to-r ${accent.bar}`} />
+      <div className={cn("h-1 w-full bg-gradient-to-r", accent.bar)} />
       <div className="p-md flex flex-col flex-1">
         <div className="flex items-start gap-sm mb-xs">
-          <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${accent.icon} flex items-center justify-center shrink-0 shadow-sm`}>
+          <div className={cn("w-11 h-11 rounded-xl bg-gradient-to-br flex items-center justify-center shrink-0 shadow-sm", accent.icon)}>
             <span className="material-symbols-outlined text-white text-[22px]">{accent.icon_name}</span>
           </div>
           <div className="flex-1 min-w-0">
@@ -373,7 +373,7 @@ function AdapterCard({
         )}
 
         {feedback && (
-          <div className={`text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded ${feedback.ok ? "bg-primary-container/50 text-on-primary-container" : "bg-error-container/50 text-on-error-container"}`}>
+          <div className={cn("text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded", feedback.ok ? "bg-primary-container/50 text-on-primary-container" : "bg-error-container/50 text-on-error-container")}>
             <span className="material-symbols-outlined icon-xs">{feedback.ok ? "check_circle" : "error"}</span>
             {feedback.msg}
           </div>
