@@ -42,7 +42,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: vi.fn().mockImplementation((query: string) => ({
-    matches: false,
+    matches: /prefers-reduced-motion:\s*reduce/i.test(query),
     media: query,
     onchange: null,
     addEventListener: vi.fn(),
