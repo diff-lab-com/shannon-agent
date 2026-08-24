@@ -5,16 +5,23 @@
 // FileDiff in parallel when the modal opens. Per-file bulk operations
 // plus an "Apply all" footer button that writes every file with >=1
 // accepted hunk in sequence.
+//
+// T1.2 — migrated onto the shared Modal primitive. The hand-rolled
+// `fixed inset-0` overlay, `useModalFocus` hook, document-level Escape
+// listener, and backdrop click handler are all gone: Modal owns them.
+// The diff-specific UI (totals chip, 2-pane body, sidebar) renders as
+// Modal children; Modal handles the dialog role, aria-modal, focus trap,
+// Esc-to-close, and body scroll lock.
 
-import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Modal } from '@/components/ui/modal'
 import DiffViewer from '@/components/diff/DiffViewer'
 import FileDiffList, { type FileFilter } from '@/components/diff/FileDiffList'
-import { useModalFocus } from '@/hooks/useModalFocus'
-import * as api from '@/lib/tauri-api'
 import { computeHunks, mergeFile, type HunkDecision } from '@/lib/diff-merge'
+import * as api from '@/lib/tauri-api'
 import type { FileDiff } from '@/types'
 
 interface DiffDialogMultiProps {
@@ -33,6 +40,8 @@ function cycleDecision(d: HunkDecision): HunkDecision {
 
 export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialogMultiProps) {
   const intl = useIntl()
+  const t = (id: string, values?: Record<string, string | number>) =>
+    intl.formatMessage({ id }, values)
   const [currentPath, setCurrentPath] = useState<string | null>(null)
   const [diffs, setDiffs] = useState<Map<string, FileDiff>>(new Map())
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set())
@@ -40,9 +49,6 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
   const [decisions, setDecisions] = useState<Map<string, Map<string, HunkDecision>>>(new Map())
   const [filter, setFilter] = useState<FileFilter>('all')
   const [applying, setApplying] = useState(false)
-
-  const containerRef = useRef<HTMLDivElement>(null)
-  useModalFocus(open, containerRef)
 
   useEffect(() => {
     if (!open || filePaths.length === 0) {
@@ -82,13 +88,6 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
     }
     return () => { cancelled = true }
   }, [open, filePaths])
-
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [open, onClose])
 
   const currentDiff = currentPath ? diffs.get(currentPath) ?? null : null
   const currentError = currentPath ? errors.get(currentPath) ?? null : null
@@ -188,17 +187,17 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
       }
       if (firstError) {
         toast.error(
-          intl.formatMessage({ id: 'diff.dialog.applyFailed' }),
+          t('diff.dialog.applyFailed'),
           { description: firstError },
         )
       } else {
         toast.success(
-          intl.formatMessage({ id: 'diff.multi.applied' }, { count: succeeded }),
+          t('diff.multi.applied', { count: succeeded }),
           {
-            description: intl.formatMessage(
-              { id: 'diff.multi.applied.desc' },
-              { accepted: succeeded, total: filesWithAccepts.length },
-            ),
+            description: t('diff.multi.applied.desc', {
+              accepted: succeeded,
+              total: filesWithAccepts.length,
+            }),
           },
         )
         onClose()
@@ -208,157 +207,155 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
     }
   }
 
-  if (!open) return null
-
   return (
-    <div
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm p-lg"
-      onClick={onClose}
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="full"
+      // No title/description: this dialog renders its own custom header in
+      // the children slot below because the layout is 2-pane and Modal's
+      // built-in header is single-pane. The dialog still gets role="dialog"
+      // + aria-modal="true" from Modal.
+      closeLabel={t('diff.dialog.close.aria')}
+      busy={applying}
+      className="max-w-7xl max-h-[85vh] flex flex-col"
     >
-      <div
-        ref={containerRef}
-        className="bg-surface-container-lowest rounded-2xl border border-outline-variant/20 shadow-2xl w-full max-w-7xl max-h-[85vh] flex flex-col"
-        role="dialog"
-        aria-modal="true"
-        aria-label={intl.formatMessage({ id: 'diff.multi.title' }, { count: filePaths.length })}
-        onClick={e => e.stopPropagation()}
-      >
-        <header className="flex items-center justify-between px-lg py-md border-b border-outline-variant/30">
-          <div className="flex items-center gap-md min-w-0">
-            <span className="material-symbols-outlined icon-md text-on-surface-variant">difference</span>
-            <h3 className="font-headline-md text-on-surface truncate">
-              {intl.formatMessage({ id: 'diff.multi.title' }, { count: filePaths.length })}
-            </h3>
-            {totals.totalAccepted + totals.totalRejected + totals.totalPending > 0 && (
-              <span className="font-label-sm text-on-surface-variant">
-                {intl.formatMessage(
-                  { id: 'diff.multi.fileCount' },
-                  {
-                    accepted: totals.totalAccepted,
-                    rejected: totals.totalRejected,
-                    pending: totals.totalPending,
-                  },
-                )}
-              </span>
-            )}
-          </div>
-          <Button
-            className="p-xs rounded-lg hover:bg-surface-container-high text-on-surface-variant cursor-pointer"
-            aria-label={intl.formatMessage({ id: 'diff.dialog.close.aria' })}
-            onClick={onClose}
-          >
-            <span className="material-symbols-outlined">close</span>
-          </Button>
-        </header>
+      <header className="flex items-center justify-between px-lg py-md border-b border-outline-variant/30">
+        <div className="flex items-center gap-md min-w-0">
+          <span className="material-symbols-outlined icon-md text-on-surface-variant" aria-hidden="true">difference</span>
+          <h3 className="font-headline-md text-on-surface truncate">
+            {t('diff.multi.title', { count: filePaths.length })}
+          </h3>
+          {totals.totalAccepted + totals.totalRejected + totals.totalPending > 0 && (
+            <span className="font-label-sm text-on-surface-variant">
+              {t('diff.multi.fileCount', {
+                accepted: totals.totalAccepted,
+                rejected: totals.totalRejected,
+                pending: totals.totalPending,
+              })}
+            </span>
+          )}
+        </div>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={t('diff.dialog.close.aria')}
+          onClick={onClose}
+          className="rounded-lg hover:bg-surface-container-high text-on-surface-variant"
+        >
+          <span className="material-symbols-outlined" aria-hidden="true">close</span>
+        </Button>
+      </header>
 
-        <div className="flex-1 flex min-h-0">
-          <FileDiffList
-            files={filePaths}
-            diffs={diffs}
-            decisions={decisions}
-            currentPath={currentPath}
-            filter={filter}
-            onSelectPath={setCurrentPath}
-            onFilterChange={setFilter}
-          />
+      <div className="flex-1 flex min-h-0">
+        <FileDiffList
+          files={filePaths}
+          diffs={diffs}
+          decisions={decisions}
+          currentPath={currentPath}
+          filter={filter}
+          onSelectPath={setCurrentPath}
+          onFilterChange={setFilter}
+        />
 
-          <div className="flex-1 flex flex-col min-w-0">
-            {currentPath && currentHunks.length > 0 && (
-              <div className="flex items-center gap-md px-lg py-sm border-b border-outline-variant/30 bg-surface-container-low">
-                <div className="flex-1 min-w-0">
-                  <div className="font-label-md text-on-surface truncate">{currentPath}</div>
-                  <div className="font-label-sm text-on-surface-variant">
-                    {intl.formatMessage({ id: 'diff.review.subtitle' })}
-                  </div>
-                </div>
-                <div className="flex items-center gap-xs shrink-0">
-                  <span className="font-label-sm text-on-surface-variant">
-                    {currentDecisions.size} / {currentHunks.length}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleAcceptAll}
-                    className="px-md py-xs rounded-lg font-label-md bg-tertiary-container/40 text-tertiary hover:bg-tertiary-container/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-                  >
-                    {intl.formatMessage({ id: 'diff.review.acceptAll' })}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleRejectAll}
-                    className="px-md py-xs rounded-lg font-label-md bg-error-container/40 text-error hover:bg-error-container/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-                  >
-                    {intl.formatMessage({ id: 'diff.review.rejectAll' })}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleReset}
-                    disabled={currentDecisions.size === 0}
-                    className="px-md py-xs rounded-lg font-label-md bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-                  >
-                    {intl.formatMessage({ id: 'diff.review.resetAll' })}
-                  </button>
+        <div className="flex-1 flex flex-col min-w-0">
+          {currentPath && currentHunks.length > 0 && (
+            <div className="flex items-center gap-md px-lg py-sm border-b border-outline-variant/30 bg-surface-container-low">
+              <div className="flex-1 min-w-0">
+                <div className="font-label-md text-on-surface truncate">{currentPath}</div>
+                <div className="font-label-sm text-on-surface-variant">
+                  {t('diff.review.subtitle')}
                 </div>
               </div>
-            )}
-
-            <div className="flex-1 overflow-auto p-lg">
-              {!currentPath ? (
-                <p className="text-body-sm text-on-surface-variant italic">
-                  {intl.formatMessage({ id: 'diff.multi.empty' })}
-                </p>
-              ) : currentLoading ? (
-                <div className="flex items-center justify-center py-xl">
-                  <span className="material-symbols-outlined animate-spin text-primary">progress_activity</span>
-                  <span className="ml-md text-body-sm text-on-surface-variant">
-                    {intl.formatMessage({ id: 'diff.dialog.loading' })}
-                  </span>
-                </div>
-              ) : currentError ? (
-                <div className="flex items-start gap-sm p-md bg-error/10 border border-error/20 rounded-xl text-error">
-                  <span className="material-symbols-outlined text-[18px] mt-[2px]">error</span>
-                  <div>
-                    <p className="font-label-md">{intl.formatMessage({ id: 'diff.dialog.loadFailed' })}</p>
-                    <p className="font-body-sm mt-xs opacity-80">{currentError}</p>
-                  </div>
-                </div>
-              ) : currentDiff ? (
-                <DiffViewer
-                  diff={currentDiff}
-                  decisions={currentDecisions}
-                  onToggleHunk={handleToggleHunk}
-                />
-              ) : null}
+              <div className="flex items-center gap-xs shrink-0">
+                <span className="font-label-sm text-on-surface-variant">
+                  {currentDecisions.size} / {currentHunks.length}
+                </span>
+                <Button
+                  size="sm"
+                  onClick={handleAcceptAll}
+                  className="h-auto px-md py-xs rounded-lg font-label-md bg-tertiary-container/40 text-tertiary hover:bg-tertiary-container/60"
+                >
+                  {t('diff.review.acceptAll')}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleRejectAll}
+                  className="h-auto px-md py-xs rounded-lg font-label-md bg-error-container/40 text-error hover:bg-error-container/60"
+                >
+                  {t('diff.review.rejectAll')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={handleReset}
+                  disabled={currentDecisions.size === 0}
+                  className="h-auto px-md py-xs rounded-lg font-label-md"
+                >
+                  {t('diff.review.resetAll')}
+                </Button>
+              </div>
             </div>
+          )}
+
+          <div className="flex-1 overflow-auto p-lg">
+            {!currentPath ? (
+              <p className="text-body-sm text-on-surface-variant italic">
+                {t('diff.multi.empty')}
+              </p>
+            ) : currentLoading ? (
+              <div className="flex items-center justify-center py-xl">
+                <span className="material-symbols-outlined animate-spin text-primary" aria-hidden="true">progress_activity</span>
+                <span className="ml-md text-body-sm text-on-surface-variant">
+                  {t('diff.dialog.loading')}
+                </span>
+              </div>
+            ) : currentError ? (
+              <div className="flex items-start gap-sm p-md bg-error/10 border border-error/20 rounded-xl text-error">
+                <span className="material-symbols-outlined text-[18px] mt-[2px]" aria-hidden="true">error</span>
+                <div>
+                  <p className="font-label-md">{t('diff.dialog.loadFailed')}</p>
+                  <p className="font-body-sm mt-xs opacity-80">{currentError}</p>
+                </div>
+              </div>
+            ) : currentDiff ? (
+              <DiffViewer
+                diff={currentDiff}
+                decisions={currentDecisions}
+                onToggleHunk={handleToggleHunk}
+              />
+            ) : null}
           </div>
         </div>
-
-        <footer className="flex items-center justify-end gap-sm px-lg py-md border-t border-outline-variant/30 bg-surface-container-low">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={applying}
-            className="px-md py-xs rounded-lg font-label-md bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-          >
-            {intl.formatMessage({ id: 'diff.dialog.cancel' })}
-          </button>
-          <button
-            type="button"
-            onClick={handleApplyAll}
-            disabled={applying || filesWithAccepts.length === 0}
-            className="px-md py-xs rounded-lg font-label-md bg-primary text-on-primary hover:bg-primary/90 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-            aria-label={intl.formatMessage({ id: 'diff.dialog.apply.aria' })}
-          >
-            {applying ? (
-              <span className="flex items-center gap-xs">
-                <span className="material-symbols-outlined animate-spin text-[16px]">progress_activity</span>
-                {intl.formatMessage({ id: 'diff.multi.applyAll' }, { count: filesWithAccepts.length })}
-              </span>
-            ) : (
-              intl.formatMessage({ id: 'diff.multi.applyAll' }, { count: filesWithAccepts.length })
-            )}
-          </button>
-        </footer>
       </div>
-    </div>
+
+      <footer className="flex items-center justify-end gap-sm px-lg py-md border-t border-outline-variant/30 bg-surface-container-low">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={onClose}
+          disabled={applying}
+          className="h-auto px-md py-xs rounded-lg font-label-md"
+        >
+          {t('diff.dialog.cancel')}
+        </Button>
+        <Button
+          size="sm"
+          onClick={handleApplyAll}
+          disabled={applying || filesWithAccepts.length === 0}
+          className="h-auto px-md py-xs rounded-lg font-label-md bg-primary text-on-primary hover:bg-primary/90"
+          aria-label={t('diff.dialog.apply.aria')}
+        >
+          {applying ? (
+            <span className="flex items-center gap-xs">
+              <span className="material-symbols-outlined animate-spin text-[16px]" aria-hidden="true">progress_activity</span>
+              {t('diff.multi.applyAll', { count: filesWithAccepts.length })}
+            </span>
+          ) : (
+            t('diff.multi.applyAll', { count: filesWithAccepts.length })
+          )}
+        </Button>
+      </footer>
+    </Modal>
   )
 }

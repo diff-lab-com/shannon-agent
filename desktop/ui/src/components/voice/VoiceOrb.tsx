@@ -1,4 +1,5 @@
 import type { VoiceState } from '@/hooks/useVoice'
+import { cn } from '@/lib/utils'
 
 interface VoiceOrbProps {
   state: VoiceState
@@ -21,7 +22,7 @@ export function VoiceOrb({ state, size = 64 }: VoiceOrbProps) {
     <div
       role="presentation"
       aria-hidden="true"
-      className={`relative rounded-full ${baseColor} ${ringClass} before:absolute before:inset-0 before:rounded-full before:-z-10 transition-colors`}
+      className={cn("relative rounded-full", baseColor, ringClass, "before:absolute before:inset-0 before:rounded-full before:-z-10 transition-colors")}
       style={{ width: size, height: size }}
     >
       <div className="absolute inset-2 rounded-full bg-surface-container-lowest/40 backdrop-blur-sm flex items-center justify-center">

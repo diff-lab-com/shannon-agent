@@ -8,6 +8,8 @@ import ErrorState from "@/components/ui/error-state";
 import EmptyState from "@/components/ui/empty-state";
 import type { CatalogEntry, CatalogSource, TrustLevel } from "@/types";
 import InstallDialog from "./InstallDialog";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 type SortMode = "trust" | "stars" | "name" | "recent";
 type TrustFilter = TrustLevel | "all";
@@ -204,7 +206,7 @@ export default function Plugins() {
             </div>
           </div>
           <span
-            className={`inline-flex items-center gap-xs px-xs py-[2px] rounded-full text-label-xs font-bold shrink-0 ${TRUST_BADGE_CLASS[trust]}`}
+            className={cn("inline-flex items-center gap-xs px-xs py-[2px] rounded-full text-label-xs font-bold shrink-0", TRUST_BADGE_CLASS[trust])}
             title={t(TRUST_LABEL_KEY[trust])}
           >
             <span className="material-symbols-outlined icon-xs">{TRUST_ICON[trust]}</span>
@@ -255,13 +257,13 @@ export default function Plugins() {
           ) : (
             <span />
           )}
-          <button
+          <Button
             onClick={() => handleInstall(entry)}
-            className="px-md py-xs rounded-lg bg-primary text-on-primary text-label-sm font-bold hover:bg-primary/90 inline-flex items-center gap-xs cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            className="px-md py-xs rounded-lg hover:bg-primary/90 cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/30"
           >
             <span className="material-symbols-outlined text-[14px]">download</span>
             {t("extensions.plugins.install")}
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -368,13 +370,15 @@ export default function Plugins() {
             )}
           </span>
           {activeFilterCount > 0 && (
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={resetFilters}
-              className="inline-flex items-center gap-xs px-sm py-xs rounded-lg bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high transition-colors text-label-sm font-bold focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+              className="px-sm py-xs rounded-lg hover:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               <span className="material-symbols-outlined text-[14px]">filter_alt_off</span>
               {t("extensions.plugins.filter.reset")}
-            </button>
+            </Button>
           )}
         </div>
       )}

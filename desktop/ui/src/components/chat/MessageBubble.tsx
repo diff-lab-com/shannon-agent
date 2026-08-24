@@ -1,12 +1,12 @@
-import { useState, useRef, memo } from 'react'
+import { useState, memo } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
+import { Modal } from '@/components/ui/modal'
 import { useChat } from '@/context/ChatContext'
 import { useSessions } from '@/context/SessionContext'
-import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import { Markdown } from '@/components/chat/Markdown'
 import { FootnoteMarkdown } from '@/components/chat/FootnoteMarkdown'
@@ -25,6 +25,7 @@ import { ResearchReportModal } from '@/components/chat/ResearchReportModal'
 import { ArtifactChipList } from '@/components/artifact/ArtifactChip'
 import { detectArtifacts } from '@/components/artifact/detectArtifact'
 import type { ChatMessage, ToolCall, FileAttachment } from '@/types'
+import { cn } from '@/lib/utils'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -83,18 +84,16 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const [open, setOpen] = useState(false)
-  const modalRef = useRef<HTMLDivElement>(null)
-  useModalFocus(open, modalRef)
   const isImage = isImagePath(attachment.path)
 
   const handleClick = () => setOpen(true)
 
   return (
     <>
-      <button
-        type="button"
+      <Button
+        variant="outline"
         onClick={handleClick}
-        className="group/att inline-flex items-center gap-xs px-sm py-xs bg-surface-container-low hover:bg-surface-container border border-outline-variant/30 rounded-lg text-on-surface-variant hover:text-primary transition-colors cursor-pointer"
+        className="group/att inline-flex items-center gap-xs px-sm py-xs h-auto bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-primary"
         title={attachment.path}
         aria-label={t('chat.message.attachment.open')}
       >
@@ -109,54 +108,53 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
           <span className="material-symbols-outlined text-[18px]">description</span>
         )}
         <span className="font-label-sm max-w-[160px] truncate">{attachment.name}</span>
-      </button>
+      </Button>
 
-      {open && (
-        <div
-          ref={modalRef}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-lg"
-          onClick={() => setOpen(false)}
-          role="dialog"
-          aria-modal="true"
-          aria-label={attachment.name}
-        >
-          {isImage ? (
-            <img
-              src={convertFileSrc(attachment.path)}
-              alt={attachment.name}
-              className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            />
-          ) : (
-            <div
-              className="bg-surface-container-lowest rounded-xl p-lg shadow-2xl max-w-md"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center gap-sm mb-md">
-                <span className="material-symbols-outlined text-on-surface-variant">description</span>
-                <span className="font-label-md text-on-surface truncate">{attachment.name}</span>
-              </div>
-              <p className="text-body-sm text-on-surface-variant mb-md break-all">{attachment.path}</p>
-              <Button
-                onClick={() => {
-                  window.open(convertFileSrc(attachment.path), '_blank')
-                }}
-              >
-                <span className="material-symbols-outlined text-[18px] mr-xs">open_in_new</span>
-                {t('chat.message.attachment.openExternally')}
-              </Button>
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            aria-label={t('chat.message.attachment.close')}
-            className="absolute top-md right-md text-on-surface-variant hover:text-on-surface bg-surface-container-lowest/80 rounded-full p-sm"
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        size="full"
+        showCloseButton={false}
+        title={attachment.name}
+        closeLabel={t('chat.message.attachment.close')}
+        className="bg-black/70 backdrop-blur-sm p-lg"
+      >
+        {isImage ? (
+          <img
+            src={convertFileSrc(attachment.path)}
+            alt={attachment.name}
+            className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <div
+            className="bg-surface-container-lowest rounded-xl p-lg shadow-2xl max-w-md"
+            onClick={(e) => e.stopPropagation()}
           >
-            <span className="material-symbols-outlined">close</span>
-          </button>
-        </div>
-      )}
+            <div className="flex items-center gap-sm mb-md">
+              <span className="material-symbols-outlined text-on-surface-variant">description</span>
+              <span className="font-label-md text-on-surface truncate">{attachment.name}</span>
+            </div>
+            <p className="text-body-sm text-on-surface-variant mb-md break-all">{attachment.path}</p>
+            <Button
+              onClick={() => {
+                window.open(convertFileSrc(attachment.path), '_blank')
+              }}
+            >
+              <span className="material-symbols-outlined text-[18px] mr-xs">open_in_new</span>
+              {t('chat.message.attachment.openExternally')}
+            </Button>
+          </div>
+        )}
+        <Button
+          variant="ghost"
+          onClick={() => setOpen(false)}
+          aria-label={t('chat.message.attachment.close')}
+          className="absolute top-md right-md text-on-surface-variant hover:text-on-surface bg-surface-container-lowest/80 rounded-full p-sm"
+        >
+          <span className="material-symbols-outlined">close</span>
+        </Button>
+      </Modal>
     </>
   )
 }
@@ -299,14 +297,15 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                       </span>
                     </div>
                     {uniquePaths.length > 1 && (
-                      <button
-                        type="button"
-                        className="shrink-0 flex items-center gap-xs px-sm py-xs rounded-md text-tertiary hover:bg-tertiary/10 font-label-sm transition-colors"
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="shrink-0 gap-xs px-sm py-xs text-tertiary hover:bg-tertiary/10"
                         onClick={() => onViewDiffMulti?.(uniquePaths)}
                       >
                         <span className="material-symbols-outlined icon-sm">open_in_new</span>
                         {t('chat.message.reviewAll')}
-                      </button>
+                      </Button>
                     )}
                   </div>
                 ) : null
@@ -323,7 +322,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
           </Button>
           {!isTool && (
             <>
-              <Button aria-label={t('chat.message.like.aria')} aria-pressed={liked} onClick={() => setLiked(!liked)} className={`flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${liked ? 'text-primary' : 'text-on-surface-variant'}`}>
+              <Button aria-label={t('chat.message.like.aria')} aria-pressed={liked} onClick={() => setLiked(!liked)} className={cn('flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30', liked ? 'text-primary' : 'text-on-surface-variant')}>
                 <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{liked ? 'thumb_up' : 'thumb_up_off_alt'}</span>
               </Button>
               <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
@@ -390,18 +389,19 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
   return (
     <Tool name={toolCall.tool_name} status={toolCall.status} className="p-sm">
       <ToolHeader onClick={() => setExpanded(!expanded)}>
-        <span className={`material-symbols-outlined icon-sm ${statusColor} ${toolCall.status === 'running' ? 'animate-spin' : ''}`}>{statusIcon}</span>
+        <span className={cn('material-symbols-outlined icon-sm', statusColor, toolCall.status === 'running' ? 'animate-spin' : '')}>{statusIcon}</span>
         <span className="font-label-md text-on-surface flex-1 truncate">{toolCall.tool_name}</span>
         {canDiff && (
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             aria-label={intl.formatMessage({ id: 'chat.message.diff.aria' }, { path: filePath })}
-            className="flex items-center gap-xs px-xs py-[2px] rounded-md text-tertiary hover:bg-tertiary-container/40 font-label-sm cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            className="gap-xs px-xs py-[2px] text-tertiary hover:bg-tertiary-container/40"
             onClick={(e) => { e.stopPropagation(); onViewDiff(filePath!) }}
           >
             <span className="material-symbols-outlined icon-sm">difference</span>
             {t('chat.message.diff')}
-          </button>
+          </Button>
         )}
         <span className="material-symbols-outlined icon-sm text-on-surface-variant" aria-hidden="true">{expanded ? 'expand_less' : 'expand_more'}</span>
       </ToolHeader>

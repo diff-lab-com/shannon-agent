@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { UsageStats, UsageBucket } from '@/types'
 
@@ -161,9 +162,10 @@ export default function Usage() {
 
       <div className="flex items-center gap-xs mb-lg">
         {RANGES.map((r) => (
-          <button
+          <Button
             key={r}
             type="button"
+            variant="outline"
             onClick={() => setDays(r)}
             aria-pressed={days === r}
             className={cn(
@@ -174,7 +176,7 @@ export default function Usage() {
             )}
           >
             {intl.formatMessage({ id: 'usage.range' }, { days: r })}
-          </button>
+          </Button>
         ))}
       </div>
 

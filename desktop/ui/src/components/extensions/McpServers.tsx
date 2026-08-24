@@ -11,6 +11,8 @@ import type { McpServerInfo } from "@/types";
 import McpAddServerDialog from "./McpAddServerDialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import LoadingState from "@/components/ui/loading-state";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 /** Semantic icon per known MCP server. Falls back to a hub/storage icon. */
 const MCP_SERVER_ICONS: Record<string, string> = {
@@ -146,14 +148,14 @@ export default function McpServers() {
       />
 
       <div className="flex justify-center pt-sm">
-        <button
+        <Button
           type="button"
           onClick={() => setDialogOpen(true)}
-          className="inline-flex items-center gap-xs px-lg py-sm rounded-xl bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 cursor-pointer"
+          className="px-lg py-sm rounded-xl hover:bg-primary/90 cursor-pointer"
         >
           <span className="material-symbols-outlined text-[18px]">add</span>
           {t("extensions.mcp.addDialog.cta")}
-        </button>
+        </Button>
       </div>
 
       <McpAddServerDialog
@@ -214,11 +216,10 @@ function InstalledSection({
             return (
               <div
                 key={srv.name}
-                className={`flex items-center gap-md px-md py-sm ${
-                  i === servers.length - 1
-                    ? ""
-                    : "border-b border-outline-variant/15"
-                }`}
+                className={cn(
+                  "flex items-center gap-md px-md py-sm",
+                  i !== servers.length - 1 && "border-b border-outline-variant/15",
+                )}
               >
                 <span className="material-symbols-outlined text-primary text-[20px]" aria-hidden="true">
                   {mcpServerIcon(srv.name)}
@@ -229,11 +230,12 @@ function InstalledSection({
                       {srv.name}
                     </div>
                     <span
-                      className={`text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 ${
+                      className={cn(
+                        "text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0",
                         srv.connected
                           ? "bg-primary-container/60 text-on-primary-container"
-                          : "bg-surface-container-highest text-on-surface-variant"
-                      }`}
+                          : "bg-surface-container-highest text-on-surface-variant",
+                      )}
                     >
                       {srv.connected
                         ? t("extensions.mcp.toolCount", {
@@ -248,14 +250,16 @@ function InstalledSection({
                     </div>
                   )}
                 </div>
-                <button
+                <Button
+                  variant="destructive"
+                  size="sm"
                   type="button"
                   onClick={() => onUninstall(srv.name)}
                   disabled={isBusy}
-                  className="px-sm py-xs rounded-lg bg-error-container/40 text-on-error-container text-label-xs font-bold hover:bg-error-container/70 disabled:opacity-50"
+                  className="bg-error-container/40 text-on-error-container hover:bg-error-container/70"
                 >
                   {isBusy ? "…" : t("extensions.mcp.remove")}
-                </button>
+                </Button>
               </div>
             );
           })}

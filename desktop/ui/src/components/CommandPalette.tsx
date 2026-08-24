@@ -1,10 +1,18 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { useSessions } from '@/context/SessionContext'
 import { useCatalog } from '@/context/CatalogContext'
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
 import * as api from '@/lib/tauri-api'
 
 interface PaletteItem {
@@ -15,34 +23,7 @@ interface PaletteItem {
   action: () => void
 }
 
-// Subsequence fuzzy matcher with scoring. Query characters must appear in
-// order, but not contiguously. Contiguous matches score higher so they rank
-// first. Returns null when query does not match.
-function fuzzyScore(query: string, text: string): number | null {
-  if (!query) return 0
-  const q = query.toLowerCase()
-  const t = text.toLowerCase()
-  let qi = 0
-  let score = 0
-  let prevMatch = false
-  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
-    if (t[ti] === q[qi]) {
-      // Bonus for contiguous matches and matches at word boundaries.
-      score += prevMatch ? 3 : 1
-      if (ti === 0 || /[\s\-_/.]/.test(t[ti - 1])) score += 5
-      qi++
-      prevMatch = true
-    } else {
-      prevMatch = false
-    }
-  }
-  return qi === q.length ? score : null
-}
-
 export default function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [query, setQuery] = useState('')
-  const [selected, setSelected] = useState(0)
-  const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
   const { sessions, switchSession } = useSessions()
   const { models, tasks, agents, refreshConfig } = useCatalog()
@@ -50,7 +31,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
 
   const t = (id: string) => intl.formatMessage({ id })
 
-  const items = useMemo<PaletteItem[]>(() => {
+  const grouped = useMemo<Record<string, PaletteItem[]>>(() => {
     const actions: PaletteItem[] = [
       { id: 'a-new-chat', label: t('palette.action.newChat'), icon: 'add_comment', category: t('palette.category.actions'), action: () => navigate('/chat') },
       { id: 'a-new-task', label: t('palette.action.newTask'), icon: 'add_task', category: t('palette.category.actions'), action: () => navigate('/tasks') },
@@ -92,87 +73,60 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       id: `m-${m.id}`, label: m.name, icon: 'neurology', category: t('palette.category.switchModel'), action: () => {
         api.configure({ key: 'model', value: m.id })
           .then(async () => {
-            // Refresh app-wide config so the new provider/model is reflected
-            // in footer, chat header, and anywhere else that reads current model.
             await refreshConfig()
             toast.success(intl.formatMessage({ id: 'palette.toast.switched' }, { name: m.name }))
           })
           .catch((e) => toastError(t('palette.toast.switchFailed'), e))
       },
     }))
-    return [...actions, ...pages, ...taskItems, ...agentItems, ...sessionItems, ...modelItems]
+
+    // Preserve category order from the original implementation. cmdk renders
+    // groups in insertion order, so this list doubles as the visual order.
+    const order = [
+      t('palette.category.actions'),
+      t('palette.category.pages'),
+      t('palette.category.settings'),
+      t('palette.category.tasks'),
+      t('palette.category.agents'),
+      t('palette.category.recentChats'),
+      t('palette.category.switchModel'),
+    ]
+    const all = [...actions, ...pages, ...taskItems, ...agentItems, ...sessionItems, ...modelItems]
+    const map: Record<string, PaletteItem[]> = {}
+    for (const cat of order) map[cat] = []
+    for (const item of all) {
+      if (!map[item.category]) map[item.category] = []
+      map[item.category].push(item)
+    }
+    return map
   }, [intl, navigate, sessions, models, tasks, agents, refreshConfig, switchSession, t])
 
-  // Fuzzy-scored + ranked results. Empty query returns items unchanged (stable
-  // category order). Non-matching items drop out; matches sort by score desc.
-  const filtered = useMemo(() => {
-    if (!query.trim()) return items
-    const scored = items
-      .map(item => ({ item, score: fuzzyScore(query, item.label) ?? -1 }))
-      .filter(x => x.score >= 0)
-      .sort((a, b) => b.score - a.score)
-      .map(x => x.item)
-    return scored
-  }, [items, query])
-
-  useEffect(() => { setSelected(0) }, [query])
-  useEffect(() => { if (open) { setQuery(''); inputRef.current?.focus() } }, [open])
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown') { e.preventDefault(); setSelected(s => Math.min(s + 1, filtered.length - 1)) }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setSelected(s => Math.max(s - 1, 0)) }
-    else if (e.key === 'Enter' && filtered[selected]) { filtered[selected].action(); onClose() }
-    else if (e.key === 'Escape') { onClose() }
-  }
-
-  if (!open) return null
-
-  let lastCategory = ''
   return (
-    <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[20vh]" onClick={onClose}>
-      <div className="w-[520px] max-w-[90vw] max-h-[400px] bg-surface-container-lowest rounded-2xl border border-outline-variant/20 shadow-2xl overflow-hidden flex flex-col" role="dialog" aria-modal="true" aria-label={t('palette.search.placeholder')} onClick={e => e.stopPropagation()}>
-        <div className="flex items-center gap-sm px-lg py-md border-b border-outline-variant/10">
-          <span className="material-symbols-outlined text-on-surface-variant">search</span>
-          <input
-            ref={inputRef}
-            autoFocus
-            className="flex-1 bg-transparent border-none outline-none font-body-lg text-on-surface placeholder:text-on-surface-variant/50"
-            placeholder={t('palette.search.placeholder')}
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-          <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono">ESC</kbd>
-        </div>
-        <div className="flex-1 overflow-y-auto py-xs" role="listbox" aria-label={t('palette.search.placeholder')}>
-          {filtered.length === 0 && (
-            <p className="text-body-sm text-on-surface-variant text-center py-lg opacity-60">{t('palette.noResults')}</p>
-          )}
-          {filtered.map((item, i) => {
-            const showCat = item.category !== lastCategory
-            lastCategory = item.category
-            return (
-              <div key={item.id}>
-                {showCat && <p className="px-lg pt-sm pb-xs font-label-sm text-on-surface-variant/60 uppercase tracking-wider">{item.category}</p>}
-                <button
-                  role="option"
-                  aria-selected={i === selected}
-                  className={`w-full text-left px-lg py-sm flex items-center gap-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${i === selected ? 'bg-primary/10 text-primary' : 'text-on-surface hover:bg-surface-container-low'}`}
-                  onClick={() => { item.action(); onClose() }}
-                  onMouseEnter={() => setSelected(i)}
+    <CommandDialog
+      open={open}
+      onOpenChange={(o) => { if (!o) onClose() }}
+      title={t('palette.search.placeholder')}
+    >
+      <CommandInput placeholder={t('palette.search.placeholder')} />
+      <CommandList>
+        <CommandEmpty>{t('palette.noResults')}</CommandEmpty>
+        {Object.entries(grouped).map(([category, items]) =>
+          items.length === 0 ? null : (
+            <CommandGroup key={category} heading={category}>
+              {items.map(item => (
+                <CommandItem
+                  key={item.id}
+                  value={`${item.label} ${category}`}
+                  onSelect={() => { item.action(); onClose() }}
                 >
                   <span className="material-symbols-outlined text-[18px]">{item.icon}</span>
                   <span className="font-label-md truncate">{item.label}</span>
-                </button>
-              </div>
-            )
-          })}
-        </div>
-        <div className="flex items-center justify-between px-lg py-xs border-t border-outline-variant/10 text-label-sm text-on-surface-variant/70">
-          <span>{intl.formatMessage({ id: 'palette.footer.results' }, { count: filtered.length })}</span>
-          <kbd className="font-mono text-[10px]">{t('palette.footer.shortcuts')}</kbd>
-        </div>
-      </div>
-    </div>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          ),
+        )}
+      </CommandList>
+    </CommandDialog>
   )
 }

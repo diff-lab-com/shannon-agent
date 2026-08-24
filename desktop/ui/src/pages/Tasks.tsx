@@ -19,6 +19,8 @@
 
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { toastError } from '@/lib/errorToast'
 import { useIntl } from 'react-intl'
 import { useCatalog } from '@/context/CatalogContext'
@@ -183,17 +185,19 @@ export default function Tasks() {
           {(['active', 'history', 'worktrees'] as const).map(tabId => {
             const selected = tab === tabId
             return (
-              <button
+              <Button
                 key={tabId}
                 role="tab"
+                variant="ghost"
                 aria-selected={selected}
                 onClick={() => setTab(tabId)}
-                className={`px-md py-sm font-label-md text-[13px] font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
-                  selected ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-on-surface'
-                }`}
+                className={cn(
+                  'h-auto px-md py-sm font-label-md text-[13px] font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-none',
+                  selected ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-on-surface',
+                )}
               >
                 {t(`tasks.tab.${tabId}`)}
-              </button>
+              </Button>
             )
           })}
         </div>

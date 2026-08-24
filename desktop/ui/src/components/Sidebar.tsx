@@ -412,9 +412,10 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
       </nav>
 
       <div className="mt-auto pt-lg border-t border-outline-variant/20 space-y-1">
-        <button
+        <Button
+          variant="ghost"
           onClick={toggleMode}
-          className="w-full flex items-center justify-between gap-3 px-4 py-2 rounded-lg font-label-md text-[12px] text-on-surface-variant hover:bg-surface-container-low hover:text-primary cursor-pointer transition-all"
+          className="w-full justify-between gap-3 px-4 py-2 rounded-lg font-label-md text-[12px] text-on-surface-variant hover:bg-surface-container-low hover:text-primary cursor-pointer transition-all h-auto"
           aria-label={intl.formatMessage({ id: mode === 'simple' ? 'nav.simpleMode.aria' : 'nav.devMode.aria' })}
           aria-pressed={mode === 'dev'}
           title={intl.formatMessage({ id: mode === 'simple' ? 'nav.simpleMode.title' : 'nav.devMode.title' })}
@@ -428,7 +429,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
           <span className="text-[10px] uppercase tracking-wider text-outline-variant">
             {intl.formatMessage({ id: mode === 'simple' ? 'nav.simpleMode.badge' : 'nav.devMode.badge' })}
           </span>
-        </button>
+        </Button>
         <Button
           variant="ghost"
           onClick={() => setSettingsOpen(!settingsOpen)}

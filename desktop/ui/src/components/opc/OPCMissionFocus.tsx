@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
 import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 
@@ -34,13 +35,15 @@ export default function OPCMissionFocus({ config }: Props) {
           <span className="w-1.5 h-1.5 bg-outline-variant rotate-45 block" />
           {intl.formatMessage({ id: 'opc.missionFocus.todayMission' })}
         </div>
-        <button
-          className="text-label-sm text-primary hover:underline cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        <Button
+          variant="link"
+          size="sm"
+          className="text-label-sm h-auto px-0 text-primary hover:underline"
           onClick={() => setEditing(!editing)}
           aria-expanded={editing}
         >
           {editing ? intl.formatMessage({ id: 'opc.missionFocus.cancel' }) : intl.formatMessage({ id: 'opc.missionFocus.edit' })}
-        </button>
+        </Button>
       </div>
       {editing ? (
         <div className="mt-2 space-y-md">
@@ -50,12 +53,12 @@ export default function OPCMissionFocus({ config }: Props) {
             onChange={e => setText(e.target.value)}
             aria-label={intl.formatMessage({ id: 'opc.missionFocus.editMission.aria' })}
           />
-          <button
-            className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          <Button
+            className="px-md py-sm rounded-lg font-label-md hover:opacity-90"
             onClick={save}
           >
             {intl.formatMessage({ id: 'opc.missionFocus.saveFocus' })}
-          </button>
+          </Button>
         </div>
       ) : (
         <h2 className="font-headline-lg text-[28px] font-bold text-on-surface mt-2 max-w-5xl">

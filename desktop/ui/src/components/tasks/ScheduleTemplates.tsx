@@ -5,6 +5,7 @@
 // for the named scenario; the user can still edit any field afterwards.
 
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
 import type { TriggerType } from '@/types'
 
 export interface ScheduleTemplate {
@@ -99,16 +100,18 @@ export default function ScheduleTemplates({ onApply }: ScheduleTemplatesProps) {
       </div>
       <div className="flex flex-wrap gap-xs">
         {SCHEDULE_TEMPLATES.map(t => (
-          <button
+          <Button
             key={t.id}
             type="button"
+            variant="outline"
+            size="sm"
             title={t.description}
             onClick={() => onApply(t)}
-            className="flex items-center gap-xs px-sm py-xs rounded-full border border-outline-variant/30 bg-surface-container-low hover:bg-primary/10 hover:border-primary/40 text-on-surface-variant hover:text-primary font-label-sm text-[12px] transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            className="rounded-full border-outline-variant/30 bg-surface-container-low hover:bg-primary/10 hover:border-primary/40 text-on-surface-variant hover:text-primary font-label-sm text-[12px]"
           >
             <span className="material-symbols-outlined text-[14px]">{t.icon}</span>
             {t.name}
-          </button>
+          </Button>
         ))}
       </div>
     </div>

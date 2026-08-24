@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState, memo, useCallback } from 'react'
+import { useMemo, useRef, useState, memo, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import { Modal } from '@/components/ui/modal'
 import { Markdown } from '@/components/chat/Markdown'
 import { Button } from '@/components/ui/button'
 import { buildPrintStyles } from '@/lib/printStyles'
 import type { ResearchReport } from '@/types'
+import { cn } from '@/lib/utils'
 
 interface ResearchReportModalProps {
   report: ResearchReport
@@ -20,20 +21,8 @@ export const ResearchReportModal = memo(function ResearchReportModal({
 }: ResearchReportModalProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const modalRef = useRef<HTMLDivElement>(null)
   const citationsRef = useRef<HTMLDivElement>(null)
   const [activeCitation, setActiveCitation] = useState<number | null>(null)
-
-  useModalFocus(open, modalRef)
-
-  useEffect(() => {
-    if (!open) return
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', handleKey)
-    return () => document.removeEventListener('keydown', handleKey)
-  }, [open, onClose])
 
   const handleCitationClick = (id: number) => {
     setActiveCitation(id)
@@ -59,21 +48,20 @@ export const ResearchReportModal = memo(function ResearchReportModal({
     }
   }, [report, t])
 
-  if (!open) return null
-
   return (
-    <div
-      ref={modalRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-md"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label={report.title}
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="full"
+      // Custom header in children renders title; showCloseButton=false
+      // suppresses Modal's built-in close button (we draw our own in the
+      // custom header so it sits next to the Export PDF action).
+      // aria-modal + Esc-to-close + scroll lock still come from Modal.
+      closeLabel={t('chat.report.close.aria')}
+      showCloseButton={false}
+      className="max-w-6xl h-[85vh] flex flex-col overflow-hidden p-0"
     >
-      <div
-        className="bg-surface-container-lowest rounded-2xl shadow-2xl w-full max-w-6xl h-[85vh] flex flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="bg-surface-container-lowest w-full h-full flex flex-col overflow-hidden rounded-2xl">
         <header className="flex items-center justify-between gap-md px-lg py-md border-b border-outline-variant/30">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-sm mb-xs">
@@ -144,11 +132,11 @@ export const ResearchReportModal = memo(function ResearchReportModal({
                   <li
                     key={c.id}
                     data-citation-id={c.id}
-                    className={`rounded-lg p-sm border transition-colors ${
+                    className={cn('rounded-lg p-sm border transition-colors',
                       activeCitation === c.id
                         ? 'border-primary/50 bg-primary-container/20'
                         : 'border-outline-variant/20 bg-surface-container-lowest/60'
-                    }`}
+                    )}
                   >
                     <div className="flex items-start gap-xs">
                       <span className="shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary-container text-on-primary-container text-label-xs font-bold">
@@ -200,7 +188,7 @@ export const ResearchReportModal = memo(function ResearchReportModal({
           </span>
         </footer>
       </div>
-    </div>
+    </Modal>
   )
 })
 
@@ -219,15 +207,15 @@ function CitationMarkdown({ children, onCitationClick }: CitationMarkdownProps) 
         seg.kind === 'text' ? (
           <Markdown key={i}>{seg.value}</Markdown>
         ) : (
-          <button
+          <Button
             key={i}
-            type="button"
+            variant="ghost"
             onClick={() => onCitationClick(seg.id)}
-            className="inline-flex items-center align-super mx-[1px] px-[3px] h-[16px] rounded-full bg-primary-container text-on-primary-container text-[10px] font-bold leading-none hover:bg-primary hover:text-on-primary transition-colors cursor-pointer"
+            className="inline-flex items-center align-super mx-[1px] px-[3px] h-[16px] rounded-full bg-primary-container text-on-primary-container text-[10px] font-bold leading-none hover:bg-primary hover:text-on-primary"
             aria-label={`Citation ${seg.id}`}
           >
             {seg.id}
-          </button>
+          </Button>
         ),
       )}
     </>

@@ -18,6 +18,8 @@
 
 import { useMemo, useState, type ReactNode } from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import type { TaskItem } from '@/types'
 import {
   STATUS_FAMILY,
@@ -162,14 +164,14 @@ function KanbanColumn({ title, icon, dotClass, bgClass, count, observe, emptyLab
         if (taskId) onDrop(taskId)
       } : undefined}
       className={observe
-        ? `flex flex-col w-[300px] rounded-2xl border border-outline-variant/20 ${bgClass}`
-        : `w-[300px] shrink-0 rounded-xl p-xs border transition-colors ${isOver ? 'bg-surface-container-high/40 border-primary/40' : `bg-surface-container-lowest/50 border-transparent hover:bg-surface-container-low/30`}`}
+        ? cn("flex flex-col w-[300px] rounded-2xl border border-outline-variant/20", bgClass)
+        : cn("w-[300px] shrink-0 rounded-xl p-xs border transition-colors", isOver ? 'bg-surface-container-high/40 border-primary/40' : 'bg-surface-container-lowest/50 border-transparent hover:bg-surface-container-low/30')}
     >
       <header className={observe
         ? 'flex items-center justify-between px-md py-sm border-b border-outline-variant/20'
         : 'flex justify-between items-center px-2 py-3 mb-1'}>
         <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${dotClass}`} />
+          <span className={cn("w-2 h-2 rounded-full", dotClass)} />
           {observe ? (
             <span className="font-label-md text-label-md text-on-surface font-bold uppercase tracking-wider flex items-center gap-xs">
               <span className="material-symbols-outlined icon-sm">{icon}</span>
@@ -205,14 +207,15 @@ export function DefaultCard({ task, onClick, observe }: { task: TaskItem; onClic
   const ring = PRIORITY_RING[priority] ?? PRIORITY_RING.normal
   const handleActivate = () => onClick?.(task.id)
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
       onClick={observe ? handleActivate : undefined}
       draggable={!observe}
       onDragStart={!observe ? e => e.dataTransfer.setData('text/plain', task.id) : undefined}
-      className={
-        'w-full text-left p-md rounded-xl bg-surface-container-lowest/90 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 mb-3 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ring-1 ' + ring
-      }
+      className={cn(
+        'w-full text-left p-md rounded-xl bg-surface-container-lowest/90 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 mb-3 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ring-1',
+        ring
+      )}
     >
       <div className="flex items-start justify-between gap-xs">
         <h4 className="font-body-md font-semibold text-on-surface line-clamp-2 flex-1">{task.title}</h4>
@@ -245,7 +248,7 @@ export function DefaultCard({ task, onClick, observe }: { task: TaskItem; onClic
           </span>
         ) : null}
       </div>
-    </button>
+    </Button>
   )
 }
 

@@ -3,8 +3,9 @@ import { useIntl, type PrimitiveType } from 'react-intl';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
+import { cn } from '@/lib/utils';
 import { useCatalog } from '@/context/CatalogContext';
-import { useModalFocus } from '@/hooks/useModalFocus';
 import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates';
 import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal';
 import { useSidebar } from './Layout';
@@ -43,9 +44,6 @@ export function Header() {
   const [modelOpen, setModelOpen] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);
   const [modelFocus, setModelFocus] = useState(-1);
-
-  const permissionRef = useRef<HTMLDivElement>(null);
-  useModalFocus(!!permissionRequest, permissionRef);
 
   const { candidates, refetch } = usePendingSkillCandidates();
   const [approvalOpen, setApprovalOpen] = useState(false);
@@ -122,7 +120,7 @@ export function Header() {
               className="flex items-center gap-sm px-md py-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all"
               onClick={() => { setModelOpen(!modelOpen); setModelFocus(-1) }}
             >
-              <span className={`w-2 h-2 rounded-full shrink-0 ${status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary'}`}></span>
+              <span className={cn('w-2 h-2 rounded-full shrink-0', status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary')}></span>
               <span className="font-label-sm text-[12px] whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
               <span className="material-symbols-outlined icon-sm">expand_more</span>
             </Button>
@@ -134,17 +132,21 @@ export function Header() {
                 else if (e.key === 'Escape') { setModelOpen(false) }
               }}>
                 {models.map((m, i) => (
-                  <button
+                  <Button
                     key={m.id}
+                    variant="ghost"
                     role="option"
                     aria-selected={m.id === status?.model}
-                    className={`w-full text-left px-md py-sm flex items-center justify-between transition-colors ${i === modelFocus ? 'bg-primary/10 text-primary' : m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5'}`}
+                    className={cn(
+                      'w-full justify-between px-md py-sm h-auto rounded-none',
+                      i === modelFocus ? 'bg-primary/10 text-primary' : m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5'
+                    )}
                     onClick={() => handleModelSwitch(m.id)}
                     onMouseEnter={() => setModelFocus(i)}
                   >
                     <span className="font-label-md truncate">{m.name}</span>
                     <span className="text-label-sm text-on-surface-variant">{m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : ''}</span>
-                  </button>
+                  </Button>
                 ))}
               </div>
             )}
@@ -170,10 +172,17 @@ export function Header() {
         </div>
       </header>
 
-      {/* Permission Modal */}
+      {/* Permission Modal — alertdialog because it demands immediate attention */}
       {permissionRequest && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 backdrop-blur-sm" onKeyDown={e => { if (e.key === 'Escape') respondPermission(permissionRequest.request_id, false) }}>
-          <div ref={permissionRef} className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/20 p-xl max-w-md w-full mx-md" role="dialog" aria-modal="true">
+      <Modal
+        open
+        onClose={() => respondPermission(permissionRequest.request_id, false)}
+        size="md"
+        role="alertdialog"
+        showCloseButton={false}
+        className="bg-black/30 backdrop-blur-sm"
+      >
+        <div className="p-xl">
             <div className="flex items-center gap-md mb-lg">
               <div className="h-10 w-10 rounded-full bg-tertiary-container flex items-center justify-center">
                 <span className="material-symbols-outlined text-on-tertiary-container">shield</span>
@@ -182,12 +191,12 @@ export function Header() {
                 <h3 className="font-headline-sm text-on-surface font-bold">{t('header.permRequest.title')}</h3>
                 <p className="text-body-sm text-on-surface-variant">{t('header.permRequest.subtitle')}</p>
               </div>
-              <span className={`px-sm py-xs rounded-full font-label-sm font-bold uppercase tracking-wider ${
+              <span className={cn('px-sm py-xs rounded-full font-label-sm font-bold uppercase tracking-wider',
                 permissionRequest.risk === 'critical' ? 'bg-error/10 text-error' :
                 permissionRequest.risk === 'high' ? 'bg-secondary/10 text-secondary' :
                 permissionRequest.risk === 'medium' ? 'bg-secondary/10 text-secondary' :
                 'bg-tertiary/10 text-tertiary'
-              }`}>{permissionRequest.risk}</span>
+              )}>{permissionRequest.risk}</span>
             </div>
             <div className="p-md bg-surface-container-low rounded-xl mb-lg space-y-sm">
               <div className="flex justify-between">
@@ -211,7 +220,7 @@ export function Header() {
               </Button>
             </div>
           </div>
-        </div>
+      </Modal>
       )}
 
       <SkillApprovalModal

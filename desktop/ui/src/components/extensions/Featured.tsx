@@ -8,6 +8,8 @@ import {
   installMcpStdio,
   type FeaturedVendor,
 } from "@/lib/tauri-api";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 /**
  * Featured tab — curated list of verified MCP vendors Shannon ships with.
@@ -150,11 +152,11 @@ export default function Featured() {
               className={`relative overflow-hidden rounded-3xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-xl hover:-translate-y-1 transition-all duration-200 flex flex-col group`}
             >
               {/* Accent strip */}
-              <div className={`h-1.5 w-full bg-gradient-to-r ${accent.bar}`} />
+              <div className={cn("h-1.5 w-full bg-gradient-to-r", accent.bar)} />
 
               <div className="p-lg flex flex-col flex-1">
                 <div className="flex items-start justify-between mb-md">
-                  <div className={`relative w-14 h-14 rounded-2xl bg-gradient-to-br ${accent.icon} flex items-center justify-center shadow-md`}>
+                  <div className={cn("relative w-14 h-14 rounded-2xl bg-gradient-to-br flex items-center justify-center shadow-md", accent.icon)}>
                     <span className="material-symbols-outlined text-white text-[28px] drop-shadow-sm">
                       {vendor.icon}
                     </span>
@@ -179,11 +181,12 @@ export default function Featured() {
 
                 {feedbackForVendor && (
                   <div
-                    className={`text-label-sm mb-sm inline-flex items-center gap-xs px-sm py-xs rounded-lg ${
+                    className={cn(
+                      "text-label-sm mb-sm inline-flex items-center gap-xs px-sm py-xs rounded-lg",
                       feedbackForVendor.ok
                         ? "bg-primary-container/50 text-on-primary-container"
-                        : "bg-error-container/50 text-on-error-container"
-                    }`}
+                        : "bg-error-container/50 text-on-error-container",
+                    )}
                   >
                     <span className="material-symbols-outlined text-[14px]">
                       {feedbackForVendor.ok ? "check_circle" : "error"}
@@ -193,11 +196,14 @@ export default function Featured() {
                 )}
 
                 {!showTokenPrompt && (
-                  <button
+                  <Button
                     type="button"
                     onClick={() => handleConnect(vendor)}
                     disabled={isBusy}
-                    className={`w-full inline-flex items-center justify-center gap-xs px-md py-sm rounded-xl bg-gradient-to-r ${accent.button} text-white text-label-md font-bold shadow-sm hover:shadow-md hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:brightness-100 transition-all`}
+                    className={cn(
+                      "w-full px-md py-sm rounded-xl bg-gradient-to-r text-white text-label-md font-bold shadow-sm hover:shadow-md hover:brightness-110 disabled:cursor-not-allowed disabled:hover:brightness-100 transition-all",
+                      accent.button,
+                    )}
                   >
                     {isBusy ? (
                       <>
@@ -217,7 +223,7 @@ export default function Featured() {
                         {t('extensions.featured.install')}
                       </>
                     )}
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
@@ -266,7 +272,7 @@ function TrustBadge({ trust }: { trust: FeaturedVendor["trust"] }) {
   };
   const { text, cls } = labels[trust];
   return (
-    <span className={`text-label-xs px-sm py-[2px] rounded-full font-bold ${cls}`}>{text}</span>
+    <span className={cn("text-label-xs px-sm py-[2px] rounded-full font-bold", cls)}>{text}</span>
   );
 }
 
@@ -297,22 +303,25 @@ function TokenPasteForm({
         disabled={disabled}
       />
       <div className="flex gap-xs">
-        <button
+        <Button
           type="button"
+          size="sm"
           onClick={() => token && onSubmit(token)}
           disabled={disabled || !token}
-          className="flex-1 px-sm py-xs rounded bg-primary text-on-primary text-label-xs font-bold disabled:opacity-50"
+          className="flex-1 rounded"
         >
           {t('extensions.featured.tokenSubmit')}
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
           type="button"
           onClick={onCancel}
           disabled={disabled}
-          className="px-sm py-xs rounded bg-surface-container-high text-on-surface text-label-xs font-bold"
+          className="rounded"
         >
           {t('extensions.featured.tokenCancel')}
-        </button>
+        </Button>
       </div>
     </div>
   );

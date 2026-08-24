@@ -18,6 +18,8 @@ import { AgentAuthoredBadge } from "@/components/self-improve/SkillBadge";
 import LoadingState from "@/components/ui/loading-state";
 import { usePagedVisible } from "@/hooks/usePagedVisible";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 const CATALOG_PAGE_SIZE = 24;
 
@@ -207,16 +209,17 @@ export default function Skills() {
                 </div>
                 {catalogPage.hasMore && (
                   <div className="flex justify-center mt-md">
-                    <button
+                    <Button
+                      variant="outline"
                       type="button"
                       onClick={catalogPage.showMore}
-                      className="px-md py-sm rounded-lg border border-outline-variant/40 bg-surface-container-lowest hover:bg-surface-container-low hover:border-primary/40 text-on-surface text-label-md transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                      className="px-md py-sm rounded-lg hover:bg-surface-container-low hover:border-primary/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                     >
                       {intl.formatMessage(
                         { id: 'skills.catalog.showMore' },
                         { count: catalogPage.remaining },
                       )}
-                    </button>
+                    </Button>
                   </div>
                 )}
               </>
@@ -236,20 +239,23 @@ export default function Skills() {
               { id: "curated", label: t('skills.installed.filter.curated'), count: curatedCount },
               { id: "agent", label: t('skills.installed.filter.agent'), count: agentAuthoredCount },
             ] as const).map((opt) => (
-              <button
+              <Button
                 key={opt.id}
+                variant="ghost"
+                size="sm"
                 type="button"
                 role="tab"
                 aria-selected={installedFilter === opt.id}
                 onClick={() => setInstalledFilter(opt.id)}
-                className={`px-sm py-xs rounded-full text-label-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
+                className={cn(
+                  "px-sm py-xs rounded-full text-label-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
                   installedFilter === opt.id
                     ? 'bg-primary/10 text-primary'
-                    : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
-                }`}
+                    : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface',
+                )}
               >
                 {opt.label} · {opt.count}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
@@ -270,7 +276,10 @@ export default function Skills() {
               return (
                 <div
                   key={skill.name}
-                  className={`flex items-center gap-md px-md py-sm ${i === filteredInstalled.length - 1 ? "" : "border-b border-outline-variant/15"}`}
+                  className={cn(
+                  "flex items-center gap-md px-md py-sm",
+                  i !== filteredInstalled.length - 1 && "border-b border-outline-variant/15",
+                )}
                 >
                   <span className="material-symbols-outlined text-primary text-[20px]">{isAgentAuthored ? 'auto_fix' : 'extension'}</span>
                   <div className="flex-1 min-w-0">
@@ -282,14 +291,16 @@ export default function Skills() {
                       {skill.path}
                     </div>
                   </div>
-                  <button
+                  <Button
+                    variant="destructive"
+                    size="sm"
                     type="button"
                     onClick={() => setRemoveTarget(skill.name)}
                     disabled={busyId === `uninstall:${skill.name}`}
-                    className="px-sm py-xs rounded-lg bg-error-container/40 text-on-error-container text-label-xs font-bold hover:bg-error-container/70 disabled:opacity-50"
+                    className="bg-error-container/40 text-on-error-container hover:bg-error-container/70"
                   >
                     {busyId === `uninstall:${skill.name}` ? "…" : t('extensions.skills.remove')}
-                  </button>
+                  </Button>
                 </div>
               )
             })}
@@ -345,28 +356,30 @@ function SkillCard({
   return (
     <div className="border border-outline-variant/30 rounded-2xl p-md bg-surface-container-low/40 flex flex-col">
       <div className="flex items-start justify-between mb-xs gap-xs">
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={onOpenDetail}
           aria-label={intl.formatMessage({ id: 'extensions.skills.drawer.openDetail' }) + ': ' + entry.name}
-          className="text-left flex-1 min-w-0 hover:text-primary transition-colors"
+          className="text-left flex-1 min-w-0 hover:text-primary transition-colors justify-start px-0 h-auto"
         >
           <h4 className="font-bold text-label-md text-on-surface hover:underline truncate">{entry.name}</h4>
-        </button>
-        <span className={`text-label-xs px-xs py-[1px] rounded-full font-bold ${trustLabel.cls} shrink-0`}>
+        </Button>
+        <span className={cn("text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0", trustLabel.cls)}>
           {t(trustLabel.key)}
         </span>
       </div>
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={onOpenDetail}
-        className="text-left flex-1 mb-sm block"
+        className="text-left flex-1 mb-sm block px-0 h-auto justify-start"
         aria-label={intl.formatMessage({ id: 'extensions.skills.drawer.openDetail' }) + ': ' + entry.name}
       >
         <p className="text-label-sm text-on-surface-variant line-clamp-2">
           {entry.description}
         </p>
-      </button>
+      </Button>
       {entry.author && (
         <div className="text-label-xs text-on-surface-variant mb-xs font-mono">
           {entry.author}
@@ -374,7 +387,7 @@ function SkillCard({
         </div>
       )}
       {feedback && (
-        <div className={`text-label-xs mb-xs ${feedback.ok ? "text-primary" : "text-error"}`}>
+        <div className={cn("text-label-xs mb-xs", feedback.ok ? "text-primary" : "text-error")}>
           {feedback.msg}
         </div>
       )}
@@ -389,14 +402,15 @@ function SkillCard({
             {t('extensions.skills.view')}
           </a>
         )}
-        <button
+        <Button
           type="button"
+          size="sm"
           onClick={onInstall}
           disabled={busy || installed}
-          className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="disabled:cursor-not-allowed"
         >
           {busy ? "…" : installed ? t('extensions.skills.installed') : t('extensions.skills.install')}
-        </button>
+        </Button>
       </div>
     </div>
   );

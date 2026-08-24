@@ -7,6 +7,8 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import * as api from '@/lib/tauri-api'
 import type { OpcMetrics } from '@/types'
 import LoadingState from '@/components/ui/loading-state'
@@ -82,16 +84,17 @@ export default function OpcAnalyticsDashboard() {
           <span className="material-symbols-outlined icon-md text-primary">monitoring</span>
           <h3 className="font-headline-md text-[16px] font-bold text-on-surface">{t('opc.analytics.title')}</h3>
         </div>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={refresh}
           disabled={loading}
-          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40"
           aria-label={t('opc.analytics.refreshAria')}
+          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs gap-1"
         >
           <span className="material-symbols-outlined text-[14px]">{loading ? 'hourglass_top' : 'refresh'}</span>
           {t('opc.analytics.refresh')}
-        </button>
+        </Button>
       </header>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
@@ -160,7 +163,7 @@ export default function OpcAnalyticsDashboard() {
             <ul className="flex flex-col gap-xs">
               {metrics.by_status.map(s => (
                 <li key={s.status} className="flex items-center gap-sm">
-                  <span className={`inline-flex items-center px-xs py-1 rounded-full border font-label-sm text-[10px] font-bold uppercase tracking-wide w-32 justify-center ${toneFor(s.status)}`}>
+                  <span className={cn("inline-flex items-center px-xs py-1 rounded-full border font-label-sm text-[10px] font-bold uppercase tracking-wide w-32 justify-center", toneFor(s.status))}>
                     {s.status}
                   </span>
                   <div className="flex-1 bg-surface-container-low rounded-full h-2 overflow-hidden">

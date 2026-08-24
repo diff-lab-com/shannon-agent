@@ -2,14 +2,18 @@
 //
 // Right-side drawer for inspecting and editing a scheduled routine.
 // Currently exposes the DependsOnEditor; later phases can add prompt /
-// trigger / policy editing here too. Click backdrop or close button to
-// dismiss. Escape closes too.
+// trigger / policy editing here too.
+//
+// T1.2 — migrated onto the shared <SidePanel> primitive. The hand-rolled
+// `fixed inset-0 z-50 flex justify-end` overlay, document-level Escape
+// listener, backdrop click handler, and `useModalFocus` hook are all
+// gone: SidePanel owns them. The `aria-label` interpolates the routine
+// name; that wiring moves to SidePanel's `ariaLabel` prop.
 
-import { useRef } from 'react'
 import { useIntl } from 'react-intl'
-import { useModalFocus } from '@/hooks/useModalFocus'
 import type { ScheduledRoutine } from '@/types'
 import DependsOnEditor from './DependsOnEditor'
+import { SidePanel, SidePanelBody, SidePanelCloseButton, SidePanelHeader, SidePanelTitle } from '@/components/ui/side-panel'
 
 interface RoutineDetailDrawerProps {
   routine: ScheduledRoutine | null
@@ -30,38 +34,26 @@ export default function RoutineDetailDrawer({
   onUpdated,
 }: RoutineDetailDrawerProps) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
-
-  const containerRef = useRef<HTMLDivElement>(null)
-  useModalFocus(!!routine, containerRef)
+  const t = (id: string, values?: Record<string, string | number>) =>
+    intl.formatMessage({ id }, values)
 
   if (!routine) return null
   const deps = (routine.depends_on ?? []).map(id => routines.find(r => r.id === id)?.name ?? id)
+  const ariaLabel = t('tasks.routineDetailDrawer.ariaLabel', { name: routine.name })
+  const closeAria = t('tasks.routineDetailDrawer.closeAria')
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-end"
-      onClick={onClose}
-      onKeyDown={e => { if (e.key === 'Escape') onClose() }}
-      role="dialog"
-      aria-modal="true"
-      aria-label={intl.formatMessage({ id: 'tasks.routineDetailDrawer.ariaLabel' }, { name: routine.name })}
+    <SidePanel
+      open={!!routine}
+      onClose={onClose}
+      ariaLabel={ariaLabel}
+      width="440px"
     >
-      <div className="bg-black/20 absolute inset-0" />
-      <div
-        ref={containerRef}
-        className="relative w-[440px] max-w-[90vw] bg-surface-container-lowest shadow-2xl border-l border-outline-variant/20 p-xl overflow-y-auto"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-lg">
-          <h3 className="font-headline-md text-on-surface font-bold">{t('tasks.routineDetailDrawer.title')}</h3>
-          <button
-            aria-label={t('tasks.routineDetailDrawer.closeAria')}
-            className="p-sm rounded-lg hover:bg-surface-container text-on-surface-variant cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-            onClick={onClose}
-          >
-            <span className="material-symbols-outlined">close</span>
-          </button>
-        </div>
+      <SidePanelHeader>
+        <SidePanelTitle>{t('tasks.routineDetailDrawer.title')}</SidePanelTitle>
+        <SidePanelCloseButton onClick={onClose} label={closeAria} />
+      </SidePanelHeader>
+      <SidePanelBody>
         <div className="space-y-md">
           <div>
             <span className="text-label-sm text-on-surface-variant">{t('tasks.routineDetailDrawer.name')}</span>
@@ -126,7 +118,7 @@ export default function RoutineDetailDrawer({
             <DependsOnEditor routine={routine} routines={routines} onUpdated={onUpdated} />
           </div>
         </div>
-      </div>
-    </div>
+      </SidePanelBody>
+    </SidePanel>
   )
 }

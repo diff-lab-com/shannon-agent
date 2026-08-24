@@ -6,6 +6,7 @@ import EmptyState from '@/components/ui/empty-state'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import * as api from '@/lib/tauri-api'
 import type { SkillInfo } from '@/types'
+import { cn } from '@/lib/utils'
 
 export default function ExtensionsHub() {
   const intl = useIntl()
@@ -85,8 +86,8 @@ export default function ExtensionsHub() {
               />
             </div>
             <div className="flex bg-surface-container-low rounded-lg p-xs gap-xs">
-              <button onClick={() => setFilterMode('trending')} className={`px-sm py-xs rounded-md text-label-sm font-bold cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none ${filterMode === 'trending' ? 'bg-surface-container-lowest text-primary shadow-sm' : 'text-on-surface-variant hover:bg-surface-container-high'}`}>{t('extensions.hub.trending')}</button>
-              <button onClick={() => setFilterMode('recent')} className={`px-sm py-xs rounded-md text-label-sm font-bold cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none ${filterMode === 'recent' ? 'bg-surface-container-lowest text-primary shadow-sm' : 'text-on-surface-variant hover:bg-surface-container-high'}`}>{t('extensions.hub.recent')}</button>
+              <Button onClick={() => setFilterMode('trending')} variant="ghost" size="xs" className={cn("px-sm py-xs rounded-md text-label-sm font-bold cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none", filterMode === 'trending' ? 'bg-surface-container-lowest text-primary shadow-sm' : 'text-on-surface-variant hover:bg-surface-container-high')}>{t('extensions.hub.trending')}</Button>
+              <Button onClick={() => setFilterMode('recent')} variant="ghost" size="xs" className={cn("px-sm py-xs rounded-md text-label-sm font-bold cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none", filterMode === 'recent' ? 'bg-surface-container-lowest text-primary shadow-sm' : 'text-on-surface-variant hover:bg-surface-container-high')}>{t('extensions.hub.recent')}</Button>
             </div>
             <Button variant="ghost" className="px-md py-sm rounded-full bg-surface-container-high font-label-md text-label-md text-on-surface cursor-pointer">
               {intl.formatMessage({ id: 'extensions.hub.skillsCount' }, { count: filteredSkills.length })}
@@ -114,7 +115,7 @@ export default function ExtensionsHub() {
               <div className="flex flex-wrap gap-md">
                 {sortedSkills(cat).map(skill => (
                   <div key={skill.name} role="button" tabIndex={0} className="group cursor-pointer bg-surface-container-lowest border border-outline-variant/50 rounded-xl p-md flex items-center gap-md hover:border-primary transition-all shadow-sm focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={() => setSelectedSkill(selectedSkill?.name === skill.name ? null : skill)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedSkill(selectedSkill?.name === skill.name ? null : skill) } }}>
-                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${colorForCategory(cat)}`}>
+                    <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center", colorForCategory(cat))}>
                       <span className="material-symbols-outlined">{iconForCategory(cat)}</span>
                     </div>
                     <div className="flex-1 min-w-0">
@@ -133,7 +134,7 @@ export default function ExtensionsHub() {
                       <span className="flex items-center gap-xs"><span className="material-symbols-outlined text-[14px]">terminal</span>{intl.formatMessage({ id: 'extensions.hub.triggerLabel' }, { trigger: skill.trigger })}</span>
                       <span className="flex items-center gap-xs"><span className="material-symbols-outlined text-[14px]">source</span>{skill.source}</span>
                     </div>
-                    <button className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md hover:opacity-90 transition-all" onClick={() => setSelectedSkill(null)}>{t('extensions.hub.close')}</button>
+                    <Button className="px-md py-sm rounded-lg font-label-md hover:opacity-90 transition-all" onClick={() => setSelectedSkill(null)}>{t('extensions.hub.close')}</Button>
                   </div>
                 ))}
               </div>

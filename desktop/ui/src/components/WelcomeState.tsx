@@ -1,4 +1,5 @@
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
 
 interface WelcomeStateProps {
   onSelectPrompt: (prompt: string) => void
@@ -24,9 +25,10 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
         <p className="font-body-md text-on-surface-variant mb-xl">{t('welcomeState.subtitle')}</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm">
           {EXAMPLES.map(ex => (
-            <button
+            <Button
               key={ex.icon}
-              className="flex items-start gap-sm p-md rounded-xl border border-outline-variant/30 bg-surface-container-low hover:bg-surface-container-high hover:border-primary/30 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none transition-all text-left cursor-pointer group"
+              variant="outline"
+              className="h-auto justify-start items-start text-left whitespace-normal p-md rounded-xl hover:bg-surface-container-high hover:border-primary/30 cursor-pointer group"
               onClick={() => onSelectPrompt(ex.prompt)}
             >
               <span className="material-symbols-outlined icon-md text-on-surface-variant mt-0.5 group-hover:text-primary transition-colors">{ex.icon}</span>
@@ -34,7 +36,7 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
                 <p className="font-label-md text-on-surface font-bold">{t(ex.title)}</p>
                 <p className="font-body-sm text-on-surface-variant line-clamp-2">{ex.prompt}</p>
               </div>
-            </button>
+            </Button>
           ))}
         </div>
         <div className="mt-xl flex items-center justify-center gap-lg text-on-surface-variant opacity-50">
