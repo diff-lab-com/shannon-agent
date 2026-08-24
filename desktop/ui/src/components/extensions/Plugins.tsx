@@ -9,6 +9,7 @@ import EmptyState from "@/components/ui/empty-state";
 import type { CatalogEntry, CatalogSource, TrustLevel } from "@/types";
 import InstallDialog from "./InstallDialog";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 type SortMode = "trust" | "stars" | "name" | "recent";
 type TrustFilter = TrustLevel | "all";
@@ -205,7 +206,7 @@ export default function Plugins() {
             </div>
           </div>
           <span
-            className={`inline-flex items-center gap-xs px-xs py-[2px] rounded-full text-label-xs font-bold shrink-0 ${TRUST_BADGE_CLASS[trust]}`}
+            className={cn("inline-flex items-center gap-xs px-xs py-[2px] rounded-full text-label-xs font-bold shrink-0", TRUST_BADGE_CLASS[trust])}
             title={t(TRUST_LABEL_KEY[trust])}
           >
             <span className="material-symbols-outlined icon-xs">{TRUST_ICON[trust]}</span>

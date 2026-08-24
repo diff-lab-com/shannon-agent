@@ -164,14 +164,14 @@ function KanbanColumn({ title, icon, dotClass, bgClass, count, observe, emptyLab
         if (taskId) onDrop(taskId)
       } : undefined}
       className={observe
-        ? `flex flex-col w-[300px] rounded-2xl border border-outline-variant/20 ${bgClass}`
-        : `w-[300px] shrink-0 rounded-xl p-xs border transition-colors ${isOver ? 'bg-surface-container-high/40 border-primary/40' : `bg-surface-container-lowest/50 border-transparent hover:bg-surface-container-low/30`}`}
+        ? cn("flex flex-col w-[300px] rounded-2xl border border-outline-variant/20", bgClass)
+        : cn("w-[300px] shrink-0 rounded-xl p-xs border transition-colors", isOver ? 'bg-surface-container-high/40 border-primary/40' : 'bg-surface-container-lowest/50 border-transparent hover:bg-surface-container-low/30')}
     >
       <header className={observe
         ? 'flex items-center justify-between px-md py-sm border-b border-outline-variant/20'
         : 'flex justify-between items-center px-2 py-3 mb-1'}>
         <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${dotClass}`} />
+          <span className={cn("w-2 h-2 rounded-full", dotClass)} />
           {observe ? (
             <span className="font-label-md text-label-md text-on-surface font-bold uppercase tracking-wider flex items-center gap-xs">
               <span className="material-symbols-outlined icon-sm">{icon}</span>

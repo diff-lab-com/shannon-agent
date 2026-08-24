@@ -25,6 +25,7 @@ import { ResearchReportModal } from '@/components/chat/ResearchReportModal'
 import { ArtifactChipList } from '@/components/artifact/ArtifactChip'
 import { detectArtifacts } from '@/components/artifact/detectArtifact'
 import type { ChatMessage, ToolCall, FileAttachment } from '@/types'
+import { cn } from '@/lib/utils'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -321,7 +322,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
           </Button>
           {!isTool && (
             <>
-              <Button aria-label={t('chat.message.like.aria')} aria-pressed={liked} onClick={() => setLiked(!liked)} className={`flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${liked ? 'text-primary' : 'text-on-surface-variant'}`}>
+              <Button aria-label={t('chat.message.like.aria')} aria-pressed={liked} onClick={() => setLiked(!liked)} className={cn('flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30', liked ? 'text-primary' : 'text-on-surface-variant')}>
                 <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{liked ? 'thumb_up' : 'thumb_up_off_alt'}</span>
               </Button>
               <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
@@ -388,7 +389,7 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
   return (
     <Tool name={toolCall.tool_name} status={toolCall.status} className="p-sm">
       <ToolHeader onClick={() => setExpanded(!expanded)}>
-        <span className={`material-symbols-outlined icon-sm ${statusColor} ${toolCall.status === 'running' ? 'animate-spin' : ''}`}>{statusIcon}</span>
+        <span className={cn('material-symbols-outlined icon-sm', statusColor, toolCall.status === 'running' ? 'animate-spin' : '')}>{statusIcon}</span>
         <span className="font-label-md text-on-surface flex-1 truncate">{toolCall.tool_name}</span>
         {canDiff && (
           <Button

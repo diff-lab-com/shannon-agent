@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/select'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { cn } from '@/lib/utils'
 
 interface VoiceLocalSettingsProps {
   /** Force-disable the card (e.g. when the desktop was built without
@@ -188,11 +189,12 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
           {t('settings.voiceLocal.title')}
         </h3>
         <span
-          className={`ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold ${
+          className={cn(
+            "ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold",
             config?.enabled
               ? 'bg-primary-container text-on-primary-container'
-              : 'bg-surface-container-high text-on-surface-variant'
-          }`}
+              : 'bg-surface-container-high text-on-surface-variant',
+          )}
         >
           {config?.enabled ? t('settings.voiceLocal.on') : t('settings.voiceLocal.off')}
         </span>

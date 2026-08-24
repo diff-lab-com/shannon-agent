@@ -8,6 +8,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import * as api from '@/lib/tauri-api'
 import type { OpcMetrics } from '@/types'
 import LoadingState from '@/components/ui/loading-state'
@@ -162,7 +163,7 @@ export default function OpcAnalyticsDashboard() {
             <ul className="flex flex-col gap-xs">
               {metrics.by_status.map(s => (
                 <li key={s.status} className="flex items-center gap-sm">
-                  <span className={`inline-flex items-center px-xs py-1 rounded-full border font-label-sm text-[10px] font-bold uppercase tracking-wide w-32 justify-center ${toneFor(s.status)}`}>
+                  <span className={cn("inline-flex items-center px-xs py-1 rounded-full border font-label-sm text-[10px] font-bold uppercase tracking-wide w-32 justify-center", toneFor(s.status))}>
                     {s.status}
                   </span>
                   <div className="flex-1 bg-surface-container-low rounded-full h-2 overflow-hidden">

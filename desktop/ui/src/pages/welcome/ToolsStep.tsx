@@ -1,6 +1,7 @@
 // Step 2 — tool toggles. Extracted from Welcome.tsx (T3.1).
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { WelcomeCard } from './components'
 import { TOOL_CATALOG, TASKS, type TaskId } from './constants'
 
@@ -42,9 +43,10 @@ export function ToolsStep({ task, enabledTools, toggleTool, onBack, onContinue, 
           return (
             <label
               key={id}
-              className={`flex items-start gap-md p-md rounded-xl border cursor-pointer transition-all ${
-                enabled ? 'border-2 border-primary bg-primary-container/5' : 'border-outline-variant/50 hover:border-primary/50'
-              }`}
+              className={cn(
+                "flex items-start gap-md p-md rounded-xl border cursor-pointer transition-all",
+                enabled ? 'border-2 border-primary bg-primary-container/5' : 'border-outline-variant/50 hover:border-primary/50',
+              )}
             >
               <input
                 type="checkbox"

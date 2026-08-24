@@ -12,6 +12,7 @@ import { VoiceLocalSettings } from '@/components/settings/VoiceLocalSettings'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type { SkillCandidate, CliInstallStatus, AppUpdateInfo } from '@/lib/tauri-api'
+import { cn } from '@/lib/utils'
 
 export default function AdvancedSettings() {
   const intl = useIntl()
@@ -243,11 +244,12 @@ export default function AdvancedSettings() {
             </div>
             <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.cliTitle')}</h3>
             <span
-              className={`ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold whitespace-nowrap ${
+              className={cn(
+                "ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold whitespace-nowrap",
                 cliStatus?.onPath
                   ? 'bg-tertiary-container text-on-tertiary-container'
-                  : 'bg-error/10 text-error'
-              }`}
+                  : 'bg-error/10 text-error',
+              )}
             >
               {cliStatus?.onPath
                 ? (cliStatus.onPathVersion ?? t('settings.advanced.cliInstalled'))
@@ -280,11 +282,12 @@ export default function AdvancedSettings() {
             <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.updateTitle')}</h3>
             {updateInfo && (
               <span
-                className={`ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold whitespace-nowrap ${
+                className={cn(
+                  "ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold whitespace-nowrap",
                   updateInfo.updateAvailable
                     ? 'bg-tertiary-container text-on-tertiary-container'
-                    : 'bg-surface-container-high text-on-surface-variant'
-                }`}
+                    : 'bg-surface-container-high text-on-surface-variant',
+                )}
               >
                 {updateInfo.error
                   ? t('settings.advanced.updateCheckFailed')

@@ -12,6 +12,7 @@ import EmptyState from '@/components/ui/empty-state'
 import ErrorState from '@/components/ui/error-state'
 import { RowSkeleton } from '@/components/SkeletonLoader'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import * as api from '@/lib/tauri-api'
 import type { TaskExecution, TaskExecutionDetail } from '@/types'
 import { statusBadge, formatUnixDateTime } from './shared'
@@ -29,7 +30,7 @@ function StatusPill({ status }: { status: string }) {
   const intl = useIntl()
   const badge = statusBadge(status)
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-bold ${badge.bg}`}>
+    <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-bold', badge.bg)}>
       <span className="material-symbols-outlined icon-xs">{badge.icon}</span>
       {intl.formatMessage({ id: badge.labelId }, badge.values)}
     </span>
@@ -140,7 +141,7 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
                 {row.token_usage != null ? (
                   <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">{row.token_usage.toLocaleString()} tok</span>
                 ) : <span className="font-label-sm text-[11px] text-on-surface-variant/60">—</span>}
-                <span className={`material-symbols-outlined icon-sm text-on-surface-variant transition-transform ${isExpanded ? 'rotate-180' : ''}`}>expand_more</span>
+                <span className={cn('material-symbols-outlined icon-sm text-on-surface-variant transition-transform', isExpanded ? 'rotate-180' : '')}>expand_more</span>
               </Button>
               {isExpanded ? (
                 <div className="px-md pb-md border-t border-outline-variant/10">

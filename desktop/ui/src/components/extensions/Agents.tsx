@@ -256,7 +256,7 @@ function AgentCard({
         <h4 className="font-bold text-label-md text-on-surface">{entry.name}</h4>
         <div className="flex items-center gap-[4px] shrink-0">
           <SecurityBadge text={entry.description} trust={entry.trust} />
-          <span className={`text-label-xs px-xs py-[1px] rounded-full font-bold ${trustLabel.cls}`}>
+          <span className={cn("text-label-xs px-xs py-[1px] rounded-full font-bold", trustLabel.cls)}>
             {t(trustLabel.textKey)}
           </span>
         </div>
@@ -278,7 +278,7 @@ function AgentCard({
         </div>
       )}
       {feedback && (
-        <div className={`text-label-xs mb-xs ${feedback.ok ? "text-primary" : "text-error"}`}>
+        <div className={cn("text-label-xs mb-xs", feedback.ok ? "text-primary" : "text-error")}>
           {feedback.msg}
         </div>
       )}

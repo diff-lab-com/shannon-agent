@@ -5,6 +5,7 @@
 // they are scoped to the Welcome flow only — other pages have their own
 // card variants.
 import { useIntl } from 'react-intl'
+import { cn } from '@/lib/utils'
 import { STEP_LABEL_KEYS } from './constants'
 
 export function Stepper({ step }: { step: number }) {
@@ -20,7 +21,7 @@ export function Stepper({ step }: { step: number }) {
     >
       {STEP_LABEL_KEYS.map((key, i) => (
         <div key={key} className="flex items-center gap-sm">
-          <div className={`w-2 h-2 rounded-full ${i <= step ? 'bg-primary' : 'bg-outline-variant'}`} />
+          <div className={cn("w-2 h-2 rounded-full", i <= step ? 'bg-primary' : 'bg-outline-variant')} />
           {i === step && <span className="font-label-sm text-primary">{stepLabel}</span>}
           {i < STEP_LABEL_KEYS.length - 1 && <div className="w-8 h-px bg-outline-variant" aria-hidden="true" />}
         </div>

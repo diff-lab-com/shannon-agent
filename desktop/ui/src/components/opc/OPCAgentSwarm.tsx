@@ -8,6 +8,7 @@ import EmptyState from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Modal } from '@/components/ui/modal'
 import { useSessions } from '@/context/SessionContext'
+import { cn } from '@/lib/utils'
 import * as api from '@/lib/tauri-api'
 import type { AgentInfo, TaskItem } from '@/types'
 
@@ -164,7 +165,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-tertiary animate-pulse' : 'bg-outline-variant'}`} />
+                    <span className={cn("w-2 h-2 rounded-full shrink-0", isActive ? 'bg-tertiary animate-pulse' : 'bg-outline-variant')} />
                     <Button
                       variant="ghost"
                       size="icon-xs"
@@ -179,8 +180,8 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className={`w-1 h-3 rounded-full shrink-0 ${isActive ? 'bg-tertiary' : 'bg-outline-variant'}`} />
-                  <span className={`font-label-sm text-[12px] ${isActive ? 'text-tertiary' : 'text-on-surface-variant italic opacity-80'}`}>
+                  <div className={cn("w-1 h-3 rounded-full shrink-0", isActive ? 'bg-tertiary' : 'bg-outline-variant')} />
+                  <span className={cn("font-label-sm text-[12px]", isActive ? 'text-tertiary' : 'text-on-surface-variant italic opacity-80')}>
                     {agent.task || agent.status}
                   </span>
                 </div>

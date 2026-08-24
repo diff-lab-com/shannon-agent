@@ -10,6 +10,7 @@ import { VoiceOrb } from '@/components/voice/VoiceOrb'
 import AttachmentChip from '@/components/chat/AttachmentChip'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { cn } from '@/lib/utils'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 
@@ -251,7 +252,7 @@ export default function ChatInput({
 
   return (
     <div
-      className={`relative group transition-all ${isDragging ? 'ring-2 ring-primary/50 rounded-2xl' : ''}`}
+      className={cn('relative group transition-all', isDragging ? 'ring-2 ring-primary/50 rounded-2xl' : '')}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -333,11 +334,11 @@ export default function ChatInput({
               disabled={!currentSessionId}
               aria-label={t('chat.input.wd.aria')}
               title={sessionWorkingDir || t('chat.input.wd.title')}
-              className={`group/wd h-auto gap-xs px-sm py-xs rounded-full text-label-sm shrink-0 ${
+              className={cn('group/wd h-auto gap-xs px-sm py-xs rounded-full text-label-sm shrink-0',
                 sessionWorkingDir
                   ? 'border-primary/30 bg-primary/5 text-on-surface hover:bg-primary/10 hover:border-primary/50'
                   : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
-              }`}
+              )}
             >
               <span className="material-symbols-outlined icon-sm">folder_open</span>
               <span className="max-w-[120px] truncate font-mono">
@@ -353,11 +354,11 @@ export default function ChatInput({
               aria-pressed={planModeActive}
               aria-label={t('chat.input.planMode.aria')}
               title={t('chat.input.planMode.tooltip')}
-              className={`h-auto gap-xs px-sm py-xs rounded-full text-label-sm shrink-0 ${
+              className={cn('h-auto gap-xs px-sm py-xs rounded-full text-label-sm shrink-0',
                 planModeActive
                   ? 'border-primary bg-primary/10 text-primary'
                   : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
-              }`}
+              )}
             >
               <span className="material-symbols-outlined icon-sm">route</span>
               <span>{t('chat.input.planMode.label')}</span>
@@ -367,7 +368,7 @@ export default function ChatInput({
               <SelectTrigger
                 size="sm"
                 aria-label={t('chat.input.mode.label')}
-                className={`border ${selectedMode.color} bg-transparent hover:bg-surface-container-low/50 transition-colors`}
+                className={cn('border', selectedMode.color, 'bg-transparent hover:bg-surface-container-low/50 transition-colors')}
               >
                 <span className="material-symbols-outlined icon-sm">{selectedMode.icon}</span>
                 <SelectValue placeholder={t('chat.input.mode.label')} />
@@ -451,7 +452,7 @@ export default function ChatInput({
               <span
                 role="status"
                 aria-live="polite"
-                className={`font-mono text-label-xs tabular-nums px-xs ${isOverSoftWarn ? 'text-error' : 'text-on-surface-variant/70'}`}
+                className={cn('font-mono text-label-xs tabular-nums px-xs', isOverSoftWarn ? 'text-error' : 'text-on-surface-variant/70')}
               >
                 {charCount.toLocaleString()}
               </span>

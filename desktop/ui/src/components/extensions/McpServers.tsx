@@ -230,11 +230,12 @@ function InstalledSection({
                       {srv.name}
                     </div>
                     <span
-                      className={`text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 ${
+                      className={cn(
+                        "text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0",
                         srv.connected
                           ? "bg-primary-container/60 text-on-primary-container"
-                          : "bg-surface-container-highest text-on-surface-variant"
-                      }`}
+                          : "bg-surface-container-highest text-on-surface-variant",
+                      )}
                     >
                       {srv.connected
                         ? t("extensions.mcp.toolCount", {

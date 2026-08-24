@@ -7,6 +7,7 @@ import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Chart, parseChartSpec } from '@/components/chat/Chart'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 // Extend the default sanitize schema so syntax-highlight classes from
 // rehype-highlight (e.g. `hljs-keyword`) survive sanitization. Keep the
@@ -163,7 +164,7 @@ function CodeBlock(props: { children?: ReactNode } & React.HTMLAttributes<HTMLPr
           </Button>
         </div>
       </div>
-      <pre {...props} className={`hljs text-body-sm overflow-x-auto p-md bg-surface-container-lowest ${showLines ? 'line-numbers' : ''}`}>
+      <pre {...props} className={cn('hljs text-body-sm overflow-x-auto p-md bg-surface-container-lowest', showLines ? 'line-numbers' : '')}>
         {props.children}
       </pre>
     </div>

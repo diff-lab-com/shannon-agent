@@ -13,6 +13,7 @@ import {
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type { SttConfig } from '@/types'
+import { cn } from '@/lib/utils'
 
 const PROVIDERS = ['groq', 'openai', 'custom'] as const
 type SttProvider = (typeof PROVIDERS)[number]
@@ -92,11 +93,12 @@ export function VoiceSttSettings() {
         </div>
         <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.voice.title')}</h3>
         <span
-          className={`ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold ${
+          className={cn(
+            "ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold",
             keyConfigured
               ? 'bg-primary-container text-on-primary-container'
-              : 'bg-surface-container-high text-on-surface-variant'
-          }`}
+              : 'bg-surface-container-high text-on-surface-variant',
+          )}
         >
           {keyConfigured ? t('settings.voice.configured') : t('settings.voice.notConfigured')}
         </span>

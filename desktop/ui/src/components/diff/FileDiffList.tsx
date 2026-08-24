@@ -158,7 +158,7 @@ export default function FileDiffList({
                     {diff && (
                       <span className="font-label-sm text-error shrink-0">−{dels}</span>
                     )}
-                    <span className={`font-label-sm px-xs rounded-full ml-auto ${status.badgeStyle}`}>
+                    <span className={cn("font-label-sm px-xs rounded-full ml-auto", status.badgeStyle)}>
                       {status.label}
                     </span>
                   </div>

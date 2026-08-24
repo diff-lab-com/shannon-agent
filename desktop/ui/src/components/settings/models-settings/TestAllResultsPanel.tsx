@@ -1,5 +1,6 @@
 import type { useIntl } from 'react-intl'
 import * as api from '@/lib/tauri-api'
+import { cn } from '@/lib/utils'
 
 /**
  * Renders the results of the "Test all providers" fan-out probe as a compact
@@ -69,7 +70,7 @@ export function TestAllResultsPanel({
                 ) : null}
                 <span
                   data-testid={`test-all-result-${r.id}`}
-                  className={`px-sm py-[2px] rounded-full text-[10px] font-bold uppercase tracking-wider ${pillClass}`}
+                  className={cn("px-sm py-[2px] rounded-full text-[10px] font-bold uppercase tracking-wider", pillClass)}
                   title={pillLabel}
                 >
                   {pillLabel}

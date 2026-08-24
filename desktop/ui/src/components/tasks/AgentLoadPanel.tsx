@@ -8,6 +8,7 @@
 import { useMemo } from 'react'
 import { useIntl } from 'react-intl'
 import type { AgentInfo } from '@/types'
+import { cn } from '@/lib/utils'
 
 interface AgentLoadPanelProps {
   agents: AgentInfo[]
@@ -119,7 +120,7 @@ export default function AgentLoadPanel({ agents }: AgentLoadPanelProps) {
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center gap-xs min-w-0">
                     <span className="w-2 h-2 rounded-full shrink-0" aria-hidden="true">
-                      <span className={`block w-2 h-2 rounded-full ${statusColor(r.status)}`} />
+                      <span className={cn('block w-2 h-2 rounded-full', statusColor(r.status))} />
                     </span>
                     <span className="font-label-md text-on-surface truncate">{r.name}</span>
                     {r.task ? (
@@ -128,7 +129,7 @@ export default function AgentLoadPanel({ agents }: AgentLoadPanelProps) {
                       </span>
                     ) : null}
                   </div>
-                  <span className={`font-label-sm font-bold ${r.active ? 'text-primary' : 'text-on-surface-variant'}`}>
+                  <span className={cn('font-label-sm font-bold', r.active ? 'text-primary' : 'text-on-surface-variant')}>
                     {r.load}%
                   </span>
                 </div>
@@ -141,7 +142,7 @@ export default function AgentLoadPanel({ agents }: AgentLoadPanelProps) {
                   aria-label={intl.formatMessage({ id: 'tasks.agentLoadPanel.loadAria' }, { name: r.name })}
                 >
                   <div
-                    className={`h-full ${statusColor(r.status)} rounded-full transition-all duration-500 ${r.active ? 'animate-pulse' : ''}`}
+                    className={cn('h-full', statusColor(r.status), 'rounded-full transition-all duration-500', r.active ? 'animate-pulse' : '')}
                     style={{ width: `${r.load}%` }}
                   />
                 </div>

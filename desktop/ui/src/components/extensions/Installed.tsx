@@ -4,6 +4,7 @@ import { useIntl } from "react-intl";
 import { listInstalledAddons } from "@/lib/tauri-api";
 import type { InstalledAddonSummary, AddonKind } from "@/types";
 import EmptyState from "@/components/ui/empty-state";
+import { cn } from "@/lib/utils";
 
 /**
  * Installed tab — P1's only fully-wired view.
@@ -156,9 +157,9 @@ function InstalledRow({ row, isLast }: { row: InstalledAddonSummary; isLast: boo
   const intl = useIntl();
   const t = (id: string) => intl.formatMessage({ id });
   return (
-    <div className={`flex items-start gap-md px-md py-sm ${isLast ? "" : "border-b border-outline-variant/15"}`}>
-      <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${row.enabled ? "bg-primary/10" : "bg-surface-container-low"}`}>
-        <span className={`material-symbols-outlined icon-md ${row.enabled ? "text-primary" : "text-on-surface-variant"}`}>
+    <div className={cn("flex items-start gap-md px-md py-sm", isLast ? "" : "border-b border-outline-variant/15")}>
+      <div className={cn("w-9 h-9 rounded-lg flex items-center justify-center shrink-0", row.enabled ? "bg-primary/10" : "bg-surface-container-low")}>
+        <span className={cn("material-symbols-outlined icon-md", row.enabled ? "text-primary" : "text-on-surface-variant")}>
           {KIND_ICONS[row.kind]}
         </span>
       </div>

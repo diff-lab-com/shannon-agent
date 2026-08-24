@@ -120,7 +120,7 @@ export function Header() {
               className="flex items-center gap-sm px-md py-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all"
               onClick={() => { setModelOpen(!modelOpen); setModelFocus(-1) }}
             >
-              <span className={`w-2 h-2 rounded-full shrink-0 ${status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary'}`}></span>
+              <span className={cn('w-2 h-2 rounded-full shrink-0', status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary')}></span>
               <span className="font-label-sm text-[12px] whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
               <span className="material-symbols-outlined icon-sm">expand_more</span>
             </Button>
@@ -191,12 +191,12 @@ export function Header() {
                 <h3 className="font-headline-sm text-on-surface font-bold">{t('header.permRequest.title')}</h3>
                 <p className="text-body-sm text-on-surface-variant">{t('header.permRequest.subtitle')}</p>
               </div>
-              <span className={`px-sm py-xs rounded-full font-label-sm font-bold uppercase tracking-wider ${
+              <span className={cn('px-sm py-xs rounded-full font-label-sm font-bold uppercase tracking-wider',
                 permissionRequest.risk === 'critical' ? 'bg-error/10 text-error' :
                 permissionRequest.risk === 'high' ? 'bg-secondary/10 text-secondary' :
                 permissionRequest.risk === 'medium' ? 'bg-secondary/10 text-secondary' :
                 'bg-tertiary/10 text-tertiary'
-              }`}>{permissionRequest.risk}</span>
+              )}>{permissionRequest.risk}</span>
             </div>
             <div className="p-md bg-surface-container-low rounded-xl mb-lg space-y-sm">
               <div className="flex justify-between">

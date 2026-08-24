@@ -183,14 +183,14 @@ export default function ModelsSettings() {
                     )}
                   >
                     <div className="flex items-center gap-md">
-                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                        m.id === currentModel ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant'
-                      }`}>
+                      <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center",
+                        m.id === currentModel ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant',
+                      )}>
                         <span className="material-symbols-outlined">psychology</span>
                       </div>
                       <div>
                     <div className="flex items-center gap-xs">
-                      <span className={`font-headline-md text-lg ${m.id === currentModel ? 'text-primary' : 'text-on-surface'}`}>{m.name}</span>
+                      <span className={cn("font-headline-md text-lg", m.id === currentModel ? 'text-primary' : 'text-on-surface')}>{m.name}</span>
                       {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary text-on-primary rounded text-[10px] font-bold">{t('settings.models.defaultBadge')}</span> : null}
                       {m.tier ? (
                         <span
