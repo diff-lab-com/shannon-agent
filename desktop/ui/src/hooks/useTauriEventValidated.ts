@@ -37,7 +37,10 @@ function getValidator(event: string) {
   return validate
 }
 
-function useDevSchemaCheck<T>(event: string, payload: T) {
+// dev-only payload validator. NOT a React hook — must not be named
+// `use*` because it is invoked from a Tauri event callback (closure),
+// and the rules-of-hooks plugin would (correctly) flag the call.
+function devSchemaCheck<T>(event: string, payload: T) {
   if (!import.meta.env.DEV) return
   const validate = getValidator(event)
   if (!validate) return
@@ -64,7 +67,7 @@ export function useTauriEventValidated<T>(
     let cancelled = false
     listen<T>(event, (e) => {
       if (cancelled) return
-      useDevSchemaCheck(event, e.payload)
+      devSchemaCheck(event, e.payload)
       handlerRef.current(e)
     })
       .then((fn) => {
