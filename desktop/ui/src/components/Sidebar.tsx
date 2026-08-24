@@ -205,7 +205,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
     let interval: ReturnType<typeof setInterval> | undefined;
     const stop = () => { if (interval) { clearInterval(interval); interval = undefined; } };
     const start = () => { stop(); refreshTriageStats(); interval = setInterval(refreshTriageStats, 30000); };
-    const onVisibility = () => { document.hidden ? stop() : start(); };
+    const onVisibility = () => { if (document.hidden) { stop(); } else { start(); } };
     start();
     document.addEventListener('visibilitychange', onVisibility);
     return () => { stop(); document.removeEventListener('visibilitychange', onVisibility); };

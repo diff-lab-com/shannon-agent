@@ -1,9 +1,9 @@
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
-import { X } from "lucide-react"
 import { useIntl } from "react-intl"
 
 import { cn } from "@/lib/utils"
+import { Icon } from "@/components/ui/icon"
 import { useModalFocus } from "@/hooks/useModalFocus"
 
 const modalSizes = cva("w-full", {
@@ -113,7 +113,7 @@ export function Modal({
                 onClick={onClose}
                 className="shrink-0 p-xs rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors disabled:opacity-50 disabled:pointer-events-none"
               >
-                <X className="size-4" />
+                <Icon name="close" />
               </button>
             )}
           </div>

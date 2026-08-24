@@ -37,7 +37,7 @@ describe('detectArtifacts', () => {
   })
 
   it('ignores short HTML (< 5 lines)', () => {
-    const md = '\`\`\`html\n<div>hi</div>\n\`\`\`'
+    const md = '```html\n<div>hi</div>\n```'
     expect(detectArtifacts(md)).toHaveLength(0)
   })
 
@@ -72,7 +72,7 @@ describe('detectArtifacts', () => {
   })
 
   it('ignores short markdown', () => {
-    const md = '\`\`\`markdown\n# hi\nshort body\n\`\`\`'
+    const md = '```markdown\n# hi\nshort body\n```'
     expect(detectArtifacts(md)).toHaveLength(0)
   })
 

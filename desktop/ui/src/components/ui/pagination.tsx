@@ -1,5 +1,6 @@
 import { useIntl } from 'react-intl'
 import { Button } from './button'
+import { Icon } from './icon'
 
 interface PaginationProps {
   page: number
@@ -33,7 +34,7 @@ export function Pagination({ page, totalPages, onPageChange }: PaginationProps) 
         className="px-sm py-xs rounded-lg text-on-surface-variant hover:text-primary disabled:opacity-30"
         aria-label={intl.formatMessage({ id: 'ui.pagination.previous' })}
       >
-        <span className="material-symbols-outlined text-[18px]">chevron_left</span>
+        <Icon name="chevron_left" className="text-[18px]" />
       </Button>
       {pages.map((p, i) =>
         p === '…' ? (
@@ -58,7 +59,7 @@ export function Pagination({ page, totalPages, onPageChange }: PaginationProps) 
         className="px-sm py-xs rounded-lg text-on-surface-variant hover:text-primary disabled:opacity-30"
         aria-label={intl.formatMessage({ id: 'ui.pagination.next' })}
       >
-        <span className="material-symbols-outlined text-[18px]">chevron_right</span>
+        <Icon name="chevron_right" className="text-[18px]" />
       </Button>
     </div>
   )

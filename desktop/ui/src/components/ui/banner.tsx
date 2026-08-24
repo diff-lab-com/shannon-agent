@@ -2,6 +2,7 @@ import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
+import { Icon } from "./icon"
 
 const bannerVariants = cva(
   "shannon-banner flex gap-md",
@@ -72,9 +73,7 @@ function Banner({
           aria-label={dismissLabel}
           className="shrink-0 p-xs rounded text-on-surface-variant hover:text-on-surface hover:bg-surface-container/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary cursor-pointer"
         >
-          <span className="material-symbols-outlined icon-sm" aria-hidden="true">
-            close
-          </span>
+          <Icon name="close" className="icon-sm" aria-hidden="true" />
         </button>
       )}
     </div>
