@@ -7,11 +7,11 @@
 // accepted hunk in sequence.
 //
 // T1.2 — migrated onto the shared Modal primitive. The hand-rolled
-// `fixed inset-0` overlay, `useModalFocus` hook, document-level Escape
-// listener, and backdrop click handler are all gone: Modal owns them.
-// The diff-specific UI (totals chip, 2-pane body, sidebar) renders as
-// Modal children; Modal handles the dialog role, aria-modal, focus trap,
-// Esc-to-close, and body scroll lock.
+// overlay, focus trap hook, document-level Escape listener, and
+// backdrop click handler are all gone: Modal owns them. The
+// diff-specific UI (totals chip, 2-pane body, sidebar) renders as
+// Modal children; Modal handles dialog role, aria-modal, focus trap,
+// Escape-to-close, and body scroll lock.
 
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useIntl } from 'react-intl'
