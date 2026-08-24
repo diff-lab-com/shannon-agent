@@ -9,12 +9,15 @@
 // rounded corners, and the backdrop is a separate sibling element so
 // the panel can overflow past the backdrop if needed.
 //
-// T1.2/R1a — Shannon's `ui/drawer.tsx` shim (deleted in R1a) is now
-// gone; SidePanel is the canonical right-edge drawer primitive.
+// R1c — re-implemented on top of `@base-ui/react/dialog` primitives
+// (the same swap Modal did in R1b). External API is frozen: callers
+// (RoutineDetailDrawer, SkillDetailDrawer, TaskDetailDrawer) keep
+// their existing `<SidePanel>` / `<SidePanelHeader>` / `<SidePanelTitle>`
+// / `<SidePanelBody>` / `<SidePanelCloseButton>` composition untouched.
 
 import * as React from 'react'
 import { useIntl } from 'react-intl'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import { Dialog as DialogPrimitive } from '@base-ui/react/dialog'
 import { cn } from '@/lib/utils'
 
 export interface SidePanelProps {
@@ -40,54 +43,45 @@ export function SidePanel({
   className,
   children,
 }: SidePanelProps) {
-  const containerRef = React.useRef<HTMLDivElement>(null)
-  useModalFocus(open, containerRef)
-
-  React.useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && closeOnEscape) onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [open, closeOnEscape, onClose])
-
-  React.useEffect(() => {
-    if (!open) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [open])
-
-  if (!open) return null
+  const handleOpenChange = React.useCallback(
+    (next: boolean, details: DialogPrimitive.Root.ChangeEventDetails) => {
+      // Same gating contract as R1b's Modal: ignore every close unless
+      // the reason matches what the caller opted into.
+      if (next) return
+      if (details.reason === 'outside-press' && !closeOnBackdrop) return
+      if (details.reason === 'escape-key' && !closeOnEscape) return
+      onClose()
+    },
+    [closeOnBackdrop, closeOnEscape, onClose],
+  )
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-end"
-      onClick={(e) => {
-        if (closeOnBackdrop && e.target === e.currentTarget) onClose()
-      }}
-    >
-      <div
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-        onClick={() => closeOnBackdrop && onClose()}
-      />
-      <div
-        ref={containerRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={ariaLabel ?? title}
-        className={cn(
-          'relative h-full w-full bg-surface-container-lowest shadow-2xl border-l border-outline-variant/30 overflow-y-auto',
-          className,
-        )}
-        style={{ maxWidth: width }}
-      >
-        {children}
-      </div>
-    </div>
+    <DialogPrimitive.Root open={open} onOpenChange={handleOpenChange}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Backdrop
+          className={cn(
+            'fixed inset-0 isolate z-50 bg-black/40 backdrop-blur-sm duration-100',
+            'data-open:animate-in data-open:fade-in-0',
+            'data-closed:animate-out data-closed:fade-out-0',
+          )}
+        />
+        <DialogPrimitive.Popup
+          role="dialog"
+          aria-modal="true"
+          aria-label={ariaLabel ?? title}
+          className={cn(
+            'fixed inset-y-0 right-0 z-50 h-full w-full bg-surface-container-lowest shadow-2xl border-l border-outline-variant/30 overflow-y-auto outline-none',
+            'duration-100',
+            'data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-right',
+            'data-closed:animate-out data-closed:fade-out-0 data-closed:slide-out-to-right',
+            className,
+          )}
+          style={{ maxWidth: width }}
+        >
+          {children}
+        </DialogPrimitive.Popup>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   )
 }
 
