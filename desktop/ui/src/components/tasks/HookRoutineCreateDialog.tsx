@@ -4,10 +4,10 @@
 // `create_triggered_routine` Tauri command. On success, callers should refresh
 // their routine list (the dialog calls onCreated with the new routine DTO).
 //
-// T1.2 — migrated onto the shared <Modal> primitive. The hand-rolled
-// `fixed inset-0 z-50 flex items-center justify-center` overlay, focus
-// containerRef, `useModalFocus` hook, and backdrop click handler are
-// all gone: Modal owns them.
+// T1.2 — migrated onto the shared <Modal> primitive; the previous
+// hand-rolled overlay, focus containerRef, and backdrop click handler
+// are gone. Modal owns focus trap, Escape close, scroll lock, and
+// backdrop dismiss.
 
 import { useState, useEffect } from 'react'
 import { useIntl } from 'react-intl'
