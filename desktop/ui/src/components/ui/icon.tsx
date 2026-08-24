@@ -73,8 +73,17 @@ export interface IconProps extends React.HTMLAttributes<HTMLSpanElement> {
 }
 
 /**
- * Render a Material Symbols icon. Use this instead of importing from
- * the `lucide` package or hand-writing `<span class="material-symbols-outlined">`.
+ * Render a Material Symbols icon.
+ *
+ * The `<Icon>` wrapper is the preferred entry point when a component needs
+ * a uniform size token, default `aria-hidden`, or the lucide→Material name
+ * mapping table documented above.
+ *
+ * Hand-written `<span class="material-symbols-outlined">…</span>` is also
+ * policy-compliant inside the desktop UI (over 100 call sites use it; base-nova-
+ * generated shadcn components ship with raw spans). Use whichever fits the file
+ * — the hard rule is: never import from the `lucide` package, and size via the
+ * `icon-xs | sm | md | lg | xl | 2xl` utility classes regardless of style.
  *
  * The wrapper is intentionally minimal — it forwards className, onClick, and
  * any other span props so call sites can compose styling freely.

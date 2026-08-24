@@ -220,11 +220,16 @@ behavior is delegated to the engine crates.
 - **CHANGELOG.md** is per-sprint, grouped by category (Features, Fixes,
   Accessibility, i18n, Dependencies). When bumping the engine pin, record
   what changed in the engine and why.
-- **Icon policy**: every icon uses Material Symbols (outlined). Render via
-  the `<Icon name="..." />` wrapper at `ui/src/components/ui/icon.tsx` —
-  never hand-write `<span class="material-symbols-outlined">` and never
-  import from the `lucide` package. Size uses the `icon-xs|sm|md|lg|xl|2xl`
-  utility classes (12/16/20/24/32/48 px) defined in `ui/src/index.css`. The
-  font (`@fontsource-variable/material-symbols-outlined`) is loaded once at
-  `src/index.css`. shadcn-generated components ship with lucide imports by
-  default — strip them and route through `<Icon>` before merging.
+- **Icon policy**: every icon uses Material Symbols (outlined). Size uses the
+  `icon-xs|sm|md|lg|xl|2xl` utility classes (12/16/20/24/32/48 px) defined
+  in `ui/src/index.css`. The font (`@fontsource-variable/material-symbols-outlined`)
+  is loaded once at `src/index.css`.
+  - **Hard rule (never violate):** never `import` from the `lucide` package.
+  - **Preferred:** the `<Icon name="..." />` wrapper at
+    `ui/src/components/ui/icon.tsx` — gives default `aria-hidden`, the
+    lucide→Material name mapping table, and a uniform `size` token.
+  - **Also compliant:** hand-written `<span class="material-symbols-outlined">`
+    — that is what the 100+ existing call sites (and shadcn-generated base
+    components like `dialog.tsx`) already use. Mix per file as long as it's
+    consistent within that file. Policy revised 2026-08-24 to formalize the
+    de-facto standard; see R1a in `docs/plans/desktop-ui-modernization-phase2.md`.
