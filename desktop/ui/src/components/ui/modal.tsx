@@ -1,10 +1,10 @@
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { useIntl } from "react-intl"
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 
 import { cn } from "@/lib/utils"
 import { Icon } from "@/components/ui/icon"
-import { useModalFocus } from "@/hooks/useModalFocus"
 
 const modalSizes = cva("w-full", {
   variants: {
@@ -53,77 +53,68 @@ export function Modal({
   className,
   children,
 }: ModalProps) {
-  const containerRef = React.useRef<HTMLDivElement>(null)
   const intl = useIntl()
   const closeAriaLabel = closeLabel ?? intl.formatMessage({ id: 'ui.modal.close.aria' })
-  useModalFocus(open, containerRef)
 
-  React.useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && closeOnEscape && !busy) onClose()
-    }
-    document.addEventListener("keydown", onKey)
-    return () => document.removeEventListener("keydown", onKey)
-  }, [open, closeOnEscape, busy, onClose])
-
-  React.useEffect(() => {
-    if (!open) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = "hidden"
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [open])
-
-  if (!open) return null
+  const handleOpenChange = React.useCallback(
+    (next: boolean, details: DialogPrimitive.Root.ChangeEventDetails) => {
+      // Base UI's controlled Dialog only routes the close direction through
+      // onOpenChange when the user requests it; we treat every close as a
+      // request and gate with the same contract the old Modal had.
+      if (next) return
+      if (busy) return
+      if (details.reason === "outside-press" && !closeOnBackdrop) return
+      if (details.reason === "escape-key" && !closeOnEscape) return
+      onClose()
+    },
+    [busy, closeOnBackdrop, closeOnEscape, onClose],
+  )
 
   const hasHeader = Boolean(title || description)
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm p-md"
-      onClick={(e) => {
-        if (closeOnBackdrop && !busy && e.target === e.currentTarget) onClose()
-      }}
-    >
-      <div
-        ref={containerRef}
-        role={role}
-        aria-modal="true"
-        aria-label={title}
-        className={cn(
-          "relative bg-surface-container-lowest rounded-2xl shadow-[var(--shadow-e5)] border border-outline-variant/30",
-          modalSizes({ size }),
-          className
-        )}
-      >
-        {hasHeader && (
-          <div className="flex items-start gap-md p-xl pb-md">
-            <div className="flex-1 min-w-0">
-              {title && (
-                <h2 className="font-headline-md text-on-surface font-bold">{title}</h2>
-              )}
-              {description && (
-                <p className="text-body-sm text-on-surface-variant mt-xs">{description}</p>
+    <DialogPrimitive.Root open={open} onOpenChange={handleOpenChange}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Backdrop
+          className="fixed inset-0 isolate z-[100] bg-black/40 backdrop-blur-sm duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+        />
+        <DialogPrimitive.Popup
+          role={role}
+          aria-modal="true"
+          aria-label={title}
+          className={cn(
+            "fixed top-1/2 left-1/2 z-[100] -translate-x-1/2 -translate-y-1/2 w-full max-w-[calc(100%-2rem)] bg-surface-container-lowest rounded-2xl shadow-[var(--shadow-e5)] border border-outline-variant/30 outline-none p-md duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+            modalSizes({ size }),
+            className
+          )}
+        >
+          {hasHeader && (
+            <div className="flex items-start gap-md p-xl pb-md">
+              <div className="flex-1 min-w-0">
+                {title && (
+                  <h2 className="font-headline-md text-on-surface font-bold">{title}</h2>
+                )}
+                {description && (
+                  <p className="text-body-sm text-on-surface-variant mt-xs">{description}</p>
+                )}
+              </div>
+              {showCloseButton && (
+                <button
+                  type="button"
+                  aria-label={closeAriaLabel}
+                  disabled={busy}
+                  onClick={onClose}
+                  className="shrink-0 p-xs rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  <Icon name="close" />
+                </button>
               )}
             </div>
-            {showCloseButton && (
-              <button
-                type="button"
-                aria-label={closeAriaLabel}
-                disabled={busy}
-                onClick={onClose}
-                className="shrink-0 p-xs rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors disabled:opacity-50 disabled:pointer-events-none"
-              >
-                <Icon name="close" />
-              </button>
-            )}
-          </div>
-        )}
-        {children}
-      </div>
-    </div>
+          )}
+          {children}
+        </DialogPrimitive.Popup>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   )
 }
 
