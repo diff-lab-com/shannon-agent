@@ -120,9 +120,9 @@ jobs:
       - name: Install UI deps
         working-directory: desktop/ui
         run: pnpm install --frozen-lockfile
-      - name: Type-check
-        # `pnpm lint` is tsc --noEmit (the UI's only lint step) — this is
-        # the strict-TS gate for desktop/ui.
+      - name: Lint (tsc + eslint)
+        # `pnpm lint` is tsc --noEmit + eslint --max-warnings 72 — the
+        # 72 cap is the frozen ESLint budget; raise only with ed sign-off.
         working-directory: desktop/ui
         run: pnpm lint
       - name: Run unit tests
