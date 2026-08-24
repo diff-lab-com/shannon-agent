@@ -9,10 +9,8 @@
 // rounded corners, and the backdrop is a separate sibling element so
 // the panel can overflow past the backdrop if needed.
 //
-// Future: replace Shannon's existing `ui/drawer.tsx` (5-line stub
-// without focus/Esc/scroll-lock) with this primitive. Drawers in
-// settings/AddProviderModal and chat/MessageBubble lightbox would
-// benefit, but those migrations are out of scope for this batch.
+// T1.2/R1a — Shannon's `ui/drawer.tsx` shim (deleted in R1a) is now
+// gone; SidePanel is the canonical right-edge drawer primitive.
 
 import * as React from 'react'
 import { useIntl } from 'react-intl'
