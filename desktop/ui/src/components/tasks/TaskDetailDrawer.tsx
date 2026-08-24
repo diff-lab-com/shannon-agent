@@ -5,11 +5,10 @@
 // (id/title/status/description) support inline editing of priority,
 // assignee, status, and due date through the `update_task` Tauri command.
 //
-// T1.2 — migrated onto the shared <SidePanel> primitive. The hand-rolled
-// `fixed inset-0 z-50 flex justify-end` overlay, backdrop click handler,
-// and Escape keydown listener are gone: SidePanel owns them. The
-// `aria-modal="true"` + `role="dialog"` attributes are inherited from
-// the primitive as well.
+// T1.2 — migrated onto the shared <SidePanel> primitive. The previous
+// hand-rolled overlay, backdrop click handler, and Escape keydown
+// listener are gone: SidePanel owns them. The `aria-modal="true"` +
+// `role="dialog"` attributes are inherited from the primitive as well.
 
 import { useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
