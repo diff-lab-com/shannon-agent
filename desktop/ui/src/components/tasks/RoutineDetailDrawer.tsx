@@ -4,11 +4,11 @@
 // Currently exposes the DependsOnEditor; later phases can add prompt /
 // trigger / policy editing here too.
 //
-// T1.2 — migrated onto the shared <SidePanel> primitive. The hand-rolled
-// `fixed inset-0 z-50 flex justify-end` overlay, document-level Escape
-// listener, backdrop click handler, and `useModalFocus` hook are all
-// gone: SidePanel owns them. The `aria-label` interpolates the routine
-// name; that wiring moves to SidePanel's `ariaLabel` prop.
+// T1.2 — migrated onto the shared <SidePanel> primitive. The previous
+// hand-rolled overlay, document-level Escape listener, backdrop click
+// handler, and focus trap hook are all gone: SidePanel owns them.
+// The `aria-label` interpolates the routine name; that wiring lives
+// on SidePanel's `ariaLabel` prop.
 
 import { useIntl } from 'react-intl'
 import type { ScheduledRoutine } from '@/types'
