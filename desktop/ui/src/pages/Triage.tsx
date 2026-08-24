@@ -18,6 +18,7 @@ import { useTriageItems, useTriageStats } from '@/hooks/scheduled-tasks'
 import type { TriageItem } from '@/types'
 import { formatUnixDateTime } from '@/components/tasks/shared'
 import * as api from '@/lib/tauri-api'
+import { cn } from '@/lib/utils'
 
 type ReadFilter = 'all' | 'unread' | 'read'
 type SortOrder = 'newest' | 'oldest'
@@ -49,7 +50,7 @@ function TriageCard({ item, selected, focused, onToggleSelected, onMarkRead, onA
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const meta = kindMeta(item.kind)
   return (
-    <div role="listitem" data-focused={focused ? 'true' : undefined} className={`glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80 ${item.read ? 'border-outline-variant/10 opacity-70' : 'border-primary/20'} ${focused ? 'ring-2 ring-primary' : selected ? 'ring-2 ring-primary/40' : ''}`}>
+    <div role="listitem" data-focused={focused ? 'true' : undefined} className={cn('glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80', item.read ? 'border-outline-variant/10 opacity-70' : 'border-primary/20', focused ? 'ring-2 ring-primary' : selected ? 'ring-2 ring-primary/40' : '')}>
       <div className="flex items-start gap-sm">
         <label className="flex items-center pt-xs cursor-pointer shrink-0" aria-label={t('triage.select.aria', { id: item.id })}>
           <input
@@ -60,12 +61,12 @@ function TriageCard({ item, selected, focused, onToggleSelected, onMarkRead, onA
           />
         </label>
         <div className="flex items-start gap-md flex-1 min-w-0">
-          <div className={`w-10 h-10 rounded-xl bg-surface-container-low flex items-center justify-center ${meta.color} shrink-0`}>
+          <div className={cn("w-10 h-10 rounded-xl bg-surface-container-low flex items-center justify-center", meta.color, "shrink-0")}>
             <span className="material-symbols-outlined icon-lg">{meta.icon}</span>
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-sm mb-xs">
-              <span className={`font-label-sm text-[11px] font-bold uppercase tracking-wider ${meta.color}`}>{meta.labelKey ? t(meta.labelKey) : item.kind}</span>
+              <span className={cn("font-label-sm text-[11px] font-bold uppercase tracking-wider", meta.color)}>{meta.labelKey ? t(meta.labelKey) : item.kind}</span>
               {!item.read && <span className="w-2 h-2 rounded-full bg-primary shrink-0" title={t('triage.unread.title')} />}
               {item.archived && <span className="font-label-sm text-[11px] text-on-surface-variant">{t('triage.archived.label')}</span>}
             </div>
@@ -281,7 +282,7 @@ export default function Triage() {
             variant="ghost"
             onClick={() => setKindFilter(undefined)}
             aria-pressed={!kindFilter}
-            className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${!kindFilter ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
+            className={cn("px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer", !kindFilter ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10')}
           >
             {t('triage.filter.all')}
           </Button>
@@ -294,7 +295,7 @@ export default function Triage() {
                 variant="ghost"
                 onClick={() => setKindFilter(kind)}
                 aria-pressed={kindFilter === kind}
-                className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${kindFilter === kind ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
+                className={cn("px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer", kindFilter === kind ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10')}
               >
                 {label}
               </Button>
@@ -310,7 +311,7 @@ export default function Triage() {
               variant="ghost"
               onClick={() => setReadFilter(opt)}
               aria-pressed={readFilter === opt}
-              className={`px-sm py-xs rounded-full text-label-sm capitalize transition-colors cursor-pointer ${readFilter === opt ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
+              className={cn("px-sm py-xs rounded-full text-label-sm capitalize transition-colors cursor-pointer", readFilter === opt ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10')}
             >
               {t(`triage.filter.${opt}`)}
             </Button>
@@ -332,7 +333,7 @@ export default function Triage() {
               variant="ghost"
               onClick={() => setShowArchived(!showArchived)}
               aria-pressed={showArchived}
-              className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${showArchived ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
+              className={cn("px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer", showArchived ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10')}
             >
               <span className="material-symbols-outlined text-[14px] mr-xs align-middle">archive</span>
               {t(showArchived ? 'triage.archived.show' : 'triage.archived.hide')}

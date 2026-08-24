@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeSanitize from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
+import { cn } from '@/lib/utils'
 
 interface DocumentRendererProps {
   source: string
@@ -18,7 +19,7 @@ const components = {
   code: ({ children, className }: { children?: React.ReactNode; className?: string }) => {
     const isBlock = className?.includes('language-')
     return isBlock ? (
-      <code className={`block bg-surface-container-high text-on-surface rounded-md p-md overflow-x-auto text-label-sm font-mono ${className ?? ''}`}>{children}</code>
+      <code className={cn("block bg-surface-container-high text-on-surface rounded-md p-md overflow-x-auto text-label-sm font-mono", className)}>{children}</code>
     ) : (
       <code className="bg-surface-container-high text-on-surface rounded px-[2px] py-[1px] text-label-sm font-mono">{children}</code>
     )

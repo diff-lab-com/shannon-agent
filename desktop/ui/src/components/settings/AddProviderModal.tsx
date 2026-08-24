@@ -1,117 +1,51 @@
+// Add/Edit Provider modal — orchestrator only (T3.1).
+//
+// SCOPE: Modal for creating a new LLM provider connection or editing an
+// existing one. The modal is opened from `ModelsSettings → Providers` and
+// from the first-run Welcome flow. All mutation goes through
+// `api.saveProvider(input)` and the parent refreshes providers from the
+// returned `ProvidersFile` snapshot.
+//
+// T3.1 split:
+//   - `add-provider-modal/types.ts` — `KindInfo`, `KIND_INFO`, `QuickFill`,
+//     `QUICK_FILL`, `kindLabel`, `HeaderRow`, `AdvancedState`,
+//     `advancedFromEditing`, `headersToRecord`, `parseDefaultMaxTokens`.
+//   - `add-provider-modal/Field.tsx` — labeled form field helper.
+//   - `add-provider-modal/HeaderRowsEditor.tsx` — extra-headers rows.
+//   - `add-provider-modal/DefaultMaxTokensField.tsx` — numeric override.
+//   - `add-provider-modal/TiersEditor.tsx` — per-tier model overrides.
+//   - `add-provider-modal/FallbackModelsEditor.tsx` — fallback list.
+
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Modal } from '@/components/ui/modal'
 import * as api from '@/lib/tauri-api'
 import type {
   ProviderConnection,
   ProviderInput,
-  ProviderKind,
   ProvidersFile,
 } from '@/types'
+import { DefaultMaxTokensField } from './add-provider-modal/DefaultMaxTokensField'
+import { FallbackModelsEditor } from './add-provider-modal/FallbackModelsEditor'
+import { Field } from './add-provider-modal/Field'
+import { HeaderRowsEditor } from './add-provider-modal/HeaderRowsEditor'
+import { TiersEditor } from './add-provider-modal/TiersEditor'
+import {
+  KIND_INFO,
+  QUICK_FILL,
+  advancedFromEditing,
+  headersToRecord,
+  kindLabel,
+  parseDefaultMaxTokens,
+  type AdvancedState,
+} from './add-provider-modal/types'
 
 export interface AddProviderModalProps {
   editing: ProviderConnection | null
   onClose: () => void
   onSaved: (f: ProvidersFile) => void
-}
-
-interface KindInfo {
-  labelKey: string
-  icon: string
-  baseUrlRequired: boolean
-  needsKey: boolean
-}
-
-export const KIND_INFO: Record<string, KindInfo> = {
-  anthropic: { labelKey: 'settings.models.providers.kinds.anthropic', icon: 'auto_awesome', baseUrlRequired: false, needsKey: true },
-  openai: { labelKey: 'settings.models.providers.kinds.openai', icon: 'bolt', baseUrlRequired: false, needsKey: true },
-  deepseek: { labelKey: 'settings.models.providers.kinds.deepseek', icon: 'psychology', baseUrlRequired: false, needsKey: true },
-  ollama: { labelKey: 'settings.models.providers.kinds.ollama', icon: 'dns', baseUrlRequired: false, needsKey: false },
-  'openai-compatible': { labelKey: 'settings.models.providers.kinds.openaiCompatible', icon: 'hub', baseUrlRequired: true, needsKey: true },
-}
-
-interface QuickFill {
-  id: string
-  label: string
-  icon: string
-  kind: ProviderKind
-  baseUrl?: string
-  model?: string
-}
-
-// Quick-fill chips in the Add/Edit modal. The built-in providers map to their
-// kind; GLM / Kimi / MiniMax are OpenAI-compatible endpoints (kind =
-// `openai-compatible`), which the Rust layer tests with a Bearer token.
-export const QUICK_FILL: QuickFill[] = [
-  { id: 'anthropic', label: 'Anthropic', icon: 'auto_awesome', kind: 'anthropic', model: 'claude-sonnet-4-6' },
-  { id: 'openai', label: 'OpenAI', icon: 'bolt', kind: 'openai', model: 'gpt-4.1-mini' },
-  { id: 'deepseek', label: 'DeepSeek', icon: 'psychology', kind: 'deepseek', model: 'deepseek-chat' },
-  { id: 'glm', label: 'GLM (Zhipu)', icon: 'auto_awesome', kind: 'openai-compatible', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-plus' },
-  { id: 'kimi', label: 'Kimi (Moonshot)', icon: 'dark_mode', kind: 'openai-compatible', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
-  { id: 'minimax', label: 'MiniMax', icon: 'group', kind: 'openai-compatible', baseUrl: 'https://api.minimax.chat/v1', model: 'abab6.5s-chat' },
-  { id: 'ollama', label: 'Ollama (local)', icon: 'dns', kind: 'ollama', baseUrl: 'http://localhost:11434', model: 'llama3.2' },
-  { id: 'custom', label: 'settings.models.providers.customOpenAI', icon: 'hub', kind: 'openai-compatible' },
-]
-
-export function kindLabel(intl: ReturnType<typeof useIntl>, kind: string): string {
-  return intl.formatMessage({ id: KIND_INFO[kind]?.labelKey ?? 'settings.models.providers.kinds.openaiCompatible' })
-}
-
-/// Key/value pair for the `extra_headers` advanced row. An empty `key` row
-/// is silently dropped at submit time so the engine never sees `""`.
-interface HeaderRow {
-  key: string
-  value: string
-}
-
-/// Internal state for the advanced disclosure. Kept as plain state — the
-/// payload only needs the final `Record<string, string>`, `number | null`,
-/// and `Tiers` shape; this view-model exists to keep the JSX simple.
-interface AdvancedState {
-  headers: HeaderRow[]
-  defaultMaxTokensInput: string
-  tiers: { fast: string; standard: string; pro: string }
-  fallbackModels: string[]
-}
-
-function advancedFromEditing(editing: ProviderConnection | null): AdvancedState {
-  if (!editing) {
-    return {
-      headers: [],
-      defaultMaxTokensInput: '',
-      tiers: { fast: '', standard: '', pro: '' },
-      fallbackModels: [],
-    }
-  }
-  return {
-    headers: Object.entries(editing.extra_headers ?? {}).map(([key, value]) => ({ key, value })),
-    defaultMaxTokensInput: editing.default_max_tokens == null ? '' : String(editing.default_max_tokens),
-    tiers: {
-      fast: editing.tiers?.fast ?? '',
-      standard: editing.tiers?.standard ?? '',
-      pro: editing.tiers?.pro ?? '',
-    },
-    fallbackModels: editing.fallback_models ? [...editing.fallback_models] : [],
-  }
-}
-
-function headersToRecord(rows: HeaderRow[]): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const r of rows) {
-    const k = r.key.trim()
-    if (!k) continue
-    out[k] = r.value
-  }
-  return out
-}
-
-function parseDefaultMaxTokens(s: string): number | null {
-  const trimmed = s.trim()
-  if (!trimmed) return null
-  const n = Number(trimmed)
-  if (!Number.isFinite(n) || n <= 0) return null
-  return Math.floor(n)
 }
 
 export default function AddProviderModal({ editing, onClose, onSaved }: AddProviderModalProps) {
@@ -129,7 +63,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
 
   const info = KIND_INFO[kind] ?? KIND_INFO['openai-compatible']
 
-  const applyQuickFill = (qf: QuickFill) => {
+  const applyQuickFill = (qf: (typeof QUICK_FILL)[number]) => {
     setKind(qf.kind)
     if (qf.baseUrl) setBaseUrl(qf.baseUrl)
     if (qf.model) setModel(qf.model)
@@ -180,35 +114,31 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-md" onClick={onClose}>
-      <div
-        className="bg-surface-container-lowest border border-outline-variant/40 rounded-2xl shadow-xl w-full max-w-lg p-lg space-y-md max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-        data-testid="add-provider-modal"
-      >
-        <div className="flex items-center justify-between">
-          <h3 className="font-headline-md text-on-surface">
-            {editing ? t('settings.models.providers.editTitle') : t('settings.models.providers.addTitle')}
-          </h3>
-          <Button variant="ghost" className="text-on-surface-variant hover:text-primary cursor-pointer" onClick={onClose} aria-label={t('settings.models.providers.cancel')}>
-            <span className="material-symbols-outlined">close</span>
-          </Button>
-        </div>
+    <Modal
+      open
+      onClose={onClose}
+      size="2xl"
+      title={editing ? t('settings.models.providers.editTitle') : t('settings.models.providers.addTitle')}
+      className="max-h-[90vh] overflow-y-auto p-lg space-y-md"
+    >
+      <div data-testid="add-provider-modal" className="space-y-md">
+
 
         {/* Quick fill */}
         <div>
           <p className="font-label-sm text-on-surface-variant mb-xs">{t('settings.models.providers.quickFill')}</p>
           <div className="flex flex-wrap gap-xs">
             {QUICK_FILL.map(qf => (
-              <button
+              <Button
                 key={qf.id}
                 type="button"
+                variant="outline"
                 onClick={() => applyQuickFill(qf)}
                 className="inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low/40 hover:border-primary/40 hover:bg-primary/5 text-on-surface-variant hover:text-primary font-label-sm text-[12px] cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[14px]">{qf.icon}</span>
                 {qf.id === 'custom' ? t(qf.label) : qf.label}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
@@ -253,8 +183,9 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
               bare fields above are the 90% path; advanced is for users who
               need to tweak per-provider behavior. */}
           <div className="pt-xs">
-            <button
+            <Button
               type="button"
+              variant="ghost"
               onClick={() => setAdvancedOpen((v) => !v)}
               className="inline-flex items-center gap-xs font-label-sm text-on-surface-variant hover:text-primary cursor-pointer"
               aria-expanded={advancedOpen}
@@ -262,7 +193,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
             >
               <span className="material-symbols-outlined text-[18px]">{advancedOpen ? 'expand_less' : 'expand_more'}</span>
               {t('settings.models.providers.advanced')}
-            </button>
+            </Button>
             {advancedOpen ? (
               <div className="mt-sm space-y-md p-md rounded-lg border border-outline-variant/30 bg-surface-container-low/40">
                 <HeaderRowsEditor
@@ -301,231 +232,9 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
           </Button>
         </div>
       </div>
-    </div>
-  )
-}
-
-function HeaderRowsEditor({
-  rows,
-  onChange,
-}: {
-  rows: HeaderRow[]
-  onChange: (rows: HeaderRow[]) => void
-}) {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
-  return (
-    <div>
-      <p className="font-label-sm text-on-surface-variant mb-xs">{t('settings.models.providers.extraHeaders')}</p>
-      {rows.length === 0 ? (
-        <p className="font-label-xs text-on-surface-variant opacity-60 mb-xs" data-testid="extra-headers-empty">
-          {t('settings.models.providers.extraHeadersEmpty')}
-        </p>
-      ) : null}
-      <div className="space-y-xs">
-        {rows.map((row, i) => (
-          <div key={i} className="flex items-center gap-xs" data-testid="extra-headers-row">
-            <Input
-              className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded font-body-xs font-mono"
-              value={row.key}
-              placeholder={t('settings.models.providers.extraHeadersKey')}
-              onChange={(e) => {
-                const next = rows.slice()
-                next[i] = { ...row, key: e.target.value }
-                onChange(next)
-              }}
-            />
-            <Input
-              className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded font-body-xs font-mono"
-              value={row.value}
-              placeholder={t('settings.models.providers.extraHeadersValue')}
-              onChange={(e) => {
-                const next = rows.slice()
-                next[i] = { ...row, value: e.target.value }
-                onChange(next)
-              }}
-            />
-            <Button
-              variant="ghost"
-              type="button"
-              className="px-sm py-xs text-on-surface-variant hover:text-error cursor-pointer"
-              onClick={() => onChange(rows.filter((_, j) => j !== i))}
-              aria-label={t('settings.models.providers.extraHeadersRemove')}
-            >
-              <span className="material-symbols-outlined text-[16px]">close</span>
-            </Button>
-          </div>
-        ))}
-      </div>
-      <Button
-        variant="ghost"
-        type="button"
-        className="mt-xs px-sm py-xs font-label-sm text-primary hover:bg-primary/10 cursor-pointer"
-        onClick={() => onChange([...rows, { key: '', value: '' }])}
-        data-testid="extra-headers-add"
-      >
-        <span className="material-symbols-outlined text-[16px] mr-xs">add</span>
-        {t('settings.models.providers.extraHeadersAdd')}
-      </Button>
-    </div>
-  )
-}
-
-function DefaultMaxTokensField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
-  return (
-    <div>
-      <p className="font-label-sm text-on-surface-variant mb-xs">{t('settings.models.providers.defaultMaxTokens')}</p>
-      <Input
-        className="w-40 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded font-body-sm font-mono"
-        type="number"
-        min={1}
-        max={200000}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        data-testid="default-max-tokens"
-      />
-    </div>
-  )
-}
-
-function TiersEditor({
-  tiers,
-  activeModelId,
-  onChange,
-}: {
-  tiers: { fast: string; standard: string; pro: string }
-  /// The provider's currently-active model id (from `editing.model`).
-  /// Used to badge the row whose override matches the running model so the
-  /// user can see at a glance which tier their engine is actually using.
-  activeModelId: string
-  onChange: (t: { fast: string; standard: string; pro: string }) => void
-}) {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
-  const rows: Array<{ key: 'fast' | 'standard' | 'pro'; labelKey: string }> = [
-    { key: 'fast', labelKey: 'settings.models.addProvider.tierFast' },
-    { key: 'standard', labelKey: 'settings.models.addProvider.tierStandard' },
-    { key: 'pro', labelKey: 'settings.models.addProvider.tierPro' },
-  ]
-  return (
-    <div>
-      <p className="font-label-sm text-on-surface-variant mb-xs">{t('settings.models.providers.tiers')}</p>
-      <p className="font-label-xs text-on-surface-variant opacity-70 mb-xs">
-        {t('settings.models.addProvider.tiersHelp')}
-      </p>
-      <div className="space-y-xs">
-        {rows.map(({ key, labelKey }) => {
-          const isActive = tiers[key].trim() === activeModelId.trim() && activeModelId.trim().length > 0
-          return (
-            <label key={key} className="flex items-center gap-sm" data-testid={`tier-${key}-row`}>
-              <span className="font-label-sm text-on-surface-variant w-20 flex items-center gap-xs">
-                {t(labelKey)}
-                {isActive ? (
-                  <span
-                    className="inline-flex items-center px-xs py-0.5 rounded-full bg-primary/10 text-primary font-label-xs"
-                    data-testid={`tier-${key}-active`}
-                    title={t('settings.models.addProvider.tierActiveBadge')}
-                  >
-                    {t('settings.models.addProvider.tierActiveBadge')}
-                  </span>
-                ) : null}
-              </span>
-              <Input
-                className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded font-body-xs font-mono"
-                value={tiers[key]}
-                placeholder="model-id"
-                onChange={(e) => onChange({ ...tiers, [key]: e.target.value })}
-                data-testid={`tier-${key}-input`}
-              />
-              {tiers[key] ? (
-                <Button
-                  variant="ghost"
-                  type="button"
-                  className="px-sm py-xs text-on-surface-variant hover:text-error cursor-pointer"
-                  onClick={() => onChange({ ...tiers, [key]: '' })}
-                  aria-label={t('settings.models.addProvider.tierClear')}
-                  data-testid={`tier-${key}-clear`}
-                >
-                  <span className="material-symbols-outlined text-[16px]">close</span>
-                </Button>
-              ) : null}
-            </label>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function FallbackModelsEditor({
-  models,
-  onChange,
-}: {
-  models: string[]
-  onChange: (models: string[]) => void
-}) {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
-  return (
-    <div>
-      <p className="font-label-sm text-on-surface-variant mb-xs">{t('settings.models.addProvider.fallbackModels')}</p>
-      <p className="font-label-xs text-on-surface-variant opacity-70 mb-xs">
-        {t('settings.models.addProvider.fallbackModelsHelp')}
-      </p>
-      {models.length === 0 ? (
-        <p className="font-label-xs text-on-surface-variant opacity-60 mb-xs" data-testid="fallback-models-empty">
-          {t('settings.models.addProvider.fallbackModelsEmpty')}
-        </p>
-      ) : null}
-      <div className="space-y-xs">
-        {models.map((m, i) => (
-          <div key={i} className="flex items-center gap-xs" data-testid="fallback-models-row">
-            <Input
-              className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded font-body-xs font-mono"
-              value={m}
-              placeholder={t('settings.models.addProvider.fallbackModelsPlaceholder')}
-              onChange={(e) => {
-                const next = models.slice()
-                next[i] = e.target.value
-                onChange(next)
-              }}
-            />
-            <Button
-              variant="ghost"
-              type="button"
-              className="px-sm py-xs text-on-surface-variant hover:text-error cursor-pointer"
-              onClick={() => onChange(models.filter((_, j) => j !== i))}
-              aria-label={t('settings.models.addProvider.fallbackModelsRemove')}
-            >
-              <span className="material-symbols-outlined text-[16px]">close</span>
-            </Button>
-          </div>
-        ))}
-      </div>
-      <Button
-        variant="ghost"
-        type="button"
-        className="mt-xs px-sm py-xs font-label-sm text-primary hover:bg-primary/10 cursor-pointer"
-        onClick={() => onChange([...models, ''])}
-        data-testid="fallback-models-add"
-      >
-        <span className="material-symbols-outlined text-[16px] mr-xs">add</span>
-        {t('settings.models.addProvider.fallbackModelsAdd')}
-      </Button>
-    </div>
-  )
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="block font-label-sm text-on-surface-variant mb-xs">{label}</span>
-      {children}
-    </label>
+    </Modal>
   )
 }
 
 // Re-export the union type for callers that import from this module.
-export type { ProviderKind }
+export type { ProviderKind } from '@/types'

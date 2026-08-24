@@ -5,6 +5,7 @@
 
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 interface TasksHeaderProps {
   showFilters: boolean
@@ -65,7 +66,7 @@ export default function TasksHeader({
         <Button
           aria-label={t('tasks.tasksHeader.filters')}
           onClick={onToggleFilters}
-          className={`px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors ${showFilters ? 'ring-2 ring-primary' : ''}`}
+          className={cn('px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors', showFilters ? 'ring-2 ring-primary' : '')}
         >
           <span className="material-symbols-outlined text-[18px]">filter_list</span>
           {t('tasks.tasksHeader.filters')}
@@ -73,7 +74,7 @@ export default function TasksHeader({
         <Button
           aria-label={t('tasks.tasksHeader.monthView')}
           onClick={onToggleCalendar}
-          className={`px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors ${calendarView ? 'ring-2 ring-primary' : ''}`}
+          className={cn('px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors', calendarView ? 'ring-2 ring-primary' : '')}
         >
           <span className="material-symbols-outlined text-[18px]">calendar_month</span>
           {calendarView ? t('tasks.tasksHeader.listView') : t('tasks.tasksHeader.monthView')}
@@ -82,7 +83,7 @@ export default function TasksHeader({
           <Button
             aria-label={t('tasks.tasksHeader.graph')}
             onClick={onToggleDag}
-            className={`px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors ${dagView ? 'ring-2 ring-primary' : ''}`}
+            className={cn('px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors', dagView ? 'ring-2 ring-primary' : '')}
           >
             <span className="material-symbols-outlined text-[18px]">account_tree</span>
             {dagView ? t('tasks.tasksHeader.hideGraph') : t('tasks.tasksHeader.graph')}

@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from 'react'
+import { Button } from '@/components/ui/button'
 
 interface Props {
   children: ReactNode
@@ -32,8 +33,8 @@ class ErrorBoundaryInner extends Component<ErrorBoundaryInnerProps, State> {
           <span className="material-symbols-outlined icon-2xl text-error mb-md">error</span>
           <h3 className="font-headline-md text-on-surface mb-sm">{t('errorBoundary.title')}</h3>
           <p className="text-body-sm text-on-surface-variant max-w-md mb-lg">{this.state.error.message}</p>
-          <button className="px-md py-sm bg-primary text-on-primary rounded-xl font-label-md cursor-pointer" onClick={() => this.setState({ error: null })}>{t('errorBoundary.tryAgain')}</button>
-          <button className="px-md py-sm border border-outline-variant text-on-surface rounded-xl font-label-md cursor-pointer hover:bg-surface-container transition-colors" onClick={() => window.location.reload()}>{t('errorBoundary.reloadPage')}</button>
+          <Button onClick={() => this.setState({ error: null })}>{t('errorBoundary.tryAgain')}</Button>
+          <Button variant="outline" onClick={() => window.location.reload()}>{t('errorBoundary.reloadPage')}</Button>
         </div>
       )
     }

@@ -3,12 +3,13 @@
 // Displays proposal details (name, description, triggers, workflow) with
 // Approve/Reject buttons. Fetches proposals on mount and refreshes after actions.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { skillLoop } from '@/lib/tauri-api'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import { Modal } from '@/components/ui/modal'
+import { Button } from '@/components/ui/button'
 import type { SkillProposal } from '@/types'
 
 interface SkillProposalReviewPanelProps {
@@ -26,19 +27,6 @@ export default function SkillProposalReviewPanel({
   const [currentIndex, setCurrentIndex] = useState(0)
   const [loading, setLoading] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
-
-  const containerRef = useRef<HTMLDivElement>(null)
-  useModalFocus(open, containerRef)
-
-  useEffect(() => {
-    if (!open) return
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [open, onClose])
 
   useEffect(() => {
     if (!open) {
@@ -133,29 +121,27 @@ export default function SkillProposalReviewPanel({
   if (!open) return null
 
   return (
-    <div
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm"
-      onClick={onClose}
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="2xl"
+      showCloseButton={false}
+      className="max-h-[80vh] flex flex-col overflow-hidden"
     >
-      <div
-        ref={containerRef}
-        className="bg-surface-container-lowest rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col border border-outline-variant/30"
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-outline-variant">
+      {/* Header */}
+      <div className="flex items-center justify-between p-6 border-b border-outline-variant">
           <h2 className="text-xl font-semibold text-on-surface">
             {t('skillProposals.review.title')}
           </h2>
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={onClose}
-            className="text-on-surface-variant hover:text-on-surface"
             aria-label={t('skillProposals.review.closeAria')}
+            className="text-on-surface-variant hover:text-on-surface"
           >
             <span className="material-symbols-outlined">close</span>
-          </button>
+          </Button>
         </div>
 
         {/* Content */}
@@ -242,48 +228,48 @@ export default function SkillProposalReviewPanel({
             {/* Navigation */}
             {proposals.length > 1 && (
               <div className="flex items-center justify-center gap-2 px-6 py-3 border-t border-outline-variant">
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={handlePrevious}
                   disabled={actionLoading}
-                  className="px-3 py-1.5 text-sm text-on-surface-variant hover:bg-surface-container rounded-md disabled:opacity-50 transition-colors"
                 >
                   {t('skillProposals.review.previous')}
-                </button>
+                </Button>
                 <span className="text-sm text-on-surface-variant">
                   {currentIndex + 1} / {proposals.length}
                 </span>
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={handleNext}
                   disabled={actionLoading}
-                  className="px-3 py-1.5 text-sm text-on-surface-variant hover:bg-surface-container rounded-md disabled:opacity-50 transition-colors"
                 >
                   {t('skillProposals.review.next')}
-                </button>
+                </Button>
               </div>
             )}
 
             {/* Actions */}
             <div className="flex justify-end gap-3 p-6 border-t border-outline-variant">
-              <button
+              <Button
+                variant="ghost"
                 onClick={handleReject}
                 disabled={actionLoading}
-                className="px-4 py-2 text-on-surface hover:bg-surface-container rounded-md disabled:opacity-50 transition-colors"
               >
                 {t('skillProposals.review.rejectButton')}
-              </button>
-              <button
+              </Button>
+              <Button
                 onClick={handleApprove}
                 disabled={actionLoading}
-                className="px-4 py-2 bg-primary hover:bg-primary/90 text-on-primary rounded-md disabled:opacity-50 transition-colors"
               >
                 {actionLoading
                   ? t('skillProposals.review.approving')
                   : t('skillProposals.review.approveButton')}
-              </button>
+              </Button>
             </div>
           </>
         )}
-      </div>
-    </div>
+    </Modal>
   )
 }

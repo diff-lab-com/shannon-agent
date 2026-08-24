@@ -11,6 +11,7 @@
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 export type Priority = 'low' | 'medium' | 'high'
 
@@ -45,19 +46,21 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
     <div className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="font-body-lg font-bold text-on-surface">{t('tasks.newTaskForm.title')}</h3>
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           type="button"
-          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs gap-1"
           onClick={() => setShowMeta(!showMeta)}
           aria-expanded={showMeta}
           aria-controls="new-task-meta"
         >
           <span className="material-symbols-outlined text-[14px]">{showMeta ? 'remove' : 'add'}</span>
           {showMeta ? t('tasks.newTaskForm.hideOptions') : t('tasks.newTaskForm.addOptions')}
-        </button>
+        </Button>
       </div>
       <textarea
-        className={`w-full h-20 p-sm bg-surface-container-low rounded-lg border text-body-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 ${!value.trim() ? 'border-outline-variant/30' : 'border-primary/30'}`}
+        className={cn('w-full h-20 p-sm bg-surface-container-low rounded-lg border text-body-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/30', !value.trim() ? 'border-outline-variant/30' : 'border-primary/30')}
         placeholder={t('tasks.newTaskForm.placeholder')}
         value={value}
         onChange={e => onChange(e.target.value)}

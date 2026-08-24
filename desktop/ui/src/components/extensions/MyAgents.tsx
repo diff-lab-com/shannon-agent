@@ -7,6 +7,7 @@ import EmptyState from '@/components/ui/empty-state'
 import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { cn } from '@/lib/utils'
 
 export default function MyAgents() {
   const intl = useIntl()
@@ -92,11 +93,11 @@ export default function MyAgents() {
               return (
                 <div key={agent.id} className="glass-card p-lg rounded-xl shadow-sm flex flex-col group hover:-translate-y-1 transition-transform duration-300">
                   <div className="flex justify-between items-start mb-md">
-                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${iconBgFor(agent.name)}`}>
+                    <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center", iconBgFor(agent.name))}>
                       <span className="material-symbols-outlined text-[28px]" style={{fontVariationSettings: "'FILL' 1"}}>{iconFor(agent.name)}</span>
                     </div>
-                    <div className={`flex items-center gap-xs px-sm py-1 rounded-full ${st.bg}`}>
-                      <span className={`w-2 h-2 rounded-full ${st.color}`} />
+                    <div className={cn("flex items-center gap-xs px-sm py-1 rounded-full", st.bg)}>
+                      <span className={cn("w-2 h-2 rounded-full", st.color)} />
                       <span className="text-label-sm">{st.label}</span>
                     </div>
                   </div>
@@ -146,8 +147,8 @@ export default function MyAgents() {
                       <span className="material-symbols-outlined">more_horiz</span>
                       {showMenu === agent.id && (
                         <div ref={menuRef} className="absolute right-0 top-full mt-1 bg-surface-container-lowest border border-outline-variant/30 rounded-lg shadow-lg py-xs z-10 min-w-[140px]">
-                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30" onClick={() => { setConfiguring(configuring === agent.id ? null : agent.id); setShowMenu(null) }}>{t('extensions.myAgents.viewStatus')}</button>
-                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors text-error focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30" onClick={async () => { setShowMenu(null); try { await api.cancelBackgroundTask(agent.id); toast.success(intl.formatMessage({ id: 'extensions.myAgents.stopped' }, { name: agent.name })) } catch (e) { toastError(t('extensions.myAgents.stopFailed'), e) } }}>{t('extensions.myAgents.stopAgent')}</button>
+                          <Button variant="ghost" className="w-full justify-start px-md py-sm text-label-md hover:bg-surface-container-high rounded-none" onClick={() => { setConfiguring(configuring === agent.id ? null : agent.id); setShowMenu(null) }}>{t('extensions.myAgents.viewStatus')}</Button>
+                          <Button variant="ghost" className="w-full justify-start px-md py-sm text-label-md hover:bg-surface-container-high text-error rounded-none" onClick={async () => { setShowMenu(null); try { await api.cancelBackgroundTask(agent.id); toast.success(intl.formatMessage({ id: 'extensions.myAgents.stopped' }, { name: agent.name })) } catch (e) { toastError(t('extensions.myAgents.stopFailed'), e) } }}>{t('extensions.myAgents.stopAgent')}</Button>
                         </div>
                       )}
                     </Button>
@@ -177,7 +178,7 @@ export default function MyAgents() {
                 <div className="space-y-sm">
                   <label className="text-label-md text-on-surface-variant">{t('extensions.myAgents.nameLabel')}</label>
                   <input
-                    className={`w-full p-sm bg-surface-container-low rounded-lg border text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30 ${nameError ? 'border-error' : 'border-outline-variant/30'}`}
+                    className={cn("w-full p-sm bg-surface-container-low rounded-lg border text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30", nameError ? 'border-error' : 'border-outline-variant/30')}
                     placeholder={t('extensions.myAgents.namePlaceholder')}
                     value={agentName}
                     onChange={e => { setAgentName(e.target.value); setNameError('') }}
@@ -267,11 +268,11 @@ export default function MyAgents() {
                       <span className="font-label-sm text-on-surface-variant w-24 truncate">{bt.prompt.slice(0, 20)}</span>
                       <div className="flex-grow h-4 bg-surface-container-low rounded overflow-hidden">
                         <div
-                          className={`h-full rounded ${bt.status === 'completed' ? 'bg-primary' : bt.status === 'running' ? 'bg-primary/60 animate-pulse' : 'bg-error/60'}`}
+                          className={cn("h-full rounded", bt.status === 'completed' ? 'bg-primary' : bt.status === 'running' ? 'bg-primary/60 animate-pulse' : 'bg-error/60')}
                           style={{ width: bt.status === 'completed' ? '100%' : bt.status === 'running' ? '60%' : '30%' }}
                         />
                       </div>
-                      <span className={`font-label-sm font-bold w-16 text-right ${bt.status === 'completed' ? 'text-primary' : bt.status === 'running' ? 'text-primary/60' : 'text-error'}`}>
+                      <span className={cn("font-label-sm font-bold w-16 text-right", bt.status === 'completed' ? 'text-primary' : bt.status === 'running' ? 'text-primary/60' : 'text-error')}>
                         {bt.status === 'completed' ? t('extensions.myAgents.done') : bt.status === 'running' ? t('extensions.myAgents.active') : t('extensions.myAgents.failed')}
                       </span>
                     </div>

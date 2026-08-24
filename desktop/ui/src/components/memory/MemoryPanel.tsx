@@ -6,10 +6,14 @@
 // Layout: stats header → filter row → list of memory cards → inline editor
 // drawer for create/edit. All mutations go through the Tauri commands and
 // re-fetch the visible list on success so the UI stays in sync with disk.
+//
+// T3.1 — this file is now the orchestrator only. Sub-components live next to
+// it: constants.ts (lookup tables), StatCard.tsx, MemoryCard.tsx,
+// MemoryEditor.tsx (with its own Field.tsx helper).
 
 import { useCallback, useEffect, useState } from 'react'
-import type React from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { toast } from 'sonner'
 import {
@@ -19,30 +23,13 @@ import {
   listMemories,
   listMemoryProjects,
   updateMemory,
-  type MemoryCategory,
   type MemoryEntry,
   type MemoryStats,
 } from '@/lib/tauri-api'
-
-type CategoryFilter = MemoryCategory | 'all'
-
-const CATEGORIES: CategoryFilter[] = ['all', 'preference', 'pattern', 'decision', 'error', 'context']
-
-const CATEGORY_ICON: Record<MemoryCategory, string> = {
-  preference: 'tune',
-  pattern: 'pattern',
-  decision: 'fork_right',
-  error: 'bug_report',
-  context: 'lightbulb',
-}
-
-const CATEGORY_COLOR: Record<MemoryCategory, string> = {
-  preference: 'bg-primary-container/50 text-on-primary-container',
-  pattern: 'bg-secondary-container/50 text-on-secondary-container',
-  decision: 'bg-tertiary-container/50 text-on-tertiary-container',
-  error: 'bg-error-container/50 text-on-error-container',
-  context: 'bg-surface-container-high text-on-surface',
-}
+import { CATEGORIES, type CategoryFilter } from './constants'
+import { MemoryCard } from './MemoryCard'
+import { MemoryEditor, type MemorySaveInput } from './MemoryEditor'
+import { StatCard } from './StatCard'
 
 export default function MemoryPanel() {
   const intl = useIntl()
@@ -109,14 +96,7 @@ export default function MemoryPanel() {
     }
   }
 
-  const handleSave = async (input: {
-    id?: string
-    project: string
-    category: MemoryCategory
-    content: string
-    tags: string[]
-    confidence: number
-  }) => {
+  const handleSave = async (input: MemorySaveInput) => {
     try {
       if (input.id) {
         await updateMemory({
@@ -189,12 +169,14 @@ export default function MemoryPanel() {
           <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/20 text-error font-label-md mb-lg">
             <span className="material-symbols-outlined text-[18px]">error</span>
             {errorMsg}
-            <button
-              className="ml-auto text-error/60 hover:text-error cursor-pointer"
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="ml-auto text-error/60 hover:text-error"
               onClick={() => setErrorMsg(null)}
             >
               <span className="material-symbols-outlined text-[18px]">close</span>
-            </button>
+            </Button>
           </div>
         )}
 
@@ -237,13 +219,13 @@ export default function MemoryPanel() {
             />
           </div>
 
-          <button
+          <Button
             onClick={() => setCreating(true)}
-            className="inline-flex items-center gap-xs px-md py-sm rounded-xl bg-primary text-on-primary text-label-md font-bold hover:brightness-110"
+            className="gap-xs px-md py-sm rounded-xl text-label-md font-bold hover:brightness-110"
           >
             <span className="material-symbols-outlined text-[18px]">add</span>
             {t('memory.action.create')}
-          </button>
+          </Button>
         </div>
 
         <div className="text-label-sm text-on-surface-variant mb-md">
@@ -260,13 +242,13 @@ export default function MemoryPanel() {
               psychology
             </span>
             <p className="text-on-surface-variant mb-lg">{t('memory.empty')}</p>
-            <button
+            <Button
               onClick={() => setCreating(true)}
-              className="inline-flex items-center gap-xs px-md py-sm rounded-xl bg-primary text-on-primary text-label-md font-bold"
+              className="gap-xs px-md py-sm rounded-xl text-label-md font-bold"
             >
               <span className="material-symbols-outlined text-[18px]">add</span>
               {t('memory.action.createFirst')}
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="space-y-md">
@@ -304,308 +286,5 @@ export default function MemoryPanel() {
         onCancel={() => setPendingDeleteId(null)}
       />
     </div>
-  )
-}
-
-function StatCard({ label, value, icon }: { label: string; value: number; icon: string }) {
-  return (
-    <div className="flex items-center gap-sm px-md py-md rounded-xl bg-surface-container-low border border-outline-variant/30">
-      <span className="material-symbols-outlined text-primary text-[24px]">{icon}</span>
-      <div>
-        <div className="text-label-lg font-bold text-on-surface leading-none">{value}</div>
-        <div className="text-label-xs text-on-surface-variant mt-[2px]">{label}</div>
-      </div>
-    </div>
-  )
-}
-
-function MemoryCard({
-  entry,
-  onEdit,
-  onDelete,
-}: {
-  entry: MemoryEntry
-  onEdit: () => void
-  onDelete: () => void
-}) {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
-  const fmtDate = (iso: string) => {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return iso
-    return intl.formatDate(d, { year: 'numeric', month: 'short', day: 'numeric' })
-  }
-
-  return (
-    <div className="px-md py-md rounded-xl bg-surface-container-low border border-outline-variant/30 shadow-sm hover:shadow-md hover:border-primary/30 transition-all">
-      <div className="flex items-start gap-md">
-        <span
-          className={`material-symbols-outlined icon-md mt-[2px] px-sm py-xs rounded-lg ${CATEGORY_COLOR[entry.category]}`}
-        >
-          {CATEGORY_ICON[entry.category]}
-        </span>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-sm mb-xs">
-            <span className="text-label-xs px-sm py-[2px] rounded-full bg-surface-container-high text-on-surface-variant font-bold uppercase">
-              {t(`memory.category.${entry.category}`)}
-            </span>
-            <span className="text-label-xs text-on-surface-variant">{entry.project}</span>
-            <span className="text-label-xs text-on-surface-variant/60">
-              · {fmtDate(entry.created_at)}
-            </span>
-            {entry.access_count > 0 && (
-              <span className="text-label-xs text-on-surface-variant/60">
-                · {intl.formatMessage({ id: 'memory.used' }, { count: entry.access_count })}
-              </span>
-            )}
-          </div>
-          <p className="text-body-md text-on-surface whitespace-pre-wrap break-words mb-md">
-            {entry.content}
-          </p>
-          {entry.tags.length > 0 && (
-            <div className="flex flex-wrap gap-xs mt-sm">
-              {entry.tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="text-label-xs px-sm py-[2px] rounded bg-primary-container/30 text-on-primary-container"
-                >
-                  #{tag}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="flex gap-xs">
-          <button
-            onClick={onEdit}
-            className="p-xs rounded-lg hover:bg-surface-container-high cursor-pointer"
-            aria-label={t('memory.action.edit')}
-          >
-            <span className="material-symbols-outlined text-[18px] text-on-surface-variant">edit</span>
-          </button>
-          <button
-            onClick={onDelete}
-            className="p-xs rounded-lg hover:bg-error/10 cursor-pointer"
-            aria-label={t('memory.action.delete')}
-          >
-            <span className="material-symbols-outlined text-[18px] text-error/70">delete</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function MemoryEditor({
-  initial,
-  onCancel,
-  onSave,
-}: {
-  initial: MemoryEntry | null
-  onCancel: () => void
-  onSave: (input: {
-    id?: string
-    project: string
-    category: MemoryCategory
-    content: string
-    tags: string[]
-    confidence: number
-  }) => Promise<void>
-}) {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
-
-  const [project, setProject] = useState(initial?.project ?? '.')
-  const [category, setCategory] = useState<MemoryCategory>(initial?.category ?? 'context')
-  const [content, setContent] = useState(initial?.content ?? '')
-  const [tagsInput, setTagsInput] = useState((initial?.tags ?? []).join(', '))
-  const [confidence, setConfidence] = useState(initial?.confidence ?? 1.0)
-  const [saving, setSaving] = useState(false)
-  const [confirmDiscard, setConfirmDiscard] = useState(false)
-
-  const isDirty = () =>
-    project !== (initial?.project ?? '.') ||
-    category !== (initial?.category ?? 'context') ||
-    content !== (initial?.content ?? '') ||
-    tagsInput !== (initial?.tags ?? []).join(', ') ||
-    confidence !== (initial?.confidence ?? 1.0)
-
-  const attemptCancel = () => {
-    if (isDirty()) setConfirmDiscard(true)
-    else onCancel()
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!content.trim() || !project.trim()) return
-    setSaving(true)
-    try {
-      await onSave({
-        id: initial?.id,
-        project: project.trim(),
-        category,
-        content: content.trim(),
-        tags: tagsInput
-          .split(',')
-          .map((t) => t.trim())
-          .filter(Boolean),
-        confidence,
-      })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-md"
-      onClick={attemptCancel}
-    >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={handleSubmit}
-        className="w-full max-w-2xl bg-surface rounded-2xl border border-outline-variant shadow-2xl overflow-hidden"
-      >
-        <header className="flex items-center justify-between px-lg py-md border-b border-outline-variant/30">
-          <h2 className="text-label-lg font-bold text-on-surface">
-            {initial ? t('memory.editor.edit') : t('memory.editor.create')}
-          </h2>
-          <button
-            type="button"
-            onClick={attemptCancel}
-            className="p-xs rounded hover:bg-surface-container-high cursor-pointer"
-            aria-label={t('memory.action.close')}
-          >
-            <span className="material-symbols-outlined icon-md text-on-surface-variant">close</span>
-          </button>
-        </header>
-
-        <div className="p-lg space-y-md max-h-[60vh] overflow-y-auto">
-          <div className="grid grid-cols-2 gap-md">
-            <Field label={t('memory.editor.project')}>
-              <input
-                value={project}
-                onChange={(e) => setProject(e.target.value)}
-                required
-                className="w-full px-md py-sm rounded-lg bg-surface-container-low border border-outline-variant text-label-md"
-                placeholder={t('memory.editor.project.placeholder')}
-              />
-            </Field>
-            <Field label={t('memory.editor.category')}>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value as MemoryCategory)}
-                className="w-full px-md py-sm rounded-lg bg-surface-container-low border border-outline-variant text-label-md"
-              >
-                {(['preference', 'pattern', 'decision', 'error', 'context'] as MemoryCategory[]).map((c) => (
-                  <option key={c} value={c}>
-                    {t(`memory.category.${c}`)}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
-
-          <Field label={t('memory.editor.content')}>
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              required
-              rows={5}
-              className="w-full px-md py-sm rounded-lg bg-surface-container-low border border-outline-variant text-body-md font-mono"
-              placeholder={t('memory.editor.contentPlaceholder')}
-            />
-          </Field>
-
-          <div className="grid grid-cols-2 gap-md">
-            <Field label={t('memory.editor.tags')}>
-              <input
-                value={tagsInput}
-                onChange={(e) => setTagsInput(e.target.value)}
-                className="w-full px-md py-sm rounded-lg bg-surface-container-low border border-outline-variant text-label-md"
-                placeholder={t('memory.editor.tags.placeholder')}
-              />
-            </Field>
-            {!initial && (
-              <Field label={`${t('memory.editor.confidence')} (${confidence.toFixed(2)})`}>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={confidence}
-                  onChange={(e) => setConfidence(Number(e.target.value))}
-                  className="w-full"
-                />
-              </Field>
-            )}
-          </div>
-        </div>
-
-        <footer className="flex justify-end gap-sm px-lg py-md border-t border-outline-variant/30 bg-surface-container-lowest">
-          <button
-            type="button"
-            onClick={attemptCancel}
-            className="px-md py-sm rounded-lg bg-surface-container-high text-on-surface text-label-md font-bold"
-          >
-            {t('memory.editor.cancel')}
-          </button>
-          <button
-            type="submit"
-            disabled={saving || !content.trim() || !project.trim()}
-            className="px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold disabled:opacity-50"
-          >
-            {saving ? t('memory.editor.saving') : t('memory.editor.save')}
-          </button>
-        </footer>
-
-        {confirmDiscard && (
-          <div
-            role="alertdialog"
-            aria-label={t('memory.editor.discard.title')}
-            className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center p-md"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full">
-              <div className="flex items-center gap-sm mb-md">
-                <span className="material-symbols-outlined text-error text-[24px]">warning</span>
-                <h3 className="font-headline-md text-on-surface">{t('memory.editor.discard.title')}</h3>
-              </div>
-              <p className="text-body-md text-on-surface-variant mb-lg">
-                {t('memory.editor.discard.message')}
-              </p>
-              <div className="flex justify-end gap-sm">
-                <button
-                  type="button"
-                  onClick={() => setConfirmDiscard(false)}
-                  className="px-md py-sm rounded-lg bg-surface-container-high text-on-surface text-label-md font-bold cursor-pointer"
-                >
-                  {t('memory.editor.discard.keep')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setConfirmDiscard(false)
-                    onCancel()
-                  }}
-                  className="px-md py-sm rounded-lg bg-error text-on-error text-label-md font-bold cursor-pointer"
-                >
-                  {t('memory.editor.discard.confirm')}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </form>
-    </div>
-  )
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="block text-label-sm text-on-surface-variant mb-xs">{label}</span>
-      {children}
-    </label>
   )
 }

@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
-import { useModalFocus } from '@/hooks/useModalFocus'
+import { Modal, ModalBody } from '@/components/ui/modal'
 import { formatShortcut, formatShortcutShift } from '@/lib/platform'
 
 interface ShortcutEntry {
@@ -61,9 +61,7 @@ const SECTIONS: ShortcutSection[] = [
 export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean; onClose: () => void }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const containerRef = useRef<HTMLDivElement>(null)
   const [query, setQuery] = useState('')
-  useModalFocus(open, containerRef)
 
   const filteredSections = useMemo(() => {
     if (!query.trim()) return SECTIONS
@@ -76,31 +74,12 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
     })).filter(section => section.entries.length > 0)
   }, [query, intl.locale])
 
-  if (!open) return null
-
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={onClose}>
-      <div
-        ref={containerRef}
-        className="bg-surface-container-lowest rounded-2xl border border-outline-variant/20 shadow-2xl p-lg max-w-lg w-full mx-md max-h-[80vh] flex flex-col"
-        role="dialog"
-        aria-modal="true"
-        aria-label={t('shortcutsHelp.title')}
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-md gap-sm">
-          <h3 className="font-headline-md text-on-surface">{t('shortcutsHelp.title')}</h3>
-          <button
-            className="p-xs rounded-lg hover:bg-surface-container text-on-surface-variant focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-            onClick={onClose}
-            aria-label={t('shortcutsHelp.close')}
-          >
-            <span className="material-symbols-outlined icon-md">close</span>
-          </button>
-        </div>
+    <Modal open={open} onClose={onClose} size="lg" title={t('shortcutsHelp.title')} aria-label={t('shortcutsHelp.title')}>
+      <ModalBody className="pt-0">
         <div className="mb-md">
           <div className="flex items-center gap-xs px-sm py-xs rounded-lg border border-outline-variant/30 bg-surface-container-lowest focus-within:border-primary/50 transition-colors">
-            <span className="material-symbols-outlined icon-sm text-on-surface-variant">search</span>
+            <span className="material-symbols-outlined icon-sm text-on-surface-variant" aria-hidden="true">search</span>
             <input
               type="text"
               value={query}
@@ -111,7 +90,7 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
             />
           </div>
         </div>
-        <div className="overflow-y-auto -mx-xs px-xs">
+        <div className="overflow-y-auto -mx-xs px-xs max-h-[60vh]">
           {filteredSections.length === 0 ? (
             <p className="text-body-sm text-on-surface-variant italic py-md text-center">{t('shortcutsHelp.noResults')}</p>
           ) : (
@@ -137,7 +116,7 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
             ))
           )}
         </div>
-      </div>
-    </div>
+      </ModalBody>
+    </Modal>
   )
 }

@@ -8,6 +8,7 @@
 import { useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
 import type { ScheduledRoutine } from '@/types'
 
@@ -100,25 +101,26 @@ export default function DependsOnEditor({ routine, routines, onUpdated }: Depend
         })}
       </div>
       <div className="flex items-center gap-sm">
-        <button
+        <Button
           type="button"
-          className="px-md py-sm bg-primary text-on-primary rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:shadow-md active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          className="rounded-xl disabled:cursor-not-allowed"
           onClick={save}
           disabled={!dirty || saving}
           aria-label={t('tasks.dependsOnEditor.saveAria')}
         >
           <span className="material-symbols-outlined text-[18px]">save</span>
           {saving ? t('tasks.dependsOnEditor.saving') : t('tasks.dependsOnEditor.save')}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
-          className="px-md py-sm border border-outline-variant text-on-surface rounded-xl font-label-md cursor-pointer hover:bg-surface-container-low/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          variant="outline"
+          className="rounded-xl disabled:cursor-not-allowed"
           onClick={reset}
           disabled={!dirty || saving}
           aria-label={t('tasks.dependsOnEditor.resetAria')}
         >
           {t('tasks.dependsOnEditor.reset')}
-        </button>
+        </Button>
         {selected.size > 0 && (
           <span className="ml-auto font-label-sm text-[12px] text-on-surface-variant">
             {intl.formatMessage({ id: 'tasks.dependsOnEditor.selectedCount' }, { count: selected.size })}

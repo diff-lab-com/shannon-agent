@@ -248,7 +248,10 @@ describe('Skills (P3 federated catalog)', () => {
     await waitFor(() => {
       expect(screen.getByRole('dialog', { name: /brainstorming/i })).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByRole('dialog', { name: /brainstorming/i }))
+    // Modal moves role="dialog" onto the inner panel; click the wrapper
+    // (parent) to simulate backdrop click — that's what closes the modal.
+    const dialog = screen.getByRole('dialog', { name: /brainstorming/i })
+    fireEvent.click(dialog.parentElement!)
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     })

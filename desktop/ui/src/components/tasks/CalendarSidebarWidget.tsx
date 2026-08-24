@@ -7,8 +7,10 @@
 // routine `next_fire_at` (rendered as a local date) are highlighted.
 
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
 import type { TaskItem, ScheduledRoutine } from '@/types'
 import { monthName, weekdayName } from './shared'
+import { cn } from '@/lib/utils'
 
 interface CalendarSidebarWidgetProps {
   viewMonth: number
@@ -60,20 +62,24 @@ export default function CalendarSidebarWidget({
           <span className="font-label-sm text-on-surface-variant">{monthName(intl.locale, viewMonth)} {viewYear}</span>
         </div>
         <div className="flex gap-sm">
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             aria-label={t('tasks.calendarSidebarWidget.prevMonth')}
-            className="material-symbols-outlined text-on-surface-variant text-[20px] cursor-pointer hover:text-primary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
+            className="text-on-surface-variant hover:text-primary"
             onClick={onPrevMonth}
           >
-            chevron_left
-          </button>
-          <button
+            <span className="material-symbols-outlined text-[20px]">chevron_left</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
             aria-label={t('tasks.calendarSidebarWidget.nextMonth')}
-            className="material-symbols-outlined text-on-surface-variant text-[20px] cursor-pointer hover:text-primary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
+            className="text-on-surface-variant hover:text-primary"
             onClick={onNextMonth}
           >
-            chevron_right
-          </button>
+            <span className="material-symbols-outlined text-[20px]">chevron_right</span>
+          </Button>
         </div>
       </div>
       <div className="grid grid-cols-7 text-center mb-sm">
@@ -90,7 +96,7 @@ export default function CalendarSidebarWidget({
           return (
             <span
               key={day}
-              className={`py-2 rounded-lg cursor-pointer relative ${isToday ? 'bg-primary text-on-primary font-bold' : hasFire ? 'bg-primary-container/20 text-primary font-bold' : 'hover:bg-surface-container'}`}
+              className={cn('py-2 rounded-lg cursor-pointer relative', isToday ? 'bg-primary text-on-primary font-bold' : hasFire ? 'bg-primary-container/20 text-primary font-bold' : 'hover:bg-surface-container')}
             >
               {day}
             </span>
@@ -104,7 +110,7 @@ export default function CalendarSidebarWidget({
           {activeTasks.map(task => (
             <div
               key={task.id}
-              className={`flex items-start gap-md ${onSelectTask ? 'cursor-pointer' : ''}`}
+              className={cn('flex items-start gap-md', onSelectTask ? 'cursor-pointer' : '')}
               onClick={() => onSelectTask?.(task.id)}
             >
               <div className="w-1 bg-primary h-8 rounded-full" />
@@ -125,10 +131,12 @@ export default function CalendarSidebarWidget({
           <h5 className="font-label-sm text-outline uppercase tracking-wider mb-md">{t('tasks.calendarSidebarWidget.routines')}</h5>
           <div className="space-y-sm">
             {scheduledTasks.slice(0, 6).map(r => (
-              <button
+              <Button
                 key={r.id}
                 type="button"
-                className="w-full flex items-center gap-sm text-left py-xs px-sm rounded-lg hover:bg-surface-container-low/60 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start px-sm hover:bg-surface-container-low/60"
                 onClick={() => onSelectRoutine?.(r.id)}
                 aria-label={intl.formatMessage({ id: 'tasks.calendarSidebarWidget.openRoutine.aria' }, { name: r.name })}
               >
@@ -147,7 +155,7 @@ export default function CalendarSidebarWidget({
                   </span>
                 </span>
                 <span className="material-symbols-outlined text-[14px] text-on-surface-variant">chevron_right</span>
-              </button>
+              </Button>
             ))}
           </div>
         </div>

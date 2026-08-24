@@ -13,6 +13,8 @@ import {
 import DataSourcesQuery from "./DataSourcesQuery";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import LoadingState from "@/components/ui/loading-state";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 const DATASOURCE_ICONS: Record<string, string> = {
   obsidian: 'book',
@@ -173,28 +175,32 @@ export default function DataSources() {
       </header>
 
       <div className="flex gap-md border-b border-outline-variant/30">
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={() => setActiveTab('adapters')}
-          className={`px-md py-sm font-bold text-label-md transition-colors ${
+          className={cn(
+            "px-md py-sm rounded-none font-bold text-label-md transition-colors border-b-2 -mb-px",
             activeTab === 'adapters'
-              ? 'text-primary border-b-2 border-primary'
-              : 'text-on-surface-variant hover:text-on-surface'
-          }`}
+              ? 'text-primary border-primary hover:bg-transparent'
+              : 'text-on-surface-variant hover:text-on-surface border-transparent hover:bg-transparent',
+          )}
         >
           {t('extensions.datasources.tab.adapters')}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
           onClick={() => setActiveTab('query')}
-          className={`px-md py-sm font-bold text-label-md transition-colors ${
+          className={cn(
+            "px-md py-sm rounded-none font-bold text-label-md transition-colors border-b-2 -mb-px",
             activeTab === 'query'
-              ? 'text-primary border-b-2 border-primary'
-              : 'text-on-surface-variant hover:text-on-surface'
-          }`}
+              ? 'text-primary border-primary hover:bg-transparent'
+              : 'text-on-surface-variant hover:text-on-surface border-transparent hover:bg-transparent',
+          )}
         >
           {t('extensions.datasources.tab.query')}
-        </button>
+        </Button>
       </div>
 
       {activeTab === 'query' ? (
@@ -257,7 +263,10 @@ export default function DataSources() {
             {installed.map((row, i) => (
               <div
                 key={row.slug}
-                className={`flex items-center gap-md px-md py-sm ${i === installed.length - 1 ? "" : "border-b border-outline-variant/15"}`}
+                className={cn(
+                  "flex items-center gap-md px-md py-sm",
+                  i !== installed.length - 1 && "border-b border-outline-variant/15",
+                )}
               >
                 <span className="material-symbols-outlined text-primary text-[20px]" aria-hidden="true">{datasourceIcon(row.slug)}</span>
                 <div className="flex-1 min-w-0">
@@ -269,14 +278,16 @@ export default function DataSources() {
                     {row.path}
                   </div>
                 </div>
-                <button
+                <Button
+                  variant="destructive"
+                  size="sm"
                   type="button"
                   onClick={() => setRemoveTarget(row.slug)}
                   disabled={busySlug === `uninstall:${row.slug}`}
-                  className="px-sm py-xs rounded-lg bg-error-container/40 text-on-error-container text-label-xs font-bold hover:bg-error-container/70 disabled:opacity-50"
+                  className="bg-error-container/40 text-on-error-container hover:bg-error-container/70"
                 >
                   {busySlug === `uninstall:${row.slug}` ? "…" : t('extensions.datasources.remove')}
-                </button>
+                </Button>
               </div>
             ))}
           </div>
@@ -332,10 +343,10 @@ function AdapterCard({
   const isQueryPending = CONFIG_ONLY_KINDS.has(kind);
   return (
     <div className="relative overflow-hidden rounded-2xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-lg transition-all flex flex-col group">
-      <div className={`h-1 w-full bg-gradient-to-r ${accent.bar}`} />
+      <div className={cn("h-1 w-full bg-gradient-to-r", accent.bar)} />
       <div className="p-md flex flex-col flex-1">
         <div className="flex items-start gap-sm mb-xs">
-          <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${accent.icon} flex items-center justify-center shrink-0 shadow-sm`}>
+          <div className={cn("w-11 h-11 rounded-xl bg-gradient-to-br flex items-center justify-center shrink-0 shadow-sm", accent.icon)}>
             <span className="material-symbols-outlined text-white text-[22px]">{accent.icon_name}</span>
           </div>
           <div className="flex-1 min-w-0">
@@ -362,7 +373,7 @@ function AdapterCard({
         )}
 
         {feedback && (
-          <div className={`text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded ${feedback.ok ? "bg-primary-container/50 text-on-primary-container" : "bg-error-container/50 text-on-error-container"}`}>
+          <div className={cn("text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded", feedback.ok ? "bg-primary-container/50 text-on-primary-container" : "bg-error-container/50 text-on-error-container")}>
             <span className="material-symbols-outlined icon-xs">{feedback.ok ? "check_circle" : "error"}</span>
             {feedback.msg}
           </div>
@@ -380,14 +391,15 @@ function AdapterCard({
                 {t('extensions.datasources.view')}
               </a>
             )}
-            <button
+            <Button
               type="button"
+              size="sm"
               onClick={onStartInstall}
               disabled={isInstalled}
-              className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="disabled:cursor-not-allowed"
             >
               {isInstalled ? t('extensions.datasources.installed') : t('extensions.datasources.configureInstall')}
-            </button>
+            </Button>
           </div>
         ) : (
           <form
@@ -416,21 +428,22 @@ function AdapterCard({
               </div>
             ))}
             <div className="flex gap-xs pt-xs">
-              <button
+              <Button
                 type="submit"
+                size="sm"
                 disabled={busy}
-                className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50"
               >
                 {busy ? t('extensions.datasources.saving') : t('extensions.datasources.save')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
                 type="button"
                 onClick={onCancelInstall}
                 disabled={busy}
-                className="px-sm py-xs rounded-lg bg-surface-container-high text-on-surface text-label-xs font-bold hover:bg-surface-container-highest disabled:opacity-50"
               >
                 {t('extensions.datasources.cancel')}
-              </button>
+              </Button>
             </div>
           </form>
         )}

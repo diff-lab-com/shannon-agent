@@ -7,6 +7,7 @@ import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import type { BackgroundTaskInfo } from '@/types'
 import { statusBadge, formatTime } from './shared'
+import { cn } from '@/lib/utils'
 
 interface TaskExecutionLogProps {
   tasks: BackgroundTaskInfo[]
@@ -26,10 +27,10 @@ export default function TaskExecutionLog({ tasks, onCancel }: TaskExecutionLogPr
           const badge = statusBadge(bt.status)
           return (
             <div key={bt.task_id} className="relative">
-              <div className={`absolute -left-[41px] top-1 w-4 h-4 rounded-full border-2 bg-surface-container-lowest z-10 ${bt.status === 'running' ? 'border-primary animate-pulse' : bt.status === 'completed' ? 'border-tertiary' : bt.status === 'failed' ? 'border-error' : 'border-outline-variant'}`} />
+              <div className={cn('absolute -left-[41px] top-1 w-4 h-4 rounded-full border-2 bg-surface-container-lowest z-10', bt.status === 'running' ? 'border-primary animate-pulse' : bt.status === 'completed' ? 'border-tertiary' : bt.status === 'failed' ? 'border-error' : 'border-outline-variant')} />
               <div className="flex justify-between items-start mb-1">
                 <div>
-                  <p className={`font-label-sm text-label-sm mb-1 ${badge.bg.includes('primary') ? 'text-primary' : badge.bg.includes('tertiary') ? 'text-tertiary' : badge.bg.includes('error') ? 'text-error' : 'text-on-surface-variant'}`}>
+                  <p className={cn('font-label-sm text-label-sm mb-1', badge.bg.includes('primary') ? 'text-primary' : badge.bg.includes('tertiary') ? 'text-tertiary' : badge.bg.includes('error') ? 'text-error' : 'text-on-surface-variant')}>
                     {formatTime(bt.started_at)} — {intl.formatMessage({ id: badge.labelId }, badge.values).toUpperCase()}
                   </p>
                   <p className="text-on-surface-variant text-body-sm italic">{bt.prompt}</p>

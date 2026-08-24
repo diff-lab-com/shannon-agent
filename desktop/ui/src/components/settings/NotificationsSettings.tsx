@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/select'
 import { validateWebhookUrl } from '@/lib/packageValidation'
 import * as api from '@/lib/tauri-api'
+import { cn } from '@/lib/utils'
 /** Channel preset id — stored as the webhook `template` discriminator. */
 type WebhookPreset = 'feishu' | 'dingtalk' | 'wechat' | 'slack' | 'custom'
 
@@ -223,9 +224,12 @@ function WebhookSection() {
           onChange={(e) => setUrl(e.target.value)}
           placeholder={presetMeta.urlPlaceholder}
           aria-describedby="webhook-url-hint webhook-url-status"
-          className={`w-full px-md py-sm rounded-md border bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-2 focus-visible:ring-primary/20 ${
-            url.trim() ? (validateWebhookUrl(url.trim()).ok ? 'border-tertiary/50' : 'border-error/50') : 'border-outline'
-          }`}
+          className={cn(
+            "w-full px-md py-sm rounded-md border bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-2 focus-visible:ring-primary/20",
+            url.trim()
+              ? (validateWebhookUrl(url.trim()).ok ? 'border-tertiary/50' : 'border-error/50')
+              : 'border-outline',
+          )}
         />
         <div className="mt-xs flex items-center gap-xs">
           <p id="webhook-url-hint" className="text-on-surface-variant font-body-sm flex-1">
@@ -234,7 +238,7 @@ function WebhookSection() {
           {url.trim() && (
             <span
               id="webhook-url-status"
-              className={`text-label-sm font-bold ${validateWebhookUrl(url.trim()).ok ? 'text-tertiary' : 'text-error'}`}
+              className={cn("text-label-sm font-bold", validateWebhookUrl(url.trim()).ok ? 'text-tertiary' : 'text-error')}
             >
               {validateWebhookUrl(url.trim()).ok ? t('settings.notifications.urlStatus.valid') : t('settings.notifications.urlStatus.invalid')}
             </span>

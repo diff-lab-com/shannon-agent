@@ -13,6 +13,7 @@
 
 import { useMemo } from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
 import type { TaskItem } from '@/types'
 
 interface TaskDAGViewProps {
@@ -206,10 +207,11 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
                 width={NODE_W}
                 height={NODE_H}
               >
-                <button
+                <Button
+                  variant="ghost"
                   type="button"
                   onClick={() => onSelectTask?.(n.task.id)}
-                  className="w-full h-full text-left bg-surface-container-lowest rounded-lg border-l-4 px-md py-xs shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  className="w-full h-full justify-start text-left bg-surface-container-lowest rounded-lg border-l-4 px-md py-xs shadow-sm hover:shadow-md hover:-translate-y-0.5"
                   style={{ borderLeftColor: fill }}
                   title={n.task.title}
                 >
@@ -229,7 +231,7 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
                       </span>
                     ) : null}
                   </div>
-                </button>
+                </Button>
               </foreignObject>
             )
           })}

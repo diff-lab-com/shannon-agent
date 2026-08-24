@@ -32,6 +32,7 @@ export interface ModalProps {
   closeOnBackdrop?: boolean
   closeOnEscape?: boolean
   showCloseButton?: boolean
+  closeLabel?: string
   busy?: boolean
   className?: string
   children?: React.ReactNode
@@ -47,12 +48,14 @@ export function Modal({
   closeOnBackdrop = true,
   closeOnEscape = true,
   showCloseButton = true,
+  closeLabel,
   busy = false,
   className,
   children,
 }: ModalProps) {
   const containerRef = React.useRef<HTMLDivElement>(null)
   const intl = useIntl()
+  const closeAriaLabel = closeLabel ?? intl.formatMessage({ id: 'ui.modal.close.aria' })
   useModalFocus(open, containerRef)
 
   React.useEffect(() => {
@@ -108,7 +111,7 @@ export function Modal({
             {showCloseButton && (
               <button
                 type="button"
-                aria-label={intl.formatMessage({ id: 'ui.modal.close.aria' })}
+                aria-label={closeAriaLabel}
                 disabled={busy}
                 onClick={onClose}
                 className="shrink-0 p-xs rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors disabled:opacity-50 disabled:pointer-events-none"

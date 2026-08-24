@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { hljs } from '@/lib/hljs'
+import { cn } from '@/lib/utils'
 
 const KIND_TO_LANG: Record<string, string> = {
   html: 'html',
@@ -29,7 +30,7 @@ export function CodeBlock({ source, kind, className }: CodeBlockProps) {
 
   return (
     <pre
-      className={`p-md text-body-sm font-mono text-on-surface whitespace-pre-wrap break-words overflow-x-auto ${className ?? ''}`}
+      className={cn("p-md text-body-sm font-mono text-on-surface whitespace-pre-wrap break-words overflow-x-auto", className)}
     >
       <code
         className="hljs"

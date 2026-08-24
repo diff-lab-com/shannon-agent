@@ -7,6 +7,8 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import * as api from '@/lib/tauri-api'
 import type { CodeActionDto } from '@/lib/tauri-api'
 
@@ -125,24 +127,26 @@ export default function LspQuickFixPanel({
           <h4 className="font-label-md text-on-surface truncate">{intl.formatMessage({ id: 'lsp.quickFix.title' })}</h4>
         </div>
         <div className="flex items-center gap-xs">
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-xs"
             onClick={fetch}
             disabled={loading || !cmd}
-            className="font-label-sm text-primary hover:bg-primary/10 rounded px-xs py-1 cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40"
             aria-label={intl.formatMessage({ id: 'lsp.quickFix.refresh.aria' })}
+            className="font-label-sm text-primary hover:bg-primary/10 rounded px-xs"
           >
             <span className="material-symbols-outlined text-[14px]">{loading ? 'hourglass_top' : 'refresh'}</span>
-          </button>
+          </Button>
           {onClose ? (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-sm"
               onClick={onClose}
               aria-label={intl.formatMessage({ id: 'lsp.quickFix.close.aria' })}
-              className="text-on-surface-variant hover:bg-surface-container-high rounded-full p-xs cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+              className="rounded-full text-on-surface-variant hover:bg-surface-container-high"
             >
               <span className="material-symbols-outlined icon-sm">close</span>
-            </button>
+            </Button>
           ) : null}
         </div>
       </div>
@@ -174,15 +178,16 @@ export default function LspQuickFixPanel({
         <ul className="flex flex-col gap-xs">
           {actions.map((a, idx) => (
             <li key={`${a.title}-${idx}`}>
-              <button
-                type="button"
+              <Button
+                variant="outline"
                 disabled={applying !== null || !a.edit}
                 onClick={() => onApply(a)}
-                className={`w-full text-left flex items-center gap-sm px-sm py-sm rounded-lg border font-label-md ${
+                className={cn(
+                  'w-full justify-start gap-sm px-sm py-sm h-auto rounded-lg font-label-md text-left',
                   a.is_preferred
                     ? 'border-tertiary/40 bg-tertiary/10 text-on-surface hover:bg-tertiary/20'
                     : 'border-outline-variant/30 bg-surface-container-low text-on-surface hover:bg-surface-container-high'
-                } disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer`}
+                )}
               >
                 <span className="material-symbols-outlined text-[14px] text-primary">
                   {applying === a.title ? 'hourglass_top' : a.is_preferred ? 'auto_awesome' : 'healing'}
@@ -193,7 +198,7 @@ export default function LspQuickFixPanel({
                     {a.kind.replace('quickfix.', '').replace('refactor.', '')}
                   </span>
                 ) : null}
-              </button>
+              </Button>
             </li>
           ))}
         </ul>

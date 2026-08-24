@@ -8,6 +8,7 @@
 
 import { useIntl } from 'react-intl'
 import type { AgentInfo } from '@/types'
+import { cn } from '@/lib/utils'
 
 interface AgentAllocationProps {
   agents: AgentInfo[]
@@ -57,10 +58,10 @@ export default function AgentAllocation({ agents }: AgentAllocationProps) {
           <div key={a.name}>
             <div className="flex items-center justify-between mb-1">
               <span className="text-body-sm text-on-surface-variant">{a.name}</span>
-              <span className={`font-label-md ${a.textColor}`}>{a.pct}%</span>
+              <span className={cn('font-label-md', a.textColor)}>{a.pct}%</span>
             </div>
             <div className="w-full h-1 bg-outline-variant/30 rounded-full">
-              <div className={`h-full ${a.color} rounded-full`} style={{ width: `${a.pct}%` }} />
+              <div className={cn('h-full', a.color, 'rounded-full')} style={{ width: `${a.pct}%` }} />
             </div>
           </div>
         ))}
