@@ -167,7 +167,7 @@ describe('ThemeContext', () => {
         <ThemeConsumer />
       </ThemeProvider>
     )
-    const consumer = screen.getByTestId('font-scale')
+    screen.getByTestId('font-scale') // presence check: getBy throws when missing
     // Test lower bound
     fireEvent.click(screen.getByTestId('set-font-scale'))
     // The setFontScale should clamp values to [0.85, 1.3]
