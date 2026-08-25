@@ -1,29 +1,39 @@
-/**
- * Command Palette coverage — DEFERRED.
- *
- * The CommandPalette component (cmdk 1.1.1 + Base UI Dialog) throws a
- * runtime error "Cannot read properties of undefined (reading 'subscribe')"
- * when it transitions from closed → open. This is a pre-existing bug surfaced
- * by the R5 audit, NOT a regression from this work.
- *
- * Tracked separately: the regression net for the palette should be added once
- * the cmdk/React 19 interaction in ui/src/components/ui/command.tsx is fixed.
- * Leaving this file as a placeholder so the R5 entry in the phase2 plan
- * status table has a real on-disk anchor for whoever picks up the fix.
- *
- * To re-enable: assert that page.getByRole('dialog') becomes visible after
- * Ctrl+K, and verify navigation via cmdk keyboard selection works.
- */
 import { test, expect } from '@playwright/test'
 
-test.describe.skip('Command palette (DEFERRED — see header)', () => {
+/**
+ * Command Palette coverage — re-enabled by the 2026-08-26 audit fix.
+ *
+ * History: R5 originally skipped this spec. CommandPalette crashed on
+ * open ("Cannot read properties of undefined (reading 'subscribe')")
+ * because CommandDialog rendered the cmdk children without the
+ * <Command> root, so every store-subscribing child hit an undefined
+ * context. Fixed in ui/src/components/ui/command.tsx; these tests now
+ * lock the open/close contract and a keyboard navigation round-trip
+ * against a real Chromium.
+ */
+test.describe('Command palette', () => {
   test('Ctrl+K opens the palette and Escape closes it', async ({ page }) => {
-    test.skip(true, 'CommandPalette has a pre-existing cmdk/React 19 bug; R5 audit deferred this coverage.')
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     await page.keyboard.press('Control+k')
-    await expect(page.getByRole('dialog')).toBeVisible()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toBeVisible()
+
     await page.keyboard.press('Escape')
-    await expect(page.getByRole('dialog')).toBeHidden()
+    await expect(dialog).toBeHidden()
+  })
+
+  test('filter + Enter navigates to the matched page command', async ({ page }) => {
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    await page.keyboard.press('Control+k')
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toBeVisible()
+
+    // "billing" uniquely matches the Usage & Billing page command — a
+    // pure route navigation, no side effects.
+    await page.keyboard.type('billing')
+    await page.keyboard.press('Enter')
+    await expect(page).toHaveURL(/settings\/billing/)
   })
 })

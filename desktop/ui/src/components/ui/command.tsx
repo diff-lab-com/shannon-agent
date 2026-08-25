@@ -46,10 +46,6 @@ function CommandDialog({
 }) {
   return (
     <Dialog {...props}>
-      <DialogHeader className="sr-only">
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
-      </DialogHeader>
       <DialogContent
         className={cn(
           "top-1/3 translate-y-0 overflow-hidden rounded-xl! p-0",
@@ -57,7 +53,15 @@ function CommandDialog({
         )}
         showCloseButton={showCloseButton}
       >
-        {children}
+        <DialogHeader className="sr-only">
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        {/* The <Command> root is required here: every cmdk subcomponent
+            (Input/Item/List/Empty) subscribes to the cmdk store provided
+            via its context. It was accidentally dropped and the palette
+            crashed on open with "reading 'subscribe'" (2026-08-26 audit). */}
+        <Command>{children}</Command>
       </DialogContent>
     </Dialog>
   )
