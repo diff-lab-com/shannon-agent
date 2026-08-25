@@ -63,4 +63,19 @@ describe('TextLoop', () => {
     act(() => { vi.advanceTimersByTime(5000) })
     expect(node()?.textContent).toBe('only')
   })
+
+  it('keeps aria-live off by default; live prop opts into polite', () => {
+    stubMatchMedia(false)
+    const { container } = render(<TextLoop items={['A', 'B']} />)
+    expect(container.querySelector('[data-testid="text-loop"]')?.getAttribute('aria-live')).toBe('off')
+
+    const live = render(<TextLoop items={['A', 'B']} live />)
+    expect(live.container.querySelector('[data-testid="text-loop"]')?.getAttribute('aria-live')).toBe('polite')
+  })
+
+  it('keeps aria-live off under reduced motion even with live prop', () => {
+    stubMatchMedia(true)
+    const { container } = render(<TextLoop items={['A', 'B']} live />)
+    expect(container.querySelector('[data-testid="text-loop"]')?.getAttribute('aria-live')).toBe('off')
+  })
 })
