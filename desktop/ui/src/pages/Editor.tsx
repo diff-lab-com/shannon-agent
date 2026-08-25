@@ -10,7 +10,7 @@
 
 import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useIntl, type PrimitiveType } from 'react-intl'
+import { useT } from '@/i18n'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { toast } from 'sonner'
 import CodeEditor, {
@@ -30,8 +30,7 @@ import {
 import type { AutoDiagnostic, DrawerDiag, ManualDiagnostic, MixedDiagnostic } from './editor'
 
 export default function Editor() {
-  const intl = useIntl()
-  const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
+  const t = useT()
   const navigate = useNavigate()
   const [filePath, setFilePath] = useState('')
   const [loading, setLoading] = useState(false)

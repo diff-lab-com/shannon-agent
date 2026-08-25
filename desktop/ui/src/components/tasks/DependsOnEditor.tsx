@@ -21,7 +21,7 @@ interface DependsOnEditorProps {
 export default function DependsOnEditor({ routine, routines, onUpdated }: DependsOnEditorProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const initial = useMemo(() => new Set(routine.depends_on ?? []), [routine.id, routine.depends_on])
+  const initial = useMemo(() => new Set(routine.depends_on ?? []), [routine.depends_on])
   const [selected, setSelected] = useState<Set<string>>(initial)
   const [saving, setSaving] = useState(false)
 
