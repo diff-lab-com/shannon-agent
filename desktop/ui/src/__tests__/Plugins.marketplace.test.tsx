@@ -5,8 +5,9 @@ import Plugins from '@/components/extensions/Plugins'
 import type { CatalogEntry } from '@/types'
 import * as api from '@/lib/tauri-api'
 
+import type * as ReactRouterDom from 'react-router-dom'
 vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  const actual = await vi.importActual<typeof ReactRouterDom>('react-router-dom')
   return {
     ...actual,
     useOutletContext: () => ({ search: (globalThis as { __PLUGINS_SEARCH__?: string }).__PLUGINS_SEARCH__ ?? '' }),

@@ -1,5 +1,7 @@
 // TypeScript types matching Rust structs in shannon-desktop/src/events.rs and commands.rs
 
+import type { VoiceLocalConfig } from '@/lib/tauri-api'
+
 // --- Event Payloads ---
 
 export interface QueryTextPayload {
@@ -371,7 +373,7 @@ export interface DesktopConfig {
   /** P2-5e local-only STT (whisper-rs). Independent of `stt`
    *  so a user can keep a cloud key for fallback while local
    *  is the primary. */
-  voice_local?: import('@/lib/tauri-api').VoiceLocalConfig
+  voice_local?: VoiceLocalConfig
 }
 
 export interface SttConfig {

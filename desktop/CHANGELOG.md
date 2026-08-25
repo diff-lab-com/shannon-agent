@@ -180,10 +180,17 @@ next release tag.
 
 #### Tooling / CI
 
-- **ESLint budget ratchet 72 → 23** — frozen at 23 (`vitest.config.ts`,
-  `package.json`, `ci.yml`, `desktop/CLAUDE.md` all agree). Remaining
-  23 warnings are all `@typescript-eslint/consistent-type-imports`
-  awaiting a batch migration. **Raises require ed sign-off.**
+- **ESLint budget ratchet 72 → 23 → 0** — frozen at 0 (`package.json`,
+  `ci.yml`, `desktop/CLAUDE.md` all agree). The 23
+  `@typescript-eslint/consistent-type-imports` warnings from R11 were
+  all migrated to top-level `import type` declarations: 12 added to the
+  existing `@/types` import block in `tauri-api.ts`, the cross-file
+  `VoiceLocalConfig` reference lifted into `types/index.ts`, and 7 test
+  files switched to `import type * as ReactRouterDom from
+  'react-router-dom'` (and `import type * as TauriApi from
+  '@/lib/tauri-api'` in `Editor.test.tsx`) so the `typeof
+  ReactRouterDom` / `typeof TauriApi` generics replace the forbidden
+  `typeof import(...)` syntax. **Raises require ed sign-off.**
 - **`pnpm test:coverage` CI gate** — `desktop-unit` job now runs
   `vitest run --coverage` so the configured thresholds (80 lines / 60
   functions / 75 branches / 80 statements) are machine-enforced;
