@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useIntl } from 'react-intl'
+import { useT } from '@/i18n'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
@@ -14,7 +15,7 @@ import type { BillingPlan, CostRecord, BillingHistory } from '@/types'
 
 export default function BillingSettings() {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
   const { usage } = useChat()
   const { status } = useCatalog()
   const [plan, setPlan] = useState<BillingPlan | null>(null)
@@ -53,7 +54,7 @@ export default function BillingSettings() {
       api.getCostHistory(30).then(setCostHistory).catch((e) => toastError(t('settings.billing.loadCostFailed'), e)),
       api.getBillingHistory().then(setBillingHistory).catch((e) => toastError(t('settings.billing.loadHistoryFailed'), e)),
     ]).finally(() => setLoading(false))
-  }, [])
+  }, [t])
 
   const inputTokens = usage?.input_tokens ?? 0
   const outputTokens = usage?.output_tokens ?? 0

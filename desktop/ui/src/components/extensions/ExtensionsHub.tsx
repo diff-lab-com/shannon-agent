@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useIntl } from 'react-intl'
+import { useT } from '@/i18n'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
@@ -10,7 +11,7 @@ import { cn } from '@/lib/utils'
 
 export default function ExtensionsHub() {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [filterMode, setFilterMode] = useState<'trending' | 'recent'>('trending')

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useIntl } from 'react-intl'
+import { useT } from '@/i18n'
 import { toast } from 'sonner'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { Button } from '@/components/ui/button'
@@ -45,15 +45,11 @@ interface DownloadProgress {
  * render.
  */
 export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettingsProps) {
-  const intl = useIntl()
   // `t` is a small wrapper that mirrors the `formatMessage({ id },
   // values)` signature used elsewhere in the UI; the Settings
   // cards in this codebase lean on the shorthand so a missing
   // translation is a single grep away.
-  const t = (
-    id: string,
-    values?: Record<string, string | number>,
-  ): string => intl.formatMessage({ id }, values)
+  const t = useT()
   const [models, setModels] = useState<api.WhisperModelInfo[]>([])
   const [config, setConfig] = useState<api.VoiceLocalConfig | null>(null)
   const [saving, setSaving] = useState(false)

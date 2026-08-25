@@ -34,6 +34,11 @@ export default defineConfig({
         'src/types/index.ts',
         'src/lib/tauri-api.ts',
         'src/App.tsx',
+        // Demo-mode mock layer (VITE_MOCK_MODE=1): only reachable via the
+        // main.tsx alias swap, never in production builds — same rationale
+        // as main.tsx/App.tsx above. 1864 lines of mock data/handlers were
+        // dragging real coverage ~6pp below the threshold.
+        'src/lib/mock/',
         'src/hooks/useTheme.ts',
         'src/components/ui/select.tsx',
       ],
