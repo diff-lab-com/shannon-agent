@@ -5,7 +5,7 @@
 // mirrors how `AppContext.tsx` consumes the existing API module.
 
 import { useCallback, useEffect, useState } from 'react'
-import { useIntl } from 'react-intl'
+import { useT } from '@/i18n'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
@@ -25,8 +25,7 @@ import type {
 // ─── Scheduled tasks (CRUD) ────────────────────────────────────────────────
 
 export function useScheduledTasks() {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
   const [tasks, setTasks] = useState<ScheduledRoutine[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -57,7 +56,7 @@ export function useScheduledTasks() {
       toastError(t('tasks.toast.failed.create'), e)
       return null
     }
-  }, [refresh, intl])
+  }, [refresh, t])
 
   const update = useCallback(async (payload: UpdateTaskPayload): Promise<ScheduledRoutine | null> => {
     try {
@@ -71,7 +70,7 @@ export function useScheduledTasks() {
       toastError(t('tasks.toast.failed.update'), e)
       return null
     }
-  }, [refresh, intl])
+  }, [refresh, t])
 
   const remove = useCallback(async (id: string): Promise<boolean> => {
     try {
@@ -85,7 +84,7 @@ export function useScheduledTasks() {
       toastError(t('tasks.toast.failed.delete'), e)
       return false
     }
-  }, [refresh, intl])
+  }, [refresh, t])
 
   const toggle = useCallback(async (id: string, enabled: boolean): Promise<ScheduledRoutine | null> => {
     try {
@@ -99,7 +98,7 @@ export function useScheduledTasks() {
       toastError(t('tasks.toast.failed.toggle'), e)
       return null
     }
-  }, [refresh, intl])
+  }, [refresh, t])
 
   const trigger = useCallback(async (id: string): Promise<boolean> => {
     try {
@@ -112,7 +111,7 @@ export function useScheduledTasks() {
       toastError(t('tasks.toast.failed.trigger'), e)
       return false
     }
-  }, [intl])
+  }, [t])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -122,8 +121,7 @@ export function useScheduledTasks() {
 // ─── Triage items ──────────────────────────────────────────────────────────
 
 export function useTriageItems(initialFilter?: TriageFilter) {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
   const [filter, setFilter] = useState<TriageFilter | undefined>(initialFilter)
   const [items, setItems] = useState<TriageItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -154,7 +152,7 @@ export function useTriageItems(initialFilter?: TriageFilter) {
       toastError(t('tasks.toast.failed.markRead'), e)
       return false
     }
-  }, [refresh, intl])
+  }, [refresh, t])
 
   const archive = useCallback(async (id: string): Promise<boolean> => {
     try {
@@ -168,7 +166,7 @@ export function useTriageItems(initialFilter?: TriageFilter) {
       toastError(t('tasks.toast.failed.archive'), e)
       return false
     }
-  }, [refresh, intl])
+  }, [refresh, t])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -178,8 +176,7 @@ export function useTriageItems(initialFilter?: TriageFilter) {
 // ─── Task executions (history) ─────────────────────────────────────────────
 
 export function useTaskExecutions(taskId?: string) {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
   const [executions, setExecutions] = useState<TaskExecution[]>([])
   const [detail, setDetail] = useState<TaskExecutionDetail | null>(null)
   const [loading, setLoading] = useState(false)
@@ -210,7 +207,7 @@ export function useTaskExecutions(taskId?: string) {
       toastError(t('tasks.toast.failed.loadExecution'), e)
       return null
     }
-  }, [intl])
+  }, [t])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -279,8 +276,7 @@ export function useTriageStats() {
 // ─── Task worktrees (P2.5) ─────────────────────────────────────────────────
 
 export function useTaskWorktrees() {
-  const intl = useIntl()
-  const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
+  const t = useT()
   const [worktrees, setWorktrees] = useState<TaskWorktreeDto[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -311,7 +307,7 @@ export function useTaskWorktrees() {
       toastError(t('tasks.toast.failed.createWorktree'), e)
       return null
     }
-  }, [refresh, intl])
+  }, [refresh, t])
 
   const remove = useCallback(async (path: string): Promise<boolean> => {
     try {
@@ -325,7 +321,7 @@ export function useTaskWorktrees() {
       toastError(t('tasks.toast.failed.removeWorktree'), e)
       return false
     }
-  }, [refresh, intl])
+  }, [refresh, t])
 
   const prune = useCallback(async (): Promise<string[] | null> => {
     try {
@@ -343,7 +339,7 @@ export function useTaskWorktrees() {
       toastError(t('tasks.toast.failed.pruneWorktrees'), e)
       return null
     }
-  }, [refresh, intl])
+  }, [refresh, t])
 
   useEffect(() => { refresh() }, [refresh])
 

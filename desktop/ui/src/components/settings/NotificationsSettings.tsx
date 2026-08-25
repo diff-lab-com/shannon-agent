@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useIntl } from 'react-intl'
+import { useT } from '@/i18n'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
@@ -63,8 +63,7 @@ function presetFromTemplate(template: string | undefined): WebhookPreset {
 }
 
 function WebhookSection() {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -275,8 +274,7 @@ function WebhookSection() {
 /** Desktop-notification master switch + Do-Not-Disturb quiet-hours window.
  * Desktop-local: webhooks still deliver while DND suppresses OS popups. */
 function DndSection() {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [master, setMaster] = useState(true)
@@ -450,8 +448,7 @@ function DndSection() {
 }
 
 export default function NotificationsSettings() {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
 
   return (
     <div className="pb-xl">

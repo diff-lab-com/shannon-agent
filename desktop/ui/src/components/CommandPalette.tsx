@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
+import { useT } from '@/i18n'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { useSessions } from '@/context/SessionContext'
@@ -29,7 +30,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   const { models, tasks, agents, refreshConfig } = useCatalog()
   const intl = useIntl()
 
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
 
   const grouped = useMemo<Record<string, PaletteItem[]>>(() => {
     const actions: PaletteItem[] = [
