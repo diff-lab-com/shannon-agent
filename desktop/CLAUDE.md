@@ -27,7 +27,7 @@ pnpm demo                      # same, but VITE_MOCK_MODE=1 — Tauri invoke()
                                #   is swapped for ui/src/lib/mock/coreMock.ts
                                #   so the UI runs without the Rust backend
 pnpm build                     # tsc --noEmit then vite build → ui/dist
-pnpm lint                      # tsc --noEmit (the only "lint" step)
+pnpm lint                      # tsc --noEmit + eslint --max-warnings 46 (frozen budget)
 pnpm test                      # vitest (jsdom)
 pnpm test -- path/to/file      # single vitest file
 pnpm test -- -t "name"         # single test by name

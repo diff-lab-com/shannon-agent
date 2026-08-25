@@ -1,5 +1,5 @@
 import type { useIntl } from 'react-intl'
-import * as api from '@/lib/tauri-api'
+import type * as api from '@/lib/tauri-api'
 import { cn } from '@/lib/utils'
 
 /**

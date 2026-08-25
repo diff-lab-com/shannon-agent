@@ -23,21 +23,12 @@ export function createStubProvider(config: VoiceProviderConfig): VoiceProvider {
   const lang = config.lang ?? 'en-US'
   let handlers: StubHandlers | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
-  let idx = 0
-
-  const tick = () => {
-    if (!handlers) return
-    handlers.onResult({ partial: PARTIALS[idx % PARTIALS.length], isFinal: false })
-    idx += 1
-    timer = setTimeout(tick, 800)
-  }
 
   return {
     kind: 'stub',
     isSupported: () => true,
     start: async (next: StubHandlers) => {
       handlers = next
-      idx = 0
       // Emit one immediate partial so the UI shows life, then idle.
       next.onResult({ partial: PARTIALS[0], isFinal: false })
       void lang
