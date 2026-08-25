@@ -12,6 +12,11 @@ interface TextLoopProps {
   className?: string
   /** Optional aria-label override (defaults to the currently visible item). */
   ariaLabel?: string
+  /** Announce item changes to screen readers (aria-live="polite")?
+   * Default false — a polite live region firing every intervalMs is
+   * chatty for assistive-tech users; enable only when the rotation
+   * itself is the content. */
+  live?: boolean
 }
 
 /**
@@ -23,7 +28,7 @@ interface TextLoopProps {
  * a single line of body copy without layout jitter. A `transition-opacity`
  * class can be added by the caller if a fade is desired.
  */
-export function TextLoop({ items, intervalMs = 2500, className, ariaLabel }: TextLoopProps) {
+export function TextLoop({ items, intervalMs = 2500, className, ariaLabel, live = false }: TextLoopProps) {
   const reduced = useReducedMotion()
   const blurred = useWindowBlur()
   const [index, setIndex] = useState(0)
@@ -41,7 +46,7 @@ export function TextLoop({ items, intervalMs = 2500, className, ariaLabel }: Tex
   return (
     <span
       aria-label={ariaLabel ?? items[index]}
-      aria-live={reduced ? 'off' : 'polite'}
+      aria-live={live && !reduced ? 'polite' : 'off'}
       className={cn('inline-block align-baseline', className)}
       data-testid="text-loop"
       data-reduced={reduced ? 'true' : 'false'}
