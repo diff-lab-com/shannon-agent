@@ -121,9 +121,11 @@ jobs:
         working-directory: desktop/ui
         run: pnpm install --frozen-lockfile
       - name: Lint (tsc + eslint)
-        # `pnpm lint` is tsc --noEmit + eslint --max-warnings 46 — the
-        # cap is the frozen ESLint budget (ratcheted 72→71→46 in the
-        # 2026-08-26 audit + R10); raise only with ed sign-off.
+        # `pnpm lint` is tsc --noEmit + eslint --max-warnings 23 — the
+        # cap is the frozen ESLint budget (ratcheted 72→71→46→23 across
+        # the 2026-08-26 audit, R10 and R11; the remaining 23 are
+        # consistent-type-imports awaiting batch migration); raise only
+        # with ed sign-off.
         working-directory: desktop/ui
         run: pnpm lint
       - name: Overlay whitelist check

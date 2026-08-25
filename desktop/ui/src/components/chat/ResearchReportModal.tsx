@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, memo, useCallback } from 'react'
 import { useIntl } from 'react-intl'
+import { useT } from '@/i18n'
 import { toast } from 'sonner'
 import { Modal } from '@/components/ui/modal'
 import { Markdown } from '@/components/chat/Markdown'
@@ -20,7 +21,7 @@ export const ResearchReportModal = memo(function ResearchReportModal({
   onClose,
 }: ResearchReportModalProps) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
   const citationsRef = useRef<HTMLDivElement>(null)
   const [activeCitation, setActiveCitation] = useState<number | null>(null)
 

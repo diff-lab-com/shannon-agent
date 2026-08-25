@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { IntlProvider } from 'react-intl'
+import { IntlProvider, useIntl, type PrimitiveType } from 'react-intl'
 
 import en from './locales/en.json'
 import zhCN from './locales/zh-CN.json'
@@ -84,6 +84,26 @@ export function useI18n(): I18nContextValue {
     throw new Error('useI18n must be used inside <I18nProvider>')
   }
   return ctx
+}
+
+/**
+ * Stable `t(id)` — `intl.formatMessage` bound per locale switch. A raw
+ * `const t = (id) => intl.formatMessage({ id })` creates a fresh function
+ * every render, which trips react-hooks/exhaustive-deps as soon as `t`
+ * (or a callback capturing it) lands in a hook dependency array. `intl`
+ * itself is referentially stable while locale+messages stay unchanged,
+ * so `[intl]` keeps dependent useCallback/useMemo/useEffect from churning.
+ *
+ * @example
+ * const t = useT()
+ * t('settings.title')
+ */
+export function useT(): (id: string, values?: Record<string, PrimitiveType>) => string {
+  const intl = useIntl()
+  return useCallback(
+    (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values),
+    [intl],
+  )
 }
 
 /** Convenience: list of supported locales for switcher UIs. */

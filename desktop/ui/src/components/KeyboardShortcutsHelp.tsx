@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useIntl } from 'react-intl'
+import { useT } from '@/i18n'
 import { Modal, ModalBody } from '@/components/ui/modal'
 import { formatShortcut, formatShortcutShift } from '@/lib/platform'
 
@@ -59,8 +59,7 @@ const SECTIONS: ShortcutSection[] = [
 ]
 
 export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
   const [query, setQuery] = useState('')
 
   const filteredSections = useMemo(() => {
@@ -72,7 +71,7 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
         t(e.actionKey).toLowerCase().includes(q) || e.keys.toLowerCase().includes(q),
       ),
     })).filter(section => section.entries.length > 0)
-  }, [query, intl.locale])
+  }, [query, t])
 
   return (
     <Modal open={open} onClose={onClose} size="lg" title={t('shortcutsHelp.title')} aria-label={t('shortcutsHelp.title')}>

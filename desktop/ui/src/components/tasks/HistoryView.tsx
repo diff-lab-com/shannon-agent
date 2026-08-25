@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
+import { useT } from '@/i18n'
 import EmptyState from '@/components/ui/empty-state'
 import ErrorState from '@/components/ui/error-state'
 import { RowSkeleton } from '@/components/SkeletonLoader'
@@ -39,7 +40,7 @@ function StatusPill({ status }: { status: string }) {
 
 export default function HistoryView({ taskId, limit = 50, onGoToActive }: { taskId?: string; limit?: number; onGoToActive?: () => void }) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
   const [rows, setRows] = useState<TaskExecution[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -55,7 +56,7 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
       .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : t('tasks.historyView.loadFailed')) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [taskId, limit])
+  }, [taskId, limit, t])
 
   const refresh = () => {
     setLoading(true); setError(null)

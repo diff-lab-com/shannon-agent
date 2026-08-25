@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
+import { useT } from '@/i18n'
 import EmptyState from '@/components/ui/empty-state'
 import { ListSkeleton } from '@/components/SkeletonLoader'
 import { Button } from '@/components/ui/button'
@@ -54,7 +55,7 @@ interface AgentMessagesPanelProps {
 
 export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesPanelProps) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
   const [rows, setRows] = useState<AgentMessageEntry[]>([])
   const [teams, setTeams] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -85,7 +86,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
     } finally {
       setLoading(false)
     }
-  }, [team, limit])
+  }, [team, limit, t])
 
   useEffect(() => {
     void reload()
@@ -110,7 +111,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
     } finally {
       setInjecting(false)
     }
-  }, [activeTeam, from, to, content, priority, reload])
+  }, [activeTeam, from, to, content, priority, reload, t])
 
   const empty = useMemo(() => rows.length === 0, [rows])
 
