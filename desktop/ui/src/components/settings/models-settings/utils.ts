@@ -3,7 +3,7 @@
 
 import { toast } from 'sonner'
 import type { useIntl } from 'react-intl'
-import * as api from '@/lib/tauri-api'
+import type * as api from '@/lib/tauri-api'
 
 export function toastTestResult(
   intl: ReturnType<typeof useIntl>,

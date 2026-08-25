@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
 import { I18nProvider } from '@/i18n'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
@@ -42,7 +42,9 @@ describe('Responsive sidebar', () => {
 
 describe('WelcomeState onboarding', () => {
   it('shows keyboard shortcuts in welcome screen', async () => {
-    const Chat = (await import('@/pages/Chat')).default
+    // Side-effect import: the /chat route below renders <Chat>, which
+    // hosts <WelcomeState> when the conversation is empty.
+    await import('@/pages/Chat')
     const WelcomeState = (await import('@/components/WelcomeState')).default
     render(
       <I18nProvider>

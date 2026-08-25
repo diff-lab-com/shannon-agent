@@ -90,7 +90,7 @@ export default function McpServers() {
 
   useEffect(() => {
     refreshInstalled();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   async function handleUninstall(name: string) {
