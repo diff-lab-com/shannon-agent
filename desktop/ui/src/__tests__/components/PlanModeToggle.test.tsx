@@ -4,8 +4,9 @@ import { I18nProvider } from '@/i18n'
 import ChatInput from '@/components/chat/ChatInput'
 import * as api from '@/lib/tauri-api'
 
+import type * as ReactRouterDom from 'react-router-dom'
 vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  const actual = await vi.importActual<typeof ReactRouterDom>('react-router-dom')
   return {
     ...actual,
     useOutletContext: () => ({ search: '' }),
