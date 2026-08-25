@@ -79,7 +79,7 @@ export class ShannonChatModelAdapter implements ChatModelAdapter {
     // transcript under `options.messages`, including already-rendered
     // assistant turns — we only care about the tail).
     const last = options.messages.at(-1);
-    // eslint-disable-next-line no-console -- spike: intentional dev log
+
     console.log(`${SHANNON_ADAPTER_TAG} onNewMessage:`, {
       messageCount: options.messages.length,
       lastRole: last?.role,
