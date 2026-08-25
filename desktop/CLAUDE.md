@@ -231,5 +231,6 @@ behavior is delegated to the engine crates.
   - **Also compliant:** hand-written `<span class="material-symbols-outlined">`
     — that is what the 100+ existing call sites (and shadcn-generated base
     components like `dialog.tsx`) already use. Mix per file as long as it's
-    consistent within that file. Policy revised 2026-08-24 to formalize the
-    de-facto standard; see R1a in `docs/plans/desktop-ui-modernization-phase2.md`.
+    consistent within that file. Policy revised 2026-08-24 to formalize this
+    de-facto standard (the rationale is this paragraph itself; it does not
+    depend on plan files that stay local to a workstation).
