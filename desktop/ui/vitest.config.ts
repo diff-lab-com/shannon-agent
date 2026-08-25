@@ -36,7 +36,6 @@ export default defineConfig({
         'src/App.tsx',
         'src/hooks/useTheme.ts',
         'src/components/ui/select.tsx',
-        'src/components/ui/tabs.tsx',
       ],
       thresholds: {
         lines: 80,

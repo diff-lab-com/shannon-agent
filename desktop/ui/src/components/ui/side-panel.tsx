@@ -2,18 +2,18 @@
 // role="dialog" + aria-modal="true", focus trap, Escape to close,
 // scroll-lock the body, click backdrop to dismiss (configurable).
 //
-// T1.2 — added so the legacy `fixed inset-0 z-50 flex justify-end`
-// pattern in TaskDetailDrawer/RoutineDetailDrawer/etc. can be replaced
-// without losing focus/Esc/scroll-lock semantics. Distinct from Modal
-// because the panel is anchored to the right edge, full height, no
-// rounded corners, and the backdrop is a separate sibling element so
-// the panel can overflow past the backdrop if needed.
+// T1.2 — replaced the hand-rolled full-screen overlay + right-anchored
+// panel pattern in TaskDetailDrawer/RoutineDetailDrawer/etc. without
+// losing focus/Esc/scroll-lock semantics. Distinct from Modal because
+// the panel is anchored to the right edge, full height, no rounded
+// corners, and the panel can overflow past the backdrop if needed.
 //
 // R1c — re-implemented on top of `@base-ui/react/dialog` primitives
 // (the same swap Modal did in R1b). External API is frozen: callers
-// (RoutineDetailDrawer, SkillDetailDrawer, TaskDetailDrawer) keep
-// their existing `<SidePanel>` / `<SidePanelHeader>` / `<SidePanelTitle>`
-// / `<SidePanelBody>` / `<SidePanelCloseButton>` composition untouched.
+// (RoutineDetailDrawer, SkillDetailDrawer, TaskDetailDrawer, and since
+// R2 the editor QuickFixDrawer) keep their existing `<SidePanel>` /
+// `<SidePanelHeader>` / `<SidePanelTitle>` / `<SidePanelBody>` /
+// `<SidePanelCloseButton>` composition untouched.
 
 import * as React from 'react'
 import { useIntl } from 'react-intl'

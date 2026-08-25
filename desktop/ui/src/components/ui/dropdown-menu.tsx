@@ -14,11 +14,13 @@ import { cn } from "@/lib/utils"
 // <Menu.Item> roving tabindex requires a working anchor trigger that the
 // legacy API does not expose. Without a real trigger, Base UI never
 // initializes focus on open and ArrowDown does nothing — breaking the test
-// contract. The shadcn-generated `dropdown-menu.prim.tsx` lives next to
-// this file and is the migration target: when a real call site lands and
-// `triggerRef` is wired to a real <button>, swap this wrapper for
-// `<DropdownMenuContent>` (from dropdown-menu.prim) and the focus behavior
-// will move to Base UI's <Menu.Item> roving tabindex out of the box.
+// contract. When a real call site lands and `triggerRef` is wired to a
+// real <button>, regenerate the shadcn primitive
+// (`pnpm dlx shadcn@latest add dropdown-menu`) and swap this wrapper for
+// the Base UI composition — focus behavior then moves to <Menu.Item>'s
+// roving tabindex out of the box. (The previously parked
+// dropdown-menu.prim.tsx was 0-ref inventory and was removed in the
+// 2026-08-26 audit cleanup.)
 //
 // For now: legacy focus hook + Base UI surface tokens. Compat shim.
 
@@ -44,8 +46,8 @@ export interface DropdownMenuProps {
 /**
  * Shannon DropdownMenu primitive. Preserved legacy focus-roving +
  * outside-click + Escape semantics; surface tokens aligned with the
- * shadcn base-nova primitive (dropdown-menu.prim.tsx) so a future call
- * site can migrate to the Base UI composition directly.
+ * shadcn base-nova primitives so a future call site can migrate to the
+ * Base UI composition directly.
  *
  * Zero production callers today (only __tests__/components/DropdownMenu.test.tsx),
  * so this is a compat shim. Once a real call site lands, prefer the

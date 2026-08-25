@@ -121,10 +121,16 @@ jobs:
         working-directory: desktop/ui
         run: pnpm install --frozen-lockfile
       - name: Lint (tsc + eslint)
-        # `pnpm lint` is tsc --noEmit + eslint --max-warnings 72 — the
-        # 72 cap is the frozen ESLint budget; raise only with ed sign-off.
+        # `pnpm lint` is tsc --noEmit + eslint --max-warnings 71 — the
+        # cap is the frozen ESLint budget (ratcheted 72→71 in the
+        # 2026-08-26 audit); raise only with ed sign-off.
         working-directory: desktop/ui
         run: pnpm lint
+      - name: Overlay whitelist check
+        # R2's tripwire against hand-rolled `fixed inset-0` overlays —
+        # see desktop/ui/scripts/check-overlays.sh for the whitelist.
+        working-directory: desktop/ui
+        run: bash scripts/check-overlays.sh
       - name: Run unit tests
         # `pnpm test` is vitest in watch mode; `vitest run` is the one-shot
         # form. CI=1 keeps workers deterministic.

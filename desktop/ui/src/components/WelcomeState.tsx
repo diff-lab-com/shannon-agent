@@ -1,6 +1,7 @@
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { TextLoop } from '@/components/reactbits/TextLoop'
+import { formatShortcut } from '@/lib/platform'
 
 interface WelcomeStateProps {
   onSelectPrompt: (prompt: string) => void
@@ -54,7 +55,7 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
           ))}
         </div>
         <div className="mt-xl flex items-center justify-center gap-lg text-on-surface-variant opacity-50">
-          <span className="flex items-center gap-xs text-label-sm"><kbd className="px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono text-[11px]">Cmd+K</kbd> {t('welcomeState.shortcuts.commands')}</span>
+          <span className="flex items-center gap-xs text-label-sm"><kbd className="px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono text-[11px]">{formatShortcut('K')}</kbd> {t('welcomeState.shortcuts.commands')}</span>
           <span className="flex items-center gap-xs text-label-sm"><kbd className="px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono text-[11px]">?</kbd> {t('welcomeState.shortcuts.shortcuts')}</span>
           <span className="flex items-center gap-xs text-label-sm"><kbd className="px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono text-[11px]">Alt+Up</kbd> {t('welcomeState.shortcuts.history')}</span>
         </div>
