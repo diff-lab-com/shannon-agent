@@ -7,7 +7,7 @@ import { MOCK_TRIAGE_ITEMS, MOCK_TRIAGE_STATS, MOCK_OPC_METRICS, MOCK_BILLING_PL
   MOCK_COST_HISTORY, MOCK_BILLING_HISTORY, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
-import type { ProviderInput } from '@/types'
+import type { ProviderInput, SessionInfo } from '@/types'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
 import {
   MOCK_SKILL_CATALOG,
@@ -19,6 +19,10 @@ import {
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v))
 const delay = (ms = 80) => new Promise<void>(r => setTimeout(r, ms + Math.random() * 40))
+
+// Demo-build session mutations (see list_sessions above).
+const deletedSessions = new Set<string>()
+const renamedSessions = new Map<string, SessionInfo>()
 
 // Mutable state for "live" feeling during demo
 const state = {
@@ -118,17 +122,32 @@ export const handlers: Record<string, MockHandler> = {
   async list_tools() { await delay(); return clone(MOCK_TOOLS) },
 
   // --- Sessions ---
+  // Deleted ids / renamed titles are tracked so the demo build and e2e flows
+  // observe their own mutations (list/search reflect them on refresh).
   async new_session() { await delay(60); return `sess-${Date.now()}` },
-  async list_sessions() { await delay(); return clone(MOCK_SESSIONS) },
+  async list_sessions() {
+    await delay()
+    return clone(MOCK_SESSIONS)
+      .filter(s => !deletedSessions.has(s.id))
+      .map(s => renamedSessions.get(s.id) ?? s)
+  },
   async search_sessions(args: { query: string }) {
     await delay()
     const q = (args.query ?? '').toLowerCase()
-    return clone(MOCK_SESSIONS.filter(s => s.title.toLowerCase().includes(q)))
+    return clone(MOCK_SESSIONS)
+      .filter(s => !deletedSessions.has(s.id))
+      .map(s => renamedSessions.get(s.id) ?? s)
+      .filter(s => s.title.toLowerCase().includes(q))
   },
   async load_session() { await delay(); return clone(MOCK_MESSAGES) },
   async switch_session() { await delay(); return clone(MOCK_MESSAGES) },
-  async delete_session() { await delay(60); return true },
-  async rename_session() { await delay(60); return true },
+  async delete_session(args: { id: string }) { await delay(60); deletedSessions.add(args.id); return true },
+  async rename_session(args: { id: string; title: string }) {
+    await delay(60)
+    const base = renamedSessions.get(args.id) ?? MOCK_SESSIONS.find(s => s.id === args.id)
+    if (base) renamedSessions.set(args.id, { ...base, title: args.title })
+    return true
+  },
   async duplicate_session(args: { id: string }) {
     await delay(60)
     const src = MOCK_SESSIONS.find(s => s.id === args.id)

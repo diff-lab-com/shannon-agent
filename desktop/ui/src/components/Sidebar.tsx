@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo, memo } from 'react';
+import { useState, useCallback, useEffect, useRef, memo } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
@@ -6,7 +6,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '../lib/utils';
 import { useSessions } from '@/context/SessionContext';
 import { useCatalog } from '@/context/CatalogContext';
-import type { SessionInfo } from '@/types';
+import { SessionsSection } from './SidebarSessions';
 import { useSidebar } from './Layout';
 import { useTriageStats } from '@/hooks/scheduled-tasks';
 import { formatShortcut } from '@/lib/platform';
@@ -57,128 +57,6 @@ function SubNavLink({ to, labelId }: { to: string; labelId: string }) {
   )
 }
 
-interface SessionsSectionProps {
-  sessions: SessionInfo[]
-  currentSessionId: string | null
-  switchSession: (id: string) => Promise<void>
-  closeMobile?: () => void
-}
-
-const SESSIONS_ORDER_KEY = 'shannon-sessions-order'
-const SESSIONS_LIMIT = 8
-
-function SessionsSection({ sessions, currentSessionId, switchSession, closeMobile }: SessionsSectionProps) {
-  const intl = useIntl()
-  const [query, setQuery] = useState('')
-  const [draggedId, setDraggedId] = useState<string | null>(null)
-  const [orderOverride, setOrderOverride] = useState<Record<string, number>>(() => {
-    if (typeof window === 'undefined') return {}
-    try {
-      const raw = window.localStorage.getItem(SESSIONS_ORDER_KEY)
-      return raw ? JSON.parse(raw) : {}
-    } catch { return {} }
-  })
-
-  // Sort: explicit order override first (ascending), then by created_at desc
-  const sorted = useMemo(() => {
-    const withOrder = sessions.filter(s => orderOverride[s.id] !== undefined)
-      .sort((a, b) => orderOverride[a.id] - orderOverride[b.id])
-    const withoutOrder = sessions.filter(s => orderOverride[s.id] === undefined)
-      .sort((a, b) => b.created_at - a.created_at)
-    return [...withOrder, ...withoutOrder]
-  }, [sessions, orderOverride])
-
-  const filtered = useMemo(() => {
-    if (!query.trim()) return sorted
-    const q = query.toLowerCase()
-    return sorted.filter(s => (s.title || '').toLowerCase().includes(q))
-  }, [sorted, query])
-
-  const visible = filtered.slice(0, SESSIONS_LIMIT)
-
-  const persistOrder = useCallback((next: Record<string, number>) => {
-    setOrderOverride(next)
-    try { window.localStorage.setItem(SESSIONS_ORDER_KEY, JSON.stringify(next)) } catch { /* noop */ }
-  }, [])
-
-  const handleDrop = useCallback((targetId: string) => {
-    if (!draggedId || draggedId === targetId) return
-    setDraggedId(null)
-    const ids = sorted.map(s => s.id)
-    const fromIdx = ids.indexOf(draggedId)
-    const toIdx = ids.indexOf(targetId)
-    if (fromIdx === -1 || toIdx === -1) return
-    // Rebuild order map based on new sequence
-    const reordered = [...ids]
-    reordered.splice(fromIdx, 1)
-    reordered.splice(toIdx, 0, draggedId)
-    const next: Record<string, number> = {}
-    reordered.forEach((id, idx) => { next[id] = idx })
-    persistOrder(next)
-  }, [draggedId, sorted, persistOrder])
-
-  return (
-    <div className="mb-lg">
-      <div className="flex items-center justify-between px-2 mb-xs">
-        <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-          {intl.formatMessage({ id: 'sidebar.sessions.title' })}
-        </span>
-        <span className="font-label-sm text-label-sm text-outline-variant">
-          {filtered.length}{filtered.length !== sessions.length ? `/${sessions.length}` : ''}
-        </span>
-      </div>
-      <input
-        type="search"
-        value={query}
-        onChange={e => setQuery(e.target.value)}
-        placeholder={intl.formatMessage({ id: 'sidebar.sessions.search.placeholder' })}
-        aria-label={intl.formatMessage({ id: 'sidebar.sessions.search.aria' })}
-        className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-outline-variant focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
-      />
-      {visible.length === 0 ? (
-        <div className="px-2 py-3 text-center font-label-sm text-label-sm text-outline-variant">
-          {intl.formatMessage({ id: 'sidebar.sessions.noResults' })}
-        </div>
-      ) : (
-        <div className="space-y-0.5" role="list" aria-label={intl.formatMessage({ id: 'sidebar.sessions.list.aria' })}>
-          {visible.map((session) => {
-            const isActive = session.id === currentSessionId
-            const isDragging = session.id === draggedId
-            return (
-              <div
-                key={session.id}
-                role="listitem"
-                draggable
-                onDragStart={() => setDraggedId(session.id)}
-                onDragOver={e => e.preventDefault()}
-                onDrop={() => handleDrop(session.id)}
-                onClick={() => {
-                  switchSession(session.id)
-                  if (closeMobile) closeMobile()
-                }}
-                className={cn(
-                  'w-full text-left px-3 py-2 rounded-lg font-label-md text-label-md transition-all duration-200 flex items-center gap-2 cursor-pointer select-none',
-                  isActive
-                    ? 'bg-primary/10 text-primary font-bold'
-                    : 'text-on-surface-variant hover:bg-surface-container-low hover:text-primary',
-                  isDragging && 'opacity-40'
-                )}
-                title={session.title}
-              >
-                <span
-                  className="material-symbols-outlined text-[14px] text-outline-variant shrink-0"
-                  aria-hidden="true"
-                >drag_indicator</span>
-                <span className="flex-1 truncate">{session.title || intl.formatMessage({ id: 'sidebar.sessions.untitled' })}</span>
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-}
-
 export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   const { close: closeMobile } = useSidebar();
   const [opcOpen, setOpcOpen] = useState(true);
@@ -191,7 +69,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   });
   const dragging = useRef(false);
   const location = useLocation();
-  const { createSession, sessions, currentSessionId, switchSession, createSessionInWorktree } = useSessions();
+  const { createSession, sessions, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree } = useSessions();
   const { status } = useCatalog();
   const intl = useIntl();
   const { stats: triageStats, refresh: refreshTriageStats } = useTriageStats();
@@ -303,16 +181,23 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
       </Button>
       )}
 
+      {/* U1: the session rail is the app's only session list. It takes the
+          remaining vertical space (own scroll); nav below gets its own scroll
+          region capped at 60% so a long session list can't push it out. */}
       {sessions.length > 0 && (
-        <SessionsSection
-          sessions={sessions}
-          currentSessionId={currentSessionId}
-          switchSession={switchSession}
-          closeMobile={mobile ? closeMobile : undefined}
-        />
+        <div className="flex-1 min-h-0 mb-lg">
+          <SessionsSection
+            sessions={sessions}
+            currentSessionId={currentSessionId}
+            switchSession={switchSession}
+            renameSession={renameSession}
+            deleteSession={deleteSession}
+            closeMobile={mobile ? closeMobile : undefined}
+          />
+        </div>
       )}
 
-      <nav aria-label={intl.formatMessage({ id: 'nav.mainNav.aria' })} className="flex-1 space-y-1">
+      <nav aria-label={intl.formatMessage({ id: 'nav.mainNav.aria' })} className="shrink-0 min-h-0 max-h-[60%]">
         <ScrollArea className="h-full">
         <NavLink to="/chat" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">chat_bubble</span>
