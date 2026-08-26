@@ -186,7 +186,9 @@ export function Header() {
             )}
           </div>
 
-          <Button variant="ghost" aria-label={t('header.notifications')} title={pendingCount > 0 ? t('header.notifications.pending', { count: pendingCount }) : t('header.notifications.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative" onClick={handleBellClick}>
+          {/* U6: the bell tooltip says where it leads — the skill-approval
+              dialog when something is pending, Triage otherwise. */}
+          <Button variant="ghost" aria-label={t('header.notifications')} title={pendingCount > 0 ? t('header.notifications.pending', { count: pendingCount }) : t('header.notifications.aria')} aria-haspopup={pendingCount > 0 ? 'dialog' : undefined} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative" onClick={handleBellClick}>
             <span className="material-symbols-outlined icon-md" aria-hidden="true">notifications</span>
             {pendingCount > 0 && (
               <span
@@ -200,9 +202,16 @@ export function Header() {
           <Button variant="ghost" aria-label={t('header.help')} title={t('header.help.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors" onClick={() => window.dispatchEvent(new CustomEvent('shannon:toggle-help'))}>
             <span className="material-symbols-outlined icon-md" aria-hidden="true">help</span>
           </Button>
-          <div className="h-8 w-8 rounded-full overflow-hidden bg-surface-container flex items-center justify-center ring-2 ring-primary/10">
+          {/* U6: the avatar is no longer a dead icon — it opens Settings. */}
+          <Button
+            variant="ghost"
+            aria-label={t('header.avatar.aria')}
+            title={t('header.avatar.aria')}
+            className="h-8 w-8 rounded-full overflow-hidden bg-surface-container flex items-center justify-center ring-2 ring-primary/10 hover:bg-surface-container-high transition-colors"
+            onClick={() => navigate('/settings')}
+          >
             <span className="material-symbols-outlined text-on-surface-variant text-[18px]" aria-hidden="true">person</span>
-          </div>
+          </Button>
         </div>
       </header>
 
