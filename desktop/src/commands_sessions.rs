@@ -77,6 +77,79 @@ pub async fn new_session(
     Ok(id_str)
 }
 
+/// Tier-1 auto-title: derive a session title from the first user message.
+///
+/// Deterministic truncation — no LLM call. First line only (the session rail
+/// must never show newlines), trimmed, capped at 50 chars with an ellipsis.
+/// Returns empty for whitespace-only input; callers treat that as "keep the
+/// placeholder".
+pub(crate) fn derive_title_from_message(message: &str) -> String {
+    const MAX_CHARS: usize = 50;
+    let first_line = message.lines().next().unwrap_or("").trim();
+    if first_line.chars().count() <= MAX_CHARS {
+        first_line.to_string()
+    } else {
+        let truncated: String = first_line.chars().take(MAX_CHARS).collect();
+        format!("{truncated}…")
+    }
+}
+
+/// Promote the first user message of a still-placeholder-titled session to
+/// its title (Tier-1 auto-title, 2026-08-26; ed-approved).
+///
+/// Fires only while the title is the generated `Session {uuid-prefix}`
+/// placeholder — a user rename writes a real title and is never
+/// overwritten. Mirrors `rename_session`'s persistence path (sessions vec +
+/// StateManager save with `Some(title)`); later auto-saves pass
+/// `title: None`, which `StateManager::save_session` backfills from disk,
+/// so the derived title survives every subsequent save.
+pub(crate) async fn auto_title_from_first_message(
+    state: &AppState,
+    app_handle: &tauri::AppHandle,
+    session_id: uuid::Uuid,
+    message: &str,
+) {
+    let title = derive_title_from_message(message);
+    if title.is_empty() {
+        return;
+    }
+    let id_str = session_id.to_string();
+
+    let mut sessions = state.sessions.lock().await;
+    let Some(session) = sessions.iter_mut().find(|s| s.id == id_str) else {
+        return;
+    };
+    if !session.title.starts_with("Session ") {
+        return;
+    }
+    session.title = title.clone();
+
+    // Persist alongside the message we just buffered, so the title is
+    // durable even if the app closes before the query completes.
+    let model = state.client_config.read().await.model.clone();
+    let target_session = state.registry.get_or_create(SessionKey(session_id));
+    let messages = target_session.messages.lock().await.clone();
+    let core_msgs: Vec<shannon_engine::api::Message> = messages
+        .iter()
+        .map(|m| shannon_engine::api::Message {
+            role: m.role.clone(),
+            content: shannon_engine::api::MessageContent::Text(m.content.clone()),
+        })
+        .collect();
+    let metadata = shannon_engine::state::SessionPersistMetadata {
+        model,
+        turn_count: core_msgs.len() / 2,
+        title: Some(title),
+        ..Default::default()
+    };
+    let _ = state
+        .state_manager
+        .save_session(&session_id, &core_msgs, &metadata);
+    drop(sessions);
+
+    let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
+}
+
 /// List all sessions.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
@@ -840,4 +913,54 @@ pub async fn branch_session(
     branch_point: usize,
 ) -> Result<events::SessionInfo, String> {
     branch_session_internal(&state, Some(&app_handle), parent_id, branch_point).await
+}
+
+#[cfg(test)]
+mod auto_title_tests {
+    use super::derive_title_from_message;
+
+    #[test]
+    fn short_message_passes_through() {
+        assert_eq!(
+            derive_title_from_message("Fix the login bug"),
+            "Fix the login bug"
+        );
+    }
+
+    #[test]
+    fn long_message_truncates_to_50_chars_plus_ellipsis() {
+        let long = "a".repeat(80);
+        let title = derive_title_from_message(&long);
+        assert_eq!(title.chars().count(), 51);
+        assert!(title.ends_with('…'));
+        assert_eq!(&title[..50], "a".repeat(50));
+    }
+
+    #[test]
+    fn truncation_counts_chars_not_bytes() {
+        // 60 CJK chars = 180 UTF-8 bytes; byte-slicing would panic or mojibake.
+        let zh = "配".repeat(60);
+        let title = derive_title_from_message(&zh);
+        assert_eq!(title.chars().count(), 51);
+        assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn exactly_50_chars_is_not_truncated() {
+        let exact = "b".repeat(50);
+        assert_eq!(derive_title_from_message(&exact), exact);
+    }
+
+    #[test]
+    fn uses_first_line_only() {
+        assert_eq!(
+            derive_title_from_message("first line\nsecond line\nthird"),
+            "first line"
+        );
+    }
+
+    #[test]
+    fn whitespace_only_yields_empty() {
+        assert_eq!(derive_title_from_message("   \n\t  "), "");
+    }
 }
