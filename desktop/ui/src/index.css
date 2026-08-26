@@ -1,7 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
 /* P2-5d design-token reference (documented inventory of every token
  * used across the app; "how to add a token" lives in
  * src/styles/README.md). Tailwind v4's @theme {} below is the source
@@ -82,8 +81,11 @@
   --font-body-md: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-headline-sm: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-headline-md: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-label-sm: "Geist Variable", ui-monospace, SFMono-Regular, monospace;
-  --font-label-md: "Geist Variable", ui-monospace, SFMono-Regular, monospace;
+  /* U8: labels are Inter like the body — Geist mono gave Latin text a
+     terminal feel but did nothing for CJK, splitting the bilingual look.
+     Monospace is now opt-in per call site via `font-mono` (code/ids/numbers). */
+  --font-label-sm: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-label-md: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-headline-lg: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-body-sm: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-body-lg: "Inter Variable", ui-sans-serif, system-ui, sans-serif;

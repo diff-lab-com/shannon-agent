@@ -742,3 +742,31 @@ describe('Sidebar — zero-session guide card (U7)', () => {
     expect(screen.queryByText('Start your first chat')).not.toBeInTheDocument()
   })
 })
+
+describe('Sidebar — icon semantics (U8)', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    vi.clearAllMocks()
+  })
+
+  it('pinned rows show a filled push_pin, unpinned rows show none', async () => {
+    const api = await import('@/lib/tauri-api')
+    const now = Date.now()
+    vi.mocked(api.listSessions).mockResolvedValue([
+      { id: 's1', title: 'Alpha', created_at: now - 1, message_count: 0 },
+      { id: 's2', title: 'Beta', created_at: now - 2, message_count: 0 },
+    ] as any)
+    render(wrap(<Sidebar />))
+    await screen.findByRole('button', { name: 'Chat: Alpha' })
+    // Pin Alpha via its ⋯ menu; Beta stays unpinned.
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Alpha' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
+    const alphaRow = screen.getByRole('button', { name: 'Chat: Alpha' }).closest('[role="listitem"]')!
+    const betaRow = screen.getByRole('button', { name: 'Chat: Beta' }).closest('[role="listitem"]')!
+    // The pin glyph is distinguished from the drag grip by its text content.
+    const pins = Array.from(alphaRow.querySelectorAll('.material-symbols-outlined')).filter(el => el.textContent === 'push_pin')
+    expect(pins).toHaveLength(1)
+    expect(pins[0].getAttribute('style')).toContain("FILL' 1")
+    expect(Array.from(betaRow.querySelectorAll('.material-symbols-outlined')).filter(el => el.textContent === 'push_pin')).toHaveLength(0)
+  })
+})
