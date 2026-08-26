@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { cn } from '@/lib/utils';
 import { useCatalog } from '@/context/CatalogContext';
+import { useChat } from '@/context/ChatContext';
+import { useSessions } from '@/context/SessionContext';
 import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates';
 import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal';
 import { useSidebar } from './Layout';
@@ -39,7 +41,9 @@ export function Header() {
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const location = useLocation();
   const navigate = useNavigate();
-  const { status, models, permissionRequest, respondPermission } = useCatalog();
+  const { status, models, permissionRequest, respondPermission, refreshConfig, refreshStatus } = useCatalog();
+  const { sessions, currentSessionId } = useSessions();
+  const { contextPanelOpen, toggleContextPanel } = useChat();
   const { toggle: toggleSidebar } = useSidebar();
   const [modelOpen, setModelOpen] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);
@@ -64,7 +68,13 @@ export function Header() {
     refetch()
   }
 
-  const title = t(getTitleKey(location.pathname));
+  // U2: on /chat the header carries the current session title instead of the
+  // fixed page title. Every other page keeps the TITLE_MAP title unchanged.
+  const isChat = location.pathname.startsWith('/chat');
+  const chatSession = sessions.find(s => s.id === currentSessionId);
+  const title = isChat && chatSession?.title
+    ? chatSession.title
+    : t(getTitleKey(location.pathname));
   const isOpcTask = location.pathname.includes('/opc/task');
 
   // Click outside to close model selector
@@ -79,13 +89,20 @@ export function Header() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [modelOpen])
 
+  // U2: absorbed ChatInput's dual-write — configure the model NAME plus its
+  // provider (the config's `model` key holds a name, not the catalog id).
+  // Header is now the only model switcher in the app.
   const handleModelSwitch = async (modelId: string) => {
-    if (!status) return
+    const model = models.find(m => m.id === modelId)
+    if (!model) return
     try {
-      await api.configure({ key: 'model', value: modelId })
+      await api.configure({ key: 'model', value: model.name })
+      await api.configure({ key: 'provider', value: model.provider })
+      await refreshConfig()
+      await refreshStatus()
       setModelOpen(false)
-      toast.success(t('header.permRequest.toast.switched', { modelId }))
-    } catch (e) { toastError(t('header.permRequest.error'), e) }
+      toast.success(t('header.model.toast.switched', { model: model.name }))
+    } catch (e) { toastError(t('header.model.failed'), e) }
   }
 
   return (
@@ -112,6 +129,23 @@ export function Header() {
           )}
         </div>
         <div className="flex items-center gap-lg shrink-0 pl-4 border-l border-outline-variant/20 md:border-none md:pl-0">
+          {/* ContextPanel toggle — U2, moved here from the retired ChatHeader.
+              Only meaningful on /chat, where the panel is mounted. */}
+          {isChat && (
+            <Button
+              variant="ghost"
+              aria-label={t('header.contextPanel.toggle')}
+              title={t('header.contextPanel.toggle')}
+              aria-expanded={contextPanelOpen}
+              aria-pressed={contextPanelOpen}
+              className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
+              onClick={toggleContextPanel}
+            >
+              <span className="material-symbols-outlined icon-md" aria-hidden="true">
+                {contextPanelOpen ? 'right_panel_close' : 'right_panel_open'}
+              </span>
+            </Button>
+          )}
           {/* Model selector */}
           <div className="relative" ref={modelRef}>
             <Button

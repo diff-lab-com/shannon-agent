@@ -2,11 +2,6 @@ import { Button } from '@/components/ui/button'
 import ChatInput from '@/components/chat/ChatInput'
 import { formatDirBreadcrumb } from './utils'
 
-interface StatusLike {
-  provider: string
-  model: string
-}
-
 interface ComposerPanelProps {
   t: (id: string) => string
   input: string
@@ -20,11 +15,13 @@ interface ComposerPanelProps {
   currentSessionId: string | null
   sessionWorkingDir: string
   handleChangeWorkingDir: () => Promise<void>
-  status: StatusLike | null
   setQuickFixOpen: (open: boolean) => void
   setEditorOpen: (open: boolean) => void
 }
 
+// U2: the composer footer keeps the working-directory picker (the app's only
+// WD entry point) but no longer mirrors provider/model — the global Header
+// is the single model surface.
 export default function ComposerPanel({
   t,
   input,
@@ -38,7 +35,6 @@ export default function ComposerPanel({
   currentSessionId,
   sessionWorkingDir,
   handleChangeWorkingDir,
-  status,
   setQuickFixOpen,
   setEditorOpen,
 }: ComposerPanelProps) {
@@ -56,8 +52,6 @@ export default function ComposerPanel({
             disabled={isQuerying}
             isQuerying={isQuerying}
             onCancelQuery={cancelQuery}
-            currentSessionId={currentSessionId}
-            sessionWorkingDir={sessionWorkingDir}
             onOpenQuickFix={() => setQuickFixOpen(true)}
             onOpenEditor={() => setEditorOpen(true)}
           />
@@ -77,16 +71,6 @@ export default function ComposerPanel({
               {sessionWorkingDir ? formatDirBreadcrumb(sessionWorkingDir) : t('chat.input.footer.workingDir.unset')}
             </span>
           </Button>
-          {status && (
-            <span
-              className="flex items-center gap-xs shrink-0 font-mono"
-              title={`${status.provider} · ${status.model}`}
-              aria-label={t('chat.input.footer.model.aria')}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-tertiary animate-pulse"></span>
-              <span className="truncate max-w-[200px]">{status.provider}/{status.model}</span>
-            </span>
-          )}
         </div>
       </div>
     </div>

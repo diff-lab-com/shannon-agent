@@ -27,6 +27,10 @@ export interface ChatContextValue {
   usage: UsagePayload | null
   sendMessage: (message: string, filePaths?: string[]) => Promise<void>
   cancelQuery: () => Promise<void>
+  /** U2: ContextPanel open state lives here so the global Header (in
+   * Layout, outside the /chat route) can toggle the panel that Chat renders. */
+  contextPanelOpen: boolean
+  toggleContextPanel: () => void
 }
 
 export const ChatContext = createContext<ChatContextValue | null>(null)
