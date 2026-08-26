@@ -12,8 +12,8 @@ use shannon_core::testing::mock_dsl::{
     anthropic_sse, provider_content_type, provider_endpoint, render_for_provider,
 };
 use shannon_core::testing::scenario::{
-    create_scenario_workspace, parse_scenario, parse_scenarios_dir, validate_rules,
-    yaml_to_mock_responses,
+    ScenarioResult, ToolCallTrace, TrajectorySummary, ValidationContext, create_scenario_workspace,
+    evaluate_rules, parse_scenario, parse_scenarios_dir, validate_rules, yaml_to_mock_responses,
 };
 
 fn scenarios_dir() -> PathBuf {
@@ -134,6 +134,27 @@ scenario_parse_test!(parse_code_search, "code_search.yaml");
 scenario_parse_test!(parse_error_recovery, "error_recovery.yaml");
 scenario_parse_test!(parse_multi_tool, "multi_tool.yaml");
 scenario_parse_test!(parse_complex_refactor, "complex_refactor.yaml");
+// W2-M1a behavioral assertion vocabulary: positive/negative pairs.
+scenario_parse_test!(parse_traj_contains_hit, "traj_contains_hit.yaml");
+scenario_parse_test!(parse_traj_contains_miss, "traj_contains_miss.yaml");
+scenario_parse_test!(
+    parse_forbidden_tool_respected,
+    "forbidden_tool_respected.yaml"
+);
+scenario_parse_test!(
+    parse_forbidden_tool_violated,
+    "forbidden_tool_violated.yaml"
+);
+scenario_parse_test!(parse_diff_matches_applied, "diff_matches_applied.yaml");
+scenario_parse_test!(
+    parse_diff_matches_mismatched,
+    "diff_matches_mismatched.yaml"
+);
+scenario_parse_test!(
+    parse_cost_below_within_budget,
+    "cost_below_within_budget.yaml"
+);
+scenario_parse_test!(parse_cost_below_over_budget, "cost_below_over_budget.yaml");
 
 // ── Workspace + Validation Integration Tests ──────────────────────────
 
@@ -332,5 +353,160 @@ fn edit_file_validation_fails_when_content_wrong() {
     assert!(
         !failures.is_empty(),
         "should fail when content doesn't match"
+    );
+}
+
+// ── W2-M1a behavioral assertion workflows ─────────────────────────────
+
+/// Setup-time file baselines for `diff_matches`.
+fn setup_baselines(
+    scenario: &shannon_core::testing::scenario::ScenarioYaml,
+) -> Vec<(String, String)> {
+    scenario
+        .setup
+        .files
+        .iter()
+        .map(|f| (f.path.clone(), f.content.clone()))
+        .collect()
+}
+
+/// Locate a specific rule's outcome in an evaluation result.
+fn rule_outcome<'a>(
+    outcomes: &'a [shannon_core::testing::scenario::RuleOutcome],
+    tag: &str,
+) -> &'a shannon_core::testing::scenario::RuleOutcome {
+    outcomes
+        .iter()
+        .find(|o| o.rule == tag)
+        .unwrap_or_else(|| panic!("outcome for rule '{tag}' missing"))
+}
+
+#[test]
+fn trajectory_contains_yaml_positive_and_negative() {
+    // Positive: observed Read->Edit order contains the declared subsequence.
+    let hit = parse_scenario(&scenarios_dir().join("traj_contains_hit.yaml")).expect("parse hit");
+    let dir = create_scenario_workspace(&hit.setup);
+    let trace_hit = ToolCallTrace::from_mock_turns(&hit.mock_responses);
+    assert_eq!(trace_hit.len(), 2, "mocks declare Read then Edit");
+
+    let ctx = ValidationContext::new(dir.path(), "success", "").with_trajectory(&trace_hit);
+    let outcomes = evaluate_rules(&hit.validate, &ctx);
+    assert!(outcomes[0].passed, "{:?}", outcomes[0].details);
+
+    // Negative: demanding Edit *before* Read cannot match and must fail.
+    let miss =
+        parse_scenario(&scenarios_dir().join("traj_contains_miss.yaml")).expect("parse miss");
+    let trace_miss = ToolCallTrace::from_mock_turns(&miss.mock_responses);
+    let ctx = ValidationContext::new(dir.path(), "success", "").with_trajectory(&trace_miss);
+    let outcomes = evaluate_rules(&miss.validate, &ctx);
+    let outcome = rule_outcome(&outcomes, "trajectory_contains");
+    assert!(!outcome.passed);
+    assert!(
+        outcome.details[0].starts_with("trajectory_contains: step"),
+        "unexpected detail: {:?}",
+        outcome.details
+    );
+}
+
+#[test]
+fn forbidden_tool_yaml_respected_and_violated() {
+    let respected = parse_scenario(&scenarios_dir().join("forbidden_tool_respected.yaml"))
+        .expect("parse respected");
+    let violated = parse_scenario(&scenarios_dir().join("forbidden_tool_violated.yaml"))
+        .expect("parse violated");
+    let dir = create_scenario_workspace(&respected.setup);
+    let trace = ToolCallTrace::from_mock_turns(&respected.mock_responses);
+    let ctx = ValidationContext::new(dir.path(), "success", "").with_trajectory(&trace);
+
+    // Bash never occurs → the ban holds.
+    let outcomes = evaluate_rules(&respected.validate, &ctx);
+    assert!(outcomes[0].passed, "{:?}", outcomes[0].details);
+
+    // Edit is banned here but the trajectory uses it → flagged with detail.
+    let outcomes = evaluate_rules(&violated.validate, &ctx);
+    let outcome = rule_outcome(&outcomes, "forbidden_tool");
+    assert!(!outcome.passed);
+    assert_eq!(outcome.details[0], "forbidden_tool: 'Edit' was invoked");
+}
+
+#[test]
+fn diff_matches_yaml_applied_and_mismatched() {
+    let applied =
+        parse_scenario(&scenarios_dir().join("diff_matches_applied.yaml")).expect("parse applied");
+    let mismatched = parse_scenario(&scenarios_dir().join("diff_matches_mismatched.yaml"))
+        .expect("parse mismatched");
+    let dir = create_scenario_workspace(&applied.setup);
+
+    // Apply exactly the edit the mocks declare.
+    let main_path = dir.path().join("src/main.rs");
+    let edited = std::fs::read_to_string(&main_path)
+        .unwrap()
+        .replace("Hello", "Goodbye");
+    std::fs::write(&main_path, edited).expect("apply edit");
+
+    let baselines = setup_baselines(&applied);
+    let ctx = ValidationContext::new(dir.path(), "success", "").with_initial_files(&baselines);
+
+    // Positive declaration: both diff regexes match the applied change.
+    let outcomes = evaluate_rules(&applied.validate, &ctx);
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes.iter().all(|o| o.passed), "{outcomes:?}");
+
+    // Negative declaration expects a Farewell line that never appears.
+    let outcomes = evaluate_rules(&mismatched.validate, &ctx);
+    let outcome = rule_outcome(&outcomes, "diff_matches");
+    assert!(!outcome.passed);
+    assert!(
+        outcome.details[0].contains("diff does not match regex"),
+        "unexpected detail: {:?}",
+        outcome.details
+    );
+}
+
+#[test]
+fn cost_below_yaml_within_and_over_budget() {
+    let within = parse_scenario(&scenarios_dir().join("cost_below_within_budget.yaml"))
+        .expect("parse within");
+    let over =
+        parse_scenario(&scenarios_dir().join("cost_below_over_budget.yaml")).expect("parse over");
+    let dir = create_scenario_workspace(&within.setup);
+
+    // Observed per-turn spend from the run's usage accounting.
+    let costs = vec![0.01_f64, 0.02];
+    let ctx = ValidationContext::new(dir.path(), "success", "").with_turn_costs_usd(&costs);
+
+    // Positive: $0.03 total under both budgets passes at task AND turn grain.
+    let outcomes = evaluate_rules(&within.validate, &ctx);
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes.iter().all(|o| o.passed), "{outcomes:?}");
+
+    let result = ScenarioResult::evaluated(
+        "cost_below_within_budget",
+        1,
+        outcomes,
+        TrajectorySummary::from_observations(
+            &ToolCallTrace::from_mock_turns(&within.mock_responses),
+            &costs,
+        ),
+    );
+    assert!(result.passed);
+    assert_eq!(result.trajectory_summary.tool_calls, vec!["Read", "Edit"]);
+    assert!((result.trajectory_summary.total_cost_usd - 0.03).abs() < 1e-9);
+
+    // Negative: $0.015 ceilings trip on the total (task) and on turn 2 (turn).
+    let outcomes = evaluate_rules(&over.validate, &ctx);
+    let failed: Vec<_> = outcomes.iter().filter(|o| !o.passed).collect();
+    assert_eq!(
+        failed.len(),
+        2,
+        "both budget bases must be reported as violated"
+    );
+    assert!(
+        failed.iter().any(|o| o.details[0].contains("task total")),
+        "task-basis violation missing: {failed:?}"
+    );
+    assert!(
+        failed.iter().any(|o| o.details[0].contains("turn 2")),
+        "turn-basis violation missing: {failed:?}"
     );
 }
