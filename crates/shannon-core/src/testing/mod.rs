@@ -5,10 +5,13 @@
 //! - **test_env**: TestShannonBuilder for one-call test environment setup
 //! - **eval_runner**: Tiered L1 evaluation suite runner (§4.4; TOML tasks →
 //!   sandboxed runs → dual JSON/Markdown reports)
+//! - **eval_metrics**: per-task cost/trajectory metrics from the L0 log plus
+//!   TOML-driven failure classification (§4.7 W2-M2)
 //! - **snapshot**: Request shape snapshot helpers for regression detection
 //! - **record_replay**: Record/Replay system for zero-cost CI testing
 //!   (moved to `shannon-engine`; re-exported here for backward compat)
 
+pub mod eval_metrics;
 pub mod eval_runner;
 pub mod mock_dsl;
 pub mod scenario;

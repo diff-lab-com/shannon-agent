@@ -105,6 +105,7 @@ fn every_task_passes_dry_run_individually() {
         bin_path: None,
         dry_run: true,
         out_dir_override: Some(tmp.path().to_path_buf()),
+        failure_rules: None,
     };
 
     let mut violations = Vec::new();
@@ -131,11 +132,13 @@ fn consecutive_runs_stay_digest_stable() {
         bin_path: None,
         dry_run: true,
         out_dir_override: Some(out_a.path().to_path_buf()),
+        failure_rules: None,
     };
     let options_b = EvalOptions {
         bin_path: None,
         dry_run: true,
         out_dir_override: Some(out_b.path().to_path_buf()),
+        failure_rules: None,
     };
 
     let (report_a, run_dir_a) = run_suite(&tasks, &options_a).expect("suite A");
@@ -171,4 +174,142 @@ fn consecutive_runs_stay_digest_stable() {
         );
         assert!(run_dir_a.join(task_id).join("stream.ndjson").exists());
     }
+}
+
+// ── §4.7 W2-M2: metrics, failure classification, version comparison ────
+
+/// ① 20 题全跑指标字段完整: every dry-run rehearsal row carries a complete
+/// metrics blob (zero-missing field contract), stamped `derived_stream`, with
+/// provenance + per-task metrics.json persisted beside each workspace.
+#[test]
+fn full_suite_metrics_are_complete_for_every_task() {
+    let tasks = parse_tasks_dir(&tasks_dir()).expect("suite parses");
+    let out_root = tempfile::TempDir::new().expect("out root");
+    let options = EvalOptions {
+        bin_path: None,
+        dry_run: true,
+        out_dir_override: Some(out_root.path().to_path_buf()),
+        failure_rules: None,
+    };
+
+    let (report, run_dir) = run_suite(&tasks, &options).expect("suite runs");
+
+    // Report-level provenance & version fields.
+    assert_eq!(report.metrics_source, "derived_stream");
+    assert_eq!(report.app_version, env!("CARGO_PKG_VERSION"));
+    assert!(
+        !report.failure_rules_fingerprint.is_empty(),
+        "rule fingerprint anchors the report to a rule-table version"
+    );
+
+    assert_eq!(report.records.len(), 20);
+    for record in &report.records {
+        let metrics = record.metrics.as_ref().unwrap_or_else(|| {
+            panic!(
+                "{} must carry §4.7 metrics (violations: {:?})",
+                record.id, record.violations
+            )
+        });
+        assert_eq!(
+            metrics.source,
+            shannon_core::testing::eval_metrics::MetricSource::DerivedStream
+        );
+        assert_eq!(
+            shannon_core::testing::eval_metrics::missing_fields(metrics),
+            Vec::<&'static str>::new(),
+            "{} has missing metric fields",
+            record.id
+        );
+        assert!(metrics.tool_calls >= 1);
+        assert_eq!(metrics.cost_usd, None, "dry run honestly reports no cost");
+        assert!(
+            record.failure_class.is_none(),
+            "green rehearsals classify nothing"
+        );
+    }
+
+    // Per-task evidence bundle gained metrics.json marking completeness.
+    for task_id in ["read_01", "edit_03", "search_02", "multi_04", "rec_01"] {
+        let raw =
+            std::fs::read_to_string(run_dir.join(task_id).join("metrics.json")).expect("metrics");
+        assert!(
+            raw.contains("\"metrics_complete\": true"),
+            "{task_id}: {raw}"
+        );
+    }
+
+    // Markdown carries the cost matrix + classification blocks.
+    let md = report.render_markdown();
+    assert!(md.contains("## Cost & trajectory matrix"));
+    assert!(md.contains("## Failure classification"));
+    assert!(md.contains("derived_stream"));
+
+    // Round-trip keeps the new fields.
+    let reloaded: shannon_core::testing::eval_runner::RunReport = serde_json::from_str(
+        &std::fs::read_to_string(run_dir.join("report.json")).expect("report.json"),
+    )
+    .expect("deserialize");
+    assert_eq!(reloaded.metrics_source, report.metrics_source);
+    assert_eq!(reloaded.records[0].failure_class, None);
+}
+
+/// ③ 版本对比字段可与上一 run diff 出报告: a degraded second run is compared
+/// against the baseline; the diff enumerates meta-version rows and per-task
+/// metric/class deltas.
+#[test]
+fn version_comparison_diff_between_runs_reports_deltas() {
+    let tasks = parse_tasks_dir(&tasks_dir()).expect("suite parses");
+    let out = tempfile::TempDir::new().expect("out root");
+    let options = |dir: &std::path::Path| EvalOptions {
+        bin_path: None,
+        dry_run: true,
+        out_dir_override: Some(dir.to_path_buf()),
+        failure_rules: None,
+    };
+
+    // Baseline: all green.
+    let (baseline, _) = run_suite(&tasks, &options(out.path())).expect("baseline");
+
+    // Degraded twin: force one task past its token budget.
+    let mut drifted = tasks.clone();
+    if let Some(task) = drifted.iter_mut().find(|t| t.id == "read_01") {
+        task.limits.max_tokens = Some(1);
+    }
+    let (degraded, _) = run_suite(&drifted, &options(out.path())).expect("degraded");
+
+    let diff = compare_reports(&baseline, &degraded);
+    assert!(diff.starts_with("UNSTABLE"), "{diff}");
+    // Meta/version anchor rows are always enumerated on drift.
+    assert!(diff.contains("[meta]"), "{diff}");
+    assert!(diff.contains("app_version ="), "{diff}");
+    assert!(diff.contains("failure_rules_fingerprint ="), "{diff}");
+    assert!(diff.contains("metrics_source ="), "{diff}");
+    // Per-task deltas expose the failure-class transition (metrics rows are
+    // printed too, but this drift only moves status/violations/class).
+    assert!(diff.contains("[read_01] read"), "{diff}");
+    assert!(
+        diff.contains("status: \"passed\" -> \"token_limit\""),
+        "{diff}"
+    );
+    assert!(
+        diff.contains("failure_class: null -> \"timeout_or_limit\""),
+        "{diff}"
+    );
+
+    let degraded_record = degraded
+        .records
+        .iter()
+        .find(|r| r.id == "read_01")
+        .expect("row");
+    assert_eq!(
+        degraded_record.failure_class.as_deref(),
+        Some("timeout_or_limit"),
+        "token ceiling routes through the ⑤ limit class"
+    );
+    assert!(
+        degraded_record
+            .failure_evidence
+            .iter()
+            .any(|line| line.contains("status equals token_limit"))
+    );
 }

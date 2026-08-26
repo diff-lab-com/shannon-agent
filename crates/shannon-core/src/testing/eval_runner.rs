@@ -29,6 +29,24 @@
 //! `limits.timeout_secs` to [`RunStatus::Timeout`] — i.e. 「超时/限额」 categories
 //! stay distinct from ordinary assertion failures ([`RunStatus::Failed`]).
 //!
+//! ## Metrics & failure classification (§4.7 W2-M2)
+//!
+//! Every finished task is enriched by the sibling [`super::eval_metrics`]
+//! module:
+//!
+//! - **Real runs**: the child engine is spawned with an isolated
+//!   `SHANNON_HOME` (`<task_dir>/l0-home`), so the §4.2 tee writes the task's
+//!   genuine `events.jsonl` inside the evidence directory; metrics come from
+//!   that log (`metrics_source = events_jsonl`) and failing tasks have the
+//!   log archived under `$SHANNON_HOME/eval/failures/<date>/<task>/`.
+//! - **Dry-run rehearsals**: the stub never spawns the engine, so no L0 log
+//!   can exist — metrics are derived from the captured NDJSON stream and the
+//!   report stamps `metrics_source = derived_stream`. Cost/cache fields hold
+//!   honest unknowns; nothing fabricates an L0 log.
+//! - **Failure classes**: seven classes judged by the external TOML rule
+//!   table ([`EvalOptions::failure_rules`] → embedded default), recorded per
+//!   task with the winning rule's evidence chain.
+//!
 //! ## Engine contract
 //!
 //! The real path shells out to the headless CLI contract of
@@ -56,13 +74,15 @@
 //!   end (load → prepare → limits → capture → verify → dual reports), never
 //!   the model policy. Per-task `[dry_run]` scripts double as living
 //!   documentation of the expected solution path.
-//! - `cost_below` rules remain expressible but **intentionally unused** by the
-//!   shipped suite: USD turn costs are not yet observable before the L0 event
-//!   integration (§4.7 wires per-task metrics), and the rule fails loudly on
-//!   empty cost observations rather than passing vacuously.
+//! - USD costs became observable once the §4.7 extractor reads `turn/end`
+//!   usage from the L0 log; `cost_below` rules remain expressible but the
+//!   shipped suite still carries no cost ceilings until real-run baselines
+//!   exist. As before, the rule fails loudly on empty cost observations
+//!   rather than passing vacuously.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -74,6 +94,11 @@ use crate::testing::scenario::{
 };
 
 use regex::Regex;
+
+use super::eval_metrics::{
+    Classification, ClassifyContext, ExtractedTask, FailureRules, MetricSource, TaskMetrics,
+    derive_from_stream, extract_from_events_log, find_event_logs, missing_fields,
+};
 
 /// Deterministic output-root resolution mirroring
 /// [`crate::testing`]'s sibling convention (`session_log::default_shannon_home`):
@@ -603,6 +628,17 @@ pub struct TaskRunRecord {
     pub rule_outcomes: Vec<RecordedRuleOutcome>,
     /// Observed trajectory (tool names in invocation order).
     pub trajectory_tools: Vec<String>,
+    /// Cost/trajectory metrics from §4.7 (`None` only when nothing ran —
+    /// spawn errors); serialized with every contracted field present.
+    #[serde(default)]
+    pub metrics: Option<TaskMetrics>,
+    /// Winning failure class ([`FAILURE_CLASSES`]-vocabulary) or `None` when
+    /// passed or unclassified by the rule table.
+    #[serde(default)]
+    pub failure_class: Option<String>,
+    /// Satisfied-rule evidence chain backing `failure_class`.
+    #[serde(default)]
+    pub failure_evidence: Vec<String>,
     /// Absolute workspace path retained for postmortem inspection.
     pub workspace: PathBuf,
     /// Original TOML source path.
@@ -628,6 +664,8 @@ impl TaskRunRecord {
                 .map(|o| json!({"rule": o.rule, "passed": o.passed}))
                 .collect::<Vec<_>>(),
             "trajectory_tools": self.trajectory_tools,
+            "metrics": self.metrics.clone().map(|m| serde_json::to_value(&m).unwrap_or(Value::Null)),
+            "failure_class": self.failure_class,
         })
     }
 }
@@ -649,6 +687,17 @@ pub struct RunReport {
     pub tasks_limited: usize,
     pub tasks_timed_out: usize,
     pub tasks_spawn_errors: usize,
+    /// Provenance of the per-task `metrics` blobs (§4.7):
+    /// `events_jsonl` for real runs, `derived_stream` for dry-run rehearsals.
+    #[serde(default)]
+    pub metrics_source: String,
+    /// Engine crate version that produced this run — a version-comparison
+    /// anchor when diffing against the previous run.
+    #[serde(default)]
+    pub app_version: String,
+    /// sha256 fingerprint of the failure-rule table that judged this run.
+    #[serde(default)]
+    pub failure_rules_fingerprint: String,
     pub records: Vec<TaskRunRecord>,
 }
 
@@ -688,9 +737,24 @@ impl RunReport {
             "tasks_limited": self.tasks_limited,
             "tasks_timed_out": self.tasks_timed_out,
             "tasks_spawn_errors": self.tasks_spawn_errors,
+            "metrics_source": self.metrics_source,
+            "app_version": self.app_version,
+            "failure_rules_fingerprint": self.failure_rules_fingerprint,
             "records": self.records.iter().map(TaskRunRecord::stable_view).collect::<Vec<_>>(),
         });
         serde_json::to_string_pretty(&body).expect("digest serialization")
+    }
+
+    /// Tally of failure classes across records (passing/unclassified rows
+    /// omitted) — the 分类分布 block of the upgraded report.
+    pub fn failure_class_tally(&self) -> BTreeMap<&str, usize> {
+        let mut tally: BTreeMap<&str, usize> = BTreeMap::new();
+        for record in &self.records {
+            if let Some(class) = &record.failure_class {
+                *tally.entry(class.as_str()).or_default() += 1;
+            }
+        }
+        tally
     }
 
     /// Human-readable companion of `report.json`.
@@ -731,6 +795,55 @@ impl RunReport {
             ));
         }
 
+        md.push_str("\n## Cost & trajectory matrix\n\n");
+        md.push_str("| id | cost_usd | tok in/out | cache w/r | turns | tools | invalid | loops | perm denied | ms |\n");
+        md.push_str("|---|---|---|---|---|---|---|---|---|---|\n");
+        for record in &self.records {
+            match &record.metrics {
+                Some(metrics) => md.push_str(&format!(
+                    "| {} | {} | {}/{} | {}/{} | {} | {} | {} | {} | {} | {} |\n",
+                    record.id,
+                    metrics
+                        .cost_usd
+                        .map_or_else(|| "null".into(), |c| format!("{c:.4}")),
+                    metrics.tokens_in,
+                    metrics.tokens_out,
+                    metrics.cache_creation_tokens,
+                    metrics.cache_read_tokens,
+                    metrics.turns,
+                    metrics.tool_calls,
+                    metrics.invalid_calls,
+                    metrics.loops,
+                    metrics.permission_blocks,
+                    metrics
+                        .wall_clock_ms
+                        .map_or_else(|| "null".into(), |ms| ms.to_string()),
+                )),
+                None => md.push_str(&format!(
+                    "| {} | (no metrics — spawn failure) | | | | | | | | |\n",
+                    record.id
+                )),
+            }
+        }
+
+        md.push_str("\n## Failure classification\n\n");
+        if self.metrics_source == "derived_stream" {
+            md.push_str(
+                "- provenance: dry-run rehearsal — metrics derived from the NDJSON \
+                 stream (`derived_stream`), not from an L0 log.\n",
+            );
+        } else {
+            md.push_str("- provenance: per-task L0 `events.jsonl` (`events_jsonl`).\n");
+        }
+        let tally = self.failure_class_tally();
+        if tally.is_empty() {
+            md.push_str("- no failed tasks (nothing to classify).\n");
+        } else {
+            for (class, count) in tally {
+                md.push_str(&format!("- {class}: {count}\n"));
+            }
+        }
+
         let broken: Vec<_> = self
             .records
             .iter()
@@ -745,6 +858,12 @@ impl RunReport {
                     record.tier,
                     record.status.as_str()
                 ));
+                if let Some(class) = &record.failure_class {
+                    md.push_str(&format!("- class: {class}\n"));
+                    for evidence in &record.failure_evidence {
+                        md.push_str(&format!("  - {evidence}\n"));
+                    }
+                }
                 if record.violations.is_empty() {
                     md.push_str("- (guardrail breach only; see status)\n");
                 }
@@ -772,6 +891,10 @@ pub struct EvalOptions {
     /// Force the output root instead of `$SHANNON_HOME`/`~/.shannon`.
     /// (Used by tests to redirect artifacts into a temp dir.)
     pub out_dir_override: Option<PathBuf>,
+    /// Explicit failure-rule table override; resolution order in
+    /// [`run_suite`] is this path → `SHANNON_EVAL_FAILURE_RULES` env → the
+    /// embedded default table.
+    pub failure_rules: Option<PathBuf>,
 }
 
 impl Default for EvalOptions {
@@ -780,8 +903,22 @@ impl Default for EvalOptions {
             bin_path: None,
             dry_run: true,
             out_dir_override: None,
+            failure_rules: None,
         }
     }
+}
+
+/// Resolve the active [`FailureRules`]: explicit option, then the
+/// `SHANNON_EVAL_FAILURE_RULES` environment override, then the embedded
+/// default table shipped with the crate.
+pub fn resolve_failure_rules(explicit: Option<&Path>) -> Result<FailureRules, EvalError> {
+    if let Some(path) = explicit {
+        return FailureRules::load(path);
+    }
+    if let Ok(env_path) = std::env::var("SHANNON_EVAL_FAILURE_RULES") {
+        return FailureRules::load(Path::new(&env_path));
+    }
+    Ok(FailureRules::embedded())
 }
 
 /// Resolve the engine binary designation for a real run.
@@ -812,6 +949,7 @@ pub fn run_suite(
         Some(dir) => dir.clone(),
         None => resolve_eval_home()?.join("eval").join("runs"),
     };
+    let rules = resolve_failure_rules(options.failure_rules.as_deref())?;
     let run_dir = out_root.join(fresh_run_id());
     std::fs::create_dir_all(&run_dir)?;
 
@@ -819,7 +957,9 @@ pub fn run_suite(
     let mut records = Vec::with_capacity(tasks.len());
 
     for task in tasks {
-        let record = run_task(task, options, &run_dir);
+        let mut record = run_task(task, options, &run_dir);
+        enrich_with_metrics(&mut record, task, options, &run_dir, &rules);
+        persist_task_artifacts(&record, run_dir.join(&task.id));
         let _ = std::fs::write(
             run_dir.join(&task.id).join("result.json"),
             serde_json::to_vec_pretty(&record).expect("result.json serialization"),
@@ -847,6 +987,9 @@ pub fn run_suite(
         tasks_limited: tally(|r| matches!(r.status, RunStatus::TurnLimit | RunStatus::TokenLimit)),
         tasks_timed_out: tally(|r| r.status == RunStatus::Timeout),
         tasks_spawn_errors: tally(|r| r.status == RunStatus::SpawnError),
+        metrics_source: primary_metrics_source(&records),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        failure_rules_fingerprint: rules.fingerprint().to_string(),
         records,
     };
 
@@ -857,6 +1000,147 @@ pub fn run_suite(
     std::fs::write(run_dir.join("report.md"), report.render_markdown())?;
 
     Ok((report, run_dir))
+}
+
+/// The provenance stamp for the suite: real L0 logs dominate; mixed suites
+/// (real spawn error rows fall back to `None` metrics) still advertise the
+/// strongest source that actually contributed data.
+fn primary_metrics_source(records: &[TaskRunRecord]) -> String {
+    if records.iter().any(|r| {
+        r.metrics
+            .iter()
+            .any(|m| m.source == MetricSource::EventsLog)
+    }) {
+        MetricSource::EventsLog.as_str().to_string()
+    } else if records.iter().any(|r| {
+        r.metrics
+            .iter()
+            .any(|m| m.source == MetricSource::DerivedStream)
+    }) {
+        MetricSource::DerivedStream.as_str().to_string()
+    } else {
+        "none".to_string()
+    }
+}
+
+/// §4.7 enrichment pass: extract metrics (real log when present, honest
+/// stream derivation otherwise), classify failures by rule table, and archive
+/// failing real-run samples with their classification evidence.
+fn enrich_with_metrics(
+    record: &mut TaskRunRecord,
+    task: &EvalTask,
+    options: &EvalOptions,
+    run_dir: &Path,
+    rules: &FailureRules,
+) {
+    if record.status == RunStatus::SpawnError {
+        return; // nothing ran; metrics stay absent rather than fabricated
+    }
+
+    let task_dir = run_dir.join(&task.id);
+    let stream_path = task_dir.join("stream.ndjson");
+    let extracted: ExtractedTask = if !options.dry_run {
+        let l0_home = task_dir.join(L0_HOME_DIRNAME);
+        let logs = find_event_logs(&l0_home);
+        match extract_from_events_log(&logs) {
+            Ok(extracted) if !logs.is_empty() => extracted,
+            _ => derive_from_stream(&std::fs::read_to_string(&stream_path).unwrap_or_default()),
+        }
+    } else {
+        derive_from_stream(&std::fs::read_to_string(&stream_path).unwrap_or_default())
+    };
+
+    // Classification context merges runner verdicts with extractor signals.
+    let context = ClassifyContext {
+        status: record.status.as_str().to_string(),
+        passed: record.passed,
+        violations: record.violations.len() as u32,
+        metrics: extracted.metrics.clone(),
+        signals: extracted.signals.clone(),
+    };
+    let classification = rules.classify(&context);
+
+    // Failure-sample archive (real runs only — archiving needs a genuine log;
+    // dry runs keep their derived numbers but no L0 artifacts exist to store).
+    let archivable_log = extracted.metrics.source == MetricSource::EventsLog;
+
+    record.metrics = Some(extracted.metrics);
+    record.failure_class = classification.as_ref().map(|c| c.class.clone());
+    record.failure_evidence = classification
+        .as_ref()
+        .map(|c| c.evidence.clone())
+        .unwrap_or_default();
+
+    if !record.passed && archivable_log {
+        archive_failure_sample(record, &task_dir, &classification, options);
+    }
+}
+
+/// Directory name (inside each task's evidence dir) of the isolated
+/// `SHANNON_HOME` handed to the spawned engine so its tee writes the task's
+/// own `events.jsonl`.
+pub const L0_HOME_DIRNAME: &str = "l0-home";
+
+/// Root of the failure-sample archive: `<home>/eval/failures/<date>/<task>/`
+/// where the override mirrors the runs-root convention (override's parent).
+fn failure_archive_root(options: &EvalOptions) -> PathBuf {
+    match &options.out_dir_override {
+        Some(dir) => dir.parent().unwrap_or(dir).join("eval").join("failures"),
+        None => resolve_eval_home()
+            .map(|home| home.join("eval").join("failures"))
+            .unwrap_or_else(|_| std::env::temp_dir().join("shannon-eval-failures")),
+    }
+}
+
+/// Copy the task's L0 logs plus its classification verdict into
+/// `$SHANNON_HOME/eval/failures/<yyyymmdd>/<task_id>/`.
+fn archive_failure_sample(
+    record: &TaskRunRecord,
+    task_dir: &Path,
+    classification: &Option<Classification>,
+    options: &EvalOptions,
+) {
+    let date = chrono::Utc::now().format("%Y%m%d");
+    let dest_root = failure_archive_root(options).join(date.to_string());
+    let dest = dest_root.join(&record.id);
+    if std::fs::create_dir_all(&dest).is_err() {
+        return; // archival must never fail a run
+    }
+    for log in find_event_logs(&task_dir.join(L0_HOME_DIRNAME)) {
+        if let Some(session) = log.parent().and_then(Path::file_name) {
+            // Sanitized copy name; sessions are UUIDs in practice.
+            let name = session.to_string_lossy().replace(['"', '\\', '/'], "");
+            let _ = std::fs::copy(log, dest.join(format!("events-{name}.jsonl")));
+        }
+    }
+    let verdict = json!({
+        "task": record.id,
+        "status": record.status.as_str(),
+        "failure_class": record.failure_class,
+        "evidence": record.failure_evidence,
+        "classification": classification.as_ref().map(|c| serde_json::to_value(c).ok()),
+        "metrics": record.metrics,
+        "workspace": record.workspace,
+    });
+    let _ = std::fs::write(
+        dest.join("classification.json"),
+        serde_json::to_vec_pretty(&verdict).expect("classification serialization"),
+    );
+}
+
+/// Persist the enriched metrics/classification alongside the raw stream in
+/// the task evidence dir (`metrics.json`), keeping result.json the runner row.
+fn persist_task_artifacts(record: &TaskRunRecord, task_dir: PathBuf) {
+    let payload = json!({
+        "metrics": record.metrics,
+        "metrics_complete": record.metrics.as_ref().map(|m| missing_fields(m).is_empty()),
+        "failure_class": record.failure_class,
+        "failure_evidence": record.failure_evidence,
+    });
+    let _ = std::fs::write(
+        task_dir.join("metrics.json"),
+        serde_json::to_vec_pretty(&payload).expect("metrics.json serialization"),
+    );
 }
 
 /// Prepare the sandboxed workspace under `<run_dir>/<task_id>/workspace`:
@@ -939,6 +1223,7 @@ pub fn run_task(task: &EvalTask, options: &EvalOptions, run_dir: &Path) -> TaskR
             &bin,
             task,
             &workspace,
+            &run_dir.join(&task.id).join(L0_HOME_DIRNAME),
             limits.max_turns,
             limits.timeout_secs,
         )
@@ -1128,6 +1413,10 @@ fn finalize_record(
             .iter()
             .map(|call| call.tool.clone())
             .collect(),
+        // Enriched by §4.7 right after this constructor returns.
+        metrics: None,
+        failure_class: None,
+        failure_evidence: Vec::new(),
         workspace,
         task_file: task.task_source_path_hint.clone().unwrap_or_default(),
     }
@@ -1163,6 +1452,9 @@ fn base_record(
         violations,
         rule_outcomes: Vec::new(),
         trajectory_tools: Vec::new(),
+        metrics: None,
+        failure_class: None,
+        failure_evidence: Vec::new(),
         workspace,
         task_file: task.task_source_path_hint.clone().unwrap_or_default(),
     }
@@ -1177,6 +1469,7 @@ fn spawn_engine(
     bin: &Path,
     task: &EvalTask,
     workspace: &Path,
+    l0_home: &Path,
     max_turns: u32,
     timeout_secs: u64,
 ) -> ProducedStream {
@@ -1194,7 +1487,13 @@ fn spawn_engine(
         .stderr(Stdio::null())
         // Isolate persisted sessions into the task's own evidence directory
         // (headless honors `SHANNON_SESSIONS_DIR`; see cli main.rs).
-        .env("SHANNON_SESSIONS_DIR", workspace.join(".eval-sessions"));
+        .env("SHANNON_SESSIONS_DIR", workspace.join(".eval-sessions"))
+        // §4.7: a task-private SHANNON_HOME routes the §4.2 tee's L0 log to
+        // `<task_dir>/l0-home/sessions/<session_id>/events.jsonl`, giving
+        // metric extraction and failure archiving a genuine per-task source.
+        // `SHANNON_HOME` is consumed only by the session-log subsystem, so
+        // config/provider resolution is untouched.
+        .env("SHANNON_HOME", l0_home);
 
     #[cfg(unix)]
     {
@@ -1628,8 +1927,9 @@ pub fn load_report(path: &Path) -> Result<RunReport, EvalError> {
 }
 
 /// Diff verdict between two runs: structurally stable when their
-/// [`RunReport::stable_digest`] strings agree; otherwise enumerate
-/// per-task deltas worth eyeballing (statuses, budgets, trajectories).
+/// [`RunReport::stable_digest`] strings agree; otherwise enumerate the
+/// version-comparison metadata plus per-task deltas worth eyeballing
+/// (statuses, budgets, trajectories, §4.7 metrics and failure classes).
 pub fn compare_reports(a: &RunReport, b: &RunReport) -> String {
     if a.stable_digest() == b.stable_digest() {
         return format!(
@@ -1638,6 +1938,30 @@ pub fn compare_reports(a: &RunReport, b: &RunReport) -> String {
         );
     }
     let mut out = String::from("UNSTABLE: digests differ\n");
+
+    // Version-comparison anchors (§4.7 ③): engine/rules/provenance drift.
+    out.push_str("\n[meta]\n");
+    for (label, left, right) in [
+        (
+            "app_version",
+            a.app_version.as_str(),
+            b.app_version.as_str(),
+        ),
+        (
+            "failure_rules_fingerprint",
+            a.failure_rules_fingerprint.as_str(),
+            b.failure_rules_fingerprint.as_str(),
+        ),
+        (
+            "metrics_source",
+            a.metrics_source.as_str(),
+            b.metrics_source.as_str(),
+        ),
+    ] {
+        let mark = if left == right { "=" } else { "->" };
+        out.push_str(&format!("  {label} {mark} {left} -> {right}\n"));
+    }
+
     for (ra, rb) in a.records.iter().zip(b.records.iter()) {
         let va = ra.stable_view();
         let vb = rb.stable_view();
@@ -1649,8 +1973,11 @@ pub fn compare_reports(a: &RunReport, b: &RunReport) -> String {
                 "turns",
                 "tokens_in",
                 "tokens_out",
+                "total_tokens",
                 "violations",
                 "trajectory_tools",
+                "failure_class",
+                "metrics",
             ] {
                 if va.get(key) != vb.get(key) {
                     out.push_str(&format!(
@@ -2134,6 +2461,7 @@ input = { file_path = "meta.txt" }
             bin_path: None,
             dry_run: true,
             out_dir_override: Some(out.to_path_buf()),
+            failure_rules: None,
         }
     }
 
@@ -2298,6 +2626,7 @@ input = { file_path = "meta.txt" }
             bin_path: Some(bin),
             dry_run: false,
             out_dir_override: Some(run_root.path().to_path_buf()),
+            failure_rules: None,
         };
         let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
 
@@ -2351,6 +2680,7 @@ input = { file_path = "meta.txt" }
             bin_path: Some(bin),
             dry_run: false,
             out_dir_override: Some(run_root.path().to_path_buf()),
+            failure_rules: None,
         };
 
         let began = Instant::now();
@@ -2418,10 +2748,140 @@ input = { file_path = "meta.txt" }
             bin_path: Some(missing_dir.path().join("definitely-absent-engine")),
             dry_run: false,
             out_dir_override: Some(run_root.path().to_path_buf()),
+            failure_rules: None,
         };
         let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
         assert_eq!(report.records[0].status, RunStatus::SpawnError);
         assert_eq!(report.tasks_spawn_errors, 1);
+        // §4.7 honesty: nothing ran, so no metrics blob may be fabricated.
+        assert!(report.records[0].metrics.is_none());
+        assert_eq!(report.metrics_source, "none");
+    }
+
+    /// §4.7 end-to-end plumbing in REAL mode: the child sees an isolated
+    /// `SHANNON_HOME` (as the genuine engine tee relies on), writes its own
+    /// L0 log there, and the runner extracts metrics + failure class from
+    /// that log and archives the failing sample.
+    #[cfg(unix)]
+    #[test]
+    fn real_mode_extracts_metrics_from_child_l0_log_and_archives_failures() {
+        let bin_tmp = tempfile::TempDir::new().expect("binroot");
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+
+        // The fake binary reproduces exactly the child-side side effect of
+        // the §4.2 tee: events.jsonl under its own $SHANNON_HOME. Content is
+        // consumed verbatim by the extractor — Edit fails unrecovered after
+        // one healthy Read, a usage-carrying turn closes, and exit code 1
+        // marks the task Failed.
+        let script = concat!(
+            "mkdir -p \"$SHANNON_HOME/sessions/sid-l0\"\n",
+            "cat > \"$SHANNON_HOME/sessions/sid-l0/events.jsonl\" <<'EVT'\n",
+            "{\"seq\":0,\"ts_ns\":1000000000,\"session_id\":\"sid-l0\",\"turn\":1,\"kind\":\"session/start\",\"model\":\"fake\",\"provider\":\"mock\",\"app_version\":\"9.9.9\"}\n",
+            "{\"seq\":1,\"ts_ns\":1100000000,\"session_id\":\"sid-l0\",\"turn\":1,\"kind\":\"permission/decision\",\"tool_name\":\"Bash\",\"decision\":\"deny\"}\n",
+            "{\"seq\":2,\"ts_ns\":1200000000,\"session_id\":\"sid-l0\",\"turn\":1,\"kind\":\"tool/call\",\"tool_use_id\":\"a1\",\"tool_name\":\"Read\",\"arguments\":\"{\\\"file_path\\\":\\\"src/a.rs\\\"}\"}\n",
+            "{\"seq\":3,\"ts_ns\":1300000000,\"session_id\":\"sid-l0\",\"turn\":1,\"kind\":\"tool/result\",\"tool_use_id\":\"a1\",\"tool_name\":\"Read\",\"output\":\"ok\",\"is_error\":false}\n",
+            "{\"seq\":4,\"ts_ns\":1400000000,\"session_id\":\"sid-l0\",\"turn\":1,\"kind\":\"tool/call\",\"tool_use_id\":\"a2\",\"tool_name\":\"Edit\",\"arguments\":\"{\\\"old_string\\\":\\\"zzz\\\"}\"}\n",
+            "{\"seq\":5,\"ts_ns\":1500000000,\"session_id\":\"sid-l0\",\"turn\":1,\"kind\":\"tool/result\",\"tool_use_id\":\"a2\",\"tool_name\":\"Edit\",\"output\":\"anchor not found\",\"is_error\":true}\n",
+            "{\"seq\":6,\"ts_ns\":1600000000,\"session_id\":\"sid-l0\",\"turn\":2,\"kind\":\"turn/end\",\"reason\":\"completed\",\"usage\":{\"input_tokens\":700,\"output_tokens\":90,\"cache_creation_tokens\":10,\"cache_read_tokens\":200,\"cost_usd\":0.42}}\n",
+            "EVT\n",
+            "printf '%s\\n' ",
+            "'{\"type\":\"start\",\"prompt\":\"-\",\"model\":\"fake\",\"session_id\":\"sid-l0\"}' ",
+            "'{\"type\":\"tool_call\",\"name\":\"Read\",\"input\":{\"file_path\":\"src/a.rs\"}}' ",
+            "'{\"type\":\"text_delta\",\"content\":\"editing...\"}' ",
+            "'{\"type\":\"done\",\"exit_code\":1,\"turns_used\":2,\"tokens_used\":790,\"tokens_in\":700,\"tokens_out\":90}'\n",
+            "exit 1\n"
+        );
+        let bin = fake_bin(bin_tmp.path(), "shannon-l0", script);
+
+        let task_body = concat!(
+            "id = \"multi_fx\"\ntier = \"multi_step\"\nprompt = \"apply fix\"\n",
+            "[[verify.rules]]\nrule = \"response_contains\"\ntext = \"editing\"\n",
+            "[limits]\nmax_turns = 8\nmax_tokens = 90000\ntimeout_secs = 20\n\n",
+            "[dry_run]\nfinal_text = \"unused\"\n"
+        );
+        let task =
+            parse_task(&write_task(tasks_root.path(), "multi_fx.toml", task_body)).expect("parse");
+
+        let options = EvalOptions {
+            bin_path: Some(bin),
+            dry_run: false,
+            out_dir_override: Some(run_root.path().to_path_buf()),
+            failure_rules: None,
+        };
+        let (report, run_dir) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
+        let record = &report.records[0];
+
+        // Provenance flipped to the genuine L0 source.
+        assert_eq!(
+            record.metrics.as_ref().expect("metrics").source,
+            MetricSource::EventsLog
+        );
+        assert_eq!(report.metrics_source, "events_jsonl");
+
+        let metrics = record.metrics.as_ref().unwrap();
+        assert_eq!(missing_fields(metrics), Vec::<&'static str>::new());
+        assert_eq!(metrics.tokens_in, 700);
+        assert_eq!(metrics.cost_usd, Some(0.42));
+        assert_eq!(metrics.permission_blocks, 1);
+        assert_eq!(metrics.tool_calls, 2);
+        assert!(metrics.wall_clock_ms.unwrap_or_default() <= 1000);
+        assert_eq!(
+            metrics.invalid_calls, 0,
+            "recovery retried elsewhere, not verbatim"
+        );
+
+        // Classification: failing row. The log carries BOTH a denied
+        // permission and an unrecovered Edit; the declared rule order makes
+        // ④ 权限误拒 outrank ⑥ 编辑冲突, demonstrating deterministic priority.
+        assert_eq!(record.status, RunStatus::Failed);
+        assert_eq!(
+            record.failure_class.as_deref(),
+            Some("permission_misreject")
+        );
+        assert!(
+            record
+                .failure_evidence
+                .iter()
+                .any(|line| line.starts_with("permission_blocks ge 1")),
+            "{:?}",
+            record.failure_evidence
+        );
+
+        // The L0 log lives inside the task's own evidence directory…
+        let l0_log = run_dir
+            .join("multi_fx")
+            .join(L0_HOME_DIRNAME)
+            .join("sessions")
+            .join("sid-l0")
+            .join("events.jsonl");
+        assert!(
+            l0_log.exists(),
+            "isolated SHANNON_HOME must hold the tee log"
+        );
+
+        // …and the failed sample was archived with copy + verdict.
+        let date = chrono::Utc::now().format("%Y%m%d").to_string();
+        let archive_root = run_root
+            .path()
+            .parent()
+            .expect("parent")
+            .join("eval")
+            .join("failures")
+            .join(&date);
+        let archived = archive_root.join("multi_fx");
+        let copied_log = std::fs::read_dir(&archived)
+            .expect("archive dir")
+            .filter_map(Result::ok)
+            .find(|e| e.file_name().to_string_lossy().starts_with("events-"))
+            .expect("archived events.jsonl copy");
+        assert!(copied_log.metadata().expect("meta").len() > 0);
+        let verdict =
+            std::fs::read_to_string(archived.join("classification.json")).expect("verdict");
+        assert!(
+            verdict.contains("\"failure_class\": \"permission_misreject\""),
+            "{verdict}"
+        );
     }
 
     // ── Report digests & comparison ───────────────────────────────────
