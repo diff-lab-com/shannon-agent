@@ -108,6 +108,7 @@ pub mod scheduled_routines;
 pub mod scheduled_runs;
 pub mod scheduled_task_store;
 pub mod scheduled_worktree;
+pub mod session_log;
 pub mod session_transcript;
 pub mod skill_loop;
 pub mod team_memory_sync;
