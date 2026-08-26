@@ -147,3 +147,7 @@ harness = false
 [[bench]]
 name = "turn_log_overhead"
 harness = false
+
+[[bench]]
+name = "event_bus"
+harness = false

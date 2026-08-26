@@ -84,24 +84,26 @@ macro_rules! send_event {
     };
 }
 
-/// The engine's event sender: the mpsc channel plus the L0 session-log tee
-/// (plan §4.2). This is the **single injection point** — every `QueryEvent`
-/// broadcast (via `send_event!` or a direct `send`) passes through
-/// [`EventTx::send`], which mirrors the event into the session log on its
-/// way to the consumer. Logging is a bypass: a disabled or degraded tee
-/// records nothing and never changes the channel's behavior.
+/// The engine's event sender: the legacy mpsc facade (§4.2 compatibility —
+/// TUI/SSE/desktop consumers unchanged) plus the session [`EventBus`] (§4.8).
+/// This is still the **single injection point**: every `QueryEvent` broadcast
+/// passes through [`EventTx::send`], which publishes the mapped inputs onto
+/// the session bus on their way to the consumer. The built-in L0 subscriber
+/// ([`L0TeeSubscriber`](crate::session_log::L0TeeSubscriber)) mirrors durable
+/// rows into the session log; publishing happens before the channel send, so
+/// log order equals broadcast order exactly like the pre-bus direct bypass.
 #[derive(Clone)]
 pub(crate) struct EventTx {
     tx: mpsc::UnboundedSender<Result<QueryEvent, QueryError>>,
-    tee: crate::session_log::TeeHandle,
+    bus: crate::bus::EventBus,
 }
 
 impl EventTx {
     fn new(
         tx: mpsc::UnboundedSender<Result<QueryEvent, QueryError>>,
-        tee: crate::session_log::TeeHandle,
+        bus: crate::bus::EventBus,
     ) -> Self {
-        Self { tx, tee }
+        Self { tx, bus }
     }
 
     fn send(
@@ -109,7 +111,10 @@ impl EventTx {
         item: Result<QueryEvent, QueryError>,
     ) -> Result<(), mpsc::error::SendError<Result<QueryEvent, QueryError>>> {
         if let Ok(event) = &item {
-            self.tee.record_query_event(event);
+            // Serial batches keep multi-input expansions (`Failed` → error row
+            // + turn boundary) atomic against foreign events.
+            self.bus
+                .dispatch_serial_batch(crate::session_log::query_event_to_bus_inputs(event));
         }
         self.tx.send(item)
     }
@@ -1119,17 +1124,19 @@ impl QueryEngine {
         let config = self.config.clone();
         let session_id_for_permissions = context.session_id;
 
-        // Create receiver for events. `EventTx` wraps the channel with the
-        // session-log tee (§4.2): every broadcast QueryEvent is mirrored to
-        // `~/.shannon/sessions/<session_id>/events.jsonl` as it is sent —
-        // "model-visible == recorded". `SHANNON_SESSION_LOG=off` disables.
+        // Create receiver for events. The legacy mpsc channel stays as the
+        // compatibility facade for TUI/SSE/desktop consumers (§4.8); every
+        // broadcast QueryEvent additionally flows through this session's
+        // [`EventBus`], whose built-in L0 subscriber mirrors durable rows to
+        // `~/.shannon/sessions/<session_id>/events.jsonl` — one dispatch
+        // path for distribution and persistence.
+        // `SHANNON_SESSION_LOG=off` still disables recording (the tee's own
+        // switch). Subscriptions and the L0 writer are mounted at the top of
+        // the producer task below so their guards live exactly as long as
+        // the query.
         let (tx_raw, rx) = mpsc::unbounded_channel();
-        let tee = crate::session_log::TeeHandle::open(
-            &self.session_id.to_string(),
-            self.client.model(),
-            Some(&self.client.provider().to_string()),
-        );
-        let tx = EventTx::new(tx_raw, tee.clone());
+        let session_bus = std::sync::Arc::new(crate::bus::EventBus::new());
+        let tx = EventTx::new(tx_raw, session_bus.shared());
 
         // Get necessary state for the spawned task
         let tools = self.tools.clone();
@@ -1167,6 +1174,7 @@ impl QueryEngine {
         let client_base_url = self.client.base_url().to_string();
         let client_max_tokens = self.client.max_tokens();
         let client_provider = self.client.provider().clone();
+        let self_session_id = self.session_id.to_string();
         let user_message = context.user_message.clone();
         let state_for_save = self.state.clone();
         let session_id_for_save = self.session_id;
@@ -1389,19 +1397,64 @@ impl QueryEngine {
             // Prevent OS sleep during long-running queries (drops on exit)
             let _sleep_guard = crate::prevent_sleep::PreventSleepGuard::new();
 
+            // ---- §4.8: mount the built-in subscriptions on this session's
+            // bus. The L0 writer is now a subscriber ("log-as-subscribe"),
+            // so in-process distribution and persistence share one path;
+            // dropping its guard (task end / abort) closes the log with the
+            // same interrupted-turn semantics as before.
+            let l0_tee = crate::session_log::TeeHandle::open(
+                &self_session_id,
+                client_model.as_str(),
+                Some(client_provider.to_string().as_str()),
+            );
+            let _l0_guard = session_bus.subscribe(
+                crate::bus::TopicFilter::all(),
+                std::sync::Arc::new(crate::session_log::L0TeeSubscriber::new(l0_tee.clone())),
+            );
+            // Plugin-gate decisions (§4.9 route (b)) republish onto the bus
+            // as permission/decision rows via the process-wide sink; the
+            // most recent query installs it (single-active-session flows).
+            {
+                use shannon_types::session_event::PermissionDecisionPayload;
+                crate::bus::install_decision_sink({
+                    let sink_bus = session_bus.shared();
+                    std::sync::Arc::new(move |frame: &crate::bus::PluginDecisionFrame| {
+                        let decision = if frame.allowed { "allow" } else { "deny" };
+                        let reason = format!(
+                            "plugin gate '{}' requires '{}' declared [{}]",
+                            frame.point,
+                            frame.required,
+                            frame.declared.join(", ")
+                        );
+                        sink_bus.dispatch(
+                            crate::bus::permission_decision_event(PermissionDecisionPayload {
+                                tool_name: None,
+                                request: Some(format!("plugin '{}'", frame.plugin)),
+                                decision: decision.to_string(),
+                                reason: Some(reason),
+                                mode: Some("PLUGIN".to_string()),
+                            })
+                            .into(),
+                            crate::bus::DispatchMode::Emit,
+                        );
+                    })
+                });
+            }
+            let tee = l0_tee;
+
             // §4.2: open the L0 record for this query — the user message and
             // turn boundary precede anything the model sees.
             tee.record_user_message(&user_message);
             tee.record_turn_start(Some(query_id.to_string()));
 
-            // Fire UserPromptSubmit hook
-            {
-                let prompt_event = shannon_engine::hooks::HookEvent::UserPromptSubmit {
-                    prompt: user_message.clone(),
-                };
-                let hm = hook_manager.read().await;
-                let _ = hm.run_hooks(&prompt_event).await;
-            }
+            // Fire UserPromptSubmit hook — §4.8: as a bus trigger picked up
+            // by the HookManagerAdapter subscription (results unused here,
+            // same as the pre-bus direct call).
+            crate::query_engine::guard_nodes::publish_hook_trigger(
+                &session_bus,
+                "UserPromptSubmit",
+                serde_json::json!({ "prompt": user_message.clone() }),
+            );
 
             // Create a new client for this task, preserving provider from original config
             let client_config = {
@@ -2440,23 +2493,35 @@ impl QueryEngine {
                                                         }
                                                     }
 
-                                                    // Pre-check with classifier and permission system
-                                                    let permission_result = {
-                                                        let guard =
-                                                            recover_lock(permissions.read());
-                                                        guard.classify_and_check(
+                                                    // §4.8: the permission gate is the
+                                                    // chain-head node of the tool
+                                                    // pre-execute waterfall; every
+                                                    // verdict is published as a
+                                                    // durable permission/decision row
+                                                    // by the node itself.
+                                                    use crate::query_engine::guard_nodes::PermissionVerdict;
+                                                    let mut guard_ctx =
+                                                        crate::query_engine::guard_nodes::ToolGuardContext::new(
+                                                            tool_name.clone(),
+                                                            tool_input.clone(),
+                                                        );
+                                                    {
+                                                        use crate::query_engine::guard_nodes::PermissionGateNode;
+                                                        let gate = PermissionGateNode::new(
+                                                            permissions.clone(),
                                                             session_id_for_permissions,
-                                                            &tool_name,
-                                                            &tool_input,
-                                                        )
-                                                    };
+                                                            session_bus.shared(),
+                                                        );
+                                                        gate.evaluate(&mut guard_ctx).await;
+                                                    }
 
-                                                    match permission_result {
-                                                        Err(_) => {
+                                                    match &guard_ctx.verdict {
+                                                        PermissionVerdict::Denied {
+                                                            reason,
+                                                            ..
+                                                        } => {
                                                             consecutive_denials += 1;
-                                                            let error_msg = format!(
-                                                                "Tool denied by classifier: {tool_name}"
-                                                            );
+                                                            let error_msg = reason.clone();
                                                             send_event!(
                                                                 tx,
                                                                 QueryEvent::ToolUseResult {
@@ -2475,34 +2540,21 @@ impl QueryEngine {
                                                             });
                                                             continue;
                                                         }
-                                                        Ok(None) => {
+                                                        PermissionVerdict::Allowed
+                                                        | PermissionVerdict::Pending => {
                                                             // Auto-allowed (low risk or always-allowed)
                                                             // Fall through to check hooks
                                                         }
-                                                        Ok(Some(mut prompt)) => {
-                                                            // Check if already denied
-                                                            if prompt.risk_level
-                                                                == shannon_engine::permissions::RiskLevel::Critical
-                                                            {
-                                                                let error_msg = format!(
-                                                                    "Tool denied: {}",
-                                                                    prompt.description
-                                                                );
-                                                                send_event!(tx, QueryEvent::ToolUseResult {
-                                                                    query_id,
-                                                                    tool_use_id: tool_id.clone(),
-                                                                    tool_name,
-                                                                    result: error_msg.clone(),
-                                                                    is_error: true,
-                                                                });
-                                                                tool_results.push(ToolResultEntry {
-                                                                    tool_use_id: tool_id,
-                                                                    content: error_msg,
-                                                                    is_error: true,
-                                                                    metadata: Default::default(),
-                                                                });
-                                                                continue;
-                                                            }
+                                                        PermissionVerdict::Prompt {
+                                                            prompt,
+                                                            ..
+                                                        } => {
+                                                            // The gate already refused Critical risk;
+                                                            // this arm is the interactive path. (Critical
+                                                            // prompts can no longer occur here.)
+                                                            #[allow(unused_mut)]
+                                                            let mut prompt = (**prompt).clone();
+                                                            let _ = &mut prompt;
 
                                                             // Send permission request if a channel is provided
                                                             if let Some(ref req_tx) =
@@ -2582,6 +2634,14 @@ impl QueryEngine {
                                                                         shannon_engine::permissions::PermissionChoice::Deny,
                                                                     ) => {
                                                                         consecutive_denials += 1;
+                                                                        crate::query_engine::guard_nodes::emit_decision(
+                                                                            &session_bus,
+                                                                            &tool_name,
+                                                                            "deny",
+                                                                            Some("user denied the operation"),
+                                                                            "USER",
+                                                                            0,
+                                                                        );
                                                                         let denied_msg = format!(
                                                                             "Permission denied: {prompt_desc}"
                                                                         );
@@ -2605,7 +2665,16 @@ impl QueryEngine {
                                                                     }
                                                                     Some(
                                                                         shannon_engine::permissions::PermissionChoice::AllowOnce,
-                                                                    ) => {}
+                                                                    ) => {
+                                                                        crate::query_engine::guard_nodes::emit_decision(
+                                                                            &session_bus,
+                                                                            &tool_name,
+                                                                            "allow",
+                                                                            Some("user allowed once"),
+                                                                            "USER",
+                                                                            0,
+                                                                        );
+                                                                    }
                                                                     Some(
                                                                         shannon_engine::permissions::PermissionChoice::AlwaysAllow,
                                                                     ) => {
@@ -2615,6 +2684,14 @@ impl QueryEngine {
                                                                                 &prompt_for_choice,
                                                                                 shannon_engine::permissions::PermissionChoice::AlwaysAllow,
                                                                             );
+                                                                        crate::query_engine::guard_nodes::emit_decision(
+                                                                            &session_bus,
+                                                                            &tool_name,
+                                                                            "allow",
+                                                                            Some("user chose always allow"),
+                                                                            "USER",
+                                                                            0,
+                                                                        );
                                                                     }
                                                                     Some(
                                                                         shannon_engine::permissions::PermissionChoice::EditAndRun,
@@ -2626,8 +2703,24 @@ impl QueryEngine {
                                                                                 &prompt_for_choice,
                                                                                 shannon_engine::permissions::PermissionChoice::EditAndRun,
                                                                             );
+                                                                        crate::query_engine::guard_nodes::emit_decision(
+                                                                            &session_bus,
+                                                                            &tool_name,
+                                                                            "allow",
+                                                                            Some("user edited then allowed"),
+                                                                            "USER",
+                                                                            0,
+                                                                        );
                                                                     }
                                                                     None => {
+                                                                        crate::query_engine::guard_nodes::emit_decision(
+                                                                            &session_bus,
+                                                                            &tool_name,
+                                                                            "deny",
+                                                                            Some("permission channel closed"),
+                                                                            "USER",
+                                                                            0,
+                                                                        );
                                                                         let error_msg =
                                                                             "Permission channel closed"
                                                                                 .to_string();
@@ -2655,68 +2748,44 @@ impl QueryEngine {
                                                         }
                                                     }
 
-                                                    // Run PreToolUse hooks
-                                                    let hook_event =
-                                                        shannon_engine::hooks::HookEvent::PreToolUse {
-                                                            tool_name: tool_name.clone(),
-                                                            input: tool_input.clone(),
-                                                        };
-                                                    let pre_hook_decision = {
-                                                        let hm = hook_manager.read().await;
-                                                        match hm.run_hooks(&hook_event).await {
-                                                            Ok(results) => shannon_engine::hooks::HookManager::resolve_results(&results),
-                                                            Err(e) => {
-                                                                tracing::warn!("PreToolUse hook error: {e}");
-                                                                shannon_engine::hooks::HookDecision::Allow
-                                                            }
-                                                        }
-                                                    };
-
-                                                    let mut effective_input = tool_input.clone();
-                                                    match &pre_hook_decision {
-                                                        shannon_engine::hooks::HookDecision::Deny {
-                                                            reason,
-                                                        } => {
-                                                            let error_msg =
-                                                                format!("Hook denied: {reason}");
-                                                            send_event!(
-                                                                tx,
-                                                                QueryEvent::ToolUseResult {
-                                                                    query_id,
-                                                                    tool_use_id: tool_id.clone(),
-                                                                    tool_name,
-                                                                    result: error_msg.clone(),
-                                                                    is_error: true,
-                                                                }
-                                                            );
-                                                            tool_results.push(ToolResultEntry {
-                                                                tool_use_id: tool_id,
-                                                                content: error_msg,
+                                                    // §4.8 stage 2: PreToolUse hooks run as the
+                                                    // second waterfall node; executed hooks are
+                                                    // audited as durable hook/fired rows by the node.
+                                                    {
+                                                        use crate::query_engine::guard_nodes::PreToolUseHookNode;
+                                                        let hooks_stage = PreToolUseHookNode::new(
+                                                            hook_manager.clone(),
+                                                            session_bus.shared(),
+                                                        );
+                                                        hooks_stage.evaluate(&mut guard_ctx).await;
+                                                    }
+                                                    if let Some(reason) = guard_ctx.hook_deny.take()
+                                                    {
+                                                        let error_msg =
+                                                            format!("Hook denied: {reason}");
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::ToolUseResult {
+                                                                query_id,
+                                                                tool_use_id: tool_id.clone(),
+                                                                tool_name,
+                                                                result: error_msg.clone(),
                                                                 is_error: true,
-                                                                metadata: Default::default(),
-                                                            });
-                                                            continue;
-                                                        }
-                                                        shannon_engine::hooks::HookDecision::Modify {
-                                                            modified_input,
-                                                            ..
-                                                        } => {
-                                                            if let Some(new_input) = modified_input
-                                                            {
-                                                                tracing::debug!(
-                                                                    "PreToolUse hook modified input for tool '{}'",
-                                                                    tool_name
-                                                                );
-                                                                effective_input = new_input.clone();
                                                             }
-                                                        }
-                                                        shannon_engine::hooks::HookDecision::Allow => {}
+                                                        );
+                                                        tool_results.push(ToolResultEntry {
+                                                            tool_use_id: tool_id,
+                                                            content: error_msg,
+                                                            is_error: true,
+                                                            metadata: Default::default(),
+                                                        });
+                                                        continue;
                                                     }
 
                                                     approved_tools.push((
                                                         tool_id,
                                                         tool_name,
-                                                        effective_input,
+                                                        guard_ctx.input,
                                                     ));
                                                 }
 
@@ -2811,26 +2880,23 @@ impl QueryEngine {
                                                                             effective_input,
                                                                             result,
                                                                         )) => {
-                                                                            // Run PostToolUse hooks
+                                                                            // §4.8: PostToolUse fires as a bus
+                                                                            // trigger handled by the adapter
+                                                                            // subscription.
                                                                             {
                                                                                 let output_val = match &result {
                                                                                     Ok(o) => serde_json::Value::String(o.content.clone()),
                                                                                     Err(e) => serde_json::Value::String(format!("Error: {e}")),
                                                                                 };
-                                                                                let post_event = shannon_engine::hooks::HookEvent::PostToolUse {
-                                                                                    tool_name: tool_name.clone(),
-                                                                                    input: effective_input,
-                                                                                    output: output_val,
-                                                                                };
-                                                                                let hm =
-                                                                                    hook_manager
-                                                                                        .read()
-                                                                                        .await;
-                                                                                let _ = hm
-                                                                                    .run_hooks(
-                                                                                        &post_event,
-                                                                                    )
-                                                                                    .await;
+                                                                                crate::query_engine::guard_nodes::publish_hook_trigger(
+                                                                                    &session_bus,
+                                                                                    "PostToolUse",
+                                                                                    serde_json::json!({
+                                                                                        "tool_name": tool_name.clone(),
+                                                                                        "input": effective_input.clone(),
+                                                                                        "output": output_val,
+                                                                                    }),
+                                                                                );
                                                                             }
 
                                                                             // Execute matching triggered routines (non-blocking)
@@ -2983,22 +3049,22 @@ impl QueryEngine {
                                                                     )
                                                                     .await;
 
-                                                                // Run PostToolUse hooks
+                                                                // §4.8: PostToolUse fires as a bus trigger
+                                                                // handled by the adapter subscription.
                                                                 {
                                                                     let output_val = match &result {
                                                                         Ok(o) => serde_json::Value::String(o.content.clone()),
                                                                         Err(e) => serde_json::Value::String(format!("Error: {e}")),
                                                                     };
-                                                                    let post_event = shannon_engine::hooks::HookEvent::PostToolUse {
-                                                                        tool_name: tool_name.clone(),
-                                                                        input: effective_input,
-                                                                        output: output_val,
-                                                                    };
-                                                                    let hm =
-                                                                        hook_manager.read().await;
-                                                                    let _ = hm
-                                                                        .run_hooks(&post_event)
-                                                                        .await;
+                                                                    crate::query_engine::guard_nodes::publish_hook_trigger(
+                                                                        &session_bus,
+                                                                        "PostToolUse",
+                                                                        serde_json::json!({
+                                                                            "tool_name": tool_name.clone(),
+                                                                            "input": effective_input.clone(),
+                                                                            "output": output_val,
+                                                                        }),
+                                                                    );
                                                                 }
 
                                                                 // Execute matching triggered routines (non-blocking)

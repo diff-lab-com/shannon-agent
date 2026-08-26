@@ -15,10 +15,12 @@
 //! Storage layout: `~/.shannon/sessions/<session_id>/events.jsonl` — one
 //! directory per session, leaving room for projections and metadata.
 
+pub mod l0_subscriber;
 pub mod reader;
 pub mod tee;
 pub mod writer;
 
+pub use l0_subscriber::L0TeeSubscriber;
 pub use reader::{SessionEventIter, SessionLogReader};
 pub use tee::{SessionTee, TeeHandle};
 pub use writer::{FlushPolicy, SessionLogWriter};
@@ -265,6 +267,64 @@ pub fn token_usage_from_event(event: &QueryEvent) -> Option<TokenUsage> {
         _ => return None,
     };
     Some(usage)
+}
+
+// ============================================================================
+// §4.8 bridge: QueryEvent → bus inputs (the L0 subscriber's diet)
+// ============================================================================
+
+/// Map one broadcast [`QueryEvent`] to the bus inputs that reproduce exactly
+/// what [`SessionTee::record_query_event`] used to write when the tee was a
+/// direct bypass of `EventTx` (§4.2). This is the migration seam of plan
+/// §4.8: the L0 writer is now a built-in bus subscriber, and this function is
+/// its single mapping source.
+///
+/// Semantics mirrored verbatim from the pre-bus record path:
+///
+/// - [`QueryEvent::Usage`] / [`QueryEvent::TurnCompleted`] become fold
+///   directives ([`crate::bus::CoalesceInput`]), not standalone rows.
+/// - [`QueryEvent::Completed`] closes the open turn; [`QueryEvent::Failed`]
+///   produces **two** inputs — the mapped `error` row and then the turn
+///   boundary, in that order (dispatch them as one batch).
+/// - `Progress` / `ToolProgress` / `Info` / `Cost` / `ConversationUpdate`
+///   map to nothing (transient or folded elsewhere), same as before.
+pub fn query_event_to_bus_inputs(event: &QueryEvent) -> Vec<crate::bus::BusInput> {
+    use crate::bus::{BusEvent, BusInput, CoalesceInput};
+
+    match event {
+        // Fold-only inputs first: they never produce standalone rows.
+        QueryEvent::Usage { .. } => {
+            let usage = token_usage_from_event(event).expect("Usage maps to usage");
+            vec![BusInput::Coalesce(CoalesceInput::StepUsage(usage))]
+        }
+        QueryEvent::TurnCompleted { tokens_used, .. } => {
+            vec![BusInput::Coalesce(CoalesceInput::BareTokens(*tokens_used))]
+        }
+        QueryEvent::Completed { .. } => vec![BusInput::Coalesce(CoalesceInput::TurnBoundary {
+            reason: TurnEndPayload::REASON_COMPLETED.into(),
+            error: None,
+        })],
+        QueryEvent::Failed { error, .. } => {
+            let mut inputs = Vec::with_capacity(2);
+            if let Some(body) = query_event_to_session_body(event) {
+                inputs.push(BusInput::Event(
+                    BusEvent::new(body).with_origin("engine-stream"),
+                ));
+            }
+            inputs.push(BusInput::Coalesce(CoalesceInput::TurnBoundary {
+                reason: TurnEndPayload::REASON_FAILED.into(),
+                error: Some(error.clone()),
+            }));
+            inputs
+        }
+        // Everything else: publish whatever the pure mapping yields.
+        _ => match query_event_to_session_body(event) {
+            Some(body) => vec![BusInput::Event(
+                BusEvent::new(body).with_origin("engine-stream"),
+            )],
+            None => Vec::new(),
+        },
+    }
 }
 
 // ============================================================================
