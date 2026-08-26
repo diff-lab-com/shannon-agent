@@ -298,7 +298,9 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
                             visual noise. */}
                         <span className="material-symbols-outlined text-[14px] text-outline-variant shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" aria-hidden="true">drag_indicator</span>
                         {pinnedIds.has(session.id) && (
-                          <span className="material-symbols-outlined text-[14px] text-primary shrink-0" aria-hidden="true">push_pin</span>
+                          // U8: filled pin marks the active state; the menu
+                          // action stays outlined.
+                          <span className="material-symbols-outlined text-[14px] text-primary shrink-0" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">push_pin</span>
                         )}
                         <span className="flex-1 truncate">
                           <HighlightText text={session.title || untitled} query={query.trim()} />

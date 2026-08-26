@@ -155,7 +155,7 @@ export function Header() {
               onClick={() => { setModelOpen(!modelOpen); setModelFocus(-1) }}
             >
               <span className={cn('w-2 h-2 rounded-full shrink-0', status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary')}></span>
-              <span className="font-label-sm text-[12px] whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
+              <span className="font-mono font-label-sm text-[12px] whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
               <span className="material-symbols-outlined icon-sm">expand_more</span>
             </Button>
             {modelOpen && models.length > 0 && (
@@ -178,7 +178,7 @@ export function Header() {
                     onClick={() => handleModelSwitch(m.id)}
                     onMouseEnter={() => setModelFocus(i)}
                   >
-                    <span className="font-label-md truncate">{m.name}</span>
+                    <span className="font-mono font-label-md truncate">{m.name}</span>
                     <span className="text-label-sm text-on-surface-variant">{m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : ''}</span>
                   </Button>
                 ))}
