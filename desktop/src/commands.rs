@@ -479,14 +479,31 @@ pub async fn send_message(
         }
     });
 
-    {
+    // Tier-1 auto-title: capture emptiness before the push — this message is
+    // the session's first user message iff the buffer was empty.
+    let first_user_message = {
         let mut messages = active_session.messages.lock().await;
+        let first = messages.is_empty();
         messages.push(ChatMessage {
             role: "user".into(),
             content: message.clone(),
             timestamp: now,
             file_attachments: attachments,
         });
+        first
+    };
+
+    // Promote the first user message to the session title while the title
+    // is still the generated placeholder. User renames are never touched;
+    // the UI refreshes its session rail off the emitted SESSIONS_UPDATED.
+    if first_user_message {
+        crate::commands_sessions::auto_title_from_first_message(
+            &state,
+            &app_handle,
+            session_id,
+            &message,
+        )
+        .await;
     }
 
     let query_id = uuid::Uuid::new_v4();
