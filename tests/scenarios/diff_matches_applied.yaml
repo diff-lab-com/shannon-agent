@@ -1,0 +1,35 @@
+name: diff_matches_applied
+description: "Positive behavioral assertion: applied Hello->Goodbye edit yields the expected +/- diff lines"
+prompt: "Read src/main.rs then replace Hello with Goodbye"
+provider: anthropic
+
+setup:
+  files:
+    - path: src/main.rs
+      content: |
+        fn main() {
+            println!("Hello, world!");
+        }
+
+mock_responses:
+  - response:
+      type: tool_use
+      tool: Read
+      tool_id: toolu_1
+      input: { "path": "src/main.rs" }
+  - response:
+      type: tool_use
+      tool: Edit
+      tool_id: toolu_2
+      input: { "path": "src/main.rs", "old_string": "Hello", "new_string": "Goodbye" }
+  - response:
+      type: text
+      content: "Updated the greeting."
+
+validate:
+  - rule: diff_matches
+    path: src/main.rs
+    expected_diff_regex: '\+\s*println!\("Goodbye, world!"\);'
+  - rule: diff_matches
+    path: src/main.rs
+    expected_diff_regex: '^-.*Hello'
