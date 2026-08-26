@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router-dom'
+import type * as ReactRouterDom from 'react-router-dom'
 import OPCKanbanBoard from '@/components/opc/OPCKanbanBoard'
 import type { TaskItem } from '@/types'
 
 const navigate = vi.hoisted(() => vi.fn())
 
 vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  const actual = await vi.importActual<typeof ReactRouterDom>('react-router-dom')
   return { ...actual, useNavigate: () => navigate }
 })
 

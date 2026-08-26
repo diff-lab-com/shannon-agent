@@ -49,6 +49,18 @@ import type {
   TriggeredRoutineDto,
   TriggerResponse,
   TaskWorktreeDto,
+  AgentMessageEntry,
+  BillingPlan,
+  CostRecord,
+  BillingHistory,
+  UsageStats,
+  HookEventInfo,
+  ProfilesList,
+  CustomProfileInfo,
+  OpcMetrics,
+  TaskEvaluation,
+  EvaluationResult,
+  SkillProposal,
 } from '@/types'
 
 export async function readAttachment(path: string): Promise<AttachmentPayload> {
@@ -974,7 +986,7 @@ export async function listAgents(): Promise<AgentInfo[]> {
 export async function listAgentMessages(
   team?: string,
   limit?: number,
-): Promise<import('@/types').AgentMessageEntry[]> {
+): Promise<AgentMessageEntry[]> {
   return invoke('list_agent_messages', { team: team ?? null, limit: limit ?? null })
 }
 
@@ -1028,25 +1040,25 @@ export async function listTasks(): Promise<TaskItem[]> {
   return invoke('list_tasks')
 }
 
-export async function updateTask(payload: import('@/types').UpdateTaskPayload): Promise<TaskItem> {
+export async function updateTask(payload: UpdateTaskPayload): Promise<TaskItem> {
   return invoke('update_task', { payload })
 }
 
 // --- Billing ---
 
-export async function getBillingPlan(): Promise<import('@/types').BillingPlan> {
+export async function getBillingPlan(): Promise<BillingPlan> {
   return invoke('get_billing_plan')
 }
 
-export async function getCostHistory(days: number): Promise<import('@/types').CostRecord[]> {
+export async function getCostHistory(days: number): Promise<CostRecord[]> {
   return invoke('get_cost_history', { days })
 }
 
-export async function getBillingHistory(): Promise<import('@/types').BillingHistory[]> {
+export async function getBillingHistory(): Promise<BillingHistory[]> {
   return invoke('get_billing_history')
 }
 
-export async function getUsageStats(days: number): Promise<import('@/types').UsageStats> {
+export async function getUsageStats(days: number): Promise<UsageStats> {
   return invoke('get_usage_stats', { days })
 }
 
@@ -1144,11 +1156,11 @@ export async function createTriggeredRoutine(payload: {
 
 // Hook events + permission profiles
 
-export async function listHookEvents(): Promise<import('@/types').HookEventInfo[]> {
+export async function listHookEvents(): Promise<HookEventInfo[]> {
   return invoke('list_hook_events')
 }
 
-export async function listPermissionProfiles(): Promise<import('@/types').ProfilesList> {
+export async function listPermissionProfiles(): Promise<ProfilesList> {
   return invoke('list_permission_profiles')
 }
 
@@ -1158,7 +1170,7 @@ export async function saveCustomProfile(payload: {
   auto_approve: string[]
   confirm: string[]
   deny: string[]
-}): Promise<import('@/types').CustomProfileInfo> {
+}): Promise<CustomProfileInfo> {
   return invoke('save_custom_profile', {
     name: payload.name,
     description: payload.description ?? null,
@@ -1174,7 +1186,7 @@ export async function deleteCustomProfile(name: string): Promise<string[]> {
 
 // --- OPC analytics ---
 
-export async function getOpcMetrics(): Promise<import('@/types').OpcMetrics> {
+export async function getOpcMetrics(): Promise<OpcMetrics> {
   return invoke('get_opc_metrics')
 }
 
@@ -1404,14 +1416,14 @@ export async function getMemoryStats(): Promise<MemoryStats> {
 // --- Skill Loop (E2) ---
 
 export const skillLoop = {
-  evaluate: (evaluation: import('@/types').TaskEvaluation) =>
-    invoke<import('@/types').EvaluationResult>('skill_loop_evaluate', { evaluation }),
+  evaluate: (evaluation: TaskEvaluation) =>
+    invoke<EvaluationResult>('skill_loop_evaluate', { evaluation }),
 
-  generate: (evaluation: import('@/types').TaskEvaluation) =>
-    invoke<import('@/types').SkillProposal>('skill_loop_generate', { evaluation }),
+  generate: (evaluation: TaskEvaluation) =>
+    invoke<SkillProposal>('skill_loop_generate', { evaluation }),
 
   listProposals: () =>
-    invoke<import('@/types').SkillProposal[]>('skill_loop_list_proposals'),
+    invoke<SkillProposal[]>('skill_loop_list_proposals'),
 
   approve: (proposalId: string) =>
     invoke<string>('skill_loop_approve', { proposalId }),

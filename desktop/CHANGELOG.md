@@ -126,6 +126,100 @@ Extensions entry, and Worktree dev-mode gate (P1 IA); `ConfirmDialog` replaces
 native `confirm()` (P2); visibility-gated triage polling; i18n context strings
 and dead keys removed (P3).
 
+### UI modernization (R1–R11) — Modal/SidePanel→Base UI · ESLint ratchet 72→23 · coverage CI gate
+
+A four-batch refactor across R0–R11: base-nova design system wire-up,
+overlay primitives swap to `@base-ui/react`, the ESLint budget ratchets
+from 72 to 23, and the vitest coverage threshold becomes machine-enforced
+in CI. All work landed on `dev` between 2026-08-24 and 2026-08-26 (see
+`docs/plans/desktop-ui-modernization-phase2.md` for the per-batch ledger;
+that doc stays local). Two merge commits (`21eda523` cmdk fix + `6b06f58f`
+audit hardening) shipped to `origin/dev`; R10 (`2928d8f0`) and R11
+(`54407e1a`) are local-only as of this entry — push happens with the
+next release tag.
+
+#### Features
+
+- **Modal/SidePanel underlay → `@base-ui/react/dialog` 1.5.0** — 20+3 call
+  sites keep their existing `ModalProps` / `SidePanelProps` signatures
+  (contracts frozen; `git diff --stat` and the e2e regression suite are
+  the dual evidence). Self-rolled `useModalFocus` hook retired
+  (`QuickFixDrawer` migrated to `SidePanel`).
+- **Command palette (cmdk)** — `CommandDialog` regains its missing
+  `<Command>` root, fixing the "reading 'subscribe'" crash on
+  closed→open under React 19. New `Command.test.tsx` covers the fix;
+  the e2e suite is unsealed.
+- **TextLoop wired into Welcome** — rotating subtitle prefix driven by
+  `WelcomeState`; `reactbits/CountUp`, the `ui/MotionGuard` wrapper,
+  and the `motion` package are deleted together.
+- **stable `useT()` hook** — `useCallback`-wrapped `intl.formatMessage`
+  bound per locale switch; `intl` is referentially stable while
+  locale+messages stay unchanged. Replaces 13 files' hand-rolled
+  `const t = (id) => intl.formatMessage({ id })` closures, which had
+  been tripping `react-hooks/exhaustive-deps`.
+- **Keyboard shortcut `formatShortcut()`** — `WelcomeState` renders
+  `Cmd/Ctrl+K` based on platform, replacing the hard-coded `"Cmd+K"`
+  string.
+
+#### Fixes
+
+- **cmdk/React 19 crash on palette open** — `CommandDialog` now
+  always renders its `<Command>` root. Unit + e2e regression.
+- **Modal.test.tsx fake cross-reference** — replaced the `it.skip`
+  that pointed at a non-existent e2e case with real outside-press
+  tests; `closeOnBackdrop=false` and `closeOnEscape=false` now have
+  positive coverage in jsdom (the old "jsdom can't simulate composedPath"
+  comment was wrong).
+- **`TextLoop` aria-live noise** — `aria-live="polite"` was re-reading
+  every 2.5s; default is now `off` with an opt-in `live` prop.
+- **VoiceLocalSettings** — newline-collapsing bug during an earlier
+  refactor; spacing restored.
+- **`depends_on` editor (DependsOnEditor)** — drops the unnecessary
+  `routine.id` from its `initial` memo deps; `depends_on` identity
+  already implies value equality.
+
+#### Tooling / CI
+
+- **ESLint budget ratchet 72 → 23 → 0** — frozen at 0 (`package.json`,
+  `ci.yml`, `desktop/CLAUDE.md` all agree). The 23
+  `@typescript-eslint/consistent-type-imports` warnings from R11 were
+  all migrated to top-level `import type` declarations: 12 added to the
+  existing `@/types` import block in `tauri-api.ts`, the cross-file
+  `VoiceLocalConfig` reference lifted into `types/index.ts`, and 7 test
+  files switched to `import type * as ReactRouterDom from
+  'react-router-dom'` (and `import type * as TauriApi from
+  '@/lib/tauri-api'` in `Editor.test.tsx`) so the `typeof
+  ReactRouterDom` / `typeof TauriApi` generics replace the forbidden
+  `typeof import(...)` syntax. **Raises require ed sign-off.**
+- **`pnpm test:coverage` CI gate** — `desktop-unit` job now runs
+  `vitest run --coverage` so the configured thresholds (80 lines / 60
+  functions / 75 branches / 80 statements) are machine-enforced;
+  previously they were checked only locally. The `src/lib/mock/**`
+  demo layer (1864 lines, 0% coverage, only reachable via the
+  `main.tsx` alias swap) is added to the exclusion list alongside
+  `App.tsx` / `tauri-api.ts` / `useTheme` / `select.tsx`. After the
+  exclusion: 83.28 / 80.64 / 69.44 / 83.28 — all four thresholds met.
+- **`scripts/check-overlays.sh`** — the R2 tripwire against hand-rolled
+  `fixed inset-0` overlays is now wired into the `desktop-unit` job
+  (`Layout` / `ArtifactPanel` / `dialog.tsx` / `modal.tsx` /
+  `side-panel.tsx` are whitelisted).
+
+#### Accessibility / i18n
+
+- **`useT()` migration** automatically stabilises hook deps across
+  13 components, removing a class of unintended effect re-runs; the
+  effect is verifiable in `dependents' `useEffect`/`useCallback` deps
+  now referencing the stable `t` instead of the intl object.
+- **`formatShortcut('K')`** replaces the hardcoded `"Cmd+K"` so
+  Windows/Linux users see `Ctrl+K` instead.
+
+#### Dependencies
+
+- **Added:** `@base-ui/react` 1.5.0, `cmdk` (already present, now
+  correctly wrapped).
+- **Removed:** `motion` (12.40.0, zero imports at removal),
+  `reactbits/CountUp`, `ui/MotionGuard` wrapper.
+
 ### Settings refactor — shared Modal/ConfirmDialog + typed i18n `t()` helper
 
 (#99, `s2/d1-d2-modal-types-voice`, audit D1+D2) Seven hand-rolled settings

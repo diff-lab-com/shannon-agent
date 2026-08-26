@@ -6,6 +6,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, createMemoryRouter, RouterProvider } from 'react-router-dom'
+import { MemoryRouter, createMemoryRouter, RouterProvider } from 'react-router-dom'
+import type * as TauriApi from '@/lib/tauri-api'
 import { I18nProvider } from '@/i18n'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import Editor from '@/pages/Editor'
@@ -16,7 +18,7 @@ const defaultDiagnosticsServer = vi.hoisted(() => vi.fn())
 const saveTextFile = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/tauri-api')>(
+  const actual = await vi.importActual<typeof TauriApi>(
     '@/lib/tauri-api',
   )
   return {
