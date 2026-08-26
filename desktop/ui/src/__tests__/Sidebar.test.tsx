@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { AppProvider } from '@/context/AppContext'
 import { I18nProvider } from '@/i18n'
 import { MemoryRouter, useLocation } from 'react-router-dom'
@@ -251,5 +252,206 @@ describe('Sidebar — Navigation', () => {
 
     const triageLink = screen.getByRole('link', { name: /Open Triage page/i })
     expect(triageLink).toBeInTheDocument()
+  })
+})
+
+// U1 — the sidebar SessionsSection is the app's single session list (the
+// Chat-page session rail was removed). These cases were migrated from
+// Chat.test.tsx plus new coverage for the ⋯ menu, pin/drag persistence.
+describe('Sidebar — Sessions rail (U1)', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    vi.clearAllMocks()
+  })
+
+  const now = Date.now()
+  const mockSessions = [
+    { id: 's1', title: 'Alpha Chat', created_at: now - 1000, message_count: 3 },
+    { id: 's2', title: 'Beta Debug', created_at: now - 2000, message_count: 1 },
+    { id: 's3', title: 'Gamma Plan', created_at: now - 3000, message_count: 0 },
+  ]
+
+  async function renderWithSessions(sessions = mockSessions) {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.listSessions).mockResolvedValue(sessions as any)
+    const utils = render(wrap(<Sidebar />))
+    await screen.findByText(sessions[0].title)
+    return utils
+  }
+
+  function row(title: string) {
+    return screen.getByRole('button', { name: new RegExp(`^${title}$`) })
+  }
+
+  function rowItem(title: string) {
+    return row(title).closest('[role="listitem"]') as HTMLElement
+  }
+
+  async function openMenu(title: string) {
+    fireEvent.click(screen.getByRole('button', { name: `Actions for ${title}` }))
+    await screen.findByRole('menu')
+  }
+
+  it('renders every session (no 8-item cap)', async () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      id: `s${i}`, title: `Session ${i}`, created_at: now - i, message_count: 0,
+    }))
+    await renderWithSessions(many)
+    for (let i = 0; i < 12; i++) {
+      expect(screen.getByRole('button', { name: `Session ${i}` })).toBeInTheDocument()
+    }
+  })
+
+  it('switches session on row click and marks it current', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.switchSession).mockResolvedValue([] as any)
+    await renderWithSessions()
+    fireEvent.click(row('Beta Debug'))
+    await waitFor(() => expect(api.switchSession).toHaveBeenCalledWith('s2'))
+    await waitFor(() => expect(row('Beta Debug')).toHaveAttribute('aria-current', 'page'))
+    expect(row('Alpha Chat')).not.toHaveAttribute('aria-current')
+  })
+
+  it('activates a row with the keyboard (Enter)', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.switchSession).mockResolvedValue([] as any)
+    await renderWithSessions()
+    row('Gamma Plan').focus()
+    await userEvent.setup().keyboard('{Enter}')
+    await waitFor(() => expect(api.switchSession).toHaveBeenCalledWith('s3'))
+  })
+
+  it('filters by title client-side for short queries', async () => {
+    await renderWithSessions()
+    fireEvent.change(screen.getByLabelText('Search sessions'), { target: { value: 'be' } })
+    expect(screen.getByRole('button', { name: 'Beta Debug' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Alpha Chat' })).not.toBeInTheDocument()
+  })
+
+  it('calls backend search after debounce for queries ≥ 3 chars and keeps rail order', async () => {
+    const api = await import('@/lib/tauri-api')
+    await renderWithSessions()
+    // s3 is a content match — its title doesn't contain the query.
+    vi.mocked(api.searchSessions).mockResolvedValue([{ ...mockSessions[2] }] as any)
+    fireEvent.change(screen.getByLabelText('Search sessions'), { target: { value: 'use' } })
+    await waitFor(() => expect(api.searchSessions).toHaveBeenCalledWith('use'))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Gamma Plan' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Alpha Chat' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Beta Debug' })).not.toBeInTheDocument()
+    })
+  })
+
+  it('does not call backend when query is shorter than 3 chars', async () => {
+    const api = await import('@/lib/tauri-api')
+    await renderWithSessions()
+    fireEvent.change(screen.getByLabelText('Search sessions'), { target: { value: 'go' } })
+    expect(api.searchSessions).not.toHaveBeenCalled()
+  })
+
+  it('renames inline via the ⋯ menu (Enter commits, Escape cancels)', async () => {
+    const api = await import('@/lib/tauri-api')
+    await renderWithSessions()
+    await openMenu('Alpha Chat')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    const input = screen.getByLabelText('Rename') as HTMLInputElement
+    expect(input.value).toBe('Alpha Chat')
+    fireEvent.change(input, { target: { value: 'Alpha Renamed' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(api.renameSession).toHaveBeenCalledWith('s1', 'Alpha Renamed'))
+    // Escape path
+    await openMenu('Beta Debug')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    const input2 = screen.getByLabelText('Rename')
+    fireEvent.change(input2, { target: { value: 'nope' } })
+    fireEvent.keyDown(input2, { key: 'Escape' })
+    expect(api.renameSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('pins a session to the top and persists across remounts', async () => {
+    await renderWithSessions()
+    expect(row('Gamma Plan').closest('[role="listitem"]')).toBeTruthy()
+    await openMenu('Gamma Plan')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Pin' }))
+    // Pinned row sorts first and shows the pin glyph.
+    const first = screen.getAllByRole('listitem')[0]
+    expect(within(first).getByText('Gamma Plan')).toBeInTheDocument()
+    expect(within(first).getByText('push_pin')).toBeInTheDocument()
+    expect(JSON.parse(window.localStorage.getItem('shannon-sessions-pinned')!)).toEqual(['s3'])
+    // Unmount + remount — pin survives (was component state before U1).
+    cleanup()
+    await renderWithSessions()
+    const firstAfter = screen.getAllByRole('listitem')[0]
+    expect(within(firstAfter).getByText('Gamma Plan')).toBeInTheDocument()
+    // Menu now offers Unpin.
+    await openMenu('Gamma Plan')
+    expect(screen.getByRole('menuitem', { name: 'Unpin' })).toBeInTheDocument()
+  })
+
+  it('persists drag reorder to localStorage and restores it on remount', async () => {
+    await renderWithSessions()
+    fireEvent.dragStart(rowItem('Beta Debug'))
+    fireEvent.drop(rowItem('Alpha Chat'))
+    const stored = JSON.parse(window.localStorage.getItem('shannon-sessions-order')!)
+    expect(stored).toEqual({ s2: 0, s1: 1, s3: 2 })
+    cleanup()
+    await renderWithSessions()
+    expect(within(screen.getAllByRole('listitem')[0]).getByText('Beta Debug')).toBeInTheDocument()
+  })
+
+  it('delete via ⋯ menu asks for confirmation, then calls deleteSession', async () => {
+    const api = await import('@/lib/tauri-api')
+    await renderWithSessions()
+    await openMenu('Beta Debug')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByText('Delete Session')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(api.deleteSession).toHaveBeenCalledWith('s2'))
+  })
+
+  it('delete confirmation dialog can be cancelled', async () => {
+    const api = await import('@/lib/tauri-api')
+    await renderWithSessions()
+    await openMenu('Beta Debug')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(api.deleteSession).not.toHaveBeenCalled()
+  })
+
+  it('export via ⋯ menu opens save dialog and writes the file', async () => {
+    const api = await import('@/lib/tauri-api')
+    const dialog = await import('@tauri-apps/plugin-dialog')
+    vi.mocked(api.exportSession).mockResolvedValueOnce('# Title\n\nbody')
+    vi.mocked(dialog.save).mockResolvedValueOnce('/tmp/sess.md')
+    await renderWithSessions()
+    await openMenu('Alpha Chat')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Export' }))
+    await waitFor(() => {
+      expect(api.exportSession).toHaveBeenCalledWith('s1', 'markdown')
+      expect(api.saveTextFile).toHaveBeenCalledWith('/tmp/sess.md', '# Title\n\nbody')
+    })
+  })
+
+  it('print via ⋯ menu opens a new window with the transcript', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.exportSession).mockResolvedValueOnce('# Title')
+    const fakeDoc: any = {
+      title: '',
+      head: { appendChild: vi.fn() },
+      body: { appendChild: vi.fn() },
+      createElement: vi.fn(() => ({ textContent: '', appendChild: vi.fn() })),
+    }
+    const fakeWin: any = { document: fakeDoc, focus: vi.fn(), print: vi.fn() }
+    const spy = vi.spyOn(window, 'open').mockReturnValueOnce(fakeWin)
+    await renderWithSessions()
+    await openMenu('Alpha Chat')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Print / PDF' }))
+    await waitFor(() => {
+      expect(api.exportSession).toHaveBeenCalledWith('s1', 'markdown')
+      expect(spy).toHaveBeenCalledWith('', '_blank', 'width=900,height=700')
+    })
+    spy.mockRestore()
   })
 })
