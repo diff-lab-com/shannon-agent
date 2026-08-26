@@ -1,0 +1,2513 @@
+//! Tiered L1 evaluation suite runner (master plan §4.4 W2-M1b).
+//!
+//! Executes a declarative TOML task suite (`tests/eval/tasks/*.toml`) against
+//! the Shannon engine — either as a **real** model run (`shannon --prompt`,
+//! NDJSON streamed) or a **dry-run** pipeline rehearsal — and verifies each
+//! run against the shared [`crate::testing::scenario`] assertion vocabulary
+//! (all 11 [`ValidationRule`] variants; no separate DSL here).
+//!
+//! ## Pipeline
+//!
+//! ```text
+//! load tasks ──► prepare sandbox workspace ──► execute
+//!     │              (files + optional git init)     │ real:  spawn `<bin> --prompt …
+//!     │                                              │        --output-format json-stream`
+//!     │                                              │        capturing NDJSON from stdout
+//!     │                                              └ dry:   scripted stub emitting the same
+//!     │                                                       NDJSON schema; its primitive
+//!     │                                                       tool effects act on the REAL
+//!     │                                                       workspace files
+//!     ▼
+//! classify limits (turn/token budget, wall-clock timeout) ──► verify (rules ∪ script ∪
+//! expectations) ──► dual reports: report.json + report.md under
+//! `$SHANNON_HOME/eval/runs/<run-id>/` (per-task subdirectories retain the
+//! workspace, the captured NDJSON stream, and a copy of the effective task).
+//! ```
+//!
+//! Limit classes: exceeding `limits.max_turns` maps to [`RunStatus::TurnLimit`],
+//! exceeding `limits.max_tokens` to [`RunStatus::TokenLimit`], and breaching
+//! `limits.timeout_secs` to [`RunStatus::Timeout`] — i.e. 「超时/限额」 categories
+//! stay distinct from ordinary assertion failures ([`RunStatus::Failed`]).
+//!
+//! ## Engine contract
+//!
+//! The real path shells out to the headless CLI contract of
+//! `shannon --prompt <text> --output-format json-stream --max-turns <n>`:
+//!
+//! - NDJSON event types consumed: `start`, `tool_call` (`name`/`input`),
+//!   `text_delta` (`content`), `tool_result` (`success` or `is_error`), and
+//!   `done` (`exit_code`, `turns_used`, `tokens_used`, `tokens_in`,
+//!   `tokens_out`). Unknown lines are ignored (forward compatible).
+//! - Exit codes (see `crates/shannon-cli/src/main.rs::HeadlessExitCode`):
+//!   0 success · 1 error · 2 turn limit · 3 timeout · 4 rate limit ·
+//!   5 context overflow · 6 permission denied.
+//!
+//! The trajectory is built solely from `tool_call` lines because the CLI emits
+//! each invocation once as a `tool_call` CI event **and** once as a `tool_use`
+//! output event; parsing both would double-count every step.
+//!
+//! ## Honesty notes
+//!
+//! - The dry-run stub derives its tool calls from the task's `[dry_run]`
+//!   script but its effects go through working `Read`/`Write`/`Edit`/
+//!   `MultiEdit`/`Glob`/`Grep`/limited-`Bash` primitives operating on the real
+//!   sandbox files, so `verify.rules` evaluate genuine workspace state and a
+//!   genuinely parsed NDJSON stream. A dry run validates the harness end to
+//!   end (load → prepare → limits → capture → verify → dual reports), never
+//!   the model policy. Per-task `[dry_run]` scripts double as living
+//!   documentation of the expected solution path.
+//! - `cost_below` rules remain expressible but **intentionally unused** by the
+//!   shipped suite: USD turn costs are not yet observable before the L0 event
+//!   integration (§4.7 wires per-task metrics), and the rule fails loudly on
+//!   empty cost observations rather than passing vacuously.
+
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use crate::testing::scenario::{
+    RuleOutcome, ToolCallTrace, TrajectoryStep, ValidationContext, ValidationRule, evaluate_rules,
+};
+
+use regex::Regex;
+
+/// Deterministic output-root resolution mirroring
+/// [`crate::testing`]'s sibling convention (`session_log::default_shannon_home`):
+/// `$SHANNON_HOME` when set, otherwise `~/.shannon`; eval runs land beneath
+/// `eval/runs/<run-id>/` there.
+pub fn resolve_eval_home() -> Result<PathBuf, EvalError> {
+    if let Ok(home) = std::env::var("SHANNON_HOME") {
+        return Ok(PathBuf::from(home));
+    }
+    let home = dirs::home_dir().ok_or_else(|| {
+        EvalError::Config("cannot determine home directory (set SHANNON_HOME)".into())
+    })?;
+    Ok(home.join(".shannon"))
+}
+
+// ── Errors ─────────────────────────────────────────────────────────────
+
+/// Runner-level failure (as opposed to per-task assertion failure).
+#[derive(Debug, thiserror::Error)]
+pub enum EvalError {
+    /// Task file missing/malformed, suite directory unreadable, bad options.
+    #[error("{0}")]
+    Config(String),
+    /// Filesystem I/O during workspace preparation or artifact persistence.
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    /// Report (de)serialization failure.
+    #[error("serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+}
+
+// ── Task schema (tests/eval/tasks/*.toml) ──────────────────────────────
+
+/// One tier label of the L1 suite.
+///
+/// `read` — comprehension questions, no mutations expected;
+/// `edit` — precise single-file modifications;
+/// `search` — locate information across the tree (Grep/Glob-centric);
+/// `multi_step` — coordinated changes spanning several files/tools;
+/// `recovery` — a snag occurs mid-flight and must be corrected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvalTier {
+    /// Comprehension only — answer from given sources, mutate nothing.
+    Read,
+    /// Precise single-file modification.
+    Edit,
+    /// Cross-tree information location (Grep/Glob-heavy).
+    Search,
+    /// Coordinated multi-file / multi-tool change.
+    MultiStep,
+    /// Deliberate snag followed by course correction.
+    Recovery,
+}
+
+impl EvalTier {
+    /// The lowercase spelling used in TOML and reports.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EvalTier::Read => "read",
+            EvalTier::Edit => "edit",
+            EvalTier::Search => "search",
+            EvalTier::MultiStep => "multi_step",
+            EvalTier::Recovery => "recovery",
+        }
+    }
+}
+
+/// An initial workspace file seeded by `setup.files`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskFile {
+    /// Relative path inside the task workspace (parent dirs auto-created).
+    pub path: String,
+    /// Full file content written verbatim.
+    pub content: String,
+}
+
+/// Sandbox seed: initial files plus an optional `git init`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TaskSetup {
+    /// Files created before execution begins.
+    pub files: Vec<TaskFile>,
+    /// Run `git init` in the workspace (for tasks exercising repo awareness).
+    pub git_init: bool,
+}
+
+impl Default for TaskSetup {
+    fn default() -> Self {
+        Self {
+            files: Vec::new(),
+            git_init: false,
+        }
+    }
+}
+
+/// Verification section: inline assertion rules and/or a shell script.
+///
+/// At least one mechanism must be non-empty (enforced by [`EvalTask::validate`]).
+/// Rules reuse the exact [`ValidationRule`] vocabulary of the YAML scenario
+/// framework (`rule = "…"`, fields identical); a malformed rule surfaces as a
+/// parse error.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TaskVerify {
+    /// Shell snippet executed in the task workspace after the run; a non-zero
+    /// exit records a violation. Unix only (executed via `sh -c`).
+    pub script: String,
+    /// Scenario-framework rules evaluated against the finished run.
+    pub rules: Vec<ValidationRule>,
+}
+
+impl Default for TaskVerify {
+    fn default() -> Self {
+        Self {
+            script: String::new(),
+            rules: Vec::new(),
+        }
+    }
+}
+
+/// Behavioral expectations carried separately from hard assertions:
+/// the expected trajectory template and forbidden-tool bans.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct TaskExpectations {
+    /// Expected tool-call steps (ordered subsequence, `args_regex` allowed),
+    /// shaped exactly like scenario `trajectory_contains.sequence` entries.
+    pub trajectory: Vec<TrajectoryStep>,
+    /// Tools that must not appear anywhere in the observed trajectory.
+    pub forbidden_tools: Vec<String>,
+}
+
+/// Per-task engineering guardrails; `None` falls back to
+/// [`DEFAULT_LIMITS`]-style defaults resolved by [`ResolvedLimits::of`].
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct TaskLimits {
+    /// Upper bound on agent turns (also forwarded as the CLI `--max-turns`
+    /// guard in real runs). Breach ⇒ [`RunStatus::TurnLimit`].
+    pub max_turns: Option<u32>,
+    /// Session token ceiling checked against the engine-side totals reported
+    /// on the `done` event. Breach ⇒ [`RunStatus::TokenLimit`].
+    pub max_tokens: Option<u64>,
+    /// Wall-clock budget for the whole task in seconds. Breach kills the
+    /// child process and marks [`RunStatus::Timeout`].
+    pub timeout_secs: Option<u64>,
+}
+
+/// Suite-wide fallback limits when a task omits them.
+pub const DEFAULT_MAX_TURNS: u32 = 12;
+/// Suite-wide fallback token ceiling.
+pub const DEFAULT_MAX_TOKENS: u64 = 80_000;
+/// Suite-wide fallback wall-clock budget in seconds.
+pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
+
+/// Fully-resolved limits (defaults filled in).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedLimits {
+    pub max_turns: u32,
+    pub max_tokens: u64,
+    pub timeout_secs: u64,
+}
+
+impl ResolvedLimits {
+    /// Apply suite defaults over optionally-declared task limits.
+    pub fn of(limits: &TaskLimits) -> Self {
+        Self {
+            max_turns: limits.max_turns.unwrap_or(DEFAULT_MAX_TURNS),
+            max_tokens: limits.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+            timeout_secs: limits.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS),
+        }
+    }
+}
+
+/// One scripted stub step for the dry-run rehearsal. `input` holds the same
+/// argument shape a real engine run would carry (e.g. `file_path`, `pattern`,
+/// `command`) so trajectories and `args_regex` expectations stay realistic.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DryRunStep {
+    /// Tool name as it should appear in the trajectory.
+    pub tool: String,
+    /// Tool arguments (JSON object); interpreted by the stub primitives.
+    #[serde(default)]
+    pub input: Value,
+    /// When true the step's effect is skipped and an error `tool_result` is
+    /// synthesized — modeling a snag the subsequent steps recover from.
+    #[serde(default)]
+    pub fail: bool,
+}
+
+/// Optional dry-run rehearsal script; when omitted the task simply cannot be
+/// rehearsed without a real engine invocation.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct DryRunScript {
+    /// Final assistant answer text emitted after the scripted steps.
+    pub final_text: String,
+    /// Ordered tool invocations performed by the stub executor.
+    pub steps: Vec<DryRunStep>,
+    /// Override the synthesized `done` token totals (useful to exercise the
+    /// token-limit classification deliberately).
+    pub tokens_used: Option<u64>,
+}
+
+/// One declarative eval task — the schema of `tests/eval/tasks/*.toml`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EvalTask {
+    /// Stable identifier (`read_01`, `edit_02`, …); becomes the run directory.
+    pub id: String,
+    /// Suite tier.
+    pub tier: EvalTier,
+    /// One-line intent shown in reports.
+    #[serde(default)]
+    pub description: String,
+    /// The prompt handed to the agent verbatim.
+    pub prompt: String,
+    /// Sandbox seeding.
+    #[serde(default)]
+    pub setup: TaskSetup,
+    /// Assertions (rules + optional shell script).
+    #[serde(default)]
+    pub verify: TaskVerify,
+    /// Expected trajectory template + forbidden-tool bans.
+    #[serde(default)]
+    pub expectations: TaskExpectations,
+    /// Engineering guardrails.
+    #[serde(default)]
+    pub limits: TaskLimits,
+    /// Dry-run rehearsal script (harness pipeline validation).
+    #[serde(default)]
+    pub dry_run: DryRunScript,
+    /// Original TOML path, attached by [`parse_task`] so runs can archive a
+    /// byte-exact copy beside the workspace. Not part of the file schema.
+    #[serde(skip)]
+    pub(crate) task_source_path_hint: Option<PathBuf>,
+}
+
+impl EvalTask {
+    /// Structural self-checks beyond serde (non-empty ids/prompts, usable
+    /// verification story). Returns human-readable problems.
+    pub fn validate(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        if self.id.trim().is_empty() {
+            problems.push("id must not be empty".to_string());
+        }
+        if self.prompt.trim().is_empty() {
+            problems.push(format!("task '{}': prompt must not be empty", self.id));
+        }
+        if self.verify.script.trim().is_empty()
+            && self.verify.rules.is_empty()
+            && self.expectations.trajectory.is_empty()
+            && self.expectations.forbidden_tools.is_empty()
+        {
+            problems.push(format!(
+                "task '{}': define at least one of verify.rules, verify.script, \
+                 expectations.trajectory, expectations.forbidden_tools",
+                self.id
+            ));
+        }
+        if self.dry_run.steps.is_empty() && self.dry_run.final_text.trim().is_empty() {
+            problems.push(format!(
+                "task '{}': dry_run rehearsal script is empty (pipeline cannot be validated)",
+                self.id
+            ));
+        }
+        // Reflexive checks on limit sanity — cheaper to catch here than mid-run.
+        let limits = ResolvedLimits::of(&self.limits);
+        if limits.max_turns == 0 || limits.timeout_secs == 0 {
+            problems.push(format!("task '{}': limits must be positive", self.id));
+        }
+        problems
+    }
+
+    #[doc(hidden)]
+    fn with_source_hint(mut self, hint: PathBuf) -> Self {
+        self.task_source_path_hint = Some(hint);
+        self
+    }
+}
+
+/// Parse one TOML task file.
+pub fn parse_task(path: &Path) -> Result<EvalTask, EvalError> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| EvalError::Config(format!("failed to read {}: {e}", path.display())))?;
+    let task: EvalTask =
+        toml::from_str(&raw).map_err(|e| EvalError::Config(format!("{}: {e}", path.display())))?;
+    Ok(task.with_source_hint(path.to_path_buf()))
+}
+
+/// Parse every `*.toml` under `dir`, sorted by file name for deterministic
+/// report ordering.
+pub fn parse_tasks_dir(dir: &Path) -> Result<Vec<EvalTask>, EvalError> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| EvalError::Config(format!("failed to read {}: {e}", dir.display())))?;
+    let mut names: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
+        .collect();
+    names.sort();
+    let mut tasks = Vec::with_capacity(names.len());
+    for path in names {
+        tasks.push(parse_task(&path)?);
+    }
+    Ok(tasks)
+}
+
+// ── Engine stream (NDJSON) ─────────────────────────────────────────────
+
+/// One decoded line of the engine's `json-stream` output.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NdjsonLine {
+    /// Session banner with engine ids.
+    Start {
+        session_id: Option<String>,
+        model: Option<String>,
+    },
+    /// Authoritative tool invocation record.
+    ToolCall { name: String, input_json: String },
+    /// Tool completion acknowledgement (`success` falls back to negating
+    /// the alternate-shape `is_error` field).
+    ToolResult { name: String, success: Option<bool> },
+    /// Streamed assistant text fragment.
+    TextDelta { content: String },
+    /// Terminal failure notice from the engine.
+    Error { message: String },
+    /// Terminal summary carrying accounting and exit semantics.
+    Done {
+        exit_code: Option<i32>,
+        turns_used: Option<u32>,
+        tokens_used: Option<u64>,
+        tokens_in: Option<u64>,
+        tokens_out: Option<u64>,
+    },
+    /// Anything unrecognized (forward compatibility).
+    Other,
+}
+
+/// Decode one NDJSON line. Malformed JSON degrades to [`NdjsonLine::Other`]
+/// rather than failing the whole run — stderr chatter occasionally bleeds
+/// onto interleaved descriptors, and a single bogus line must not poison
+/// otherwise-valid telemetry.
+pub fn parse_ndjson_line(line: &str) -> NdjsonLine {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return NdjsonLine::Other;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+        return NdjsonLine::Other;
+    };
+    match value.get("type").and_then(Value::as_str) {
+        Some("start") => NdjsonLine::Start {
+            session_id: value
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            model: value
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        },
+        Some("tool_call") => NdjsonLine::ToolCall {
+            name: value
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            input_json: value
+                .get("input")
+                .cloned()
+                .map(|input| input.to_string())
+                .unwrap_or_default(),
+        },
+        Some("tool_result") => NdjsonLine::ToolResult {
+            name: value
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            success: value
+                .get("success")
+                .and_then(Value::as_bool)
+                .or_else(|| value.get("is_error").and_then(Value::as_bool).map(|e| !e)),
+        },
+        Some("text_delta") => NdjsonLine::TextDelta {
+            content: value
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        },
+        Some("error") => NdjsonLine::Error {
+            message: value
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        },
+        Some("done") => NdjsonLine::Done {
+            exit_code: value
+                .get("exit_code")
+                .and_then(Value::as_i64)
+                .map(|v| v as i32),
+            turns_used: value
+                .get("turns_used")
+                .and_then(Value::as_u64)
+                .map(|v| v as u32),
+            tokens_used: value.get("tokens_used").and_then(Value::as_u64),
+            tokens_in: value.get("tokens_in").and_then(Value::as_u64),
+            tokens_out: value.get("tokens_out").and_then(Value::as_u64),
+        },
+        _ => NdjsonLine::Other,
+    }
+}
+
+/// Decoded view of one complete engine stream.
+#[derive(Debug, Default, Clone)]
+pub struct RunObservation {
+    /// Engine session id (start event) — links reports to persisted sessions.
+    pub session_id: Option<String>,
+    /// Model name (start event).
+    pub model: Option<String>,
+    /// Ordered tool-call trajectory (authoritative `tool_call` lines only).
+    pub trajectory: Vec<ToolCallTrace>,
+    /// Concatenated assistant answer text (text fragments only, no echoes).
+    pub answer_text: String,
+    /// Error notices seen on the stream.
+    pub errors: Vec<String>,
+    /// Terminal summary, when the stream completed cleanly.
+    pub done: Option<NdjsonLine>,
+}
+
+/// Fold a newline-delimited stream into a [`RunObservation`].
+pub fn observe_stream(ndjson: &str) -> RunObservation {
+    let mut obs = RunObservation::default();
+    for line in ndjson.lines() {
+        match parse_ndjson_line(line) {
+            NdjsonLine::Start { session_id, model } => {
+                obs.session_id = obs.session_id.or(session_id);
+                obs.model = obs.model.or(model);
+            }
+            NdjsonLine::ToolCall { name, input_json } => {
+                obs.trajectory.push(ToolCallTrace::new(&name, input_json));
+            }
+            NdjsonLine::TextDelta { content } => obs.answer_text.push_str(&content),
+            NdjsonLine::Error { message } => obs.errors.push(message),
+            done @ NdjsonLine::Done { .. } => obs.done = Some(done),
+            NdjsonLine::ToolResult { .. } | NdjsonLine::Other => {}
+        }
+    }
+    obs
+}
+
+// ── Run records & reports ──────────────────────────────────────────────
+
+/// Outcome classification of one executed task.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStatus {
+    /// Every guardrail respected and every assertion satisfied.
+    Passed,
+    /// The run finished but at least one assertion/expectation was violated.
+    Failed,
+    /// Agent exceeded `limits.max_turns` (「限额」class).
+    TurnLimit,
+    /// Session token bill exceeded `limits.max_tokens` (「限额」class).
+    TokenLimit,
+    /// Wall-clock budget exhausted; child killed (「超时」class).
+    Timeout,
+    /// Engine could not be launched at all (missing binary, bad exec).
+    SpawnError,
+}
+
+impl RunStatus {
+    /// Short display spelling for tables/digests.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RunStatus::Passed => "passed",
+            RunStatus::Failed => "failed",
+            RunStatus::TurnLimit => "turn_limit",
+            RunStatus::TokenLimit => "token_limit",
+            RunStatus::Timeout => "timeout",
+            RunStatus::SpawnError => "spawn_error",
+        }
+    }
+}
+
+/// Serializable projection of a scenario [`RuleOutcome`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RecordedRuleOutcome {
+    pub rule: String,
+    pub passed: bool,
+    pub details: Vec<String>,
+}
+
+impl From<&RuleOutcome> for RecordedRuleOutcome {
+    fn from(outcome: &RuleOutcome) -> Self {
+        Self {
+            rule: outcome.rule.clone(),
+            passed: outcome.passed,
+            details: outcome.details.clone(),
+        }
+    }
+}
+
+/// Persisted per-task result — one row of the report tables.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TaskRunRecord {
+    pub id: String,
+    pub tier: String,
+    pub status: RunStatus,
+    /// True iff `status == Passed` (kept alongside for naive consumers).
+    pub passed: bool,
+    pub duration_ms: u64,
+    /// Process/stream exit code (`null` for spawn failures/timeouts).
+    pub exit_code: Option<i32>,
+    pub turns: u32,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub total_tokens: u64,
+    /// Engine-side session id when available.
+    pub session_id: Option<String>,
+    /// Assertion violations, oldest-first.
+    pub violations: Vec<String>,
+    /// Independent per-rule outcomes, verification order.
+    pub rule_outcomes: Vec<RecordedRuleOutcome>,
+    /// Observed trajectory (tool names in invocation order).
+    pub trajectory_tools: Vec<String>,
+    /// Absolute workspace path retained for postmortem inspection.
+    pub workspace: PathBuf,
+    /// Original TOML source path.
+    pub task_file: PathBuf,
+}
+
+impl TaskRunRecord {
+    /// Strip volatile fields (duration/workspace/ids) for cross-run digests.
+    fn stable_view(&self) -> Value {
+        json!({
+            "id": self.id,
+            "tier": self.tier,
+            "status": self.status.as_str(),
+            "exit_code": self.exit_code,
+            "turns": self.turns,
+            "tokens_in": self.tokens_in,
+            "tokens_out": self.tokens_out,
+            "total_tokens": self.total_tokens,
+            "violations": self.violations,
+            "rule_outcomes": self
+                .rule_outcomes
+                .iter()
+                .map(|o| json!({"rule": o.rule, "passed": o.passed}))
+                .collect::<Vec<_>>(),
+            "trajectory_tools": self.trajectory_tools,
+        })
+    }
+}
+
+/// Complete suite report for one run.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RunReport {
+    /// `<utcstamp>-<hex>` unique directory suffix.
+    pub run_id: String,
+    /// RFC3339 UTC start time (volatile — excluded from stable digest).
+    pub started_at_utc: String,
+    /// Whether this run rehearsed the pipeline via the stub executor.
+    pub dry_run: bool,
+    /// Engine binary designation recorded for provenance ("" for dry-run).
+    pub shannon_bin: String,
+    pub tasks_total: usize,
+    pub tasks_passed: usize,
+    pub tasks_failed: usize,
+    pub tasks_limited: usize,
+    pub tasks_timed_out: usize,
+    pub tasks_spawn_errors: usize,
+    pub records: Vec<TaskRunRecord>,
+}
+
+fn utc_now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Unique-enough run id: UTC compact stamp + short random hex. Two runs
+/// started in the same second stay collision-free thanks to the entropy half.
+fn fresh_run_id() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_secs();
+    let hex = uuid::Uuid::new_v4().as_simple().to_string();
+    format!(
+        "{}-{}",
+        chrono::DateTime::from_timestamp(secs as i64, 0)
+            .expect("valid epoch seconds")
+            .format("%Y%m%d%H%M%S"),
+        &hex[..8]
+    )
+}
+
+impl RunReport {
+    /// Volatility-free canonical JSON: identical structure across repeated
+    /// executions of unchanged code (drops timestamps, wall-clock durations,
+    /// session ids and workspace/bin paths, keeps statuses, counters and
+    /// violations). Serialized deterministically by construction of the
+    /// input vectors.
+    pub fn stable_digest(&self) -> String {
+        let body = json!({
+            "dry_run": self.dry_run,
+            "tasks_total": self.tasks_total,
+            "tasks_passed": self.tasks_passed,
+            "tasks_failed": self.tasks_failed,
+            "tasks_limited": self.tasks_limited,
+            "tasks_timed_out": self.tasks_timed_out,
+            "tasks_spawn_errors": self.tasks_spawn_errors,
+            "records": self.records.iter().map(TaskRunRecord::stable_view).collect::<Vec<_>>(),
+        });
+        serde_json::to_string_pretty(&body).expect("digest serialization")
+    }
+
+    /// Human-readable companion of `report.json`.
+    pub fn render_markdown(&self) -> String {
+        let mode = if self.dry_run { "DRY-RUN" } else { "REAL" };
+        let mut md = String::new();
+        md.push_str(&format!(
+            "# Shannon Eval Report `{}` ({mode})\n\n\
+             - Started: {}\n\
+             - Binary: {}\n\
+             - Tasks: {} total · {} passed · {} failed · {} limited · {} timed out · {} spawn errors\n\n",
+            self.run_id,
+            self.started_at_utc,
+            if self.shannon_bin.is_empty() { "-" } else { &self.shannon_bin },
+            self.tasks_total,
+            self.tasks_passed,
+            self.tasks_failed,
+            self.tasks_limited,
+            self.tasks_timed_out,
+            self.tasks_spawn_errors,
+        ));
+
+        md.push_str("| tier | id | status | rules | turns | tokens (in/out) | ms |\n");
+        md.push_str("|---|---|---|---|---|---|---|\n");
+        for record in &self.records {
+            let rules_failed = record.rule_outcomes.iter().filter(|o| !o.passed).count();
+            md.push_str(&format!(
+                "| {} | {} | {} | {}/{} ok | {} | {}/{} | {} |\n",
+                record.tier,
+                record.id,
+                record.status.as_str(),
+                record.rule_outcomes.len() - rules_failed,
+                record.rule_outcomes.len(),
+                record.turns,
+                record.tokens_in,
+                record.tokens_out,
+                record.duration_ms,
+            ));
+        }
+
+        let broken: Vec<_> = self
+            .records
+            .iter()
+            .filter(|r| r.status != RunStatus::Passed)
+            .collect();
+        if !broken.is_empty() {
+            md.push_str("\n## Failures\n");
+            for record in broken {
+                md.push_str(&format!(
+                    "\n### {} ({}) — {}\n",
+                    record.id,
+                    record.tier,
+                    record.status.as_str()
+                ));
+                if record.violations.is_empty() {
+                    md.push_str("- (guardrail breach only; see status)\n");
+                }
+                for violation in &record.violations {
+                    md.push_str(&format!("- {violation}\n"));
+                }
+            }
+        }
+        md
+    }
+}
+
+// ── Execution ──────────────────────────────────────────────────────────
+
+/// Knobs controlling one suite execution.
+#[derive(Debug, Clone)]
+pub struct EvalOptions {
+    /// Engine binary for real runs. Resolution order when left as `None`:
+    /// `SHANNON_EVAL_BIN` env → `target/debug/shannon` beside this crate
+    /// (manifest-relative) → bare `shannon` on `PATH`.
+    pub bin_path: Option<PathBuf>,
+    /// Rehearse via the deterministic stub executor instead of spawning the
+    /// engine (no API key needed; exercises the full pipeline honestly).
+    pub dry_run: bool,
+    /// Force the output root instead of `$SHANNON_HOME`/`~/.shannon`.
+    /// (Used by tests to redirect artifacts into a temp dir.)
+    pub out_dir_override: Option<PathBuf>,
+}
+
+impl Default for EvalOptions {
+    fn default() -> Self {
+        Self {
+            bin_path: None,
+            dry_run: true,
+            out_dir_override: None,
+        }
+    }
+}
+
+/// Resolve the engine binary designation for a real run.
+pub fn resolve_bin(explicit: Option<&Path>) -> Result<PathBuf, EvalError> {
+    if let Some(path) = explicit {
+        return Ok(path.to_path_buf());
+    }
+    if let Ok(env_path) = std::env::var("SHANNON_EVAL_BIN") {
+        return Ok(PathBuf::from(env_path));
+    }
+    let manifest_debug = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/debug/shannon")
+        .components()
+        .collect::<PathBuf>();
+    if manifest_debug.exists() {
+        return Ok(manifest_debug);
+    }
+    Ok(PathBuf::from("shannon"))
+}
+
+/// Execute the whole declared suite; returns the report and the run directory
+/// holding `report.json`/`report.md` plus per-task evidence directories.
+pub fn run_suite(
+    tasks: &[EvalTask],
+    options: &EvalOptions,
+) -> Result<(RunReport, PathBuf), EvalError> {
+    let out_root = match &options.out_dir_override {
+        Some(dir) => dir.clone(),
+        None => resolve_eval_home()?.join("eval").join("runs"),
+    };
+    let run_dir = out_root.join(fresh_run_id());
+    std::fs::create_dir_all(&run_dir)?;
+
+    let started_at = utc_now_rfc3339();
+    let mut records = Vec::with_capacity(tasks.len());
+
+    for task in tasks {
+        let record = run_task(task, options, &run_dir);
+        let _ = std::fs::write(
+            run_dir.join(&task.id).join("result.json"),
+            serde_json::to_vec_pretty(&record).expect("result.json serialization"),
+        );
+        records.push(record);
+    }
+
+    let tally = |want: fn(&TaskRunRecord) -> bool| records.iter().filter(|r| want(r)).count();
+    let report = RunReport {
+        run_id: run_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_owned(),
+        started_at_utc: started_at,
+        dry_run: options.dry_run,
+        shannon_bin: options
+            .bin_path
+            .clone()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+        tasks_total: records.len(),
+        tasks_passed: tally(|r| r.status == RunStatus::Passed),
+        tasks_failed: tally(|r| r.status == RunStatus::Failed),
+        tasks_limited: tally(|r| matches!(r.status, RunStatus::TurnLimit | RunStatus::TokenLimit)),
+        tasks_timed_out: tally(|r| r.status == RunStatus::Timeout),
+        tasks_spawn_errors: tally(|r| r.status == RunStatus::SpawnError),
+        records,
+    };
+
+    std::fs::write(
+        run_dir.join("report.json"),
+        serde_json::to_vec_pretty(&report)?,
+    )?;
+    std::fs::write(run_dir.join("report.md"), report.render_markdown())?;
+
+    Ok((report, run_dir))
+}
+
+/// Prepare the sandboxed workspace under `<run_dir>/<task_id>/workspace`:
+/// seed files (parents auto-created), optional `git init`, and persist a
+/// byte-exact copy of the task definition beside it for audits.
+pub fn prepare_task_dir(task: &EvalTask, run_dir: &Path) -> Result<PathBuf, EvalError> {
+    let task_dir = run_dir.join(&task.id);
+    let workspace = task_dir.join("workspace");
+    std::fs::create_dir_all(&workspace)?;
+
+    for file in &task.setup.files {
+        let target = workspace.join(&file.path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&target, &file.content)?;
+    }
+
+    if task.setup.git_init {
+        let status = Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(&workspace)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if !status.success() {
+            return Err(EvalError::Config(format!(
+                "task '{}': git init failed in workspace",
+                task.id
+            )));
+        }
+    }
+
+    if let Some(source) = &task.task_source_path_hint {
+        let _ = std::fs::copy(source, task_dir.join("task.toml"));
+    }
+    Ok(workspace)
+}
+
+/// Execute one task: prepare workspace → produce stream (stub or engine
+/// subprocess) → classify limits → verify → persist artifacts.
+pub fn run_task(task: &EvalTask, options: &EvalOptions, run_dir: &Path) -> TaskRunRecord {
+    let started = Instant::now();
+    let limits = ResolvedLimits::of(&task.limits);
+
+    let prepare = prepare_task_dir(task, run_dir);
+    let workspace = match prepare {
+        Ok(ws) => ws,
+        Err(e) => {
+            return base_record(
+                task,
+                RunStatus::SpawnError,
+                started.elapsed(),
+                None,
+                vec![format!("workspace preparation failed: {e}")],
+                PathBuf::new(),
+            );
+        }
+    };
+
+    // Produce the raw NDJSON stream + true process exit code.
+    let produced = if options.dry_run {
+        execute_stub(task, &workspace)
+    } else {
+        let bin = match resolve_bin(options.bin_path.as_deref()) {
+            Ok(bin) => bin,
+            Err(e) => {
+                return base_record(
+                    task,
+                    RunStatus::SpawnError,
+                    started.elapsed(),
+                    None,
+                    vec![format!("binary resolution failed: {e}")],
+                    workspace.clone(),
+                );
+            }
+        };
+        spawn_engine(
+            &bin,
+            task,
+            &workspace,
+            limits.max_turns,
+            limits.timeout_secs,
+        )
+    };
+
+    // Persist the captured stream beside the workspace as forensic evidence.
+    let stream_path = run_dir.join(&task.id).join("stream.ndjson");
+    let _ = std::fs::write(&stream_path, &produced.ndjson);
+
+    finalize_record(task, limits, started, workspace, produced)
+}
+
+/// Raw stream plus child-process facts returned by either executor.
+struct ProducedStream {
+    ndjson: String,
+    exit_code: Option<i32>,
+    launch_error: Option<String>,
+    timed_out: bool,
+}
+
+/// Map engine exit codes to guardrail statuses. Engine-specific soft
+/// conditions (rate limit / context overflow / permission denial) land in
+/// `Failed` with the code spelled out — they describe *why* the run aborted,
+/// not a budget overrun of the harness itself.
+fn classify_exit(exit_code: i32) -> RunStatus {
+    match exit_code {
+        0 => RunStatus::Passed,
+        2 => RunStatus::TurnLimit,
+        3 => RunStatus::Timeout,
+        _ => RunStatus::Failed,
+    }
+}
+
+/// Common decision path shared by stub and real streams: derive the status
+/// (limit classes take precedence, in ascending harshness: token < turn <
+/// wall-clock), gather evidence, then evaluate assertions (always, so the
+/// retained scene documents *why* a run died, even under guardrail breach).
+fn finalize_record(
+    task: &EvalTask,
+    limits: ResolvedLimits,
+    started: Instant,
+    workspace: PathBuf,
+    produced: ProducedStream,
+) -> TaskRunRecord {
+    if let Some(error) = produced.launch_error {
+        return base_record(
+            task,
+            RunStatus::SpawnError,
+            started.elapsed(),
+            None,
+            vec![error],
+            workspace,
+        );
+    }
+
+    let observation = observe_stream(&produced.ndjson);
+    let mut violations: Vec<String> = observation.errors.to_vec();
+
+    // Account for budget guards.
+    let done = match &observation.done {
+        Some(NdjsonLine::Done {
+            exit_code,
+            turns_used,
+            tokens_used,
+            tokens_in,
+            tokens_out,
+            ..
+        }) => (
+            *exit_code,
+            *turns_used,
+            (*tokens_in).unwrap_or(0),
+            (*tokens_out).unwrap_or(0),
+            tokens_used.map_or_else(
+                || (*tokens_in).unwrap_or(0) + (*tokens_out).unwrap_or(0),
+                |t| t,
+            ),
+        ),
+        _ => {
+            violations.push("engine stream ended without a `done` event".to_string());
+            (Some(produced.exit_code.unwrap_or(-1)), None, 0, 0, 0)
+        }
+    };
+    let (stream_exit, stream_turns, tokens_in, tokens_out, total_tokens) = done;
+
+    // Status: process/exit signal first, then token ceiling, then any limit hit.
+    let exit_for_classification = stream_exit.or(produced.exit_code).unwrap_or(-1);
+    let mut status = if produced.timed_out {
+        RunStatus::Timeout
+    } else {
+        classify_exit(exit_for_classification)
+    };
+
+    if !produced.timed_out && status != RunStatus::SpawnError {
+        if total_tokens > limits.max_tokens {
+            violations.push(format!(
+                "token limit: {} exceeds budget {}",
+                total_tokens, limits.max_tokens
+            ));
+            status = RunStatus::TokenLimit;
+        } else if let Some(turns) = stream_turns {
+            if turns > limits.max_turns {
+                violations.push(format!(
+                    "turn limit: {} exceeds budget {}",
+                    turns, limits.max_turns
+                ));
+                status = RunStatus::TurnLimit;
+            }
+        }
+    }
+
+    // Verification runs regardless of class — diagnosis evidence is valuable
+    // precisely on breaches. `initial_files` feeds `diff_matches` baselines.
+    let setup_pairs: Vec<(String, String)> = task
+        .setup
+        .files
+        .iter()
+        .map(|f| (f.path.clone(), f.content.clone()))
+        .collect();
+
+    let mut effective_rules: Vec<ValidationRule> = task.verify.rules.clone();
+    if !task.expectations.trajectory.is_empty() {
+        effective_rules.push(ValidationRule::TrajectoryContains {
+            sequence: task.expectations.trajectory.clone(),
+        });
+    }
+    for banned in &task.expectations.forbidden_tools {
+        effective_rules.push(ValidationRule::ForbiddenTool {
+            tool: banned.clone(),
+        });
+    }
+
+    let answer = observation.answer_text.clone();
+    let exit_word = if exit_for_classification == 0 {
+        "success"
+    } else {
+        "error"
+    };
+    let ctx = ValidationContext::new(&workspace, exit_word, &answer)
+        .with_initial_files(&setup_pairs)
+        .with_trajectory(&observation.trajectory);
+
+    let outcomes = evaluate_rules(&effective_rules, &ctx);
+    let mut recorded: Vec<RecordedRuleOutcome> =
+        outcomes.iter().map(RecordedRuleOutcome::from).collect();
+    for outcome in &outcomes {
+        violations.extend(outcome.details.iter().cloned());
+    }
+    // Shell-script verification (unix workers only).
+    if !task.verify.script.trim().is_empty() {
+        let script_result = run_verify_script(&task.verify.script, &workspace);
+        let failure = script_result.err();
+        let details: Vec<String> = failure.iter().cloned().collect();
+        violations.extend(details.iter().cloned());
+        recorded.push(RecordedRuleOutcome {
+            rule: "verify_script".to_string(),
+            passed: failure.is_none(),
+            details,
+        });
+    }
+
+    // A limit-breach status is final even when assertions happen to pass;
+    // otherwise anything other than a zero exit is a failure by contract.
+    let passed = status == RunStatus::Passed && violations.is_empty();
+    if passed {
+        status = RunStatus::Passed;
+    } else if status == RunStatus::Passed {
+        status = RunStatus::Failed;
+    }
+
+    let fallback_turns = stream_turns_from_trajectory(&observation);
+    TaskRunRecord {
+        id: task.id.clone(),
+        tier: task.tier.as_str().to_string(),
+        passed,
+        status,
+        duration_ms: started.elapsed().as_millis() as u64,
+        exit_code: produced.exit_code,
+        turns: stream_turns.unwrap_or(fallback_turns),
+        tokens_in,
+        tokens_out,
+        total_tokens,
+        session_id: observation.session_id.clone(),
+        violations,
+        rule_outcomes: recorded,
+        trajectory_tools: observation
+            .trajectory
+            .iter()
+            .map(|call| call.tool.clone())
+            .collect(),
+        workspace,
+        task_file: task.task_source_path_hint.clone().unwrap_or_default(),
+    }
+}
+
+/// Derived turns when the engine did not volunteer them (defensive; the
+/// contract always sends `turns_used`).
+fn stream_turns_from_trajectory(observation: &RunObservation) -> u32 {
+    observation.trajectory.len() as u32
+}
+
+#[allow(clippy::too_many_arguments)]
+fn base_record(
+    task: &EvalTask,
+    status: RunStatus,
+    elapsed: Duration,
+    exit_code: Option<i32>,
+    violations: Vec<String>,
+    workspace: PathBuf,
+) -> TaskRunRecord {
+    TaskRunRecord {
+        id: task.id.clone(),
+        tier: task.tier.as_str().to_string(),
+        passed: status == RunStatus::Passed,
+        status,
+        duration_ms: elapsed.as_millis() as u64,
+        exit_code,
+        turns: 0,
+        tokens_in: 0,
+        tokens_out: 0,
+        total_tokens: 0,
+        session_id: None,
+        violations,
+        rule_outcomes: Vec::new(),
+        trajectory_tools: Vec::new(),
+        workspace,
+        task_file: task.task_source_path_hint.clone().unwrap_or_default(),
+    }
+}
+
+/// Spawn the engine child with the guardrail flags and collect its stdout
+/// NDJSON under a wall-clock deadline (polling `try_wait`; hard-kills on
+/// breach and keeps whatever partial stream was captured). On unix the child
+/// gets its own process group so a timeout kill takes down any grandchildren
+/// that would otherwise keep the stdout pipe open.
+fn spawn_engine(
+    bin: &Path,
+    task: &EvalTask,
+    workspace: &Path,
+    max_turns: u32,
+    timeout_secs: u64,
+) -> ProducedStream {
+    let mut command = Command::new(bin);
+    command
+        .arg("--prompt")
+        .arg(&task.prompt)
+        .arg("--output-format")
+        .arg("json-stream")
+        .arg("--max-turns")
+        .arg(max_turns.to_string())
+        .current_dir(workspace)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        // Isolate persisted sessions into the task's own evidence directory
+        // (headless honors `SHANNON_SESSIONS_DIR`; see cli main.rs).
+        .env("SHANNON_SESSIONS_DIR", workspace.join(".eval-sessions"));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Failure to set a fresh process group is non-fatal — fall back to
+        // plain kill semantics below.
+        let _ = command.process_group(0);
+    }
+
+    let spawned = command.spawn();
+
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(e) => {
+            return ProducedStream {
+                ndjson: String::new(),
+                exit_code: None,
+                launch_error: Some(format!("failed to spawn {}: {e}", bin.display())),
+                timed_out: false,
+            };
+        }
+    };
+
+    let stdout = child.stdout.take().expect("child stdout was piped");
+    let reader = thread::spawn(move || {
+        let mut collected = String::new();
+        for line in BufReader::new(stdout).lines() {
+            match line {
+                Ok(text) => {
+                    collected.push_str(&text);
+                    collected.push('\n');
+                }
+                Err(_) => break,
+            }
+        }
+        collected
+    });
+
+    let deadline = Duration::from_secs(timeout_secs);
+    let began = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let exit_code = status.code();
+                let ndjson = reader.join().unwrap_or_default();
+                return ProducedStream {
+                    ndjson,
+                    exit_code,
+                    launch_error: None,
+                    timed_out: false,
+                };
+            }
+            Ok(None) if began.elapsed() >= deadline => {
+                // Wall-clock budget exhausted: hard-kill and keep the partial
+                // stream that made it through before death. On unix the whole
+                // process group dies so no grandchild keeps the pipe open.
+                kill_process_tree(&mut child);
+                let _ = child.wait();
+                let ndjson = reader.join().unwrap_or_default();
+                return ProducedStream {
+                    ndjson,
+                    exit_code: None,
+                    launch_error: None,
+                    timed_out: true,
+                };
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(e) => {
+                let ndjson = reader.join().unwrap_or_default();
+                return ProducedStream {
+                    ndjson,
+                    exit_code: None,
+                    launch_error: Some(format!("wait on child failed: {e}")),
+                    timed_out: false,
+                };
+            }
+        }
+    }
+}
+
+/// Hard-kill the timed-out child; on unix, SIGKILL the entire process group
+/// (the child was spawned with `process_group(0)`) so descendants cannot keep
+/// the stdout pipe — and therefore the stream collection thread — alive past
+/// the wall-clock budget.
+#[cfg(unix)]
+fn kill_process_tree(child: &mut std::process::Child) {
+    let negated_pid = -(child.id() as i32);
+    // SAFETY: kill(2) with SIGKILL on this runner's own spawned process group;
+    // ESRCH for an already-dead group is an acceptable non-error.
+    let group_signalled = unsafe { libc::kill(negated_pid, libc::SIGKILL) } == 0;
+    if !group_signalled {
+        // Group already gone or not set: fall back to direct-child kill.
+        let _ = child.kill();
+    }
+}
+
+/// Non-unix builds fall back to terminating the direct child.
+#[cfg(not(unix))]
+fn kill_process_tree(child: &mut std::process::Child) {
+    let _ = child.kill();
+}
+
+/// Execute `verify.script` inside the workspace via `sh -c`; captures combined
+/// output tails (up to 2000 chars) into the violation message on failure.
+#[cfg(unix)]
+fn run_verify_script(script: &str, workspace: &Path) -> Result<(), String> {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .current_dir(workspace)
+        .output()
+        .map_err(|e| format!("verify_script could not run: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let mut tail = String::from_utf8_lossy(&output.stderr).to_string();
+    if tail.trim().is_empty() {
+        tail = String::from_utf8_lossy(&output.stdout).to_string();
+    }
+    if tail.chars().count() > 2000 {
+        tail = tail.chars().take(2000).collect();
+    }
+    Err(format!(
+        "verify_script exited with {} (cwd={})\n{tail}",
+        output.status.code().unwrap_or(-1),
+        workspace.display()
+    ))
+}
+
+/// Windows builds get an explicit dead-end rather than silent skips.
+#[cfg(not(unix))]
+fn run_verify_script(_script: &str, _workspace: &Path) -> Result<(), String> {
+    Err("verify_script is unsupported on this platform".to_string())
+}
+
+// ── Dry-run stub executor ──────────────────────────────────────────────
+
+/// Deterministic rehearsal: interpret the task's `[dry_run]` steps against the
+/// real workspace via mini-primitives and emit an engine-schema-faithful
+/// NDJSON stream (`start` → per-step `tool_call`/`tool_result` → final
+/// `text_delta` → `done`). The verify stage consumes this exactly as it would
+/// consume a live engine's stream.
+fn execute_stub(task: &EvalTask, workspace: &Path) -> ProducedStream {
+    let mut stream = String::new();
+    push_line(
+        &mut stream,
+        &json!({
+            "type": "start",
+            "prompt": task.prompt,
+            "model": "eval-dry-run-stub",
+            "session_id": format!("dryrun-{}", uuid::Uuid::new_v4().as_simple()),
+        }),
+    );
+
+    // Synthesized billing keeps the token-budget plumbing exercised; roughly
+    // four characters per token with a fixed per-step overhead.
+    let prompt_tokens = (task.prompt.len() as u64).div_ceil(4) + 24;
+    let mut tokens_in: u64 = prompt_tokens;
+    let mut tokens_out: u64 = 0;
+
+    for step in &task.dry_run.steps {
+        let rendered_input = render_tool_input(&step.input);
+        let effect = if step.fail {
+            Err("synthetic failure injected by dry-run script".to_string())
+        } else {
+            apply_stub_tool(step.tool.as_str(), &step.input, workspace)
+        };
+        tokens_in += 32;
+
+        let (success, output_summary) = match effect {
+            Ok(result) => (true, result),
+            Err(reason) => (false, reason),
+        };
+
+        push_line(
+            &mut stream,
+            &json!({
+                "type": "tool_call",
+                "name": step.tool,
+                "input": rendered_input,
+            }),
+        );
+        push_line(
+            &mut stream,
+            &json!({
+                "type": "tool_result",
+                "name": step.tool,
+                "success": success,
+                "output": output_summary,
+            }),
+        );
+        tokens_out += output_summary.len() as u64 / 8 + 16;
+    }
+
+    push_line(
+        &mut stream,
+        &json!({ "type": "text_delta", "content": task.dry_run.final_text }),
+    );
+
+    let mut tokens_used = tokens_in + tokens_out + 12;
+    if let Some(forced) = task.dry_run.tokens_used {
+        tokens_used = forced;
+    }
+    push_line(
+        &mut stream,
+        &json!({
+            "type": "done",
+            "exit_code": 0,
+            "turns_used": task.dry_run.steps.len() as u32 + 1,
+            "tokens_used": tokens_used,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+        }),
+    );
+
+    ProducedStream {
+        ndjson: stream,
+        exit_code: Some(0),
+        launch_error: None,
+        timed_out: false,
+    }
+}
+
+fn push_line(buf: &mut String, value: &Value) {
+    buf.push_str(&value.to_string());
+    buf.push('\n');
+}
+
+/// Compact-JSON rendering of a step's arguments — mirrors what the engine
+/// puts in `tool_call.input`, so `args_regex` patterns behave identically.
+fn render_tool_input(input: &Value) -> Value {
+    match serde_json::from_str::<Value>(&input.to_string()) {
+        Ok(parsed) => parsed,
+        Err(_) => input.clone(),
+    }
+}
+
+fn workspace_file(workspace: &Path, raw: &str) -> PathBuf {
+    // Absolute paths flow through unchanged; anything else resolves inside
+    // the sandbox so stub effects can never escape the task directory.
+    let candidate = Path::new(raw);
+    if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        workspace.join(candidate)
+    }
+}
+
+/// Apply one stub step's effect on the actual workspace. Implements the
+/// primitives the suite relies upon (`Read`, `Write`, `Edit`, `MultiEdit`,
+/// `Glob`, `Grep`, narrow `Bash`); unknown tools degrade to an error result
+/// rather than pretending success.
+fn apply_stub_tool(tool: &str, input: &Value, workspace: &Path) -> Result<String, String> {
+    let arg_str = |key: &str| input.get(key).and_then(Value::as_str);
+
+    match tool {
+        "Read" => {
+            let path = arg_str("file_path").ok_or("Read: missing file_path")?;
+            std::fs::read_to_string(workspace_file(workspace, path))
+                .map_err(|_| format!("Read: {path} does not exist"))
+        }
+        "Write" => {
+            let path = arg_str("file_path").ok_or("Write: missing file_path")?;
+            let content = arg_str("content").ok_or("Write: missing content")?;
+            let target = workspace_file(workspace, path);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Write: cannot create parent: {e}"))?;
+            }
+            std::fs::write(&target, content).map_err(|e| format!("Write: {e}"))?;
+            Ok(format!("{path}: written ({} bytes)", content.len()))
+        }
+        "Edit" => {
+            let path = arg_str("file_path").ok_or("Edit: missing file_path")?;
+            let old = arg_str("old_string").ok_or("Edit: missing old_string")?;
+            let new = arg_str("new_string").ok_or("Edit: missing new_string")?;
+            apply_edit_once(workspace, path, old, new)
+        }
+        "MultiEdit" => {
+            let path = arg_str("file_path").ok_or("MultiEdit: missing file_path")?;
+            let edits = input
+                .get("edits")
+                .and_then(Value::as_array)
+                .ok_or("MultiEdit: missing edits array")?;
+            for pair in edits {
+                let old = pair
+                    .get("old_string")
+                    .and_then(Value::as_str)
+                    .ok_or("MultiEdit: edit missing old_string")?;
+                let new = pair
+                    .get("new_string")
+                    .and_then(Value::as_str)
+                    .ok_or("MultiEdit: edit missing new_string")?;
+                apply_edit_once(workspace, path, old, new)?;
+            }
+            Ok(format!("{}: {} replacements applied", path, edits.len()))
+        }
+        "Glob" => {
+            let pattern = arg_str("pattern").ok_or("Glob: missing pattern")?;
+            let matches = glob_workspace(workspace, pattern)?;
+            Ok(matches.into_iter().take(50).collect::<Vec<_>>().join("\n"))
+        }
+        "Grep" => {
+            let pattern = arg_str("pattern").ok_or("Grep: missing pattern")?;
+            let matcher = Regex::new(pattern)
+                .map_err(|e| format!("Grep: invalid pattern '{pattern}': {e}"))?;
+            let mut hits: Vec<String> = Vec::new();
+            walk_files(workspace, Path::new(""), &mut |rel, abs| {
+                if hits.len() >= 50 {
+                    return;
+                }
+                if let Ok(content) = std::fs::read_to_string(abs) {
+                    for (idx, line) in content.lines().enumerate() {
+                        if matcher.is_match(line) {
+                            hits.push(format!("{}:{}:{}", rel.display(), idx + 1, line));
+                        }
+                    }
+                }
+            });
+            if hits.is_empty() {
+                Err(format!("Grep: no matches for '{pattern}'"))
+            } else {
+                Ok(hits.join("\n"))
+            }
+        }
+        "Bash" => {
+            let command = arg_str("command").ok_or("Bash: missing command")?.trim();
+            if let Some(target) = command.strip_prefix("ls").map(str::trim) {
+                let dir = if target.is_empty() || target == "." {
+                    workspace.to_path_buf()
+                } else {
+                    workspace_file(workspace, target)
+                };
+                let mut names: Vec<String> = std::fs::read_dir(&dir)
+                    .map_err(|e| format!("ls: {e}"))?
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .collect();
+                names.sort();
+                Ok(if names.is_empty() {
+                    "(empty directory)".to_string()
+                } else {
+                    names.join("\n")
+                })
+            } else if let Some(rest) = command.strip_prefix("cat").map(str::trim) {
+                std::fs::read_to_string(workspace_file(workspace, rest))
+                    .map_err(|e| format!("cat: {rest}: {e}"))
+            } else if command.starts_with("find . -type f") {
+                let mut rels: Vec<String> = Vec::new();
+                walk_files(workspace, Path::new(""), &mut |rel, _| {
+                    // Mirror real `find .`: entries render with the `./`
+                    // prefix (matches GNU coreutils output).
+                    rels.push(format!("./{}", rel.display()));
+                });
+                Ok(rels.join("\n"))
+            } else {
+                Err(format!("Bash: '{command}' unavailable in dry-run stub"))
+            }
+        }
+        other => Err(format!("{other}: unsupported tool in dry-run stub")),
+    }
+}
+
+fn apply_edit_once(workspace: &Path, path: &str, old: &str, new: &str) -> Result<String, String> {
+    let target = workspace_file(workspace, path);
+    let content =
+        std::fs::read_to_string(&target).map_err(|_| format!("Edit: {path} does not exist"))?;
+    if !content.contains(old) {
+        return Err(format!("Edit: old_string not found in {path}"));
+    }
+    let updated = content.replacen(old, new, 1);
+    std::fs::write(&target, updated).map_err(|e| format!("Edit: {e}"))?;
+    Ok(format!("{path}: edited"))
+}
+
+/// Tiny wildcard matcher over workspace-relative paths (uses `globset` already
+/// in the dependency graph) — enough for suite prompts like `src/**/*.rs`.
+fn glob_workspace(root: &Path, pattern: &str) -> Result<Vec<String>, String> {
+    let normalized = pattern.strip_prefix("./").unwrap_or(pattern);
+    let glob = globset::GlobBuilder::new(normalized)
+        .literal_separator(true)
+        .build()
+        .map_err(|e| format!("Glob: invalid pattern '{pattern}': {e}"))?;
+    let matcher = glob.compile_matcher();
+
+    let mut hits = Vec::new();
+    walk_files(root, Path::new(""), &mut |rel, _| {
+        if matcher.is_match(rel) {
+            hits.push(rel.to_string_lossy().into_owned());
+        }
+    });
+    hits.sort();
+    Ok(hits)
+}
+
+/// Depth-bounded recursive file visitor. `visit` receives each file's path
+/// relative to the walk root (slash-separated forward on unix as-is from the
+/// filesystem) and its absolute path. Hidden dirs, `target/` and
+/// `node_modules/` are pruned; depth caps runaway trees.
+fn walk_files(dir: &Path, rel_prefix: &Path, visit: &mut dyn FnMut(&Path, &Path)) {
+    const MAX_DEPTH: usize = 8;
+    if rel_prefix.components().count() > MAX_DEPTH {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy().into_owned();
+        if name_str.starts_with('.') || name_str == "target" || name_str == "node_modules" {
+            continue;
+        }
+        let rel = rel_prefix.join(&name);
+        if path.is_dir() {
+            walk_files(&path, &rel, visit);
+        } else {
+            visit(&rel, &path);
+        }
+    }
+}
+
+// ── Cross-run comparison ───────────────────────────────────────────────
+
+/// Load a persisted `report.json` for the `diff` workflow.
+pub fn load_report(path: &Path) -> Result<RunReport, EvalError> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| EvalError::Config(format!("cannot read {}: {e}", path.display())))?;
+    serde_json::from_str(&raw).map_err(|e| EvalError::Config(format!("{}: {e}", path.display())))
+}
+
+/// Diff verdict between two runs: structurally stable when their
+/// [`RunReport::stable_digest`] strings agree; otherwise enumerate
+/// per-task deltas worth eyeballing (statuses, budgets, trajectories).
+pub fn compare_reports(a: &RunReport, b: &RunReport) -> String {
+    if a.stable_digest() == b.stable_digest() {
+        return format!(
+            "STABLE: structural digest identical across runs ({} tasks)",
+            a.records.len()
+        );
+    }
+    let mut out = String::from("UNSTABLE: digests differ\n");
+    for (ra, rb) in a.records.iter().zip(b.records.iter()) {
+        let va = ra.stable_view();
+        let vb = rb.stable_view();
+        if va != vb {
+            out.push_str(&format!("\n[{}] {}\n", ra.id, ra.tier));
+            for key in [
+                "status",
+                "exit_code",
+                "turns",
+                "tokens_in",
+                "tokens_out",
+                "violations",
+                "trajectory_tools",
+            ] {
+                if va.get(key) != vb.get(key) {
+                    out.push_str(&format!(
+                        "  {key}: {} -> {}\n",
+                        va.get(key).map_or("?".into(), ToString::to_string),
+                        vb.get(key).map_or("?".into(), ToString::to_string)
+                    ));
+                }
+            }
+        }
+    }
+    out.truncate(out.len());
+    out
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    // ── Task parsing ──────────────────────────────────────────────────
+
+    const SAMPLE_TASK: &str = r#"
+id = "edit_42"
+tier = "edit"
+description = "rename a symbol"
+prompt = "Rename fetch_data to load_data in src/api.rs"
+
+[setup]
+git_init = false
+
+[[setup.files]]
+path = "src/api.rs"
+content = "fn fetch_data() {}"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/api.rs"
+contains = "fn load_data"
+
+[[verify.rules]]
+rule = "diff_matches"
+path = "src/api.rs"
+expected_diff_regex = '-fn fetch_data\(\).*\n\+fn load_data\(\)'
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Edit"
+args_regex = '"old_string":"fn fetch_data'
+
+[limits]
+max_turns = 5
+max_tokens = 20000
+timeout_secs = 120
+
+[dry_run]
+final_text = "Renamed."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/api.rs" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "src/api.rs", old_string = "fn fetch_data()", new_string = "fn load_data()" }
+"#;
+
+    fn write_task(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, body).expect("write task toml");
+        path
+    }
+
+    #[test]
+    fn parse_full_task_roundtrip() {
+        let dir = tempfile::TempDir::new().expect("tmp");
+        let path = write_task(dir.path(), "edit_42.toml", SAMPLE_TASK);
+        let task = parse_task(&path).expect("parse");
+
+        assert_eq!(task.id, "edit_42");
+        assert_eq!(task.tier, EvalTier::Edit);
+        assert_eq!(task.setup.files.len(), 1);
+        assert_eq!(task.verify.rules.len(), 2);
+        assert_eq!(task.expectations.forbidden_tools, vec!["Write", "Bash"]);
+        assert_eq!(task.expectations.trajectory.len(), 1);
+        assert_eq!(task.expectations.trajectory[0].tool, "Edit");
+        assert!(!task.expectations.trajectory[0].args_regex.is_empty());
+
+        let limits = ResolvedLimits::of(&task.limits);
+        assert_eq!(limits.max_turns, 5);
+        assert_eq!(limits.max_tokens, 20_000);
+        assert_eq!(limits.timeout_secs, 120);
+
+        assert!(task.validate().is_empty(), "{:?}", task.validate());
+        assert_eq!(task.task_source_path_hint.as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn parse_task_defaults_fill_in() {
+        let minimal = r#"
+id = "read_01"
+tier = "read"
+prompt = "What version?"
+
+[dry_run]
+final_text = "1.0.0"
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "meta.txt" }
+"#;
+        let dir = tempfile::TempDir::new().expect("tmp");
+        let task = parse_task(&write_task(dir.path(), "read_01.toml", minimal)).expect("parse");
+        assert!(task.setup.files.is_empty());
+        assert!(!task.setup.git_init);
+        assert!(task.verify.rules.is_empty());
+        let limits = ResolvedLimits::of(&task.limits);
+        assert_eq!(limits.max_turns, DEFAULT_MAX_TURNS);
+        assert_eq!(limits.max_tokens, DEFAULT_MAX_TOKENS);
+        assert_eq!(limits.timeout_secs, DEFAULT_TIMEOUT_SECS);
+        assert!(
+            !task.validate().is_empty(),
+            "no rules/script/expectations must be flagged"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_unknown_tier_and_malformed_rule() {
+        let dir = tempfile::TempDir::new().expect("tmp");
+
+        let bad_tier =
+            "id = \"x\"\ntier = \"quantum\"\nprompt = \"p\"\n[dry_run]\nfinal_text = \"t\"\n";
+        assert!(parse_task(&write_task(dir.path(), "bad_tier.toml", bad_tier)).is_err());
+
+        let bad_rule = concat!(
+            "id = \"y\"\ntier = \"edit\"\nprompt = \"p\"\n",
+            "[[verify.rules]]\nrule = \"cost_below\"\nmax_usd = 1.0\nper = \"fortnight\"\n",
+            "[dry_run]\nfinal_text = \"t\"\n"
+        );
+        assert!(
+            parse_task(&write_task(dir.path(), "bad_rule.toml", bad_rule)).is_err(),
+            "unknown cost basis must fail at task parse time"
+        );
+    }
+
+    #[test]
+    fn parse_tasks_dir_is_sorted_by_filename_and_skips_non_toml() {
+        let dir = tempfile::TempDir::new().expect("tmp");
+        for name in ["c_third.toml", "a_first.toml", "b_second.toml", "notes.txt"] {
+            if !name.ends_with(".toml") {
+                std::fs::write(dir.path().join(name), "not a task").expect("write");
+                continue;
+            }
+            let id = name
+                .trim_end_matches(".toml")
+                .split('_')
+                .next_back()
+                .unwrap_or(name);
+            let body = format!(
+                "id = \"{id}\"\ntier = \"read\"\nprompt = \"p\"\n\n[dry_run]\nfinal_text = \"t\"\n\n[[dry_run.steps]]\ntool = \"Read\"\ninput = {{ file_path = \"x\" }}\n"
+            );
+            std::fs::write(dir.path().join(name), body).expect("write");
+        }
+        let tasks = parse_tasks_dir(dir.path()).expect("parse dir");
+        let ids: Vec<_> = tasks.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["first", "second", "third"]);
+    }
+
+    // ── NDJSON decoding ───────────────────────────────────────────────
+
+    #[test]
+    fn ndjson_lines_decode_all_event_shapes() {
+        assert_eq!(
+            parse_ndjson_line(r#"{"type":"start","session_id":"s-1","model":"m"}"#),
+            NdjsonLine::Start {
+                session_id: Some("s-1".into()),
+                model: Some("m".into())
+            }
+        );
+        assert_eq!(
+            parse_ndjson_line(r#"{"type":"tool_call","name":"Edit","input":{"file_path":"a.rs"}}"#),
+            NdjsonLine::ToolCall {
+                name: "Edit".into(),
+                input_json: r#"{"file_path":"a.rs"}"#.into()
+            }
+        );
+        // Both real-world tool_result shapes normalize onto one variant.
+        assert_eq!(
+            parse_ndjson_line(
+                r#"{"type":"tool_result","name":"Edit","success":true,"output":"ok"}"#
+            ),
+            NdjsonLine::ToolResult {
+                name: "Edit".into(),
+                success: Some(true)
+            }
+        );
+        assert_eq!(
+            parse_ndjson_line(
+                r#"{"type":"tool_result","name":"Bash","is_error":true,"output":"boom"}"#
+            ),
+            NdjsonLine::ToolResult {
+                name: "Bash".into(),
+                success: Some(false)
+            }
+        );
+        assert_eq!(
+            parse_ndjson_line(r#"{"type":"text_delta","content":"hi"}"#),
+            NdjsonLine::TextDelta {
+                content: "hi".into()
+            }
+        );
+        assert_eq!(
+            parse_ndjson_line(
+                r#"{"type":"done","exit_code":0,"turns_used":3,"tokens_used":90,"tokens_in":60,"tokens_out":30}"#
+            ),
+            NdjsonLine::Done {
+                exit_code: Some(0),
+                turns_used: Some(3),
+                tokens_used: Some(90),
+                tokens_in: Some(60),
+                tokens_out: Some(30)
+            }
+        );
+
+        // Tolerant fallbacks.
+        assert_eq!(parse_ndjson_line("garbage not json"), NdjsonLine::Other);
+        assert_eq!(parse_ndjson_line(""), NdjsonLine::Other);
+        assert_eq!(
+            parse_ndjson_line(r#"{"type":"future_event","x":1}"#),
+            NdjsonLine::Other
+        );
+    }
+
+    #[test]
+    fn observe_stream_ignores_duplicate_tool_use_channel() {
+        // The CLI emits each invocation both as a CI `tool_call` event and as
+        // an output `tool_use` event; observation must count every call once.
+        let stream = concat!(
+            "{\"type\":\"start\",\"session_id\":\"s\",\"model\":\"m\"}\n",
+            "{\"type\":\"tool_call\",\"name\":\"Read\",\"input\":{\"file_path\":\"a\"}}\n",
+            "{\"type\":\"text_delta\",\"content\":\"partial \"}\n",
+            "{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"a\"}}\n",
+            "{\"type\":\"tool_result\",\"name\":\"Read\",\"success\":true,\"output\":\"..\"}\n",
+            "{\"type\":\"text_delta\",\"content\":\"answer\"}\n",
+            "{\"type\":\"error\",\"message\":\"late noise\"}\n",
+            "{\"type\":\"done\",\"exit_code\":0,\"turns_used\":2,\"tokens_used\":10,\"tokens_in\":6,\"tokens_out\":4}\n",
+        );
+        let obs = observe_stream(stream);
+        assert_eq!(obs.session_id.as_deref(), Some("s"));
+        assert_eq!(obs.model.as_deref(), Some("m"));
+        assert_eq!(obs.trajectory.len(), 1, "tool_use echo must be skipped");
+        assert_eq!(obs.trajectory[0].tool, "Read");
+        assert_eq!(obs.answer_text, "partial answer");
+        assert_eq!(obs.errors, vec!["late noise"]);
+        match obs.done.expect("done captured") {
+            NdjsonLine::Done {
+                exit_code: Some(0),
+                tokens_used: Some(10),
+                ..
+            } => {}
+            other => panic!("unexpected done: {other:?}"),
+        }
+    }
+
+    // ── Stub executor primitives ──────────────────────────────────────
+
+    fn seed_workspace() -> tempfile::TempDir {
+        let tmp = tempfile::TempDir::new().expect("tmp");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
+        std::fs::write(
+            tmp.path().join("src/app.rs"),
+            "fn main() {\n    println!(\"Hello, world!\");\n}\n",
+        )
+        .expect("seed");
+        std::fs::write(
+            tmp.path().join("notes.md"),
+            "- fix login bug\n- add retry\n",
+        )
+        .expect("seed notes");
+        tmp
+    }
+
+    #[test]
+    fn stub_primitives_act_on_real_files() {
+        let ws = seed_workspace();
+
+        let content = apply_stub_tool("Read", &json!({ "file_path": "src/app.rs" }), ws.path())
+            .expect("read");
+        assert!(content.contains("println"));
+
+        apply_stub_tool(
+            "Edit",
+            &json!({
+                "file_path": "src/app.rs",
+                "old_string": "Hello, world!",
+                "new_string": "Goodbye, world!"
+            }),
+            ws.path(),
+        )
+        .expect("edit works");
+        let after = std::fs::read_to_string(ws.path().join("src/app.rs")).expect("read back");
+        assert!(after.contains("Goodbye"));
+
+        // Failed edits surface as errors, never silent success.
+        let miss = apply_stub_tool(
+            "Edit",
+            &json!({
+                "file_path": "src/app.rs",
+                "old_string": "absent text",
+                "new_string": "x"
+            }),
+            ws.path(),
+        );
+        assert!(miss.unwrap_err().contains("old_string not found"));
+
+        apply_stub_tool(
+            "Write",
+            &json!({ "file_path": "docs/guide.md", "content": "# Guide" }),
+            ws.path(),
+        )
+        .expect("nested write works");
+        assert!(ws.path().join("docs/guide.md").exists());
+
+        apply_stub_tool(
+            "MultiEdit",
+            &json!({
+                "file_path": "notes.md",
+                "edits": [
+                    { "old_string": "login bug", "new_string": "signup bug" },
+                    { "old_string": "add retry", "new_string": "add backoff" }
+                ]
+            }),
+            ws.path(),
+        )
+        .expect("multiedit works");
+        let notes = std::fs::read_to_string(ws.path().join("notes.md")).expect("notes");
+        assert!(notes.contains("signup bug") && notes.contains("add backoff"));
+    }
+
+    #[test]
+    fn stub_grep_glob_search_the_real_tree() {
+        let ws = seed_workspace();
+
+        let glob_hits =
+            apply_stub_tool("Glob", &json!({ "pattern": "src/**/*.rs" }), ws.path()).expect("glob");
+        assert_eq!(glob_hits, "src/app.rs");
+
+        let grep_hits =
+            apply_stub_tool("Grep", &json!({ "pattern": "retry" }), ws.path()).expect("grep hits");
+        assert!(grep_hits.starts_with("notes.md:"), "{grep_hits}");
+        assert!(grep_hits.contains("- add retry"));
+
+        assert!(
+            apply_stub_tool(
+                "Grep",
+                &json!({ "pattern": "no_such_token_xyz" }),
+                ws.path()
+            )
+            .is_err()
+        );
+        assert!(apply_stub_tool("Glob", &json!({ "pattern": "([" }), ws.path()).is_err());
+
+        let find_out = apply_stub_tool("Bash", &json!({ "command": "find . -type f" }), ws.path())
+            .expect("find works");
+        assert!(find_out.contains("./notes.md"));
+        assert!(find_out.contains("./src/app.rs"));
+
+        let ls_out =
+            apply_stub_tool("Bash", &json!({ "command": "ls src" }), ws.path()).expect("ls");
+        assert_eq!(ls_out, "app.rs");
+    }
+
+    #[test]
+    fn stub_unsupported_tools_fail_loudly() {
+        let ws = seed_workspace();
+        let err = apply_stub_tool("WebFetch", &json!({"url":"https://example.com"}), ws.path())
+            .unwrap_err();
+        assert!(err.contains("unsupported tool"), "{err}");
+
+        let bash_err =
+            apply_stub_tool("Bash", &json!({"command":"rm -rf /"}), ws.path()).unwrap_err();
+        assert!(
+            bash_err.contains("unavailable in dry-run stub"),
+            "{bash_err}"
+        );
+    }
+
+    #[test]
+    fn stub_stream_matches_engine_schema() {
+        let ws = seed_workspace();
+        let body = concat!(
+            "id = \"probe\"\ntier = \"edit\"\nprompt = \"probe\"\n\n",
+            "[dry_run]\nfinal_text = \"Updated.\"\n\n",
+            "[[dry_run.steps]]\ntool = \"Read\"\ninput = { file_path = \"src/app.rs\" }\n"
+        );
+        let dir = tempfile::TempDir::new().expect("tmp");
+        let task = parse_task(&write_task(dir.path(), "probe.toml", body)).expect("parse");
+
+        let produced = execute_stub(&task, ws.path());
+        let lines: Vec<&str> = produced.ndjson.lines().collect();
+        assert_eq!(lines.len(), 5, "start + call/result + text + done");
+        assert!(produced.ndjson.contains("\"type\":\"start\""));
+        assert!(produced.ndjson.contains("\"type\":\"tool_call\""));
+        assert!(produced.ndjson.contains("\"type\":\"tool_result\""));
+        assert!(produced.ndjson.contains("\"type\":\"text_delta\""));
+        assert!(produced.ndjson.contains("\"type\":\"done\""));
+
+        let obs = observe_stream(&produced.ndjson);
+        match obs.done {
+            Some(NdjsonLine::Done {
+                exit_code: Some(0),
+                turns_used: Some(2),
+                ..
+            }) => {}
+            other => panic!("terminal done expected, got {other:?}"),
+        }
+        assert_eq!(obs.answer_text, "Updated.");
+        assert_eq!(produced.exit_code, Some(0));
+    }
+
+    // ── Workspace preparation ─────────────────────────────────────────
+
+    #[test]
+    fn prepare_task_dir_seeds_files_and_archives_definition() {
+        let run_dir = tempfile::TempDir::new().expect("runroot");
+        let source = tempfile::TempDir::new().expect("source");
+        let source_path = write_task(source.path(), "edit_42.toml", SAMPLE_TASK);
+        let task = parse_task(&source_path).expect("parse");
+
+        let ws = prepare_task_dir(&task, run_dir.path()).expect("prepare");
+        assert!(ws.ends_with("workspace"));
+        assert!(ws.join("src/api.rs").exists());
+        assert_eq!(
+            std::fs::read_to_string(ws.join("src/api.rs")).expect("content"),
+            "fn fetch_data() {}"
+        );
+        assert!(
+            !ws.join(".git").exists(),
+            "git_init=false must skip git init"
+        );
+
+        let archived = run_dir.path().join("edit_42").join("task.toml");
+        // The archive is a byte-exact copy (leading newline included).
+        assert_eq!(
+            std::fs::read_to_string(&archived)
+                .expect("archive exists")
+                .trim(),
+            SAMPLE_TASK.trim()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepare_task_dir_git_init_creates_repo() {
+        let run_dir = tempfile::TempDir::new().expect("runroot");
+        let dir = tempfile::TempDir::new().expect("tmp");
+        let git_task_body = concat!(
+            "id = \"rec_09\"\ntier = \"recovery\"\nprompt = \"resolve\"\n",
+            "[setup]\ngit_init = true\n\n",
+            "[[setup.files]]\npath = \"a.txt\"\ncontent = \"x\"\n\n",
+            "[dry_run]\nfinal_text = \"done\"\n\n[[dry_run.steps]]\n",
+            "tool = \"Read\"\ninput = { file_path = \"a.txt\" }\n"
+        );
+        let task =
+            parse_task(&write_task(dir.path(), "rec_09.toml", git_task_body)).expect("parse");
+        let ws = prepare_task_dir(&task, run_dir.path()).expect("prepare");
+        assert!(
+            ws.join(".git").exists(),
+            "git init should have created .git"
+        );
+    }
+
+    // ── Full pipeline (stub mode) ─────────────────────────────────────
+
+    fn options_into(out: &Path) -> EvalOptions {
+        EvalOptions {
+            bin_path: None,
+            dry_run: true,
+            out_dir_override: Some(out.to_path_buf()),
+        }
+    }
+
+    #[test]
+    fn pipeline_dry_run_passes_declared_script_and_writes_reports() {
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+        let path = write_task(tasks_root.path(), "edit_42.toml", SAMPLE_TASK);
+        let task = parse_task(&path).expect("parse");
+        assert!(task.validate().is_empty());
+
+        let options = options_into(run_root.path());
+        let (report, run_dir) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
+
+        assert_eq!(report.tasks_total, 1);
+        assert_eq!(report.tasks_passed, 1, "self-consistent script must pass");
+        let record = &report.records[0];
+        assert_eq!(record.status, RunStatus::Passed);
+        assert_eq!(record.trajectory_tools, vec!["Read", "Edit"]);
+        assert!(record.rule_outcomes.iter().all(|o| o.passed));
+        assert_eq!(
+            record.rule_outcomes.len(),
+            2 + 1 + 2,
+            "declared rules + trajectory expectation + two forbidden tools fold into one set"
+        );
+
+        // Evidence bundle retained on disk.
+        let evidence = run_dir.join("edit_42");
+        assert!(evidence.join("workspace/src/api.rs").exists());
+        assert!(evidence.join("stream.ndjson").exists());
+        assert!(evidence.join("result.json").exists());
+        assert!(evidence.join("task.toml").exists());
+        assert!(run_dir.join("report.json").exists());
+        assert!(run_dir.join("report.md").exists());
+
+        let md = report.render_markdown();
+        assert!(md.contains("# Shannon Eval Report"), "{md}");
+        assert!(md.contains("DRY-RUN"));
+        assert!(md.contains("| edit | edit_42 | passed |"));
+
+        let persisted: RunReport = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.join("report.json")).expect("read report.json"),
+        )
+        .expect("report deserializes");
+        assert_eq!(persisted.stable_digest(), report.stable_digest());
+    }
+
+    #[test]
+    fn pipeline_detects_violation_when_script_drifts_from_rules() {
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+        // The stub prose claims success but forgets the actual Edit — file
+        // assertions must catch it.
+        let drifting = SAMPLE_TASK.replace(
+            "[[dry_run.steps]]\ntool = \"Edit\"\ninput = { file_path = \"src/api.rs\", old_string = \"fn fetch_data()\", new_string = \"fn load_data()\" }\n",
+            "",
+        );
+        let task =
+            parse_task(&write_task(tasks_root.path(), "drift.toml", &drifting)).expect("parse");
+
+        let options = options_into(run_root.path());
+        let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
+        let record = &report.records[0];
+        assert_eq!(record.status, RunStatus::Failed);
+        assert!(!record.passed);
+        assert!(
+            record
+                .violations
+                .iter()
+                .any(|v| v.contains("does not contain 'fn load_data'")),
+            "{:?}",
+            record.violations
+        );
+        assert_eq!(record.trajectory_tools, vec!["Read"]);
+        assert!(report.render_markdown().contains("## Failures"));
+    }
+
+    #[test]
+    fn token_budget_breach_yields_limit_class() {
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+        let over = SAMPLE_TASK
+            .replacen("max_tokens = 20000", "max_tokens = 100", 1)
+            .replace("[dry_run]", "[dry_run]\ntokens_used = 5000");
+        let task = parse_task(&write_task(tasks_root.path(), "over.toml", &over)).expect("parse");
+        assert_eq!(ResolvedLimits::of(&task.limits).max_tokens, 100);
+
+        let options = options_into(run_root.path());
+        let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
+        let record = &report.records[0];
+        assert_eq!(
+            record.status,
+            RunStatus::TokenLimit,
+            "{:?}",
+            record.violations
+        );
+        assert!(record.violations.iter().any(|v| v.contains("token limit")));
+        assert!(!record.passed);
+        assert_eq!(record.total_tokens, 5000);
+        // Verification still ran — evidence stays visible despite the breach.
+        assert!(!record.rule_outcomes.is_empty());
+    }
+
+    #[test]
+    fn classify_exit_maps_guardrail_codes() {
+        assert_eq!(classify_exit(0), RunStatus::Passed);
+        assert_eq!(classify_exit(2), RunStatus::TurnLimit);
+        assert_eq!(classify_exit(3), RunStatus::Timeout);
+        for code in [1, 4, 5, 6] {
+            assert_eq!(classify_exit(code), RunStatus::Failed);
+        }
+    }
+
+    // ── Real-spawn mechanics with fake binaries ───────────────────────
+
+    /// Build an executable shell script stand-in for the engine binary.
+    #[cfg(unix)]
+    fn fake_bin(dir: &Path, name: &str, script: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).expect("write script");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_engine_captures_fake_binary_stream_and_limits_fire() {
+        let bin_tmp = tempfile::TempDir::new().expect("binroot");
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+
+        // The fake binary IS the engine contract under test: NDJSON-schema
+        // output through a real child process. Its token totals deliberately
+        // blow the tiny max_tokens budget so limit classification is proven
+        // against genuine subprocess accounting.
+        let script = concat!(
+            "printf '%s\\n' ",
+            "'{\"type\":\"start\",\"prompt\":\"-\",\"model\":\"fake\",\"session_id\":\"sid-7\"}' ",
+            "'{\"type\":\"tool_call\",\"name\":\"Grep\",\"input\":{\"pattern\":\"TODO\"}}' ",
+            "'{\"type\":\"text_delta\",\"content\":\"found two todos\"}' ",
+            "'{\"type\":\"done\",\"exit_code\":0,\"turns_used\":2,\"tokens_used\":9999,\"tokens_in\":8888,\"tokens_out\":1111}'\n",
+            "exit 0\n"
+        );
+        let bin = fake_bin(bin_tmp.path(), "shannon-fake", script);
+
+        let fake_task_body = concat!(
+            "id = \"search_fx\"\ntier = \"search\"\nprompt = \"count TODOs\"\n",
+            "[[verify.rules]]\nrule = \"response_contains\"\ntext = \"todos\"\n\n",
+            "[[expectations.trajectory]]\ntool = \"Grep\"\n\n",
+            "[limits]\nmax_turns = 8\nmax_tokens = 50\ntimeout_secs = 30\n\n",
+            "[dry_run]\nfinal_text = \"unused here\"\n"
+        );
+        let task = parse_task(&write_task(
+            tasks_root.path(),
+            "search_fx.toml",
+            fake_task_body,
+        ))
+        .expect("parse");
+
+        let options = EvalOptions {
+            bin_path: Some(bin),
+            dry_run: false,
+            out_dir_override: Some(run_root.path().to_path_buf()),
+        };
+        let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
+
+        let record = &report.records[0];
+        assert_eq!(
+            record.session_id.as_deref(),
+            Some("sid-7"),
+            "start event decoded"
+        );
+        assert_eq!(
+            record.status,
+            RunStatus::TokenLimit,
+            "{:?}",
+            record.violations
+        );
+        assert_eq!(record.tokens_in, 8888);
+        assert_eq!(record.total_tokens, 9999);
+        assert_eq!(record.exit_code, Some(0));
+        assert_eq!(record.trajectory_tools, vec!["Grep"]);
+        // Rule verification ran alongside the guardrail classification.
+        let response_rule = record
+            .rule_outcomes
+            .iter()
+            .find(|o| o.rule == "response_contains")
+            .expect("response rule evaluated");
+        assert!(response_rule.passed, "{:?}", response_rule.details);
+
+        assert!(report.render_markdown().contains("REAL"));
+        assert!(!report.dry_run);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_kills_slow_children_within_deadline() {
+        let bin_tmp = tempfile::TempDir::new().expect("binroot");
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+
+        let bin = fake_bin(bin_tmp.path(), "slow-shannon", "sleep 30\n");
+
+        let slow_task_body = concat!(
+            "id = \"multi_stuck\"\ntier = \"multi_step\"\nprompt = \"stall\"\n",
+            "[[verify.rules]]\nrule = \"exit_code\"\nvalue = \"success\"\n\n",
+            "[limits]\nmax_turns = 3\nmax_tokens = 900000\ntimeout_secs = 1\n\n",
+            "[dry_run]\nfinal_text = \"unused\"\n"
+        );
+        let task =
+            parse_task(&write_task(tasks_root.path(), "stuck.toml", slow_task_body)).expect("p");
+
+        let options = EvalOptions {
+            bin_path: Some(bin),
+            dry_run: false,
+            out_dir_override: Some(run_root.path().to_path_buf()),
+        };
+
+        let began = Instant::now();
+        let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
+        assert!(
+            began.elapsed() < Duration::from_secs(15),
+            "kill-on-timeout must not wait out the child's full sleep"
+        );
+        let record = &report.records[0];
+        assert_eq!(record.status, RunStatus::Timeout);
+        assert!(record.exit_code.is_none());
+        assert!(record.violations.iter().any(|v| v.contains("`done` event")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_script_failure_is_recorded_as_violation() {
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+
+        let scripted = concat!(
+            "id = \"rec_scr\"\ntier = \"recovery\"\nprompt = \"script probe\"\n",
+            "[[setup.files]]\npath = \"state.txt\"\ncontent = \"wrong\"\n\n",
+            "[verify]\nscript = \"grep -q RIGHT state.txt\"\n\n",
+            "[dry_run]\nfinal_text = \"claimed fixed\"\n\n[[dry_run.steps]]\n",
+            "tool = \"Read\"\ninput = { file_path = \"state.txt\" }\n"
+        );
+        let task = parse_task(&write_task(tasks_root.path(), "scr.toml", scripted)).expect("p");
+
+        let options = options_into(run_root.path());
+        let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
+        let record = &report.records[0];
+        assert_eq!(record.status, RunStatus::Failed);
+        let script_outcome = record
+            .rule_outcomes
+            .iter()
+            .find(|o| o.rule == "verify_script")
+            .expect("script outcome recorded");
+        assert!(!script_outcome.passed);
+        assert!(
+            record
+                .violations
+                .iter()
+                .any(|v| v.contains("verify_script exited")),
+            "{:?}",
+            record.violations
+        );
+
+        // Happy twin: seeding the right content satisfies the same script.
+        let scripted_ok = scripted.replace("content = \"wrong\"", "content = \"RIGHT\"");
+        let task_ok =
+            parse_task(&write_task(tasks_root.path(), "scr_ok.toml", &scripted_ok)).expect("p2");
+        let (report_ok, _) = run_suite(std::slice::from_ref(&task_ok), &options).expect("s2");
+        assert_eq!(report_ok.records[0].status, RunStatus::Passed);
+    }
+
+    #[test]
+    fn missing_binary_surfaces_as_spawn_error_not_panic() {
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+        let task = parse_task(&write_task(tasks_root.path(), "t.toml", SAMPLE_TASK)).expect("p");
+
+        let missing_dir = tempfile::TempDir::new().expect("missing root");
+        let options = EvalOptions {
+            bin_path: Some(missing_dir.path().join("definitely-absent-engine")),
+            dry_run: false,
+            out_dir_override: Some(run_root.path().to_path_buf()),
+        };
+        let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
+        assert_eq!(report.records[0].status, RunStatus::SpawnError);
+        assert_eq!(report.tasks_spawn_errors, 1);
+    }
+
+    // ── Report digests & comparison ───────────────────────────────────
+
+    #[test]
+    fn stable_digest_excludes_volatile_fields() {
+        let dir = tempfile::TempDir::new().expect("tmp");
+        let task = parse_task(&write_task(dir.path(), "d.toml", SAMPLE_TASK)).expect("parse");
+        let out_a = tempfile::TempDir::new().expect("a");
+        let out_b = tempfile::TempDir::new().expect("b");
+
+        let (report_a, _) =
+            run_suite(std::slice::from_ref(&task), &options_into(out_a.path())).expect("a");
+        // Nudge every volatile dimension: later clock second, fresh duration
+        // profile, different workspace location.
+        thread::sleep(Duration::from_millis(1100));
+        let (report_b, _) =
+            run_suite(std::slice::from_ref(&task), &options_into(out_b.path())).expect("b");
+
+        assert_ne!(report_a.run_id, report_b.run_id);
+        assert_ne!(report_a.started_at_utc, report_b.started_at_utc);
+        assert_ne!(
+            report_a.records[0].workspace, report_b.records[0].workspace,
+            "override roots differ by construction"
+        );
+
+        assert_eq!(
+            report_a.stable_digest(),
+            report_b.stable_digest(),
+            "digest must ignore timestamps/durations/paths yet pin statuses+counts"
+        );
+        let verdict = compare_reports(&report_a, &report_b);
+        assert!(verdict.starts_with("STABLE:"), "{verdict}");
+    }
+
+    #[test]
+    fn compare_reports_flags_structural_drift() {
+        let dir = tempfile::TempDir::new().expect("tmp");
+        let task = parse_task(&write_task(dir.path(), "d.toml", SAMPLE_TASK)).expect("parse");
+        let out = tempfile::TempDir::new().expect("out");
+
+        let (good, _) = run_suite(std::slice::from_ref(&task), &options_into(out.path()))
+            .expect("baseline suite");
+
+        // Break the trajectory expectation so the digest legitimately flips.
+        let weaker_body =
+            SAMPLE_TASK.replace("[[expectations.trajectory]]", "[[stale.trajectory]]");
+        let weaker = parse_task(&write_task(out.path(), "weaker.toml", &weaker_body))
+            .expect("weaker parses");
+        let (worse, _) =
+            run_suite(std::slice::from_ref(&weaker), &options_into(out.path())).expect("worse");
+
+        let verdict = compare_reports(&good, &worse);
+        assert!(verdict.starts_with("UNSTABLE"), "{verdict}");
+        assert!(verdict.contains("[edit_42]"), "{verdict}");
+        assert_ne!(good.stable_digest(), worse.stable_digest());
+    }
+
+    #[test]
+    fn resolve_eval_home_honors_explicit_home_env_or_falls_back() {
+        // Read-only inspection avoids global env mutation; the SHANNON_HOME
+        // branch and the ~/.shannon fallback are mutually exclusive.
+        match std::env::var("SHANNON_HOME") {
+            Ok(home) => assert!(resolve_eval_home().expect("home").starts_with(home)),
+            Err(_) => {
+                let home = resolve_eval_home().expect("fallback home");
+                assert!(home.ends_with(".shannon"));
+                assert!(home.is_absolute());
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_bin_prefers_explicit_flag_then_env_then_default() {
+        let custom = PathBuf::from("/opt/custom-shannon");
+        assert_eq!(resolve_bin(Some(&custom)).expect("explicit"), custom);
+
+        match std::env::var("SHANNON_EVAL_BIN") {
+            Ok(env_bin) => assert_eq!(resolve_bin(None).expect("env"), PathBuf::from(env_bin)),
+            Err(_) => {
+                let resolved = resolve_bin(None).expect("resolved default");
+                assert!(
+                    resolved.ends_with("shannon"),
+                    "falls back to target/debug path or PATH lookup: {resolved:?}"
+                );
+            }
+        }
+    }
+}

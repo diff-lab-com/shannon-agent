@@ -1,0 +1,81 @@
+id = "multi_06"
+tier = "multi_step"
+description = "Keep a port constant in sync across a source file and its config."
+prompt = "The service port moves from 9100 to 9443. Update BOTH src/net.rs and proxy.conf so they stay in sync."
+
+[setup]
+[[setup.files]]
+path = "src/net.rs"
+content = """pub const LISTEN_PORT: u16 = 9100;
+
+pub fn bind_addr() -> String { format!("0.0.0.0:{}", LISTEN_PORT) }
+"""
+
+[[setup.files]]
+path = "proxy.conf"
+content = "upstream app {\n    server 127.0.0.1:9100;\n}\n"
+
+[verify]
+script = "! grep -rq '9100' src/net.rs proxy.conf && grep -q LISTEN_PORT: u16 = 9443 src/net.rs && grep -q '127.0.0.1:9443' proxy.conf"
+
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/net.rs"
+contains = "= 9443"
+
+[[verify.rules]]
+rule = "file_content"
+path = "proxy.conf"
+contains = "127.0.0.1:9443"
+
+[[verify.rules]]
+rule = "diff_matches"
+path = "src/net.rs"
+expected_diff_regex = '-.*9100;.*\n\+.*9443;'
+
+[[verify.rules]]
+rule = "diff_matches"
+path = "proxy.conf"
+expected_diff_regex = '-.*9100;.*\n\+.*9443;'
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Read"
+args_regex = '"file_path":"src/net.rs"'
+
+[[expectations.trajectory]]
+tool = "Edit"
+
+[[expectations.trajectory]]
+tool = "Edit"
+args_regex = '"file_path":"proxy.conf"'
+
+[limits]
+max_turns = 10
+max_tokens = 26000
+timeout_secs = 240
+
+[dry_run]
+final_text = "Both the constant and the proxy config now point at 9443."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/net.rs" }
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "proxy.conf" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "src/net.rs", old_string = "LISTEN_PORT: u16 = 9100", new_string = "LISTEN_PORT: u16 = 9443" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "proxy.conf", old_string = "127.0.0.1:9100", new_string = "127.0.0.1:9443" }

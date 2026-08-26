@@ -94,6 +94,24 @@ perf:
 scenarios:
     cargo nextest run --workspace -E 'test(scenario_)'
 
+# ---------- Eval (L1 任务集,§4.4) ----------
+
+# 全量评测。默认 dry-run:免 API key 演练管线(加载→沙箱→limits→NDJSON→verify→双报告);
+# 真实模型跑分用 `just eval-real`。参数透传,例:
+#   just eval --task edit_01            # 单题演练
+#   just eval --tier recovery           # 整层演练
+#   just eval --list                    # 只列任务清单
+eval *args:
+    cargo run -q -p shannon-core --example eval_runner -- --tasks "{{justfile_directory()}}/tests/eval/tasks" {{args}}
+
+# 真实模型跑分(需 API key):SHANNON_API_KEY=<key> just eval-real [--task <id>]
+eval-real *args:
+    SHANNON_EVAL_REAL=1 cargo run -q -p shannon-core --example eval_runner -- --real --tasks "{{justfile_directory()}}/tests/eval/tasks" {{args}}
+
+# 对比两次 run 的指标稳定性:`just eval-diff ~/.shannon/eval/runs/<a>/report.json ~/.shannon/eval/runs/<b>/report.json`
+eval-diff a b:
+    cargo run -q -p shannon-core --example eval_runner -- diff {{a}} {{b}}
+
 # ---------- Test ----------
 
 test-rust:

@@ -1,0 +1,71 @@
+id = "multi_05"
+tier = "multi_step"
+description = "Add a new guide page and register it in the docs index."
+prompt = "Create guides/faq.md answering 'What is this project?' with a short paragraph starting '# FAQ', then add a row '| FAQ | guides/faq.md |' to the table in docs/index.md."
+
+[setup]
+[[setup.files]]
+path = "docs/index.md"
+content = """# Docs Index
+
+| Page | Path |
+|------|------|
+| Intro | docs/intro.md |
+"""
+
+[[setup.files]]
+path = "docs/intro.md"
+content = "# Intro\n\nStarter material.\n"
+
+[verify]
+script = "grep -q 'guides/faq.md' docs/index.md && test -s guides/faq.md"
+
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_exists"
+path = "guides/faq.md"
+
+[[verify.rules]]
+rule = "file_content"
+path = "guides/faq.md"
+contains = "# FAQ"
+
+[[verify.rules]]
+rule = "file_content"
+path = "docs/index.md"
+contains = "| FAQ | guides/faq.md |"
+
+[[verify.rules]]
+rule = "diff_matches"
+path = "docs/index.md"
+expected_diff_regex = '\+\| FAQ \| guides/faq\.md \|'
+
+[expectations]
+forbidden_tools = ["MultiEdit", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Write"
+args_regex = '"file_path":"guides/faq.md"'
+
+[[expectations.trajectory]]
+tool = "Edit"
+args_regex = '"file_path":"docs/index.md"'
+
+[limits]
+max_turns = 10
+max_tokens = 26000
+timeout_secs = 240
+
+[dry_run]
+final_text = "Created guides/faq.md and linked it from docs/index.md."
+
+[[dry_run.steps]]
+tool = "Write"
+input = { file_path = "guides/faq.md", content = "# FAQ\n\nWhat is this project?\nA terminal-native coding assistant.\n" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "docs/index.md", old_string = "| Intro | docs/intro.md |", new_string = "| Intro | docs/intro.md |\n| FAQ | guides/faq.md |" }

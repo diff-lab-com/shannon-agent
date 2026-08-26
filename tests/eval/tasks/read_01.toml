@@ -1,0 +1,42 @@
+id = "read_01"
+tier = "read"
+description = "Report the exact application version recorded in the metadata file."
+prompt = "Read meta.txt in this workspace and tell me the exact application version string it records."
+
+[setup]
+[[setup.files]]
+path = "meta.txt"
+content = """
+project = shannon-eval-fixture
+app_version = 7.42.0
+channel = stable
+maintainer = fixtures@example.com
+"""
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "response_contains"
+text = "7.42.0"
+
+[expectations]
+forbidden_tools = ["Write", "Edit", "MultiEdit", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Read"
+args_regex = '"file_path":"meta.txt"'
+
+[limits]
+max_turns = 4
+max_tokens = 9000
+timeout_secs = 120
+
+[dry_run]
+final_text = "The application version recorded in meta.txt is 7.42.0."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "meta.txt" }

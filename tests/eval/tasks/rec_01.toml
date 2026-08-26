@@ -1,0 +1,66 @@
+id = "rec_01"
+tier = "recovery"
+description = "Ambiguous value requires checking context before editing — wrong-guess recovery."
+prompt = "In config.toml, raise max_payload_mb under [limits] from 128 to 256. Careful: another setting elsewhere in the file shares the same current value and must stay at 128."
+
+[setup]
+[[setup.files]]
+path = "config.toml"
+content = """[limits]
+max_payload_mb = 128
+
+[cache]
+cache_entries = 128
+"""
+
+[verify]
+script = "grep -q 'max_payload_mb = 256' config.toml && grep -q 'cache_entries = 128' config.toml && ! grep -q 'cache_entries = 256' config.toml"
+
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "config.toml"
+matches_regex = '(?m)^max_payload_mb = 256$'
+
+[[verify.rules]]
+rule = "file_content"
+path = "config.toml"
+matches_regex = '(?m)^cache_entries = 128$'
+
+[[verify.rules]]
+rule = "diff_matches"
+path = "config.toml"
+expected_diff_regex = '-max_payload_mb = 128\n\+max_payload_mb = 256'
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Edit"
+
+[limits]
+max_turns = 8
+max_tokens = 20000
+timeout_secs = 240
+
+[dry_run]
+final_text = "Raised max_payload_mb to 256 under [limits]; cache_entries correctly remains 128."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "config.toml" }
+
+# Simulated wrong guess: editing without section context hits the shared
+# value ambiguity and errors out (the tool rejects it).
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "config.toml", old_string = "cache_entries = 128", new_string = "cache_entries = 256" }
+fail = true
+
+# Corrected attempt anchored on the unique [limits] block line.
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "config.toml", old_string = "[limits]\nmax_payload_mb = 128", new_string = "[limits]\nmax_payload_mb = 256" }

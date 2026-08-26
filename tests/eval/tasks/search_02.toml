@@ -1,0 +1,61 @@
+id = "search_02"
+tier = "search"
+description = "Pin down where a type is actually defined among references and aliases."
+prompt = "Where is the struct PaymentIntent defined in this workspace? Give the definition path, not places that merely mention it."
+
+[setup]
+[[setup.files]]
+path = "src/billing/model.rs"
+content = """/// Settlement request for one charge.
+pub struct PaymentIntent {
+    pub amount_cents: i64,
+    pub currency: String,
+}
+"""
+
+[[setup.files]]
+path = "src/billing/invoice.rs"
+content = """use crate::billing::model::PaymentIntent;
+
+pub type PaymentIntentRef = std::sync::Arc<PaymentIntent>;
+"""
+
+[[setup.files]]
+path = "docs/glossary.md"
+content = "- PaymentIntent: the settlement record for a charge.\n"
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "response_contains"
+text = "PaymentIntent"
+
+[[verify.rules]]
+rule = "response_contains"
+text = "model.rs"
+
+[expectations]
+forbidden_tools = ["Write", "Edit", "MultiEdit", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Read"
+args_regex = '"file_path":"src/billing/model.rs"'
+
+[limits]
+max_turns = 6
+max_tokens = 12000
+timeout_secs = 150
+
+[dry_run]
+final_text = "The struct PaymentIntent is defined in src/billing/model.rs."
+
+[[dry_run.steps]]
+tool = "Grep"
+input = { pattern = "struct PaymentIntent" }
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/billing/model.rs" }
