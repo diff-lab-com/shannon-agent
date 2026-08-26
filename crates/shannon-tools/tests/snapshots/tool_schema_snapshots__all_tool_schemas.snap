@@ -1,6 +1,5 @@
 ---
 source: crates/shannon-tools/tests/tool_schema_snapshots.rs
-assertion_line: 38
 expression: output
 ---
 ## Agent
@@ -805,7 +804,7 @@ expression: output
 {
   "properties": {
     "file_path": {
-      "description": "Absolute path to the file",
+      "description": "Path to the file — absolute, or relative to the working directory",
       "type": "string"
     },
     "limit": {
