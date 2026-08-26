@@ -7,7 +7,10 @@
  * of truth for the actual values. */
 @import "./styles/tokens.css";
 
-@custom-variant dark (&:where([data-theme="tokyo-night"], [data-theme="catppuccin"], [data-theme="nord"], [data-theme="ember"], [data-theme="slate"], [data-theme="solarized"], [data-theme="dracula"], [data-theme="gruvbox"]) *);
+/* U9: `dark` is registry-driven — ThemeContext's THEME_SCHEMES decides the
+ * scheme and mirrors it on <html data-theme-mode>. New themes no longer
+ * need an entry in a hardcoded selector list here. */
+@custom-variant dark (&:where([data-theme-mode="dark"]));
 
 @theme {
   --color-primary: #6b38d4;
@@ -75,6 +78,9 @@
   --spacing-xl: 32px;
   --spacing-gutter: 24px;
   --spacing-sidebar-width: 280px;
+  /* U9: single source for the app footer's height; main padding and the
+     chat composer's bottom offset derive from it (was h-8 / bottom-6/12). */
+  --spacing-footer: 32px;
   --spacing-max-content-width: 1200px;
 
   /* Fonts */

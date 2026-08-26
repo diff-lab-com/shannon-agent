@@ -38,8 +38,10 @@ export default function ComposerPanel({
   setQuickFixOpen,
   setEditorOpen,
 }: ComposerPanelProps) {
+  // U9: offset derives from the footer height token (32px) — mobile sits
+  // 8px above it, ≥md 16px — instead of bare bottom-6/12 magic numbers.
   return (
-    <div className="absolute bottom-6 md:bottom-12 w-full px-lg md:px-xl py-lg transition-colors">
+    <div className="absolute bottom-[calc(var(--spacing-footer)-8px)] md:bottom-[calc(var(--spacing-footer)+16px)] w-full px-lg md:px-xl py-lg transition-colors">
       <div className="max-w-4xl mx-auto">
         <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl shadow-sm">
           <ChatInput
