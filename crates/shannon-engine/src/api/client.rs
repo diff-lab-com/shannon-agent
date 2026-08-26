@@ -71,6 +71,12 @@ fn generate_zhipu_jwt(api_key: &str) -> Option<String> {
     Some(format!("{message}.{sig}"))
 }
 
+/// Synchronous observer invoked with the exact serialized JSON body of every
+/// outgoing LLM request (session-log tee, plan §4.2). Receives the adapter's
+/// own wire product — the same value handed to the HTTP layer — so callers
+/// can log requests byte-faithfully without reconstructing them.
+pub type RequestCapture = std::sync::Arc<dyn Fn(&serde_json::Value) + Send + Sync>;
+
 /// LLM API client with multi-provider and streaming support
 #[derive(Clone)]
 pub struct LlmClient {
@@ -78,6 +84,8 @@ pub struct LlmClient {
     client: Client,
     /// Cached Ollama model capabilities (populated by check_ollama_capabilities).
     ollama_info: std::sync::Arc<std::sync::RwLock<Option<OllamaModelInfo>>>,
+    /// Optional request observer (see [`RequestCapture`]).
+    request_capture: Option<RequestCapture>,
 }
 
 impl LlmClient {
@@ -103,6 +111,7 @@ impl LlmClient {
             config,
             client,
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            request_capture: None,
         }
     }
 
@@ -116,6 +125,7 @@ impl LlmClient {
             config,
             client,
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            request_capture: None,
         })
     }
 
@@ -147,6 +157,27 @@ impl LlmClient {
             config,
             client,
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            request_capture: None,
+        }
+    }
+
+    /// Attach a request observer (see [`RequestCapture`]). Consumer:
+    /// `shannon-core`'s session-log tee records every request envelope.
+    pub fn with_request_capture(mut self, capture: RequestCapture) -> Self {
+        self.request_capture = Some(capture);
+        self
+    }
+
+    /// The current request observer, if any (for propagating to internal
+    /// fallback / reconnect client clones).
+    pub(crate) fn request_capture_handle(&self) -> Option<RequestCapture> {
+        self.request_capture.clone()
+    }
+
+    /// Fire the observer (if attached) with a serialized request body.
+    fn capture_request(&self, body: &serde_json::Value) {
+        if let Some(capture) = &self.request_capture {
+            capture(body);
         }
     }
 
@@ -417,6 +448,9 @@ impl LlmClient {
             return Ok(stream);
         }
 
+        // Session-log tee: observe the exact wire body of the real request.
+        self.capture_request(&serialized);
+
         // ── Real API call ──
         let url = self.endpoint_url();
         let provider_path = self.config.provider.endpoint().to_string();
@@ -490,10 +524,15 @@ impl LlmClient {
             let messages_clone = request_body.messages.clone();
             let tools_clone = request_body.tools.clone();
             let system_clone = request_body.system.clone();
+            let reconnect_client = Self::new(self.config.clone());
+            let reconnect_client = match self.request_capture_handle() {
+                Some(capture) => reconnect_client.with_request_capture(capture),
+                None => reconnect_client,
+            };
             Ok(super::streaming::sse_stream_from_response_resumable(
                 response,
                 self.config.provider.clone(),
-                Self::new(self.config.clone()),
+                reconnect_client,
                 messages_clone,
                 tools_clone,
                 system_clone,
@@ -552,6 +591,8 @@ impl LlmClient {
             &self.config.provider,
             &self.config.base_url,
         );
+        // Session-log tee: observe the exact wire body of the real request.
+        self.capture_request(&body);
         request = request.json(&body);
 
         let response = request.send().await.map_err(|e| match e.status() {
@@ -644,15 +685,19 @@ impl LlmClient {
         let url = self.endpoint_url();
         let headers = self.auth_headers();
 
+        let serialized = super::adapter::serialize_request_with_base_url(
+            &request_body,
+            &self.config.provider,
+            &self.config.base_url,
+        );
+        // Session-log tee: observe the exact wire body of the real request.
+        self.capture_request(&serialized);
+
         let mut request = self
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&super::adapter::serialize_request_with_base_url(
-                &request_body,
-                &self.config.provider,
-                &self.config.base_url,
-            ));
+            .json(&serialized);
 
         for (key, value) in headers {
             request = request.header(&key, &value);
@@ -729,15 +774,19 @@ impl LlmClient {
         let url = self.endpoint_url();
         let headers = self.auth_headers();
 
+        let serialized = super::adapter::serialize_request_with_base_url(
+            &request_body,
+            &self.config.provider,
+            &self.config.base_url,
+        );
+        // Session-log tee: observe the exact wire body of the real request.
+        self.capture_request(&serialized);
+
         let mut request = self
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&super::adapter::serialize_request_with_base_url(
-                &request_body,
-                &self.config.provider,
-                &self.config.base_url,
-            ));
+            .json(&serialized);
 
         for (key, value) in headers {
             request = request.header(&key, &value);
@@ -939,7 +988,12 @@ impl LlmClient {
                     fallback_config.base_url = fallback_base_url.clone();
                     // Inherit retry config
                     let fallback_retry = fallback_config.retry_config.clone();
-                    let fallback_client = Self::new(fallback_config);
+                    // Keep the request observer attached across failover so
+                    // the session log records fallback envelopes too.
+                    let fallback_client = match self.request_capture_handle() {
+                        Some(capture) => Self::new(fallback_config).with_request_capture(capture),
+                        None => Self::new(fallback_config),
+                    };
                     retry_request(&fallback_retry, || {
                         fallback_client.send_message(
                             messages.clone(),
@@ -986,7 +1040,12 @@ impl LlmClient {
                     fallback_config.provider = fallback_provider.clone();
                     fallback_config.base_url = fallback_base_url.clone();
                     let fallback_retry = fallback_config.retry_config.clone();
-                    let fallback_client = Self::new(fallback_config);
+                    // Keep the request observer attached across failover so
+                    // the session log records fallback envelopes too.
+                    let fallback_client = match self.request_capture_handle() {
+                        Some(capture) => Self::new(fallback_config).with_request_capture(capture),
+                        None => Self::new(fallback_config),
+                    };
                     retry_request(&fallback_retry, || {
                         fallback_client.send_message_stream(
                             messages.clone(),
@@ -1037,7 +1096,12 @@ impl LlmClient {
                     fallback_config.provider = fallback_provider.clone();
                     fallback_config.base_url = fallback_base_url.clone();
                     let fallback_retry = fallback_config.retry_config.clone();
-                    let fallback_client = Self::new(fallback_config);
+                    // Keep the request observer attached across failover so
+                    // the session log records fallback envelopes too.
+                    let fallback_client = match self.request_capture_handle() {
+                        Some(capture) => Self::new(fallback_config).with_request_capture(capture),
+                        None => Self::new(fallback_config),
+                    };
                     retry_request(&fallback_retry, || {
                         fallback_client.send_message_stream_structured(
                             messages.clone(),

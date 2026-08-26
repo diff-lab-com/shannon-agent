@@ -84,6 +84,37 @@ macro_rules! send_event {
     };
 }
 
+/// The engine's event sender: the mpsc channel plus the L0 session-log tee
+/// (plan §4.2). This is the **single injection point** — every `QueryEvent`
+/// broadcast (via `send_event!` or a direct `send`) passes through
+/// [`EventTx::send`], which mirrors the event into the session log on its
+/// way to the consumer. Logging is a bypass: a disabled or degraded tee
+/// records nothing and never changes the channel's behavior.
+#[derive(Clone)]
+pub(crate) struct EventTx {
+    tx: mpsc::UnboundedSender<Result<QueryEvent, QueryError>>,
+    tee: crate::session_log::TeeHandle,
+}
+
+impl EventTx {
+    fn new(
+        tx: mpsc::UnboundedSender<Result<QueryEvent, QueryError>>,
+        tee: crate::session_log::TeeHandle,
+    ) -> Self {
+        Self { tx, tee }
+    }
+
+    fn send(
+        &self,
+        item: Result<QueryEvent, QueryError>,
+    ) -> Result<(), mpsc::error::SendError<Result<QueryEvent, QueryError>>> {
+        if let Ok(event) = &item {
+            self.tee.record_query_event(event);
+        }
+        self.tx.send(item)
+    }
+}
+
 /// Stream wrapper that aborts the spawned producer task when the stream is
 /// dropped, so a consumer can cancel an in-progress query simply by dropping
 /// the [`QueryStream`].
@@ -132,7 +163,7 @@ impl<S: futures::Stream> futures::Stream for AbortOnDropStream<S> {
 
 /// Progress sender that forwards tool output lines as `ToolProgress` events.
 struct ChannelProgressSender {
-    tx: mpsc::UnboundedSender<Result<QueryEvent, QueryError>>,
+    tx: EventTx,
     query_id: Uuid,
     tool_use_id: String,
     tool_name: String,
@@ -1088,8 +1119,17 @@ impl QueryEngine {
         let config = self.config.clone();
         let session_id_for_permissions = context.session_id;
 
-        // Create receiver for events
-        let (tx, rx) = mpsc::unbounded_channel();
+        // Create receiver for events. `EventTx` wraps the channel with the
+        // session-log tee (§4.2): every broadcast QueryEvent is mirrored to
+        // `~/.shannon/sessions/<session_id>/events.jsonl` as it is sent —
+        // "model-visible == recorded". `SHANNON_SESSION_LOG=off` disables.
+        let (tx_raw, rx) = mpsc::unbounded_channel();
+        let tee = crate::session_log::TeeHandle::open(
+            &self.session_id.to_string(),
+            self.client.model(),
+            Some(&self.client.provider().to_string()),
+        );
+        let tx = EventTx::new(tx_raw, tee.clone());
 
         // Get necessary state for the spawned task
         let tools = self.tools.clone();
@@ -1327,12 +1367,32 @@ impl QueryEngine {
         // Clone memory store for post-query extraction (fire-and-forget)
         let memory_for_extraction = self.memory.clone();
 
+        // Engine-config snapshot embedded in every `request/header` (§4.2),
+        // so each logged request is a pure function of the log.
+        let header_config_snapshot = serde_json::json!({
+            "max_turns": config.max_turns,
+            "max_budget_usd": config.max_budget_usd,
+            "timeout_seconds": config.timeout_seconds,
+            "enable_thinking": config.enable_thinking,
+            "effective_max_context_tokens": self.effective_max_context_tokens,
+            "effort_level": config.effort_level,
+            "repo_map_enabled": config.repo_map_enabled,
+            "tools_allowed": context.metadata.tools_allowed,
+            "temperature": context.metadata.temperature,
+            "top_p": context.metadata.top_p,
+        });
+
         // Spawn background task to handle query processing. Its `JoinHandle`
         // is captured by `AbortOnDropStream` below so the task is aborted when
         // the consumer drops the `QueryStream` (the cancellation path).
         let producer = tokio::spawn(async move {
             // Prevent OS sleep during long-running queries (drops on exit)
             let _sleep_guard = crate::prevent_sleep::PreventSleepGuard::new();
+
+            // §4.2: open the L0 record for this query — the user message and
+            // turn boundary precede anything the model sees.
+            tee.record_user_message(&user_message);
+            tee.record_turn_start(Some(query_id.to_string()));
 
             // Fire UserPromptSubmit hook
             {
@@ -1394,7 +1454,24 @@ impl QueryEngine {
                 }
                 cfg
             };
-            let client = LlmClient::new(client_config);
+            // Attach the request observer: every adapter-serialized request
+            // body is teed into the L0 log verbatim as a `request/header`
+            // (§4.2). Taking the adapter's own product (rather than
+            // re-serializing) guarantees byte-identity with the wire request.
+            let client = LlmClient::new(client_config).with_request_capture({
+                let tee = tee.clone();
+                let header_model = client_model.clone();
+                let header_provider = client_provider.to_string();
+                let snapshot = header_config_snapshot.clone();
+                std::sync::Arc::new(move |wire: &serde_json::Value| {
+                    tee.record_request_header(
+                        wire,
+                        &header_model,
+                        Some(&header_provider),
+                        snapshot.clone(),
+                    );
+                })
+            });
 
             let mut turn = 0;
             let mut tool_results: Vec<ToolResultEntry> = Vec::new();
@@ -4253,7 +4330,7 @@ async fn maybe_run_auto_test(
     cfg: &crate::auto_test::AutoTestConfig,
     state: &mut crate::auto_test::AntiLoopState,
     tool_results: &mut Vec<ToolResultEntry>,
-    tx: &mpsc::UnboundedSender<Result<QueryEvent, QueryError>>,
+    tx: &EventTx,
     query_id: Uuid,
 ) {
     // Emit a progress event so the UI shows the auto-test is running.

@@ -16,9 +16,11 @@
 //! directory per session, leaving room for projections and metadata.
 
 pub mod reader;
+pub mod tee;
 pub mod writer;
 
 pub use reader::{SessionEventIter, SessionLogReader};
+pub use tee::{SessionTee, TeeHandle};
 pub use writer::{FlushPolicy, SessionLogWriter};
 
 use std::path::{Path, PathBuf};
