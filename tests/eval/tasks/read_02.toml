@@ -1,0 +1,49 @@
+id = "read_02"
+tier = "read"
+description = "Enumerate the public functions of a utility module."
+prompt = "List every public function defined in src/util.rs. Answer with their bare names."
+
+[setup]
+[[setup.files]]
+path = "src/util.rs"
+content = """pub fn add(a: i64, b: i64) -> i64 { a + b }
+pub fn subtract(a: i64, b: i64) -> i64 { a - b }
+pub fn multiply(a: i64, b: i64) -> i64 { a * b }
+fn internal_helper() {}
+"""
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "response_contains"
+text = "add"
+
+[[verify.rules]]
+rule = "response_contains"
+text = "subtract"
+
+[[verify.rules]]
+rule = "response_contains"
+text = "multiply"
+
+[expectations]
+forbidden_tools = ["Write", "Edit", "MultiEdit", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Read"
+args_regex = '"file_path":"src/util.rs"'
+
+[limits]
+max_turns = 4
+max_tokens = 9000
+timeout_secs = 120
+
+[dry_run]
+final_text = "Public functions in src/util.rs: add, subtract, multiply."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/util.rs" }

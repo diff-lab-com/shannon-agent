@@ -1,0 +1,52 @@
+id = "edit_01"
+tier = "edit"
+description = "Rename a function at its definition site."
+prompt = "In src/api.rs rename the function fetch_data to load_data. Keep everything else identical."
+
+[setup]
+[[setup.files]]
+path = "src/api.rs"
+content = """fn fetch_data(endpoint: &str) -> Vec<u8> {
+    download(endpoint)
+}
+
+fn publish(data: &[u8]) {}
+"""
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/api.rs"
+contains = "fn load_data"
+
+[[verify.rules]]
+rule = "diff_matches"
+path = "src/api.rs"
+expected_diff_regex = '-fn fetch_data\(endpoint.*\n\+fn load_data\(endpoint'
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Edit"
+args_regex = '"old_string":"fn fetch_data'
+
+[limits]
+max_turns = 8
+max_tokens = 16000
+timeout_secs = 180
+
+[dry_run]
+final_text = "Renamed fetch_data to load_data in src/api.rs."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/api.rs" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "src/api.rs", old_string = "fn fetch_data(endpoint", new_string = "fn load_data(endpoint" }

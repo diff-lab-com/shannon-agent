@@ -1,0 +1,44 @@
+id = "read_03"
+tier = "read"
+description = "Extract a numeric policy value from an operations document."
+prompt = "According to .ci/pipeline.md, how many deployment retries are allowed before the pipeline aborts? Answer with the bare number."
+
+[setup]
+[[setup.files]]
+path = ".ci/pipeline.md"
+content = """
+# Deploy Pipeline
+
+Stages: build, test, promote.
+On transient registry errors the deploy stage retries up to 2 times per stage,
+and the final promotion step allows 5 retries before the pipeline aborts.
+Notifications go to the releases channel.
+"""
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "response_contains"
+text = "5"
+
+[expectations]
+forbidden_tools = ["Write", "Edit", "MultiEdit", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Read"
+args_regex = '"file_path":".ci/pipeline.md"'
+
+[limits]
+max_turns = 4
+max_tokens = 9000
+timeout_secs = 120
+
+[dry_run]
+final_text = "The final promotion step allows 5 retries before the pipeline aborts."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = ".ci/pipeline.md" }

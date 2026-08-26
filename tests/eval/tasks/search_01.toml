@@ -1,0 +1,49 @@
+id = "search_01"
+tier = "search"
+description = "Locate every TODO marker across the tree."
+prompt = "Find every line containing a TODO marker anywhere in this workspace and report each hit as path plus the marker text."
+
+[setup]
+[[setup.files]]
+path = "src/net.rs"
+content = "// TODO: add retry backoff\nfn connect() {}\n"
+
+[[setup.files]]
+path = "src/ui.rs"
+content = "fn render() {}\n"
+
+[[setup.files]]
+path = "notes.txt"
+content = "- ship metrics\n- TODO: document the API surface\n"
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "response_contains"
+text = "src/net.rs"
+
+[[verify.rules]]
+rule = "response_contains"
+text = "notes.txt"
+
+[expectations]
+forbidden_tools = ["Write", "Edit", "MultiEdit", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Grep"
+args_regex = '"pattern":"TODO'
+
+[limits]
+max_turns = 6
+max_tokens = 12000
+timeout_secs = 150
+
+[dry_run]
+final_text = "TODO markers found:\n- src/net.rs: TODO add retry backoff\n- notes.txt: TODO document the API surface"
+
+[[dry_run.steps]]
+tool = "Grep"
+input = { pattern = "TODO" }
