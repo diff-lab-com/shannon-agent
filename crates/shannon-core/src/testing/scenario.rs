@@ -3,12 +3,63 @@
 //! Defines test scenarios in YAML files with setup, mock responses, and validation
 //! rules. Each scenario creates an isolated workspace, runs Shannon with mockito-
 //! backed LLM responses, and validates the results against declared rules.
+//!
+//! ## Validation rules
+//!
+//! Outcome rules (original set — check the final state of a run):
+//! - `file_exists` / `file_not_exists` / `file_content` — workspace file assertions
+//! - `exit_code`, `response_contains`, `tool_called`, `max_duration_ms` — run output assertions
+//!
+//! Behavioral rules (W2-M1a — assert on *how* the result was produced, not just
+//! the end state; they read their observations from [`ValidationContext`]):
+//! - `diff_matches { path, expected_diff_regex }` — regex over a line diff of the
+//!   file (before = value declared in `setup.files`, after = current workspace
+//!   content). A path absent from setup is treated as created from scratch, so a
+//!   Write-only run yields `+...` lines only.
+//! - `trajectory_contains { sequence: [{tool, args_regex?}, ...] }` — the observed
+//!   tool calls must contain these steps as an *ordered subsequence* (extra calls
+//!   may interleave; relative order is enforced). When `args_regex` is present it
+//!   must match the step's tool input rendered as compact JSON
+//!   (`{"path":"x",...}`); when omitted only the tool name is compared.
+//! - `forbidden_tool { tool }` — fails if the tool appears anywhere in the
+//!   observed trajectory.
+//! - `cost_below { max_usd, per }` — budget assertion where `per` is either
+//!   `task` (sum of per-turn costs ≤ `max_usd`) or `turn` (every turn cost ≤
+//!   `max_usd`). No recorded cost data is treated as an unverifiable claim and
+//!   fails loudly rather than passing vacuously.
+//!
+//! The YAML schema stays backward compatible: existing scenarios gain new rule
+//! variants without any field changes; within each new rule its own fields are
+//! required so that typos surface at parse time.
+//!
+//! ## Observation data sources
+//!
+//! Until the L0 event stream lands, trajectory/cost observations come from
+//! recording artifacts ([`ToolCallTrace::from_recording_entries`]) or are derived
+//! from the scenario's mocked assistant turns
+//! ([`ToolCallTrace::from_mock_turns`]). [`ValidationRule::MaxDurationMs`] remains
+//! enforced by the runner externally.
+//!
+//! ```no_run
+//! use shannon_core::testing::scenario::{
+//!     evaluate_rules, ToolCallTrace, ValidationContext,
+//! };
+//!
+//! # fn doc(ctx_dir: &std::path::Path) {
+//! let trajectory = ToolCallTrace::from_mock_turns(&[]);
+//! let ctx = ValidationContext::new(ctx_dir, "success", "").with_trajectory(&trajectory);
+//! let outcomes = evaluate_rules(&[], &ctx);
+//! assert!(outcomes.iter().all(|o| o.passed));
+//! # }
+//! ```
 
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-use crate::testing::mock_dsl::{MockResponse, text_response, tool_call_response};
+use crate::recording::types::RecordingEntry;
+use crate::testing::mock_dsl::{MockContentBlock, MockResponse, text_response, tool_call_response};
 
 // ── YAML Schema Types ─────────────────────────────────────────────────
 
@@ -55,6 +106,28 @@ pub struct MockTurn {
     pub response: MockResponseYaml,
 }
 
+/// One expected step inside a `trajectory_contains` rule.
+///
+/// `args_regex` is optional; when present it is matched against the tool input
+/// serialized as compact JSON (`{"path":"src/main.rs",...}`), so patterns must
+/// not assume whitespace after `:` or `,`.
+#[derive(Debug, Deserialize, Clone)]
+pub struct TrajectoryStep {
+    pub tool: String,
+    #[serde(default)]
+    pub args_regex: String,
+}
+
+/// Granularity of a `cost_below` budget assertion.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CostBasis {
+    /// Total spend across all recorded turns.
+    Task,
+    /// Each individual turn's spend must stay within the limit.
+    Turn,
+}
+
 /// YAML representation of a mock response.
 #[derive(Debug, Deserialize)]
 pub struct MockResponseYaml {
@@ -94,17 +167,72 @@ pub enum ValidationRule {
     ResponseContains { text: String },
     #[serde(rename = "max_duration_ms")]
     MaxDurationMs { limit: u64 },
+    // ── Behavioral rules (W2-M1a) — observations come from ValidationContext ──
+    /// Regex assertion over the before/after line diff of one file.
+    #[serde(rename = "diff_matches")]
+    DiffMatches {
+        path: String,
+        expected_diff_regex: String,
+    },
+    /// Expected tool-call steps that must appear (in order) in the observed
+    /// trajectory. Extra interleaved calls are allowed.
+    #[serde(rename = "trajectory_contains")]
+    TrajectoryContains { sequence: Vec<TrajectoryStep> },
+    /// Tool that must NOT appear anywhere in the observed trajectory.
+    #[serde(rename = "forbidden_tool")]
+    ForbiddenTool { tool: String },
+    /// Budget ceiling for recorded per-turn costs.
+    #[serde(rename = "cost_below")]
+    CostBelow { max_usd: f64, per: CostBasis },
 }
 
 // ── Scenario Result ───────────────────────────────────────────────────
 
+/// Independent pass/fail outcome of exactly one validation rule.
+#[derive(Debug, Clone)]
+pub struct RuleOutcome {
+    /// Rule tag as spelled in YAML (`file_exists`, `trajectory_contains`, ...).
+    pub rule: String,
+    pub passed: bool,
+    /// Human-readable violation details; empty when passed. A single rule can
+    /// report several details (e.g. `file_content` with both `contains` and
+    /// `matches_regex` violated).
+    pub details: Vec<String>,
+}
+
+/// Compact trajectory summary carried on [`ScenarioResult`] for runner reports.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrajectorySummary {
+    /// Observed tool names in invocation order (arguments omitted).
+    pub tool_calls: Vec<String>,
+    /// Total recorded spend across turns in USD.
+    pub total_cost_usd: f64,
+    /// Number of turns with cost accounting available.
+    pub turns: usize,
+}
+
+impl TrajectorySummary {
+    /// Build a summary from observed trajectory and per-turn costs.
+    pub fn from_observations(trajectory: &[ToolCallTrace], turn_costs_usd: &[f64]) -> Self {
+        Self {
+            tool_calls: trajectory.iter().map(|c| c.tool.clone()).collect(),
+            total_cost_usd: turn_costs_usd.iter().sum(),
+            turns: turn_costs_usd.len(),
+        }
+    }
+}
+
 /// Result of running a scenario.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScenarioResult {
     pub name: String,
     pub passed: bool,
     pub failures: Vec<String>,
     pub duration_ms: u64,
+    /// Independent per-rule outcomes (behavioral assertions, W2-M1a).
+    pub rule_outcomes: Vec<RuleOutcome>,
+    /// Trajectory summary for runner reports.
+    pub trajectory_summary: TrajectorySummary,
 }
 
 impl ScenarioResult {
@@ -114,6 +242,8 @@ impl ScenarioResult {
             passed: true,
             failures: Vec::new(),
             duration_ms,
+            rule_outcomes: Vec::new(),
+            trajectory_summary: TrajectorySummary::default(),
         }
     }
 
@@ -123,6 +253,29 @@ impl ScenarioResult {
             passed: false,
             failures,
             duration_ms,
+            rule_outcomes: Vec::new(),
+            trajectory_summary: TrajectorySummary::default(),
+        }
+    }
+
+    /// Build from evaluated rule outcomes plus a trajectory summary; `passed`
+    /// is derived (true only when every rule passed) and `failures` collects
+    /// all violation details.
+    pub fn evaluated(
+        name: &str,
+        duration_ms: u64,
+        rule_outcomes: Vec<RuleOutcome>,
+        trajectory_summary: TrajectorySummary,
+    ) -> Self {
+        let passed = rule_outcomes.iter().all(|o| o.passed);
+        let failures = outcomes_failures(&rule_outcomes);
+        Self {
+            name: name.to_string(),
+            passed,
+            failures,
+            duration_ms,
+            rule_outcomes,
+            trajectory_summary,
         }
     }
 }
@@ -167,82 +320,427 @@ pub fn yaml_to_mock_responses(turns: &[MockTurn]) -> Vec<MockResponse> {
         .collect()
 }
 
+// ── Observations ───────────────────────────────────────────────────────
+
+/// One observed tool invocation, in execution order.
+#[derive(Debug, Clone)]
+pub struct ToolCallTrace {
+    /// Tool name as invoked (e.g. `Read`, `Edit`, `Bash`).
+    pub tool: String,
+    /// Tool input arguments serialized as compact JSON.
+    pub input_json: String,
+}
+
+impl ToolCallTrace {
+    pub fn new(tool: &str, input_json: impl Into<String>) -> Self {
+        Self {
+            tool: tool.to_string(),
+            input_json: input_json.into(),
+        }
+    }
+
+    /// Derive the trajectory from scenario mock turns: every `tool_use` content
+    /// block of the mocked assistant responses, in turn order. Before the L0
+    /// event stream exists this is what a mocked run would have executed.
+    pub fn from_mock_turns(turns: &[MockTurn]) -> Vec<Self> {
+        turns
+            .iter()
+            .flat_map(|turn| yaml_to_mock_response(&turn.response).content_blocks)
+            .filter_map(|block| match block {
+                MockContentBlock::ToolUse { name, input, .. } => Some(Self {
+                    tool: name,
+                    input_json: serde_json::to_string(&input).expect("serialize tool input"),
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Derive the trajectory from session recording artifacts (`RecordingEntry`
+    /// stream). Non-tool entries are skipped; entries keep their original order.
+    /// This is the W2-M1a data source until L0 replaces it.
+    pub fn from_recording_entries(entries: &[RecordingEntry]) -> Vec<Self> {
+        entries
+            .iter()
+            .filter_map(|entry| match entry {
+                RecordingEntry::ToolCall { tool, input, .. } => Some(Self {
+                    tool: tool.clone(),
+                    input_json: serde_json::to_string(input).expect("serialize tool input"),
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// Observation data supplied by the harness when validating a finished run.
+///
+/// Outcome-only rules need just `workspace_dir` / `exit_code` / `stdout`; the
+/// behavioral rules introduced in W2-M1a additionally read initial file
+/// contents, the observed tool-call trajectory, and per-turn costs.
+#[derive(Debug, Clone, Copy)]
+pub struct ValidationContext<'a> {
+    pub workspace_dir: &'a Path,
+    pub exit_code: &'a str,
+    pub stdout: &'a str,
+    /// Files exactly as created during scenario setup: `(path, content)`
+    /// baselines used by `diff_matches` to compute before/after diffs.
+    pub initial_files: &'a [(String, String)],
+    /// Observed tool invocations in execution order.
+    pub trajectory: &'a [ToolCallTrace],
+    /// Recorded cost per turn in USD; index aligns with the turn number.
+    pub turn_costs_usd: &'a [f64],
+}
+
+impl<'a> ValidationContext<'a> {
+    pub fn new(workspace_dir: &'a Path, exit_code: &'a str, stdout: &'a str) -> Self {
+        Self {
+            workspace_dir,
+            exit_code,
+            stdout,
+            initial_files: &[],
+            trajectory: &[],
+            turn_costs_usd: &[],
+        }
+    }
+
+    /// Attach setup-time file baselines for `diff_matches`.
+    pub fn with_initial_files(mut self, files: &'a [(String, String)]) -> Self {
+        self.initial_files = files;
+        self
+    }
+
+    /// Attach the observed tool-call trajectory.
+    pub fn with_trajectory(mut self, trajectory: &'a [ToolCallTrace]) -> Self {
+        self.trajectory = trajectory;
+        self
+    }
+
+    /// Attach per-turn cost observations.
+    pub fn with_turn_costs_usd(mut self, costs: &'a [f64]) -> Self {
+        self.turn_costs_usd = costs;
+        self
+    }
+}
+
 // ── Validation ────────────────────────────────────────────────────────
 
 /// Validate a set of rules against workspace state.
+///
+/// Convenience wrapper over [`evaluate_rules`] for outcome-only runs that has
+/// no trajectory/cost/diff observations attached.
 pub fn validate_rules(
     rules: &[ValidationRule],
     workspace_dir: &Path,
     exit_code: &str,
     stdout: &str,
 ) -> Vec<String> {
+    let ctx = ValidationContext::new(workspace_dir, exit_code, stdout);
+    outcomes_failures(&evaluate_rules(rules, &ctx))
+}
+
+/// Flatten rule outcomes into the failure-string list consumed by callers.
+fn outcomes_failures(outcomes: &[RuleOutcome]) -> Vec<String> {
+    outcomes
+        .iter()
+        .flat_map(|outcome| outcome.details.iter().cloned())
+        .collect()
+}
+
+/// Evaluate each rule independently against the run observations.
+pub fn evaluate_rules(rules: &[ValidationRule], ctx: &ValidationContext) -> Vec<RuleOutcome> {
+    rules.iter().map(|rule| evaluate_rule(rule, ctx)).collect()
+}
+
+fn violated(rule_tag: &str, details: Vec<String>) -> RuleOutcome {
+    RuleOutcome {
+        rule: rule_tag.to_string(),
+        passed: false,
+        details,
+    }
+}
+
+fn passed(rule_tag: &str) -> RuleOutcome {
+    RuleOutcome {
+        rule: rule_tag.to_string(),
+        passed: true,
+        details: Vec::new(),
+    }
+}
+
+fn evaluate_rule(rule: &ValidationRule, ctx: &ValidationContext) -> RuleOutcome {
     let mut failures = Vec::new();
 
-    for rule in rules {
-        match rule {
-            ValidationRule::FileExists { path } => {
-                let full_path = workspace_dir.join(path);
-                if !full_path.exists() {
-                    failures.push(format!("file_exists: {path} does not exist"));
-                }
+    match rule {
+        ValidationRule::FileExists { path } => {
+            let full_path = ctx.workspace_dir.join(path);
+            if !full_path.exists() {
+                failures.push(format!("file_exists: {path} does not exist"));
             }
-            ValidationRule::FileContent {
-                path,
-                contains,
-                matches_regex,
-            } => {
-                let full_path = workspace_dir.join(path);
-                if !full_path.exists() {
-                    failures.push(format!("file_content: {path} does not exist"));
-                    continue;
-                }
-                let content = std::fs::read_to_string(&full_path).unwrap_or_default();
-                if !contains.is_empty() && !content.contains(contains) {
-                    failures.push(format!(
-                        "file_content: {path} does not contain '{contains}'"
-                    ));
-                }
-                if !matches_regex.is_empty() {
-                    if let Ok(re) = regex::Regex::new(matches_regex) {
-                        if !re.is_match(&content) {
-                            failures.push(format!(
-                                "file_content: {path} does not match regex '{matches_regex}'"
-                            ));
-                        }
+        }
+        ValidationRule::FileContent {
+            path,
+            contains,
+            matches_regex,
+        } => {
+            let full_path = ctx.workspace_dir.join(path);
+            if !full_path.exists() {
+                return violated(
+                    "file_content",
+                    vec![format!("file_content: {path} does not exist")],
+                );
+            }
+            let content = std::fs::read_to_string(&full_path).unwrap_or_default();
+            if !contains.is_empty() && !content.contains(contains.as_str()) {
+                failures.push(format!(
+                    "file_content: {path} does not contain '{contains}'"
+                ));
+            }
+            if !matches_regex.is_empty() {
+                if let Ok(re) = regex::Regex::new(matches_regex) {
+                    if !re.is_match(&content) {
+                        failures.push(format!(
+                            "file_content: {path} does not match regex '{matches_regex}'"
+                        ));
                     }
                 }
             }
-            ValidationRule::FileNotExists { path } => {
-                let full_path = workspace_dir.join(path);
-                if full_path.exists() {
-                    failures.push(format!("file_not_exists: {path} should not exist"));
-                }
+        }
+        ValidationRule::FileNotExists { path } => {
+            let full_path = ctx.workspace_dir.join(path);
+            if full_path.exists() {
+                failures.push(format!("file_not_exists: {path} should not exist"));
             }
-            ValidationRule::ExitCode { value } => {
-                if exit_code != value {
-                    failures.push(format!("exit_code: expected '{value}', got '{exit_code}'"));
-                }
+        }
+        ValidationRule::ExitCode { value } => {
+            if ctx.exit_code != value {
+                failures.push(format!(
+                    "exit_code: expected '{value}', got '{}'",
+                    ctx.exit_code
+                ));
             }
-            ValidationRule::ToolCalled { tool } => {
-                // Check stdout for tool use indicators in JSON output
-                if !stdout.contains(tool) {
-                    failures.push(format!("tool_called: tool '{tool}' not found in output"));
-                }
+        }
+        ValidationRule::ToolCalled { tool } => {
+            // Check stdout for tool use indicators in JSON output
+            if !ctx.stdout.contains(tool.as_str()) {
+                failures.push(format!("tool_called: tool '{tool}' not found in output"));
             }
-            ValidationRule::ResponseContains { text } => {
-                if !stdout.contains(text) {
-                    failures.push(format!("response_contains: '{text}' not found in output"));
-                }
+        }
+        ValidationRule::ResponseContains { text } => {
+            if !ctx.stdout.contains(text.as_str()) {
+                failures.push(format!("response_contains: '{text}' not found in output"));
             }
-            ValidationRule::MaxDurationMs { limit } => {
-                // Duration is checked externally; this is a placeholder for
-                // integration with timing logic
-                let _ = limit;
+        }
+        ValidationRule::MaxDurationMs { limit } => {
+            // Duration is checked externally; this is a placeholder for
+            // integration with timing logic
+            let _ = limit;
+        }
+        ValidationRule::DiffMatches {
+            path,
+            expected_diff_regex,
+        } => {
+            eval_diff_matches(path, expected_diff_regex, ctx, &mut failures);
+        }
+        ValidationRule::TrajectoryContains { sequence } => {
+            check_subsequence(sequence, ctx.trajectory, &mut failures);
+        }
+        ValidationRule::ForbiddenTool { tool } => {
+            if ctx.trajectory.iter().any(|call| call.tool == *tool) {
+                failures.push(format!("forbidden_tool: '{tool}' was invoked"));
             }
+        }
+        ValidationRule::CostBelow { max_usd, per } => {
+            eval_cost_below(*max_usd, *per, ctx.turn_costs_usd, &mut failures);
         }
     }
 
-    failures
+    if failures.is_empty() {
+        passed(rule_tag(rule))
+    } else {
+        violated(rule_tag(rule), failures)
+    }
+}
+
+/// The YAML tag spelling of a rule variant.
+fn rule_tag(rule: &ValidationRule) -> &'static str {
+    match rule {
+        ValidationRule::FileExists { .. } => "file_exists",
+        ValidationRule::FileContent { .. } => "file_content",
+        ValidationRule::FileNotExists { .. } => "file_not_exists",
+        ValidationRule::ExitCode { .. } => "exit_code",
+        ValidationRule::ToolCalled { .. } => "tool_called",
+        ValidationRule::ResponseContains { .. } => "response_contains",
+        ValidationRule::MaxDurationMs { .. } => "max_duration_ms",
+        ValidationRule::DiffMatches { .. } => "diff_matches",
+        ValidationRule::TrajectoryContains { .. } => "trajectory_contains",
+        ValidationRule::ForbiddenTool { .. } => "forbidden_tool",
+        ValidationRule::CostBelow { .. } => "cost_below",
+    }
+}
+
+/// `diff_matches`: regex assertion over the line diff between the setup-time
+/// baseline and the current workspace content of one file.
+fn eval_diff_matches(
+    path: &str,
+    expected_diff_regex: &str,
+    ctx: &ValidationContext,
+    out: &mut Vec<String>,
+) {
+    let baseline = ctx
+        .initial_files
+        .iter()
+        .find(|(p, _)| p == path)
+        .map(|(_, c)| c.as_str())
+        .unwrap_or("");
+    let full_path = ctx.workspace_dir.join(path);
+    let Ok(current) = std::fs::read_to_string(&full_path) else {
+        out.push(format!("diff_matches: {path} does not exist in workspace"));
+        return;
+    };
+
+    let diff = render_line_diff(baseline, &current);
+    match Regex::new(expected_diff_regex) {
+        Ok(re) if re.is_match(&diff) => {}
+        Ok(_) => out.push(format!(
+            "diff_matches: {path} diff does not match regex '{expected_diff_regex}'"
+        )),
+        Err(e) => out.push(format!(
+            "diff_matches: invalid regex '{expected_diff_regex}': {e}"
+        )),
+    }
+}
+
+/// `cost_below`: budget ceiling over recorded per-turn costs.
+fn eval_cost_below(max_usd: f64, per: CostBasis, turn_costs_usd: &[f64], out: &mut Vec<String>) {
+    if turn_costs_usd.is_empty() {
+        // An unverifiable budget claim must fail loudly, never pass vacuously.
+        out.push("cost_below: no recorded turn costs available".to_string());
+        return;
+    }
+    match per {
+        CostBasis::Task => {
+            let total: f64 = turn_costs_usd.iter().sum();
+            if total > max_usd {
+                out.push(format!(
+                    "cost_below: task total ${total:.4} exceeds limit ${max_usd:.4}"
+                ));
+            }
+        }
+        CostBasis::Turn => {
+            for (idx, cost) in turn_costs_usd.iter().enumerate() {
+                if *cost > max_usd {
+                    out.push(format!(
+                        "cost_below: turn {} cost ${cost:.4} exceeds limit ${max_usd:.4}",
+                        idx + 1
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Check that `sequence` appears as an ordered subsequence of `observed` calls:
+/// gaps are allowed but relative order is enforced. A missing step or an
+/// invalid `args_regex` is reported as a violation string.
+fn check_subsequence(
+    sequence: &[TrajectoryStep],
+    observed: &[ToolCallTrace],
+    out: &mut Vec<String>,
+) {
+    let mut cursor = 0usize;
+
+    for (want_idx, step) in sequence.iter().enumerate() {
+        let mut matched = false;
+        while cursor < observed.len() {
+            let call = &observed[cursor];
+            cursor += 1;
+            let hit = if call.tool != step.tool {
+                Ok(false)
+            } else if step.args_regex.is_empty() {
+                Ok(true)
+            } else {
+                Regex::new(&step.args_regex)
+                    .map(|re| re.is_match(&call.input_json))
+                    .map_err(|e| e.to_string())
+            };
+            match hit {
+                Ok(true) => {
+                    matched = true;
+                    break;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    out.push(format!(
+                        "trajectory_contains: invalid args_regex '{}' on step {} ('{}'): {err}",
+                        step.args_regex,
+                        want_idx + 1,
+                        step.tool
+                    ));
+                    return;
+                }
+            }
+        }
+        if !matched {
+            let expectation = if step.args_regex.is_empty() {
+                String::new()
+            } else {
+                format!(" matching '{}'", step.args_regex)
+            };
+            out.push(format!(
+                "trajectory_contains: step {} ('{}'{expectation}) not found in observed trajectory",
+                want_idx + 1,
+                step.tool
+            ));
+            return;
+        }
+    }
+}
+
+/// Render a line-based diff (`-removed` / `+added` lines only) between two
+/// texts using an LCS walk. Inputs are scenario-sized files, so the O(n*m)
+/// table is fine and keeps this dependency-free.
+fn render_line_diff(before: &str, after: &str) -> String {
+    let old_lines: Vec<&str> = before.lines().collect();
+    let new_lines: Vec<&str> = after.lines().collect();
+
+    let rows = old_lines.len() + 1;
+    let cols = new_lines.len() + 1;
+    let mut lcs = vec![vec![0usize; cols]; rows];
+    for i in (0..old_lines.len()).rev() {
+        for j in (0..new_lines.len()).rev() {
+            lcs[i][j] = if old_lines[i] == new_lines[j] {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
+        }
+    }
+
+    let mut lines = Vec::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < old_lines.len() && j < new_lines.len() {
+        if old_lines[i] == new_lines[j] {
+            i += 1;
+            j += 1;
+        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
+            lines.push(format!("-{}", old_lines[i]));
+            i += 1;
+        } else {
+            lines.push(format!("+{}", new_lines[j]));
+            j += 1;
+        }
+    }
+    while i < old_lines.len() {
+        lines.push(format!("-{}", old_lines[i]));
+        i += 1;
+    }
+    while j < new_lines.len() {
+        lines.push(format!("+{}", new_lines[j]));
+        j += 1;
+    }
+
+    lines.join("\n")
 }
 
 // ── Parsing ───────────────────────────────────────────────────────────
@@ -700,5 +1198,444 @@ validate: []
             "",
         );
         assert_eq!(failures.len(), 1);
+    }
+
+    // ── W2-M1a behavioral rules ──────────────────────────────────────
+
+    #[test]
+    fn test_render_line_diff_variants() {
+        // Identical texts produce an empty diff.
+        assert_eq!(render_line_diff("same", "same"), "");
+
+        // Creation: everything shows up as additions.
+        assert_eq!(render_line_diff("", "alpha\nbeta"), "+alpha\n+beta");
+
+        // Deletion: everything shows up as removals.
+        assert_eq!(render_line_diff("alpha\nbeta", ""), "-alpha\n-beta");
+
+        // Modification keeps context lines implicit and emits -/+ pairs.
+        assert_eq!(
+            render_line_diff("keep\nold tail\n", "keep\nnew tail\n"),
+            "-old tail\n+new tail"
+        );
+    }
+
+    #[test]
+    fn test_tool_call_trace_from_mock_turns() {
+        let turns = vec![
+            MockTurn {
+                response: MockResponseYaml {
+                    response_type: "text_and_tool".to_string(),
+                    content: "reading".to_string(),
+                    tool: "Read".to_string(),
+                    tool_id: "t1".to_string(),
+                    input: serde_json::json!({"path": "a.rs"}),
+                },
+            },
+            MockTurn {
+                response: MockResponseYaml {
+                    response_type: "text".to_string(),
+                    content: "plain".to_string(),
+                    tool: String::new(),
+                    tool_id: String::new(),
+                    input: Value::Null,
+                },
+            },
+        ];
+
+        let trace = ToolCallTrace::from_mock_turns(&turns);
+        assert_eq!(trace.len(), 1, "text-only turns contribute no calls");
+        assert_eq!(trace[0].tool, "Read");
+        assert!(trace[0].input_json.contains(r#""path":"a.rs""#));
+    }
+
+    #[test]
+    fn test_tool_call_trace_from_recording_entries() {
+        let entries = vec![
+            RecordingEntry::UserMessage {
+                content: "do it".to_string(),
+                turn: 0,
+            },
+            RecordingEntry::ToolCall {
+                tool: "Read".to_string(),
+                input: serde_json::json!({"path": "b.rs"}),
+                result: String::new(),
+                is_error: false,
+                duration_ms: 3,
+            },
+            RecordingEntry::ToolCall {
+                tool: "Bash".to_string(),
+                input: serde_json::json!({"command": "ls"}),
+                result: String::new(),
+                is_error: false,
+                duration_ms: 4,
+            },
+            RecordingEntry::SessionEnd {
+                session_id: "s".to_string(),
+                total_turns: 1,
+                total_tokens: 12,
+            },
+        ];
+
+        let trace = ToolCallTrace::from_recording_entries(&entries);
+        assert_eq!(
+            trace.iter().map(|c| c.tool.as_str()).collect::<Vec<_>>(),
+            vec!["Read", "Bash"],
+            "only ToolCall entries become trajectory steps"
+        );
+        assert_eq!(trace[0].input_json, r#"{"path":"b.rs"}"#);
+    }
+
+    #[test]
+    fn test_trajectory_contains_rule() {
+        let observed = [
+            ToolCallTrace::new("Read", r#"{"path":"src/main.rs"}"#),
+            ToolCallTrace::new("Bash", r#"{"command":"cargo check"}"#),
+            ToolCallTrace::new("Edit", r#"{"old_string":"Hello","new_string":"Goodbye"}"#),
+        ];
+        let dir = tempfile::TempDir::new().expect("dir");
+        let ctx = ValidationContext::new(dir.path(), "success", "").with_trajectory(&observed);
+
+        // Ordered subsequence with gaps allowed (Read ... Edit skipping Bash).
+        let sequence = vec![
+            TrajectoryStep {
+                tool: "Read".to_string(),
+                args_regex: r#""path":"src/main\.rs""#.to_string(),
+            },
+            TrajectoryStep {
+                tool: "Edit".to_string(),
+                args_regex: String::new(),
+            },
+        ];
+        let outcomes = evaluate_rules(
+            &[ValidationRule::TrajectoryContains {
+                sequence: sequence.clone(),
+            }],
+            &ctx,
+        );
+        assert!(outcomes[0].passed, "{:?}", outcomes[0].details);
+
+        // Wrong order: requiring Edit before Read cannot match.
+        let reversed = vec![sequence[1].clone(), sequence[0].clone()];
+        let outcomes = evaluate_rules(
+            &[ValidationRule::TrajectoryContains { sequence: reversed }],
+            &ctx,
+        );
+        assert!(!outcomes[0].passed);
+        assert!(outcomes[0].details[0].starts_with("trajectory_contains: step"));
+
+        // Absent tool never matches.
+        let outcomes = evaluate_rules(
+            &[ValidationRule::TrajectoryContains {
+                sequence: vec![TrajectoryStep {
+                    tool: "Grep".to_string(),
+                    args_regex: String::new(),
+                }],
+            }],
+            &ctx,
+        );
+        assert!(!outcomes[0].passed);
+
+        // A malformed args_regex is reported instead of silently passing.
+        let outcomes = evaluate_rules(
+            &[ValidationRule::TrajectoryContains {
+                sequence: vec![TrajectoryStep {
+                    tool: "Read".to_string(),
+                    args_regex: "([".to_string(),
+                }],
+            }],
+            &ctx,
+        );
+        assert!(!outcomes[0].passed);
+        assert!(outcomes[0].details[0].contains("invalid args_regex"));
+    }
+
+    #[test]
+    fn test_forbidden_tool_rule() {
+        let observed = [ToolCallTrace::new("Bash", r#"{"command":"rm -rf /"}"#)];
+        let dir = tempfile::TempDir::new().expect("dir");
+
+        let clean = ValidationContext::new(dir.path(), "success", "");
+        let outcomes = evaluate_rules(
+            &[ValidationRule::ForbiddenTool {
+                tool: "Bash".to_string(),
+            }],
+            &clean,
+        );
+        assert!(outcomes[0].passed);
+
+        let dirty = ValidationContext::new(dir.path(), "success", "").with_trajectory(&observed);
+        let outcomes = evaluate_rules(
+            &[ValidationRule::ForbiddenTool {
+                tool: "Bash".to_string(),
+            }],
+            &dirty,
+        );
+        assert!(!outcomes[0].passed);
+        assert_eq!(outcomes[0].details[0], "forbidden_tool: 'Bash' was invoked");
+    }
+
+    #[test]
+    fn test_cost_below_rule() {
+        let costs = [0.01_f64, 0.02];
+        let dir = tempfile::TempDir::new().expect("dir");
+        let ctx = ValidationContext::new(dir.path(), "success", "").with_turn_costs_usd(&costs);
+
+        // per=task: 0.03 total within budget passes.
+        let outcomes = evaluate_rules(
+            &[ValidationRule::CostBelow {
+                max_usd: 0.05,
+                per: CostBasis::Task,
+            }],
+            &ctx,
+        );
+        assert!(outcomes[0].passed);
+
+        // per=task over budget fails with the running total in the message.
+        let outcomes = evaluate_rules(
+            &[ValidationRule::CostBelow {
+                max_usd: 0.015,
+                per: CostBasis::Task,
+            }],
+            &ctx,
+        );
+        assert!(!outcomes[0].passed);
+        assert!(outcomes[0].details[0].contains("task total"));
+
+        // per=turn flags individual violating turns only.
+        let outcomes = evaluate_rules(
+            &[ValidationRule::CostBelow {
+                max_usd: 0.015,
+                per: CostBasis::Turn,
+            }],
+            &ctx,
+        );
+        assert!(!outcomes[0].passed);
+        assert!(outcomes[0].details.len() == 1 && outcomes[0].details[0].contains("turn 2"));
+
+        // per=turn where every turn sits within the budget passes.
+        let outcomes = evaluate_rules(
+            &[ValidationRule::CostBelow {
+                max_usd: 0.05,
+                per: CostBasis::Turn,
+            }],
+            &ctx,
+        );
+        assert!(outcomes[0].passed);
+
+        // Missing cost observations fail loudly rather than passing vacuously.
+        let no_costs = ValidationContext::new(dir.path(), "success", "");
+        let outcomes = evaluate_rules(
+            &[ValidationRule::CostBelow {
+                max_usd: 100.0,
+                per: CostBasis::Task,
+            }],
+            &no_costs,
+        );
+        assert!(!outcomes[0].passed);
+        assert!(outcomes[0].details[0].contains("no recorded turn costs"));
+    }
+
+    #[test]
+    fn test_diff_matches_rule() {
+        let dir = tempfile::TempDir::new().expect("dir");
+        let files = vec![("src/lib.rs".to_string(), "fn old() {}".to_string())];
+
+        // Created-from-scratch file: baseline absent means diff is pure additions.
+        std::fs::write(dir.path().join("hello.txt"), "world").expect("write");
+        let ctx = ValidationContext::new(dir.path(), "success", "").with_initial_files(&files);
+
+        let outcomes = evaluate_rules(
+            &[ValidationRule::DiffMatches {
+                path: "hello.txt".to_string(),
+                expected_diff_regex: r"^\+world$".to_string(),
+            }],
+            &ctx,
+        );
+        assert!(outcomes[0].passed, "{:?}", outcomes[0].details);
+
+        // Modified file against its setup-time baseline.
+        std::fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+        std::fs::write(dir.path().join("src/lib.rs"), "fn new() {}").expect("write");
+        let outcomes = evaluate_rules(
+            &[ValidationRule::DiffMatches {
+                path: "src/lib.rs".to_string(),
+                expected_diff_regex: r"-fn old\(\) \{\}\n\+fn new\(\) \{\}".to_string(),
+            }],
+            &ctx,
+        );
+        assert!(outcomes[0].passed, "{:?}", outcomes[0].details);
+
+        // Wrong expectation reports a diff-mismatch violation.
+        let outcomes = evaluate_rules(
+            &[ValidationRule::DiffMatches {
+                path: "src/lib.rs".to_string(),
+                expected_diff_regex: r"\+pub mod lib;".to_string(),
+            }],
+            &ctx,
+        );
+        assert!(!outcomes[0].passed);
+        assert!(outcomes[0].details[0].starts_with("diff_matches: src/lib.rs diff does not match"));
+
+        // Missing target file fails explicitly.
+        let outcomes = evaluate_rules(
+            &[ValidationRule::DiffMatches {
+                path: "ghost.rs".to_string(),
+                expected_diff_regex: ".+".to_string(),
+            }],
+            &ctx,
+        );
+        assert!(!outcomes[0].passed);
+        assert!(outcomes[0].details[0].contains("does not exist in workspace"));
+
+        // Invalid pattern is reported, not treated as a non-match.
+        let outcomes = evaluate_rules(
+            &[ValidationRule::DiffMatches {
+                path: "src/lib.rs".to_string(),
+                expected_diff_regex: "([".to_string(),
+            }],
+            &ctx,
+        );
+        assert!(outcomes[0].details[0].contains("invalid regex"));
+    }
+
+    #[test]
+    fn test_parse_behavioral_validation_rules() {
+        let f = write_temp_yaml(
+            r#"
+name: behavioral
+prompt: "Apply behavior"
+setup:
+  files: []
+mock_responses:
+  - response:
+      type: text
+      content: "done"
+validate:
+  - rule: diff_matches
+    path: src/main.rs
+    expected_diff_regex: '\+.*Goodbye'
+  - rule: trajectory_contains
+    sequence:
+      - tool: Read
+        args_regex: '"path":"src/main\.rs"'
+      - tool: Edit
+  - rule: forbidden_tool
+    tool: Bash
+  - rule: cost_below
+    max_usd: 0.25
+    per: task
+"#,
+        );
+        let scenario = parse_scenario(f.path()).expect("parse behavioral scenario");
+        assert_eq!(scenario.validate.len(), 4);
+        assert!(matches!(
+            &scenario.validate[0],
+            ValidationRule::DiffMatches { path, expected_diff_regex }
+                if path == "src/main.rs" && expected_diff_regex.contains("Goodbye")
+        ));
+        assert!(matches!(
+            &scenario.validate[1],
+            ValidationRule::TrajectoryContains { sequence }
+                if sequence.len() == 2
+                    && sequence[0].tool == "Read"
+                    && !sequence[0].args_regex.is_empty()
+                    && sequence[1].args_regex.is_empty()
+        ));
+        assert!(matches!(
+            &scenario.validate[2],
+            ValidationRule::ForbiddenTool { tool } if tool == "Bash"
+        ));
+        assert!(matches!(
+            &scenario.validate[3],
+            ValidationRule::CostBelow { max_usd, per: CostBasis::Task } if (*max_usd - 0.25).abs() < f64::EPSILON
+        ));
+    }
+
+    #[test]
+    fn test_cost_below_rejects_unknown_basis() {
+        let f = write_temp_yaml(
+            r#"
+name: bad-basis
+prompt: "Budget"
+setup:
+  files: []
+mock_responses:
+  - response:
+      type: text
+      content: "done"
+validate:
+  - rule: cost_below
+    max_usd: 1.0
+    per: fortnight
+"#,
+        );
+        assert!(
+            parse_scenario(f.path()).is_err(),
+            "unknown cost basis must be rejected at parse time"
+        );
+    }
+
+    #[test]
+    fn test_outcome_parity_with_legacy_strings() {
+        let dir = tempfile::TempDir::new().expect("dir");
+
+        // Legacy wrapper keeps producing the exact historical failure strings.
+        let failures = validate_rules(
+            &[ValidationRule::ExitCode {
+                value: "success".to_string(),
+            }],
+            dir.path(),
+            "error",
+            "",
+        );
+        assert_eq!(failures, vec!["exit_code: expected 'success', got 'error'"]);
+
+        // Two violated aspects of one file_content rule still yield two details.
+        std::fs::write(dir.path().join("x.txt"), "unrelated").expect("write");
+        let outcomes = evaluate_rules(
+            &[ValidationRule::FileContent {
+                path: "x.txt".to_string(),
+                contains: "wanted".to_string(),
+                matches_regex: r"^nomatch$".to_string(),
+            }],
+            &ValidationContext::new(dir.path(), "success", ""),
+        );
+        assert_eq!(outcomes[0].rule, "file_content");
+        assert!(!outcomes[0].passed);
+        assert_eq!(outcomes[0].details.len(), 2);
+    }
+
+    #[test]
+    fn test_scenario_result_evaluated_derives_state() {
+        let summary = TrajectorySummary::from_observations(
+            &[ToolCallTrace::new("Read", "{}")],
+            &[0.01, 0.02],
+        );
+        assert_eq!(summary.tool_calls, vec!["Read"]);
+        assert_eq!(summary.turns, 2);
+        assert!((summary.total_cost_usd - 0.03).abs() < f64::EPSILON);
+
+        let good =
+            ScenarioResult::evaluated("all-good", 12, vec![passed("exit_code")], summary.clone());
+        assert!(good.passed);
+        assert!(good.failures.is_empty());
+        assert_eq!(good.trajectory_summary.turns, 2);
+
+        let bad = ScenarioResult::evaluated(
+            "some-bad",
+            30,
+            vec![
+                passed("exit_code"),
+                violated(
+                    "forbidden_tool",
+                    vec!["forbidden_tool: 'Bash' was invoked".into()],
+                ),
+            ],
+            summary,
+        );
+        assert!(!bad.passed);
+        assert_eq!(bad.failures, vec!["forbidden_tool: 'Bash' was invoked"]);
+        assert_eq!(bad.rule_outcomes.len(), 2);
     }
 }

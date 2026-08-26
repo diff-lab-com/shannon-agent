@@ -1,0 +1,35 @@
+name: cost_below_within_budget
+description: "Positive behavioral assertion: observed per-turn costs stay under both task and turn budgets"
+prompt: "Read src/main.rs then replace Hello with Goodbye"
+provider: anthropic
+
+setup:
+  files:
+    - path: src/main.rs
+      content: |
+        fn main() {
+            println!("Hello, world!");
+        }
+
+mock_responses:
+  - response:
+      type: tool_use
+      tool: Read
+      tool_id: toolu_1
+      input: { "path": "src/main.rs" }
+  - response:
+      type: tool_use
+      tool: Edit
+      tool_id: toolu_2
+      input: { "path": "src/main.rs", "old_string": "Hello", "new_string": "Goodbye" }
+  - response:
+      type: text
+      content: "Updated the greeting."
+
+validate:
+  - rule: cost_below
+    max_usd: 5.0
+    per: task
+  - rule: cost_below
+    max_usd: 0.5
+    per: turn
