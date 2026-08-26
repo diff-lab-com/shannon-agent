@@ -9,7 +9,7 @@
 //   shannon-sessions-order  — Record<sessionId, index> written on drag reorder
 //   shannon-sessions-pinned — string[] of pinned session ids
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -67,6 +67,24 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [orderOverride, setOrderOverride] = useState<Record<string, number>>(readOrderOverride)
   const [pinnedIds, setPinnedIds] = useState<ReadonlySet<string>>(readPinned)
+  // U5: touch long-press (500ms) opens the ⋯ menu; the click that follows a
+  // completed long-press must not also switch the session.
+  const longPressTimer = useRef<number | null>(null)
+  const suppressClickRef = useRef(false)
+  const clearLongPress = useCallback(() => {
+    if (longPressTimer.current !== null) {
+      clearTimeout(longPressTimer.current)
+      longPressTimer.current = null
+    }
+  }, [])
+  useEffect(() => clearLongPress, [clearLongPress])
+  const startLongPress = useCallback((id: string) => {
+    clearLongPress()
+    longPressTimer.current = window.setTimeout(() => {
+      suppressClickRef.current = true
+      setMenuFor(id)
+    }, 500)
+  }, [clearLongPress])
 
   const untitled = t('chat.session.untitled')
 
@@ -140,6 +158,30 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
     persistOrder(next)
   }, [draggedId, sorted, persistOrder])
 
+  // U5: keyboard alternative to drag reorder — Alt+↑/↓ on a focused row
+  // swaps it with its neighbor and writes through the same order-override
+  // path as handleDrop. Inert mid-search: reordering a filtered subset is
+  // ambiguous (the neighbor may be filtered out).
+  const moveRow = useCallback((id: string, dir: -1 | 1) => {
+    const ids = sorted.map(s => s.id)
+    const fromIdx = ids.indexOf(id)
+    const toIdx = fromIdx + dir
+    if (fromIdx === -1 || toIdx < 0 || toIdx >= ids.length) return
+    ;[ids[fromIdx], ids[toIdx]] = [ids[toIdx], ids[fromIdx]]
+    const next: Record<string, number> = {}
+    ids.forEach((sid, idx) => { next[sid] = idx })
+    persistOrder(next)
+  }, [sorted, persistOrder])
+
+  const handleRowKeyDown = useCallback((e: React.KeyboardEvent<HTMLButtonElement>, id: string) => {
+    if (!e.altKey) return
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (query.trim()) return
+      moveRow(id, e.key === 'ArrowUp' ? -1 : 1)
+    }
+  }, [moveRow, query])
+
   const togglePin = useCallback((id: string) => {
     setPinnedIds(prev => {
       const next = new Set(prev)
@@ -161,6 +203,7 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
   }, [editTitle, renameSession])
 
   const handleSwitch = useCallback((id: string) => {
+    if (suppressClickRef.current) { suppressClickRef.current = false; return }
     void switchSession(id)
     navigate('/chat')
     closeMobile?.()
@@ -214,6 +257,10 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
                   onDragStart={() => setDraggedId(session.id)}
                   onDragOver={e => e.preventDefault()}
                   onDrop={() => handleDrop(session.id)}
+                  onTouchStart={() => startLongPress(session.id)}
+                  onTouchEnd={clearLongPress}
+                  onTouchMove={clearLongPress}
+                  onTouchCancel={clearLongPress}
                   className={cn('group relative flex items-center gap-1', draggedId === session.id && 'opacity-40')}
                 >
                   {isEditing ? (
@@ -237,6 +284,7 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
                         aria-label={t('chat.session.aria', { title: session.title || untitled })}
                         title={session.title || untitled}
                         onClick={() => handleSwitch(session.id)}
+                        onKeyDown={e => handleRowKeyDown(e, session.id)}
                         className={cn(
                           'flex-1 min-w-0 text-left px-3 py-2 rounded-lg font-label-md text-label-md transition-all duration-200 flex items-center gap-2 cursor-pointer select-none',
                           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
@@ -245,7 +293,10 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
                             : 'text-on-surface-variant hover:bg-surface-container-low hover:text-primary',
                         )}
                       >
-                        <span className="material-symbols-outlined text-[14px] text-outline-variant shrink-0" aria-hidden="true">drag_indicator</span>
+                        {/* U5: affordance only — the grip shows on hover/focus
+                            (Alt+↑/↓ or drag does the work), cutting per-row
+                            visual noise. */}
+                        <span className="material-symbols-outlined text-[14px] text-outline-variant shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" aria-hidden="true">drag_indicator</span>
                         {pinnedIds.has(session.id) && (
                           <span className="material-symbols-outlined text-[14px] text-primary shrink-0" aria-hidden="true">push_pin</span>
                         )}

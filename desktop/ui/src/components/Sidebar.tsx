@@ -96,6 +96,26 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
     document.body.style.userSelect = 'none'
   }, [])
 
+  // U5: double-click resets to the default width; arrow keys resize by 16px
+  // (the handle is a focusable separator so keyboard users can widen the
+  // sidebar too — P3-1).
+  const resetWidth = useCallback(() => {
+    setWidth(DEFAULT_W)
+    localStorage.setItem(STORAGE_KEY, String(DEFAULT_W))
+    document.documentElement.style.setProperty('--sidebar-w', `${DEFAULT_W}px`)
+  }, [])
+
+  const handleResizeKey = useCallback((e: React.KeyboardEvent) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    e.preventDefault()
+    const delta = e.key === 'ArrowLeft' ? -16 : 16
+    setWidth(prev => {
+      const next = Math.min(MAX_W, Math.max(MIN_W, prev + delta))
+      localStorage.setItem(STORAGE_KEY, String(next))
+      return next
+    })
+  }, [])
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!dragging.current) return
@@ -141,13 +161,25 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
       "fixed left-0 top-0 h-full bg-surface-container-lowest/70 backdrop-blur-[20px] border-r border-outline-variant/30 flex flex-col py-lg px-md shadow-[4px_0_24px_-12px_color-mix(in_srgb,var(--color-inverse-surface)_15%,transparent)] transition-transform duration-300",
       mobile ? "z-[70] w-[280px]" : "z-50",
     )} style={mobile ? undefined : { width }}>
-      {/* Drag handle */}
+      {/* Drag handle — 8px hot zone with a 4px visual bar (U5/P3-1: the old
+          4px zone was nearly un-hittable). Focusable separator: ←/→ resize,
+          double-click resets to 280px. */}
       <div
-        className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10"
+        role="separator"
+        aria-orientation="vertical"
+        tabIndex={0}
+        aria-valuenow={width}
+        aria-valuemin={MIN_W}
+        aria-valuemax={MAX_W}
+        className="group absolute right-0 top-0 bottom-0 w-2 cursor-col-resize z-10"
         aria-label={intl.formatMessage({ id: 'nav.resize.aria' })}
         title={intl.formatMessage({ id: 'nav.resize.title' })}
         onMouseDown={handleMouseDown}
-      />
+        onDoubleClick={resetWidth}
+        onKeyDown={handleResizeKey}
+      >
+        <div className="absolute right-0 top-0 bottom-0 w-1 transition-colors group-hover:bg-primary/30 group-focus-visible:bg-primary/30 group-active:bg-primary/50" />
+      </div>
       <div className="flex items-center gap-3 mb-xl px-2">
         <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-on-primary shadow-lg shadow-primary/30">
           <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>hub</span>
@@ -202,12 +234,12 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         <NavLink to="/chat" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">chat_bubble</span>
            <span className="flex-1">{intl.formatMessage({ id: 'nav.chat' })}</span>
-           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">{formatShortcut('1')}</kbd>
+           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface font-mono">{formatShortcut('1')}</kbd>
         </NavLink>
         <NavLink to="/tasks" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">task_alt</span>
            <span className="flex-1">{intl.formatMessage({ id: 'nav.scheduled' })}</span>
-           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">{formatShortcut('2')}</kbd>
+           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface font-mono">{formatShortcut('2')}</kbd>
         </NavLink>
         <NavLink to="/memory" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">psychology</span>
@@ -311,7 +343,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
               {intl.formatMessage({ id: mode === 'simple' ? 'nav.modeLabel.simple' : 'nav.modeLabel.dev' })}
             </span>
           </div>
-          <span className="text-[10px] uppercase tracking-wider text-outline-variant">
+          <span className="text-[10px] uppercase tracking-wider text-on-surface-variant">
             {intl.formatMessage({ id: mode === 'simple' ? 'nav.simpleMode.badge' : 'nav.devMode.badge' })}
           </span>
         </Button>
