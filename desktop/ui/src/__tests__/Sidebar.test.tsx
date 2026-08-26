@@ -280,7 +280,8 @@ describe('Sidebar — Sessions rail (U1)', () => {
   }
 
   function row(title: string) {
-    return screen.getByRole('button', { name: new RegExp(`^${title}$`) })
+    // Row buttons carry aria-label "Chat: {title}" (U4 terminology).
+    return screen.getByRole('button', { name: `Chat: ${title}` })
   }
 
   function rowItem(title: string) {
@@ -298,7 +299,7 @@ describe('Sidebar — Sessions rail (U1)', () => {
     }))
     await renderWithSessions(many)
     for (let i = 0; i < 12; i++) {
-      expect(screen.getByRole('button', { name: `Session ${i}` })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: `Chat: Session ${i}` })).toBeInTheDocument()
     }
   })
 
@@ -323,9 +324,9 @@ describe('Sidebar — Sessions rail (U1)', () => {
 
   it('filters by title client-side for short queries', async () => {
     await renderWithSessions()
-    fireEvent.change(screen.getByLabelText('Search sessions'), { target: { value: 'be' } })
-    expect(screen.getByRole('button', { name: 'Beta Debug' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Alpha Chat' })).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Search chats'), { target: { value: 'be' } })
+    expect(screen.getByRole('button', { name: 'Chat: Beta Debug' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Chat: Alpha Chat' })).not.toBeInTheDocument()
   })
 
   it('calls backend search after debounce for queries ≥ 3 chars and keeps rail order', async () => {
@@ -333,19 +334,19 @@ describe('Sidebar — Sessions rail (U1)', () => {
     await renderWithSessions()
     // s3 is a content match — its title doesn't contain the query.
     vi.mocked(api.searchSessions).mockResolvedValue([{ ...mockSessions[2] }] as any)
-    fireEvent.change(screen.getByLabelText('Search sessions'), { target: { value: 'use' } })
+    fireEvent.change(screen.getByLabelText('Search chats'), { target: { value: 'use' } })
     await waitFor(() => expect(api.searchSessions).toHaveBeenCalledWith('use'))
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Gamma Plan' })).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Alpha Chat' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Beta Debug' })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Chat: Gamma Plan' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Chat: Alpha Chat' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Chat: Beta Debug' })).not.toBeInTheDocument()
     })
   })
 
   it('does not call backend when query is shorter than 3 chars', async () => {
     const api = await import('@/lib/tauri-api')
     await renderWithSessions()
-    fireEvent.change(screen.getByLabelText('Search sessions'), { target: { value: 'go' } })
+    fireEvent.change(screen.getByLabelText('Search chats'), { target: { value: 'go' } })
     expect(api.searchSessions).not.toHaveBeenCalled()
   })
 
@@ -405,7 +406,7 @@ describe('Sidebar — Sessions rail (U1)', () => {
     await openMenu('Beta Debug')
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
     const dialog = await screen.findByRole('alertdialog')
-    expect(within(dialog).getByText('Delete Session')).toBeInTheDocument()
+    expect(within(dialog).getByText('Delete Chat')).toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(api.deleteSession).toHaveBeenCalledWith('s2'))
   })
