@@ -11,7 +11,6 @@ import { useSessions } from '@/context/SessionContext';
 import { useCatalog } from '@/context/CatalogContext';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { shouldShowWelcome } from '@/pages/Welcome';
-import { cn } from '@/lib/utils';
 
 interface SidebarContextValue {
   open: boolean
@@ -24,8 +23,8 @@ export const useSidebar = () => useContext(SidebarContext)
 
 export function Layout() {
   const { usage } = useChat();
-  const { sessions, createSession } = useSessions();
-  const { agents, status, backgroundTasks, config, loading } = useCatalog();
+  const { createSession } = useSessions();
+  const { agents, backgroundTasks, config, loading } = useCatalog();
   const navigate = useNavigate();
   const intl = useIntl();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -73,6 +72,9 @@ export function Layout() {
           <ErrorBoundary><Outlet /></ErrorBoundary>
         </main>
         <footer role="contentinfo" className="fixed bottom-0 right-0 h-8 bg-surface-container-low/90 backdrop-blur-sm border-t border-outline-variant/20 flex items-center justify-between px-lg z-40" style={{ left: 'var(--sidebar-w)' }}>
+          {/* U2: footer carries runtime + usage only — tokens/cost, active
+              tasks, agents, version. Provider/model live in the Header and
+              the session count is visible in the sidebar rail (U1). */}
           <span className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-sm">
             {usage ? (
               <>
@@ -80,13 +82,6 @@ export function Layout() {
                 <span>{intl.formatMessage({ id: 'footer.tokens' }, { count: (usage.input_tokens + usage.output_tokens) })}</span>
                 <span className="text-outline-variant">·</span>
                 <span className="text-primary">${usage.cost_usd.toFixed(4)}</span>
-              </>
-            ) : status ? (
-              <>
-                <span className={cn('w-2 h-2 rounded-full shrink-0', status.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary')} />
-                <span>{status.provider}</span>
-                <span className="text-outline-variant">·</span>
-                <span className="truncate max-w-[140px]">{status.model}</span>
               </>
             ) : (
               <>
@@ -96,11 +91,6 @@ export function Layout() {
             )}
           </span>
           <div className="flex items-center gap-md font-label-sm text-label-sm text-on-surface-variant">
-            {sessions.length > 0 && (
-              <span className="hidden sm:inline">
-                {intl.formatMessage({ id: 'footer.sessions' }, { count: sessions.length })}
-              </span>
-            )}
             {activeBgTasks > 0 && (
               <span className="flex items-center gap-xs text-primary">
                 <span className="w-2 h-2 rounded-full bg-secondary animate-pulse" />

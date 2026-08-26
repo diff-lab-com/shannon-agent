@@ -271,15 +271,9 @@ describe('Chat page', () => {
   // of WD selection. Per-input chip behavior is covered in ChatInput.test.tsx.
   // U1 additionally removed the per-row WD hint + export/print hover buttons
   // (now in the sidebar rail's ⋯ menu — see Sidebar.test.tsx).
-
-  it('shows provider/model pill when status is present', () => {
-    resetCtx()
-    ctx.currentSessionId = 's1'
-    ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
-    ctx.status = { provider: 'anthropic', model: 'claude-sonnet-4-6', querying: false, message_count: 0, working_dir: '' }
-    renderChat()
-    expect(screen.getByText(/anthropic\/claude-sonnet-4-6/)).toBeInTheDocument()
-  })
+  // U2 removed the composer-footer provider/model pill (the global Header is
+  // the single model surface) and the per-page ChatHeader bar (title + panel
+  // toggle now live in the global Header — see Header.test.tsx).
 
   describe('API key missing banner', () => {
     it('renders banner when config has no api_key and provider is not ollama', () => {
