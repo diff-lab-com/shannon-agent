@@ -81,7 +81,7 @@ describe('Chat page', () => {
   it('does not render its own session rail', () => {
     resetCtx()
     renderChat()
-    expect(screen.queryByPlaceholderText('Search sessions…')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Search chats…')).not.toBeInTheDocument()
     expect(screen.queryByText('New Chat')).not.toBeInTheDocument()
   })
 

@@ -33,7 +33,7 @@ describe('AdvancedSettings', () => {
 
   it('renders clear session cache button', () => {
     render(wrap(<AdvancedSettings />))
-    expect(screen.getByText('Clear Session Cache')).toBeInTheDocument()
+    expect(screen.getByText('Clear Chat Cache')).toBeInTheDocument()
   })
 
   it('renders data privacy section', () => {
