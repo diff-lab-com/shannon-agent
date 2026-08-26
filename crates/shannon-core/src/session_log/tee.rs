@@ -429,6 +429,31 @@ impl SessionTee {
         }
     }
 
+    /// Record one bus-delivered input (§4.8): either a durable vocabulary
+    /// body or a fold directive — byte-identical to what
+    /// [`Self::record_query_event`] writes for the equivalent engine event.
+    ///
+    /// Routing-only events (hook triggers in reserved namespaces) are skipped:
+    /// they are distribution topics, not durable rows; their audit trail lands
+    /// as explicit `hook/fired` bodies instead.
+    pub fn record_bus_input(&mut self, input: &crate::bus::BusInput) {
+        match input {
+            crate::bus::BusInput::Event(event) => {
+                if event.is_routing_only() {
+                    return;
+                }
+                self.record_body(event.body.clone());
+            }
+            crate::bus::BusInput::Coalesce(coalesce) => match coalesce {
+                crate::bus::CoalesceInput::StepUsage(usage) => self.add_turn_usage(usage.clone()),
+                crate::bus::CoalesceInput::BareTokens(tokens) => self.bare_tokens = Some(*tokens),
+                crate::bus::CoalesceInput::TurnBoundary { reason, error } => {
+                    self.close_turn(reason, error.clone());
+                }
+            },
+        }
+    }
+
     /// Sum one step's usage into the turn accumulator.
     fn add_turn_usage(&mut self, usage: TokenUsage) {
         self.turn_usage = Some(match self.turn_usage.take() {
@@ -663,6 +688,13 @@ impl TeeHandle {
     pub fn record_query_event(&self, event: &QueryEvent) {
         if let Ok(mut tee) = self.tee.lock() {
             tee.record_query_event(event);
+        }
+    }
+
+    /// Record one bus-delivered input (§4.8 L0-subscriber path).
+    pub fn record_bus_input(&self, input: &crate::bus::BusInput) {
+        if let Ok(mut tee) = self.tee.lock() {
+            tee.record_bus_input(input);
         }
     }
 
