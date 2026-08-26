@@ -50,6 +50,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isQuerying, setIsQuerying] = useState(false)
   const [activeToolCalls, setActiveToolCalls] = useState<ToolCall[]>([])
   const [usage, setUsage] = useState<UsagePayload | null>(null)
+  // U2: ContextPanel visibility — owned here (not in the /chat page) so the
+  // global Header can host the toggle while Chat renders the panel.
+  const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const [status, setStatus] = useState<StatusResponse | null>(null)
@@ -74,6 +77,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshSessions = useCallback(async () => {
     try { setSessions(await api.listSessions()) } catch (e) { console.warn('refreshSessions failed:', e) }
+  }, [])
+
+  const toggleContextPanel = useCallback(() => {
+    setContextPanelOpen(v => !v)
   }, [])
 
   const refreshStatus = useCallback(async () => {
@@ -304,8 +311,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const chatValue = useMemo<ChatContextValue>(() => ({
     messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage,
-    sendMessage, cancelQuery,
-  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery])
+    sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel,
+  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel])
 
   const sessionValue = useMemo<SessionContextValue>(() => ({
     sessions, currentSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,

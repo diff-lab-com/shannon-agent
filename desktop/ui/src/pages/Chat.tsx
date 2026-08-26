@@ -11,7 +11,6 @@ import { useSessions } from '@/context/SessionContext'
 import { useCatalog } from '@/context/CatalogContext'
 import {
   ApiKeyBanner,
-  ChatHeader,
   ComposerPanel,
   ContextPanel,
   InlinePanelModal,
@@ -28,12 +27,12 @@ const EditorPanel = lazy(() => import('@/pages/Editor'))
 export default function Chat() {
   const {
     messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage,
-    sendMessage, cancelQuery,
+    sendMessage, cancelQuery, contextPanelOpen,
   } = useChat()
   const {
     sessions, currentSessionId,
   } = useSessions()
-  const { error, config, status } = useCatalog()
+  const { error, config } = useCatalog()
   const intl = useIntl()
   const navigate = useNavigate()
   const location = useLocation()
@@ -61,7 +60,6 @@ export default function Chat() {
     }
   }, [location.state, location.pathname, navigate])
 
-  const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollParentRef = useRef<HTMLDivElement>(null)
@@ -116,8 +114,6 @@ export default function Chat() {
     setAttachedFiles([])
   }
 
-  const untitled = t('chat.session.untitled')
-
   const currentSession = sessions.find(s => s.id === currentSessionId)
   const sessionWorkingDir = currentSession?.working_dir ?? config?.working_dir ?? ''
 
@@ -130,23 +126,13 @@ export default function Chat() {
   const handleChangeWorkingDir = () => changeSessionWorkingDir(currentSessionId, t)
   changeWorkingDirRef.current = handleChangeWorkingDir
 
-  const toggleContextPanel = () => setContextPanelOpen(v => !v)
-
   return (
     <ArtifactProvider>
       <div className="flex-1 flex w-full h-full relative">
-        {/* Main Chat Canvas — the session list lives in the app sidebar (U1). */}
+        {/* Main Chat Canvas — the session list lives in the app sidebar (U1)
+            and the session title + ContextPanel toggle live in the global
+            Header (U2); the ChatHeader bar is retired. */}
         <section className="flex-1 flex flex-col relative bg-surface-container-lowest/40 overflow-hidden">
-          <ChatHeader
-            t={t}
-            currentSessionTitle={currentSession?.title ?? ''}
-            fallbackTitle={untitled}
-            sessionWorkingDir={sessionWorkingDir}
-            contextPanelOpen={contextPanelOpen}
-            toggleContextPanel={toggleContextPanel}
-            handleChangeWorkingDir={handleChangeWorkingDir}
-          />
-
           <ApiKeyBanner
             t={t}
             visible={showApiKeyBanner}
@@ -185,7 +171,6 @@ export default function Chat() {
             currentSessionId={currentSessionId}
             sessionWorkingDir={sessionWorkingDir}
             handleChangeWorkingDir={handleChangeWorkingDir}
-            status={status}
             setQuickFixOpen={setQuickFixOpen}
             setEditorOpen={setEditorOpen}
           />
