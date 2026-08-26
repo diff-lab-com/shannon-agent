@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { ThemeProvider, useTheme } from '@/context/ThemeContext'
 
@@ -172,5 +172,56 @@ describe('ThemeContext', () => {
     fireEvent.click(screen.getByTestId('set-font-scale'))
     // The setFontScale should clamp values to [0.85, 1.3]
     expect(document.documentElement.style.fontSize).toBe('18.4px')
+  })
+})
+
+describe('ThemeContext — scheme registry (U9)', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    document.documentElement.removeAttribute('data-theme-mode')
+  })
+
+  // Expected scheme per theme — mirrors how each theme's tokens are authored.
+  const EXPECTED: Record<string, 'light' | 'dark'> = {
+    'material': 'light',
+    'tokyo-night': 'dark',
+    'tokyo-night-light': 'light',
+    'catppuccin': 'dark',
+    'nord': 'dark',
+    'ember': 'dark',
+    'slate': 'dark',
+    'solarized': 'dark',
+    'solarized-light': 'light',
+    'dracula': 'dark',
+    'gruvbox': 'dark',
+    'gruvbox-light': 'light',
+  }
+
+  it('mirrors the scheme of every theme onto data-theme-mode', () => {
+    render(
+      <ThemeProvider>
+        <ThemeConsumer />
+      </ThemeProvider>
+    )
+    for (const [id, scheme] of Object.entries(EXPECTED)) {
+      fireEvent.click(screen.getByTestId(`btn-${id}`))
+      expect(document.documentElement.getAttribute('data-theme'), id).toBe(id)
+      expect(document.documentElement.getAttribute('data-theme-mode'), id).toBe(scheme)
+    }
+  })
+
+  it('system resolves data-theme-mode with the resolved theme', () => {
+    // Patch the factory so every fresh matchMedia call reports dark.
+    const real = window.matchMedia
+    vi.spyOn(window, 'matchMedia').mockImplementation(q =>
+      ({ ...real(q), matches: q.includes('dark') }))
+    render(
+      <ThemeProvider>
+        <ThemeConsumer />
+      </ThemeProvider>
+    )
+    fireEvent.click(screen.getByTestId('btn-system'))
+    expect(document.documentElement.getAttribute('data-theme')).toBe('tokyo-night')
+    expect(document.documentElement.getAttribute('data-theme-mode')).toBe('dark')
   })
 })

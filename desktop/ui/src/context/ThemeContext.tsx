@@ -22,6 +22,25 @@ export function useTheme() {
   return ctx
 }
 
+// U9: single registry of which scheme each theme renders as. ThemeProvider
+// mirrors it onto <html data-theme-mode>, and index.css's `dark:` variant
+// keys off that attribute — adding a theme means one THEMES entry + one
+// line here (+ its token block in index.css), no CSS selector list to hunt.
+const THEME_SCHEMES: Record<ResolvedTheme, 'light' | 'dark'> = {
+  'material': 'light',
+  'tokyo-night': 'dark',
+  'tokyo-night-light': 'light',
+  'catppuccin': 'dark',
+  'nord': 'dark',
+  'ember': 'dark',
+  'slate': 'dark',
+  'solarized': 'dark',
+  'solarized-light': 'light',
+  'dracula': 'dark',
+  'gruvbox': 'dark',
+  'gruvbox-light': 'light',
+}
+
 const THEMES: { id: ThemeName; label: string }[] = [
   { id: 'system', label: 'System' },
   { id: 'material', label: 'Material' },
@@ -63,6 +82,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', resolvedTheme)
+    document.documentElement.setAttribute('data-theme-mode', THEME_SCHEMES[resolvedTheme])
     if (theme !== 'system') {
       localStorage.setItem('shannon-theme', theme)
     }
