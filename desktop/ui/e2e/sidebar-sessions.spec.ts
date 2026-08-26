@@ -15,12 +15,12 @@ test.describe('Sidebar sessions rail (U1)', () => {
     await page.goto('/chat')
     // exact: true — otherwise the substring also matches the row's
     // "Actions for …" ⋯ button.
-    const row = page.getByRole('button', { name: 'Q3 roadmap brainstorm', exact: true })
+    const row = page.getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
     await expect(row).toBeVisible()
     await row.click()
     await expect(page).toHaveURL(/\/chat/)
     await expect(
-      page.getByRole('button', { name: 'Q3 roadmap brainstorm', exact: true })
+      page.getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
     ).toHaveAttribute('aria-current', 'page')
   })
 
@@ -28,17 +28,17 @@ test.describe('Sidebar sessions rail (U1)', () => {
     await page.goto('/chat')
     // getByRole filters the CSS-hidden mobile-drawer copy of the sidebar
     // that getByLabel would also match (Layout mounts both variants).
-    const search = page.getByRole('searchbox', { name: 'Search sessions' })
+    const search = page.getByRole('searchbox', { name: 'Search chats' })
     await search.fill('pricing')
 
     await expect(
-      page.getByRole('button', { name: 'Pricing page copy review', exact: true })
+      page.getByRole('button', { name: 'Chat: Pricing page copy review', exact: true })
     ).toBeVisible()
     await expect(
-      page.getByRole('button', { name: 'Q3 roadmap brainstorm', exact: true })
+      page.getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
     ).toBeHidden()
     await expect(
-      page.getByRole('button', { name: 'Investor update draft', exact: true })
+      page.getByRole('button', { name: 'Chat: Investor update draft', exact: true })
     ).toBeHidden()
   })
 
@@ -52,7 +52,7 @@ test.describe('Sidebar sessions rail (U1)', () => {
 
     const dialog = page.getByRole('alertdialog')
     await expect(dialog).toBeVisible()
-    await expect(dialog.getByText('Delete Session')).toBeVisible()
+    await expect(dialog.getByText('Delete Chat')).toBeVisible()
     await dialog.getByRole('button', { name: 'Delete' }).click()
 
     await expect(dialog).toBeHidden()

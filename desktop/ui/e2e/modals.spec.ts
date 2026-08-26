@@ -8,7 +8,7 @@ import { test, expect } from '@playwright/test'
  * onClose prop. The internal implementation can swap to Base UI Dialog
  * (R1b) without changing what users observe, as long as these tests pass.
  *
- * Target: AdvancedSettings → "Clear Session Cache" ConfirmDialog.
+ * Target: AdvancedSettings → "Clear Chat Cache" ConfirmDialog.
  * It's reachable purely from mock-mode routes (no Tauri command beyond
  * configure('clear_cache')).
  *
@@ -24,7 +24,7 @@ test.describe('Modal interactions (R5 regression net)', () => {
     await page.goto('/settings/advanced')
     await page.waitForLoadState('networkidle')
 
-    const trigger = page.getByRole('button', { name: /Clear Session Cache/i })
+    const trigger = page.getByRole('button', { name: /Clear Chat Cache/i })
     await expect(trigger).toBeVisible()
     await trigger.click()
 
@@ -40,7 +40,7 @@ test.describe('Modal interactions (R5 regression net)', () => {
     await page.goto('/settings/advanced')
     await page.waitForLoadState('networkidle')
 
-    const trigger = page.getByRole('button', { name: /Clear Session Cache/i })
+    const trigger = page.getByRole('button', { name: /Clear Chat Cache/i })
     await trigger.click()
 
     const dialog = page.getByRole('alertdialog')
@@ -60,7 +60,7 @@ test.describe('Modal interactions (R5 regression net)', () => {
     await page.goto('/settings/advanced')
     await page.waitForLoadState('networkidle')
 
-    const trigger = page.getByRole('button', { name: /Clear Session Cache/i })
+    const trigger = page.getByRole('button', { name: /Clear Chat Cache/i })
     await trigger.click()
     const dialog = page.getByRole('alertdialog')
     await expect(dialog).toBeVisible()

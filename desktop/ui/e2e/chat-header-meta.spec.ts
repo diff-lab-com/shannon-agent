@@ -11,7 +11,7 @@ test.describe('Chat header meta (U2)', () => {
   test('switching a session updates the global Header title', async ({ page }) => {
     await page.goto('/chat')
     await page
-      .getByRole('button', { name: 'Q3 roadmap brainstorm', exact: true })
+      .getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
       .click()
     const banner = page.getByRole('banner')
     await expect(banner.locator('h2')).toHaveText('Q3 roadmap brainstorm')
