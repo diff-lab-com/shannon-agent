@@ -1155,11 +1155,20 @@ fn run_noninteractive_query(
                 if !enabled.is_empty() {
                     eprintln!("Loaded {} plugin(s)", enabled.len());
                     for plugin in &enabled {
+                        // §4.9: gate every Shannon-side execution point on
+                        // the manifest allow-set; empty declarations keep the
+                        // pre-enforcement lenient default.
+                        let policy = std::sync::Arc::new(
+                            shannon_core::plugin::PluginPermissionPolicy::from_manifest(
+                                &plugin.manifest,
+                            ),
+                        );
                         match plugin.manifest.kind() {
                             Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
                                 if let Some(command) = transport.command() {
                                     let args = transport.args().to_vec();
-                                    match shannon_core::discover_tools(
+                                    match shannon_core::plugin::gated_discover_tools_stdio(
+                                        &policy,
                                         &plugin.manifest.name,
                                         command,
                                         &args,
@@ -1169,6 +1178,10 @@ fn run_noninteractive_query(
                                     .await
                                     {
                                         Ok(result) => {
+                                            tools.attach_plugin_policy(
+                                                &plugin.manifest.name,
+                                                std::sync::Arc::clone(&policy),
+                                            );
                                             let tool_count = result.tools.len();
                                             let boxed: Vec<Box<dyn shannon_core::tools::Tool>> = result
                                                 .tools
@@ -1185,10 +1198,24 @@ fn run_noninteractive_query(
                                 }
                             }
                             Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
-                                eprintln!("  Command plugin '{}' ({}) — use /plugin:{}", plugin.manifest.name, description, name);
+                                // Prompt-driven extension faces apply to the
+                                // slash command this plugin advertises.
+                                match shannon_core::plugin::admit_prompt_based_extension(
+                                    &policy,
+                                    &plugin.manifest.name,
+                                ) {
+                                    Ok(()) => eprintln!("  Command plugin '{}' ({}) — use /plugin:{}", plugin.manifest.name, description, name),
+                                    Err(e) => eprintln!("  Warning: Command plugin '{}' not registered: {e}", plugin.manifest.name),
+                                }
                             }
                             Ok(shannon_core::plugin::PluginKind::Skill { trigger, template: _ }) => {
-                                eprintln!("  Skill plugin '{}' (trigger: '{}') — use /{}", plugin.manifest.name, trigger, trigger);
+                                match shannon_core::plugin::admit_prompt_based_extension(
+                                    &policy,
+                                    &plugin.manifest.name,
+                                ) {
+                                    Ok(()) => eprintln!("  Skill plugin '{}' (trigger: '{}') — use /{}", plugin.manifest.name, trigger, trigger),
+                                    Err(e) => eprintln!("  Warning: Skill plugin '{}' not registered: {e}", plugin.manifest.name),
+                                }
                             }
                             Err(e) => {
                                 eprintln!("  Warning: Plugin '{}' has invalid config: {e}", plugin.manifest.name);
