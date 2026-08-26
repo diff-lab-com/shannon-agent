@@ -48,8 +48,6 @@ function renderChatInput(props: Partial<React.ComponentProps<typeof ChatInput>> 
     disabled: false,
     isQuerying: false,
     onCancelQuery: vi.fn(),
-    currentSessionId: 'session-123',
-    sessionWorkingDir: '/home/user/projects/shannon',
     onOpenQuickFix: vi.fn(),
     onOpenEditor: vi.fn(),
   }
@@ -61,30 +59,20 @@ describe('ChatInput', () => {
     vi.clearAllMocks()
     mockRefreshConfig.mockReset()
     vi.mocked(api.configure).mockReset()
-    vi.mocked(api.setSessionWorkingDir).mockReset()
   })
 
-  it('renders the three control strip components', () => {
+  // U2: model switching moved to the global Header and the working-directory
+  // picker to the composer footer — neither control lives in the strip anymore.
+  it('does not render a model selector or working-directory chip (U2)', () => {
     renderChatInput()
-    expect(screen.getByLabelText('Change working directory')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Change working directory')).not.toBeInTheDocument()
+  })
+
+  it('renders the plan-mode and permission-mode controls', () => {
+    renderChatInput()
+    expect(screen.getByRole('button', { name: 'Toggle plan mode' })).toBeInTheDocument()
     expect(screen.getByLabelText('Permission mode')).toBeInTheDocument()
-    expect(screen.getByLabelText('Model')).toBeInTheDocument()
-  })
-
-  it('displays working directory basename', () => {
-    renderChatInput({ sessionWorkingDir: '/home/user/projects/my-project' })
-    expect(screen.getByText('my-project')).toBeInTheDocument()
-  })
-
-  it('shows "Working directory" when no WD is set', () => {
-    renderChatInput({ sessionWorkingDir: '' })
-    expect(screen.getByText('Working directory')).toBeInTheDocument()
-  })
-
-  it('disables WD button when no session', () => {
-    renderChatInput({ currentSessionId: null })
-    const wdButton = screen.getByLabelText('Change working directory')
-    expect(wdButton).toBeDisabled()
   })
 
   it('calls handleSend when Send button is clicked', async () => {
@@ -273,14 +261,6 @@ describe('ChatInput', () => {
     // Check the select has the suggest value in its hidden input
     const hiddenInput = document.querySelector('input[value="suggest"]')
     expect(hiddenInput).toBeInTheDocument()
-  })
-
-  it('renders model selector with correct default value', () => {
-    renderChatInput()
-    const modelSelect = screen.getByLabelText('Model')
-    expect(modelSelect).toBeInTheDocument()
-    // Check the Model label text is visible
-    expect(screen.getByText('Model')).toBeInTheDocument()
   })
 
   it('shows correct icons for querying states', () => {

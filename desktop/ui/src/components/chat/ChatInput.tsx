@@ -32,12 +32,13 @@ interface ChatInputProps {
   disabled: boolean
   isQuerying: boolean
   onCancelQuery: () => void
-  currentSessionId: string | null
-  sessionWorkingDir: string
   onOpenQuickFix: () => void
   onOpenEditor: () => void
 }
 
+// U2: the model Select and the working-directory chip were removed — the
+// global Header owns model switching, and the composer footer (ComposerPanel)
+// is the single working-directory entry point.
 export default function ChatInput({
   value,
   onChange,
@@ -48,15 +49,12 @@ export default function ChatInput({
   disabled,
   isQuerying,
   onCancelQuery,
-  currentSessionId,
-  sessionWorkingDir,
   onOpenQuickFix,
   onOpenEditor,
 }: ChatInputProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { config, models, refreshConfig } = useCatalog()
-  const modelList = models ?? []
+  const { config, refreshConfig } = useCatalog()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isDragging, setIsDragging] = useState(false)
   const voice = useVoice({
@@ -77,18 +75,6 @@ export default function ChatInput({
       : undefined,
   })
 
-  const handleChangeWorkingDir = async () => {
-    if (!currentSessionId) return
-    try {
-      const selected = await open({ directory: true, multiple: false })
-      if (!selected || Array.isArray(selected)) return
-      await api.setSessionWorkingDir(currentSessionId, selected as string)
-      await refreshConfig()
-    } catch (err) {
-      toastError(t('chat.input.wd.failed'), err)
-    }
-  }
-
   const handleModeChange = async (mode: string | null) => {
     if (!mode) return
     try {
@@ -96,19 +82,6 @@ export default function ChatInput({
       await refreshConfig()
     } catch (err) {
       toastError(t('chat.input.mode.failed'), err)
-    }
-  }
-
-  const handleModelChange = async (modelId: string | null) => {
-    if (!modelId) return
-    const model = modelList.find(m => m.id === modelId)
-    if (!model) return
-    try {
-      await api.configure({ key: 'model', value: model.name })
-      await api.configure({ key: 'provider', value: model.provider })
-      await refreshConfig()
-    } catch (err) {
-      toastError(t('chat.input.model.failed'), err)
     }
   }
 
@@ -189,8 +162,6 @@ export default function ChatInput({
   }
 
   const currentMode = config?.approval_mode || 'suggest'
-  const currentModelId = modelList.find(m => m.name === config?.model && m.provider === config?.provider)?.id || ''
-  const workingDirBasename = sessionWorkingDir ? sessionWorkingDir.split('/').pop() || sessionWorkingDir.split('\\').pop() || '' : ''
   const planModeActive = currentMode === 'plan'
 
   const handlePlanToggle = async () => {
@@ -330,26 +301,6 @@ export default function ChatInput({
             <Button
               variant="outline"
               size="sm"
-              onClick={handleChangeWorkingDir}
-              disabled={!currentSessionId}
-              aria-label={t('chat.input.wd.aria')}
-              title={sessionWorkingDir || t('chat.input.wd.title')}
-              className={cn('group/wd h-auto gap-xs px-sm py-xs rounded-full text-label-sm shrink-0',
-                sessionWorkingDir
-                  ? 'border-primary/30 bg-primary/5 text-on-surface hover:bg-primary/10 hover:border-primary/50'
-                  : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
-              )}
-            >
-              <span className="material-symbols-outlined icon-sm">folder_open</span>
-              <span className="max-w-[120px] truncate font-mono">
-                {workingDirBasename || t('chat.input.wd.title')}
-              </span>
-              <span className="material-symbols-outlined text-[14px] opacity-50 group-hover/wd:opacity-100 group-hover/wd:text-primary transition-opacity">change_folder</span>
-            </Button>
-
-            <Button
-              variant="outline"
-              size="sm"
               onClick={handlePlanToggle}
               aria-pressed={planModeActive}
               aria-label={t('chat.input.planMode.aria')}
@@ -379,30 +330,6 @@ export default function ChatInput({
                     <div className="flex items-center gap-xs">
                       <span className="material-symbols-outlined icon-sm">{mode.icon}</span>
                       <span>{mode.label}</span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <Select value={currentModelId} onValueChange={handleModelChange}>
-              <SelectTrigger
-                size="sm"
-                aria-label={t('chat.input.model.label')}
-                className="border border-outline-variant/30 bg-transparent hover:bg-surface-container-low/50 transition-colors"
-              >
-                <span className="material-symbols-outlined icon-sm">auto_awesome</span>
-                <SelectValue placeholder={t('chat.input.model.label')} />
-              </SelectTrigger>
-              <SelectContent>
-                {modelList.map(model => (
-                  <SelectItem key={model.id} value={model.id}>
-                    <div className="flex items-center gap-xs">
-                      <span className="material-symbols-outlined icon-sm">auto_awesome</span>
-                      <div className="flex flex-col">
-                        <span className="text-sm">{model.name}</span>
-                        <span className="text-xs text-on-surface-variant">{model.provider}</span>
-                      </div>
                     </div>
                   </SelectItem>
                 ))}

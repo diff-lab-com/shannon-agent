@@ -2,7 +2,6 @@
 // short and centralizes the seam if any of these need to be relocated.
 
 export { default as ApiKeyBanner } from './ApiKeyBanner'
-export { default as ChatHeader } from './ChatHeader'
 export { default as ComposerPanel } from './ComposerPanel'
 export { default as ContextPanel } from './ContextPanel'
 export { default as InlinePanelModal } from './InlinePanelModal'

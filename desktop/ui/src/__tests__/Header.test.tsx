@@ -13,10 +13,29 @@ const mockCtx = vi.hoisted(() => ({
   ],
   permissionRequest: null as any,
   respondPermission: vi.fn(),
+  refreshConfig: vi.fn(),
+  refreshStatus: vi.fn(),
+}))
+
+// U2: Header reads the session slice (title on /chat) and the chat slice
+// (ContextPanel toggle state, owned by AppProvider).
+const mockSessionCtx = vi.hoisted(() => ({
+  sessions: [] as any[],
+  currentSessionId: null as string | null,
+}))
+const mockChatCtx = vi.hoisted(() => ({
+  contextPanelOpen: false,
+  toggleContextPanel: vi.fn(),
 }))
 
 vi.mock('@/context/CatalogContext', () => ({
   useCatalog: () => mockCtx,
+}))
+vi.mock('@/context/SessionContext', () => ({
+  useSessions: () => mockSessionCtx,
+}))
+vi.mock('@/context/ChatContext', () => ({
+  useChat: () => mockChatCtx,
 }))
 
 function wrap(ui: React.ReactElement, { route = '/chat' } = {}) {
@@ -38,11 +57,63 @@ describe('Header component', () => {
     ]
     mockCtx.permissionRequest = null
     mockCtx.respondPermission = vi.fn()
+    mockCtx.refreshConfig = vi.fn()
+    mockCtx.refreshStatus = vi.fn()
+    mockSessionCtx.sessions = []
+    mockSessionCtx.currentSessionId = null
+    mockChatCtx.contextPanelOpen = false
+    mockChatCtx.toggleContextPanel = vi.fn()
   })
 
   it('renders page title based on route', () => {
     render(wrap(<Header />, { route: '/chat' }))
     expect(screen.getByText('Chat')).toBeInTheDocument()
+  })
+
+  // U2 — the global Header carries the current session's title on /chat
+  // (replaces the retired per-page ChatHeader).
+  it('shows the current session title on /chat', () => {
+    mockSessionCtx.sessions = [
+      { id: 's1', title: 'Q3 roadmap brainstorm', created_at: 1, message_count: 0 },
+    ]
+    mockSessionCtx.currentSessionId = 's1'
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByText('Q3 roadmap brainstorm')).toBeInTheDocument()
+    expect(screen.queryByText('Chat')).not.toBeInTheDocument()
+  })
+
+  it('keeps the fixed Chat title when no session is active', () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByText('Chat')).toBeInTheDocument()
+  })
+
+  it('keeps TITLE_MAP titles on non-chat pages even with a session active', () => {
+    mockSessionCtx.sessions = [
+      { id: 's1', title: 'Q3 roadmap brainstorm', created_at: 1, message_count: 0 },
+    ]
+    mockSessionCtx.currentSessionId = 's1'
+    render(wrap(<Header />, { route: '/tasks' }))
+    expect(screen.getByText('Scheduled')).toBeInTheDocument()
+  })
+
+  // U2 — ContextPanel toggle moved here from the retired ChatHeader.
+  it('renders the ContextPanel toggle on /chat and wires it to the chat slice', () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    const toggle = screen.getByRole('button', { name: 'Toggle context panel' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(toggle)
+    expect(mockChatCtx.toggleContextPanel).toHaveBeenCalledTimes(1)
+  })
+
+  it('reflects open state on the ContextPanel toggle', () => {
+    mockChatCtx.contextPanelOpen = true
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByRole('button', { name: 'Toggle context panel' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('does not render the ContextPanel toggle on other pages', () => {
+    render(wrap(<Header />, { route: '/tasks' }))
+    expect(screen.queryByRole('button', { name: 'Toggle context panel' })).not.toBeInTheDocument()
   })
 
   it('renders model selector with current model name', () => {
@@ -59,6 +130,8 @@ describe('Header component', () => {
     })
   })
 
+  // U2 — Header absorbed ChatInput's dual-write: it configures the model
+  // NAME plus the model's provider (not just the catalog id).
   it('switches model when option is clicked', async () => {
     const api = await import('@/lib/tauri-api')
     render(wrap(<Header />, { route: '/chat' }))
@@ -67,7 +140,10 @@ describe('Header component', () => {
       expect(screen.getByText('GPT-4o')).toBeInTheDocument()
     })
     fireEvent.click(screen.getByText('GPT-4o'))
-    expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'gpt-4o' })
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'GPT-4o' })
+      expect(api.configure).toHaveBeenCalledWith({ key: 'provider', value: 'openai' })
+    })
   })
 
   it('renders OPC title on /opc route', () => {
