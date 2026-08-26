@@ -1,0 +1,67 @@
+id = "multi_02"
+tier = "multi_step"
+description = "Author a new changelog derived from raw release notes."
+prompt = "Create CHANGELOG.md at the workspace root with a '# Changelog' heading followed by one bullet line for each entry you find in NOTES.md."
+
+[setup]
+[[setup.files]]
+path = "NOTES.md"
+content = """- fixed the login crash on empty username
+- added retry logic to sync jobs
+"""
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_exists"
+path = "CHANGELOG.md"
+
+[[verify.rules]]
+rule = "file_content"
+path = "CHANGELOG.md"
+contains = "# Changelog"
+
+[[verify.rules]]
+rule = "file_content"
+path = "CHANGELOG.md"
+contains = "login crash"
+
+[[verify.rules]]
+rule = "file_content"
+path = "CHANGELOG.md"
+contains = "retry logic"
+
+[[verify.rules]]
+rule = "diff_matches"
+path = "CHANGELOG.md"
+expected_diff_regex = '\+# Changelog'
+
+[expectations]
+forbidden_tools = ["MultiEdit", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Read"
+args_regex = '"file_path":"NOTES.md"'
+
+[[expectations.trajectory]]
+tool = "Write"
+args_regex = '"file_path":"CHANGELOG.md"'
+
+[limits]
+max_turns = 10
+max_tokens = 26000
+timeout_secs = 240
+
+[dry_run]
+final_text = "Created CHANGELOG.md with the two fixes from NOTES.md."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "NOTES.md" }
+
+[[dry_run.steps]]
+tool = "Write"
+input = { file_path = "CHANGELOG.md", content = "# Changelog\n\n- fixed the login crash on empty username\n- added retry logic to sync jobs\n" }

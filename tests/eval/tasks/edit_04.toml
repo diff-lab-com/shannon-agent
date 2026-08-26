@@ -1,0 +1,59 @@
+id = "edit_04"
+tier = "edit"
+description = "Extend an enum with a new variant, preserving surrounding formatting."
+prompt = "Add a new variant Paused to the LoadState enum in src/theme.rs, right after the Running variant."
+
+[setup]
+[[setup.files]]
+path = "src/theme.rs"
+content = """#[derive(Debug)]
+pub enum LoadState {
+    Idle,
+    Running,
+}
+
+pub fn label(state: &LoadState) -> &str {
+    match state {
+        LoadState::Idle => "idle",
+        LoadState::Running => "running",
+    }
+}
+"""
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/theme.rs"
+matches_regex = 'pub enum LoadState \{[\s\S]*Paused,[\s\S]*\}'
+
+[[verify.rules]]
+rule = "diff_matches"
+path = "src/theme.rs"
+expected_diff_regex = '\+    Paused,'
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Edit"
+args_regex = '"new_string":"[^"]*Paused'
+
+[limits]
+max_turns = 8
+max_tokens = 16000
+timeout_secs = 180
+
+[dry_run]
+final_text = "Added the Paused variant to LoadState."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/theme.rs" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "src/theme.rs", old_string = "    Idle,\n    Running,\n", new_string = "    Idle,\n    Running,\n    Paused,\n" }

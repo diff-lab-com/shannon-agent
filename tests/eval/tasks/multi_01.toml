@@ -1,0 +1,67 @@
+id = "multi_01"
+tier = "multi_step"
+description = "Rename a module consistently across its declaration and consumers."
+prompt = "Rename the module utils to helpers across this workspace: update the declaration and every use site."
+
+[setup]
+[[setup.files]]
+path = "src/lib.rs"
+content = "pub mod utils;\n"
+
+[[setup.files]]
+path = "src/utils.rs"
+content = "pub fn norm(x: i64) -> i64 { x.abs() }\n"
+
+[[setup.files]]
+path = "src/app.rs"
+content = "use crate::utils::norm;\n\npub fn clean(v: i64) -> i64 { norm(v) }\n"
+
+[verify]
+script = "! grep -rq 'utils' src/lib.rs src/app.rs && grep -q 'mod helpers' src/lib.rs && grep -q 'crate::helpers' src/app.rs"
+
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/lib.rs"
+contains = "mod helpers"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/app.rs"
+contains = "use crate::helpers::norm"
+
+[[verify.rules]]
+rule = "file_not_exists"
+path = "src/utils.rs.bak"
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Read"
+
+[[expectations.trajectory]]
+tool = "Edit"
+
+[limits]
+max_turns = 10
+max_tokens = 26000
+timeout_secs = 240
+
+[dry_run]
+final_text = "Renamed the module to helpers and updated both the declaration and the consumer."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/lib.rs" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "src/lib.rs", old_string = "pub mod utils;", new_string = "pub mod helpers;" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "src/app.rs", old_string = "use crate::utils::norm;", new_string = "use crate::helpers::norm;" }

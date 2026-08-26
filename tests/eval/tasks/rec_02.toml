@@ -1,0 +1,61 @@
+id = "rec_02"
+tier = "recovery"
+description = "Restore a lost shebang header without rewriting the file."
+prompt = "scripts/bootstrap.sh lost its shebang line and no longer runs as an executable script. Restore it in place — prepend '#!/usr/bin/env bash' while keeping every existing line."
+
+[setup]
+[[setup.files]]
+path = "scripts/bootstrap.sh"
+content = """set -euo pipefail
+
+echo bootstrapping workspace
+"""
+
+[verify]
+script = "grep -q '^#!/usr/bin/env bash' scripts/bootstrap.sh && grep -q 'set -euo pipefail' scripts/bootstrap.sh"
+
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "scripts/bootstrap.sh"
+contains = "#!/usr/bin/env bash\nset -euo pipefail"
+
+[[verify.rules]]
+rule = "file_content"
+path = "scripts/bootstrap.sh"
+matches_regex = '(?m)^#!/usr/bin/env bash$'
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Read"
+
+[[expectations.trajectory]]
+tool = "Edit"
+
+[limits]
+max_turns = 8
+max_tokens = 20000
+timeout_secs = 240
+
+[dry_run]
+final_text = "Restored the shebang at the top of scripts/bootstrap.sh."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "scripts/bootstrap.sh" }
+
+# Simulated wrong guess: trying to anchor on text that does not exist.
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "scripts/bootstrap.sh", old_string = "#!/bin/sh", new_string = "#!/usr/bin/env bash\n#!/bin/sh" }
+fail = true
+
+# Corrected attempt: re-anchor on the real first line.
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "scripts/bootstrap.sh", old_string = "set -euo pipefail", new_string = "#!/usr/bin/env bash\nset -euo pipefail" }

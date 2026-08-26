@@ -1,0 +1,46 @@
+id = "search_03"
+tier = "search"
+description = "Count pattern occurrences under a directory."
+prompt = "Count how many unwrap() calls exist under src/ in this workspace. Answer with the bare total number."
+
+[setup]
+[[setup.files]]
+path = "src/a.rs"
+content = """let width = config.width().unwrap();
+let height = config.height().unwrap();
+"""
+
+[[setup.files]]
+path = "src/b.rs"
+content = """let name = field.text().unwrap();
+let title = row.title().unwrap();
+let tag = cell.tag().unwrap();
+"""
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "response_contains"
+text = "5"
+
+[expectations]
+forbidden_tools = ["Write", "Edit", "MultiEdit", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Grep"
+args_regex = '"pattern":"unwrap'
+
+[limits]
+max_turns = 6
+max_tokens = 12000
+timeout_secs = 150
+
+[dry_run]
+final_text = "There are 5 unwrap() calls under src/."
+
+[[dry_run.steps]]
+tool = "Grep"
+input = { pattern = "unwrap\\(" }

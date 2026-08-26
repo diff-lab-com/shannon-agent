@@ -1,0 +1,54 @@
+id = "edit_03"
+tier = "edit"
+description = "Bump a version constant with an exact, minimal diff."
+prompt = "Update src/config.rs so APP_VERSION becomes \"3.2.0\" instead of \"3.1.4\". Change nothing else."
+
+[setup]
+[[setup.files]]
+path = "src/config.rs"
+content = """pub const APP_NAME: &str = "core-service";
+pub const APP_VERSION: &str = "3.1.4";
+"""
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/config.rs"
+contains = '"3.2.0"'
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/config.rs"
+matches_regex = '\bAPP_VERSION: &str = "3\.2\.0";'
+
+[[verify.rules]]
+rule = "diff_matches"
+path = "src/config.rs"
+expected_diff_regex = '-pub const APP_VERSION: &str = "3\.1\.4";\n\+pub const APP_VERSION: &str = "3\.2\.0";'
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Edit"
+args_regex = '"old_string":"\\"3\.1\.4\\""'
+
+[limits]
+max_turns = 8
+max_tokens = 16000
+timeout_secs = 180
+
+[dry_run]
+final_text = "Bumped APP_VERSION to 3.2.0."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/config.rs" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "src/config.rs", old_string = "\"3.1.4\"", new_string = "\"3.2.0\"" }

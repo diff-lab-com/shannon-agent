@@ -1,0 +1,55 @@
+id = "edit_05"
+tier = "edit"
+description = "Delete a deprecated function completely."
+prompt = "Remove the entire deprecated function legacy_fetch (and its doc comment) from src/net.rs. Keep live_fetch untouched."
+
+[setup]
+[[setup.files]]
+path = "src/net.rs"
+content = """/// Deprecated: superseded by live_fetch.
+fn legacy_fetch(url: &str) -> String {
+    blocking_get(url)
+}
+
+/// Current fetch path.
+fn live_fetch(url: &str) -> String {
+    pooled_get(url)
+}
+"""
+
+[verify]
+script = "! grep -q legacy_fetch src/net.rs && grep -q 'fn live_fetch' src/net.rs"
+
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/net.rs"
+contains = "pooled_get"
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Read"
+
+[[expectations.trajectory]]
+tool = "Edit"
+
+[limits]
+max_turns = 8
+max_tokens = 16000
+timeout_secs = 180
+
+[dry_run]
+final_text = "Removed legacy_fetch; live_fetch is unchanged."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/net.rs" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "src/net.rs", old_string = "/// Deprecated: superseded by live_fetch.\nfn legacy_fetch(url: &str) -> String {\n    blocking_get(url)\n}\n\n", new_string = "" }

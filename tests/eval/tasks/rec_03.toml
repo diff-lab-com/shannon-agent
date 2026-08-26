@@ -1,0 +1,69 @@
+id = "rec_03"
+tier = "recovery"
+description = "Resolve left/right conflict markers keeping both sides."
+prompt = "src/api_options.rs contains unresolved conflict markers from a merge. Resolve them so that BOTH exported functions survive (timeout_seconds and request_timeout_ms) with no marker lines remaining."
+
+[setup]
+[[setup.files]]
+path = "src/api_options.rs"
+content = """pub struct ApiOptions {
+    pub retries: u32,
+}
+
+<<<<<<< HEAD
+pub fn timeout_seconds() -> u64 {
+    30
+}
+=======
+pub fn request_timeout_ms() -> u64 {
+    30000
+}
+>>>>>>> feature/tuning
+"""
+
+[verify]
+script = "! grep -qE '^(<{7}|={7}|>{7})' src/api_options.rs && grep -q 'fn timeout_seconds' src/api_options.rs && grep -q 'fn request_timeout_ms' src/api_options.rs"
+
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/api_options.rs"
+contains = "timeout_seconds"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/api_options.rs"
+contains = "request_timeout_ms"
+
+[[verify.rules]]
+rule = "file_not_exists"
+path = "src/api_options.rs.orig"
+
+[expectations]
+forbidden_tools = ["Write", "MultiEdit", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Read"
+args_regex = '"file_path":"src/api_options.rs"'
+
+[[expectations.trajectory]]
+tool = "Edit"
+
+[limits]
+max_turns = 10
+max_tokens = 22000
+timeout_secs = 240
+
+[dry_run]
+final_text = "Conflict resolved: both timeout helpers are kept and the markers are gone."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/api_options.rs" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "src/api_options.rs", old_string = "<<<<<<< HEAD\npub fn timeout_seconds() -> u64 {\n    30\n}\n=======\npub fn request_timeout_ms() -> u64 {\n    30000\n}\n>>>>>>> feature/tuning\n", new_string = "pub fn timeout_seconds() -> u64 {\n    30\n}\n\npub fn request_timeout_ms() -> u64 {\n    30000\n}\n" }
