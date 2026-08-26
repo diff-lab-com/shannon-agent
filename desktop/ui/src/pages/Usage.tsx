@@ -9,6 +9,7 @@ import { useIntl } from 'react-intl'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
+import EmptyState from '@/components/ui/empty-state'
 import { cn } from '@/lib/utils'
 import type { UsageStats, UsageBucket } from '@/types'
 
@@ -61,6 +62,7 @@ function BucketTable({
   labelTitle,
   buckets,
   locale,
+  emptyTitle,
   emptyLabel,
 }: {
   title: string
@@ -68,6 +70,7 @@ function BucketTable({
   labelTitle: string
   buckets: UsageBucket[]
   locale: string
+  emptyTitle: string
   emptyLabel: string
 }) {
   return (
@@ -77,9 +80,7 @@ function BucketTable({
         <h2 className="font-label-md font-bold text-on-surface">{title}</h2>
       </div>
       {buckets.length === 0 ? (
-        <div className="px-lg py-lg text-center text-outline-variant font-label-md">
-          {emptyLabel}
-        </div>
+        <EmptyState icon="monitoring" title={emptyTitle} description={emptyLabel} />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left">
@@ -223,7 +224,8 @@ export default function Usage() {
             labelTitle={t('usage.col.model')}
             buckets={stats!.by_model}
             locale={intl.locale}
-            emptyLabel={t('usage.empty')}
+            emptyTitle={t('usage.empty.title')}
+          emptyLabel={t('usage.empty')}
           />
           <BucketTable
             title={t('usage.section.byProvider')}
@@ -231,7 +233,8 @@ export default function Usage() {
             labelTitle={t('usage.col.provider')}
             buckets={stats!.by_provider}
             locale={intl.locale}
-            emptyLabel={t('usage.empty')}
+            emptyTitle={t('usage.empty.title')}
+          emptyLabel={t('usage.empty')}
           />
           <BucketTable
             title={t('usage.section.byDay')}
@@ -239,7 +242,8 @@ export default function Usage() {
             labelTitle={t('usage.col.date')}
             buckets={stats!.by_day}
             locale={intl.locale}
-            emptyLabel={t('usage.empty')}
+            emptyTitle={t('usage.empty.title')}
+          emptyLabel={t('usage.empty')}
           />
         </div>
       )}
