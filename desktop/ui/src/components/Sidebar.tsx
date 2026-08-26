@@ -257,8 +257,12 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         <div className="absolute right-0 top-0 bottom-0 w-1 transition-colors group-hover:bg-primary/30 group-focus-visible:bg-primary/30 group-active:bg-primary/50" />
       </div>
       <div className="flex items-center gap-3 mb-xl px-2">
+        {/* U8: brand mark `cognitive` (filled) — a knowledge-graph knot reads as
+            "connected intelligence" and nods to Shannon's information theory;
+            the old `hub` read as generic networking. Alternates considered:
+            blur_on (abstract mesh), neurology (organic nodes). */}
         <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-on-primary shadow-lg shadow-primary/30">
-          <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>hub</span>
+          <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>cognitive</span>
         </div>
         <div>
           <h1 className="font-headline-md text-[20px] font-bold text-primary leading-tight">Shannon</h1>

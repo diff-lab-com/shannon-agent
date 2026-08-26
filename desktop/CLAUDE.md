@@ -234,3 +234,13 @@ behavior is delegated to the engine crates.
     consistent within that file. Policy revised 2026-08-24 to formalize this
     de-facto standard (the rationale is this paragraph itself; it does not
     depend on plan files that stay local to a workstation).
+  - **FILL axis (U8, 2026-08-26):** outlined is the default. FILL
+    (`style={{fontVariationSettings: "'FILL' 1"}}`) marks an active/selected
+    state or a brand/section anchor — expanded settings gear, active
+    extension tile, pinned session row, sidebar brand mark. Don't fill icons
+    purely for decoration.
+  - **Semantic conventions (U8):** pin = `push_pin` for both states (filled
+    marks the pinned row; the menu action stays outlined) — never `keep`;
+    grip affordances = `drag_indicator`, revealed on hover/focus only; brand
+    mark = `cognitive` (filled). When naming icons, prefer a glyph whose
+    meaning survives without its tooltip.

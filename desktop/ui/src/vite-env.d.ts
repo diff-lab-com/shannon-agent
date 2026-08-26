@@ -2,11 +2,6 @@
 
 declare const __APP_VERSION__: string
 
-declare module '@fontsource-variable/geist' {
-  const css: string
-  export default css
-}
-
 declare module '@fontsource-variable/inter' {
   const css: string
   export default css
