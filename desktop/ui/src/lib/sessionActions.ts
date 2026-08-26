@@ -3,7 +3,71 @@ import { toast } from 'sonner'
 import * as api from '@/lib/tauri-api'
 import { buildPrintStyles } from '@/lib/printStyles'
 import type { SessionInfo } from '@/types'
-import { appendMarkdownToElement } from './utils'
+
+// Session-level actions shared by the app-sidebar session rail (Sidebar) and
+// the chat page (working-dir picker). Lives in lib/ — not pages/chat/ — so
+// components can use it without importing a page module.
+
+// Render a tiny subset of Markdown (headings, paragraphs, hr, fenced code,
+// **bold**, `code`) into an existing DOM node. Built with createElement +
+// textContent so all user content is auto-escaped — never use innerHTML with
+// raw conversation bytes.
+function appendMarkdownToElement(parent: HTMLElement, md: string) {
+  const doc = parent.ownerDocument
+  if (!doc) return
+  const lines = md.split('\n')
+  let i = 0
+  let inCode = false
+  let codeBuffer: string[] = []
+
+  const flushCode = () => {
+    if (codeBuffer.length === 0) return
+    const pre = doc.createElement('pre')
+    const code = doc.createElement('code')
+    code.textContent = codeBuffer.join('\n')
+    pre.appendChild(code)
+    parent.appendChild(pre)
+    codeBuffer = []
+  }
+
+  while (i < lines.length) {
+    const line = lines[i]
+    if (line.startsWith('```')) {
+      if (inCode) {
+        flushCode()
+        inCode = false
+      } else {
+        inCode = true
+      }
+      i++
+      continue
+    }
+    if (inCode) {
+      codeBuffer.push(line)
+      i++
+      continue
+    }
+    if (line.startsWith('# ')) {
+      const h = doc.createElement('h1')
+      h.textContent = line.slice(2)
+      parent.appendChild(h)
+    } else if (line.startsWith('### ')) {
+      const h = doc.createElement('h3')
+      h.textContent = line.slice(4)
+      parent.appendChild(h)
+    } else if (/^(\s*)(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      parent.appendChild(doc.createElement('hr'))
+    } else if (line.trim() === '') {
+      // paragraph break — skip
+    } else {
+      const p = doc.createElement('p')
+      p.textContent = line
+      parent.appendChild(p)
+    }
+    i++
+  }
+  if (inCode) flushCode()
+}
 
 // Export a single session as a Markdown file via Tauri's native save dialog.
 // The browser File System Access API can't write into arbitrary OS paths,

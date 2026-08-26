@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, lazy } from 'react'
+import { useState, useRef, useEffect, lazy } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -9,21 +9,14 @@ import DiffDialogMulti from '@/components/diff/DiffDialogMulti'
 import { useChat } from '@/context/ChatContext'
 import { useSessions } from '@/context/SessionContext'
 import { useCatalog } from '@/context/CatalogContext'
-import * as api from '@/lib/tauri-api'
-import type { SessionInfo } from '@/types'
 import {
   ApiKeyBanner,
   ChatHeader,
   ComposerPanel,
   ContextPanel,
-  DeleteSessionModal,
   InlinePanelModal,
   MessageArea,
-  SessionSidebar,
-  SESSIONS_PER_PAGE,
   changeSessionWorkingDir,
-  exportSessionAsMarkdown,
-  printSession,
 } from './chat'
 
 // QuickFix and Editor are no longer top-level routes — they are inline
@@ -39,7 +32,6 @@ export default function Chat() {
   } = useChat()
   const {
     sessions, currentSessionId,
-    createSession, switchSession, deleteSession, renameSession,
   } = useSessions()
   const { error, config, status } = useCatalog()
   const intl = useIntl()
@@ -48,6 +40,11 @@ export default function Chat() {
   const t = (id: string) => intl.formatMessage({ id })
 
   const [input, setInput] = useState('')
+  const [diffPath, setDiffPath] = useState<string | null>(null)
+  const [diffPaths, setDiffPaths] = useState<string[] | null>(null)
+  const [attachedFiles, setAttachedFiles] = useState<string[]>([])
+  const [quickFixOpen, setQuickFixOpen] = useState(false)
+  const [editorOpen, setEditorOpen] = useState(false)
 
   // Pre-fill the composer when navigated from elsewhere (e.g. Editor's
   // "Ask AI about this diagnostic" button passes { prefill } in location.state).
@@ -63,18 +60,6 @@ export default function Chat() {
       navigate(location.pathname, { replace: true, state: null })
     }
   }, [location.state, location.pathname, navigate])
-  const [sessionSearch, setSessionSearch] = useState('')
-  const [backendSessionHits, setBackendSessionHits] = useState<SessionInfo[] | null>(null)
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
-  const [editTitle, setEditTitle] = useState('')
-  const [diffPath, setDiffPath] = useState<string | null>(null)
-  const [diffPaths, setDiffPaths] = useState<string[] | null>(null)
-  const [attachedFiles, setAttachedFiles] = useState<string[]>([])
-  const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set())
-  const [sessionPage, setSessionPage] = useState(1)
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
-  const [quickFixOpen, setQuickFixOpen] = useState(false)
-  const [editorOpen, setEditorOpen] = useState(false)
 
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState(false)
@@ -110,27 +95,6 @@ export default function Chat() {
     return () => window.removeEventListener('shannon:change-wd', handler)
   }, [])
 
-  // Debounced backend full-text search. Backend matches title first, then
-  // message content. Short queries fall back to a client-side title filter
-  // (cheaper, instant feedback, no IPC round-trip).
-  useEffect(() => {
-    const q = sessionSearch.trim()
-    if (q.length < 3) {
-      setBackendSessionHits(null)
-      return
-    }
-    let cancelled = false
-    const handle = setTimeout(() => {
-      api.searchSessions(q)
-        .then(hits => { if (!cancelled) setBackendSessionHits(hits) })
-        .catch(e => {
-          console.warn('searchSessions failed, falling back to client filter:', e)
-          if (!cancelled) setBackendSessionHits(null)
-        })
-    }, 250)
-    return () => { cancelled = true; clearTimeout(handle) }
-  }, [sessionSearch])
-
   const handleSend = () => {
     const trimmed = input.trim()
     if (!trimmed || isQuerying) return
@@ -152,37 +116,6 @@ export default function Chat() {
     setAttachedFiles([])
   }
 
-  const filteredSessions = useMemo(() => {
-    const q = sessionSearch.trim()
-    if (!q) return sessions
-    if (backendSessionHits === null) {
-      const ql = q.toLowerCase()
-      return sessions.filter(s => s.title.toLowerCase().includes(ql))
-    }
-    const byId = new Map(sessions.map(s => [s.id, s]))
-    return backendSessionHits.map(h => byId.get(h.id) ?? h)
-  }, [sessions, sessionSearch, backendSessionHits])
-
-  const sortedSessions = [...filteredSessions].sort((a, b) => {
-    const aPin = pinnedIds.has(a.id) ? 1 : 0
-    const bPin = pinnedIds.has(b.id) ? 1 : 0
-    return bPin - aPin
-  })
-
-  const sessionTotalPages = Math.ceil(sortedSessions.length / SESSIONS_PER_PAGE)
-  const pagedSessions = sortedSessions.slice((sessionPage - 1) * SESSIONS_PER_PAGE, sessionPage * SESSIONS_PER_PAGE)
-
-  const togglePin = (id: string) => {
-    setPinnedIds(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id); else next.add(id)
-      return next
-    })
-  }
-
-  const handleExport = (id: string) => exportSessionAsMarkdown(id, sessions, t)
-  const handlePrint = (id: string) => printSession(id, sessions, t)
-
   const untitled = t('chat.session.untitled')
 
   const currentSession = sessions.find(s => s.id === currentSessionId)
@@ -202,32 +135,7 @@ export default function Chat() {
   return (
     <ArtifactProvider>
       <div className="flex-1 flex w-full h-full relative">
-        <SessionSidebar
-          intl={intl}
-          t={t}
-          sortedSessions={sortedSessions}
-          pagedSessions={pagedSessions}
-          sessionSearch={sessionSearch}
-          setSessionSearch={setSessionSearch}
-          sessionPage={sessionPage}
-          sessionTotalPages={sessionTotalPages}
-          setSessionPage={setSessionPage}
-          currentSessionId={currentSessionId}
-          pinnedIds={pinnedIds}
-          editingSessionId={editingSessionId}
-          editTitle={editTitle}
-          setEditTitle={setEditTitle}
-          createSession={createSession}
-          switchSession={switchSession}
-          renameSession={renameSession}
-          setEditingSessionId={setEditingSessionId}
-          setDeleteTarget={setDeleteTarget}
-          togglePin={togglePin}
-          handleExport={handleExport}
-          handlePrint={handlePrint}
-        />
-
-        {/* Main Chat Canvas */}
+        {/* Main Chat Canvas — the session list lives in the app sidebar (U1). */}
         <section className="flex-1 flex flex-col relative bg-surface-container-lowest/40 overflow-hidden">
           <ChatHeader
             t={t}
@@ -282,13 +190,6 @@ export default function Chat() {
             setEditorOpen={setEditorOpen}
           />
         </section>
-
-        <DeleteSessionModal
-          t={t}
-          deleteTarget={deleteTarget}
-          onCancel={() => setDeleteTarget(null)}
-          onConfirm={() => { if (deleteTarget) { deleteSession(deleteTarget); setDeleteTarget(null) } }}
-        />
 
         <InlinePanelModal
           t={t}
