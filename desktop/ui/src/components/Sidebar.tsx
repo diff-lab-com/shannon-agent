@@ -15,8 +15,32 @@ const MIN_W = 200
 const MAX_W = 400
 const DEFAULT_W = 280
 const STORAGE_KEY = 'shannon-sidebar-width'
+const NAV_OPEN_KEY = 'shannon-nav-open'
 export const SIDEBAR_MODE_KEY = 'shannon-sidebar-mode'
 export type SidebarMode = 'simple' | 'dev'
+
+// U6: nav IA groups — Work / Resources / Experiments (+ the nested
+// Extensions and Settings disclosure). All expansion states persist to
+// localStorage under one key so a reload keeps the user's sidebar shape.
+type NavGroupId = 'work' | 'resources' | 'experiments' | 'extensions' | 'settings'
+type NavOpenMap = Record<NavGroupId, boolean>
+
+function readNavOpen(mode: SidebarMode): NavOpenMap {
+  const fallback: NavOpenMap = {
+    work: true,
+    // Simple mode starts with Resources folded (U6: only Work + Extensions
+    // visible); dev mode unfolds it.
+    resources: mode === 'dev',
+    experiments: true,
+    extensions: true,
+    settings: false,
+  }
+  if (typeof window === 'undefined') return fallback
+  try {
+    const raw = window.localStorage.getItem(NAV_OPEN_KEY)
+    return raw ? { ...fallback, ...JSON.parse(raw) } : fallback
+  } catch { return fallback }
+}
 
 export function useSidebarMode(): [SidebarMode, () => void] {
   const [mode, setMode] = useState<SidebarMode>(() => {
@@ -57,12 +81,53 @@ function SubNavLink({ to, labelId }: { to: string; labelId: string }) {
   )
 }
 
+// U6: nav group — small uppercase disclosure header + full nav links
+// underneath. Expansion state is owned by the caller (persisted).
+function NavGroup({ labelId, open, onToggle, children }: {
+  labelId: string
+  open: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
+  const intl = useIntl()
+  return (
+    <div className="space-y-1">
+      <Button
+        variant="ghost"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="w-full justify-between px-4 py-1.5 rounded-lg font-label-sm text-[11px] uppercase tracking-wider text-on-surface-variant hover:text-primary transition-all h-auto"
+      >
+        {intl.formatMessage({ id: labelId })}
+        <span className="material-symbols-outlined icon-sm transition-transform duration-200" style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+      </Button>
+      {open && <div className="space-y-1">{children}</div>}
+    </div>
+  )
+}
+
 export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   const { close: closeMobile } = useSidebar();
-  const [opcOpen, setOpcOpen] = useState(true);
-  const [extensionsOpen, setExtensionsOpen] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [mode, toggleMode] = useSidebarMode();
+  const [navOpen, setNavOpen] = useState<NavOpenMap>(() => readNavOpen(mode));
+  const toggleNav = useCallback((key: NavGroupId) => {
+    setNavOpen(prev => {
+      const next = { ...prev, [key]: !prev[key] }
+      try { window.localStorage.setItem(NAV_OPEN_KEY, JSON.stringify(next)) } catch { /* noop */ }
+      return next
+    })
+  }, []);
+  // Mode switches reset group folding to that mode's defaults — a fresh dev
+  // session opens Resources instead of inheriting the simple-mode fold.
+  // (Skipped on mount so a stored custom shape survives reloads.)
+  const mountedMode = useRef(mode)
+  useEffect(() => {
+    if (mountedMode.current === mode) return
+    mountedMode.current = mode
+    const next = readNavOpen(mode)
+    setNavOpen(next)
+    try { window.localStorage.setItem(NAV_OPEN_KEY, JSON.stringify(next)) } catch { /* noop */ }
+  }, [mode]);
   const [width, setWidth] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
     return stored ? Math.min(MAX_W, Math.max(MIN_W, parseInt(stored, 10) || DEFAULT_W)) : DEFAULT_W
@@ -142,7 +207,6 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
     document.documentElement.style.setProperty('--sidebar-w', `${width}px`)
   }, [width])
 
-  const isOpcActive = location.pathname.includes('/opc') && !location.pathname.includes('/extensions');
   const isExtensionsActive = location.pathname.includes('/extensions');
   const isSettingsActive = location.pathname.includes('/settings');
 
@@ -231,41 +295,35 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
       <nav aria-label={intl.formatMessage({ id: 'nav.mainNav.aria' })} className="shrink-0 min-h-0 max-h-[60%]">
         <ScrollArea className="h-full">
-        <NavLink to="/chat" className={getNavClass} onClick={handleNavClick}>
-           <span className="material-symbols-outlined">chat_bubble</span>
-           <span className="flex-1">{intl.formatMessage({ id: 'nav.chat' })}</span>
-           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface font-mono">{formatShortcut('1')}</kbd>
-        </NavLink>
-        <NavLink to="/tasks" className={getNavClass} onClick={handleNavClick}>
-           <span className="material-symbols-outlined">task_alt</span>
-           <span className="flex-1">{intl.formatMessage({ id: 'nav.scheduled' })}</span>
-           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface font-mono">{formatShortcut('2')}</kbd>
-        </NavLink>
-        <NavLink to="/memory" className={getNavClass} onClick={handleNavClick}>
-           <span className="material-symbols-outlined">psychology</span>
-           <span className="flex-1">{intl.formatMessage({ id: 'nav.memory' })}</span>
-        </NavLink>
-
-        <NavLink to="/usage" className={getNavClass} onClick={handleNavClick}>
-           <span className="material-symbols-outlined">monitoring</span>
-           <span className="flex-1">{intl.formatMessage({ id: 'nav.usage' })}</span>
-        </NavLink>
-
-        {/* Triage full-page navigation */}
-        <NavLink
-          to="/triage"
-          aria-label={intl.formatMessage({ id: 'nav.triage.aria' })}
-          className={getNavClass}
-          onClick={handleNavClick}
-        >
-          <span className="material-symbols-outlined">inbox</span>
-          <span className="flex-1">{intl.formatMessage({ id: 'nav.triage' })}</span>
-          {triageStats.unread > 0 && (
-            <span className="bg-error text-on-error text-[11px] font-bold px-1.5 py-0.5 rounded-full">
-              {triageStats.unread}
-            </span>
-          )}
-        </NavLink>
+        {/* U6: nav grouped by mental model — Work (workflow) / Resources
+            (data & extensions) / Experiments (dev-only). */}
+        <NavGroup labelId="nav.group.work" open={navOpen.work} onToggle={() => toggleNav('work')}>
+          <NavLink to="/chat" className={getNavClass} onClick={handleNavClick}>
+             <span className="material-symbols-outlined">chat_bubble</span>
+             <span className="flex-1">{intl.formatMessage({ id: 'nav.chat' })}</span>
+             <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface font-mono">{formatShortcut('1')}</kbd>
+          </NavLink>
+          <NavLink to="/tasks" className={getNavClass} onClick={handleNavClick}>
+             <span className="material-symbols-outlined">task_alt</span>
+             <span className="flex-1">{intl.formatMessage({ id: 'nav.scheduled' })}</span>
+             <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface font-mono">{formatShortcut('2')}</kbd>
+          </NavLink>
+          {/* Triage full-page navigation */}
+          <NavLink
+            to="/triage"
+            aria-label={intl.formatMessage({ id: 'nav.triage.aria' })}
+            className={getNavClass}
+            onClick={handleNavClick}
+          >
+            <span className="material-symbols-outlined">inbox</span>
+            <span className="flex-1">{intl.formatMessage({ id: 'nav.triage' })}</span>
+            {triageStats.unread > 0 && (
+              <span className="bg-error text-on-error text-[11px] font-bold px-1.5 py-0.5 rounded-full">
+                {triageStats.unread}
+              </span>
+            )}
+          </NavLink>
+        </NavGroup>
 
         {/* Simple mode: flat Extensions entry so普通用户 can reach the
             Extensions Hub without switching to dev mode (dev mode keeps the
@@ -277,53 +335,58 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
           </NavLink>
         )}
 
+        <NavGroup labelId="nav.group.resources" open={navOpen.resources} onToggle={() => toggleNav('resources')}>
+          <NavLink to="/memory" className={getNavClass} onClick={handleNavClick}>
+             <span className="material-symbols-outlined">psychology</span>
+             <span className="flex-1">{intl.formatMessage({ id: 'nav.memory' })}</span>
+          </NavLink>
+
+          <NavLink to="/usage" className={getNavClass} onClick={handleNavClick}>
+             <span className="material-symbols-outlined">monitoring</span>
+             <span className="flex-1">{intl.formatMessage({ id: 'nav.usage' })}</span>
+          </NavLink>
+
+          {mode === 'dev' && (
+          <div className="space-y-1">
+            <Button
+              variant="ghost"
+              onClick={() => toggleNav('extensions')}
+              aria-expanded={navOpen.extensions}
+              className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isExtensionsActive ? "bg-primary/10 text-primary font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
+            >
+              <div className="flex items-center gap-3">
+                <span className="material-symbols-outlined">grid_view</span>
+                <span>{intl.formatMessage({ id: 'nav.extensions' })}</span>
+              </div>
+              <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: navOpen.extensions ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+            </Button>
+
+            {navOpen.extensions && (
+              <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label={intl.formatMessage({ id: 'nav.extensions.section.aria' })}>
+                 <SubNavLink to="/extensions/skills" labelId="nav.skills" />
+                 <SubNavLink to="/extensions/agents" labelId="nav.myAgents" />
+                 <SubNavLink to="/extensions/datasources" labelId="nav.dataSources" />
+              </div>
+            )}
+          </div>
+          )}
+        </NavGroup>
+
         {mode === 'dev' && (
-        <>
-        <div className="space-y-1">
-          <Button
-            variant="ghost"
-            onClick={() => setExtensionsOpen(!extensionsOpen)}
-            className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isExtensionsActive ? "bg-primary/10 text-primary font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
-          >
-            <div className="flex items-center gap-3">
-              <span className="material-symbols-outlined">grid_view</span>
-              <span>{intl.formatMessage({ id: 'nav.extensions' })}</span>
-            </div>
-            <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: extensionsOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
-          </Button>
-
-          {extensionsOpen && (
-            <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label={intl.formatMessage({ id: 'nav.extensions.section.aria' })}>
-               <SubNavLink to="/extensions/skills" labelId="nav.skills" />
-               <SubNavLink to="/extensions/agents" labelId="nav.myAgents" />
-               <SubNavLink to="/extensions/datasources" labelId="nav.dataSources" />
-            </div>
-          )}
-        </div>
-
-        <div className="space-y-1">
-          <Button
-            variant="ghost"
-            onClick={() => setOpcOpen(!opcOpen)}
-            className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg font-label-md text-label-md transition-all duration-200", isOpcActive ? "bg-primary/10 text-primary font-bold" : "text-on-surface-variant hover:bg-surface-container-high/50 hover:text-primary")}
-          >
-            <div className="flex items-center gap-3">
-              <span>{intl.formatMessage({ id: 'nav.opc' })}</span>
-              <span className="text-[9px] bg-primary text-on-primary px-1.5 py-0.5 rounded uppercase font-bold tracking-wider">
-                {intl.formatMessage({ id: 'nav.experiment' })}
-              </span>
-            </div>
-            <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: opcOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
-          </Button>
-
-          {opcOpen && (
-            <div className="pl-4 pr-2 space-y-1 mt-1 transition-all">
-               <SubNavLink to="/opc" labelId="nav.onePersonCompany" />
-            </div>
-          )}
-        </div>
-
-        </>
+        <NavGroup labelId="nav.group.experiments" open={navOpen.experiments} onToggle={() => toggleNav('experiments')}>
+          {/* U6: OPC flattened to a direct link — its old disclosure held a
+              single sub-link, and a disclosure inside a group is two levels
+              of folding for one destination. */}
+          <NavLink to="/opc" className={getNavClass} onClick={handleNavClick}>
+             <span className="material-symbols-outlined">auto_awesome</span>
+             <span className="flex-1 flex items-center gap-2">
+               {intl.formatMessage({ id: 'nav.opc' })}
+               <span className="text-[9px] bg-primary text-on-primary px-1.5 py-0.5 rounded uppercase font-bold tracking-wider">
+                 {intl.formatMessage({ id: 'nav.experiment' })}
+               </span>
+             </span>
+          </NavLink>
+        </NavGroup>
         )}
         </ScrollArea>
       </nav>
@@ -349,17 +412,18 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         </Button>
         <Button
           variant="ghost"
-          onClick={() => setSettingsOpen(!settingsOpen)}
+          onClick={() => toggleNav('settings')}
+          aria-expanded={navOpen.settings}
           className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isSettingsActive ? "bg-primary/10 text-primary font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
         >
           <div className="flex items-center gap-3">
             <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>settings</span>
             <span>{intl.formatMessage({ id: 'nav.settings' })}</span>
           </div>
-          <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: settingsOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+          <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: navOpen.settings ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
         </Button>
 
-        {settingsOpen && (
+        {navOpen.settings && (
           <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label={intl.formatMessage({ id: 'nav.settings.section.aria' })}>
              <SubNavLink to="/settings/general" labelId="nav.general" />
              <SubNavLink to="/settings/theme" labelId="nav.theme" />
