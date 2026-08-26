@@ -225,12 +225,16 @@ export function Header() {
                 <h3 className="font-headline-sm text-on-surface font-bold">{t('header.permRequest.title')}</h3>
                 <p className="text-body-sm text-on-surface-variant">{t('header.permRequest.subtitle')}</p>
               </div>
-              <span className={cn('px-sm py-xs rounded-full font-label-sm font-bold uppercase tracking-wider',
-                permissionRequest.risk === 'critical' ? 'bg-error/10 text-error' :
-                permissionRequest.risk === 'high' ? 'bg-secondary/10 text-secondary' :
-                permissionRequest.risk === 'medium' ? 'bg-secondary/10 text-secondary' :
-                'bg-tertiary/10 text-tertiary'
-              )}>{permissionRequest.risk}</span>
+              {/* U3: four distinguishable risk tiers — critical=error,
+                  high=secondary, medium=tertiary, low=tertiary — with a
+                  localized, screen-reader-visible label. */}
+              <span
+                aria-label={t('header.permRequest.risk.aria', { level: t(`header.permRequest.risk.${permissionRequest.risk}`) })}
+                className={cn('px-sm py-xs rounded-full font-label-sm font-bold uppercase tracking-wider',
+                  permissionRequest.risk === 'critical' ? 'bg-error/10 text-error' :
+                  permissionRequest.risk === 'high' ? 'bg-secondary/10 text-secondary' :
+                  'bg-tertiary/10 text-tertiary'
+                )}>{t(`header.permRequest.risk.${permissionRequest.risk}`)}</span>
             </div>
             <div className="p-md bg-surface-container-low rounded-xl mb-lg space-y-sm">
               <div className="flex justify-between">
@@ -241,10 +245,10 @@ export function Header() {
                 <pre className="text-body-sm text-on-surface-variant bg-surface-container p-sm rounded-lg overflow-x-auto max-h-[200px] mt-sm">{JSON.stringify(permissionRequest.input as object, null, 2)}</pre>
               ) : null}
             </div>
-            <label className="flex items-center gap-sm mb-lg cursor-pointer text-body-sm text-on-surface-variant hover:text-on-surface transition-colors">
-              <input type="checkbox" className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary/30" />
-              {t('header.permRequest.alwaysAllow')}
-            </label>
+            {/* U3: the "Always allow" checkbox was removed — it was a stateless
+                dead control. Real "remember allow" needs an approval scope in
+                respond_permission (PermissionRuleChecker allow rules); tracked
+                as a follow-up task, out of phase-3 scope. */}
             <div className="flex gap-md">
               <Button autoFocus className="flex-1 py-sm bg-surface-container text-on-surface rounded-xl hover:bg-surface-container-high transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, false)}>
                 {t('header.permRequest.deny')}
