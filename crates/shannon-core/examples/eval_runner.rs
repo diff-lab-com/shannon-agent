@@ -24,6 +24,7 @@ struct RunArgs {
     tier_filter: Vec<EvalTier>,
     out_override: Option<PathBuf>,
     bin_path: Option<PathBuf>,
+    rules: Option<PathBuf>,
     real: bool,
     list_only: bool,
 }
@@ -37,6 +38,7 @@ Usage:
       --out <DIR>     Override the output root instead of $SHANNON_HOME/~/.shannon
       --bin <PATH>    Engine binary for --real (default: SHANNON_EVAL_BIN,
                       target/debug/shannon, then $PATH/shannon)
+      --rules <PATH>  Failure-rule table override (§4.7; default: embedded)
       --real          Launch real engine runs (default is dry-run rehearsal)
       --list          Print the parsed suite inventory and exit
 
@@ -66,6 +68,7 @@ fn parse_run_args(raw: &[String]) -> Result<RunArgs, String> {
         tier_filter: Vec::new(),
         out_override: None,
         bin_path: None,
+        rules: None,
         real: false,
         list_only: false,
     };
@@ -105,6 +108,10 @@ fn parse_run_args(raw: &[String]) -> Result<RunArgs, String> {
             }
             "--bin" => {
                 args.bin_path = Some(PathBuf::from(value_at(i + 1)?));
+                i += 1;
+            }
+            "--rules" => {
+                args.rules = Some(PathBuf::from(value_at(i + 1)?));
                 i += 1;
             }
             "--real" => args.real = true,
@@ -184,6 +191,7 @@ fn cmd_run(args: RunArgs) -> ExitCode {
         bin_path: args.bin_path.clone(),
         dry_run: !args.real,
         out_dir_override: args.out_override.clone(),
+        failure_rules: args.rules.clone(),
     };
     if args.real && options.bin_path.is_none() {
         match resolve_bin(None) {
@@ -203,8 +211,9 @@ fn cmd_run(args: RunArgs) -> ExitCode {
                 report.tasks_passed, report.tasks_total
             );
             for record in &report.records {
+                let class = record.failure_class.as_deref().unwrap_or("-");
                 println!(
-                    "  {:>10} {:<8} {:<11} turns={:<3} tokens={:<6} violations={}",
+                    "  {:>10} {:<8} {:<11} turns={:<3} tokens={:<6} violations={:<3} class={class}",
                     record.id,
                     record.tier,
                     record.status.as_str(),
