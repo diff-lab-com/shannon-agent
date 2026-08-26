@@ -22,10 +22,13 @@
  *      `bg-{name}`, `text-{name}`, etc.) or `style={{ color: 'var(--color-…)' }}`.
  *
  * Color values themselves come from the Material 3 color roles (light)
- * + a curated set of dark themes (`tokyo-night`, `catppuccin`, `nord`,
- * `ember`, `slate`, `solarized`, `dracula`, `gruvbox`). Tailwind v4
- * handles switching via the `@custom-variant dark` rule at the top of
- * `index.css`.
+ * + a curated set of dark themes. Which scheme a theme renders as is
+ * decided by the registry in `src/context/ThemeContext.tsx`
+ * (THEME_SCHEMES) — ThemeProvider mirrors it onto
+ * `<html data-theme-mode="light|dark">`, and Tailwind v4's
+ * `@custom-variant dark` rule at the top of `index.css` keys off that
+ * attribute. Adding a theme: one THEMES entry + one THEME_SCHEMES line
+ * there, plus its token block below — no CSS selector list to maintain.
  */
 
 :root {
@@ -83,6 +86,7 @@
   --spacing-xl: 32px;
   --spacing-gutter: 24px;     /* App-level horizontal padding */
   --spacing-sidebar-width: 280px;
+  --spacing-footer: 32px;
   --spacing-max-content-width: 1200px;
 
   /* ───── Typography ───────────────────────────────────────────── */

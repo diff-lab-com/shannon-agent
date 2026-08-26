@@ -24,7 +24,7 @@ export const useSidebar = () => useContext(SidebarContext)
 export function Layout() {
   const { usage } = useChat();
   const { createSession } = useSessions();
-  const { agents, backgroundTasks, config, loading } = useCatalog();
+  const { backgroundTasks, config, loading } = useCatalog();
   const navigate = useNavigate();
   const intl = useIntl();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -68,13 +68,15 @@ export function Layout() {
         <Header />
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
         <KeyboardShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
-        <main role="main" className="pt-16 pb-8 h-screen flex flex-col relative" style={{ marginLeft: 'var(--sidebar-w)', width: 'calc(100% - var(--sidebar-w))' }}>
+        <main role="main" className="pt-16 pb-footer h-screen flex flex-col relative" style={{ marginLeft: 'var(--sidebar-w)', width: 'calc(100% - var(--sidebar-w))' }}>
           <ErrorBoundary><Outlet /></ErrorBoundary>
         </main>
-        <footer role="contentinfo" className="fixed bottom-0 right-0 h-8 bg-surface-container-low/90 backdrop-blur-sm border-t border-outline-variant/20 flex items-center justify-between px-lg z-40" style={{ left: 'var(--sidebar-w)' }}>
+        <footer role="contentinfo" className="fixed bottom-0 right-0 h-footer bg-surface-container-low/90 backdrop-blur-sm border-t border-outline-variant/20 flex items-center justify-between px-lg z-40" style={{ left: 'var(--sidebar-w)' }}>
           {/* U2: footer carries runtime + usage only — tokens/cost, active
-              tasks, agents, version. Provider/model live in the Header and
-              the session count is visible in the sidebar rail (U1). */}
+              tasks, version. Provider/model live in the Header and the
+              session count is visible in the sidebar rail (U1). U9: the
+              agents count was removed — it counted agent *definitions*, not
+              running work, so it had no action meaning for the user. */}
           <span className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-sm">
             {usage ? (
               <>
@@ -95,12 +97,6 @@ export function Layout() {
               <span className="flex items-center gap-xs text-primary">
                 <span className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
                 {intl.formatMessage({ id: 'footer.tasks' }, { count: activeBgTasks })}
-              </span>
-            )}
-            {agents.length > 0 && (
-              <span className="hidden sm:flex items-center gap-xs text-primary">
-                <span className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
-                {intl.formatMessage({ id: 'footer.agents' }, { count: agents.length })}
               </span>
             )}
             {version && (

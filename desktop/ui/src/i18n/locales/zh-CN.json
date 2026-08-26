@@ -258,7 +258,6 @@
   "nav.mainNav.aria": "主导航",
   "footer.tokens": "{count, plural, other {{count, number} 个 token}}",
   "footer.tasks": "{count, plural, other {{count} 个任务}}",
-  "footer.agents": "{count, plural, other {{count} 个智能体}}",
   "palette.action.newChat": "开始新对话",
   "palette.action.newTask": "创建计划任务",
   "palette.action.newRoutine": "创建例行程序",
