@@ -46,7 +46,7 @@ function StatCard({
         <span className="material-symbols-outlined icon-sm">{icon}</span>
         <span className="font-label-sm text-label-sm uppercase tracking-wider">{label}</span>
       </div>
-      <div className="font-headline-md text-[26px] font-bold text-on-surface leading-tight">
+      <div className="font-mono font-headline-md text-[26px] font-bold text-on-surface leading-tight tabular-nums">
         {value}
       </div>
       {hint && (
@@ -187,8 +187,11 @@ export default function Usage() {
         </div>
       ) : !hasData ? (
         <div className="bg-surface-container-low rounded-2xl border border-outline-variant/30 px-lg py-3xl text-center">
-          <span className="material-symbols-outlined text-[40px] text-outline-variant">bar_chart</span>
-          <p className="font-body-md text-on-surface-variant mt-md">{t('usage.empty')}</p>
+          <EmptyState
+            icon="bar_chart"
+            title={t('usage.empty.title')}
+            description={t('usage.empty')}
+          />
         </div>
       ) : (
         <div className="space-y-lg">
