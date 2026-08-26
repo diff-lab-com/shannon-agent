@@ -690,3 +690,55 @@ describe('Sidebar — nav IA groups (U6)', () => {
     expect(screen.queryByText('Chat')).not.toBeInTheDocument()
   })
 })
+
+describe('Sidebar — zero-session guide card (U7)', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    vi.clearAllMocks()
+  })
+
+  it('renders the guide card instead of a blank rail when there are no sessions', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.listSessions).mockResolvedValue([] as any)
+    render(wrap(<Sidebar />))
+    expect(await screen.findByText('Start your first chat')).toBeInTheDocument()
+    expect(screen.getByText('Pick a starter below — your chats will live here.')).toBeInTheDocument()
+    // Two starter prompts, sharing copy with WelcomeState's example cards.
+    expect(screen.getByRole('button', { name: /Draft an email/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Summarize/ })).toBeInTheDocument()
+    // No research/code starters in the compact rail (dedupe with WelcomeState).
+    expect(screen.queryByRole('button', { name: /Research/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Write code/ })).not.toBeInTheDocument()
+    // The session rail controls (search box) don't render on an empty rail.
+    expect(screen.queryByLabelText('Search chats')).not.toBeInTheDocument()
+  })
+
+  it('starter prompt creates the first session and prefills the composer via /chat state', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.listSessions).mockResolvedValue([] as any)
+    vi.mocked(api.newSession).mockResolvedValue('fresh-id' as any)
+    // LocationProbe captures pathname + state after the suggestion click.
+    function LocationProbe() {
+      const location = useLocation()
+      return <div data-testid="probe" data-path={location.pathname} data-prefill={(location.state as { prefill?: string } | null)?.prefill ?? ''} />
+    }
+    render(wrap(<div><Sidebar /><LocationProbe /></div>, { path: '/triage' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Draft an email/ }))
+    await waitFor(() => expect(api.newSession).toHaveBeenCalledTimes(1))
+    await waitFor(() => {
+      const probe = screen.getByTestId('probe')
+      expect(probe.getAttribute('data-path')).toBe('/chat')
+      expect(probe.getAttribute('data-prefill')).toMatch(/follow-up email/i)
+    })
+  })
+
+  it('keeps the session rail once a session exists', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.listSessions).mockResolvedValue([
+      { id: 's1', title: 'Alpha Chat', created_at: Date.now(), message_count: 0 },
+    ] as any)
+    render(wrap(<Sidebar />))
+    expect(await screen.findByRole('button', { name: 'Chat: Alpha Chat' })).toBeInTheDocument()
+    expect(screen.queryByText('Start your first chat')).not.toBeInTheDocument()
+  })
+})
