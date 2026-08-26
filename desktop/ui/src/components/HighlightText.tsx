@@ -1,9 +1,9 @@
 import { memo } from 'react'
 
-// Tiny presentational memo used inside the session list to highlight the
-// matched substring of the current search query. Memoized because the list
-// re-renders on every keystroke and HighlightText otherwise does redundant
-// toLowerCase work for each session row.
+// Tiny presentational memo used inside the sidebar session rail to highlight
+// the matched substring of the current search query. Memoized because the
+// list re-renders on every keystroke and HighlightText otherwise does
+// redundant toLowerCase work for each session row.
 const HighlightText = memo(function HighlightText({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>
   const idx = text.toLowerCase().indexOf(query.toLowerCase())

@@ -4,6 +4,11 @@
 // Rust backend knows about, mark the active one, and switch the
 // `currentSessionId` in `AppContext` when clicked.
 //
+// U1 (2026-08-26, D1=A): NOT mounted in production. The app sidebar's
+// SessionsSection (components/SidebarSessions.tsx) is the single session
+// list. This spike is retained for the P2-5b ThreadSidebar line — do not
+// mount it without resolving that plan first.
+//
 // This is deliberately small. The full thread-switcher UX
 // (per-session event replay, focused-stream rendering, unread
 // indicators, fork/branch/rename) lives in the next iteration; this
