@@ -258,7 +258,6 @@
   "nav.mainNav.aria": "Main navigation",
   "footer.tokens": "{count, plural, =1 {{count, number} token} other {{count, number} tokens}}",
   "footer.tasks": "{count, plural, =1 {{count} task} other {{count} tasks}}",
-  "footer.agents": "{count, plural, =1 {{count} agent} other {{count} agents}}",
   "palette.action.newChat": "Start new chat",
   "palette.action.newTask": "Create scheduled task",
   "palette.action.newRoutine": "Create routine",
