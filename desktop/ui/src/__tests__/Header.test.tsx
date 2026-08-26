@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import { Header } from '@/components/Header'
@@ -168,6 +169,46 @@ describe('Header component', () => {
     expect(screen.getByText('bash')).toBeInTheDocument()
     expect(screen.getByText('Allow Once')).toBeInTheDocument()
     expect(screen.getByText('Deny')).toBeInTheDocument()
+  })
+
+  // U3 — four distinguishable risk tiers: critical=error, high=secondary,
+  // medium=tertiary (was wrongly secondary), low=tertiary. Localized text,
+  // announced via aria-label.
+  describe.each(['critical', 'high', 'medium', 'low'] as const)('risk tier %s', (risk) => {
+    const label = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' }[risk]
+    const tier = { critical: 'text-error', high: 'text-secondary', medium: 'text-tertiary', low: 'text-tertiary' }[risk]
+
+    it(`renders a localized "${label}" badge in the ${tier} tier`, () => {
+      mockCtx.permissionRequest = { request_id: 'p1', tool: 'bash', risk, input: null }
+      render(wrap(<Header />, { route: '/chat' }))
+      const badge = screen.getByText(label)
+      expect(badge).toBeInTheDocument()
+      expect(badge.className).toContain(tier)
+      expect(badge).toHaveAttribute('aria-label', `Risk level: ${label}`)
+    })
+  })
+
+  it('no longer renders the dead "Always allow" checkbox (U3)', () => {
+    mockCtx.permissionRequest = { request_id: 'p1', tool: 'bash', risk: 'low', input: null }
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(screen.queryByText('Always allow')).not.toBeInTheDocument()
+  })
+
+  it('focuses Deny so Enter is the safe default and denies the request', async () => {
+    mockCtx.permissionRequest = { request_id: 'p9', tool: 'bash', risk: 'high', input: null }
+    render(wrap(<Header />, { route: '/chat' }))
+    const deny = screen.getByRole('button', { name: 'Deny' })
+    expect(deny).toHaveFocus()
+    await userEvent.setup().keyboard('{Enter}')
+    expect(mockCtx.respondPermission).toHaveBeenCalledWith('p9', false)
+  })
+
+  it('clicking Allow Once approves the request', () => {
+    mockCtx.permissionRequest = { request_id: 'p9', tool: 'bash', risk: 'high', input: null }
+    render(wrap(<Header />, { route: '/chat' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Allow Once' }))
+    expect(mockCtx.respondPermission).toHaveBeenCalledWith('p9', true)
   })
 
   it('renders Chat title on /chat route (legacy /goals redirects)', () => {
