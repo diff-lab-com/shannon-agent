@@ -1,8 +1,10 @@
 import { useState, useCallback, useEffect, useRef, memo } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import EmptyState from './ui/empty-state';
+import { WELCOME_EXAMPLES } from './welcomeExamples';
 import { cn } from '../lib/utils';
 import { useSessions } from '@/context/SessionContext';
 import { useCatalog } from '@/context/CatalogContext';
@@ -134,6 +136,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   });
   const dragging = useRef(false);
   const location = useLocation();
+  const navigate = useNavigate();
   const { createSession, sessions, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree } = useSessions();
   const { status } = useCatalog();
   const intl = useIntl();
@@ -220,6 +223,15 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
   const handleNavClick = () => { if (mobile) closeMobile() }
 
+  // U7: sidebar starter prompt — creates the first session when none exists,
+  // then hands the prompt to the composer via /chat navigation state (the
+  // same channel the Editor's "Ask AI" button uses).
+  const startWithPrompt = async (prompt: string) => {
+    if (!currentSessionId) await createSession()
+    navigate('/chat', { state: { prefill: prompt } })
+    if (mobile) closeMobile()
+  }
+
   return (
     <aside data-sidebar className={cn(
       "fixed left-0 top-0 h-full bg-surface-container-lowest/70 backdrop-blur-[20px] border-r border-outline-variant/30 flex flex-col py-lg px-md shadow-[4px_0_24px_-12px_color-mix(in_srgb,var(--color-inverse-surface)_15%,transparent)] transition-transform duration-300",
@@ -279,9 +291,24 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
       {/* U1: the session rail is the app's only session list. It takes the
           remaining vertical space (own scroll); nav below gets its own scroll
-          region capped at 60% so a long session list can't push it out. */}
-      {sessions.length > 0 && (
-        <div className="flex-1 min-h-0 mb-lg">
+          region capped at 60% so a long session list can't push it out.
+          U7: zero-session users get a guide card instead of a blank rail.
+          It shares example copy with WelcomeState (first two of the same
+          list) but stays compact — the canvas welcome card owns the full
+          four-card pitch, so the two never duplicate. */}
+      <div className="flex-1 min-h-0 mb-lg">
+        {sessions.length === 0 ? (
+          <EmptyState
+            icon="forum"
+            title={intl.formatMessage({ id: 'sidebar.sessions.empty.title' })}
+            description={intl.formatMessage({ id: 'sidebar.sessions.empty.description' })}
+            suggestions={WELCOME_EXAMPLES.slice(0, 2).map(ex => ({
+              label: intl.formatMessage({ id: ex.titleKey }),
+              icon: ex.icon,
+              onClick: () => void startWithPrompt(ex.prompt),
+            }))}
+          />
+        ) : (
           <SessionsSection
             sessions={sessions}
             currentSessionId={currentSessionId}
@@ -290,8 +317,8 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
             deleteSession={deleteSession}
             closeMobile={mobile ? closeMobile : undefined}
           />
-        </div>
-      )}
+        )}
+      </div>
 
       <nav aria-label={intl.formatMessage({ id: 'nav.mainNav.aria' })} className="shrink-0 min-h-0 max-h-[60%]">
         <ScrollArea className="h-full">
