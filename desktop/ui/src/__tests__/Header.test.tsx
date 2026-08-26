@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import { Header } from '@/components/Header'
 import * as api from '@/lib/tauri-api'
@@ -47,6 +47,11 @@ function wrap(ui: React.ReactElement, { route = '/chat' } = {}) {
       </MemoryRouter>
     </I18nProvider>
   )
+}
+
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="header-location">{location.pathname}</div>
 }
 
 describe('Header component', () => {
@@ -235,6 +240,42 @@ describe('Header component', () => {
     render(wrap(<Header />, { route: '/chat' }))
     expect(screen.getByLabelText('Notifications')).toBeInTheDocument()
     expect(screen.getByLabelText('Help')).toBeInTheDocument()
+  })
+
+  // U6: the bell tooltip says where it leads — the approval dialog when
+  // pending, Triage otherwise.
+  it('bell title names the Triage inbox when nothing is pending', () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByLabelText('Notifications')).toHaveAttribute(
+      'title', 'View notifications (Triage inbox)'
+    )
+  })
+
+  it('bell title names the approval dialog when skills are pending', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.listSkillCandidates).mockResolvedValue([
+      { id: 'c1', proposed_name: 'X', proposed_trigger: 'Y', occurrence_count: 1, procedure: [], last_seen_at: '', originating_sessions: [] },
+    ])
+    render(wrap(<Header />, { route: '/chat' }))
+    const bell = await screen.findByLabelText('Notifications')
+    await waitFor(() => {
+      expect(bell).toHaveAttribute('title', expect.stringContaining('opens the approval dialog'))
+    })
+  })
+
+  // U6: the avatar is a button that opens Settings (was a dead icon).
+  it('avatar button navigates to /settings', () => {
+    render(
+      wrap(
+        <>
+          <Header />
+          <LocationProbe />
+        </>,
+        { route: '/chat' }
+      )
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings' }))
+    expect(screen.getByTestId('header-location')).toHaveTextContent('/settings')
   })
 })
 

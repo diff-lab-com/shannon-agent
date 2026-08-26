@@ -171,9 +171,13 @@ describe('Sidebar — Advanced mode', () => {
     expect(screen.getByText('Connections')).toBeInTheDocument()
   })
 
-  it('renders OPC sub-link when expanded', () => {
+  it('renders OPC as a direct link in the Experiments group (U6 flatten)', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('One Person Company')).toBeInTheDocument()
+    // U6 flattened the OPC disclosure (it held a single sub-link); the link
+    // now lives directly inside the Experiments group.
+    expect(screen.queryByText('One Person Company')).not.toBeInTheDocument()
+    const opc = screen.getByText('OPC').closest('a')
+    expect(opc).toHaveAttribute('href', '/opc')
   })
 
   it('shows dev-only Settings sub-links (Billing, Advanced) when expanded', () => {
@@ -621,5 +625,68 @@ describe('Sidebar — resize handle (U5)', () => {
     fireEvent.dblClick(handle())
     await waitFor(() => expect(handle()).toHaveAttribute('aria-valuenow', '280'))
     expect(window.localStorage.getItem('shannon-sidebar-width')).toBe('280')
+  })
+})
+
+describe('Sidebar — nav IA groups (U6)', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('groups nav: Work visible, Resources folded in Simple mode', () => {
+    render(wrap(<Sidebar />))
+    expect(screen.getByRole('button', { name: /Work/ })).toHaveAttribute('aria-expanded', 'true')
+    const resources = screen.getByRole('button', { name: /Resources/ })
+    expect(resources).toHaveAttribute('aria-expanded', 'false')
+    // Work group is open: Chat / Scheduled / Triage visible.
+    expect(screen.getByText('Chat')).toBeInTheDocument()
+    expect(screen.getByText('Scheduled')).toBeInTheDocument()
+    expect(screen.getByText('Triage')).toBeInTheDocument()
+    // Resources folded: Memory / Usage hidden; Extensions stays a flat entry.
+    expect(screen.queryByText('Memory')).not.toBeInTheDocument()
+    expect(screen.queryByText('Usage')).not.toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
+  })
+
+  it('expanding Resources reveals Memory and Usage', () => {
+    render(wrap(<Sidebar />))
+    fireEvent.click(screen.getByRole('button', { name: /Resources/ }))
+    expect(screen.getByText('Memory')).toBeInTheDocument()
+    expect(screen.getByText('Usage')).toBeInTheDocument()
+  })
+
+  it('collapsing the Work group hides Chat/Scheduled', () => {
+    render(wrap(<Sidebar />))
+    fireEvent.click(screen.getByRole('button', { name: /Work/ }))
+    expect(screen.queryByText('Chat')).not.toBeInTheDocument()
+    expect(screen.queryByText('Scheduled')).not.toBeInTheDocument()
+  })
+
+  it('Experiments group is dev-only and holds the OPC link', () => {
+    render(wrap(<Sidebar />))
+    expect(screen.queryByRole('button', { name: /Experiments/ })).not.toBeInTheDocument()
+    window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
+    const { unmount } = render(wrap(<Sidebar />))
+    expect(screen.getByRole('button', { name: /Experiments/ })).toBeInTheDocument()
+    expect(screen.getByText('OPC')).toBeInTheDocument()
+    unmount()
+  })
+
+  it('persists group + settings expansion to shannon-nav-open across remounts', () => {
+    const { unmount } = render(wrap(<Sidebar />))
+    fireEvent.click(screen.getByRole('button', { name: /Resources/ }))
+    fireEvent.click(screen.getByText('Settings'))
+    const stored = JSON.parse(window.localStorage.getItem('shannon-nav-open')!)
+    expect(stored).toMatchObject({ resources: true, settings: true, work: true })
+    unmount()
+    render(wrap(<Sidebar />))
+    // Remounted: Resources still open, Settings still expanded.
+    expect(screen.getByText('Memory')).toBeInTheDocument()
+    expect(screen.getByText('General')).toBeInTheDocument()
+    // Collapse Work, remount: still collapsed.
+    fireEvent.click(screen.getByRole('button', { name: /Work/ }))
+    cleanup()
+    render(wrap(<Sidebar />))
+    expect(screen.queryByText('Chat')).not.toBeInTheDocument()
   })
 })
