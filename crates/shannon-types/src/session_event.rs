@@ -347,6 +347,11 @@ pub struct RequestHeaderPayload {
     /// snapshot is recorded on every request-shape change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The exact adapter-serialized request body (the wire product itself,
+    /// not a reconstruction). Present since §4.2 so the log alone can
+    /// byte-reconstruct every request; exempt from payload truncation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_body: Option<serde_json::Value>,
 }
 
 /// Payload for [`SessionEventKind::RequestContext`]: the input message list
@@ -711,6 +716,7 @@ mod tests {
                     }],
                     config_snapshot: json!({"max_turns": 20}),
                     reason: Some("initial".into()),
+                    wire_body: Some(json!({"model": "claude-sonnet-4", "messages": []})),
                 })
             }
             SessionEventKind::RequestContext => {
