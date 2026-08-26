@@ -31,6 +31,15 @@ const SECTIONS: ShortcutSection[] = [
       { keys: formatShortcut('4'), actionKey: 'shortcuts.help.goMemory' },
       { keys: formatShortcut('5'), actionKey: 'shortcuts.help.goEditor' },
       { keys: formatShortcut('6'), actionKey: 'shortcuts.help.goSettings' },
+      // U6: complete the list — this binding exists in useKeyboardShortcuts
+      // but was missing from the help overlay.
+      { keys: formatShortcutShift('N'), actionKey: 'shortcuts.help.goChat' },
+    ],
+  },
+  {
+    titleKey: 'shortcutsHelp.section.sessions',
+    entries: [
+      { keys: 'Alt + ↑ / ↓', actionKey: 'shortcuts.help.rowReorder' },
     ],
   },
   {
