@@ -92,9 +92,11 @@ pub enum PermissionDecision {
 
 /// Emit the per-decision trace event.
 ///
-/// All gates report here with a stable target (`permission/decision`) so the
-/// upcoming §4.8 event bus can subscribe permission-decision records and
-/// persist them into L0 as `SessionEventKind::PermissionDecision`.
+/// All gates report here with a stable target (`permission/decision`).
+/// Since §4.8 each decision is additionally forwarded to the bus world via
+/// [`crate::bus::broadcast_plugin_decision`] so both decision sources
+/// (permission manager and plugin gates) persist into L0 with one schema
+/// ([`SessionEventKind::PermissionDecision`](shannon_types::session_event::SessionEventKind)).
 pub fn emit_decision(
     plugin: &str,
     required: PluginPermission,
@@ -102,6 +104,13 @@ pub fn emit_decision(
     point: &str,
     declared: &[PluginPermission],
 ) {
+    crate::bus::broadcast_plugin_decision(crate::bus::PluginDecisionFrame {
+        plugin: plugin.to_string(),
+        required: required.wire_name().to_string(),
+        declared: declared.iter().map(|p| p.wire_name().to_string()).collect(),
+        point: point.to_string(),
+        allowed: decision == PermissionDecision::Allowed,
+    });
     let declared = fmt_declared(declared);
     match decision {
         PermissionDecision::Allowed => tracing::debug!(

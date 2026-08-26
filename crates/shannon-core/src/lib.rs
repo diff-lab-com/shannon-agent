@@ -42,6 +42,7 @@ pub mod analytics;
 pub mod api_services;
 pub mod away_summary;
 pub mod bridge_service;
+pub mod bus;
 pub mod checkpoint;
 pub mod compact;
 pub mod config_persist;
