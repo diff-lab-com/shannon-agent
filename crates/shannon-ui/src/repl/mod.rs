@@ -679,18 +679,33 @@ impl Repl {
                 if !enabled.is_empty() {
                     tracing::info!("Loaded {} plugin(s)", enabled.len());
                     for plugin in &enabled {
+                        // §4.9: gate every Shannon-side execution point on
+                        // the manifest allow-set; empty declarations keep the
+                        // pre-enforcement lenient default.
+                        let policy = std::sync::Arc::new(
+                            shannon_core::plugin::PluginPermissionPolicy::from_manifest(
+                                &plugin.manifest,
+                            ),
+                        );
                         match plugin.manifest.kind() {
                             Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
                                 if let Some(command) = transport.command() {
                                     let args = transport.args().to_vec();
-                                    match runtime.block_on(shannon_core::discover_tools(
-                                        &plugin.manifest.name,
-                                        command,
-                                        &args,
-                                        &std::collections::HashMap::new(),
-                                        None,
-                                    )) {
+                                    match runtime.block_on(
+                                        shannon_core::plugin::gated_discover_tools_stdio(
+                                            &policy,
+                                            &plugin.manifest.name,
+                                            command,
+                                            &args,
+                                            &std::collections::HashMap::new(),
+                                            None,
+                                        ),
+                                    ) {
                                         Ok(result) => {
+                                            tool_registry.attach_plugin_policy(
+                                                &plugin.manifest.name,
+                                                std::sync::Arc::clone(&policy),
+                                            );
                                             let tool_count = result.tools.len();
                                             for tool in result.tools {
                                                 if let Err(e) =
@@ -1146,11 +1161,20 @@ impl Repl {
                     if !enabled.is_empty() {
                         tracing::info!("Loaded {} plugin(s)", enabled.len());
                         for plugin in &enabled {
+                            // §4.9: gate every Shannon-side execution point on
+                            // the manifest allow-set; empty declarations keep
+                            // the pre-enforcement lenient default.
+                            let policy = std::sync::Arc::new(
+                                shannon_core::plugin::PluginPermissionPolicy::from_manifest(
+                                    &plugin.manifest,
+                                ),
+                            );
                             match plugin.manifest.kind() {
                                 Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
                                     if let Some(command) = transport.command() {
                                         let args = transport.args().to_vec();
-                                        match shannon_core::discover_tools(
+                                        match shannon_core::plugin::gated_discover_tools_stdio(
+                                            &policy,
                                             &plugin.manifest.name,
                                             command,
                                             &args,
@@ -1158,6 +1182,10 @@ impl Repl {
                                             None,
                                         ).await {
                                             Ok(result) => {
+                                                tool_registry.attach_plugin_policy(
+                                                    &plugin.manifest.name,
+                                                    std::sync::Arc::clone(&policy),
+                                                );
                                                 let tool_count = result.tools.len();
                                                 for tool in result.tools {
                                                     if let Err(e) = tool_registry.register(Box::new(tool)) {
@@ -1177,6 +1205,19 @@ impl Repl {
                                     }
                                 }
                                 Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
+                                    // Prompt-driven extension: the host reads
+                                    // the entry file and the prompt drives
+                                    // model turns — both faces must be granted.
+                                    if let Err(e) = shannon_core::plugin::admit_prompt_based_extension(
+                                        &policy,
+                                        &plugin.manifest.name,
+                                    ) {
+                                        tracing::warn!(
+                                            "Command plugin '{}' not registered: {e}",
+                                            plugin.manifest.name
+                                        );
+                                        continue;
+                                    }
                                     let plugin_dir = plugin.path.parent()
                                         .map(|p| p.to_path_buf())
                                         .unwrap_or_default();
@@ -1218,6 +1259,18 @@ impl Repl {
                                     tracing::info!("Registered command '/plugin:{}' from plugin '{}'", name, plugin.manifest.name);
                                 }
                                 Ok(shannon_core::plugin::PluginKind::Skill { trigger, template }) => {
+                                    // Same prompt-extension faces as commands:
+                                    // entry read + model turns must be granted.
+                                    if let Err(e) = shannon_core::plugin::admit_prompt_based_extension(
+                                        &policy,
+                                        &plugin.manifest.name,
+                                    ) {
+                                        tracing::warn!(
+                                            "Skill plugin '{}' not registered: {e}",
+                                            plugin.manifest.name
+                                        );
+                                        continue;
+                                    }
                                     let plugin_dir = plugin.path.parent()
                                         .map(|p| p.to_path_buf())
                                         .unwrap_or_default();

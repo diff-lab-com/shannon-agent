@@ -93,8 +93,12 @@ impl TransportConfig {
     }
 }
 
-/// Plugin permission
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Plugin permission — one capability face of the manifest allow-set.
+///
+/// A declared list grants exactly the faces it names at Shannon-side execution
+/// points (see `plugin/permissions.rs` and `plugin/PERMISSIONS.md`); an empty
+/// or omitted list is the pre-enforcement lenient default (allow-all).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PluginPermission {
     /// Read files from filesystem
     #[serde(rename = "read_files")]
@@ -119,6 +123,21 @@ pub enum PluginPermission {
     /// Access to LLM API
     #[serde(rename = "llm_api")]
     LlmApi,
+}
+/// Wire names mirror the serde renames so denials and logs always quote the
+/// exact token a plugin author writes in `plugin.toml`.
+impl PluginPermission {
+    /// The manifest string form of this permission (e.g. `"read_files"`).
+    pub fn wire_name(&self) -> &'static str {
+        match self {
+            PluginPermission::ReadFiles => "read_files",
+            PluginPermission::WriteFiles => "write_files",
+            PluginPermission::ExecuteCommands => "execute_commands",
+            PluginPermission::Network => "network",
+            PluginPermission::McpTools => "mcp_tools",
+            PluginPermission::LlmApi => "llm_api",
+        }
+    }
 }
 
 /// Typed plugin kind, derived from the manifest fields
@@ -559,5 +578,25 @@ command_name = "build"
         assert_eq!(toml_manifest.entry, json_manifest.entry);
         assert_eq!(toml_manifest.permissions, json_manifest.permissions);
         assert_eq!(toml_manifest.keywords, json_manifest.keywords);
+    }
+
+    /// Wire names used by enforcement denials must match serde renames.
+    #[test]
+    fn wire_names_match_serde_renames() {
+        let all = [
+            ("read_files", PluginPermission::ReadFiles),
+            ("write_files", PluginPermission::WriteFiles),
+            ("execute_commands", PluginPermission::ExecuteCommands),
+            ("network", PluginPermission::Network),
+            ("mcp_tools", PluginPermission::McpTools),
+            ("llm_api", PluginPermission::LlmApi),
+        ];
+        for (wire, variant) in all {
+            assert_eq!(variant.wire_name(), wire);
+            assert_eq!(
+                serde_json::to_string(&variant).unwrap(),
+                format!("\"{wire}\"")
+            );
+        }
     }
 }
