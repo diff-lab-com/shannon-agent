@@ -1,0 +1,67 @@
+id = "multi_04"
+tier = "multi_step"
+description = "Convert a JSON config to its TOML equivalent."
+prompt = "Convert config.json into a TOML file named config.toml in this workspace, preserving every key and value."
+
+[setup]
+[[setup.files]]
+path = "config.json"
+content = """{
+  "server": {
+    "host": "db.local",
+    "port": 8085
+  },
+  "retries": 3
+}
+"""
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_exists"
+path = "config.toml"
+
+[[verify.rules]]
+rule = "file_content"
+path = "config.toml"
+contains = "db.local"
+
+[[verify.rules]]
+rule = "file_content"
+path = "config.toml"
+contains = "8085"
+
+[[verify.rules]]
+rule = "file_content"
+path = "config.toml"
+matches_regex = '(?m)^\[server\]'
+
+[expectations]
+forbidden_tools = ["Edit", "MultiEdit", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Read"
+args_regex = '"file_path":"config.json"'
+
+[[expectations.trajectory]]
+tool = "Write"
+args_regex = '"file_path":"config.toml"'
+
+[limits]
+max_turns = 10
+max_tokens = 26000
+timeout_secs = 240
+
+[dry_run]
+final_text = "Wrote config.toml mirroring the JSON structure."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "config.json" }
+
+[[dry_run.steps]]
+tool = "Write"
+input = { file_path = "config.toml", content = "[server]\nhost = \"db.local\"\nport = 8085\n\nretries = 3\n" }

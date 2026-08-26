@@ -1,0 +1,50 @@
+id = "edit_02"
+tier = "edit"
+description = "Fix every occurrence of a misspelled word inside one document."
+prompt = "The word 'recieve' is misspelled throughout docs/guide.md. Fix every occurrence to 'receive'."
+
+[setup]
+[[setup.files]]
+path = "docs/guide.md"
+content = """# Contributor Guide
+
+You will recieve a review within two days.
+Patches are welcome; you will recieve build logs by email.
+"""
+
+[verify]
+script = "! grep -q recieve docs/guide.md && grep -q receive docs/guide.md"
+
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "diff_matches"
+path = "docs/guide.md"
+expected_diff_regex = '\+.*receive a review'
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Read"
+
+[[expectations.trajectory]]
+tool = "MultiEdit"
+
+[limits]
+max_turns = 8
+max_tokens = 16000
+timeout_secs = 180
+
+[dry_run]
+final_text = "Fixed both occurrences of recieve in docs/guide.md."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "docs/guide.md" }
+
+[[dry_run.steps]]
+tool = "MultiEdit"
+input = { file_path = "docs/guide.md", edits = [ { old_string = "recieve a review", new_string = "receive a review" }, { old_string = "recieve build logs", new_string = "receive build logs" } ] }

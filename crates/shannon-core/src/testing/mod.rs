@@ -3,10 +3,13 @@
 //! This module provides:
 //! - **mock_dsl**: Unified mock response builder for Anthropic, OpenAI, Ollama
 //! - **test_env**: TestShannonBuilder for one-call test environment setup
+//! - **eval_runner**: Tiered L1 evaluation suite runner (§4.4; TOML tasks →
+//!   sandboxed runs → dual JSON/Markdown reports)
 //! - **snapshot**: Request shape snapshot helpers for regression detection
 //! - **record_replay**: Record/Replay system for zero-cost CI testing
 //!   (moved to `shannon-engine`; re-exported here for backward compat)
 
+pub mod eval_runner;
 pub mod mock_dsl;
 pub mod scenario;
 pub mod snapshot;
