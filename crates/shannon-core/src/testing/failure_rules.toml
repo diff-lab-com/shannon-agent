@@ -1,0 +1,195 @@
+# Failure-classification rules for the Shannon eval runner (master plan §4.7 W2-M2).
+#
+# Pure rule table: no model names, no provider names — classes are defined by
+# event-shape predicates over the L0 session log plus the runner's own verdict,
+# never by what produced them. This file is the embedded default
+# (`FailureRules::embedded`); an external copy can override it via
+# `--rules <PATH>` on the example CLI or `EvalOptions::failure_rules`.
+#
+# Evaluation model:
+# - Rules are checked in declared order against FAILED tasks only;
+#   the first rule whose conditions ALL hold wins and evaluation stops.
+# - `signal` names a scalar fact computed by the extractor (glossary below);
+#   `op` is one of `equals`, `ge` (numeric >=), `contains` (substring);
+#   `value` is compared as text (or numerically for `ge`).
+#
+# Signal glossary:
+#   status              final runner verdict: passed|failed|timeout|turn_limit|
+#                       token_limit|spawn_error
+#   violations          assertion/script violation count (>0 means assertions ran)
+#   permission_blocks   permission/decision events with decision="deny"
+#   loops               maximal runs of >=3 identical consecutive tool calls
+#   loop_max_streak     longest such identical-call streak observed
+#   invalid_calls       errored call retried verbatim immediately afterwards
+#   tool_errors         tool/result events with is_error=true
+#   edit_tool_errors    tool_errors whose tool was Edit/MultiEdit/Write
+#   tool_error_unrecovered  distinct call signatures whose LAST attempt still failed
+#   turn_interrupted    1 when a turn/end closed as "interrupted"
+#   compaction_events   surface/replace(reason="compaction") occurrences
+#   error_rate_limit    1 when category="rate_limit" error event seen
+#   error_query_failed  1 when category="query-failed" error event seen
+
+schema_version = 1
+
+# ── ⑤ 超时或限额 ──────────────────────────────────────────────────────────
+# The harness guardrails or the provider limit ended the run; assertions may
+# never have been reached.
+[[rule]]
+class = "timeout_or_limit"
+description = "wall-clock timeout, turn budget, token ceiling, or provider rate limit stopped the run"
+[[rule.condition]]
+signal = "status"
+op = "equals"
+value = "timeout"
+[[rule.condition]]
+signal = "passed"
+op = "equals"
+value = "false"
+
+[[rule]]
+class = "timeout_or_limit"
+description = "turn budget exhausted"
+[[rule.condition]]
+signal = "status"
+op = "equals"
+value = "turn_limit"
+[[rule.condition]]
+signal = "passed"
+op = "equals"
+value = "false"
+
+[[rule]]
+class = "timeout_or_limit"
+description = "session token ceiling exceeded"
+[[rule.condition]]
+signal = "status"
+op = "equals"
+value = "token_limit"
+[[rule.condition]]
+signal = "passed"
+op = "equals"
+value = "false"
+
+[[rule]]
+class = "timeout_or_limit"
+description = "provider rate-limit error surfaced mid-run"
+[[rule.condition]]
+signal = "error_rate_limit"
+op = "equals"
+value = "true"
+[[rule.condition]]
+signal = "passed"
+op = "equals"
+value = "false"
+
+# ── ④ 权限误拒 ────────────────────────────────────────────────────────────
+# A deny decision blocked work the task needed done; candidate mis-rejection
+# whenever a denied run fails. Human review confirms the "mis-" part.
+[[rule]]
+class = "permission_misreject"
+description = "at least one permission decision denied a needed action and the task failed"
+[[rule.condition]]
+signal = "permission_blocks"
+op = "ge"
+value = "1"
+[[rule.condition]]
+signal = "passed"
+op = "equals"
+value = "false"
+
+# ── ⑥ 编辑冲突 ────────────────────────────────────────────────────────────
+# Edit-family failures dominate (anchor drift, concurrent state mismatch).
+[[rule]]
+class = "edit_conflict"
+description = "Edit/MultiEdit/Write failures are the dominant unresolved breakage"
+[[rule.condition]]
+signal = "edit_tool_errors"
+op = "ge"
+value = "1"
+[[rule.condition]]
+signal = "tool_error_unrecovered"
+op = "ge"
+value = "1"
+[[rule.condition]]
+signal = "passed"
+op = "equals"
+value = "false"
+
+# ── ② 工具失败未恢复 ──────────────────────────────────────────────────────
+# Something errored and the model never made the same call succeed again.
+[[rule]]
+class = "tool_failure_unrecovered"
+description = "a tool call errored and its final retry still failed at end of run"
+[[rule.condition]]
+signal = "tool_error_unrecovered"
+op = "ge"
+value = "1"
+[[rule.condition]]
+signal = "passed"
+op = "equals"
+value = "false"
+
+# ── ⑦ 模型上限 ────────────────────────────────────────────────────────────
+# The model ground in place: >=3 identical consecutive invocations (the strict
+# loop definition) show capability exhaustion rather than environment trouble.
+[[rule]]
+class = "model_ceiling"
+description = "repeated identical tool loops (>=3 consecutive same-signature calls)"
+[[rule.condition]]
+signal = "loops"
+op = "ge"
+value = "1"
+[[rule.condition]]
+signal = "passed"
+op = "equals"
+value = "false"
+
+# ── ③ 上下文丢失 ──────────────────────────────────────────────────────────
+# Interruption or mid-run compaction followed by an unproductive finish.
+[[rule]]
+class = "context_loss"
+description = "turn interrupted or context compacted mid-flight without recovery"
+[[rule.condition]]
+signal = "turn_interrupted"
+op = "equals"
+value = "true"
+[[rule.condition]]
+signal = "passed"
+op = "equals"
+value = "false"
+
+[[rule]]
+class = "context_loss"
+description = "compaction replacement happened mid-run and the run still failed"
+[[rule.condition]]
+signal = "compaction_events"
+op = "ge"
+value = "1"
+[[rule.condition]]
+signal = "passed"
+op = "equals"
+value = "false"
+
+# ── ① 指令误解 ────────────────────────────────────────────────────────────
+# Deliberately last structural bucket: assertions failed while the execution
+# trace shows no anomalies (no tool errors, denials, loops, limits). The rule
+# version cannot read intent — this class flags candidates for human review.
+[[rule]]
+class = "instruction_misunderstanding"
+description = "assertions violated with a clean execution trace (no engine-side anomalies)"
+[[rule.condition]]
+signal = "status"
+op = "equals"
+value = "failed"
+[[rule.condition]]
+signal = "tool_errors"
+op = "equals"
+value = "0"
+[[rule.condition]]
+signal = "permission_blocks"
+op = "equals"
+value = "0"
+[[rule.condition]]
+signal = "loops"
+op = "equals"
+value = "0"
