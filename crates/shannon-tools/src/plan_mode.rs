@@ -14,8 +14,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_tool_interface::FileSystemProvider;
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -64,11 +64,23 @@ struct PlanState {
 /// A secondary `plan_mode_flag` (`Arc<RwLock<bool>>`) is kept in sync with the
 /// active state and can be shared with the query engine across crate boundaries
 /// without creating a circular dependency.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PlanManager {
     state: Arc<RwLock<PlanState>>,
     /// Shared flag for query-engine write-blocking. Kept in sync with `state.active`.
     plan_mode_flag: Arc<RwLock<bool>>,
+    /// Filesystem world used for `.shannon/plans` persistence (§4.11).
+    fs: Arc<dyn FileSystemProvider>,
+}
+
+impl std::fmt::Debug for PlanManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Mirrors the pre-§4.11 derive output; the provider handle is opaque.
+        f.debug_struct("PlanManager")
+            .field("state", &self.state)
+            .field("plan_mode_flag", &self.plan_mode_flag)
+            .finish()
+    }
 }
 
 impl PlanManager {
@@ -77,7 +89,14 @@ impl PlanManager {
         Self {
             state: Arc::new(RwLock::new(PlanState::default())),
             plan_mode_flag: Arc::new(RwLock::new(false)),
+            fs: crate::defaults::fs(),
         }
+    }
+
+    /// Inject a filesystem world override for plan persistence.
+    pub fn with_fs(mut self, fs: Arc<dyn FileSystemProvider>) -> Self {
+        self.fs = fs;
+        self
     }
 
     /// Activate plan mode (disables file modifications).
@@ -232,7 +251,7 @@ impl PlanManager {
             .ok_or_else(|| ToolError::ExecutionFailed("No current plan to save".to_string()))?;
 
         let plans_dir = dir.join(".shannon").join("plans");
-        fs::create_dir_all(&plans_dir).map_err(|e| {
+        self.fs.create_dir_all_blocking(&plans_dir).map_err(|e| {
             ToolError::ExecutionFailed(format!("Failed to create plans directory: {e}"))
         })?;
 
@@ -255,7 +274,8 @@ impl PlanManager {
         );
 
         let file_path = plans_dir.join(format!("{}.md", plan.id));
-        fs::write(&file_path, file_content)
+        self.fs
+            .write_bytes_blocking(&file_path, file_content.as_bytes())
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write plan file: {e}")))?;
 
         Ok(file_path)
@@ -266,7 +286,9 @@ impl PlanManager {
     /// Parses the file header for title, creation timestamp, and status, then
     /// reconstructs a `PlanEntry`.
     pub fn load_plan_from_file(&self, path: &Path) -> Result<PlanEntry, ToolError> {
-        let content = fs::read_to_string(path)
+        let content = self
+            .fs
+            .read_text_blocking(path)
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read plan file: {e}")))?;
 
         let mut lines = content.lines();
@@ -327,14 +349,14 @@ impl PlanManager {
             return Ok(Vec::new());
         }
 
-        let entries = fs::read_dir(&plans_dir).map_err(|e| {
+        let entries = self.fs.list_dir_blocking(&plans_dir).map_err(|e| {
             ToolError::ExecutionFailed(format!("Failed to read plans directory: {e}"))
         })?;
 
         let mut plans: Vec<(String, PlanEntry)> = Vec::new();
 
-        for entry in entries.flatten() {
-            let path = entry.path();
+        for entry in entries {
+            let path = entry.path;
             if path.extension().and_then(|e| e.to_str()) == Some("md") {
                 let filename = path
                     .file_name()

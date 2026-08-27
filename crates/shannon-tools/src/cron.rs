@@ -713,13 +713,24 @@ fn humanize_field(field: &str, name: &str, names: Option<&[(&str, u32)]>) -> Str
 // ---------------------------------------------------------------------------
 
 /// Cron management tool
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CronTool {
     description: String,
     store: CronStore,
     max_jobs: usize,
     /// Optional path for persisting durable jobs. If None, no persistence occurs.
     persistence_path: Option<PathBuf>,
+    /// Filesystem world backing durable-job persistence (§4.11).
+    fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+}
+
+impl std::fmt::Debug for CronTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CronTool")
+            .field("max_jobs", &self.max_jobs)
+            .field("persisted", &self.persistence_path.is_some())
+            .finish()
+    }
 }
 
 /// Default file name for durable cron jobs.
@@ -733,6 +744,7 @@ impl CronTool {
             store: Arc::new(RwLock::new(HashMap::new())),
             max_jobs: 50,
             persistence_path: None,
+            fs: crate::defaults::fs(),
         }
     }
 
@@ -746,6 +758,7 @@ impl CronTool {
             store: Arc::new(RwLock::new(HashMap::new())),
             max_jobs: 50,
             persistence_path: path,
+            fs: crate::defaults::fs(),
         };
         tool.load_durable_jobs();
         tool
@@ -759,7 +772,17 @@ impl CronTool {
             store,
             max_jobs: 50,
             persistence_path: None,
+            fs: crate::defaults::fs(),
         }
+    }
+
+    /// Inject a filesystem world override for durable-job persistence (§4.11).
+    pub fn with_fs(
+        mut self,
+        fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+    ) -> Self {
+        self.fs = fs;
+        self
     }
 
     /// Get a reference to the underlying store (for testing).
@@ -779,7 +802,7 @@ impl CronTool {
             return;
         }
 
-        match std::fs::read_to_string(&path) {
+        match self.fs.read_text_blocking(&path) {
             Ok(content) => {
                 match serde_json::from_str::<Vec<CronJob>>(&content) {
                     Ok(jobs) => {
@@ -849,7 +872,7 @@ impl CronTool {
 
         if durable_jobs.is_empty() {
             // Remove the file if no durable jobs remain
-            if let Err(e) = std::fs::remove_file(&path) {
+            if let Err(e) = self.fs.remove_file_blocking(&path) {
                 tracing::debug!("Failed to remove durable cron file {}: {e}", path.display());
             }
             return;
@@ -857,12 +880,12 @@ impl CronTool {
 
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            let _ = self.fs.create_dir_all_blocking(parent);
         }
 
         match serde_json::to_string_pretty(&durable_jobs) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
+                if let Err(e) = self.fs.write_bytes_blocking(&path, json.as_bytes()) {
                     tracing::warn!(
                         "Failed to write durable cron jobs to {}: {e}",
                         path.display()

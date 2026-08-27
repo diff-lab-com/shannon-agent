@@ -96,6 +96,8 @@ pub struct GrepFileMatch {
 /// GrepTool - search file contents using regex patterns
 pub struct GrepTool {
     sandbox: PathSandbox,
+    /// Filesystem world backing binary sniffing and line reads (§4.11).
+    fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
 }
 
 impl GrepTool {
@@ -108,38 +110,46 @@ impl GrepTool {
                 denied_patterns: crate::file::sandbox::SandboxConfig::default_denied_patterns(),
                 strict_mode: false,
             }),
+            fs: crate::defaults::fs(),
         }
     }
 
     /// Create a GrepTool with a custom sandbox configuration.
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
-        Self { sandbox }
+        Self {
+            sandbox,
+            fs: crate::defaults::fs(),
+        }
     }
 
-    /// Check if a file appears to be binary by looking for null bytes
-    fn is_binary(path: &Path) -> bool {
-        match std::fs::File::open(path) {
-            Ok(mut file) => {
-                let mut buf = [0u8; BINARY_CHECK_BYTES];
-                match std::io::Read::read(&mut file, &mut buf) {
-                    Ok(n) => buf[..n].contains(&0),
-                    Err(_) => true, // Treat unreadable files as binary
-                }
-            }
-            Err(_) => true,
+    /// Inject a filesystem world override (sandbox/remote assemblies).
+    pub fn with_fs(
+        mut self,
+        fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+    ) -> Self {
+        self.fs = fs;
+        self
+    }
+
+    /// Check if a file appears to be binary by looking for null bytes.
+    /// Reads the sniff buffer through the injected filesystem world.
+    fn is_binary(&self, path: &Path) -> bool {
+        match self.fs.read_prefix_blocking(path, BINARY_CHECK_BYTES) {
+            Ok(buf) => buf.contains(&0),
+            Err(_) => true, // Treat unreadable files as binary
         }
     }
 
     /// Read lines from a file, returning a vector of (line_number, line_content)
-    fn read_file_lines(path: &Path) -> std::io::Result<Vec<(usize, String)>> {
+    fn read_file_lines(&self, path: &Path) -> std::io::Result<Vec<(usize, String)>> {
         // Skip files that are too large to avoid OOM on huge log/data files
         const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
-        if let Ok(meta) = std::fs::metadata(path) {
-            if meta.len() > MAX_FILE_SIZE {
+        if let Ok(meta) = self.fs.metadata_blocking(path) {
+            if meta.len > MAX_FILE_SIZE {
                 return Ok(Vec::new());
             }
         }
-        let content = std::fs::read_to_string(path)?;
+        let content = self.fs.read_text_blocking(path)?;
         Ok(content
             .lines()
             .enumerate()
@@ -156,11 +166,11 @@ impl GrepTool {
         context_before: usize,
         context_after: usize,
     ) -> Option<GrepFileMatch> {
-        if Self::is_binary(path) {
+        if self.is_binary(path) {
             return None;
         }
 
-        let lines = match Self::read_file_lines(path) {
+        let lines = match self.read_file_lines(path) {
             Ok(lines) => lines,
             Err(_) => return None,
         };

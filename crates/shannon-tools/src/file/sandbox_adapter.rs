@@ -179,6 +179,8 @@ pub trait SandboxAdapter {
 /// validation, dynamic rule management, and file size limits.
 pub struct PathSandboxAdapter {
     config: SandboxConfig,
+    /// Filesystem world used for path resolution checks (§4.11).
+    fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
 }
 
 impl PathSandboxAdapter {
@@ -186,12 +188,16 @@ impl PathSandboxAdapter {
     pub fn new() -> Self {
         Self {
             config: SandboxConfig::default(),
+            fs: crate::defaults::fs(),
         }
     }
 
     /// Create a new adapter with custom configuration.
     pub fn with_config(config: SandboxConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            fs: crate::defaults::fs(),
+        }
     }
 
     /// Check path access against allowed and denied lists.
@@ -333,7 +339,7 @@ impl PathSandboxAdapter {
 
     /// Check if a path is read-only.
     fn is_read_only(&self, path: &Path) -> bool {
-        let resolved = safe_resolve(path);
+        let resolved = safe_resolve(self.fs.as_ref(), path);
         self.config
             .read_only_paths
             .iter()
@@ -342,7 +348,7 @@ impl PathSandboxAdapter {
 
     /// Check if a path is in the denied list.
     fn is_path_denied(&self, path: &Path) -> bool {
-        let resolved = safe_resolve(path);
+        let resolved = safe_resolve(self.fs.as_ref(), path);
         self.config
             .denied_paths
             .iter()
@@ -356,7 +362,7 @@ impl PathSandboxAdapter {
             return true;
         }
 
-        let resolved = safe_resolve(path);
+        let resolved = safe_resolve(self.fs.as_ref(), path);
         self.config
             .allowed_paths
             .iter()
@@ -368,15 +374,15 @@ impl PathSandboxAdapter {
 /// Uses canonicalize when the file exists; otherwise canonicalizes the parent
 /// directory (if it exists) and appends the file name, or falls back to
 /// component-based normalization that strips `.` and resolves `..`.
-fn safe_resolve(path: &Path) -> PathBuf {
+fn safe_resolve(fs: &dyn shannon_tool_interface::FileSystemProvider, path: &Path) -> PathBuf {
     // Best case: file exists, full canonicalization (resolves symlinks)
-    if let Ok(canonical) = std::fs::canonicalize(path) {
+    if let Ok(canonical) = fs.canonicalize_blocking(path) {
         return canonical;
     }
     // File doesn't exist yet — try canonicalizing the parent directory
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+            if let Ok(canonical_parent) = fs.canonicalize_blocking(parent) {
                 if let Some(file_name) = path.file_name() {
                     return canonical_parent.join(file_name);
                 }

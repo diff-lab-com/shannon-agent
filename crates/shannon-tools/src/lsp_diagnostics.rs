@@ -370,12 +370,21 @@ pub async fn run_cli_diagnostics(project_dir: &Path) -> CliDiagnosticResult {
 
 /// Run `cargo check --message-format=json` and parse diagnostics.
 async fn run_cargo_check(project_dir: &Path) -> CliDiagnosticResult {
-    let output = match tokio::process::Command::new("cargo")
-        .args(["check", "--message-format=json", "--color=never"])
-        .current_dir(project_dir)
-        .output()
-        .await
-    {
+    run_cargo_check_with(crate::defaults::process().as_ref(), project_dir).await
+}
+
+/// Provider-injected variant (§4.11): the `cargo check` probe spawns through
+/// the injected process world instead of a direct spawn API.
+async fn run_cargo_check_with(
+    process: &dyn shannon_tool_interface::ProcessProvider,
+    project_dir: &Path,
+) -> CliDiagnosticResult {
+    let mut request = shannon_tool_interface::ProcessRequest::new(
+        "cargo",
+        &["check", "--message-format=json", "--color=never"],
+    );
+    request.cwd = Some(project_dir.to_path_buf());
+    let output = match process.run_async(&request).await {
         Ok(o) => o,
         Err(e) => {
             return CliDiagnosticResult {

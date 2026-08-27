@@ -436,6 +436,8 @@ pub struct FileHistoryManager {
     cache: HashMap<PathBuf, FileHistory>,
     /// Whether the cache has been loaded from disk.
     cache_loaded: bool,
+    /// Filesystem world backing snapshot persistence (§4.11).
+    fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
 }
 
 /// Action that [`FileHistoryManager::rewind_file_to_turn`] prescribes for a file
@@ -461,12 +463,22 @@ impl FileHistoryManager {
             ttl: config.ttl.map(Duration::from_secs),
             cache: HashMap::new(),
             cache_loaded: false,
+            fs: crate::defaults::fs(),
         };
 
         // Ensure the history directory exists
-        let _ = std::fs::create_dir_all(&manager.history_dir);
+        let _ = manager.fs.create_dir_all_blocking(&manager.history_dir);
 
         manager
+    }
+
+    /// Inject a filesystem world override for snapshot storage (§4.11).
+    pub fn with_fs(
+        mut self,
+        fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+    ) -> Self {
+        self.fs = fs;
+        self
     }
 
     /// Create a new manager with a temporary directory (for testing).
@@ -484,7 +496,7 @@ impl FileHistoryManager {
 
     /// Ensure the history directory exists.
     fn ensure_dir(&self) -> Result<(), FileHistoryError> {
-        std::fs::create_dir_all(&self.history_dir)?;
+        self.fs.create_dir_all_blocking(&self.history_dir)?;
         Ok(())
     }
 
@@ -509,7 +521,7 @@ impl FileHistoryManager {
 
         let index_path = self.history_dir.join("_index.json");
         if index_path.exists() {
-            let content = std::fs::read_to_string(&index_path)?;
+            let content = self.fs.read_text_blocking(&index_path)?;
             let index: HashMap<String, Vec<String>> = serde_json::from_str(&content)?;
 
             for (file_path_str, snapshot_ids) in index {
@@ -519,7 +531,7 @@ impl FileHistoryManager {
                 for id in &snapshot_ids {
                     let snapshot_path = self.file_dir(&file_path).join(format!("{id}.json"));
                     if snapshot_path.exists() {
-                        if let Ok(content) = std::fs::read_to_string(&snapshot_path) {
+                        if let Ok(content) = self.fs.read_text_blocking(&snapshot_path) {
                             if let Ok(snapshot) = serde_json::from_str::<FileSnapshot>(&content) {
                                 snapshots.push(snapshot);
                             }
@@ -549,7 +561,8 @@ impl FileHistoryManager {
 
         let index_path = self.history_dir.join("_index.json");
         let content = serde_json::to_string_pretty(&index)?;
-        std::fs::write(&index_path, content)?;
+        self.fs
+            .write_bytes_blocking(&index_path, content.as_bytes())?;
 
         Ok(())
     }
@@ -557,11 +570,12 @@ impl FileHistoryManager {
     /// Save a single snapshot to disk.
     fn save_snapshot(&self, snapshot: &FileSnapshot) -> Result<(), FileHistoryError> {
         let dir = self.file_dir(&snapshot.file_path);
-        std::fs::create_dir_all(&dir)?;
+        self.fs.create_dir_all_blocking(&dir)?;
 
         let snapshot_path = dir.join(format!("{}.json", snapshot.id));
         let content = serde_json::to_string_pretty(snapshot)?;
-        std::fs::write(&snapshot_path, content)?;
+        self.fs
+            .write_bytes_blocking(&snapshot_path, content.as_bytes())?;
 
         Ok(())
     }
@@ -783,7 +797,7 @@ impl FileHistoryManager {
         // Second pass: delete the snapshot files
         for (file_path, snapshot_id) in &files_to_delete {
             let snapshot_path = self.file_dir(file_path).join(format!("{snapshot_id}.json"));
-            if let Err(e) = std::fs::remove_file(&snapshot_path) {
+            if let Err(e) = self.fs.remove_file_blocking(&snapshot_path) {
                 tracing::debug!("Failed to remove old snapshot: {e}");
             }
         }
@@ -828,7 +842,7 @@ impl FileHistoryManager {
 
         for (file_path, snapshot_id) in &to_delete {
             let snapshot_path = self.file_dir(file_path).join(format!("{snapshot_id}.json"));
-            if let Err(e) = std::fs::remove_file(&snapshot_path) {
+            if let Err(e) = self.fs.remove_file_blocking(&snapshot_path) {
                 tracing::debug!("Failed to remove expired snapshot: {e}");
             }
         }
@@ -860,7 +874,7 @@ impl FileHistoryManager {
 
     /// Check total storage usage against the quota.
     fn check_storage_quota(&self) -> Result<(), FileHistoryError> {
-        let total_bytes = dir_size(&self.history_dir).unwrap_or(0);
+        let total_bytes = dir_size(self.fs.as_ref(), &self.history_dir).unwrap_or(0);
         let used_mb = total_bytes as f64 / (1024.0 * 1024.0);
 
         if used_mb > self.max_total_history_mb as f64 {
@@ -1163,19 +1177,24 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// Recursively compute the total size of a directory in bytes.
-fn dir_size(path: &Path) -> Result<u64, std::io::Error> {
-    if !path.is_dir() {
-        return Ok(std::fs::metadata(path)?.len());
+///
+/// Walks through the injected filesystem world rather than filesystem APIs
+/// directly (§4.11).
+fn dir_size(
+    fs: &dyn shannon_tool_interface::FileSystemProvider,
+    path: &Path,
+) -> Result<u64, std::io::Error> {
+    let meta = fs.metadata_blocking(path)?;
+    if !meta.is_dir {
+        return Ok(meta.len);
     }
 
     let mut total = 0u64;
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        let metadata = entry.metadata()?;
-        if metadata.is_dir() {
-            total += dir_size(&entry.path())?;
+    for entry in fs.list_dir_blocking(path)? {
+        if entry.is_dir {
+            total += dir_size(fs, &entry.path)?;
         } else {
-            total += metadata.len();
+            total += entry.len;
         }
     }
     Ok(total)

@@ -13,10 +13,11 @@ use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_tool_interface::FileSystemProvider;
 use std::collections::HashMap;
 use std::fmt;
-use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Jupyter notebook cell structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -182,6 +183,8 @@ pub struct NotebookEditOutput {
 /// Notebook edit tool
 pub struct NotebookEditTool {
     description: String,
+    /// Filesystem world backing notebook reads/writes (§4.11).
+    fs: Arc<dyn FileSystemProvider>,
 }
 
 impl Default for NotebookEditTool {
@@ -195,12 +198,32 @@ impl NotebookEditTool {
         Self {
             description: "Edit Jupyter notebook (.ipynb) cells - replace, insert, or delete cells"
                 .to_string(),
+            fs: crate::defaults::fs(),
         }
     }
 
-    /// Load notebook from file
+    /// Inject a filesystem world override (sandbox/remote assemblies).
+    pub fn with_fs(mut self, fs: Arc<dyn FileSystemProvider>) -> Self {
+        self.fs = fs;
+        self
+    }
+
+    /// Load notebook from file via the default filesystem world.
+    ///
+    /// Legacy 1-arg shape kept untouched for existing tests (§4.11 keeps
+    /// production paths on [`Self::load_notebook_with`]).
+    #[cfg(test)]
     fn load_notebook(path: &str) -> Result<NotebookContent, ToolError> {
-        let content = fs::read_to_string(path)
+        Self::load_notebook_with(crate::defaults::fs().as_ref(), path)
+    }
+
+    /// Load notebook from file through the injected filesystem world.
+    fn load_notebook_with(
+        fs: &dyn FileSystemProvider,
+        path: &str,
+    ) -> Result<NotebookContent, ToolError> {
+        let content = fs
+            .read_text_blocking(Path::new(path))
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read notebook: {e}")))?;
 
         let notebook: NotebookContent = serde_json::from_str(&content).map_err(|e| {
@@ -210,13 +233,26 @@ impl NotebookEditTool {
         Ok(notebook)
     }
 
-    /// Save notebook to file
+    /// Save notebook to file via the default filesystem world.
+    ///
+    /// Legacy 2-arg shape kept untouched for existing tests (§4.11 keeps
+    /// production paths on [`Self::save_notebook_with`]).
+    #[cfg(test)]
     fn save_notebook(path: &str, notebook: &NotebookContent) -> Result<(), ToolError> {
+        Self::save_notebook_with(crate::defaults::fs().as_ref(), path, notebook)
+    }
+
+    /// Save notebook to file through the injected filesystem world.
+    fn save_notebook_with(
+        fs: &dyn FileSystemProvider,
+        path: &str,
+        notebook: &NotebookContent,
+    ) -> Result<(), ToolError> {
         let json = serde_json::to_string_pretty(notebook).map_err(|e| {
             ToolError::ExecutionFailed(format!("Failed to serialize notebook: {e}"))
         })?;
 
-        fs::write(path, json)
+        fs.write_bytes_blocking(Path::new(path), json.as_bytes())
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write notebook: {e}")))?;
 
         Ok(())
@@ -302,10 +338,13 @@ impl NotebookEditTool {
         }
 
         // Read original file
-        let original_content = fs::read_to_string(notebook_path).unwrap_or_default();
+        let original_content = self
+            .fs
+            .read_text_blocking(Path::new(notebook_path))
+            .unwrap_or_default();
 
         // Load notebook
-        let mut notebook = Self::load_notebook(notebook_path)?;
+        let mut notebook = Self::load_notebook_with(self.fs.as_ref(), notebook_path)?;
 
         // Get edit mode (default to replace)
         let edit_mode = input.edit_mode.unwrap_or(EditMode::Replace);
@@ -443,10 +482,13 @@ impl NotebookEditTool {
         };
 
         // Save updated notebook
-        Self::save_notebook(notebook_path, &notebook)?;
+        Self::save_notebook_with(self.fs.as_ref(), notebook_path, &notebook)?;
 
         // Get updated content
-        let updated_content = fs::read_to_string(notebook_path).unwrap_or_default();
+        let updated_content = self
+            .fs
+            .read_text_blocking(Path::new(notebook_path))
+            .unwrap_or_default();
 
         // Determine cell type for output
         let cell_type_str = output_cell_type
