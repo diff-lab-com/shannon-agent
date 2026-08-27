@@ -47,5 +47,5 @@ tool = "Read"
 input = { file_path = "docs/guide.md" }
 
 [[dry_run.steps]]
-tools = ["MultiEdit", "Edit"]
+tool = "MultiEdit"
 input = { file_path = "docs/guide.md", edits = [ { old_string = "recieve a review", new_string = "receive a review" }, { old_string = "recieve build logs", new_string = "receive build logs" } ] }
