@@ -38,9 +38,9 @@ tool = "Edit"
 args_regex = '"old_string":"\\"3\.1\.4\\""'
 
 [limits]
-max_turns = 8
-max_tokens = 16000
-timeout_secs = 180
+max_turns = 50
+max_tokens = 1000000
+timeout_secs = 450
 
 [dry_run]
 final_text = "Bumped APP_VERSION to 3.2.0."

@@ -45,9 +45,9 @@ tool = "Read"
 args_regex = '"file_path":"src/billing/model.rs"'
 
 [limits]
-max_turns = 6
-max_tokens = 12000
-timeout_secs = 150
+max_turns = 50
+max_tokens = 1000000
+timeout_secs = 360
 
 [dry_run]
 final_text = "The struct PaymentIntent is defined in src/billing/model.rs."

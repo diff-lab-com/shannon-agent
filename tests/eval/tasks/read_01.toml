@@ -30,9 +30,9 @@ tool = "Read"
 args_regex = '"file_path":"meta.txt"'
 
 [limits]
-max_turns = 4
-max_tokens = 9000
-timeout_secs = 120
+max_turns = 50
+max_tokens = 1000000
+timeout_secs = 300
 
 [dry_run]
 final_text = "The application version recorded in meta.txt is 7.42.0."

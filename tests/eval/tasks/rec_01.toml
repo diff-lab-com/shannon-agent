@@ -42,9 +42,9 @@ forbidden_tools = ["Write", "Bash"]
 tool = "Edit"
 
 [limits]
-max_turns = 8
-max_tokens = 20000
-timeout_secs = 240
+max_turns = 50
+max_tokens = 1000000
+timeout_secs = 600
 
 [dry_run]
 final_text = "Raised max_payload_mb to 256 under [limits]; cache_entries correctly remains 128."

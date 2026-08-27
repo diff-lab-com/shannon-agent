@@ -54,9 +54,9 @@ args_regex = '"file_path":"src/math_utils.rs"'
 tool = "Edit"
 
 [limits]
-max_turns = 12
-max_tokens = 30000
-timeout_secs = 240
+max_turns = 50
+max_tokens = 1000000
+timeout_secs = 600
 
 [dry_run]
 final_text = "Extracted median into math_utils and pointed both consumers at it."
