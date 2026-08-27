@@ -1,0 +1,22 @@
+{"seq":0,"ts_ns":1700000000000000000,"session_id":"fx-cascading_edits","turn":1,"kind":"session/start","model":"test-model"}
+{"seq":1,"ts_ns":1700000000001000000,"session_id":"fx-cascading_edits","turn":1,"kind":"user/message","content":"rename the process function to handle and update all callers","source":"user"}
+{"seq":2,"ts_ns":1700000000002000000,"session_id":"fx-cascading_edits","turn":1,"kind":"request/header","model":"test","adapter_defaults":{},"tools":[],"config_snapshot":{},"reason":"turn"}
+{"seq":3,"ts_ns":1700000000003000000,"session_id":"fx-cascading_edits","turn":1,"kind":"assistant/message","content":"Let me find all usages of the process function.","interrupted":false}
+{"seq":4,"ts_ns":1700000000004000000,"session_id":"fx-cascading_edits","turn":1,"kind":"assistant/message","content":"Let me find all usages of the process function.","interrupted":false}
+{"seq":5,"ts_ns":1700000000005000000,"session_id":"fx-cascading_edits","turn":1,"kind":"tool/call","tool_use_id":"toolu_0005","tool_name":"Grep","arguments":"{\"pattern\":\"process\",\"output_mode\":\"content\"}"}
+{"seq":6,"ts_ns":1700000000006000000,"session_id":"fx-cascading_edits","turn":1,"kind":"tool/result","tool_use_id":"toolu_0005","tool_name":"Grep","output":"src/lib.rs:1:pub fn process(input: &str) -> String\nsrc/main.rs:3:let result = process(\"hello\");\ntests/test.rs:5:assert_eq!(process(\"a\"), \"a\");","is_error":false,"meta":{},"duration_ms":15}
+{"seq":7,"ts_ns":1700000000007000000,"session_id":"fx-cascading_edits","turn":1,"kind":"assistant/message","content":"Found 3 locations. Let me read and fix each.","interrupted":false}
+{"seq":8,"ts_ns":1700000000008000000,"session_id":"fx-cascading_edits","turn":1,"kind":"tool/call","tool_use_id":"toolu_0008","tool_name":"Read","arguments":"{\"path\":\"src/lib.rs\"}"}
+{"seq":9,"ts_ns":1700000000009000000,"session_id":"fx-cascading_edits","turn":1,"kind":"tool/result","tool_use_id":"toolu_0008","tool_name":"Read","output":"pub fn process(input: &str) -> String {\n    input.to_uppercase()\n}","is_error":false,"meta":{},"duration_ms":2}
+{"seq":10,"ts_ns":1700000000010000000,"session_id":"fx-cascading_edits","turn":1,"kind":"assistant/message","content":"","interrupted":false}
+{"seq":11,"ts_ns":1700000000011000000,"session_id":"fx-cascading_edits","turn":1,"kind":"tool/call","tool_use_id":"toolu_0011","tool_name":"Edit","arguments":"{\"path\":\"src/lib.rs\",\"old\":\"pub fn process\",\"new\":\"pub fn handle\"}"}
+{"seq":12,"ts_ns":1700000000012000000,"session_id":"fx-cascading_edits","turn":1,"kind":"tool/result","tool_use_id":"toolu_0011","tool_name":"Edit","output":"edited","is_error":false,"meta":{},"duration_ms":2}
+{"seq":13,"ts_ns":1700000000013000000,"session_id":"fx-cascading_edits","turn":1,"kind":"assistant/message","content":"","interrupted":false}
+{"seq":14,"ts_ns":1700000000014000000,"session_id":"fx-cascading_edits","turn":1,"kind":"tool/call","tool_use_id":"toolu_0014","tool_name":"Edit","arguments":"{\"path\":\"src/main.rs\",\"old\":\"process(\\\"hello\\\")\",\"new\":\"handle(\\\"hello\\\")\"}"}
+{"seq":15,"ts_ns":1700000000015000000,"session_id":"fx-cascading_edits","turn":1,"kind":"tool/result","tool_use_id":"toolu_0014","tool_name":"Edit","output":"edited","is_error":false,"meta":{},"duration_ms":2}
+{"seq":16,"ts_ns":1700000000016000000,"session_id":"fx-cascading_edits","turn":1,"kind":"assistant/message","content":"","interrupted":false}
+{"seq":17,"ts_ns":1700000000017000000,"session_id":"fx-cascading_edits","turn":1,"kind":"tool/call","tool_use_id":"toolu_0017","tool_name":"Edit","arguments":"{\"path\":\"tests/test.rs\",\"old\":\"process(\\\"a\\\")\",\"new\":\"handle(\\\"a\\\")\"}"}
+{"seq":18,"ts_ns":1700000000018000000,"session_id":"fx-cascading_edits","turn":1,"kind":"tool/result","tool_use_id":"toolu_0017","tool_name":"Edit","output":"edited","is_error":false,"meta":{},"duration_ms":2}
+{"seq":19,"ts_ns":1700000000019000000,"session_id":"fx-cascading_edits","turn":1,"kind":"assistant/message","content":"Let me verify it compiles.","interrupted":false}
+{"seq":20,"ts_ns":1700000000020000000,"session_id":"fx-cascading_edits","turn":1,"kind":"tool/call","tool_use_id":"toolu_0020","tool_name":"Bash","arguments":"{\"command\":\"cargo check\"}"}
+{"seq":21,"ts_ns":1700000000021000000,"session_id":"fx-cascading_edits","turn":1,"kind":"tool/result","tool_use_id":"toolu_0020","tool_name":"Bash","output":"Finished dev [unoptimized] target(s) in 0.3s","is_error":false,"meta":{},"duration_ms":300}

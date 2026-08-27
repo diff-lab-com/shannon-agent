@@ -2,9 +2,57 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
-## [Unreleased]
+## [Unreleased] — §4.6 W1-P1 · L0 becomes the only authoritative session record (breaking, DP4)
 
-_No entries yet._
+### ⚠️ Breaking changes
+
+- **Sessions are now event-sourced.** The single-file session snapshot
+  (`~/.shannon/sessions/<uuid>.json`) is gone. Every session's durable state
+  lives in `<sessions>/<uuid>/events.jsonl`, and everything else — message
+  history for `--resume` / `/resume`, token totals, listings, branches — is
+  *derived* from that log at read time. Old `.json` snapshots are neither
+  read nor migrated: delete them after upgrading. Titles survive via a small
+  per-session sidecar (`<uuid>/meta.json`) holding only user-curation fields
+  (title / branch lineage); model, timestamps, project path and token totals
+  come from the log itself.
+- **Transcript files discontinued.** `~/.shannon/transcripts/<sid>.jsonl` is
+  no longer written. Full-text search and stats over past conversations are
+  now pure functions over the event log (`session_log::search_events`,
+  analytics projection), surfaced through the new `shannon trace` family.
+- **Legacy recording fixtures replaced.** `crates/shannon-core/fixtures/sessions/*.jsonl`
+  (RecordingEntry shape) were converted once into authoritative-format logs
+  under `fixtures/session_l0/<name>/events.jsonl`; every fixture-driven test
+  now reads them through the typed L0 reader. Tool-chain assertions are
+  unchanged — same sequences verified on the new medium.
+- **Analytics scatter collection removed.** The unused `AnalyticsStore`
+  write path (zero producers/consumers found) is deleted; its eight
+  aggregate dimensions live on as a derived projection
+  (`project_analytics_jsonl`) bundled by `shannon trace export`.
+- **Session-recording capture retired.** `shannon-core/src/recording/` +
+  `vcr.rs` are removed; their LLM request/response capture role is fully
+  superseded by always-on `request/header` rows carrying the exact wire body.
+  Note this does NOT touch the engine wire-fixture hook
+  (`SHANNON_RECORD_DIR`) used by `just record` / dogfood evidence scripts.
+
+### Added
+
+- **`shannon trace` subcommand family**: `show <session> [--turn N]
+  [--tool X] [--permission]`, `replay <session>` (time-compressed rendering,
+  chunks folded), `diff <a> <b>` (seq/kind/payload-digest comparison), and
+  `export <session> [--out DIR]` (events + derived analytics + summary).
+  Session references accept full UUIDs, unique prefixes, or `latest`.
+- Restore path now projects conversation history from L0 via
+  `session_log::project_conversation`, with a dedicated restore round-trip
+  equivalence suite (`state_integration.rs`) proving
+  write → process exit → re-enter → identical in-memory state.
+- Engine tee writes into the sessions container owned by `StateManager`
+  (still honoring a whole-root `$SHANNON_HOME` override), so redirected
+  stacks (`SHANNON_SESSIONS_DIR`) resume from the same location they log to.
+
+### Changed
+
+- Headless runs no longer checkpoint per-turn JSON snapshots; the continuous
+  event log makes crash-window tail recovery the resumption mechanism.
 
 ## v0.10.0 (2026-08-13) — memory curated layer (ADR-0010), ADR-0005 provider tail closed
 

@@ -315,16 +315,40 @@ impl SessionTee {
         Self::open_opt(session_id, model, provider, Some(base_dir))
     }
 
+    /// Open the tee writing to `<container>/<session_id>/events.jsonl` where
+    /// `container` is the sessions directory itself (§4.6 L0 layout). The
+    /// engine uses this so log location always matches the `StateManager`
+    /// that reads sessions back.
+    pub fn open_in_container(
+        container: &Path,
+        session_id: &str,
+        model: &str,
+        provider: Option<&str>,
+    ) -> Self {
+        Self::open_with_writer(session_id, model, provider, Some(container), true)
+    }
+
     fn open_opt(
         session_id: &str,
         model: &str,
         provider: Option<&str>,
         base_dir: Option<&Path>,
     ) -> Self {
+        Self::open_with_writer(session_id, model, provider, base_dir, false)
+    }
+
+    fn open_with_writer(
+        session_id: &str,
+        model: &str,
+        provider: Option<&str>,
+        base_dir: Option<&Path>,
+        container_layout: bool,
+    ) -> Self {
         if disabled_by_env() {
             return Self::disabled();
         }
         let opened = match base_dir {
+            Some(base) if container_layout => SessionLogWriter::open_layout(base, session_id),
             Some(base) => SessionLogWriter::open_in_dir(base, session_id),
             None => SessionLogWriter::open(session_id),
         };
@@ -657,6 +681,19 @@ impl TeeHandle {
     ) -> Self {
         Self::new(SessionTee::open_in_dir(
             base_dir, session_id, model, provider,
+        ))
+    }
+
+    /// Wrap a tee writing to `<container>/<session_id>/events.jsonl` (§4.6
+    /// sessions-container layout; see [`SessionTee::open_in_container`]).
+    pub fn open_in_container(
+        container: &Path,
+        session_id: &str,
+        model: &str,
+        provider: Option<&str>,
+    ) -> Self {
+        Self::new(SessionTee::open_in_container(
+            container, session_id, model, provider,
         ))
     }
 

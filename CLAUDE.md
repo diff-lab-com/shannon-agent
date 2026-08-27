@@ -79,6 +79,16 @@ The StatusBar shows a compact `[provider/model · tier]` pill that updates in re
 - **Mockito**: For HTTP API tests. Server matchers are order-dependent with `.expect(N)`.
 - **Test helpers**: `CollectingSender` (progress sender), `tempfile::TempDir` (file tests), `mockito::Server` (HTTP tests).
 
+### Session persistence (§4.6 L0)
+
+Sessions are event-sourced: `<SHANNON_HOME>/sessions/<uuid>/events.jsonl` is
+the single authoritative record; message history, token totals, listings and
+branches are projections (`shannon-core/src/session_log/projections.rs`,
+`session_store.rs`). Legacy `sessions/<uuid>.json` snapshots,
+`~/.shannon/transcripts/*`, and `shannon-core/src/recording|vcr` capture are
+removed — `shannon trace show/replay/diff/export` replaces their read paths.
+Titles / branch lineage persist in a `<uuid>/meta.json` sidecar.
+
 ### Test Commands (justfile)
 
 `just test` runs everything without API keys. Install: `cargo install just`.

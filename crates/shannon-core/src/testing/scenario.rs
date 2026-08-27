@@ -34,11 +34,11 @@
 //!
 //! ## Observation data sources
 //!
-//! Until the L0 event stream lands, trajectory/cost observations come from
-//! recording artifacts ([`ToolCallTrace::from_recording_entries`]) or are derived
-//! from the scenario's mocked assistant turns
-//! ([`ToolCallTrace::from_mock_turns`]). [`ValidationRule::MaxDurationMs`] remains
-//! enforced by the runner externally.
+//! Trajectory observations come from the session's L0 event log
+//! ([`ToolCallTrace::from_session_events`]) or are derived from the scenario's
+//! mocked assistant turns ([`ToolCallTrace::from_mock_turns`])
+//! ([`ValidationRule::MaxDurationMs`]) remains enforced by the runner
+//! externally.
 //!
 //! ```no_run
 //! use shannon_core::testing::scenario::{
@@ -58,7 +58,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-use crate::recording::types::RecordingEntry;
 use crate::testing::mock_dsl::{MockContentBlock, MockResponse, text_response, tool_call_response};
 
 // ── YAML Schema Types ─────────────────────────────────────────────────
@@ -356,16 +355,25 @@ impl ToolCallTrace {
             .collect()
     }
 
-    /// Derive the trajectory from session recording artifacts (`RecordingEntry`
-    /// stream). Non-tool entries are skipped; entries keep their original order.
-    /// This is the W2-M1a data source until L0 replaces it.
-    pub fn from_recording_entries(entries: &[RecordingEntry]) -> Vec<Self> {
-        entries
+    /// Derive the trajectory from a session's L0 event log rows.
+    ///
+    /// `tool/call` bodies map 1:1 onto trace steps (`tool_name`, raw
+    /// `arguments` kept verbatim); every other kind is skipped. Order matches
+    /// the log, so `TrajectoryContains` sees the same subsequence semantics as
+    /// the recording-based source it replaced in §4.6.
+    pub fn from_session_events(events: &[shannon_types::session_event::SessionEvent]) -> Vec<Self> {
+        use shannon_types::session_event::{SessionEventBody, ToolCallPayload};
+
+        events
             .iter()
-            .filter_map(|entry| match entry {
-                RecordingEntry::ToolCall { tool, input, .. } => Some(Self {
-                    tool: tool.clone(),
-                    input_json: serde_json::to_string(input).expect("serialize tool input"),
+            .filter_map(|event| match &event.body {
+                SessionEventBody::ToolCall(ToolCallPayload {
+                    tool_name,
+                    arguments,
+                    ..
+                }) => Some(Self {
+                    tool: tool_name.clone(),
+                    input_json: arguments.clone(),
                 }),
                 _ => None,
             })
@@ -1250,38 +1258,51 @@ validate: []
     }
 
     #[test]
-    fn test_tool_call_trace_from_recording_entries() {
-        let entries = vec![
-            RecordingEntry::UserMessage {
-                content: "do it".to_string(),
-                turn: 0,
-            },
-            RecordingEntry::ToolCall {
-                tool: "Read".to_string(),
-                input: serde_json::json!({"path": "b.rs"}),
-                result: String::new(),
-                is_error: false,
-                duration_ms: 3,
-            },
-            RecordingEntry::ToolCall {
-                tool: "Bash".to_string(),
-                input: serde_json::json!({"command": "ls"}),
-                result: String::new(),
-                is_error: false,
-                duration_ms: 4,
-            },
-            RecordingEntry::SessionEnd {
-                session_id: "s".to_string(),
-                total_turns: 1,
-                total_tokens: 12,
-            },
+    fn test_tool_call_trace_from_session_events() {
+        use shannon_types::session_event::{
+            SessionEvent, SessionEventBody, ToolCallPayload, UserMessagePayload,
+        };
+
+        let events = vec![
+            SessionEvent::new(
+                0,
+                100,
+                "s",
+                1,
+                SessionEventBody::UserMessage(UserMessagePayload {
+                    source: UserMessagePayload::SOURCE_USER.into(),
+                    content: "do it".into(),
+                }),
+            ),
+            SessionEvent::new(
+                1,
+                101,
+                "s",
+                1,
+                SessionEventBody::ToolCall(ToolCallPayload {
+                    tool_use_id: "t1".into(),
+                    tool_name: "Read".into(),
+                    arguments: r#"{"path":"b.rs"}"#.into(),
+                }),
+            ),
+            SessionEvent::new(
+                2,
+                102,
+                "s",
+                1,
+                SessionEventBody::ToolCall(ToolCallPayload {
+                    tool_use_id: "t2".into(),
+                    tool_name: "Bash".into(),
+                    arguments: r#"{"command":"ls"}"#.into(),
+                }),
+            ),
         ];
 
-        let trace = ToolCallTrace::from_recording_entries(&entries);
+        let trace = ToolCallTrace::from_session_events(&events);
         assert_eq!(
             trace.iter().map(|c| c.tool.as_str()).collect::<Vec<_>>(),
             vec!["Read", "Bash"],
-            "only ToolCall entries become trajectory steps"
+            "only tool/call rows become trajectory steps"
         );
         assert_eq!(trace[0].input_json, r#"{"path":"b.rs"}"#);
     }

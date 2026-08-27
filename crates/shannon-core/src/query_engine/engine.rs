@@ -791,19 +791,21 @@ impl QueryEngine {
         self.triggered_routines.clone()
     }
 
-    /// Restore conversation from a previously saved session
+    /// Restore conversation from the session's L0 event log (§4.6 cutover).
     ///
-    /// Attempts to load session data from disk. Returns Ok(false) if no
-    /// persisted session exists for the given session_id.
+    /// The only authoritative record is
+    /// `<sessions-dir>/<session_id>/events.jsonl`; the in-memory conversation
+    /// is rebuilt by projecting that log — no snapshot file is consulted.
+    /// Returns Ok(false) when no log exists for `session_id`.
     pub fn restore_session(&mut self, session_id: Uuid) -> Result<bool, QueryError> {
-        match self.state.load_session(&session_id) {
-            Ok(Some(session_data)) => {
-                // Restore conversation messages
-                self.conversation.messages = session_data.messages;
-                self.conversation.turn_count = session_data.metadata.turn_count;
-                self.conversation.total_tokens = session_data.metadata.total_input_tokens
-                    + session_data.metadata.total_output_tokens;
-                // Cost is not tracked in persisted metadata, so we keep current value
+        let store = crate::session_log::SessionStore::new(self.state.sessions_dir().to_path_buf());
+        match store.load(&session_id) {
+            Ok(Some(stored)) => {
+                // Restore conversation messages from the projected history.
+                self.conversation.messages = stored.messages;
+                self.conversation.turn_count = stored.metadata.turn_count;
+                self.conversation.total_tokens =
+                    stored.metadata.total_input_tokens + stored.metadata.total_output_tokens;
                 self.session_id = session_id;
                 Ok(true)
             }
@@ -1175,9 +1177,11 @@ impl QueryEngine {
         let client_max_tokens = self.client.max_tokens();
         let client_provider = self.client.provider().clone();
         let self_session_id = self.session_id.to_string();
+        // §4.6: the log lives in the sessions container owned by this
+        // engine's `StateManager`, so restore/list always find it —
+        // `SHANNON_HOME` still wins when set (legacy whole-root override).
+        let l0_container = crate::session_log::effective_log_container(self.state.sessions_dir());
         let user_message = context.user_message.clone();
-        let state_for_save = self.state.clone();
-        let session_id_for_save = self.session_id;
         let cost_tracker = self.cost_tracker.clone();
         let hook_manager = self.hook_manager.clone();
         let triggered_routines = self.triggered_routines.clone();
@@ -1402,7 +1406,8 @@ impl QueryEngine {
             // so in-process distribution and persistence share one path;
             // dropping its guard (task end / abort) closes the log with the
             // same interrupted-turn semantics as before.
-            let l0_tee = crate::session_log::TeeHandle::open(
+            let l0_tee = crate::session_log::TeeHandle::open_in_container(
+                &l0_container,
                 &self_session_id,
                 client_model.as_str(),
                 Some(client_provider.to_string().as_str()),
@@ -1590,16 +1595,6 @@ impl QueryEngine {
                         }
                     );
                     send_event!(tx, QueryEvent::Completed { query_id });
-
-                    // Auto-save conversation after completion
-                    if let Err(e) = save_conversation_to_disk(
-                        &state_for_save,
-                        session_id_for_save,
-                        &conversation.messages,
-                        &client_model,
-                    ) {
-                        tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {e}");
-                    }
 
                     break;
                 }
@@ -3506,16 +3501,6 @@ impl QueryEngine {
                                                 let _ =
                                                     tx.send(Ok(QueryEvent::Completed { query_id }));
 
-                                                // Auto-save conversation after completion
-                                                if let Err(e) = save_conversation_to_disk(
-                                                    &state_for_save,
-                                                    session_id_for_save,
-                                                    &conversation.messages,
-                                                    &client_model,
-                                                ) {
-                                                    tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {e}");
-                                                }
-
                                                 return;
                                             }
                                         }
@@ -3571,14 +3556,7 @@ impl QueryEngine {
                                             }
                                         );
                                         send_event!(tx, QueryEvent::Completed { query_id });
-                                        if let Err(err) = save_conversation_to_disk(
-                                            &state_for_save,
-                                            session_id_for_save,
-                                            &conversation.messages,
-                                            &client_model,
-                                        ) {
-                                            tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {err}");
-                                        }
+
                                         return;
                                     }
 
@@ -3699,14 +3677,7 @@ impl QueryEngine {
                                                     }
                                                 );
                                                 send_event!(tx, QueryEvent::Completed { query_id });
-                                                if let Err(err) = save_conversation_to_disk(
-                                                    &state_for_save,
-                                                    session_id_for_save,
-                                                    &conversation.messages,
-                                                    &client_model,
-                                                ) {
-                                                    tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {err}");
-                                                }
+
                                                 return;
                                             }
                                             Ok(Err(retry_err)) => {
@@ -3792,16 +3763,6 @@ impl QueryEngine {
                                 }
                             );
                             send_event!(tx, QueryEvent::Completed { query_id });
-
-                            // Auto-save conversation after completion
-                            if let Err(e) = save_conversation_to_disk(
-                                &state_for_save,
-                                session_id_for_save,
-                                &conversation.messages,
-                                &client_model,
-                            ) {
-                                tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {e}");
-                            }
 
                             return;
                         }
@@ -3896,15 +3857,6 @@ impl QueryEngine {
                                 }
                             );
                             send_event!(tx, QueryEvent::Completed { query_id });
-
-                            if let Err(e) = save_conversation_to_disk(
-                                &state_for_save,
-                                session_id_for_save,
-                                &conversation.messages,
-                                &client_model,
-                            ) {
-                                tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {e}");
-                            }
 
                             return;
                         }
@@ -4186,14 +4138,7 @@ impl QueryEngine {
                                         }
                                     );
                                     send_event!(tx, QueryEvent::Completed { query_id });
-                                    if let Err(err) = save_conversation_to_disk(
-                                        &state_for_save,
-                                        session_id_for_save,
-                                        &conversation.messages,
-                                        &client_model,
-                                    ) {
-                                        tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {err}");
-                                    }
+
                                     return;
                                 }
                                 Ok(Err(retry_err)) => {
@@ -4320,64 +4265,6 @@ impl QueryEngine {
         self.conversation.total_tokens += input_tokens + output_tokens;
         self.conversation.total_cost += cost_usd;
     }
-}
-
-/// Helper function to save conversation to disk
-///
-/// This is called from the background task after a query completes successfully.
-fn save_conversation_to_disk(
-    state: &Arc<StateManager>,
-    session_id: Uuid,
-    messages: &[Message],
-    model: &str,
-) -> Result<(), String> {
-    use shannon_engine::api::{ContentBlock, MessageContent};
-    use shannon_engine::state::SessionPersistMetadata;
-
-    // Generate title from first user message
-    let title = messages
-        .iter()
-        .find(|m| m.role == "user")
-        .and_then(|m| match &m.content {
-            MessageContent::Text(text) => {
-                let preview = if text.len() > 50 {
-                    let mut end = 47.min(text.len());
-                    while !text.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    format!("{}...", &text[..end])
-                } else {
-                    text.clone()
-                };
-                Some(preview)
-            }
-            MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
-                ContentBlock::Text { text } => {
-                    let preview = if text.len() > 50 {
-                        let mut end = 47.min(text.len());
-                        while !text.is_char_boundary(end) {
-                            end -= 1;
-                        }
-                        format!("{}...", &text[..end])
-                    } else {
-                        text.clone()
-                    };
-                    Some(preview)
-                }
-                _ => None,
-            }),
-        });
-
-    // Build metadata
-    let metadata = SessionPersistMetadata {
-        model: model.to_string(),
-        title,
-        ..Default::default()
-    };
-
-    state
-        .save_session(&session_id, messages, &metadata)
-        .map_err(|e| e.to_string())
 }
 
 // ─── Auto-test loop (P1-5) ──────────────────────────────────────────────────
@@ -4645,8 +4532,9 @@ mod tests {
     }
 
     #[test]
-    fn test_save_and_restore_session() {
-        // Create a temp directory for this test
+    fn test_save_and_restore_session_roundtrips_through_l0() {
+        // §4.6: the restore roundtrip runs through the L0 event log only —
+        // a live-looking session is written by the tee, then projected back.
         let temp_dir = env::temp_dir()
             .join("shannon-session-test")
             .join(Uuid::new_v4().to_string());
@@ -4655,69 +4543,50 @@ mod tests {
         let state = Arc::new(StateManager::with_sessions_dir(temp_dir.clone()).unwrap());
         let session_id = Uuid::new_v4();
 
-        // Create some test messages
-        let messages = vec![
-            shannon_engine::api::Message {
-                role: "user".to_string(),
-                content: MessageContent::Text("Hello, how are you?".to_string()),
-            },
-            shannon_engine::api::Message {
-                role: "assistant".to_string(),
-                content: MessageContent::Text("I'm doing well, thanks!".to_string()),
-            },
-        ];
+        // Seed the L0 log exactly as a real query would (tee + writer).
+        {
+            let mut tee = crate::session_log::SessionTee::open_in_container(
+                state.sessions_dir(),
+                &session_id.to_string(),
+                "test-model",
+                Some("anthropic"),
+            );
+            tee.record_user_message("Hello, how are you?");
+            tee.record_turn_start(None);
+            tee.record_query_event(&QueryEvent::Text {
+                query_id: Uuid::new_v4(),
+                content: "I'm doing well".into(),
+            });
+            tee.record_query_event(&QueryEvent::Usage {
+                query_id: Uuid::new_v4(),
+                input_tokens: 5,
+                output_tokens: 4,
+                cost_usd: 0.01,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+            });
+            tee.record_query_event(&QueryEvent::Completed {
+                query_id: Uuid::new_v4(),
+            });
+            tee.close();
+        }
 
-        // Save session
-        let result = save_conversation_to_disk(&state, session_id, &messages, "test-model");
-        assert!(result.is_ok(), "Failed to save session: {:?}", result.err());
-
-        // Verify file was created
-        let session_file = temp_dir.join(format!("{session_id}.json"));
-        assert!(session_file.exists(), "Session file not created");
-
-        // Load and verify
-        let loaded = state.load_session(&session_id).unwrap();
-        assert!(loaded.is_some(), "Failed to load session");
-
-        let session_data = loaded.unwrap();
-        assert_eq!(session_data.session_id, session_id);
-        assert_eq!(session_data.messages.len(), 2);
-        assert_eq!(session_data.metadata.model, "test-model");
-
-        // Verify title was generated from first user message
-        assert_eq!(
-            session_data.metadata.title,
-            Some("Hello, how are you?".to_string())
+        let mut engine = create_test_engine_with_state(
+            StateManager::with_sessions_dir(temp_dir.clone()).unwrap(),
         );
+        engine.session_id = session_id;
+        let restored = engine.restore_session(session_id);
+        assert!(matches!(restored, Ok(true)), "restore must succeed");
 
-        // Cleanup
-        let _ = fs::remove_dir_all(temp_dir);
-    }
-
-    #[test]
-    fn test_save_conversation_long_title_truncated() {
-        let temp_dir = env::temp_dir()
-            .join("shannon-title-test")
-            .join(Uuid::new_v4().to_string());
-        fs::create_dir_all(&temp_dir).unwrap();
-
-        let state = Arc::new(StateManager::with_sessions_dir(temp_dir.clone()).unwrap());
-        let session_id = Uuid::new_v4();
-
-        // Create a message with long text (100 chars)
-        let long_text = "A".repeat(100);
-        let messages = vec![shannon_engine::api::Message {
-            role: "user".to_string(),
-            content: MessageContent::Text(long_text),
-        }];
-
-        // Save
-        save_conversation_to_disk(&state, session_id, &messages, "test-model").unwrap();
-
-        // Load and check title is truncated to 47 chars + "..." = 50 total
-        let loaded = state.load_session(&session_id).unwrap().unwrap();
-        let expected_title = "A".repeat(47) + "...";
-        assert_eq!(loaded.metadata.title, Some(expected_title));
+        assert_eq!(engine.conversation_history().len(), 2);
+        let first = &engine.conversation_history()[0];
+        assert_eq!(first.role, "user");
+        match &first.content {
+            MessageContent::Text(t) => assert_eq!(t, "Hello, how are you?"),
+            other => panic!("wrong content: {other:?}"),
+        }
+        assert_eq!(engine.conversation.turn_count, 1);
+        assert_eq!(engine.conversation.total_tokens, 9);
 
         // Cleanup
         let _ = fs::remove_dir_all(temp_dir);
@@ -4864,6 +4733,14 @@ mod tests {
         let tools = ToolRegistry::new();
         let permissions = PermissionManager::new();
         let state = StateManager::new();
+        let config = QueryEngineConfig::default();
+        QueryEngine::new(client, tools, permissions, state, config)
+    }
+
+    fn create_test_engine_with_state(state: StateManager) -> QueryEngine {
+        let client = create_test_client();
+        let tools = ToolRegistry::new();
+        let permissions = PermissionManager::new();
         let config = QueryEngineConfig::default();
         QueryEngine::new(client, tools, permissions, state, config)
     }

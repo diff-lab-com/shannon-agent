@@ -104,6 +104,14 @@ impl SessionLogWriter {
         Self::open_path(path, session_id)
     }
 
+    /// Open (or resume) `<container>/<session_id>/events.jsonl` where
+    /// `container` **is** the sessions directory (the §4.6 L0 layout used by
+    /// the restore/list paths and `StateManager`).
+    pub fn open_layout(container: &Path, session_id: &str) -> Result<Self, SessionLogError> {
+        let path = super::session_log_container_path(container, session_id);
+        Self::open_path(path, session_id)
+    }
+
     fn open_path(path: PathBuf, session_id: &str) -> Result<Self, SessionLogError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;

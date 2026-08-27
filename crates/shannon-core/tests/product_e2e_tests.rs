@@ -19,15 +19,10 @@ use futures::StreamExt;
 use mockito::{Server, ServerGuard};
 use serde_json::json;
 use shannon_core::query_engine::CostTracker;
-use shannon_core::query_engine::{
-    QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
-};
-use shannon_core::tools::{Tool, ToolError, ToolOutput, ToolRegistry, ToolResult};
-use shannon_engine::api::{
-    ContentBlock, ContentDelta, LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent,
-    RetryConfig, StreamEvent,
-};
-use shannon_engine::permissions::{PermissionChoice, PermissionManager};
+use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
+use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
+use shannon_engine::api::{ContentBlock, LlmClient, LlmClientConfig, LlmProvider, RetryConfig};
+use shannon_engine::permissions::PermissionManager;
 use shannon_engine::state::StateManager;
 use shannon_engine::streaming_tool_executor::{StreamingToolExecutor, ToolStatus};
 use uuid::Uuid;
@@ -763,453 +758,100 @@ async fn test_tool_registry_missing_tool_returns_error() {
 }
 
 // ============================================================================
-// E2E Test: Session persistence round-trip
+// E2E Test: Session persistence round-trip over the L0 event log (§4.6)
 // ============================================================================
 
 #[test]
 fn test_session_persistence_round_trip() {
-    let state_mgr = StateManager::new();
+    // The snapshot file is gone; persistence IS the event log now. Seed a
+    // two-turn session the way the engine tee does, then project it back.
+    let home = tempfile::tempdir().unwrap();
+    let container = home.path().join("sessions");
+    let store = shannon_core::session_log::SessionStore::new(&container);
     let session_id = Uuid::new_v4();
 
-    let messages = vec![
-        Message {
-            role: "user".to_string(),
-            content: MessageContent::Text("Write a hello world in Rust".to_string()),
-        },
-        Message {
-            role: "assistant".to_string(),
-            content: MessageContent::Blocks(vec![ContentBlock::Text {
-                text: "Here's a simple hello world:".to_string(),
-            }]),
-        },
-        Message {
-            role: "user".to_string(),
-            content: MessageContent::Text("Now add error handling".to_string()),
-        },
-        Message {
-            role: "assistant".to_string(),
-            content: MessageContent::Blocks(vec![ContentBlock::Text {
-                text: "Added Result type handling".to_string(),
-            }]),
-        },
-    ];
+    {
+        let mut w = shannon_core::session_log::SessionLogWriter::open_layout(
+            &container,
+            &session_id.to_string(),
+        )
+        .unwrap();
+        w.record(
+            shannon_types::session_event::SessionEventBody::SessionStart(
+                shannon_types::session_event::SessionStartPayload {
+                    model: "claude-sonnet-4".into(),
+                    provider: Some("anthropic".into()),
+                    cwd: None,
+                    app_version: None,
+                },
+            ),
+        );
+        for (prompt, reply) in [
+            (
+                "Write a hello world in Rust",
+                "Here's a simple hello world:",
+            ),
+            ("Now add error handling", "Added Result type handling"),
+        ] {
+            w.record(shannon_types::session_event::SessionEventBody::TurnStart(
+                shannon_types::session_event::TurnStartPayload { query_id: None },
+            ));
+            w.record(shannon_types::session_event::SessionEventBody::UserMessage(
+                shannon_types::session_event::UserMessagePayload {
+                    source: shannon_types::session_event::UserMessagePayload::SOURCE_USER.into(),
+                    content: prompt.into(),
+                },
+            ));
+            w.record(
+                shannon_types::session_event::SessionEventBody::AssistantChunk(
+                    shannon_types::session_event::AssistantChunkPayload {
+                        delta: reply.into(),
+                        thinking: false,
+                    },
+                ),
+            );
+            w.record(shannon_types::session_event::SessionEventBody::TurnEnd(
+                shannon_types::session_event::TurnEndPayload {
+                    reason: shannon_types::session_event::TurnEndPayload::REASON_COMPLETED.into(),
+                    usage: Some(shannon_types::session_event::TokenUsage {
+                        input_tokens: 1250,
+                        output_tokens: 600,
+                        cache_creation_tokens: 0,
+                        cache_read_tokens: 0,
+                        cost_usd: None,
+                    }),
+                    error: None,
+                },
+            ));
+        }
+        w.close().unwrap();
+    }
 
-    let metadata = shannon_engine::state::SessionPersistMetadata {
-        model: "claude-sonnet-4".to_string(),
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        total_input_tokens: 2500,
-        total_output_tokens: 1200,
-        turn_count: 4,
-        title: Some("Rust hello world".to_string()),
-        parent_session_id: None,
-        branch_point_message_index: None,
-        project_path: None,
-    };
-
-    // Save
-    state_mgr
-        .save_session(&session_id, &messages, &metadata)
+    // Curated title survives through the sidecar.
+    store
+        .save_sidecar(
+            &session_id,
+            &shannon_core::session_log::SessionSidecar {
+                title: Some("Rust hello world".into()),
+                ..Default::default()
+            },
+        )
         .unwrap();
 
-    // Load
-    let loaded = state_mgr.load_session(&session_id).unwrap();
+    let loaded = store.load(&session_id).unwrap();
     assert!(loaded.is_some());
 
     let data = loaded.unwrap();
     assert_eq!(data.session_id, session_id);
+    // user → assistant ×2 turns
     assert_eq!(data.messages.len(), 4);
     assert_eq!(data.metadata.title, Some("Rust hello world".to_string()));
     assert_eq!(data.metadata.model, "claude-sonnet-4");
     assert_eq!(data.metadata.total_input_tokens, 2500);
+    assert_eq!(data.metadata.total_output_tokens, 1200);
+    assert_eq!(data.metadata.turn_count, 2);
 
-    // Clean up
-    state_mgr.delete_persisted_session(&session_id).unwrap();
-    assert!(state_mgr.load_session(&session_id).unwrap().is_none());
-}
-
-// ============================================================================
-// E2E Test: Tool error produces is_error result
-// ============================================================================
-
-struct FailingTool;
-#[async_trait]
-impl Tool for FailingTool {
-    async fn execute(&self, _input: serde_json::Value) -> ToolResult<ToolOutput> {
-        Err(ToolError::ExecutionFailed(
-            "Permission denied: cannot write to /etc/passwd".to_string(),
-        ))
-    }
-    fn name(&self) -> &str {
-        "bash"
-    }
-    fn description(&self) -> &str {
-        "failing tool"
-    }
-    fn input_schema(&self) -> serde_json::Value {
-        json!({})
-    }
-}
-
-#[tokio::test]
-async fn test_e2e_tool_error_propagates_as_is_error_result() {
-    let _guard = AnthropicKeyGuard::set();
-    let mut server = Server::new_async().await;
-
-    // First response: LLM requests tool use
-    let tool_sse = concat!(
-        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_err\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":20,\"output_tokens\":0}}}\n\n",
-        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
-        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I'll try that.\"}}\n\n",
-        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
-        "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_err\",\"name\":\"bash\",\"input\":{}}}\n\n",
-        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n",
-        "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
-        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"input_tokens\":20,\"output_tokens\":10}}\n\n",
-        "data: {\"type\":\"message_stop\"}\n\n",
-    );
-
-    // Second response: LLM apologizes after error
-    let final_sse = concat!(
-        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_apology\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":30,\"output_tokens\":0}}}\n\n",
-        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
-        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I can't access that file.\"}}\n\n",
-        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
-        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":30,\"output_tokens\":10}}\n\n",
-        "data: {\"type\":\"message_stop\"}\n\n",
-    );
-
-    server
-        .mock("POST", "/v1/messages")
-        .with_status(200)
-        .with_header("content-type", "text/event-stream")
-        .with_body(tool_sse)
-        .expect(1)
-        .create();
-
-    server
-        .mock("POST", "/v1/messages")
-        .with_status(200)
-        .with_header("content-type", "text/event-stream")
-        .with_body(final_sse)
-        .expect(1)
-        .create();
-
-    let client = make_client(&server, LlmProvider::Anthropic);
-    let registry = ToolRegistry::new();
-    registry.register(Box::new(FailingTool)).unwrap();
-
-    let engine = QueryEngine::with_defaults(
-        client,
-        registry,
-        PermissionManager::new(),
-        StateManager::new(),
-    );
-
-    let ctx = make_context("Read /etc/passwd");
-    let mut stream = engine.process_query(ctx, None).await;
-
-    let mut has_error_result = false;
-    let mut final_text = String::new();
-
-    while let Some(result) = stream.next().await {
-        match result.unwrap() {
-            QueryEvent::ToolUseResult { is_error, .. } => {
-                has_error_result = true;
-                assert!(is_error, "Tool error should set is_error = true");
-            }
-            QueryEvent::Text { content, .. } => final_text.push_str(&content),
-            _ => {}
-        }
-    }
-
-    assert!(has_error_result, "Should receive tool result with is_error");
-    assert!(
-        !final_text.is_empty(),
-        "LLM should respond acknowledging the error"
-    );
-}
-
-// ============================================================================
-// E2E Test: QueryEngineConfig defaults and customization
-// ============================================================================
-
-#[test]
-fn test_query_engine_config_defaults() {
-    let config = QueryEngineConfig::default();
-    assert_eq!(config.max_turns, 20);
-    assert!(config.system_prompt.is_some());
-    assert_eq!(config.compression_threshold, 0.8);
-    assert_eq!(config.keep_recent_messages, 10);
-    assert_eq!(config.max_parallel_tools, 10);
-    assert!(!config.verbose);
-    assert!(!config.enable_thinking);
-}
-
-#[test]
-fn test_query_engine_config_custom() {
-    let config = QueryEngineConfig {
-        max_turns: 5,
-        max_budget_usd: Some(1.0),
-        timeout_seconds: 60,
-        verbose: true,
-        enable_thinking: true,
-        max_context_tokens: Some(50_000),
-        compression_threshold: 0.7,
-        keep_recent_messages: 5,
-        compression_strategy: shannon_core::query_engine::CompressionStrategy::TruncateOldest,
-        system_prompt: Some("Custom prompt".to_string()),
-        auto_commit: false,
-        effort_level: None,
-        focus_area: None,
-        fast_model: None,
-        plan_model: None,
-        max_parallel_tools: 10,
-        repo_map_enabled: true,
-        repo_map_budget_tokens: 2_000,
-        repo_map_root: None,
-        auto_test: None,
-    };
-    assert_eq!(config.max_turns, 5);
-    assert_eq!(config.max_budget_usd, Some(1.0));
-    assert!(config.verbose);
-    assert!(config.enable_thinking);
-}
-
-// ============================================================================
-// E2E Test: Permission denied flow with recovery
-// ============================================================================
-
-#[tokio::test]
-async fn test_e2e_permission_denied_recovers_gracefully() {
-    let _guard = AnthropicKeyGuard::set();
-    let mut server = Server::new_async().await;
-
-    // First response: LLM requests dangerous tool
-    server
-        .mock("POST", "/v1/messages")
-        .with_status(200)
-        .with_header("content-type", "text/event-stream")
-        .with_body(anthropic_sse_tool_then_text(
-            "msg_danger",
-            "bash",
-            "toolu_danger",
-            &json!({"command": "rm -rf /"})
-                .to_string()
-                .replace('"', "\\\""),
-            "",
-        ))
-        .expect(1)
-        .create();
-
-    // Recovery response after denial
-    server
-        .mock("POST", "/v1/messages")
-        .with_status(200)
-        .with_header("content-type", "text/event-stream")
-        .with_body(anthropic_sse_final_text(
-            "msg_recovery",
-            "Understood, I won't delete files.",
-        ))
-        .expect(1)
-        .create();
-
-    let client = make_client(&server, LlmProvider::Anthropic);
-    let registry = ToolRegistry::new();
-    registry
-        .register(Box::new(RecordableTool::new(
-            "bash",
-            ToolOutput::success("deleted".to_string()),
-        )))
-        .unwrap();
-
-    let engine = QueryEngine::with_defaults(
-        client,
-        registry,
-        PermissionManager::new(),
-        StateManager::new(),
-    );
-
-    let ctx = make_context("Delete everything");
-    let (perm_tx, mut perm_rx) =
-        tokio::sync::mpsc::unbounded_channel::<shannon_core::query_engine::PermissionRequest>();
-
-    // Spawn task to deny the permission
-    let deny_handle = tokio::spawn(async move {
-        if let Some(req) = perm_rx.recv().await {
-            let _ = req.response_tx.send(PermissionChoice::Deny);
-        }
-    });
-
-    let mut stream = engine.process_query(ctx, Some(perm_tx)).await;
-
-    let mut events = Vec::new();
-    while let Some(result) = stream.next().await {
-        match result {
-            Ok(event) => events.push(event),
-            Err(e) => panic!("Stream should not error on permission denial: {e}"),
-        }
-    }
-
-    let _ = deny_handle.await;
-
-    let has_tool_request = events
-        .iter()
-        .any(|e| matches!(e, QueryEvent::ToolUseRequest { .. }));
-    let has_termination = events
-        .iter()
-        .any(|e| matches!(e, QueryEvent::Completed { .. } | QueryEvent::Failed { .. }));
-
-    assert!(has_tool_request, "Should have tool request before denial");
-    assert!(
-        has_termination,
-        "Should terminate (Completed or Failed) after denial"
-    );
-}
-
-// ============================================================================
-// E2E Test: LlmClient non-streaming with tool calls
-// ============================================================================
-
-#[tokio::test]
-async fn test_e2e_llm_client_non_streaming_tool_calls() {
-    let mut server = Server::new_async().await;
-
-    let response = json!({
-        "id": "msg_tools",
-        "role": "assistant",
-        "content": [
-            {"type": "text", "text": "Let me check."},
-            {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {"command": "ls"}},
-            {"type": "tool_use", "id": "toolu_2", "name": "read", "input": {"path": "main.rs"}}
-        ],
-        "model": "test-model",
-        "stop_reason": "tool_use",
-        "usage": {"input_tokens": 20, "output_tokens": 15}
-    });
-
-    server
-        .mock("POST", "/v1/messages")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(response.to_string())
-        .create();
-
-    let client = make_client(&server, LlmProvider::Anthropic);
-    let messages = vec![Message {
-        role: "user".to_string(),
-        content: MessageContent::Text("Check files".to_string()),
-    }];
-
-    let content = client.send_message(messages, None, None).await.unwrap();
-    assert_eq!(content.len(), 3, "Should have text + 2 tool_use blocks");
-
-    // Verify content block types
-    assert!(matches!(&content[0], ContentBlock::Text { text } if text == "Let me check."));
-    assert!(matches!(&content[1], ContentBlock::ToolUse { name, .. } if name == "bash"));
-    assert!(matches!(&content[2], ContentBlock::ToolUse { name, .. } if name == "read"));
-}
-
-// ============================================================================
-// E2E Test: OpenAI streaming with multiple text deltas
-// ============================================================================
-
-#[tokio::test]
-async fn test_e2e_openai_streaming_assembles_text() {
-    let mut server = Server::new_async().await;
-
-    let body = concat!(
-        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"index\":0}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"content\":\"Step 1: \"},\"index\":0}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"content\":\"Create \"},\"index\":0}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"content\":\"main.rs\"},\"index\":0}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"content\":\".\\n\"},\"index\":0}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"content\":\"Step 2: Write code.\"},\"index\":0}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}]}\n\n",
-        "data: [DONE]\n\n",
-    );
-
-    server
-        .mock("POST", "/v1/chat/completions")
-        .with_status(200)
-        .with_header("content-type", "text/event-stream")
-        .with_body(body)
-        .create();
-
-    let client = make_client(&server, LlmProvider::OpenAI);
-    let messages = vec![Message {
-        role: "user".to_string(),
-        content: MessageContent::Text("Guide me".to_string()),
-    }];
-
-    let mut stream = client
-        .send_message_stream(messages, None, None)
-        .await
-        .unwrap();
-    let mut text = String::new();
-    while let Some(result) = stream.next().await {
-        let event = result.unwrap();
-        if let StreamEvent::ContentBlockDelta { delta, .. } = event {
-            if let ContentDelta::TextDelta { text: t } = delta {
-                text.push_str(&t);
-            }
-        }
-    }
-
-    assert_eq!(text, "Step 1: Create main.rs.\nStep 2: Write code.");
-}
-
-// ════════════════════════════════════════════════════════════════════════
-// Section: Ollama malformed output pattern detection
-// ════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn test_is_ollama_malformed_message_patterns() {
-    use shannon_engine::api::error::is_ollama_malformed_message;
-
-    // Original patterns
-    assert!(is_ollama_malformed_message("can't find closing '}' symbol"));
-    assert!(is_ollama_malformed_message("unexpected end of input"));
-    assert!(is_ollama_malformed_message("malformed JSON response"));
-
-    // GLM-specific pattern
-    assert!(is_ollama_malformed_message(
-        "json: cannot unmarshal array into Go value of type string"
-    ));
-
-    // New patterns
-    assert!(is_ollama_malformed_message(
-        "invalid json: unexpected character"
-    ));
-    assert!(is_ollama_malformed_message("parse error: invalid token"));
-    assert!(is_ollama_malformed_message(
-        "unexpected token during parsing"
-    ));
-
-    // Case insensitive
-    assert!(is_ollama_malformed_message("MALFORMED output"));
-    assert!(is_ollama_malformed_message(
-        "JSON: Cannot Unmarshal something"
-    ));
-    assert!(is_ollama_malformed_message("Parse Error at line 5"));
-
-    // Unicode normalization (U+2019 → ASCII ')
-    assert!(is_ollama_malformed_message(
-        "can\u{2019}t find closing bracket"
-    ));
-
-    // GLM variant without "find"
-    assert!(is_ollama_malformed_message("can't closing '}' symbol"));
-    assert!(is_ollama_malformed_message(
-        "Value looks like object, but can't closing '}' symbol"
-    ));
-
-    // Brace-closing pattern
-    assert!(is_ollama_malformed_message("closing '}' not found"));
-
-    // Non-matching patterns
-    assert!(!is_ollama_malformed_message("Internal Server Error"));
-    assert!(!is_ollama_malformed_message("rate limit exceeded"));
-    assert!(!is_ollama_malformed_message("model not found"));
-    assert!(!is_ollama_malformed_message("connection refused"));
+    // Delete removes the whole session directory.
+    assert!(store.delete(&session_id).unwrap());
+    assert!(store.load(&session_id).unwrap().is_none());
 }

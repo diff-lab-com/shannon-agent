@@ -30,19 +30,16 @@ pub async fn new_session(
     let title = format!("Session {}", id_str.split('-').next().unwrap_or(&id_str));
     let now = chrono_timestamp();
 
-    // Create empty session file using StateManager
+    // Create the session's L0 log (§4.6): opening + closing a fresh writer
+    // records the `session/start` row, which is all a brand-new session has.
     let model = state.client_config.read().await.model.clone();
-    let metadata = shannon_engine::state::SessionPersistMetadata {
-        model,
-        turn_count: 0,
-        title: Some(title.clone()),
-        ..Default::default()
-    };
-
-    state
-        .state_manager
-        .save_session(&id, &[], &metadata)
-        .map_err(|e| e.to_string())?;
+    shannon_core::session_log::SessionTee::open_in_container(
+        state.l0_store().container(),
+        &id_str,
+        &model,
+        None,
+    )
+    .close();
 
     // Create session metadata
     let session_meta = SessionMeta {
@@ -124,28 +121,17 @@ pub(crate) async fn auto_title_from_first_message(
     }
     session.title = title.clone();
 
-    // Persist alongside the message we just buffered, so the title is
-    // durable even if the app closes before the query completes.
-    let model = state.client_config.read().await.model.clone();
-    let target_session = state.registry.get_or_create(SessionKey(session_id));
-    let messages = target_session.messages.lock().await.clone();
-    let core_msgs: Vec<shannon_engine::api::Message> = messages
-        .iter()
-        .map(|m| shannon_engine::api::Message {
-            role: m.role.clone(),
-            content: shannon_engine::api::MessageContent::Text(m.content.clone()),
-        })
-        .collect();
-    let metadata = shannon_engine::state::SessionPersistMetadata {
-        model,
-        turn_count: core_msgs.len() / 2,
-        title: Some(title),
-        ..Default::default()
-    };
-    let _ = state
-        .state_manager
-        .save_session(&session_id, &core_msgs, &metadata);
+    // Persist the curated title in the session sidecar (§4.6) so it is
+    // durable even if the app closes before the query completes. The
+    // conversation itself is already continuous in events.jsonl.
     drop(sessions);
+    let _ = state.l0_store().save_sidecar(
+        &session_id,
+        &shannon_core::session_log::SessionSidecar {
+            title: Some(title),
+            ..Default::default()
+        },
+    );
 
     let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
 }
@@ -214,23 +200,14 @@ pub async fn search_sessions(
         }
 
         if let Ok(uuid) = uuid::Uuid::parse_str(&s.id) {
-            if let Ok(Some(data)) = state.state_manager.load_session(&uuid) {
-                let hit = data.messages.iter().any(|m| match &m.content {
-                    shannon_engine::api::MessageContent::Text(t) => {
-                        t.to_lowercase().contains(&query_lower)
-                    }
-                    shannon_engine::api::MessageContent::Blocks(blocks) => {
-                        blocks.iter().any(|b| match b {
-                            shannon_engine::api::ContentBlock::Text { text } => {
-                                text.to_lowercase().contains(&query_lower)
-                            }
-                            _ => false,
-                        })
-                    }
-                });
-                if hit {
-                    content_matches.push(info());
-                }
+            // Full-text search on L0 events — the transcript-search successor.
+            let hit = state
+                .l0_store()
+                .search_session(&uuid, &query_lower)
+                .map(|hits| !hits.is_empty())
+                .unwrap_or(false);
+            if hit {
+                content_matches.push(info());
             }
         }
     }
@@ -248,10 +225,10 @@ pub async fn load_session(
 ) -> Result<Vec<ChatMessage>, String> {
     let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
-    // Load from StateManager
+    // Load by projecting the session's L0 log.
     let session_data = state
-        .state_manager
-        .load_session(&session_uuid)
+        .l0_store()
+        .load(&session_uuid)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Session not found: {id}"))?;
 
@@ -319,8 +296,8 @@ pub async fn export_session(
     let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
     let session_data = state
-        .state_manager
-        .load_session(&session_uuid)
+        .l0_store()
+        .load(&session_uuid)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Session not found: {id}"))?;
 
@@ -407,34 +384,13 @@ pub async fn switch_session(
 ) -> Result<Vec<ChatMessage>, String> {
     let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
-    // Save current session before switching (P0-4: use registry's active key)
-    {
-        let current_key = state.registry.active_key();
-        if let Some(key) = current_key {
-            if let Some(current_session) = state.registry.get(key) {
-                let messages = current_session.messages.lock().await.clone();
-                let model = state.client_config.read().await.model.clone();
-                let core_msgs: Vec<shannon_engine::api::Message> = messages
-                    .iter()
-                    .map(|m| shannon_engine::api::Message {
-                        role: m.role.clone(),
-                        content: shannon_engine::api::MessageContent::Text(m.content.clone()),
-                    })
-                    .collect();
-                let meta = shannon_engine::state::SessionPersistMetadata {
-                    model,
-                    turn_count: core_msgs.len() / 2,
-                    ..Default::default()
-                };
-                let _ = state.state_manager.save_session(&key.0, &core_msgs, &meta);
-            }
-        }
-    }
+    // (§4.6) No explicit save needed before switching: every turn is already
+    // durable in events.jsonl via the engine tee.
 
-    // Load new session
+    // Load new session by projecting its L0 log.
     let messages = match state
-        .state_manager
-        .load_session(&session_uuid)
+        .l0_store()
+        .load(&session_uuid)
         .map_err(|e| e.to_string())?
     {
         Some(data) => data
@@ -640,10 +596,10 @@ pub async fn delete_session(
             .and_then(|s| s.working_dir.clone())
     };
 
-    // Delete from StateManager
+    // Delete removes the session's whole L0 directory (log + sidecar).
     let deleted = state
-        .state_manager
-        .delete_persisted_session(&session_uuid)
+        .l0_store()
+        .delete(&session_uuid)
         .map_err(|e| e.to_string())?;
 
     if deleted {
@@ -695,29 +651,15 @@ pub async fn rename_session(
     if let Some(session) = sessions.iter_mut().find(|s| s.id == id) {
         session.title = title.clone();
 
-        // Update persisted session metadata (P0-4: read messages from the
-        // target session in the registry, not from `state.messages`).
-        let model = state.client_config.read().await.model.clone();
-        let target_session = state.registry.get_or_create(SessionKey(session_uuid));
-        let messages = target_session.messages.lock().await.clone();
-        let core_msgs: Vec<shannon_engine::api::Message> = messages
-            .iter()
-            .map(|m| shannon_engine::api::Message {
-                role: m.role.clone(),
-                content: shannon_engine::api::MessageContent::Text(m.content.clone()),
-            })
-            .collect();
-
-        let metadata = shannon_engine::state::SessionPersistMetadata {
-            model,
-            turn_count: core_msgs.len() / 2,
-            title: Some(title),
-            ..Default::default()
-        };
-
-        let _ = state
-            .state_manager
-            .save_session(&session_uuid, &core_msgs, &metadata);
+        // Persist the curated title in the sidecar (§4.6); P0-4 note still
+        // applies to the in-memory list above — the store never reads it.
+        let _ = state.l0_store().save_sidecar(
+            &session_uuid,
+            &shannon_core::session_log::SessionSidecar {
+                title: Some(title),
+                ..Default::default()
+            },
+        );
 
         // Emit sessions updated event
         let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
@@ -744,30 +686,57 @@ pub async fn duplicate_session(
         .find(|s| s.id == id)
         .ok_or_else(|| format!("Session not found: {id}"))?;
 
-    // Load original session data
+    // Load original session data (projected from its L0 log)
     let session_data = state
-        .state_manager
-        .load_session(&session_uuid)
+        .l0_store()
+        .load(&session_uuid)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Session data not found: {id}"))?;
 
-    // Create new session with copied messages
+    // Create the duplicate by replaying every event into a fresh log.
     let new_id = uuid::Uuid::new_v4();
     let new_id_str = new_id.to_string();
     let new_title = format!("Copy of {}", original_session.title);
     let now = chrono_timestamp();
 
-    let model_name = state.client_config.read().await.model.clone();
-    let metadata = shannon_engine::state::SessionPersistMetadata {
-        model: model_name,
-        turn_count: session_data.messages.len() / 2,
-        title: Some(new_title.clone()),
-        ..Default::default()
-    };
+    {
+        use shannon_types::session_event::SessionEventBody;
+        let events = state
+            .l0_store()
+            .read_events(&session_uuid)
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        let mut w = shannon_core::session_log::SessionLogWriter::open_layout(
+            state.l0_store().container(),
+            &new_id_str,
+        )
+        .map_err(|e| e.to_string())?;
+        if events.is_empty() {
+            // Keep empty duplicates listable: an explicit start row marks them.
+            w.record(SessionEventBody::SessionStart(
+                shannon_types::session_event::SessionStartPayload {
+                    model: state.client_config.read().await.model.clone(),
+                    provider: None,
+                    cwd: None,
+                    app_version: None,
+                },
+            ));
+        }
+        for event in events {
+            w.record(event.body);
+        }
+        w.close().map_err(|e| e.to_string())?;
+    }
 
     state
-        .state_manager
-        .save_session(&new_id, &session_data.messages, &metadata)
+        .l0_store()
+        .save_sidecar(
+            &new_id,
+            &shannon_core::session_log::SessionSidecar {
+                title: Some(new_title.clone()),
+                ..Default::default()
+            },
+        )
         .map_err(|e| e.to_string())?;
 
     // Add to sessions list
@@ -821,16 +790,15 @@ pub(crate) async fn branch_session_internal(
     let parent_title = parent_session.title.clone();
     let parent_working_dir = parent_session.working_dir.clone();
 
-    // Load parent session data
+    // Load parent session data (projected from L0)
     let session_data = state
-        .state_manager
-        .load_session(&parent_uuid)
+        .l0_store()
+        .load(&parent_uuid)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Session data not found: {parent_id}"))?;
 
-    // Create new session with messages up to branch point
-    let new_id = uuid::Uuid::new_v4();
-    let new_id_str = new_id.to_string();
+    // Create new session carrying messages up to AND INCLUDING the branch
+    // point — the desktop convention (`take(branch_point + 1)`).
     let new_title = format!("Branch of {parent_title}");
     let now = chrono_timestamp();
 
@@ -842,39 +810,25 @@ pub(crate) async fn branch_session_internal(
             session_data.messages.len().saturating_sub(1)
         ));
     }
+    let keep_messages = branch_point + 1;
 
-    // Slice messages to include only up to branch point
-    let branch_messages: Vec<shannon_engine::api::Message> = session_data
-        .messages
-        .iter()
-        .take(branch_point + 1)
-        .cloned()
-        .collect();
-
-    let model_name = state.client_config.read().await.model.clone();
-    let metadata = shannon_engine::state::SessionPersistMetadata {
-        model: model_name,
-        turn_count: branch_messages.len() / 2,
-        title: Some(new_title.clone()),
-        parent_session_id: Some(parent_uuid),
-        branch_point_message_index: Some(branch_point),
-        ..Default::default()
-    };
-
-    state
-        .state_manager
-        .save_session(&new_id, &branch_messages, &metadata)
+    let stored_branch = state
+        .l0_store()
+        .create_branch(&parent_uuid, keep_messages, Some(new_title.clone()))
         .map_err(|e| e.to_string())?;
+
+    let branch_message_count = keep_messages;
+    let _ = &session_data;
 
     // Drop sessions lock before re-acquiring for push
     drop(sessions);
 
     // Add to sessions list with parent/branch info
     let new_session_meta = SessionMeta {
-        id: new_id_str.clone(),
+        id: stored_branch.session_id.to_string(),
         title: new_title.clone(),
         created_at: now,
-        message_count: branch_messages.len(),
+        message_count: branch_message_count,
         working_dir: parent_working_dir.clone(),
         parent_id: Some(parent_id.clone()),
         branch_point: Some(branch_point),
@@ -890,10 +844,10 @@ pub(crate) async fn branch_session_internal(
     }
 
     Ok(events::SessionInfo {
-        id: new_id_str,
+        id: stored_branch.session_id.to_string(),
         title: new_title,
         created_at: now,
-        message_count: branch_messages.len(),
+        message_count: branch_message_count,
         working_dir: parent_working_dir,
         parent_id: Some(parent_id),
         branch_point: Some(branch_point),

@@ -272,6 +272,16 @@ impl Default for AppState {
 }
 
 impl AppState {
+    /// The L0 session store over this app's sessions directory (§4.6).
+    ///
+    /// Every session read/write outside the live query path projects from or
+    /// curates the event log through here.
+    pub(crate) fn l0_store(&self) -> shannon_core::session_log::SessionStore {
+        shannon_core::session_log::SessionStore::new(
+            self.state_manager.sessions_dir().to_path_buf(),
+        )
+    }
+
     /// Create a new AppState, initializing the LLM client from env/config.
     pub fn new() -> Self {
         let desktop_config = config::load_config();
@@ -562,7 +572,6 @@ pub async fn send_message(
     // P0-4: per-session flags live on the `Arc<SessionState>` clone.
     let app = app_handle.clone();
     let cancel_token_clone = cancel_token.clone();
-    let state_mgr_arc = state.state_manager.clone();
     let client_config_arc = state.client_config.clone();
     let usage_store_arc = state.usage_store.clone();
     let notifier_arc = state.notifier.clone();
@@ -739,30 +748,8 @@ pub async fn send_message(
                             });
                         }
 
-                        // Auto-persist to StateManager using the per-session UUID.
-                        {
-                            let msgs = session_for_task.messages.lock().await.clone();
-                            let model = client_config_arc.read().await.model.clone();
-                            let core_msgs: Vec<shannon_engine::api::Message> = msgs
-                                .iter()
-                                .map(|m| shannon_engine::api::Message {
-                                    role: m.role.clone(),
-                                    content: shannon_engine::api::MessageContent::Text(
-                                        m.content.clone(),
-                                    ),
-                                })
-                                .collect();
-                            let meta = shannon_engine::state::SessionPersistMetadata {
-                                model,
-                                turn_count: core_msgs.len() / 2,
-                                ..Default::default()
-                            };
-                            let _ = state_mgr_arc.save_session(
-                                &session_for_task.session_id,
-                                &core_msgs,
-                                &meta,
-                            );
-                        }
+                        // (§4.6) Conversation already durable in events.jsonl
+                        // via the engine tee; nothing to snapshot per turn.
 
                         let _ = app.emit(
                             event_names::QUERY_COMPLETED,
@@ -1185,6 +1172,57 @@ pub async fn cancel_background_task(
 
 #[cfg(test)]
 mod tests {
+    /// Seed alternating user/assistant engine messages into a session's L0
+    /// log (§4.6): desktop flows project history from this record only.
+    fn seed_l0_messages(
+        state: &AppState,
+        session_id: uuid::Uuid,
+        messages: &[shannon_engine::api::Message],
+    ) {
+        use shannon_types::session_event::{
+            AssistantChunkPayload, TurnEndPayload, TurnStartPayload, UserMessagePayload,
+        };
+        let mut w = shannon_core::session_log::SessionLogWriter::open_layout(
+            state.l0_store().container(),
+            &session_id.to_string(),
+        )
+        .expect("open fresh log");
+        for m in messages {
+            let text = match &m.content {
+                shannon_engine::api::MessageContent::Text(t) => t.clone(),
+                _ => String::new(),
+            };
+            if m.role == "user" {
+                w.record(shannon_types::session_event::SessionEventBody::TurnStart(
+                    TurnStartPayload { query_id: None },
+                ));
+                w.record(shannon_types::session_event::SessionEventBody::UserMessage(
+                    UserMessagePayload {
+                        source: UserMessagePayload::SOURCE_USER.into(),
+                        content: text,
+                    },
+                ));
+            } else {
+                w.record(
+                    shannon_types::session_event::SessionEventBody::AssistantChunk(
+                        AssistantChunkPayload {
+                            delta: text,
+                            thinking: false,
+                        },
+                    ),
+                );
+                w.record(shannon_types::session_event::SessionEventBody::TurnEnd(
+                    TurnEndPayload {
+                        reason: TurnEndPayload::REASON_COMPLETED.into(),
+                        usage: None,
+                        error: None,
+                    },
+                ));
+            }
+        }
+        w.close().expect("close seeded log");
+    }
+
     use super::*;
     use crate::commands_sessions::branch_session_internal;
 
@@ -1372,17 +1410,7 @@ mod tests {
             },
         ];
 
-        let parent_metadata = shannon_engine::state::SessionPersistMetadata {
-            model: "claude-3".into(),
-            turn_count: 2,
-            title: Some("Parent Session".into()),
-            ..Default::default()
-        };
-
-        state
-            .state_manager
-            .save_session(&parent_id, &messages, &parent_metadata)
-            .expect("save parent");
+        seed_l0_messages(&state, parent_id, &messages);
 
         // Add parent to sessions list
         let parent_meta = SessionMeta {
@@ -1413,8 +1441,8 @@ mod tests {
         // Verify branch session data
         let branch_uuid = uuid::Uuid::parse_str(&branch_result.id).expect("parse uuid");
         let branch_data = state
-            .state_manager
-            .load_session(&branch_uuid)
+            .l0_store()
+            .load(&branch_uuid)
             .expect("load branch")
             .expect("branch data exists");
 
@@ -1433,17 +1461,7 @@ mod tests {
             content: shannon_engine::api::MessageContent::Text("single message".into()),
         }];
 
-        let parent_metadata = shannon_engine::state::SessionPersistMetadata {
-            model: "claude-3".into(),
-            turn_count: 0,
-            title: Some("Parent".into()),
-            ..Default::default()
-        };
-
-        state
-            .state_manager
-            .save_session(&parent_id, &messages, &parent_metadata)
-            .expect("save parent");
+        seed_l0_messages(&state, parent_id, &messages);
 
         let parent_meta = SessionMeta {
             id: parent_id_str.clone(),
@@ -1477,19 +1495,7 @@ mod tests {
             content: shannon_engine::api::MessageContent::Text("only message".into()),
         }];
 
-        state
-            .state_manager
-            .save_session(
-                &parent_id,
-                &messages,
-                &shannon_engine::state::SessionPersistMetadata {
-                    model: "claude-3".into(),
-                    turn_count: 0,
-                    title: Some("Parent".into()),
-                    ..Default::default()
-                },
-            )
-            .expect("save parent");
+        seed_l0_messages(&state, parent_id, &messages);
 
         state.sessions.lock().await.push(SessionMeta {
             id: parent_id_str.clone(),
@@ -1541,17 +1547,7 @@ mod tests {
             content: shannon_engine::api::MessageContent::Text("message".into()),
         }];
 
-        let metadata = shannon_engine::state::SessionPersistMetadata {
-            model: "claude-3".into(),
-            turn_count: 0,
-            title: Some("Parent".into()),
-            ..Default::default()
-        };
-
-        state
-            .state_manager
-            .save_session(&parent_id, &messages, &metadata)
-            .expect("save parent");
+        seed_l0_messages(&state, parent_id, &messages);
 
         state.sessions.lock().await.push(SessionMeta {
             id: parent_id_str.clone(),

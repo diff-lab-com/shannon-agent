@@ -97,7 +97,12 @@ Sophisticated safety controls with multiple modes:
 
 ### Session & Context Management
 
-- **Session persistence** — Save, resume by ID, search history
+- **Session persistence** — Event-sourced: every turn lands in an
+  append-only `events.jsonl` per session; resume, search, replay, and diff
+  are all projections of that single authoritative log. Inspect any session
+  with `shannon trace show / replay / diff / export`. (Breaking since
+  v0.11.0-dev: legacy `sessions/<uuid>.json` snapshots and transcript files
+  are no longer read — see CHANGELOG.)
 - **Context compression** — Auto-compact, micro-compact, conversation phase tracking
 - **Memory system** — Persistent memory store with auto-extraction and consolidation
 - **Extended context** — Phase-based budget reallocation (Initialization → Active → Extended → Critical)
