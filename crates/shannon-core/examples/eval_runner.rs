@@ -164,13 +164,15 @@ fn cmd_run(args: RunArgs) -> ExitCode {
         for task in &selected {
             let problems = task.validate();
             let verdict = if problems.is_empty() { "ok" } else { "INVALID" };
+            let limits = task.resolved_limits();
             println!(
-                "{:>10} {:<8} limits(turns={},tokens={},timeout={}s) [{}] {}",
+                "{:>10} {:<8} {:<5} limits(turns={},tokens={},timeout={}s) [{}] {}",
                 task.id,
                 task.tier.as_str(),
-                task.limits.max_turns.unwrap_or(12),
-                task.limits.max_tokens.unwrap_or(80_000),
-                task.limits.timeout_secs.unwrap_or(300),
+                task.effective_horizon().as_str(),
+                limits.max_turns,
+                limits.max_tokens,
+                limits.timeout_secs,
                 verdict,
                 task.description,
             );
@@ -219,10 +221,24 @@ fn cmd_run(args: RunArgs) -> ExitCode {
             );
             for record in &report.records {
                 let class = record.failure_class.as_deref().unwrap_or("-");
+                let over = match record.over_expected {
+                    Some(over) => {
+                        let mut parts = Vec::new();
+                        if let Some(multiple) = over.turns_multiple {
+                            parts.push(format!("turn×{multiple:.1}"));
+                        }
+                        if let Some(multiple) = over.tokens_multiple {
+                            parts.push(format!("tok×{multiple:.1}"));
+                        }
+                        format!(" OVER[{}]", parts.join(" "))
+                    }
+                    None => String::new(),
+                };
                 println!(
-                    "  {:>10} {:<8} {:<11} turns={:<3} tokens={:<6} violations={:<3} class={class}",
+                    "  {:>10} {:<8} {:<5} {:<11} turns={:<3} tokens={:<6} violations={:<3} class={class}{over}",
                     record.id,
                     record.tier,
+                    record.horizon,
                     record.status.as_str(),
                     record.turns,
                     record.total_tokens,

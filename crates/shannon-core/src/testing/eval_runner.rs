@@ -96,8 +96,9 @@ use crate::testing::scenario::{
 use regex::Regex;
 
 use super::eval_metrics::{
-    Classification, ClassifyContext, ExtractedTask, FailureRules, MetricSource, TaskMetrics,
-    derive_from_stream, extract_from_events_log, find_event_logs, missing_fields,
+    Classification, ClassifyContext, DRY_RUN_ANCHOR_MODEL, ExtractedTask, FailureRules,
+    MetricSource, RunAnchor, TaskMetrics, UNCLASSIFIED_CLASS, derive_from_stream, extract_anchor,
+    extract_from_events_log, find_event_logs, missing_fields,
 };
 
 /// Deterministic output-root resolution mirroring
@@ -167,6 +168,64 @@ impl EvalTier {
     }
 }
 
+/// Task completion-length class (design §2): how long a task is *expected*
+/// to take, as opposed to [`EvalTier`]'s capability dimension. Drives the
+/// default limits table ([`Horizon::default_limits`]) and is stamped into
+/// every report row so short- and long-horizon numbers are never read as
+/// comparable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Horizon {
+    /// Read/search/precise-edit scale — minutes.
+    #[default]
+    Short,
+    /// Multi-step changes — tens of minutes.
+    Mid,
+    /// Long-horizon refactors — up to ~15 minutes wall clock / millions of
+    /// tokens; sized to keep L2 long tasks from being strangled by the
+    /// harness before the model gives up on its own.
+    Long,
+}
+
+impl Horizon {
+    /// The lowercase spelling used in TOML and reports.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Horizon::Short => "short",
+            Horizon::Mid => "mid",
+            Horizon::Long => "long",
+        }
+    }
+
+    /// W1 default limits table (design §2①): explicit task limits always
+    /// win; these fill the gaps.
+    ///
+    /// | horizon | max_turns | max_tokens | timeout_secs |
+    /// |---------|-----------|------------|--------------|
+    /// | short   | 12        | 300 000    | 180          |
+    /// | mid     | 30        | 800 000    | 450          |
+    /// | long    | 80        | 2 000 000  | 900          |
+    pub fn default_limits(self) -> ResolvedLimits {
+        match self {
+            Horizon::Short => ResolvedLimits {
+                max_turns: DEFAULT_MAX_TURNS,
+                max_tokens: DEFAULT_MAX_TOKENS,
+                timeout_secs: DEFAULT_TIMEOUT_SECS,
+            },
+            Horizon::Mid => ResolvedLimits {
+                max_turns: MID_MAX_TURNS,
+                max_tokens: MID_MAX_TOKENS,
+                timeout_secs: MID_TIMEOUT_SECS,
+            },
+            Horizon::Long => ResolvedLimits {
+                max_turns: LONG_MAX_TURNS,
+                max_tokens: LONG_MAX_TOKENS,
+                timeout_secs: LONG_TIMEOUT_SECS,
+            },
+        }
+    }
+}
+
 /// An initial workspace file seeded by `setup.files`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TaskFile {
@@ -232,8 +291,23 @@ pub struct TaskExpectations {
     pub forbidden_tools: Vec<String>,
 }
 
-/// Per-task engineering guardrails; `None` falls back to
-/// [`DEFAULT_LIMITS`]-style defaults resolved by [`ResolvedLimits::of`].
+/// Soft expectation budget (design §2③): the task author's sense of what the
+/// run *should* cost. Exceeding it raises the observational
+/// `over_expected` marker on the report row — it never changes
+/// [`RunStatus`] or `passed`. This is deliberately distinct from the hard
+/// `verify` assertions (e.g. `cost_below`), which fail the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(default)]
+pub struct ExpectedBudget {
+    /// Expected turn count.
+    pub turns: Option<u32>,
+    /// Expected session token bill.
+    pub tokens: Option<u64>,
+}
+
+/// Per-task engineering guardrails; unset fields fall back to the
+/// horizon-default table ([`Horizon::default_limits`]) resolved by
+/// [`EvalTask::resolved_limits`].
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct TaskLimits {
@@ -246,14 +320,29 @@ pub struct TaskLimits {
     /// Wall-clock budget for the whole task in seconds. Breach kills the
     /// child process and marks [`RunStatus::Timeout`].
     pub timeout_secs: Option<u64>,
+    /// Soft expectation budget (`expected = { turns = …, tokens = … }`);
+    /// exceeding it only flags `over_expected` on the report row.
+    pub expected: Option<ExpectedBudget>,
 }
 
-/// Suite-wide fallback limits when a task omits them.
+/// Horizon default row: `short` max turns.
 pub const DEFAULT_MAX_TURNS: u32 = 12;
-/// Suite-wide fallback token ceiling.
-pub const DEFAULT_MAX_TOKENS: u64 = 80_000;
-/// Suite-wide fallback wall-clock budget in seconds.
-pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
+/// Horizon default row: `short` token ceiling.
+pub const DEFAULT_MAX_TOKENS: u64 = 300_000;
+/// Horizon default row: `short` wall-clock budget in seconds.
+pub const DEFAULT_TIMEOUT_SECS: u64 = 180;
+/// Horizon default row: `mid` max turns.
+pub const MID_MAX_TURNS: u32 = 30;
+/// Horizon default row: `mid` token ceiling.
+pub const MID_MAX_TOKENS: u64 = 800_000;
+/// Horizon default row: `mid` wall-clock budget in seconds.
+pub const MID_TIMEOUT_SECS: u64 = 450;
+/// Horizon default row: `long` max turns.
+pub const LONG_MAX_TURNS: u32 = 80;
+/// Horizon default row: `long` token ceiling.
+pub const LONG_MAX_TOKENS: u64 = 2_000_000;
+/// Horizon default row: `long` wall-clock budget in seconds.
+pub const LONG_TIMEOUT_SECS: u64 = 900;
 
 /// Fully-resolved limits (defaults filled in).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,13 +353,61 @@ pub struct ResolvedLimits {
 }
 
 impl ResolvedLimits {
-    /// Apply suite defaults over optionally-declared task limits.
+    /// Apply the `short`-horizon defaults over optionally-declared task
+    /// limits. Kept for callers without a horizon context; task runs should
+    /// prefer [`EvalTask::resolved_limits`].
     pub fn of(limits: &TaskLimits) -> Self {
+        Self::for_horizon(limits, Horizon::Short)
+    }
+
+    /// Apply the horizon's default table over optionally-declared task
+    /// limits — explicit task limits always win.
+    pub fn for_horizon(limits: &TaskLimits, horizon: Horizon) -> Self {
+        let defaults = horizon.default_limits();
         Self {
-            max_turns: limits.max_turns.unwrap_or(DEFAULT_MAX_TURNS),
-            max_tokens: limits.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
-            timeout_secs: limits.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS),
+            max_turns: limits.max_turns.unwrap_or(defaults.max_turns),
+            max_tokens: limits.max_tokens.unwrap_or(defaults.max_tokens),
+            timeout_secs: limits.timeout_secs.unwrap_or(defaults.timeout_secs),
         }
+    }
+}
+
+/// W1 §2③ over-expected soft marker: multiples of the declared expectation
+/// budget that the run actually exceeded. Presence on a report row *is* the
+/// `over_expected: true` flag; the multiples answer "how far over". Purely
+/// observational — it never feeds `passed` or [`RunStatus`].
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct OverExpected {
+    /// actual_turns / expected_turns; absent unless that expectation was
+    /// declared and exceeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turns_multiple: Option<f64>,
+    /// total_tokens / expected_tokens; same presence rule.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokens_multiple: Option<f64>,
+}
+
+impl OverExpected {
+    /// Compare a finished run against its declared expectations. `None` when
+    /// nothing was declared or nothing was exceeded; a zero-valued
+    /// expectation is skipped (no division, no division-by-zero masquerading
+    /// as a verdict).
+    pub fn of(turns: u32, total_tokens: u64, expected: Option<ExpectedBudget>) -> Option<Self> {
+        let expected = expected?;
+        let turns_multiple = expected
+            .turns
+            .filter(|want| *want > 0)
+            .map(|want| f64::from(turns) / f64::from(want))
+            .filter(|multiple| *multiple > 1.0);
+        let tokens_multiple = expected
+            .tokens
+            .filter(|want| *want > 0)
+            .map(|want| total_tokens as f64 / want as f64)
+            .filter(|multiple| *multiple > 1.0);
+        (turns_multiple.is_some() || tokens_multiple.is_some()).then_some(Self {
+            turns_multiple,
+            tokens_multiple,
+        })
     }
 }
 
@@ -311,6 +448,10 @@ pub struct EvalTask {
     pub id: String,
     /// Suite tier.
     pub tier: EvalTier,
+    /// Expected completion length (design §2); when omitted it is derived
+    /// from the tier — read/search/edit ⇒ short, multi_step/recovery ⇒ mid.
+    #[serde(default)]
+    pub horizon: Option<Horizon>,
     /// One-line intent shown in reports.
     #[serde(default)]
     pub description: String,
@@ -338,6 +479,21 @@ pub struct EvalTask {
 }
 
 impl EvalTask {
+    /// The horizon in force for this task: the explicit `horizon` field when
+    /// declared, otherwise the tier-derived default (design §2①).
+    pub fn effective_horizon(&self) -> Horizon {
+        self.horizon.unwrap_or(match self.tier {
+            EvalTier::Read | EvalTier::Search | EvalTier::Edit => Horizon::Short,
+            EvalTier::MultiStep | EvalTier::Recovery => Horizon::Mid,
+        })
+    }
+
+    /// Limits in force: explicit `limits` fields win, unset fields fall back
+    /// to this task's horizon row of the default table.
+    pub fn resolved_limits(&self) -> ResolvedLimits {
+        ResolvedLimits::for_horizon(&self.limits, self.effective_horizon())
+    }
+
     /// Structural self-checks beyond serde (non-empty ids/prompts, usable
     /// verification story). Returns human-readable problems.
     pub fn validate(&self) -> Vec<String> {
@@ -366,7 +522,7 @@ impl EvalTask {
             ));
         }
         // Reflexive checks on limit sanity — cheaper to catch here than mid-run.
-        let limits = ResolvedLimits::of(&self.limits);
+        let limits = self.resolved_limits();
         if limits.max_turns == 0 || limits.timeout_secs == 0 {
             problems.push(format!("task '{}': limits must be positive", self.id));
         }
@@ -644,6 +800,9 @@ impl From<&RuleOutcome> for RecordedRuleOutcome {
 pub struct TaskRunRecord {
     pub id: String,
     pub tier: String,
+    /// Completion-length class in force (explicit or tier-derived, §2①).
+    #[serde(default)]
+    pub horizon: String,
     pub status: RunStatus,
     /// True iff `status == Passed` (kept alongside for naive consumers).
     pub passed: bool,
@@ -673,6 +832,15 @@ pub struct TaskRunRecord {
     /// Satisfied-rule evidence chain backing `failure_class`.
     #[serde(default)]
     pub failure_evidence: Vec<String>,
+    /// W1 §2③ soft budget marker — `Some` only when a declared
+    /// `limits.expected` was exceeded. Observationally recorded; never
+    /// affects `passed` or [`RunStatus`].
+    #[serde(default)]
+    pub over_expected: Option<OverExpected>,
+    /// W1 §4① per-task metadata anchor (model/provider/profile observed for
+    /// THIS task's engine process). Unknown for spawn errors.
+    #[serde(default)]
+    pub anchor: RunAnchor,
     /// Absolute workspace path retained for postmortem inspection.
     pub workspace: PathBuf,
     /// Original TOML source path.
@@ -685,6 +853,7 @@ impl TaskRunRecord {
         json!({
             "id": self.id,
             "tier": self.tier,
+            "horizon": self.horizon,
             "status": self.status.as_str(),
             "exit_code": self.exit_code,
             "turns": self.turns,
@@ -700,6 +869,8 @@ impl TaskRunRecord {
             "trajectory_tools": self.trajectory_tools,
             "metrics": self.metrics.clone().map(|m| serde_json::to_value(&m).unwrap_or(Value::Null)),
             "failure_class": self.failure_class,
+            "over_expected": self.over_expected,
+            "anchor": self.anchor,
         })
     }
 }
@@ -718,6 +889,11 @@ pub struct RunReport {
     /// A/B arm marker: the experimental prompt directive in force, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directive: Option<String>,
+    /// W1 §4① suite-level metadata anchor. Dry runs record
+    /// `model_id = "dry-run-stub"`; real runs consolidate the per-task
+    /// anchors, keeping a dimension only when every task agrees on it.
+    #[serde(default)]
+    pub anchors: RunAnchor,
     pub tasks_total: usize,
     pub tasks_passed: usize,
     pub tasks_failed: usize,
@@ -764,10 +940,13 @@ impl RunReport {
     /// executions of unchanged code (drops timestamps, wall-clock durations,
     /// session ids and workspace/bin paths, keeps statuses, counters and
     /// violations). Serialized deterministically by construction of the
-    /// input vectors.
+    /// input vectors. Model anchors (W1 §4①) and the soft `over_expected`
+    /// markers (§2③) ride along so a model swap or a budget blowout can
+    /// never digest as "unchanged".
     pub fn stable_digest(&self) -> String {
         let body = json!({
             "dry_run": self.dry_run,
+            "anchors": self.anchors,
             "tasks_total": self.tasks_total,
             "tasks_passed": self.tasks_passed,
             "tasks_failed": self.tasks_failed,
@@ -783,13 +962,18 @@ impl RunReport {
         serde_json::to_string_pretty(&body).expect("digest serialization")
     }
 
-    /// Tally of failure classes across records (passing/unclassified rows
-    /// omitted) — the 分类分布 block of the upgraded report.
+    /// Tally of failure classes across records. Passing rows are omitted;
+    /// failed rows no rule fired on land in the `unclassified` bucket (W1
+    /// §6 阶段 1) so the rule table's blind spot stays measurable.
     pub fn failure_class_tally(&self) -> BTreeMap<&str, usize> {
         let mut tally: BTreeMap<&str, usize> = BTreeMap::new();
         for record in &self.records {
-            if let Some(class) = &record.failure_class {
-                *tally.entry(class.as_str()).or_default() += 1;
+            match &record.failure_class {
+                Some(class) => *tally.entry(class.as_str()).or_default() += 1,
+                None if !record.passed => {
+                    *tally.entry(UNCLASSIFIED_CLASS).or_default() += 1;
+                }
+                None => {}
             }
         }
         tally
@@ -803,10 +987,14 @@ impl RunReport {
             "# Shannon Eval Report `{}` ({mode})\n\n\
              - Started: {}\n\
              - Binary: {}\n\
+             - Anchor: model={} · provider={} · profile={}\n\
              - Tasks: {} total · {} passed · {} failed · {} limited · {} timed out · {} spawn errors\n\n",
             self.run_id,
             self.started_at_utc,
             if self.shannon_bin.is_empty() { "-" } else { &self.shannon_bin },
+            self.anchors.model_id.as_deref().unwrap_or("-"),
+            self.anchors.provider.as_deref().unwrap_or("-"),
+            self.anchors.profile_digest.as_deref().unwrap_or("-"),
             self.tasks_total,
             self.tasks_passed,
             self.tasks_failed,
@@ -815,12 +1003,14 @@ impl RunReport {
             self.tasks_spawn_errors,
         ));
 
-        md.push_str("| tier | id | status | rules | turns | tokens (in/out) | ms |\n");
-        md.push_str("|---|---|---|---|---|---|---|\n");
+        md.push_str(
+            "| tier | id | status | rules | turns | tokens (in/out) | budget | horizon | ms |\n",
+        );
+        md.push_str("|---|---|---|---|---|---|---|---|---|\n");
         for record in &self.records {
             let rules_failed = record.rule_outcomes.iter().filter(|o| !o.passed).count();
             md.push_str(&format!(
-                "| {} | {} | {} | {}/{} ok | {} | {}/{} | {} |\n",
+                "| {} | {} | {} | {}/{} ok | {} | {}/{} | {} | {} | {} |\n",
                 record.tier,
                 record.id,
                 record.status.as_str(),
@@ -829,6 +1019,8 @@ impl RunReport {
                 record.turns,
                 record.tokens_in,
                 record.tokens_out,
+                render_over_expected(record.over_expected),
+                record.horizon,
                 record.duration_ms,
             ));
         }
@@ -911,6 +1103,27 @@ impl RunReport {
             }
         }
         md
+    }
+}
+
+/// Markdown cell for the §2③ soft budget marker: `-` when within the
+/// declared expectations, otherwise the exceeded multiples (`turn×2.5
+/// tok×1.3`).
+fn render_over_expected(over: Option<OverExpected>) -> String {
+    let Some(over) = over else {
+        return "-".to_string();
+    };
+    let mut parts = Vec::new();
+    if let Some(multiple) = over.turns_multiple {
+        parts.push(format!("turn×{multiple:.1}"));
+    }
+    if let Some(multiple) = over.tokens_multiple {
+        parts.push(format!("tok×{multiple:.1}"));
+    }
+    if parts.is_empty() {
+        "-".to_string()
+    } else {
+        parts.join(" ")
     }
 }
 
@@ -1026,6 +1239,7 @@ pub fn run_suite(
             .clone()
             .map(|p| p.display().to_string())
             .unwrap_or_default(),
+        anchors: suite_anchor(&records, options.dry_run),
         tasks_total: records.len(),
         tasks_passed: tally(|r| r.status == RunStatus::Passed),
         tasks_failed: tally(|r| r.status == RunStatus::Failed),
@@ -1066,6 +1280,41 @@ fn primary_metrics_source(records: &[TaskRunRecord]) -> String {
         MetricSource::DerivedStream.as_str().to_string()
     } else {
         "none".to_string()
+    }
+}
+
+/// Consolidate the per-task anchors into the suite-level anchor (W1 §4①).
+/// Dry runs record the constant stub marker; real runs keep a dimension
+/// only when every contributing task observed the same value — any
+/// disagreement dissolves to `None` (honestly unknown) instead of picking a
+/// winner, so `eval-diff` cannot bless a mixed-model comparison.
+fn suite_anchor(records: &[TaskRunRecord], dry_run: bool) -> RunAnchor {
+    if dry_run {
+        return RunAnchor {
+            model_id: Some(DRY_RUN_ANCHOR_MODEL.to_string()),
+            provider: None,
+            profile_digest: None,
+        };
+    }
+    let consensus = |pick: fn(&RunAnchor) -> &Option<String>| -> Option<String> {
+        let mut seen: Option<String> = None;
+        let mut conflicted = false;
+        for record in records {
+            let Some(value) = pick(&record.anchor) else {
+                continue;
+            };
+            match &seen {
+                None => seen = Some(value.clone()),
+                Some(previous) if previous != value => conflicted = true,
+                Some(_) => {}
+            }
+        }
+        (!conflicted).then_some(seen).flatten()
+    };
+    RunAnchor {
+        model_id: consensus(|a| &a.model_id),
+        provider: consensus(|a| &a.provider),
+        profile_digest: consensus(|a| &a.profile_digest),
     }
 }
 
@@ -1118,7 +1367,7 @@ fn enrich_with_metrics(
         .unwrap_or_default();
 
     if !record.passed && archivable_log {
-        archive_failure_sample(record, &task_dir, &classification, options);
+        archive_failure_sample(record, task, &task_dir, &classification, options);
     }
 }
 
@@ -1138,10 +1387,12 @@ fn failure_archive_root(options: &EvalOptions) -> PathBuf {
     }
 }
 
-/// Copy the task's L0 logs plus its classification verdict into
+/// Copy the task's L0 logs plus its classification verdict (including the
+/// W1 §7③ minimal-reproduction recipe) into
 /// `$SHANNON_HOME/eval/failures/<yyyymmdd>/<task_id>/`.
 fn archive_failure_sample(
     record: &TaskRunRecord,
+    task: &EvalTask,
     task_dir: &Path,
     classification: &Option<Classification>,
     options: &EvalOptions,
@@ -1167,11 +1418,56 @@ fn archive_failure_sample(
         "classification": classification.as_ref().map(|c| serde_json::to_value(c).ok()),
         "metrics": record.metrics,
         "workspace": record.workspace,
+        // W1 §7③: the minimal engine invocation that produced this sample,
+        // so the archived evidence doubles as a one-shot replay recipe
+        // (engine arguments + workspace path; identical to what the runner
+        // actually drove, directive fencing included).
+        "repro": repro_view(task, options, &record.workspace),
     });
     let _ = std::fs::write(
         dest.join("classification.json"),
         serde_json::to_vec_pretty(&verdict).expect("classification serialization"),
     );
+}
+
+/// The minimal-reproduction recipe for one real-run failure: the exact
+/// engine binary designation, argv, and workspace the runner used. `args`
+/// is the authoritative form (no shell quoting involved); `command` is a
+/// convenience rendering for terminals.
+fn repro_view(task: &EvalTask, options: &EvalOptions, workspace: &Path) -> Value {
+    let limits = task.resolved_limits();
+    let engine = resolve_bin(options.bin_path.as_deref())
+        .map(|bin| bin.display().to_string())
+        .unwrap_or_else(|_| "shannon".to_string());
+    // Byte-identical to what spawn_engine sends, directive fencing included.
+    let prompt = match &options.instruction_directive {
+        Some(directive) => format!("{}\n\n【实验指令】{directive}", task.prompt),
+        None => task.prompt.clone(),
+    };
+    let args = json!([
+        "--prompt",
+        prompt,
+        "--output-format",
+        "json-stream",
+        "--max-turns",
+        limits.max_turns.to_string(),
+    ]);
+    let rendered_args = args
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| item.as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
+    json!({
+        "engine": engine,
+        "args": args,
+        "command": format!("{engine} {rendered_args}"),
+        "workspace": workspace,
+    })
 }
 
 /// Persist the enriched metrics/classification alongside the raw stream in
@@ -1231,7 +1527,7 @@ pub fn prepare_task_dir(task: &EvalTask, run_dir: &Path) -> Result<PathBuf, Eval
 /// subprocess) → classify limits → verify → persist artifacts.
 pub fn run_task(task: &EvalTask, options: &EvalOptions, run_dir: &Path) -> TaskRunRecord {
     let started = Instant::now();
-    let limits = ResolvedLimits::of(&task.limits);
+    let limits = task.resolved_limits();
 
     let prepare = prepare_task_dir(task, run_dir);
     let workspace = match prepare {
@@ -1294,14 +1590,24 @@ pub fn run_task(task: &EvalTask, options: &EvalOptions, run_dir: &Path) -> TaskR
     } else {
         None
     };
-    finalize_record(
+    let mut record = finalize_record(
         task,
         limits,
         started,
         workspace,
         produced,
         l0_events.as_deref(),
-    )
+    );
+    if options.dry_run {
+        // The stub never talks to a provider: stamp the constant marker so
+        // a dry report can never masquerade as a model run (W1 §4①).
+        record.anchor = RunAnchor {
+            model_id: Some(DRY_RUN_ANCHOR_MODEL.to_string()),
+            provider: None,
+            profile_digest: None,
+        };
+    }
+    record
 }
 
 /// Raw stream plus child-process facts returned by either executor.
@@ -1470,14 +1776,22 @@ fn finalize_record(
     }
 
     let fallback_turns = stream_turns_from_trajectory(&observation);
+    // W1 §4①: prefer the L0 request header (wire-honest model); the stream
+    // start banner's model is the fallback when no header/log exists.
+    let mut anchor = l0_events.map(extract_anchor).unwrap_or_default();
+    if anchor.model_id.is_none() {
+        anchor.model_id = observation.model.clone();
+    }
+    let turns_final = stream_turns.unwrap_or(fallback_turns);
     TaskRunRecord {
         id: task.id.clone(),
         tier: task.tier.as_str().to_string(),
+        horizon: task.effective_horizon().as_str().to_string(),
         passed,
         status,
         duration_ms: started.elapsed().as_millis() as u64,
         exit_code: produced.exit_code,
-        turns: stream_turns.unwrap_or(fallback_turns),
+        turns: turns_final,
         tokens_in,
         tokens_out,
         total_tokens,
@@ -1493,6 +1807,9 @@ fn finalize_record(
         metrics: None,
         failure_class: None,
         failure_evidence: Vec::new(),
+        // W1 §2③: observational only — presence here never flips `passed`.
+        over_expected: OverExpected::of(turns_final, total_tokens, task.limits.expected),
+        anchor,
         workspace,
         task_file: task.task_source_path_hint.clone().unwrap_or_default(),
     }
@@ -1531,6 +1848,7 @@ fn base_record(
     TaskRunRecord {
         id: task.id.clone(),
         tier: task.tier.as_str().to_string(),
+        horizon: task.effective_horizon().as_str().to_string(),
         passed: status == RunStatus::Passed,
         status,
         duration_ms: elapsed.as_millis() as u64,
@@ -1546,6 +1864,8 @@ fn base_record(
         metrics: None,
         failure_class: None,
         failure_evidence: Vec::new(),
+        over_expected: None,
+        anchor: RunAnchor::default(),
         workspace,
         task_file: task.task_source_path_hint.clone().unwrap_or_default(),
     }
@@ -2024,11 +2344,35 @@ pub fn load_report(path: &Path) -> Result<RunReport, EvalError> {
     serde_json::from_str(&raw).map_err(|e| EvalError::Config(format!("{}: {e}", path.display())))
 }
 
-/// Diff verdict between two runs: structurally stable when their
-/// [`RunReport::stable_digest`] strings agree; otherwise enumerate the
-/// version-comparison metadata plus per-task deltas worth eyeballing
-/// (statuses, budgets, trajectories, §4.7 metrics and failure classes).
+/// Diff verdict between two runs.
+///
+/// W1 §4② — the ATTRIBUTE-SPLIT protocol runs FIRST: when the two runs did
+/// not measure the same thing (model, provider, profile digest, or
+/// failure-rule table differ), the function refuses the single-line
+/// stability/regression conclusion and only enumerates raw deltas. Numbers
+/// are still listed; the verdict is not issued — a model swap can never
+/// masquerade as a code-change regression.
+///
+/// With anchors aligned, structurally stable runs (agreeing
+/// [`RunReport::stable_digest`]) report STABLE; otherwise the
+/// version-comparison metadata plus per-task deltas worth eyeballing are
+/// enumerated (statuses, budgets, trajectories, §4.7 metrics and failure
+/// classes).
 pub fn compare_reports(a: &RunReport, b: &RunReport) -> String {
+    let split = attribute_splits(a, b);
+    if !split.is_empty() {
+        let mut out = String::from(
+            "ATTRIBUTE-SPLIT: attribution dimensions differ between runs — \
+             capability verdict withheld, raw deltas only\n",
+        );
+        for (label, left, right) in &split {
+            out.push_str(&format!("  {label}: {left} -> {right}\n"));
+        }
+        out.push_str(&raw_deltas(a, b));
+        out.push_str("\n(no cross-run conclusion: align anchors and rule table, then re-diff)\n");
+        return out;
+    }
+
     if a.stable_digest() == b.stable_digest() {
         return format!(
             "STABLE: structural digest identical across runs ({} tasks)",
@@ -2036,6 +2380,43 @@ pub fn compare_reports(a: &RunReport, b: &RunReport) -> String {
         );
     }
     let mut out = String::from("UNSTABLE: digests differ\n");
+    out.push_str(&raw_deltas(a, b));
+    out
+}
+
+/// Attribution dimensions whose disagreement blocks a cross-run verdict
+/// (W1 §4②): every anchor field plus the failure-rule fingerprint.
+fn attribute_splits(a: &RunReport, b: &RunReport) -> Vec<(&'static str, String, String)> {
+    let render = |value: &Option<String>| value.clone().unwrap_or_else(|| "(unknown)".to_string());
+    let mut splits = Vec::new();
+    for (label, left, right) in [
+        ("model_id", &a.anchors.model_id, &b.anchors.model_id),
+        ("provider", &a.anchors.provider, &b.anchors.provider),
+        (
+            "profile_digest",
+            &a.anchors.profile_digest,
+            &b.anchors.profile_digest,
+        ),
+    ] {
+        if left != right {
+            splits.push((label, render(left), render(right)));
+        }
+    }
+    if a.failure_rules_fingerprint != b.failure_rules_fingerprint {
+        splits.push((
+            "failure_rules_fingerprint",
+            a.failure_rules_fingerprint.clone(),
+            b.failure_rules_fingerprint.clone(),
+        ));
+    }
+    splits
+}
+
+/// The evidence half of a diff — version-comparison metadata plus per-task
+/// deltas. Shared verbatim by the UNSTABLE and ATTRIBUTE-SPLIT paths so the
+/// numbers stay visible even when the verdict is withheld (§4②: 数字照列).
+fn raw_deltas(a: &RunReport, b: &RunReport) -> String {
+    let mut out = String::new();
 
     // Version-comparison anchors (§4.7 ③): engine/rules/provenance drift.
     out.push_str("\n[meta]\n");
@@ -2075,6 +2456,7 @@ pub fn compare_reports(a: &RunReport, b: &RunReport) -> String {
                 "violations",
                 "trajectory_tools",
                 "failure_class",
+                "over_expected",
                 "metrics",
             ] {
                 if va.get(key) != vb.get(key) {
@@ -2087,7 +2469,6 @@ pub fn compare_reports(a: &RunReport, b: &RunReport) -> String {
             }
         }
     }
-    out.truncate(out.len());
     out
 }
 
@@ -2204,6 +2585,119 @@ input = { file_path = "meta.txt" }
             !task.validate().is_empty(),
             "no rules/script/expectations must be flagged"
         );
+    }
+
+    // ── W1 §2① horizon dimension ──────────────────────────────────────
+
+    fn minimal_task_body(id: &str, tier: &str, extra: &str) -> String {
+        format!(
+            "id = \"{id}\"\ntier = \"{tier}\"\nprompt = \"p\"\n{extra}\n[dry_run]\nfinal_text = \"t\"\n\n[[dry_run.steps]]\ntool = \"Read\"\ninput = {{ file_path = \"x\" }}\n"
+        )
+    }
+
+    #[test]
+    fn horizon_defaults_table_and_explicit_overrides() {
+        let dir = tempfile::TempDir::new().expect("tmp");
+        let parse = |name: &str, body: String| {
+            parse_task(&write_task(dir.path(), name, &body)).expect("parse")
+        };
+
+        // Tier-derived: read ⇒ short.
+        let short = parse("s.toml", minimal_task_body("s", "read", ""));
+        assert_eq!(short.horizon, None);
+        assert_eq!(short.effective_horizon(), Horizon::Short);
+        assert_eq!(
+            short.resolved_limits(),
+            ResolvedLimits {
+                max_turns: 12,
+                max_tokens: 300_000,
+                timeout_secs: 180
+            }
+        );
+
+        // Tier-derived: multi_step ⇒ mid.
+        let mid = parse("m.toml", minimal_task_body("m", "multi_step", ""));
+        assert_eq!(mid.effective_horizon(), Horizon::Mid);
+        assert_eq!(
+            mid.resolved_limits(),
+            ResolvedLimits {
+                max_turns: 30,
+                max_tokens: 800_000,
+                timeout_secs: 450
+            }
+        );
+
+        // Explicit horizon field: long row applies to whatever tier.
+        let long = parse(
+            "l.toml",
+            minimal_task_body("l", "recovery", "horizon = \"long\"\n"),
+        );
+        assert_eq!(long.effective_horizon(), Horizon::Long);
+        assert_eq!(
+            long.resolved_limits(),
+            ResolvedLimits {
+                max_turns: 80,
+                max_tokens: 2_000_000,
+                timeout_secs: 900
+            }
+        );
+
+        // Explicit limits always beat the horizon table, per-field.
+        let overridden = parse(
+            "o.toml",
+            minimal_task_body(
+                "o",
+                "multi_step",
+                "horizon = \"mid\"\n\n[limits]\nmax_turns = 5\n",
+            ),
+        );
+        let limits = overridden.resolved_limits();
+        assert_eq!(limits.max_turns, 5, "declared value wins");
+        assert_eq!(
+            limits.max_tokens, MID_MAX_TOKENS,
+            "unset field keeps mid row"
+        );
+        assert_eq!(limits.timeout_secs, MID_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn over_expected_marks_but_never_fails() {
+        // Expected budget deliberately tiny: the stub's turn count (2 steps +
+        // final turn) and the declared token total (20000) blow it wide open.
+        let over_budget = SAMPLE_TASK.replace(
+            "[limits]\nmax_turns = 5\nmax_tokens = 20000\ntimeout_secs = 120",
+            "[limits]\nmax_turns = 5\nmax_tokens = 20000\ntimeout_secs = 120\nexpected = { turns = 1, tokens = 100 }",
+        );
+        assert!(
+            over_budget.contains("expected = { turns = 1, tokens = 100 }"),
+            "limits block must have been extended"
+        );
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+        let task =
+            parse_task(&write_task(tasks_root.path(), "over.toml", &over_budget)).expect("parse");
+
+        let options = options_into(run_root.path());
+        let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
+        let record = &report.records[0];
+        assert_eq!(
+            record.status,
+            RunStatus::Passed,
+            "soft marker must not fail"
+        );
+        assert!(record.passed);
+        let over = record.over_expected.expect("over_expected flagged");
+        assert!(over.turns_multiple.unwrap_or(0.0) > 1.0, "{over:?}");
+        assert!(over.tokens_multiple.unwrap_or(0.0) > 1.0, "{over:?}");
+        // The marker rides the stable digest (design §2③: budget_flags in
+        // stable_view) so budget blowouts surface in cross-run diffs.
+        assert!(report.stable_digest().contains("over_expected"));
+
+        // Same task without a declared expectation stays unmarked.
+        let task =
+            parse_task(&write_task(tasks_root.path(), "plain.toml", SAMPLE_TASK)).expect("parse2");
+        let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite2");
+        assert_eq!(report.records[0].over_expected, None);
     }
 
     #[test]
@@ -3017,6 +3511,138 @@ input = { file_path = "meta.txt" }
         );
     }
 
+    /// W1 §4①+§6 阶段 1 end-to-end in REAL mode: the anchor is lifted from
+    /// the L0 `request/header` wire body (beating the stream banner), the
+    /// suite consolidates it, a failure no rule fires on lands in the
+    /// `unclassified` tally bucket, and the archived classification.json
+    /// carries the minimal-reproduction recipe.
+    #[cfg(unix)]
+    #[test]
+    fn real_run_anchors_unclassified_and_repro_archive() {
+        let bin_tmp = tempfile::TempDir::new().expect("binroot");
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+        let rules_root = tempfile::TempDir::new().expect("rules");
+
+        // Narrow override that matches NOTHING in the seeded log — the run
+        // must land in the unclassified residue bucket, not be force-fit.
+        let override_body = concat!(
+            "schema_version = 1\n\n[[rule]]\n",
+            "class = \"model_ceiling\"\ndescription = \"loops >= 99\"\n",
+            "[[rule.condition]]\nsignal = \"loops\"\nop = \"ge\"\nvalue = \"99\"\n"
+        );
+        let rules_path = rules_root.path().join("narrow.toml");
+        std::fs::write(&rules_path, override_body).expect("write rules override");
+
+        // The child writes an L0 log whose request/header carries the
+        // wire-honest model, provider, and a config snapshot; the stream
+        // banner advertises a DIFFERENT model to prove the header wins.
+        let script = concat!(
+            "mkdir -p \"$SHANNON_HOME/sessions/sid-anchor\"\n",
+            "cat > \"$SHANNON_HOME/sessions/sid-anchor/events.jsonl\" <<'EVT'\n",
+            "{\"seq\":0,\"ts_ns\":1000000000,\"session_id\":\"sid-anchor\",\"turn\":1,\"kind\":\"session/start\",\"model\":\"banner-model\",\"provider\":\"banner-provider\",\"app_version\":\"9.9.9\"}\n",
+            "{\"seq\":1,\"ts_ns\":1100000000,\"session_id\":\"sid-anchor\",\"turn\":1,\"kind\":\"request/header\",\"model\":\"declared-model\",\"provider\":\"mock\",\"adapter_defaults\":null,\"config_snapshot\":{\"profile\":\"full_auto\"},\"reason\":\"initial\",\"wire_body\":{\"model\":\"wire-model\",\"messages\":[]}}\n",
+            "{\"seq\":2,\"ts_ns\":1200000000,\"session_id\":\"sid-anchor\",\"turn\":1,\"kind\":\"tool/call\",\"tool_use_id\":\"a1\",\"tool_name\":\"Bash\",\"arguments\":\"{\\\"command\\\":\\\"false\\\"}\"}\n",
+            "{\"seq\":3,\"ts_ns\":1300000000,\"session_id\":\"sid-anchor\",\"turn\":1,\"kind\":\"tool/result\",\"tool_use_id\":\"a1\",\"tool_name\":\"Bash\",\"output\":\"boom\",\"is_error\":true}\n",
+            "{\"seq\":4,\"ts_ns\":1400000000,\"session_id\":\"sid-anchor\",\"turn\":2,\"kind\":\"turn/end\",\"reason\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":2,\"cache_creation_tokens\":0,\"cache_read_tokens\":0,\"cost_usd\":0.01}}\n",
+            "EVT\n",
+            "printf '%s\\n' ",
+            "'{\"type\":\"start\",\"prompt\":\"-\",\"model\":\"stream-model\",\"session_id\":\"sid-anchor\"}' ",
+            "'{\"type\":\"done\",\"exit_code\":1,\"turns_used\":2,\"tokens_used\":12,\"tokens_in\":10,\"tokens_out\":2}'\n",
+            "exit 1\n"
+        );
+        let bin = fake_bin(bin_tmp.path(), "shannon-anchor", script);
+        let bin_display = bin.display().to_string();
+
+        let task_body = concat!(
+            "id = \"edit_anc\"\ntier = \"edit\"\nprompt = \"apply fix\"\n",
+            "[[verify.rules]]\nrule = \"exit_code\"\nvalue = \"success\"\n",
+            "[limits]\nmax_turns = 8\nmax_tokens = 90000\ntimeout_secs = 20\n\n",
+            "[dry_run]\nfinal_text = \"unused\"\n"
+        );
+        let task =
+            parse_task(&write_task(tasks_root.path(), "edit_anc.toml", task_body)).expect("parse");
+
+        let options = EvalOptions {
+            bin_path: Some(bin),
+            dry_run: false,
+            out_dir_override: Some(run_root.path().to_path_buf()),
+            failure_rules: Some(rules_path),
+            instruction_directive: None,
+        };
+        let (report, _run_dir) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
+        let record = &report.records[0];
+
+        // Anchor: the L0 request/header wire model wins over both the banner
+        // and the stream-start model.
+        assert_eq!(record.anchor.model_id.as_deref(), Some("wire-model"));
+        assert_eq!(record.anchor.provider.as_deref(), Some("mock"));
+        assert!(record.anchor.profile_digest.is_some());
+        assert_eq!(
+            report.anchors.model_id.as_deref(),
+            Some("wire-model"),
+            "suite anchor consolidates the per-task anchor"
+        );
+        assert!(
+            report
+                .render_markdown()
+                .contains("Anchor: model=wire-model")
+        );
+
+        // §6 阶段 1: failed, no rule fired ⇒ unclassified bucket, in the
+        // tally and in the markdown, while failure_class stays unset.
+        assert_eq!(record.status, RunStatus::Failed);
+        assert_eq!(record.failure_class, None);
+        assert_eq!(
+            report.failure_class_tally().get(UNCLASSIFIED_CLASS),
+            Some(&1)
+        );
+        assert!(
+            report
+                .render_markdown()
+                .contains(&format!("{UNCLASSIFIED_CLASS}: 1"))
+        );
+
+        // §7③: the archived verdict carries the minimal repro recipe.
+        let date = chrono::Utc::now().format("%Y%m%d").to_string();
+        let archived = run_root
+            .path()
+            .parent()
+            .expect("parent")
+            .join("eval")
+            .join("failures")
+            .join(&date)
+            .join("edit_anc");
+        let verdict: Value = serde_json::from_str(
+            &std::fs::read_to_string(archived.join("classification.json")).expect("verdict"),
+        )
+        .expect("verdict json");
+        let repro = verdict.get("repro").expect("repro field present");
+        assert_eq!(
+            repro.get("workspace").and_then(Value::as_str),
+            Some(record.workspace.to_string_lossy().as_ref())
+        );
+        let args = repro
+            .get("args")
+            .and_then(Value::as_array)
+            .expect("args array");
+        assert_eq!(args.first().and_then(Value::as_str), Some("--prompt"));
+        assert_eq!(
+            args.last().and_then(Value::as_str),
+            Some("8"),
+            "max-turns rides last"
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--output-format" && pair[1] == "json-stream"),
+            "{args:?}"
+        );
+        assert_eq!(
+            repro.get("engine").and_then(Value::as_str),
+            Some(bin_display.as_str())
+        );
+    }
+
     // ── Report digests & comparison ───────────────────────────────────
 
     #[test]
@@ -3071,6 +3697,81 @@ input = { file_path = "meta.txt" }
         assert!(verdict.starts_with("UNSTABLE"), "{verdict}");
         assert!(verdict.contains("[edit_42]"), "{verdict}");
         assert_ne!(good.stable_digest(), worse.stable_digest());
+    }
+
+    // ── W1 §4① anchors + §4② ATTRIBUTE-SPLIT ─────────────────────────
+
+    #[test]
+    fn dry_run_reports_carry_stub_anchor_and_horizon() {
+        let dir = tempfile::TempDir::new().expect("tmp");
+        let task = parse_task(&write_task(dir.path(), "d.toml", SAMPLE_TASK)).expect("parse");
+        let out = tempfile::TempDir::new().expect("out");
+        let (report, _) =
+            run_suite(std::slice::from_ref(&task), &options_into(out.path())).expect("dry suite");
+
+        // Suite anchor: the constant stub marker, no fabricated provider.
+        assert_eq!(
+            report.anchors.model_id.as_deref(),
+            Some(DRY_RUN_ANCHOR_MODEL)
+        );
+        assert!(report.anchors.provider.is_none());
+        assert!(report.anchors.profile_digest.is_none());
+        // Per-task anchor mirrors it; horizon is tier-derived.
+        let record = &report.records[0];
+        assert_eq!(
+            record.anchor.model_id.as_deref(),
+            Some(DRY_RUN_ANCHOR_MODEL)
+        );
+        assert_eq!(record.horizon, "short", "edit tier derives short");
+
+        // The markdown shows both the anchor line and the horizon column.
+        let md = report.render_markdown();
+        assert!(
+            md.contains(&format!("Anchor: model={DRY_RUN_ANCHOR_MODEL}")),
+            "{md}"
+        );
+        assert!(md.contains("| short |"), "{md}");
+
+        // Anchors ride the stable digest (§4①) — flipping the model must
+        // never digest as "unchanged".
+        let mut other = report.clone();
+        other.anchors.model_id = Some("some-real-model".into());
+        assert_ne!(report.stable_digest(), other.stable_digest());
+    }
+
+    #[test]
+    fn attribute_split_blocks_verdict_on_anchor_or_rule_drift() {
+        let dir = tempfile::TempDir::new().expect("tmp");
+        let task = parse_task(&write_task(dir.path(), "d.toml", SAMPLE_TASK)).expect("parse");
+        let out_a = tempfile::TempDir::new().expect("a");
+        let out_b = tempfile::TempDir::new().expect("b");
+        let (a, _) =
+            run_suite(std::slice::from_ref(&task), &options_into(out_a.path())).expect("suite a");
+        let (b, _) =
+            run_suite(std::slice::from_ref(&task), &options_into(out_b.path())).expect("suite b");
+        assert_eq!(a.stable_digest(), b.stable_digest());
+
+        // Model drift ⇒ ATTRIBUTE-SPLIT: no STABLE/UNSTABLE verdict, raw
+        // deltas still enumerated.
+        let mut other_model = b.clone();
+        other_model.anchors.model_id = Some("claude-x".into());
+        let verdict = compare_reports(&a, &other_model);
+        assert!(verdict.starts_with("ATTRIBUTE-SPLIT"), "{verdict}");
+        assert!(!verdict.starts_with("STABLE"));
+        assert!(!verdict.starts_with("UNSTABLE"));
+        assert!(verdict.contains("model_id"), "{verdict}");
+        assert!(verdict.contains("[meta]"), "numbers stay listed: {verdict}");
+
+        // Rule-table drift splits too (design §4② names the fingerprint).
+        let mut other_rules = b.clone();
+        other_rules.failure_rules_fingerprint = "deadbeefdeadbeef".to_string();
+        let verdict = compare_reports(&a, &other_rules);
+        assert!(verdict.starts_with("ATTRIBUTE-SPLIT"), "{verdict}");
+        assert!(verdict.contains("failure_rules_fingerprint"), "{verdict}");
+
+        // Aligned anchors keep the historical verdicts.
+        let verdict = compare_reports(&a, &b);
+        assert!(verdict.starts_with("STABLE:"), "{verdict}");
     }
 
     #[test]
