@@ -1027,6 +1027,7 @@ mod tests {
                 tool_name: "Bash".into(),
                 result: big.clone(),
                 is_error: false,
+                meta: Box::new(serde_json::Value::Null),
             });
             tee.close();
         }

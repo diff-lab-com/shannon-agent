@@ -125,6 +125,29 @@ fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
     Regex::new(&regex_str)
 }
 
+/// Extract the L0-mirrorable portion of a tool's metadata (§4.12 W3-3b).
+///
+/// Returns the structured denial record when a tool labeled its result as
+/// `sandbox_denied`; `Null` otherwise. The value flows into
+/// [`crate::query_engine::types::QueryEvent::ToolUseResult::meta`] and from
+/// there into the session log's `tool/result.meta` — no new event kind, per
+/// the §4.1 vocabulary contract.
+pub fn sandbox_meta_from(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> serde_json::Value {
+    let classified = metadata
+        .get("classification")
+        .and_then(|v| v.as_str())
+        .is_some_and(|c| c == shannon_tool_interface::SANDBOX_DENIED_CLASSIFICATION);
+    if !classified {
+        return serde_json::Value::Null;
+    }
+    serde_json::json!({
+        "classification": shannon_tool_interface::SANDBOX_DENIED_CLASSIFICATION,
+        "sandbox": metadata.get("sandbox").cloned().unwrap_or(serde_json::Value::Null),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // ToolRegistry
 // ---------------------------------------------------------------------------

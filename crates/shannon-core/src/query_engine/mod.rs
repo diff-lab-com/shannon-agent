@@ -500,6 +500,7 @@ mod tests {
             tool_name: "read".to_string(),
             result: "file contents".to_string(),
             is_error: false,
+            meta: Box::new(serde_json::Value::Null),
         };
         match event {
             QueryEvent::ToolUseResult {
@@ -520,6 +521,7 @@ mod tests {
             tool_name: "bash".to_string(),
             result: "permission denied".to_string(),
             is_error: true,
+            meta: Box::new(serde_json::Value::Null),
         };
         match event {
             QueryEvent::ToolUseResult { is_error, .. } => assert!(is_error),

@@ -33,6 +33,7 @@
 use std::sync::Arc;
 
 mod defaults;
+pub mod sandbox;
 
 pub mod agent;
 pub mod ask_user;
@@ -186,6 +187,9 @@ pub struct ToolProviders {
     pub fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
     /// Process world for bash/git/gh/lsp-style tools.
     pub process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+    /// §4.12: classifier tagging kernel-denied bash runs as `sandbox_denied`.
+    /// `None` unless a kernel-enforcing backend produced this set.
+    pub denial_classifier: Option<crate::sandbox::DenialClassifier>,
 }
 
 impl Default for ToolProviders {
@@ -193,6 +197,7 @@ impl Default for ToolProviders {
         Self {
             fs: defaults::fs(),
             process: defaults::process(),
+            denial_classifier: None,
         }
     }
 }
@@ -206,7 +211,11 @@ fn register_all_tools(
     providers: &ToolProviders,
 ) -> Result<ToolRegistrationResult, Box<dyn std::error::Error>> {
     use crate::file::sandbox::{PathSandbox, SandboxConfig as PathSandboxConfig};
-    let ToolProviders { fs, process } = providers;
+    let ToolProviders {
+        fs,
+        process,
+        denial_classifier,
+    } = providers;
 
     // Project-scoped sandbox when a project directory is given (same config
     // shape as the pre-provider `register_default_tools_with_project_dir`).
@@ -262,11 +271,14 @@ fn register_all_tools(
     }
 
     // ── System operations ──────────────────────────────────────────────
-    let bash = match project_dir {
+    let mut bash = match project_dir {
         Some(dir) => BashTool::with_process_sandbox(dir),
         None => BashTool::new(),
     }
     .with_worlds(process.clone());
+    if let Some(classifier) = denial_classifier {
+        bash = bash.with_denial_classifier(classifier.clone());
+    }
     registry.register(Box::new(bash))?;
     registry.register(Box::new(SleepTool::new()))?;
     registry.register(Box::new(
@@ -464,15 +476,56 @@ pub struct ToolRegistrationResult {
 /// let engine = QueryEngine::with_defaults_arc(client, Arc::new(registry), perms, state)
 ///     .with_plan_mode_active(result.plan_manager.plan_mode_flag());
 /// ```
+///
+/// ## Sandbox selection (§4.12 W3-3b)
+///
+/// Before assembling, [`crate::sandbox::SandboxSettings::detect`] resolves
+/// `sandbox = off|local|landlock` from env/TOML:
+///
+/// - `off` (default): the exact legacy body below runs — byte-for-byte the
+///   §4.11 passthrough, including the auto-detected argv-level wrappers.
+/// - `local`: user-space policy decorators ride the same registration
+///   ordering (see [`crate::sandbox::assemble_local`]).
+/// - `landlock`: the kernel-enforced world decorates both providers; tool
+///   code is unchanged. A host that cannot enforce degrades **loudly** to
+///   the legacy body (`tracing::error`) rather than pretending to restrict.
 pub fn register_default_tools_with_project_dir_ex(
     registry: &mut ToolRegistry,
     project_dir: &std::path::Path,
 ) -> Result<ToolRegistrationResult, Box<dyn std::error::Error>> {
-    let worlds = ToolProviders::default();
-    register_all_tools(registry, Some(project_dir), true, &worlds)
-}
+    let detected = crate::sandbox::SandboxSettings::detect();
+    let worlds = match detected.mode {
+        // Default + explicit passthrough: legacy assembly, untouched.
+        shannon_tool_interface::SandboxMode::Off => None,
 
-/// Register team coordination tools that require an AgentCoordinator.
+        shannon_tool_interface::SandboxMode::Local => {
+            Some(crate::sandbox::assemble_local(&detected, project_dir))
+        }
+        shannon_tool_interface::SandboxMode::Landlock => {
+            match crate::sandbox::assemble(&detected, project_dir) {
+                Ok(assembled) => Some(assembled),
+                Err(e) => {
+                    // Explicit degrade to the status-quo world — never a
+                    // silent fake sandbox.
+                    tracing::error!(
+                        "sandbox=landlock requested but unavailable ({e}); \
+                         falling back to unrestricted local execution"
+                    );
+                    None
+                }
+            }
+        }
+    };
+
+    if let Some(assembled) = worlds {
+        for notice in &assembled.notices {
+            tracing::warn!(tag = %notice.tag, "sandbox: {}", notice.detail);
+        }
+        return register_all_tools(registry, Some(project_dir), true, &assembled.providers);
+    }
+
+    register_all_tools(registry, Some(project_dir), true, &ToolProviders::default())
+}
 ///
 /// Call this after `register_default_tools` when a team context is available.
 /// These tools let the LLM manage the shared team TaskBoard for multi-agent coordination.
