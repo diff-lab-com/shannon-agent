@@ -863,6 +863,18 @@ pub struct WebhookConfig {
     pub include_body: bool,
 }
 
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            secret: None,
+            template: WebhookTemplate::default(),
+            timeout_ms: Self::default_timeout_ms(),
+            include_body: false,
+        }
+    }
+}
+
 impl WebhookConfig {
     fn default_timeout_ms() -> u64 {
         5000
@@ -1050,6 +1062,19 @@ impl WebhookHandler {
 impl NotificationHandler for WebhookHandler {
     fn send(&self, n: &Notification) -> Result<(), NotifierError> {
         let body = self.render_body(n);
+        self.deliver(body)
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl WebhookHandler {
+    /// Spawn fire-and-forget delivery of a pre-rendered JSON document through
+    /// the same retry/backoff/signature plumbing as notification bodies
+    /// (§4.15: analytics payloads ride the webhook transport unchanged).
+    pub(crate) fn deliver(&self, body: String) -> Result<(), NotifierError> {
         let sig = self.sign(&body)?;
         let handle =
             tokio::runtime::Handle::try_current().map_err(|_| NotifierError::HandlerFailed {
@@ -1059,51 +1084,52 @@ impl NotificationHandler for WebhookHandler {
         let client = self.client.clone();
         let url = self.config.url.clone();
         handle.spawn(async move {
-            const MAX_ATTEMPTS: u32 = 3;
-            let mut attempt: u32 = 0;
-            let mut delay_ms: u64 = 500;
-            loop {
-                attempt += 1;
-                let mut req = client
-                    .post(&url)
-                    .header("Content-Type", "application/json")
-                    .body(body.clone());
-                if !sig.is_empty() {
-                    req = req.header("X-Shannon-Signature", format!("sha256={sig}"));
-                }
-                match req.send().await {
-                    Ok(resp) if resp.status().is_success() => return,
-                    Ok(resp) => {
-                        tracing::warn!(
-                            target: "shannon_core::notifier::webhook",
-                            status = %resp.status(),
-                            attempt,
-                            "webhook returned non-success status"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "shannon_core::notifier::webhook",
-                            error = %e,
-                            attempt,
-                            "webhook delivery failed"
-                        );
-                    }
-                }
-                if attempt >= MAX_ATTEMPTS {
-                    return;
-                }
-                let jitter = (delay_ms / 4).max(1);
-                let actual_delay = delay_ms + (rand::random::<u64>() % jitter);
-                tokio::time::sleep(Duration::from_millis(actual_delay)).await;
-                delay_ms *= 2;
-            }
+            deliver_with_retry(&client, &url, sig, body).await;
         });
         Ok(())
     }
+}
 
-    fn name(&self) -> &str {
-        &self.name
+/// Bounded-retry POST shared by every webhook payload shape.
+async fn deliver_with_retry(client: &reqwest::Client, url: &str, signature: String, body: String) {
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut attempt: u32 = 0;
+    let mut delay_ms: u64 = 500;
+    loop {
+        attempt += 1;
+        let mut req = client
+            .post(url)
+            .header("Content-Type", "application/json")
+            .body(body.clone());
+        if !signature.is_empty() {
+            req = req.header("X-Shannon-Signature", format!("sha256={signature}"));
+        }
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => return,
+            Ok(resp) => {
+                tracing::warn!(
+                    target: "shannon_core::notifier::webhook",
+                    status = %resp.status(),
+                    attempt,
+                    "webhook returned non-success status"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "shannon_core::notifier::webhook",
+                    error = %e,
+                    attempt,
+                    "webhook delivery failed"
+                );
+            }
+        }
+        if attempt >= MAX_ATTEMPTS {
+            return;
+        }
+        let jitter = (delay_ms / 4).max(1);
+        let actual_delay = delay_ms + (rand::random::<u64>() % jitter);
+        tokio::time::sleep(Duration::from_millis(actual_delay)).await;
+        delay_ms *= 2;
     }
 }
 

@@ -11,10 +11,13 @@
 //!   SWE-bench Verified 50 subset, self-built regression pool (§4.13 W2-M3),
 //!   with pinned-workload fingerprints, n=3 variance discipline and
 //!   citability gating
+//! - **dashboard**: static offline HTML trend board over `runs/*/report.json`
+//!   (§4.15 W2-M4; version×metric matrix + chronological run sequence)
 //! - **snapshot**: Request shape snapshot helpers for regression detection
 //! - **record_replay**: Record/Replay system for zero-cost CI testing
 //!   (moved to `shannon-engine`; re-exported here for backward compat)
 
+pub mod dashboard;
 pub mod eval_benchmarks;
 pub mod eval_metrics;
 pub mod eval_runner;

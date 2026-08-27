@@ -4,6 +4,7 @@ use crate::{Result, widgets::ChatRole};
 
 use super::super::Repl;
 
+use shannon_core::signals::RewindKind;
 use shannon_tools::{FileHistoryConfig, FileHistoryManager, FileSnapshot, RewindAction};
 use std::path::{Path, PathBuf};
 
@@ -691,7 +692,20 @@ fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, Str
 }
 
 pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
-    match parse_rewind_intent(args) {
+    let intent = parse_rewind_intent(args);
+    // §4.15 online signals: count the invocation kind (never the argument
+    // value — a file path stays here). `history` is a read-only listing and
+    // does not count as rewind usage.
+    match &intent {
+        RewindIntent::History => {}
+        RewindIntent::Code(_) => shannon_core::signals::observe_rewind(RewindKind::Code),
+        RewindIntent::Both(_) => shannon_core::signals::observe_rewind(RewindKind::Both),
+        RewindIntent::Conversation(_) => {
+            shannon_core::signals::observe_rewind(RewindKind::Conversation)
+        }
+        RewindIntent::File { .. } => shannon_core::signals::observe_rewind(RewindKind::File),
+    }
+    match intent {
         RewindIntent::History => {
             let checkpoints = repl.checkpoint_manager.list_checkpoints();
             if checkpoints.is_empty() {
