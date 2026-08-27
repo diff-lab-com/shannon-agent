@@ -546,7 +546,41 @@ pub fn observe_stream(ndjson: &str) -> RunObservation {
             }
             NdjsonLine::TextDelta { content } => obs.answer_text.push_str(&content),
             NdjsonLine::Error { message } => obs.errors.push(message),
-            done @ NdjsonLine::Done { .. } => obs.done = Some(done),
+            done @ NdjsonLine::Done { .. } => {
+                // Real headless runs may emit two `done` lines: an
+                // engine-side one carrying usage/turns, then a final
+                // exit marker with only `exit_code`. Merge field-wise so
+                // the populated stats survive; a later line still wins
+                // on any field it actually carries.
+                obs.done = match obs.done.take() {
+                    Some(NdjsonLine::Done {
+                        exit_code: pe,
+                        turns_used: pt,
+                        tokens_used: pu,
+                        tokens_in: pi,
+                        tokens_out: po,
+                    }) => {
+                        let NdjsonLine::Done {
+                            exit_code,
+                            turns_used,
+                            tokens_used,
+                            tokens_in,
+                            tokens_out,
+                        } = done
+                        else {
+                            unreachable!("arm matched Done variant");
+                        };
+                        Some(NdjsonLine::Done {
+                            exit_code: exit_code.or(pe),
+                            turns_used: turns_used.or(pt),
+                            tokens_used: tokens_used.or(pu),
+                            tokens_in: tokens_in.or(pi),
+                            tokens_out: tokens_out.or(po),
+                        })
+                    }
+                    _ => Some(done),
+                };
+            }
             NdjsonLine::ToolResult { .. } | NdjsonLine::Other => {}
         }
     }
@@ -2213,6 +2247,36 @@ input = { file_path = "meta.txt" }
             parse_ndjson_line(r#"{"type":"future_event","x":1}"#),
             NdjsonLine::Other
         );
+    }
+
+    #[test]
+    fn observe_stream_merges_dual_done_lines_field_wise() {
+        // Real headless runs emit an engine-side `done` carrying usage/turns
+        // followed by a final synthesized marker with only `exit_code`.
+        // Field-wise merge must keep the populated stats (last-wins used to
+        // zero every metric on real runs).
+        let stream = concat!(
+            "{\"type\":\"start\",\"session_id\":\"s\",\"model\":\"m\"}\n",
+            "{\"type\":\"done\",\"exit_code\":0,\"turns_used\":3,\"tokens_used\":127468,\"tokens_in\":126984,\"tokens_out\":484}\n",
+            "{\"type\":\"done\",\"exit_code\":0}\n",
+        );
+        let obs = observe_stream(stream);
+        match obs.done {
+            Some(NdjsonLine::Done {
+                exit_code,
+                turns_used,
+                tokens_used,
+                tokens_in,
+                tokens_out,
+            }) => {
+                assert_eq!(exit_code, Some(0));
+                assert_eq!(turns_used, Some(3));
+                assert_eq!(tokens_used, Some(127_468));
+                assert_eq!(tokens_in, Some(126_984));
+                assert_eq!(tokens_out, Some(484));
+            }
+            other => panic!("expected merged Done, got {other:?}"),
+        }
     }
 
     #[test]
