@@ -12,6 +12,7 @@ pub mod installer;
 pub mod manifest;
 pub mod permissions;
 pub mod registry;
+pub mod spawn_sandbox;
 pub mod validate;
 
 pub use config::{PluginState, PluginsConfig};
@@ -28,7 +29,9 @@ pub use manifest::{
 pub use permissions::{
     DENY_PREFIX, PermissionDecision, PluginPermissionError, PluginPermissionPolicy,
     PluginToolPolicies, admit_prompt_based_extension, emit_decision, gated_discover_tools_http,
-    gated_discover_tools_stdio, owner_of_tool,
+    gated_discover_tools_stdio, gated_discover_tools_stdio_guarded, owner_of_tool,
 };
+pub use spawn_sandbox::PluginSpawnGuard;
+
 pub use registry::{InstalledPlugin, PluginRegistry};
 pub use validate::{validate_for_install, warn_about};

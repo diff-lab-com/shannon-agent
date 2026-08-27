@@ -1293,17 +1293,27 @@ fn run_noninteractive_query(
                                 &plugin.manifest,
                             ),
                         );
+                        // write_files enforcement ("declaration IS sandbox"):
+                        // declared write_files installs a manifest-derived
+                        // execution world around every stdio spawn; anything
+                        // else stays a zero-overhead passthrough.
+                        let spawn_guard = shannon_tools::sandbox::plugin_spawn_guard_for_manifest(
+                            &policy,
+                            &plugin.manifest.name,
+                            &plugin.path,
+                        );
                         match plugin.manifest.kind() {
                             Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
                                 if let Some(command) = transport.command() {
                                     let args = transport.args().to_vec();
-                                    match shannon_core::plugin::gated_discover_tools_stdio(
+                                    match shannon_core::plugin::gated_discover_tools_stdio_guarded(
                                         &policy,
                                         &plugin.manifest.name,
                                         command,
                                         &args,
                                         &std::collections::HashMap::new(),
                                         None,
+                                        spawn_guard,
                                     )
                                     .await
                                     {

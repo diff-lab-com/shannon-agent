@@ -142,7 +142,11 @@ pub enum PluginPermission {
     #[serde(rename = "read_files")]
     ReadFiles,
 
-    /// Write files to filesystem
+    /// Write files to the filesystem. Declaring this face runs the plugin's
+    /// stdio server processes inside a manifest-derived execution world
+    /// (writable roots converge to the install dir + workspace; see
+    /// `PERMISSIONS.md`), so the declaration is enforced by the OS, not just
+    /// honored by host gates.
     #[serde(rename = "write_files")]
     WriteFiles,
 
