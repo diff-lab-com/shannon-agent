@@ -1537,6 +1537,7 @@ fn provider_id(p: &shannon_engine::api::LlmProvider) -> &'static str {
         LlmProvider::Zhipu => "zhipu",
         LlmProvider::ZhipuInternational => "zhipu_international",
         LlmProvider::ZhipuCoding => "zhipu_coding",
+        LlmProvider::ZhipuCodingPlan => "zhipu_coding_plan",
         LlmProvider::Moonshot => "moonshot",
         LlmProvider::Minimax => "minimax",
         LlmProvider::DashScope => "dashscope",
