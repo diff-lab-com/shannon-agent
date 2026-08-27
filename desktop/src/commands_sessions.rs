@@ -869,6 +869,30 @@ pub async fn branch_session(
     branch_session_internal(&state, Some(&app_handle), parent_id, branch_point).await
 }
 
+/// Turn Timeline (§4.14): the per-session projection consumed by the
+/// Timeline panel — turns × tool waterfall rows × token/cost cumulative
+/// curve. The fold itself lives in `project_turn_timeline` next to the other
+/// L0 projections; this command is transport only.
+#[tauri::command]
+pub async fn trace_timeline(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<shannon_core::session_log::TurnTimeline, String> {
+    let session_uuid =
+        uuid::Uuid::parse_str(&session_id).map_err(|e| format!("Invalid UUID: {e}"))?;
+
+    let events = match state.l0_store().read_events(&session_uuid) {
+        Ok(Some(events)) => events,
+        Ok(None) => return Err(format!("Session not found: {session_id}")),
+        Err(e) => return Err(e.to_string()),
+    };
+    if events.is_empty() {
+        return Err(format!("Session not found: {session_id}"));
+    }
+
+    Ok(shannon_core::session_log::project_turn_timeline(&events))
+}
+
 #[cfg(test)]
 mod auto_title_tests {
     use super::derive_title_from_message;

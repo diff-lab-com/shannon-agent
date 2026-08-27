@@ -138,6 +138,8 @@ fn main() {
             commands_sessions::rename_session,
             commands_sessions::duplicate_session,
             commands_sessions::branch_session,
+            // §4.14 — Turn Timeline panel data source
+            commands_sessions::trace_timeline,
             // E2 skill loop — task evaluation and skill proposal management
             commands_skill_loop::skill_loop_evaluate,
             commands_skill_loop::skill_loop_generate,

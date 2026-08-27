@@ -1,0 +1,9 @@
+# Provision Jaeger as Grafana's tracing datasource (no manual setup).
+apiVersion: 1
+datasources:
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    isDefault: true

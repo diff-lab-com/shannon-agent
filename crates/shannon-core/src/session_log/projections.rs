@@ -21,7 +21,8 @@ use std::path::{Path, PathBuf};
 
 use chrono::TimeZone;
 use shannon_types::session_event::{
-    PermissionDecisionPayload, SessionEvent, SessionEventBody, ToolResultPayload, TurnEndPayload,
+    PermissionDecisionPayload, SessionEvent, SessionEventBody, TokenUsage, ToolResultPayload,
+    TurnEndPayload,
 };
 
 /// Conversation rebuild output ([`project_conversation`]).
@@ -265,6 +266,278 @@ pub fn project_conversation(events: &[SessionEvent]) -> ConversationProjection {
 }
 
 // ============================================================================
+// ============================================================================
+// Turn timeline projection (§4.14 desktop Turn Timeline)
+// ============================================================================
+
+/// One tool execution inside a timeline turn (waterfall row).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TimelineToolEntry {
+    /// Provider tool-use id this row answers.
+    pub tool_use_id: String,
+    /// Tool name.
+    pub tool_name: String,
+    /// `tool/call` timestamp, ns since epoch.
+    pub start_ts_ns: u64,
+    /// `tool/result` timestamp (falls back to the call ts when unpaired).
+    pub end_ts_ns: u64,
+    /// Measured duration when the result carried one, else the call→result
+    /// delta.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// Result flagged as error (also true for unpaired/interrupted calls).
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+/// One user-visible turn: window, terminal reason, usage triple, tools.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TimelineTurn {
+    /// Turn number from the event envelope.
+    pub turn: u64,
+    /// First event ts of the turn window.
+    pub start_ts_ns: u64,
+    /// `turn/end` ts (or last observed event of the turn).
+    pub end_ts_ns: u64,
+    /// Terminal reason from `turn/end`, when the turn closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Error that ended the turn, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Usage summed over the turn (from the `turn/end` payload).
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    /// Tool executions in call order.
+    pub tools: Vec<TimelineToolEntry>,
+}
+
+/// One cumulative sample on the token/cost curve (taken at each `turn/end`).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TimelineCumulativePoint {
+    /// Sample time (`turn/end` ts), ns since epoch.
+    pub ts_ns: u64,
+    /// Total output tokens across all closed turns so far.
+    pub output_tokens_total: u64,
+    /// Total USD cost so far; stays None until any value exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_total_usd: Option<f64>,
+}
+
+/// The whole Turn Timeline for one session: turns × tool rows × token/cost
+/// accumulation. Consumed by the desktop `trace_timeline` command — derived
+/// here so no consumer re-implements the fold over L0.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct TurnTimeline {
+    /// Owning session id.
+    pub session_id: String,
+    /// Model from `session/start`, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// First event ts (root of every waterfall axis).
+    #[serde(default)]
+    pub started_ts_ns: u64,
+    /// Last event ts.
+    #[serde(default)]
+    pub ended_ts_ns: u64,
+    /// Per-turn detail rows, in first-appearance order.
+    pub turns: Vec<TimelineTurn>,
+    /// Running totals sampled at every `turn/end`.
+    pub cumulative: Vec<TimelineCumulativePoint>,
+}
+
+/// Builder state per envelope-turn number.
+#[derive(Default)]
+struct TimelineTurnAcc {
+    start_ts_ns: u64,
+    end_ts_ns: u64,
+    reason: Option<String>,
+    error: Option<String>,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
+    cost_usd: Option<f64>,
+    /// Tool rows in call order.
+    tools: Vec<TimelineToolAcc>,
+}
+
+/// `(tool_use_id, tool_name, call_ts, result?)` — the raw pairing buffer
+/// before `TimelineTurnAcc::finish` folds it into render rows.
+type TimelineToolAcc = (String, String, u64, Option<(u64, bool, Option<u64>)>);
+
+impl TimelineTurnAcc {
+    fn add_usage(&mut self, usage: &TokenUsage) {
+        self.input_tokens += usage.input_tokens;
+        self.output_tokens += usage.output_tokens;
+        self.cache_creation_tokens += usage.cache_creation_tokens;
+        self.cache_read_tokens += usage.cache_read_tokens;
+        self.cost_usd = match (self.cost_usd, usage.cost_usd) {
+            (Some(a), Some(b)) => Some(a + b),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        };
+    }
+
+    fn finish(self, turn: u64) -> TimelineTurn {
+        TimelineTurn {
+            turn,
+            start_ts_ns: self.start_ts_ns,
+            end_ts_ns: self.end_ts_ns.max(self.start_ts_ns),
+            reason: self.reason,
+            error: self.error,
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            cache_creation_tokens: self.cache_creation_tokens,
+            cache_read_tokens: self.cache_read_tokens,
+            cost_usd: self.cost_usd,
+            tools: self
+                .tools
+                .into_iter()
+                .map(|(id, name, call_ts, done)| {
+                    // An unpaired call closes at its own ts and renders as an
+                    // error instead of being dropped (interrupted turns).
+                    let (end_ts, is_error, duration_ms) = done.unwrap_or((call_ts, true, None));
+                    TimelineToolEntry {
+                        tool_use_id: id,
+                        tool_name: name,
+                        start_ts_ns: call_ts.min(end_ts),
+                        end_ts_ns: end_ts.max(call_ts),
+                        duration_ms,
+                        is_error,
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Slot-or-create the accumulator for envelope-turn `n`, ordered by first
+/// appearance (the log's chronology).
+fn timeline_slot(accs: &mut Vec<(u64, TimelineTurnAcc)>, n: u64, ts: u64) -> &mut TimelineTurnAcc {
+    if let Some(pos) = accs.iter().position(|(key, _)| *key == n) {
+        &mut accs[pos].1
+    } else {
+        accs.push((
+            n,
+            TimelineTurnAcc {
+                start_ts_ns: ts,
+                ..Default::default()
+            },
+        ));
+        let (_, last) = accs.last_mut().expect("just pushed");
+        last
+    }
+}
+
+/// Derive the Turn Timeline projection from one session's events.
+///
+/// Pure function like [`project_conversation`] — carries render data only;
+/// message bodies never leave the log through this view.
+pub fn project_turn_timeline(events: &[SessionEvent]) -> TurnTimeline {
+    let mut out = TurnTimeline {
+        session_id: events
+            .first()
+            .map(|e| e.session_id.clone())
+            .unwrap_or_default(),
+        ..Default::default()
+    };
+    let Some(first_ev) = events.first() else {
+        return out;
+    };
+    let last_ts = events
+        .iter()
+        .map(|e| e.ts_ns)
+        .max()
+        .unwrap_or(first_ev.ts_ns);
+    out.started_ts_ns = first_ev.ts_ns;
+    out.ended_ts_ns = last_ts;
+
+    let mut accs: Vec<(u64, TimelineTurnAcc)> = Vec::new();
+    let mut curve_output_total = 0u64;
+    let mut curve_cost_total = None::<f64>;
+
+    for event in events {
+        match &event.body {
+            SessionEventBody::SessionStart(p) => {
+                out.model.get_or_insert_with(|| p.model.clone());
+            }
+            SessionEventBody::ToolCall(p) => {
+                let acc = timeline_slot(&mut accs, event.turn, event.ts_ns);
+                acc.tools.push((
+                    p.tool_use_id.clone(),
+                    p.tool_name.clone(),
+                    event.ts_ns,
+                    None,
+                ));
+            }
+            SessionEventBody::ToolResult(p) => {
+                let acc = timeline_slot(&mut accs, event.turn, event.ts_ns);
+                let open = acc
+                    .tools
+                    .iter_mut()
+                    .rev()
+                    .find(|(id, _, _, done)| id == &p.tool_use_id && done.is_none());
+                match open {
+                    Some((_, _, call_ts, done)) => {
+                        let measured = p
+                            .duration_ms
+                            .unwrap_or_else(|| event.ts_ns.saturating_sub(*call_ts) / 1_000_000);
+                        *done = Some((event.ts_ns, p.is_error, Some(measured)));
+                    }
+                    // A result whose call was never scanned (truncated log
+                    // head, deduped export, …) still renders as one row.
+                    None => acc.tools.push((
+                        p.tool_use_id.clone(),
+                        p.tool_name.clone(),
+                        event.ts_ns,
+                        Some((event.ts_ns, p.is_error, p.duration_ms)),
+                    )),
+                }
+            }
+            SessionEventBody::TurnEnd(TurnEndPayload {
+                reason,
+                usage,
+                error,
+            }) => {
+                let acc = timeline_slot(&mut accs, event.turn, event.ts_ns);
+                acc.end_ts_ns = event.ts_ns.max(acc.start_ts_ns);
+                acc.reason.get_or_insert_with(|| reason.clone());
+                if acc.error.is_none() {
+                    acc.error.clone_from(error);
+                }
+                if let Some(u) = usage {
+                    acc.add_usage(u);
+                    curve_output_total += u.output_tokens;
+                    curve_cost_total = match (curve_cost_total, u.cost_usd) {
+                        (Some(a), Some(b)) => Some(a + b),
+                        (Some(a), None) | (None, Some(a)) => Some(a),
+                        (None, None) => None,
+                    };
+                }
+                out.cumulative.push(TimelineCumulativePoint {
+                    ts_ns: event.ts_ns,
+                    output_tokens_total: curve_output_total,
+                    cost_total_usd: curve_cost_total,
+                });
+            }
+            // Every other durable content kind anchors/keeps its turn row so
+            // windows reflect reality even when `turn/start` predates the
+            // scanned slice (branch tails, exported heads).
+            _ => {
+                timeline_slot(&mut accs, event.turn, event.ts_ns);
+            }
+        }
+    }
+
+    out.turns = accs.into_iter().map(|(n, acc)| acc.finish(n)).collect();
+    out
+}
+
 // Trace / transcript-style accessors on L0
 // ============================================================================
 
@@ -646,6 +919,140 @@ mod tests {
                 error: None,
             }),
         )
+    }
+
+    // -- Turn Timeline projection (§4.14 desktop panel) -----------------------
+
+    fn tev(seq: u64, turn: u64, body: SessionEventBody) -> SessionEvent {
+        SessionEvent::new(seq, 1_000 + seq * 10, "sess-proj", turn, body)
+    }
+
+    fn tcall(seq: u64, turn: u64, id: &str, tool: &str) -> SessionEvent {
+        tev(
+            seq,
+            turn,
+            SessionEventBody::ToolCall(ToolCallPayload {
+                tool_use_id: id.into(),
+                tool_name: tool.into(),
+                arguments: "{}".into(),
+            }),
+        )
+    }
+
+    fn tresult(seq: u64, turn: u64, id: &str, is_error: bool) -> SessionEvent {
+        tev(
+            seq,
+            turn,
+            SessionEventBody::ToolResult(ToolResultPayload {
+                tool_use_id: id.into(),
+                tool_name: "X".into(),
+                output: "o".into(),
+                is_error,
+                duration_ms: Some(33),
+                meta: serde_json::Value::Null,
+            }),
+        )
+    }
+
+    fn tcurve_end(seq: u64, turn: u64, out: u64, cost: Option<f64>) -> SessionEvent {
+        tev(
+            seq,
+            turn,
+            SessionEventBody::TurnEnd(TurnEndPayload {
+                reason: TurnEndPayload::REASON_COMPLETED.into(),
+                usage: Some(TokenUsage {
+                    input_tokens: 5,
+                    output_tokens: out,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                    cost_usd: cost,
+                }),
+                error: None,
+            }),
+        )
+    }
+
+    #[test]
+    fn test_project_turn_timeline_rows_tools_and_curve() {
+        let events = vec![
+            tev(
+                0,
+                0,
+                SessionEventBody::SessionStart(shannon_types::session_event::SessionStartPayload {
+                    model: "claude-sonnet-4".into(),
+                    provider: Some("anthropic".into()),
+                    cwd: None,
+                    app_version: None,
+                }),
+            ),
+            user(0, "hi"),
+            call(1, "ta", "{}"),
+            tresult(2, 1, "ta", false),
+            tcurve_end(3, 1, 100, Some(0.10)),
+            user(5, "again"),
+            tcall(4, 2, "tb", "Read"),
+            tresult(5, 2, "tb", true),
+            tcall(6, 2, "tc", "Grep"), // never answered
+            tcurve_end(7, 2, 40, None),
+        ];
+
+        let tl = project_turn_timeline(&events);
+        assert_eq!(tl.session_id, "sess-proj");
+        assert_eq!(tl.model.as_deref(), Some("claude-sonnet-4"));
+        assert_eq!(tl.turns.len(), 2);
+
+        let (t1, t2) = (&tl.turns[0], &tl.turns[1]);
+        assert_eq!(t1.tools.len(), 1);
+        assert_eq!(t1.tools[0].tool_name, "Bash");
+        assert!(!t1.tools[0].is_error);
+        assert_eq!(t1.output_tokens, 100);
+        assert_eq!(t1.cost_usd, Some(0.10));
+        assert_eq!(
+            t1.tools[0].duration_ms,
+            Some(33),
+            "measured duration wins over delta"
+        );
+
+        assert_eq!(t2.tools.len(), 2, "interrupted call still renders");
+        assert!(t2.tools.iter().any(|t| t.tool_name == "Read" && t.is_error));
+        let grep = t2
+            .tools
+            .iter()
+            .find(|t| t.tool_use_id == "tc")
+            .expect("grep row kept");
+        assert!(grep.is_error, "unpaired call marks error");
+
+        // Curve samples once per closed turn with running totals.
+        assert_eq!(tl.cumulative.len(), 2);
+        assert_eq!(tl.cumulative[0].output_tokens_total, 100);
+        assert_eq!(tl.cumulative[1].output_tokens_total, 140);
+        assert_eq!(tl.cumulative[0].cost_total_usd, Some(0.10));
+        // A None cost in a later turn must not erase the running total.
+        assert_eq!(tl.cumulative[1].cost_total_usd, Some(0.10));
+    }
+
+    #[test]
+    fn test_project_turn_timeline_empty_and_preamble_only() {
+        assert_eq!(
+            project_turn_timeline(&[]).turns.len(),
+            0,
+            "empty log => empty timeline"
+        );
+        // Only a session/start preamble: no phantom turn rows.
+        let start = tev(
+            0,
+            0,
+            SessionEventBody::SessionStart(shannon_types::session_event::SessionStartPayload {
+                model: "m".into(),
+                provider: None,
+                cwd: None,
+                app_version: None,
+            }),
+        );
+        let tl = project_turn_timeline(&[start]);
+        assert_eq!(tl.turns.len(), 0);
+        assert_eq!(tl.model.as_deref(), Some("m"));
+        assert!(tl.cumulative.is_empty());
     }
 
     #[test]

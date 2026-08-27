@@ -1,7 +1,8 @@
 // Mock command handlers — map every Tauri command used by tauri-api.ts to a mock response.
 // Handlers are async to mimic network latency. All return clones so consumers can't mutate the data.
 import { MOCK_TASKS, MOCK_AGENTS, MOCK_AGENT_DEFINITIONS, MOCK_SESSIONS, MOCK_MESSAGES,
-  MOCK_SKILLS, MOCK_MCP_SERVERS, MOCK_PLUGINS, MOCK_BACKGROUND_TASKS } from './data/core'
+  MOCK_SKILLS, MOCK_MCP_SERVERS, MOCK_PLUGINS, MOCK_BACKGROUND_TASKS,
+  MOCK_TURN_TIMELINE } from './data/core'
 import { MOCK_SCHEDULED_ROUTINES, MOCK_TRIGGERED_ROUTINES, MOCK_HOOK_EVENTS, MOCK_PROFILES } from './data/automation'
 import { MOCK_TRIAGE_ITEMS, MOCK_TRIAGE_STATS, MOCK_OPC_METRICS, MOCK_BILLING_PLAN,
   MOCK_COST_HISTORY, MOCK_BILLING_HISTORY, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
@@ -154,6 +155,9 @@ export const handlers: Record<string, MockHandler> = {
     return src ? { ...clone(src), id: `sess-${Date.now()}`, title: `${src.title} copy` } : null
   },
   async export_session() { await delay(120); return '# Exported session\n\n(mock content)' },
+  // §4.14 — Turn Timeline: demo data regardless of id (sessions come from
+  // MOCK_SESSIONS, which do not have real L0 logs to project).
+  async trace_timeline() { await delay(); return clone(MOCK_TURN_TIMELINE) },
 
   // --- Permissions ---
   async respond_permission() { await delay(20) },
