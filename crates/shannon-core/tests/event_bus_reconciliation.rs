@@ -50,6 +50,7 @@ mod reconciliation {
             tool_name: "Bash".into(),
             result: "total 0".into(),
             is_error: false,
+            meta: Box::new(serde_json::Value::Null),
         });
         events.push(QueryEvent::Usage {
             query_id: q,
@@ -92,6 +93,7 @@ mod reconciliation {
                         tool_name: "echo".into(),
                         result: format!("out-{turn}"),
                         is_error: false,
+                        meta: Box::new(serde_json::Value::Null),
                     },
                     QueryEvent::Usage {
                         query_id: q,
@@ -159,6 +161,7 @@ mod reconciliation {
             tool_name: "dump".into(),
             result: "x".repeat(400 * 1024),
             is_error: false,
+            meta: Box::new(serde_json::Value::Null),
         });
 
         // Turn 2 ends in failure: error row + closed-turn pairing.

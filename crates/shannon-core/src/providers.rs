@@ -18,8 +18,8 @@
 
 use async_trait::async_trait;
 use shannon_tool_interface::{
-    CapturedOutput, DirEntryInfo, FileMeta, FileSystemProvider, PipedChild, PipedSpawn,
-    ProcessExit, ProcessProvider, ProcessRequest, SpawnRewrite,
+    CapturedOutput, ChildWorldInit, DirEntryInfo, FileMeta, FileSystemProvider, ForkInitHost,
+    PipedChild, PipedSpawn, ProcessExit, ProcessProvider, ProcessRequest, SpawnRewrite,
 };
 use std::io;
 use std::path::{Path, PathBuf};
@@ -216,30 +216,47 @@ impl SpawnRewrite for SandboxExecutorRewrite {
 ///
 /// A [`SpawnRewrite`] chain may be installed via [`LocalProcess::with_rewrite`]
 /// / [`LocalProcess::set_rewrite`]; every spawn entry point runs the chain
-/// first — this is the sandbox wrapping point consumed by §4.12.
+/// first — this is the sandbox wrapping point consumed by §4.12. Separately,
+/// a fork-time child initializer (`pre_exec`) may be installed; sandbox
+/// backends use it to drop each child into its execution-world boundary
+/// before exec. When unset, spawn paths are byte-identical to the §4.11
+/// passthrough.
 #[derive(Clone, Default)]
 pub struct LocalProcess {
     rewrite: Option<Arc<dyn SpawnRewrite>>,
+    #[cfg(unix)]
+    fork_init: Option<Arc<ForkInitFn>>,
 }
+
+#[cfg(unix)]
+type ForkInitFn = dyn Fn() -> io::Result<()> + Send + Sync;
 
 impl std::fmt::Debug for LocalProcess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LocalProcess")
-            .field("rewrite", &self.rewrite.is_some())
-            .finish()
+        let mut dbg = f.debug_struct("LocalProcess");
+        dbg.field("rewrite", &self.rewrite.is_some());
+        #[cfg(unix)]
+        dbg.field("fork_init", &self.fork_init.is_some());
+        dbg.finish()
     }
 }
 
 impl LocalProcess {
     /// Provider with no rewrites (plain local execution).
     pub fn new() -> Self {
-        Self { rewrite: None }
+        Self {
+            rewrite: None,
+            #[cfg(unix)]
+            fork_init: None,
+        }
     }
 
     /// Provider applying `rewrite` before every OS spawn (§4.12 seam).
     pub fn with_rewrite(rewrite: Arc<dyn SpawnRewrite>) -> Self {
         Self {
             rewrite: Some(rewrite),
+            #[cfg(unix)]
+            fork_init: None,
         }
     }
 
@@ -268,6 +285,32 @@ impl LocalProcess {
         }
         cmd
     }
+
+    /// Install the fork-time initializer on a blocking command. Unset hook ⇒
+    /// no-op (byte-identical spawn path).
+    #[cfg(unix)]
+    fn install_fork_init_std(&self, cmd: &mut std::process::Command) {
+        use std::os::unix::process::CommandExt;
+        if let Some(init) = &self.fork_init {
+            let init = init.clone();
+            // Executes inside the freshly forked child; an `Err` aborts the
+            // spawn so a child never starts without its boundary installed.
+            unsafe {
+                cmd.pre_exec(move || init());
+            }
+        }
+    }
+
+    /// [`Self::install_fork_init_std`] twin for tokio commands.
+    #[cfg(unix)]
+    fn install_fork_init_tokio(&self, cmd: &mut tokio::process::Command) {
+        if let Some(init) = &self.fork_init {
+            let init = init.clone();
+            unsafe {
+                cmd.pre_exec(move || init());
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -281,6 +324,8 @@ impl ProcessProvider for LocalProcess {
             use std::io::Write;
             use std::process::Stdio;
             let mut cmd = Self::build_blocking(&prepared);
+            #[cfg(unix)]
+            self.install_fork_init_std(&mut cmd);
             cmd.stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
@@ -300,7 +345,13 @@ impl ProcessProvider for LocalProcess {
             });
         }
 
-        let output = Self::build_blocking(&prepared).output()?;
+        let output = {
+            #[allow(unused_mut)]
+            let mut cmd = Self::build_blocking(&prepared);
+            #[cfg(unix)]
+            self.install_fork_init_std(&mut cmd);
+            cmd.output()?
+        };
         Ok(CapturedOutput {
             stdout: output.stdout,
             stderr: output.stderr,
@@ -343,6 +394,8 @@ impl ProcessProvider for LocalProcess {
         // historical bash-tool `kill_on_drop(true)` so timeouts actually
         // terminate the underlying process.
         cmd.kill_on_drop(true);
+        #[cfg(unix)]
+        self.install_fork_init_tokio(&mut cmd);
 
         let mut child = cmd.spawn()?;
         if let Some(bytes) = stdin_bytes {
@@ -417,9 +470,35 @@ impl ProcessProvider for LocalProcess {
         if spec.kill_on_drop {
             cmd.kill_on_drop(true);
         }
+        #[cfg(unix)]
+        self.install_fork_init_tokio(&mut cmd);
 
         let child = cmd.spawn()?;
         Ok(Box::new(LocalPipedChild { child }))
+    }
+}
+
+impl ForkInitHost for LocalProcess {
+    /// Produce a provider whose every future child runs `init` between fork
+    /// and exec (§4.12 sandbox enforcement hook point).
+    fn boxed_with_fork_init(
+        self: Arc<Self>,
+        init: Arc<dyn ChildWorldInit>,
+    ) -> Result<Arc<dyn ProcessProvider>, String> {
+        #[cfg(not(unix))]
+        {
+            let _ = init;
+            Err("fork-time sandbox enforcement requires a unix host".to_string())
+        }
+        #[cfg(unix)]
+        {
+            let fork_init: Arc<dyn Fn() -> io::Result<()> + Send + Sync> =
+                Arc::new(move || init.init_child());
+            Ok(Arc::new(Self {
+                rewrite: self.rewrite.clone(),
+                fork_init: Some(fork_init),
+            }))
+        }
     }
 }
 
@@ -683,5 +762,69 @@ mod tests {
         assert_eq!(got.program, "git");
         assert_eq!(got.args, vec!["status"]);
         assert_eq!(got.cwd, None);
+    }
+
+    // ── §4.12 fork-time world initializer (pre_exec seam) ──────────────
+
+    struct TouchInit {
+        path: std::path::PathBuf,
+        /// When set, initialization fails with this raw OS error instead of
+        /// installing (mirrors how kernel-backed initializers report).
+        fail_with_raw: Option<i32>,
+    }
+
+    impl ChildWorldInit for TouchInit {
+        fn init_child(&self) -> io::Result<()> {
+            if let Some(code) = self.fail_with_raw {
+                return Err(io::Error::from_raw_os_error(code));
+            }
+            std::fs::write(&self.path, b"installed")?;
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    fn host_with_init(
+        path: std::path::PathBuf,
+        fail_with_raw: Option<i32>,
+    ) -> Arc<dyn ProcessProvider> {
+        Arc::new(LocalProcess::new())
+            .boxed_with_fork_init(Arc::new(TouchInit {
+                path,
+                fail_with_raw,
+            }))
+            .expect("local host accepts fork init")
+    }
+
+    /// The installed initializer runs inside the child before exec.
+    #[cfg(unix)]
+    #[test]
+    fn fork_init_runs_before_child_exec() {
+        let dir = tempdir();
+        let marker = dir.path().join("boundary-marker");
+        let host = host_with_init(marker.clone(), None);
+        host.run_blocking(&ProcessRequest::new("/bin/true", &[]))
+            .expect("child with boundary installed");
+        assert!(
+            marker.exists(),
+            "initializer must have run inside the child pre-exec"
+        );
+    }
+
+    /// A failing initializer aborts the spawn — a child never starts without
+    /// its execution-world boundary (fail-closed contract). Raw OS errors
+    /// propagate verbatim (production kernels report EPERM here).
+    #[cfg(unix)]
+    #[test]
+    fn fork_init_failure_aborts_spawn_fail_closed() {
+        let dir = tempdir();
+        let marker = dir.path().join("never");
+        let host = host_with_init(marker.clone(), Some(13)); // EACCES
+        let err = match host.run_blocking(&ProcessRequest::new("/bin/true", &[])) {
+            Ok(_) => panic!("failing initializer must abort the spawn"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!marker.exists(), "child must never have started");
     }
 }

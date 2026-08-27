@@ -61,6 +61,7 @@ fn seed_two_turn_session(store: &SessionStore, id: &Uuid) {
         tool_name: "Bash".into(),
         result: "src\nCargo.toml".into(),
         is_error: false,
+        meta: Box::new(serde_json::Value::Null),
     });
     tee.record_query_event(&shannon_core::QueryEvent::Text {
         query_id: Uuid::new_v4(),

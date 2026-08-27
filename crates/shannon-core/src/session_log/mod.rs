@@ -208,6 +208,7 @@ pub fn query_event_to_session_body(event: &QueryEvent) -> Option<SessionEventBod
             tool_name,
             result,
             is_error,
+            meta,
             ..
         } => SessionEventBody::ToolResult(ToolResultPayload {
             tool_use_id: tool_use_id.clone(),
@@ -215,7 +216,8 @@ pub fn query_event_to_session_body(event: &QueryEvent) -> Option<SessionEventBod
             output: result.clone(),
             is_error: *is_error,
             duration_ms: None,
-            meta: serde_json::Value::Null,
+            // Boxed in the event; payload keeps the vocabulary's plain Value.
+            meta: (**meta).clone(),
         }),
         QueryEvent::TurnCompleted { tokens_used, .. } => {
             SessionEventBody::TurnEnd(TurnEndPayload {
@@ -453,6 +455,7 @@ mod tests {
             tool_name: "Read".into(),
             result: "contents".into(),
             is_error: true,
+            meta: Box::new(serde_json::json!({"classification": "sandbox_denied"})),
         })
         .unwrap();
         match body {
@@ -460,6 +463,11 @@ mod tests {
                 assert!(result.is_error);
                 assert_eq!(result.output, "contents");
                 assert_eq!(result.duration_ms, None);
+                // §4.12: event meta is mirrored into the payload verbatim.
+                assert_eq!(
+                    result.meta["classification"],
+                    serde_json::Value::String("sandbox_denied".into())
+                );
             }
             other => panic!("wrong body: {other:?}"),
         }
