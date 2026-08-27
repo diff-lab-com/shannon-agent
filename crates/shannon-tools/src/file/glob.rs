@@ -649,6 +649,29 @@ mod tests {
         assert!(files.iter().any(|f| f.ends_with("lib.rs")));
     }
 
+    /// An escaping pattern (`..`) deterministically returns the same
+    /// error-shaped output with no "count" key — pins the contract the
+    /// determinism proptest relies on (proptest-regressions seeds).
+    #[tokio::test]
+    async fn glob_escaping_pattern_error_contract_is_stable() {
+        let tmp = TempDir::new().unwrap();
+        let input = GlobInput {
+            pattern: "..".to_string(),
+            path: Some(tmp.path().display().to_string()),
+            exclude_pattern: None,
+        };
+        let out = execute(input.clone())
+            .await
+            .expect("error-shaped Ok output");
+        assert!(out.is_error);
+        assert!(out.content.contains("cannot match here"));
+        assert!(!out.metadata.contains_key("count"));
+
+        let again = execute(input).await.expect("second call");
+        assert_eq!(out.is_error, again.is_error);
+        assert_eq!(out.content, again.content);
+    }
+
     // ======================================================================
     // Property-based tests (proptest)
     // ======================================================================
@@ -703,7 +726,17 @@ mod tests {
             match (out1, out2) {
                 (Ok(o1), Ok(o2)) => {
                     assert_eq!(o1.is_error, o2.is_error);
-                    assert_eq!(o1.metadata["count"], o2.metadata["count"]);
+                    assert_eq!(o1.content, o2.content);
+                    // Error-shaped outputs (traversal blocked, escaping pattern,
+                    // missing directory) carry no "count" metadata by contract —
+                    // only compare it when both calls succeeded.
+                    if !o1.is_error {
+                        assert_eq!(
+                            o1.metadata.get("count"),
+                            o2.metadata.get("count"),
+                            "count differs between identical calls"
+                        );
+                    }
                 }
                 (Err(e1), Err(e2)) => {
                     assert_eq!(e1.to_string(), e2.to_string());
