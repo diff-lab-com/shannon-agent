@@ -1,0 +1,94 @@
+# ── Regression pool task 2/10 · §4.13 W2-M3 ────────────────────────────────
+# Source defect: CHANGELOG.md v0.9.0 → Fixed ¶3 — "/model --tier <t> --save
+# tier override now survives a restart": persist_model_to_providers_toml wrote
+# only the tier name, so resolve_active_target read back defaults instead of
+# the chosen provider/model pair.
+
+id = "reg_02_active_target_persist"
+tier = "edit"
+description = "persist() must write [active_target] (provider+model), not only the tier label (CHANGELOG v0.9.0 Fixed)"
+prompt = """Issue report (from this repo's v0.9.0 release notes):
+`/model --tier standard --save` did not survive a restart: only the tier
+string reached disk, never the concrete provider/model pair, so
+resolve_active_target silently lost the selection.
+
+In src/target_store.rs, `persist(target)` reproduces that defect — it emits a
+bare `tier = standard` row and nothing else.
+
+Required repair semantics (keep `pub fn persist(target: &ActiveTarget) ->
+String` unchanged):
+1. Keep writing the tier line first.
+2. Then write an `[active_target]` table with exactly two rows built from
+   the target: `provider = <target.provider>` and `model = <target.model>`
+   (one row per line, in that order).
+
+Everything stays inside `persist`; do not rename types or fields.
+"""
+
+[[setup.files]]
+path = "src/target_store.rs"
+content = '''
+pub struct ActiveTarget {
+    pub provider: &'static str,
+    pub model: &'static str,
+}
+
+// REGRESSION (Shannon v0.9.0, Fixed): /model --tier --save persisted only
+// the tier label; the concrete provider/model pair never reached disk, so
+// resolve_active_target dropped the chosen model on restart.
+pub fn persist(target: &ActiveTarget) -> String {
+    format!("tier = standard\n")
+}
+'''
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/target_store.rs"
+contains = "[active_target]"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/target_store.rs"
+contains = "target.provider"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/target_store.rs"
+contains = "target.model"
+
+script = '''
+set -e
+test -f src/target_store.rs
+grep -qF 'tier = standard' src/target_store.rs \
+  || { echo "FAIL: tier line must be retained"; exit 1; }
+grep -qF '[active_target]' src/target_store.rs \
+  || { echo "FAIL: missing active_target table"; exit 1; }
+grep -qE 'provider = ' src/target_store.rs || { echo "FAIL: provider row"; exit 1; }
+grep -qE 'model = ' src/target_store.rs || { echo "FAIL: model row"; exit 1; }
+'''
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[limits]
+max_turns = 6
+max_tokens = 16000
+timeout_secs = 180
+
+[dry_run]
+final_text = "persist() now writes tier plus the [active_target] pair."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/target_store.rs" }
+
+[[dry_run.steps]]
+tool = "MultiEdit"
+input = { file_path = "src/target_store.rs", edits = [
+  { old_string = "// REGRESSION (Shannon v0.9.0, Fixed): /model --tier --save persisted only\n// the tier label; the concrete provider/model pair never reached disk, so\n// resolve_active_target dropped the chosen model on restart.\npub fn persist(target: &ActiveTarget) -> String {\n    format!(\"tier = standard\\n\")\n}", new_string = "// POST-FIX (mirrors CHANGELOG v0.9.0): tier first, then active_target.\npub fn persist(target: &ActiveTarget) -> String {\n    let mut out = format!(\"tier = standard\\n\");\n    out.push_str(\"[active_target]\\n\");\n    out.push_str(&format!(\"provider = {}\\n\", target.provider));\n    out.push_str(&format!(\"model = {}\\n\", target.model));\n    out\n}" },
+] }

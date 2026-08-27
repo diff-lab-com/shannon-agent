@@ -1,0 +1,113 @@
+# ── Regression pool task 3/10 · §4.13 W2-M3 ────────────────────────────────
+# Source defect: CHANGELOG.md v0.5.5 → Features T5 — 3-tier volume presets:
+# `Quiet = errors only; Balanced = errors + permission:* + agent:* sources;
+# Verbose = all`. The seeded variant of the Balanced branch matches exact
+# source names instead of the documented prefix families.
+
+id = "reg_03_preset_filter_truth_table"
+tier = "multi_step"
+description = "Balanced preset must honor the permission:*/agent:* source families per v0.5.5 T5 truth table"
+prompt = """Issue report (from this repo's v0.5.5 release notes, notification presets):
+The shipped truth table for NotifPreset routing is:
+
+  Quiet    -> deliver only when level == "error"
+  Balanced -> deliver when level == "error" OR the source belongs to the
+              "permission:" family OR it belongs to the "agent:" family
+  Verbose  -> always deliver
+  None     -> always deliver (preset unset keeps legacy behaviour)
+
+Sources arrive prefixed, e.g. "permission:Bash", "agent:completed",
+"agent:idle". In src/preset_filter.rs the Balanced arm of should_deliver
+compares whole strings against two specific historical names instead of
+matching the documented families.
+
+Repair `should_deliver` so Balanced uses `source.starts_with("permission:")`
+and `source.starts_with("agent:")` exactly as specified. Keep every other arm,
+the enum, and all signatures unchanged.
+"""
+
+[[setup.files]]
+path = "src/preset_filter.rs"
+content = '''
+pub enum NotifPreset {
+    Quiet,
+    Balanced,
+    Verbose,
+}
+
+// Notification routing (Shannon v0.5.5, T5): presets choose which sources
+// reach the user. Quiet = errors only; Balanced = errors + permission:*
+// + agent:* families; Verbose = everything (minimum_level applies later).
+//
+// REGRESSION: the Balanced arm forgot the prefix families — it matched two
+// frozen literal names and delivered nothing from today's prefixed sources.
+pub fn should_deliver(preset: Option<NotifPreset>, level: &str, source: &str) -> bool {
+    match preset {
+        Some(NotifPreset::Quiet) => level == "error",
+        Some(NotifPreset::Balanced) => {
+            level == "error"
+                || source == "permission_request"
+                || source == "agent_completed"
+        }
+        Some(NotifPreset::Verbose) => true,
+        None => true,
+    }
+}
+'''
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/preset_filter.rs"
+contains = 'starts_with("permission:")'
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/preset_filter.rs"
+contains = 'starts_with("agent:")'
+
+[[verify.rules]]
+rule = "trajectory_contains"
+sequence = [{ tool = "MultiEdit" }]
+
+script = '''
+set -e
+test -f src/preset_filter.rs
+if grep -qF 'source == "permission_request"' src/preset_filter.rs; then
+  echo "FAIL: frozen literal comparison still present"; exit 1
+fi
+if grep -qF 'source == "agent_completed"' src/preset_filter.rs; then
+  echo "FAIL: frozen literal comparison still present"; exit 1
+fi
+grep -qF 'starts_with("permission:")' src/preset_filter.rs \
+  || { echo "FAIL: permission family matcher missing"; exit 1; }
+grep -qF 'starts_with("agent:")' src/preset_filter.rs \
+  || { echo "FAIL: agent family matcher missing"; exit 1; }
+grep -qF 'level == "error"' src/preset_filter.rs \
+  || { echo "FAIL: error gate lost"; exit 1; }
+'''
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[limits]
+max_turns = 8
+max_tokens = 16000
+timeout_secs = 180
+
+[dry_run]
+final_text = "Balanced now routes the permission:/agent: families."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/preset_filter.rs" }
+
+[[dry_run.steps]]
+tool = "MultiEdit"
+input = { file_path = "src/preset_filter.rs", edits = [
+  { old_string = "// REGRESSION: the Balanced arm forgot the prefix families — it matched two\n// frozen literal names and delivered nothing from today's prefixed sources.\npub fn should_deliver(preset: Option<NotifPreset>, level: &str, source: &str) -> bool {\n    match preset {\n        Some(NotifPreset::Quiet) => level == \"error\",\n        Some(NotifPreset::Balanced) => {\n            level == \"error\"\n                || source == \"permission_request\"\n                || source == \"agent_completed\"\n        }\n        Some(NotifPreset::Verbose) => true,\n        None => true,\n    }\n}", new_string = "// POST-FIX (mirrors CHANGELOG v0.5.5 T5): Balanced routes both families.\npub fn should_deliver(preset: Option<NotifPreset>, level: &str, source: &str) -> bool {\n    match preset {\n        Some(NotifPreset::Quiet) => level == \"error\",\n        Some(NotifPreset::Balanced) => {\n            level == \"error\"\n                || source.starts_with(\"permission:\")\n                || source.starts_with(\"agent:\")\n        }\n        Some(NotifPreset::Verbose) => true,\n        None => true,\n    }\n}" },
+] }

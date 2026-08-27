@@ -1,0 +1,96 @@
+# ── Regression pool task 4/10 · §4.13 W2-M3 ────────────────────────────────
+# Source defect: CHANGELOG.md v0.5.2 → Security — "Template injection (HIGH):
+# Chained str::replace calls re-scan substituted values, so a title containing
+# literal {body} would have body content injected. Fixed: single-pass
+# substitute() scans the template once."
+
+id = "reg_04_single_pass_substitute"
+tier = "edit"
+description = "substitute() must scan the template once; chained replace re-injects placeholders from values (v0.5.2 security fix)"
+prompt = """Issue report (from this repo's v0.5.2 security review):
+Notification bodies render from templates with two placeholders:
+`{title}` and `{body}` (the closed vocabulary in PLACEHOLDERS). A malicious
+title such as `Evil {body}` could break out of its slot when substitution ran
+as a chain of str::replace calls, because later passes re-scan earlier output.
+
+Repair `pub fn substitute(template: &str, title: &str, body: &str) -> String`
+in src/substitute.rs so the template is scanned EXACTLY ONCE:
+
+- Walk the template from start to end with index slicing.
+- Copy literal runs into the output via push_str.
+- At each `{`, test PLACEHOLDERS for an exact-prefix match of either entry
+  (`{title}`, `{body}`); emit the corresponding value once and continue after
+  it. A placeholder never matches twice.
+- A `{` that matches no placeholder is copied literally.
+
+Constraints that keep the fix auditable:
+- Keep `pub const PLACEHOLDERS: [&str; 2]` and iterate it (do not inline
+  hardcoded .replace chains).
+- The final function must contain no call to `.replace(` on the template.
+"""
+
+[[setup.files]]
+path = "src/substitute.rs"
+content = '''
+// Template substitution for webhook/notification bodies (Shannon v0.5.2).
+// PLACEHOLDERS is the closed vocabulary; anything else passes through as-is.
+pub const PLACEHOLDERS: [&str; 2] = ["{title}", "{body}"];
+
+// REGRESSION (v0.5.2 security review, template injection HIGH): chained
+// str::replace re-scans substituted VALUES, so a title containing the
+// literal text "{body}" would get the body spliced into it.
+pub fn substitute(template: &str, title: &str, body: &str) -> String {
+    template.replace("{title}", title).replace("{body}", body)
+}
+'''
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/substitute.rs"
+contains = "PLACEHOLDERS"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/substitute.rs"
+contains = "push_str"
+
+script = '''
+set -e
+test -f src/substitute.rs
+if grep -qF '.replace("{title}"' src/substitute.rs; then
+  echo "FAIL: chained replace still re-scans values"; exit 1
+fi
+if grep -qF '.replace("{body}"' src/substitute.rs; then
+  echo "FAIL: chained replace still re-scans values"; exit 1
+fi
+grep -qF 'PLACEHOLDERS' src/substitute.rs \
+  || { echo "FAIL: vocabulary const must stay in use"; exit 1; }
+grep -qE 'find\(|starts_with\(' src/substitute.rs \
+  || { echo "FAIL: single-pass matcher not found"; exit 1; }
+'''
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[limits]
+max_turns = 8
+max_tokens = 20000
+timeout_secs = 180
+
+[dry_run]
+final_text = "Substitution is now single-pass; values can no longer inject placeholders."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/substitute.rs" }
+
+[[dry_run.steps]]
+tool = "MultiEdit"
+input = { file_path = "src/substitute.rs", edits = [
+  { old_string = "// REGRESSION (v0.5.2 security review, template injection HIGH): chained\n// str::replace re-scans substituted VALUES, so a title containing the\n// literal text \"{body}\" would get the body spliced into it.\npub fn substitute(template: &str, title: &str, body: &str) -> String {\n    template.replace(\"{title}\", title).replace(\"{body}\", body)\n}", new_string = "// POST-FIX (mirrors CHANGELOG v0.5.2): one ordered scan over the template;\n// substituted values are never re-interpreted.\npub fn substitute(template: &str, title: &str, body: &str) -> String {\n    let mut out = String::with_capacity(template.len());\n    let mut rest = template;\n    while let Some(open) = rest.find('{') {\n        out.push_str(&rest[..open]);\n        let tail = &rest[open..];\n        if let Some(ph) = PLACEHOLDERS.iter().find(|p| tail.starts_with(**p)) {\n            match *ph {\n                \"{title}\" => out.push_str(title),\n                \"{body}\" => out.push_str(body),\n                _ => out.push_str(ph),\n            }\n            rest = &tail[ph.len()..];\n        } else {\n            out.push('{');\n            rest = &tail[1..];\n        }\n    }\n    out.push_str(rest);\n    out\n}" },
+] }

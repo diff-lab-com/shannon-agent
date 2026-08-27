@@ -1,0 +1,108 @@
+# ── Regression pool task 8/10 · §4.13 W2-M3 ────────────────────────────────
+# Source defect: CHANGELOG.md v0.8.0 → Fixed — CI: "relocate audit.toml to
+# .cargo/ (cargo-audit 0.22+ discovers project config there, not at repo
+# root)". Multi-step flavor: create the dot-directory copy AND re-point the
+# workflow invocation.
+
+id = "reg_08_audit_config_relocation"
+tier = "multi_step"
+description = "cargo-audit config must live at .cargo/audit.toml with the CI workflow re-pointed (v0.8.0 CI fix)"
+prompt = """Issue report (from this repo's v0.8.0 release notes):
+cargo-audit 0.22+ discovers its project configuration under `.cargo/`, not at
+the repository root, so the `audit.toml` parked in the root was silently
+ignored by CI.
+
+Perform BOTH halves of the relocation in this workspace:
+
+1. Create `.cargo/audit.toml` with byte-identical content to the existing root
+   `audit.toml` (the orchestrator cleans the stale root file afterwards).
+2. Update `ci/audit.yml` so its audit step passes `--config .cargo/audit.toml`
+   instead of the old root-relative flag.
+
+Do not alter the advisory database URL inside the config.
+"""
+
+[[setup.files]]
+path = "audit.toml"
+content = '''
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+ignore = []
+'''
+
+[[setup.files]]
+path = "ci/audit.yml"
+content = '''
+name: security-audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  cargo-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # REGRESSION: config path pointed at the repo root; cargo-audit 0.22+
+      # only discovers project config beneath .cargo/, so these invocations
+      # ran with defaults and ignored the curated ignore list.
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit --file Cargo.lock --config audit.toml
+'''
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_exists"
+path = ".cargo/audit.toml"
+
+[[verify.rules]]
+rule = "file_content"
+path = ".cargo/audit.toml"
+contains = "rustsec/advisory-db"
+
+[[verify.rules]]
+rule = "file_content"
+path = "ci/audit.yml"
+contains = "--config .cargo/audit.toml"
+
+script = '''
+set -e
+test -f .cargo/audit.toml || { echo "FAIL: .cargo/audit.toml missing"; exit 1; }
+grep -qF 'db-urls' .cargo/audit.toml \
+  || { echo "FAIL: relocated config lost advisories table"; exit 1; }
+grep -qF 'rustsec/advisory-db' .cargo/audit.toml \
+  || { echo "FAIL: advisory db url must survive verbatim"; exit 1; }
+if grep -qE '\-\-config audit\.toml' ci/audit.yml; then
+  echo "FAIL: workflow still points at the stale root path"; exit 1
+fi
+grep -qF '--config .cargo/audit.toml' ci/audit.yml \
+  || { echo "FAIL: workflow not re-pointed"; exit 1; }
+'''
+
+[expectations]
+forbidden_tools = ["Bash"]
+
+[limits]
+max_turns = 8
+max_tokens = 16000
+timeout_secs = 180
+
+[dry_run]
+final_text = "Config copied into .cargo/ and the workflow re-pointed."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "audit.toml" }
+
+[[dry_run.steps]]
+tool = "Write"
+input = { file_path = ".cargo/audit.toml", content = "\n[advisories]\ndb-urls = [\"https://github.com/rustsec/advisory-db\"]\nignore = []\n" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "ci/audit.yml", old_string = "- run: cargo audit --file Cargo.lock --config audit.toml", new_string = "- run: cargo audit --file Cargo.lock --config .cargo/audit.toml" }
