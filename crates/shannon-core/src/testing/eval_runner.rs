@@ -1267,7 +1267,28 @@ pub fn run_task(task: &EvalTask, options: &EvalOptions, run_dir: &Path) -> TaskR
     let stream_path = run_dir.join(&task.id).join("stream.ndjson");
     let _ = std::fs::write(&stream_path, &produced.ndjson);
 
-    finalize_record(task, limits, started, workspace, produced)
+    let l0_events = if !options.dry_run {
+        let logs = find_event_logs(&run_dir.join(&task.id).join(L0_HOME_DIRNAME));
+        let mut evts = Vec::new();
+        for path in &logs {
+            if let Ok(reader) = crate::session_log::SessionLogReader::open(path) {
+                if let Ok(vs) = reader.read_events(false) {
+                    evts.extend(vs);
+                }
+            }
+        }
+        (!evts.is_empty()).then_some(evts)
+    } else {
+        None
+    };
+    finalize_record(
+        task,
+        limits,
+        started,
+        workspace,
+        produced,
+        l0_events.as_deref(),
+    )
 }
 
 /// Raw stream plus child-process facts returned by either executor.
@@ -1301,6 +1322,7 @@ fn finalize_record(
     started: Instant,
     workspace: PathBuf,
     produced: ProducedStream,
+    l0_events: Option<&[shannon_types::session_event::SessionEvent]>,
 ) -> TaskRunRecord {
     if let Some(error) = produced.launch_error {
         return base_record(
@@ -1395,9 +1417,16 @@ fn finalize_record(
     } else {
         "error"
     };
+    // Prefer the L0 log's trajectory when available; the stream-side
+    // observation is only a fallback for dry runs / spawn-lost logs.
+    let trajectory_owned = l0_events
+        .filter(|e| !e.is_empty())
+        .map(l0_trajectory)
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| observation.trajectory.clone());
     let ctx = ValidationContext::new(&workspace, exit_word, &answer)
         .with_initial_files(&setup_pairs)
-        .with_trajectory(&observation.trajectory);
+        .with_trajectory(&trajectory_owned);
 
     let outcomes = evaluate_rules(&effective_rules, &ctx);
     let mut recorded: Vec<RecordedRuleOutcome> =
@@ -1454,6 +1483,21 @@ fn finalize_record(
         workspace,
         task_file: task.task_source_path_hint.clone().unwrap_or_default(),
     }
+}
+
+/// L0 as the authoritative trajectory source (§4.1 tool/call rows carry the
+/// raw, untruncated model arguments — the NDJSON stream summary can lose
+/// call-side lines, so rules only fall back to it when no L0 log exists).
+fn l0_trajectory(events: &[shannon_types::session_event::SessionEvent]) -> Vec<ToolCallTrace> {
+    events
+        .iter()
+        .filter_map(|e| match &e.body {
+            shannon_types::session_event::SessionEventBody::ToolCall(p) => {
+                Some(ToolCallTrace::new(&p.tool_name, p.arguments.clone()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Derived turns when the engine did not volunteer them (defensive; the
