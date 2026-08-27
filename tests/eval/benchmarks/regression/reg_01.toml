@@ -1,0 +1,115 @@
+# ── Regression pool task 1/10 · §4.13 W2-M3 ────────────────────────────────
+# Source defect: CHANGELOG.md v0.9.0 → Fixed ¶1 — "/connect no longer drops
+# previously connected providers": the REPL connect path overwrote
+# ~/.shannon/providers.toml with a single-provider config, so connecting B
+# after A silently destroyed A's credentials. Fix shape: merge semantics.
+
+id = "reg_01_connect_merge"
+tier = "edit"
+description = "connect() must merge into the persisted provider set instead of clobbering it (CHANGELOG v0.9.0 Fixed)"
+prompt = """Issue report (from this repo's v0.9.0 release notes):
+Users ran /connect anthropic, later /connect minimax, and discovered anthropic's
+stored credentials were gone from the persisted store — the second connect had
+overwritten the first.
+
+In src/store.rs the function `connect` reproduces that defect: it replaces the
+whole connected list with just the incoming name.
+
+Required repair semantics (keep the public signature `pub fn connect(store:
+&ProviderStore, incoming: &str) -> String` unchanged):
+1. Start from the CURRENTLY connected set (preserve order).
+2. Append `incoming` only when it is not already present (dedupe).
+3. Serialize the merged set through the existing `serialize` helper.
+
+Do not touch `parse` or `serialize`. Implement the change inside `connect`.
+"""
+
+[[setup.files]]
+path = "src/store.rs"
+content = '''
+pub struct ProviderStore {
+    pub connected: Vec<String>,
+}
+
+/// Minimal stand-in for the persisted providers.toml: one
+/// `provider = "<name>"` row per connected profile.
+pub fn parse(text: &str) -> ProviderStore {
+    let mut connected = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("provider = ") {
+            let name = rest.trim().trim_matches('"');
+            if !name.is_empty() {
+                connected.push(name.to_string());
+            }
+        }
+    }
+    ProviderStore { connected }
+}
+
+pub fn serialize(store: &ProviderStore) -> String {
+    let mut out = String::new();
+    for name in &store.connected {
+        out.push_str("provider = ");
+        out.push_str(name);
+        out.push('\n');
+    }
+    out
+}
+
+// REGRESSION (Shannon v0.9.0, Fixed): /connect stored ONLY the newly
+// connected provider, clobbering every previously connected one, so running
+// /connect minimax after /connect anthropic silently lost anthropic.
+pub fn connect(store: &ProviderStore, incoming: &str) -> String {
+    let next = ProviderStore { connected: vec![incoming.to_string()] };
+    serialize(&next)
+}
+'''
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/store.rs"
+contains = "merge"
+
+[[verify.rules]]
+rule = "trajectory_contains"
+sequence = [{ tool = "MultiEdit" }]
+
+script = '''
+set -e
+test -f src/store.rs
+grep -q "pub fn connect" src/store.rs
+if grep -qF 'connected: vec![incoming.to_string()]' src/store.rs; then
+  echo "FAIL: connect still clobbers the previous set"; exit 1
+fi
+grep -qF 'push(incoming.to_string())' src/store.rs \
+  || { echo "FAIL: missing append-on-absent path"; exit 1; }
+grep -qF 'store.connected.clone()' src/store.rs \
+  || { echo "FAIL: current connections are not carried forward"; exit 1; }
+'''
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[limits]
+max_turns = 6
+max_tokens = 16000
+timeout_secs = 180
+
+[dry_run]
+final_text = "connect() now merges into the existing provider set."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/store.rs" }
+
+[[dry_run.steps]]
+tool = "MultiEdit"
+input = { file_path = "src/store.rs", edits = [
+  { old_string = "// REGRESSION (Shannon v0.9.0, Fixed): /connect stored ONLY the newly\n// connected provider, clobbering every previously connected one, so running\n// /connect minimax after /connect anthropic silently lost anthropic.\npub fn connect(store: &ProviderStore, incoming: &str) -> String {\n    let next = ProviderStore { connected: vec![incoming.to_string()] };\n    serialize(&next)\n}", new_string = "// POST-FIX (mirrors CHANGELOG v0.9.0 merge semantics).\npub fn connect(store: &ProviderStore, incoming: &str) -> String {\n    let mut merge = ProviderStore { connected: store.connected.clone() };\n    if !merge.connected.iter().any(|n| n == incoming) {\n        merge.connected.push(incoming.to_string());\n    }\n    serialize(&merge)\n}" },
+] }
