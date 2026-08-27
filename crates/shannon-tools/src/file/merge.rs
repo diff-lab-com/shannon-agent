@@ -555,16 +555,21 @@ pub fn resolve_conflicts(content: &str, resolutions: &[String]) -> Result<String
 ///
 /// Returns `None` if git is not available or the file is not tracked.
 pub async fn get_git_head_version(file_path: &str) -> Option<String> {
-    use tokio::process::Command;
+    get_git_head_version_with(file_path, crate::defaults::process().as_ref()).await
+}
 
+/// Provider-injected variant (§4.11): the `git show` probe runs through the
+/// injected process world instead of a direct `async process-spawn API::Command`.
+pub async fn get_git_head_version_with(
+    file_path: &str,
+    process: &dyn shannon_tool_interface::ProcessProvider,
+) -> Option<String> {
     // Use git show HEAD:<path> to get the committed version
-    let result = Command::new("git")
-        .args(["show", &format!("HEAD:{file_path}")])
-        .output()
-        .await
-        .ok()?;
+    let request =
+        shannon_tool_interface::ProcessRequest::new("git", &["show", &format!("HEAD:{file_path}")]);
+    let result = process.run_async(&request).await.ok()?;
 
-    if !result.status.success() {
+    if !result.exit.success {
         return None;
     }
 

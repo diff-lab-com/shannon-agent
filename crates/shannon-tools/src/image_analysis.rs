@@ -68,6 +68,8 @@ struct ImageAnalysisOutput {
 /// the query engine can construct a `ContentBlock::Image` block for the LLM.
 pub struct AnalyzeImageTool {
     description: String,
+    /// Filesystem world backing local image loads (§4.11).
+    fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
 }
 
 impl Default for AnalyzeImageTool {
@@ -80,7 +82,17 @@ impl AnalyzeImageTool {
     pub fn new() -> Self {
         Self {
             description: "Analyze an image file or URL. The image is sent to the LLM for visual analysis based on your prompt. Supports PNG, JPEG, GIF, WebP, BMP, ICO, and TIFF formats.".to_string(),
+            fs: crate::defaults::fs(),
         }
+    }
+
+    /// Inject a filesystem world override (sandbox/remote assemblies).
+    pub fn with_fs(
+        mut self,
+        fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+    ) -> Self {
+        self.fs = fs;
+        self
     }
 
     /// Determine MIME type from a file extension.
@@ -128,9 +140,20 @@ impl AnalyzeImageTool {
     }
 
     /// Load an image from a local file path, returning (base64_data, mime_type, size).
+    ///
+    /// Legacy associated-function shape retained for existing tests; routes
+    /// through the local filesystem world by default.
+    #[cfg_attr(not(test), allow(dead_code))]
     async fn load_from_file(file_path: &str) -> Result<(String, &'static str, u64), ToolError> {
-        use tokio::fs;
+        Self::load_from_file_with(crate::defaults::fs().as_ref(), file_path).await
+    }
 
+    /// Provider-injected variant (§4.11): metadata and byte reads flow
+    /// through the injected filesystem world.
+    async fn load_from_file_with(
+        fs: &dyn shannon_tool_interface::FileSystemProvider,
+        file_path: &str,
+    ) -> Result<(String, &'static str, u64), ToolError> {
         // Validate extension
         if !Self::is_image_extension(file_path) {
             return Err(ToolError::InvalidInput(format!(
@@ -140,18 +163,20 @@ impl AnalyzeImageTool {
             )));
         }
 
-        let metadata = fs::metadata(file_path)
+        let metadata = fs
+            .metadata(std::path::Path::new(file_path))
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to stat file: {e}")))?;
 
-        let size = metadata.len();
+        let size = metadata.len;
         if size > MAX_IMAGE_SIZE {
             return Err(ToolError::ExecutionFailed(format!(
                 "Image file too large: {size} bytes (max {MAX_IMAGE_SIZE} bytes)",
             )));
         }
 
-        let bytes = fs::read(file_path)
+        let bytes = fs
+            .read_bytes(std::path::Path::new(file_path))
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read image file: {e}")))?;
 
@@ -299,7 +324,7 @@ impl Tool for AnalyzeImageTool {
         }
 
         let (base64_data, media_type, size) = if let Some(ref file_path) = analyze_input.file_path {
-            Self::load_from_file(file_path).await?
+            Self::load_from_file_with(self.fs.as_ref(), file_path).await?
         } else if let Some(ref url) = analyze_input.url {
             Self::load_from_url(url).await?
         } else {

@@ -14,6 +14,7 @@ use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_tool_interface::{FileSystemProvider, ProcessProvider};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -79,7 +80,11 @@ async fn validate_write_path(sandbox: &PathSandbox, path: &str) -> ToolResult<Pa
 /// cap is a best-effort guard, not a hard guarantee.
 pub const MAX_SNAPSHOT_BYTES: u64 = 10 * 1024 * 1024;
 
-fn snapshot_for_undo(history: &Option<Arc<Mutex<history::FileHistoryManager>>>, file_path: &str) {
+fn snapshot_for_undo(
+    fs: &dyn FileSystemProvider,
+    history: &Option<Arc<Mutex<history::FileHistoryManager>>>,
+    file_path: &str,
+) {
     let Some(history) = history else {
         return;
     };
@@ -88,14 +93,14 @@ fn snapshot_for_undo(history: &Option<Arc<Mutex<history::FileHistoryManager>>>, 
     // here. 10 MB covers typical source files; large data/minified files are
     // poor undo targets anyway. A benign TOCTOU exists between this stat and
     // the read — the cap is a best-effort guard, not a hard guarantee.
-    let Ok(meta) = std::fs::metadata(file_path) else {
+    let Ok(meta) = fs.metadata_blocking(Path::new(file_path)) else {
         return;
     };
-    if meta.len() > MAX_SNAPSHOT_BYTES {
+    if meta.len > MAX_SNAPSHOT_BYTES {
         return;
     }
     // Only existing, readable text files carry restorable pre-modify state.
-    let Ok(old_content) = std::fs::read_to_string(file_path) else {
+    let Ok(old_content) = fs.read_text_blocking(Path::new(file_path)) else {
         return;
     };
     if let Ok(mut mgr) = history.lock() {
@@ -111,6 +116,8 @@ fn snapshot_for_undo(history: &Option<Arc<Mutex<history::FileHistoryManager>>>, 
 pub struct ReadTool {
     description: String,
     sandbox: PathSandbox,
+    /// Filesystem world backing the actual read (§4.11; `LocalFs` default).
+    fs: Arc<dyn FileSystemProvider>,
 }
 
 impl Default for ReadTool {
@@ -124,6 +131,7 @@ impl ReadTool {
         Self {
             description: "Read file contents from the local filesystem".to_string(),
             sandbox: PathSandbox::new(),
+            fs: crate::defaults::fs(),
         }
     }
 
@@ -132,7 +140,14 @@ impl ReadTool {
         Self {
             description: "Read file contents from the local filesystem".to_string(),
             sandbox,
+            fs: crate::defaults::fs(),
         }
+    }
+
+    /// Inject a filesystem world override (sandbox/remote assemblies).
+    pub fn with_fs(mut self, fs: Arc<dyn FileSystemProvider>) -> Self {
+        self.fs = fs;
+        self
     }
 }
 
@@ -175,7 +190,7 @@ impl Tool for ReadTool {
         let mut input = read_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
-        read::execute(input).await
+        read::execute_with(input, self.fs.as_ref()).await
     }
     fn is_read_only(&self) -> bool {
         true
@@ -186,6 +201,8 @@ impl Tool for ReadTool {
 pub struct WriteTool {
     description: String,
     sandbox: PathSandbox,
+    /// Filesystem world backing the atomic write (§4.11; `LocalFs` default).
+    fs: Arc<dyn FileSystemProvider>,
     /// Optional shared file-history manager for file-level `/undo` (W6-2).
     /// `None` (default) records no snapshots — identical to pre-W6-2 behavior.
     history: Option<Arc<Mutex<history::FileHistoryManager>>>,
@@ -202,6 +219,7 @@ impl WriteTool {
         Self {
             description: "Write content to a file, overwriting if it exists".to_string(),
             sandbox: PathSandbox::new(),
+            fs: crate::defaults::fs(),
             history: None,
         }
     }
@@ -211,8 +229,15 @@ impl WriteTool {
         Self {
             description: "Write content to a file, overwriting if it exists".to_string(),
             sandbox,
+            fs: crate::defaults::fs(),
             history: None,
         }
+    }
+
+    /// Inject a filesystem world override (sandbox/remote assemblies).
+    pub fn with_fs(mut self, fs: Arc<dyn FileSystemProvider>) -> Self {
+        self.fs = fs;
+        self
     }
 
     /// Attach a shared file-history manager so each write snapshots the
@@ -268,8 +293,8 @@ impl Tool for WriteTool {
         let mut input = write_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
-        snapshot_for_undo(&self.history, &input.file_path);
-        write::execute(input).await
+        snapshot_for_undo(self.fs.as_ref(), &self.history, &input.file_path);
+        write::execute_with(input, self.fs.as_ref()).await
     }
 }
 
@@ -277,6 +302,10 @@ impl Tool for WriteTool {
 pub struct EditTool {
     description: String,
     sandbox: PathSandbox,
+    /// Filesystem world backing reads and the atomic write-back (§4.11).
+    fs: Arc<dyn FileSystemProvider>,
+    /// Process world backing the git-HEAD three-way merge probe.
+    process: Arc<dyn ProcessProvider>,
     /// Optional shared file-history manager for file-level `/undo` (W6-2).
     history: Option<Arc<Mutex<history::FileHistoryManager>>>,
 }
@@ -292,6 +321,8 @@ impl EditTool {
         Self {
             description: "Perform exact string replacements in files".to_string(),
             sandbox: PathSandbox::new(),
+            fs: crate::defaults::fs(),
+            process: crate::defaults::process(),
             history: None,
         }
     }
@@ -301,8 +332,22 @@ impl EditTool {
         Self {
             description: "Perform exact string replacements in files".to_string(),
             sandbox,
+            fs: crate::defaults::fs(),
+            process: crate::defaults::process(),
             history: None,
         }
+    }
+
+    /// Inject filesystem + process world overrides for assemblies that
+    /// replace the execution environment (§4.11/§4.12).
+    pub fn with_worlds(
+        mut self,
+        fs: Arc<dyn FileSystemProvider>,
+        process: Arc<dyn ProcessProvider>,
+    ) -> Self {
+        self.fs = fs;
+        self.process = process;
+        self
     }
 
     /// Attach a shared file-history manager so each edit snapshots the
@@ -366,8 +411,8 @@ impl Tool for EditTool {
         let mut input = edit_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
-        snapshot_for_undo(&self.history, &input.file_path);
-        edit::execute(input).await
+        snapshot_for_undo(self.fs.as_ref(), &self.history, &input.file_path);
+        edit::execute_with(input, self.fs.as_ref(), self.process.as_ref()).await
     }
 }
 
@@ -375,6 +420,8 @@ impl Tool for EditTool {
 pub struct MultiEditTool {
     description: String,
     sandbox: PathSandbox,
+    /// Filesystem world backing batched writes (§4.11; `LocalFs` default).
+    fs: Arc<dyn FileSystemProvider>,
     /// Optional shared file-history manager for file-level `/undo` (W6-2).
     history: Option<Arc<Mutex<history::FileHistoryManager>>>,
 }
@@ -392,6 +439,7 @@ impl MultiEditTool {
                 "Apply multiple file edits atomically — all edits succeed or none are applied"
                     .to_string(),
             sandbox: PathSandbox::new(),
+            fs: crate::defaults::fs(),
             history: None,
         }
     }
@@ -402,8 +450,15 @@ impl MultiEditTool {
                 "Apply multiple file edits atomically — all edits succeed or none are applied"
                     .to_string(),
             sandbox,
+            fs: crate::defaults::fs(),
             history: None,
         }
+    }
+
+    /// Inject a filesystem world override (sandbox/remote assemblies).
+    pub fn with_fs(mut self, fs: Arc<dyn FileSystemProvider>) -> Self {
+        self.fs = fs;
+        self
     }
 
     /// Attach a shared file-history manager so each edited file is snapshotted
@@ -484,11 +539,11 @@ impl Tool for MultiEditTool {
         for op in &multi_input.edits {
             if !snapshotted.contains(&op.file_path) {
                 snapshotted.push(op.file_path.clone());
-                snapshot_for_undo(&self.history, &op.file_path);
+                snapshot_for_undo(self.fs.as_ref(), &self.history, &op.file_path);
             }
         }
 
-        multiedit::execute(multi_input).await
+        multiedit::execute_with(multi_input, self.fs.as_ref()).await
     }
 }
 
@@ -496,6 +551,8 @@ impl Tool for MultiEditTool {
 pub struct GlobTool {
     description: String,
     sandbox: PathSandbox,
+    /// Filesystem world backing metadata/canonicalization (§4.11).
+    fs: Arc<dyn FileSystemProvider>,
 }
 
 impl Default for GlobTool {
@@ -510,6 +567,7 @@ impl GlobTool {
             description: "Fast file pattern matching tool that works with any codebase size"
                 .to_string(),
             sandbox: PathSandbox::new(),
+            fs: crate::defaults::fs(),
         }
     }
 
@@ -519,7 +577,14 @@ impl GlobTool {
             description: "Fast file pattern matching tool that works with any codebase size"
                 .to_string(),
             sandbox,
+            fs: crate::defaults::fs(),
         }
+    }
+
+    /// Inject a filesystem world override (sandbox/remote assemblies).
+    pub fn with_fs(mut self, fs: Arc<dyn FileSystemProvider>) -> Self {
+        self.fs = fs;
+        self
     }
 }
 
@@ -555,7 +620,7 @@ impl Tool for GlobTool {
             validate_path(&self.sandbox, base_path).await?;
         }
 
-        glob::execute(glob_input).await
+        glob::execute_with(glob_input, self.fs.as_ref()).await
     }
     fn is_read_only(&self) -> bool {
         true

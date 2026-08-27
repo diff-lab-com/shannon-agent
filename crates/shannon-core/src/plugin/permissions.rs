@@ -16,7 +16,7 @@
 //! | `mcp_tools`          | routing calls to `mcp__<plugin>__*` tools (host tool pipeline) | yes, via [`PluginToolPolicies`] on the tool registry |
 //! | `read_files`         | host reading the plugin entry/template file (command + skill extensions) | yes, [`PluginPermissionPolicy::admit_entry_read`] |
 //! | `llm_api`            | prompt-based extensions driving model turns | yes, [`admit_prompt_based_extension`] |
-//! | `write_files`        | reserved — no post-manifest host-side write face exists yet; lands with the §4.11 FileSystemProvider seam | scaffolding only |
+//! | `write_files`        | host tool writes flow through the §4.11 `FileSystemProvider` seam (`WriteFilesPolicyGuard`); enforcement stays OFF | hook point ready, scaffolding only |
 //!
 //! A manifest that **omits** `permissions` entirely deserializes to an empty
 //! list, and an empty list means "nothing declared" — every point stays open,
@@ -205,6 +205,12 @@ impl PluginPermissionPolicy {
     /// Reserved seam (§4.11 FileSystemProvider): today no Shannon-side write is
     /// ever performed for a known manifest, so `write_files` ships as
     /// scaffolding — consult this predicate there, not a throwing gate.
+    ///
+    /// The §4.11 W3-3a task landed the execution-world seam: when enforcement
+    /// is implemented (W0 follow-up), it wraps the assembled
+    /// [`shannon_tool_interface::FileSystemProvider`] in a guard that consults
+    /// this predicate before forwarding mutating operations. Until then this
+    /// remains a pure predicate — nothing calls it from a forcing position.
     pub fn allows_file_writes(&self) -> bool {
         self.allows(PluginPermission::WriteFiles)
     }

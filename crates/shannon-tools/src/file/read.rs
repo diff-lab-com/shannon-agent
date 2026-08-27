@@ -4,7 +4,9 @@ use crate::{ToolError, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use shannon_core::progressive_loader::{ProgressiveLoaderConfig, truncate_content};
+use shannon_tool_interface::FileSystemProvider;
 use std::collections::HashMap;
+use std::path::Path;
 
 /// Image file extensions we support
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
@@ -120,25 +122,33 @@ pub struct ReadOutput {
 }
 
 pub async fn execute(input: ReadInput) -> Result<ToolOutput, ToolError> {
-    use tokio::fs;
+    execute_with(input, crate::defaults::fs().as_ref()).await
+}
 
+/// Provider-injected entry point (§4.11): reads flow through the injected
+/// filesystem world instead of direct async filesystem APIs calls.
+pub async fn execute_with(
+    input: ReadInput,
+    fs: &dyn FileSystemProvider,
+) -> Result<ToolOutput, ToolError> {
     // Check file size before reading to prevent memory exhaustion
     const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
-    let metadata = fs::metadata(&input.file_path)
+    let metadata = fs
+        .metadata(Path::new(&input.file_path))
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to stat file: {e}")))?;
-    if metadata.len() > MAX_FILE_SIZE {
+    if metadata.len > MAX_FILE_SIZE {
         return Err(ToolError::ExecutionFailed(format!(
             "File too large: {} bytes (max {} bytes). Use offset/limit to read portions.",
-            metadata.len(),
-            MAX_FILE_SIZE
+            metadata.len, MAX_FILE_SIZE
         )));
     }
 
     // Check if file appears to be an image
     if is_image_path(&input.file_path) {
         // Read as binary
-        let bytes = fs::read(&input.file_path)
+        let bytes = fs
+            .read_bytes(Path::new(&input.file_path))
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read image file: {e}")))?;
 
@@ -182,7 +192,8 @@ pub async fn execute(input: ReadInput) -> Result<ToolOutput, ToolError> {
     }
 
     // Original text file handling
-    let content = fs::read_to_string(&input.file_path)
+    let content = fs
+        .read_text(Path::new(&input.file_path))
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {e}")))?;
 
