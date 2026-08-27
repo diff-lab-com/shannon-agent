@@ -1,0 +1,105 @@
+# ── Regression pool task 10/10 · §4.13 W2-M3 ───────────────────────────────
+# Source defect: CHANGELOG.md v0.9.0 → Changed (MODEL_CATALOG SSOT) —
+# "MODEL_CATALOG is now the canonical pricing source of truth ... Local
+# catalog entries no longer get mispriced as hosted (bare qwen alias
+# removed)."
+
+id = "reg_10_pricing_local_first"
+tier = "edit"
+description = "price_per_mtok must serve local entries before any hosted estimate (v0.9.0 MODEL_CATALOG SSOT change)"
+prompt = """Issue report (from this repo's v0.9.0 release notes):
+After MODEL_CATALOG became the pricing source of truth, LOCAL catalogue
+entries were still billed through the hosted per-token rate table — for
+example a self-hosted qwen deployment rendering API-like prices in /model.
+
+In src/pricing_lookup.rs, `price_per_mtok` currently forwards every entry to
+the hosted `estimate` helper regardless of the entry's `local` flag.
+
+Repair it so pricing branches on locality FIRST:
+
+  pub fn price_per_mtok(entry: &CatalogEntry) -> f64 {
+      if entry.local { ... } else { estimate(entry) }
+  }
+
+- Local entries price at exactly 0.0 per MTok.
+- Hosted entries keep the existing `estimate(entry)` call untouched.
+Keep the helper and the struct as-is; the change lives solely inside
+price_per_mtok with that exact if/else shape.
+"""
+
+[[setup.files]]
+path = "src/pricing_lookup.rs"
+content = '''
+pub struct CatalogEntry {
+    pub hosted_input_per_mtok: f64,
+    pub local: bool,
+}
+
+/// Legacy hosted-rate heuristic kept from the file/env/LiteLLM era: treat an
+/// entry like a commercial API model and price from its hosted rate table.
+fn estimate(entry: &CatalogEntry) -> f64 {
+    entry.hosted_input_per_mtok
+}
+
+// MODEL_CATALOG is pricing SSOT (v0.9.0). LOCAL entries must NEVER ride the
+// hosted per-token rate table — that mispriced self-hosted deployments at
+// API prices and confused /model cost labels.
+//
+// REGRESSION: the locality flag is consulted nowhere; every entry falls
+// through to the hosted estimator.
+pub fn price_per_mtok(entry: &CatalogEntry) -> f64 {
+    // BUG: local branch missing entirely.
+    estimate(entry)
+}
+'''
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/pricing_lookup.rs"
+contains = "if entry.local"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/pricing_lookup.rs"
+contains = "estimate(entry)"
+
+script = '''
+set -e
+test -f src/pricing_lookup.rs
+grep -qE 'if entry\.local' src/pricing_lookup.rs \
+  || { echo "FAIL: locality branch missing"; exit 1; }
+grep -qF 'estimate(entry)' src/pricing_lookup.rs \
+  || { echo "FAIL: hosted path dropped"; exit 1; }
+grep -qE 'return 0\.0|=> 0\.0|\{ 0\.0 \}| 0\.0$' src/pricing_lookup.rs \
+  || { echo "FAIL: local entries must price at zero"; exit 1; }
+grep -qF 'fn estimate(entry: &CatalogEntry) -> f64 {' src/pricing_lookup.rs \
+  || { echo "FAIL: hosted helper must remain"; exit 1; }
+'''
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[[expectations.trajectory]]
+tool = "Edit"
+args_regex = 'price_per_mtok'
+
+[limits]
+max_turns = 6
+max_tokens = 12000
+timeout_secs = 180
+
+[dry_run]
+final_text = "Local entries now price at 0.0 before the hosted estimate fallback."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/pricing_lookup.rs" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "src/pricing_lookup.rs", old_string = "// REGRESSION: the locality flag is consulted nowhere; every entry falls\n// through to the hosted estimator.\npub fn price_per_mtok(entry: &CatalogEntry) -> f64 {\n    // BUG: local branch missing entirely.\n    estimate(entry)\n}", new_string = "// POST-FIX (mirrors CHANGELOG v0.9.0): locality decides first.\npub fn price_per_mtok(entry: &CatalogEntry) -> f64 {\n    if entry.local {\n        return 0.0;\n    }\n    estimate(entry)\n}" }

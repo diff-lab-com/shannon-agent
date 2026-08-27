@@ -1,0 +1,99 @@
+# ── Regression pool task 9/10 · §4.13 W2-M3 ────────────────────────────────
+# Source defect: CHANGELOG.md v0.9.0 → Added (provider allowlist) —
+# "restricts the model picker ... fails open (full list) when an allowlist
+# matches nothing so a typo never bricks the picker".
+
+id = "reg_09_allowlist_fail_open"
+tier = "edit"
+description = "SHANNON_ENABLED_PROVIDERS filter must fail OPEN when the allowlist matches nothing (v0.9.0 design constraint)"
+prompt = """Issue report (from this repo's v0.9.0 provider allowlist feature):
+The documented design for SHANNON_ENABLED_PROVIDERS is fail-open: an allowlist
+that matches nothing is operator error and must yield the FULL catalogue, so a
+typo can never brick the picker with an empty first screen.
+
+src/catalog_filter.rs reproduces the fail-closed defect: apply_enabled_allowlist
+returns whatever survives a strict intersection, so unknown ids empty the list.
+
+Truth table to implement inside `pub fn apply_enabled_allowlist(enabled:
+&[String]) -> Vec<&'static str>` (signature unchanged):
+
+- `enabled` empty                          -> full CATALOG (unrestricted)
+- no entry of CATALOG occurs in `enabled`  -> full CATALOG (fail open)
+- otherwise                                -> exactly the matching entries,
+                                              preserving CATALOG order
+
+Do not modify the CATALOG constant.
+"""
+
+[[setup.files]]
+path = "src/catalog_filter.rs"
+content = '''
+pub const CATALOG: [&str; 6] = [
+    "anthropic",
+    "openai",
+    "minimax",
+    "deepseek",
+    "ollama",
+    "litellm",
+];
+
+// SHANNON_ENABLED_PROVIDERS restricts listings. Shannon ships fail-open: an
+// allowlist that matches NOTHING is treated as operator error and yields the
+// FULL catalogue rather than bricking the picker. (v0.9.0 feature, explicit
+// design constraint.)
+//
+// REGRESSION: this implementation fails CLOSED — one unexpected ENABLED id
+// hides every provider and the first screen renders empty.
+pub fn apply_enabled_allowlist(enabled: &[String]) -> Vec<&'static str> {
+    let filtered: Vec<&str> = CATALOG
+        .iter()
+        .copied()
+        .filter(|id| enabled.iter().any(|want| want == id))
+        .collect();
+    filtered
+}
+'''
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/catalog_filter.rs"
+contains = "CATALOG.to_vec()"
+
+script = '''
+set -e
+test -f src/catalog_filter.rs
+grep -qF 'fn apply_enabled_allowlist(enabled: &[String]) -> Vec<&' src/catalog_filter.rs \
+  || { echo "FAIL: signature drifted"; exit 1; }
+grep -qE 'is_empty\(\)' src/catalog_filter.rs \
+  || { echo "FAIL: unrestricted-input branch missing"; exit 1; }
+grep -qF 'CATALOG.to_vec()' src/catalog_filter.rs \
+  || { echo "FAIL: fail-open escape hatch missing"; exit 1; }
+grep -qF '"anthropic",' src/catalog_filter.rs \
+  || { echo "FAIL: catalogue must stay untouched"; exit 1; }
+'''
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[limits]
+max_turns = 6
+max_tokens = 16000
+timeout_secs = 180
+
+[dry_run]
+final_text = "Allowlist now fails open on empty or fully-unmatched inputs."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/catalog_filter.rs" }
+
+[[dry_run.steps]]
+tool = "MultiEdit"
+input = { file_path = "src/catalog_filter.rs", edits = [
+  { old_string = "// REGRESSION: this implementation fails CLOSED — one unexpected ENABLED id\n// hides every provider and the first screen renders empty.\npub fn apply_enabled_allowlist(enabled: &[String]) -> Vec<&'static str> {\n    let filtered: Vec<&str> = CATALOG\n        .iter()\n        .copied()\n        .filter(|id| enabled.iter().any(|want| want == id))\n        .collect();\n    filtered\n}", new_string = "// POST-FIX (mirrors CHANGELOG v0.9.0): empty OR unmatched allowlists fall\n// back to the full catalogue so a typo cannot brick the picker.\npub fn apply_enabled_allowlist(enabled: &[String]) -> Vec<&'static str> {\n    let unmatched =\n        enabled.is_empty() || enabled.iter().all(|want| !CATALOG.contains(&want.as_str()));\n    if unmatched {\n        return CATALOG.to_vec();\n    }\n    CATALOG\n        .iter()\n        .copied()\n        .filter(|id| enabled.iter().any(|want| want == id))\n        .collect()\n}" },
+] }

@@ -1,0 +1,96 @@
+# ── Regression pool task 6/10 · §4.13 W2-M3 ────────────────────────────────
+# Source defect: CHANGELOG.md v0.5.5 → Features T7 — "Webhook retry + bumped
+# default timeout: WebhookHandler::send now retries up to 3 attempts with
+# exponential backoff (500ms → 1s → 2s ...). Returns early on 2xx ...
+# Default timeout_ms bumped 3000 → 5000 to accommodate slow chat APIs."
+
+id = "reg_06_webhook_retry_ladder"
+tier = "edit"
+description = "webhook delivery needs the 3-attempt backoff ladder with 2xx early return and the 5000ms timeout (v0.5.5 T7)"
+prompt = """Issue report (from this repo's v0.5.5 release notes):
+The shipped webhook sink fires exactly once and keeps a 3000 ms delivery
+timeout — Slack/Discord routinely take 2-3 s, and one transient 503 drops the
+notification for good.
+
+In src/webhook_send.rs apply the v0.5.5 T7 contract:
+
+1. DELIVERY_TIMEOUT_MS becomes 5000 (keep the const name, exact value).
+2. attempts_for_status returns:
+   - 1 when the status is an HTTP 2xx success (early return; nothing to retry)
+   - otherwise 3 (the length of BACKOFF_SCHEDULE_MS, which stays [500, 1000,
+     2000] untouched).
+
+Keep both function signatures as written; implement via the constants given.
+"""
+
+[[setup.files]]
+path = "src/webhook_send.rs"
+content = '''
+// HTTP delivery for the webhook sink (Shannon v0.5.5, T7): slow chat APIs
+// need room (Slack/Discord can take 2-3 s) and transient failures deserve a
+// bounded retry ladder with exponential backoff.
+pub const DELIVERY_TIMEOUT_MS: u64 = 3000;
+
+const BACKOFF_SCHEDULE_MS: [u64; 3] = [500, 1000, 2000];
+
+// REGRESSION: a single shot was fired regardless of outcome — no retry
+// ladder ran and the pre-existing tight timeout stayed put.
+pub fn attempts_for_status(status: u16) -> u32 {
+    let _ = status;
+    1
+}
+'''
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/webhook_send.rs"
+contains = "DELIVERY_TIMEOUT_MS: u64 = 5000"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/webhook_send.rs"
+matches_regex = "200\\.\\.300\\)\\.contains"
+
+script = '''
+set -e
+test -f src/webhook_send.rs
+grep -qF 'const BACKOFF_SCHEDULE_MS: [u64; 3] = [500, 1000, 2000]' src/webhook_send.rs \
+  || { echo "FAIL: backoff schedule must stay untouched"; exit 1; }
+grep -qF 'DELIVERY_TIMEOUT_MS: u64 = 5000' src/webhook_send.rs \
+  || { echo "FAIL: timeout not bumped to 5000"; exit 1; }
+grep -qE '\(200\.\.300\)\.contains' src/webhook_send.rs \
+  || { echo "FAIL: missing 2xx early-return branch"; exit 1; }
+grep -qE 'BACKOFF_SCHEDULE_MS\.len\(\)' src/webhook_send.rs \
+  || { echo "FAIL: retry count must derive from the schedule"; exit 1; }
+'''
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[[expectations.trajectory]]
+tool = "MultiEdit"
+args_regex = '"old_string":"pub const DELIVERY_TIMEOUT_MS: u64 = 3000'
+
+[limits]
+max_turns = 6
+max_tokens = 16000
+timeout_secs = 180
+
+[dry_run]
+final_text = "Delivery now returns early on 2xx, retries per ladder, timeout 5000ms."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/webhook_send.rs" }
+
+[[dry_run.steps]]
+tool = "MultiEdit"
+input = { file_path = "src/webhook_send.rs", edits = [
+  { old_string = "pub const DELIVERY_TIMEOUT_MS: u64 = 3000;", new_string = "pub const DELIVERY_TIMEOUT_MS: u64 = 5000;" },
+  { old_string = "// REGRESSION: a single shot was fired regardless of outcome — no retry\n// ladder ran and the pre-existing tight timeout stayed put.\npub fn attempts_for_status(status: u16) -> u32 {\n    let _ = status;\n    1\n}", new_string = "// POST-FIX (mirrors CHANGELOG v0.5.5 T7): 2xx short-circuits the ladder;\n// anything else gets every attempt in BACKOFF_SCHEDULE_MS.\npub fn attempts_for_status(status: u16) -> u32 {\n    if (200..300).contains(&status) {\n        return 1;\n    }\n    BACKOFF_SCHEDULE_MS.len() as u32\n}" },
+] }
