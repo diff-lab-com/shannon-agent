@@ -64,6 +64,13 @@ shell-words = "1.1"
 # PTY support for interactive commands
 portable-pty = "0.8"
 
+# §4.12 sandbox settings parsing (layered TOML config stack)
+toml = "0.8"
+
+# Landlock backend for the Linux kernel-enforced execution world (§4.12)
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
+
 [features]
 default = []
 computer-use = ["xcap", "enigo", "image"]

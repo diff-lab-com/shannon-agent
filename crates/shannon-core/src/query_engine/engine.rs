@@ -2286,6 +2286,9 @@ impl QueryEngine {
                                                                     "Failed to parse tool arguments: {e}"
                                                                 ),
                                                                 is_error: true,
+                                                                meta: Box::new(
+                                                                    serde_json::Value::Null
+                                                                ),
                                                             }
                                                         );
                                                         tool_results.push(ToolResultEntry {
@@ -2476,6 +2479,9 @@ impl QueryEngine {
                                                                     tool_name,
                                                                     result: error_msg.clone(),
                                                                     is_error: true,
+                                                                    meta: Box::new(
+                                                                        serde_json::Value::Null
+                                                                    ),
                                                                 }
                                                             );
                                                             tool_results.push(ToolResultEntry {
@@ -2525,6 +2531,9 @@ impl QueryEngine {
                                                                     tool_name,
                                                                     result: error_msg.clone(),
                                                                     is_error: true,
+                                                                    meta: Box::new(
+                                                                        serde_json::Value::Null
+                                                                    ),
                                                                 }
                                                             );
                                                             tool_results.push(ToolResultEntry {
@@ -2648,7 +2657,8 @@ impl QueryEngine {
                                                                             result: denied_msg
                                                                                 .clone(),
                                                                             is_error: true,
-                                                                        });
+                                                                            meta: Box::new(serde_json::Value::Null),
+                                                                            });
                                                                         tool_results
                                                                             .push(ToolResultEntry {
                                                                                 tool_use_id: tool_id,
@@ -2727,7 +2737,8 @@ impl QueryEngine {
                                                                             result: error_msg
                                                                                 .clone(),
                                                                             is_error: true,
-                                                                        });
+                                                                            meta: Box::new(serde_json::Value::Null),
+                                                                            });
                                                                         tool_results
                                                                             .push(ToolResultEntry {
                                                                                 tool_use_id: tool_id,
@@ -2766,6 +2777,9 @@ impl QueryEngine {
                                                                 tool_name,
                                                                 result: error_msg.clone(),
                                                                 is_error: true,
+                                                                meta: Box::new(
+                                                                    serde_json::Value::Null
+                                                                ),
                                                             }
                                                         );
                                                         tool_results.push(ToolResultEntry {
@@ -2792,7 +2806,8 @@ impl QueryEngine {
                                                         tool_name: "system".to_string(),
                                                         result: "Too many consecutive permission denials. Stopping.".to_string(),
                                                         is_error: true,
-                                                    });
+                                                        meta: Box::new(serde_json::Value::Null),
+                                                        });
                                                     break; // exit the agent loop
                                                 }
 
@@ -2948,7 +2963,8 @@ impl QueryEngine {
                                                                                         tool_name: tool_name.clone(),
                                                                                         result: output.content.clone(),
                                                                                         is_error: is_err,
-                                                                                    });
+                                                                                        meta: Box::new(crate::tools::sandbox_meta_from(&output.metadata)),
+                                                                                        });
                                                                                     tool_results
                                                                                         .push(ToolResultEntry {
                                                                                         tool_use_id: tool_id,
@@ -2968,7 +2984,8 @@ impl QueryEngine {
                                                                                         tool_name,
                                                                                         result: error_msg.clone(),
                                                                                         is_error: true,
-                                                                                    });
+                                                                                        meta: Box::new(serde_json::Value::Null),
+                                                                                        });
                                                                                     tool_results
                                                                                         .push(ToolResultEntry {
                                                                                         tool_use_id: tool_id,
@@ -2990,7 +3007,8 @@ impl QueryEngine {
                                                                                 tool_name: String::new(),
                                                                                 result: error_msg.clone(),
                                                                                 is_error: true,
-                                                                            });
+                                                                                meta: Box::new(serde_json::Value::Null),
+                                                                                });
                                                                             tool_results.push(ToolResultEntry {
                                                                                 tool_use_id: saved_tool_id,
                                                                                 content: error_msg,
@@ -3113,7 +3131,8 @@ impl QueryEngine {
                                                                             tool_name: tool_name.clone(),
                                                                             result: output.content.clone(),
                                                                             is_error: is_err,
-                                                                        });
+                                                                            meta: Box::new(crate::tools::sandbox_meta_from(&output.metadata)),
+                                                                            });
                                                                         tool_results.push(
                                                                             ToolResultEntry {
                                                                                 tool_use_id:
@@ -3144,7 +3163,8 @@ impl QueryEngine {
                                                                             tool_name,
                                                                             result: error_msg.clone(),
                                                                             is_error: true,
-                                                                        });
+                                                                            meta: Box::new(serde_json::Value::Null),
+                                                                            });
                                                                         tool_results.push(ToolResultEntry {
                                                                             tool_use_id: tool_id,
                                                                             content: error_msg,
@@ -3268,7 +3288,8 @@ impl QueryEngine {
                                                                             tool_name: "auto_commit".to_string(),
                                                                             result: format!("Auto-committed: {hash}"),
                                                                             is_error: false,
-                                                                        });
+                                                                            meta: Box::new(serde_json::Value::Null),
+                                                                            });
                                                                     }
                                                                 }
                                                             }

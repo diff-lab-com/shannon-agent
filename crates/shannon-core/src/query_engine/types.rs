@@ -780,6 +780,13 @@ pub enum QueryEvent {
         tool_name: String,
         result: String,
         is_error: bool,
+        /// Structured tool-private metadata (§4.12): carries e.g.
+        /// `{"classification":"sandbox_denied", …}` for sandboxed denials;
+        /// `Null` for the historical shape. Boxed to keep the event small
+        /// (clippy `result_large_err`). Mirrored into the L0 `tool/result`
+        /// payload's `meta`.
+        #[serde(default)]
+        meta: Box<serde_json::Value>,
     },
 
     /// Turn completed
