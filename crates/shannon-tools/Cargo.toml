@@ -7,6 +7,7 @@ edition.workspace = true
 [dependencies]
 # Core types and traits
 shannon-core = { path = "../shannon-core" }
+shannon-tool-interface = { path = "../shannon-tool-interface" }
 shannon-engine = { path = "../shannon-engine" }
 shannon-types = { path = "../shannon-types" }
 shannon-mcp = { path = "../shannon-mcp" }

@@ -49,6 +49,8 @@ pub struct ConfigManager {
     values: HashMap<String, Value>,
     defaults: HashMap<String, Value>,
     on_change: Option<ChangeCallback>,
+    /// Filesystem world backing persistence (§4.11; `LocalFs` default).
+    fs: Arc<dyn shannon_tool_interface::FileSystemProvider>,
 }
 
 impl std::fmt::Debug for ConfigManager {
@@ -66,6 +68,12 @@ impl std::fmt::Debug for ConfigManager {
 }
 
 impl ConfigManager {
+    /// Inject a filesystem world override (sandbox/remote assemblies).
+    pub fn with_fs(mut self, fs: Arc<dyn shannon_tool_interface::FileSystemProvider>) -> Self {
+        self.fs = fs;
+        self
+    }
+
     /// Create a new ConfigManager with the default config path.
     pub fn new() -> Self {
         let config_path = dirs::home_dir()
@@ -78,6 +86,7 @@ impl ConfigManager {
             values: HashMap::new(),
             defaults: HashMap::new(),
             on_change: None,
+            fs: crate::defaults::fs(),
         }
     }
 
@@ -85,6 +94,7 @@ impl ConfigManager {
     pub fn with_path(path: PathBuf) -> Self {
         Self {
             config_path: path,
+            fs: crate::defaults::fs(),
             values: HashMap::new(),
             defaults: HashMap::new(),
             on_change: None,
@@ -165,7 +175,8 @@ impl ConfigManager {
     /// Save the current config to disk.
     pub fn save(&self) -> Result<(), String> {
         if let Some(parent) = self.config_path.parent() {
-            std::fs::create_dir_all(parent)
+            self.fs
+                .create_dir_all_blocking(parent)
                 .map_err(|e| format!("Failed to create config directory: {e}"))?;
         }
 
@@ -177,7 +188,8 @@ impl ConfigManager {
         let serialized = serde_json::to_string_pretty(&data)
             .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
-        std::fs::write(&self.config_path, serialized)
+        self.fs
+            .write_bytes_blocking(&self.config_path, serialized.as_bytes())
             .map_err(|e| format!("Failed to write config file: {e}"))?;
 
         Ok(())
@@ -185,11 +197,13 @@ impl ConfigManager {
 
     /// Load config from disk.
     pub fn load(&mut self) -> Result<(), String> {
-        if !self.config_path.exists() {
+        if !self.fs.exists_blocking(&self.config_path) {
             return Ok(());
         }
 
-        let content = std::fs::read_to_string(&self.config_path)
+        let content = self
+            .fs
+            .read_text_blocking(&self.config_path)
             .map_err(|e| format!("Failed to read config file: {e}"))?;
 
         let data: Value = serde_json::from_str(&content)

@@ -72,11 +72,25 @@ impl SandboxConfig {
 /// accessing the filesystem. The sandbox resolves symlinks and canonicalizes
 /// paths, then checks the resolved path against allowed roots and denied
 /// patterns.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PathSandbox {
     config: SandboxConfig,
     /// Cached home directory of the current user for boundary checking.
     home_dir: Option<PathBuf>,
+    /// Filesystem world used for TOCTOU canonicalization (§4.11). Defaults to
+    /// the local world; assemblies that replace the execution environment
+    /// inject the matching provider so resolution follows the same world the
+    /// tools will act in.
+    fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+}
+
+impl std::fmt::Debug for PathSandbox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PathSandbox")
+            .field("config", &self.config)
+            .field("home_dir", &self.home_dir)
+            .finish()
+    }
 }
 
 /// Errors returned by sandbox validation
@@ -118,7 +132,20 @@ impl PathSandbox {
     /// Create a sandbox with custom configuration.
     pub fn with_config(config: SandboxConfig) -> Self {
         let home_dir = dirs_home_dir();
-        Self { config, home_dir }
+        Self {
+            config,
+            home_dir,
+            fs: crate::defaults::fs(),
+        }
+    }
+
+    /// Inject the filesystem world used for canonicalization (§4.11).
+    pub fn with_fs_provider(
+        mut self,
+        fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+    ) -> Self {
+        self.fs = fs;
+        self
     }
 
     /// Remap a `/workspace/<rest>` path onto the allowed roots, in order,
@@ -158,7 +185,7 @@ impl PathSandbox {
     async fn resolve_bind_alias(&self, path: &Path) -> Option<PathBuf> {
         let candidates = self.remap_bind_alias(path)?;
         for candidate in candidates {
-            if let Ok(c) = tokio::fs::canonicalize(&candidate).await {
+            if let Ok(c) = self.fs.canonicalize(&candidate).await {
                 return Some(c);
             }
         }
@@ -201,7 +228,7 @@ impl PathSandbox {
         // On failure, retry through the sandbox bind alias (`/workspace`),
         // which the command sandbox uses for the project dir — see
         // `remap_bind_alias`. Every check below still runs on the result.
-        let canonical = match tokio::fs::canonicalize(path).await {
+        let canonical = match self.fs.canonicalize(path).await {
             Ok(c) => c,
             Err(e) => self.resolve_bind_alias(path).await.ok_or_else(|| {
                 SandboxError::ResolutionFailed(format!("Cannot resolve path '{path_str}': {e}"))
@@ -237,7 +264,7 @@ impl PathSandbox {
 
         self.check_raw_traversal(&path_str)?;
 
-        let canonical = match std::fs::canonicalize(path) {
+        let canonical = match self.fs.canonicalize_blocking(path) {
             Ok(c) => c,
             Err(e) => {
                 // Bind-alias fallback — see `remap_bind_alias`. Checks below
@@ -246,7 +273,7 @@ impl PathSandbox {
                 if let Some(candidates) = self.remap_bind_alias(path) {
                     resolved = candidates
                         .into_iter()
-                        .find_map(|c| std::fs::canonicalize(&c).ok());
+                        .find_map(|c| self.fs.canonicalize_blocking(&c).ok());
                 }
                 resolved.ok_or_else(|| {
                     SandboxError::ResolutionFailed(format!("Cannot resolve path '{path_str}': {e}"))
@@ -281,7 +308,7 @@ impl PathSandbox {
         self.check_raw_traversal(&path_str)?;
 
         // Try canonicalizing the full path first (works for existing files)
-        if let Ok(canonical) = tokio::fs::canonicalize(path).await {
+        if let Ok(canonical) = self.fs.canonicalize(path).await {
             self.check_denied_patterns(&canonical.to_string_lossy())?;
             if self.config.strict_mode {
                 self.check_allowed_roots(&canonical)?;
@@ -327,7 +354,7 @@ impl PathSandbox {
         let mut missing: Vec<std::ffi::OsString> = Vec::new();
         let mut cur = parent;
         let canonical_parent = loop {
-            match tokio::fs::canonicalize(cur).await {
+            match self.fs.canonicalize(cur).await {
                 Ok(c) => break c,
                 Err(_) => {
                     let Some(name) = cur.file_name() else {
@@ -410,13 +437,13 @@ impl PathSandbox {
 
         for root in &self.config.allowed_roots {
             // Canonicalize the root as well so comparison is consistent
-            let resolved_root = match std::fs::canonicalize(root) {
+            let resolved_root = match self.fs.canonicalize_blocking(root) {
                 Ok(r) => r,
                 Err(_) => {
                     // If root doesn't exist yet (e.g., a project dir not yet created),
                     // try to canonicalize it first for comparison, then fall back to prefix matching
                     // Canonicalize the root path to resolve any symlinks before comparison
-                    let canonical_root = match std::fs::canonicalize(root) {
+                    let canonical_root = match self.fs.canonicalize_blocking(root) {
                         Ok(r) => r,
                         Err(_) => {
                             // Root doesn't exist and can't be canonicalized,

@@ -9,6 +9,9 @@ use crate::{ToolError, ToolOutput};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
+use shannon_tool_interface::FileSystemProvider;
+use std::path::Path;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Input types
@@ -34,6 +37,8 @@ pub struct MergeResolveInput {
 /// and writes the resolved content back.
 pub struct MergeResolveTool {
     description: String,
+    /// Filesystem world used for reads and the atomic write-back (§4.11).
+    fs: Arc<dyn FileSystemProvider>,
 }
 
 impl Default for MergeResolveTool {
@@ -46,7 +51,14 @@ impl MergeResolveTool {
     pub fn new() -> Self {
         Self {
             description: "Resolve merge conflict markers in a file by choosing 'ours' or 'theirs' for each conflict".to_string(),
+            fs: crate::defaults::fs(),
         }
+    }
+
+    /// Inject a filesystem world override (sandbox/remote assemblies).
+    pub fn with_fs(mut self, fs: Arc<dyn FileSystemProvider>) -> Self {
+        self.fs = fs;
+        self
     }
 }
 
@@ -82,8 +94,7 @@ impl crate::Tool for MergeResolveTool {
     }
 
     async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
-        use tokio::fs;
-
+        let fs = self.fs.as_ref();
         let resolve_input: MergeResolveInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid merge-resolve input: {e}")))?;
 
@@ -97,15 +108,18 @@ impl crate::Tool for MergeResolveTool {
         }
 
         // Check file exists
-        let metadata = fs::metadata(&resolve_input.file_path).await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                ToolError::InvalidInput(format!("File not found: {}", resolve_input.file_path))
-            } else {
-                ToolError::ExecutionFailed(format!("Failed to access file: {e}"))
-            }
-        })?;
+        let metadata = fs
+            .metadata(Path::new(&resolve_input.file_path))
+            .await
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    ToolError::InvalidInput(format!("File not found: {}", resolve_input.file_path))
+                } else {
+                    ToolError::ExecutionFailed(format!("Failed to access file: {e}"))
+                }
+            })?;
 
-        if metadata.is_dir() {
+        if metadata.is_dir {
             return Err(ToolError::InvalidInput(format!(
                 "Path is a directory, not a file: {}",
                 resolve_input.file_path
@@ -113,7 +127,8 @@ impl crate::Tool for MergeResolveTool {
         }
 
         // Read the file
-        let content = fs::read_to_string(&resolve_input.file_path)
+        let content = fs
+            .read_text(Path::new(&resolve_input.file_path))
             .await
             .map_err(|e| {
                 ToolError::ExecutionFailed(format!(
@@ -148,16 +163,18 @@ impl crate::Tool for MergeResolveTool {
             resolve_input.file_path,
             uuid::Uuid::new_v4().as_simple()
         );
-        fs::write(&temp_path, &resolved).await.map_err(|e| {
-            ToolError::ExecutionFailed(format!(
-                "Failed to write file '{}': {}",
-                resolve_input.file_path, e
-            ))
-        })?;
-        fs::rename(&temp_path, &resolve_input.file_path)
+        fs.write_bytes(Path::new(&temp_path), resolved.as_bytes())
             .await
             .map_err(|e| {
-                let _ = std::fs::remove_file(&temp_path);
+                ToolError::ExecutionFailed(format!(
+                    "Failed to write file '{}': {}",
+                    resolve_input.file_path, e
+                ))
+            })?;
+        fs.rename(Path::new(&temp_path), Path::new(&resolve_input.file_path))
+            .await
+            .map_err(|e| {
+                let _ = fs.remove_file_blocking(Path::new(&temp_path));
                 ToolError::ExecutionFailed(format!(
                     "Failed to rename temp file for '{}': {}",
                     resolve_input.file_path, e

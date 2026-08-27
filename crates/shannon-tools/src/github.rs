@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use shannon_core::tools::ToolError;
 use shannon_core::{Tool, ToolOutput, ToolResult};
-use tokio::process::Command;
+use shannon_tool_interface::{ProcessProvider, ProcessRequest};
 
 const GH_TIMEOUT_SECS: u64 = 30;
 
@@ -20,11 +20,16 @@ const GH_TIMEOUT_SECS: u64 = 30;
 // Helper: run a gh command and capture output
 // ---------------------------------------------------------------------------
 
-/// Run a gh command asynchronously and return stdout, stderr, exit status.
-async fn run_gh(args: &[&str]) -> Result<(String, String, bool), ToolError> {
+/// Run a gh command asynchronously through the injected process world (§4.11)
+/// and return stdout, stderr, exit status.
+async fn run_gh_with(
+    process: &dyn ProcessProvider,
+    args: &[&str],
+) -> Result<(String, String, bool), ToolError> {
+    let request = ProcessRequest::new("gh", args);
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(GH_TIMEOUT_SECS),
-        Command::new("gh").args(args).output(),
+        process.run_async(&request),
     )
     .await
     .map_err(|_| ToolError::ExecutionFailed("gh command timed out".to_string()))?
@@ -32,12 +37,18 @@ async fn run_gh(args: &[&str]) -> Result<(String, String, bool), ToolError> {
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    Ok((stdout, stderr, output.status.success()))
+    Ok((stdout, stderr, output.exit.success))
+}
+
+/// Default-world wrapper (no injection), matching the pre-provider shape.
+#[allow(dead_code)] // KEEP: legacy default-world shape kept for test parity
+async fn run_gh(args: &[&str]) -> Result<(String, String, bool), ToolError> {
+    run_gh_with(crate::defaults::process().as_ref(), args).await
 }
 
 /// Check if gh is installed and authenticated.
-async fn check_gh_available() -> Result<(), ToolError> {
-    let (_, _, success) = run_gh(&["--version"]).await.map_err(|e| {
+async fn check_gh_available_with(process: &dyn ProcessProvider) -> Result<(), ToolError> {
+    let (_, _, success) = run_gh_with(process, &["--version"]).await.map_err(|e| {
         ToolError::ExecutionFailed(format!(
             "gh CLI not found: {e}. Please install from https://cli.github.com/"
         ))
@@ -50,7 +61,7 @@ async fn check_gh_available() -> Result<(), ToolError> {
     }
 
     // Check authentication
-    let (_, _, success) = run_gh(&["auth", "status"])
+    let (_, _, success) = run_gh_with(process, &["auth", "status"])
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to check gh auth status: {e}")))?;
 
@@ -63,11 +74,18 @@ async fn check_gh_available() -> Result<(), ToolError> {
     Ok(())
 }
 
+/// Default-world wrapper (no injection), matching the pre-provider shape.
+#[allow(dead_code)] // KEEP: legacy default-world shape kept for test parity
+async fn check_gh_available() -> Result<(), ToolError> {
+    check_gh_available_with(crate::defaults::process().as_ref()).await
+}
+
 /// Check if the current directory is a git repository with a GitHub remote.
-async fn check_github_repo() -> Result<(), ToolError> {
+async fn check_github_repo_with(process: &dyn ProcessProvider) -> Result<(), ToolError> {
+    let request = ProcessRequest::new("git", &["remote", "-v"]);
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        Command::new("git").args(["remote", "-v"]).output(),
+        process.run_async(&request),
     )
     .await
     .map_err(|_| ToolError::ExecutionFailed("git remote check timed out".to_string()))?
@@ -189,6 +207,8 @@ pub struct GhIssueListInput {
 /// Tool for listing GitHub issues
 pub struct GhIssueListTool {
     description: String,
+    /// Process world backing gh/git invocations (§4.11).
+    process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
 }
 
 impl Default for GhIssueListTool {
@@ -201,7 +221,16 @@ impl GhIssueListTool {
     pub fn new() -> Self {
         Self {
             description: "List GitHub issues for the current repository".to_string(),
+            process: crate::defaults::process(),
         }
+    }
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(
+        mut self,
+        process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+    ) -> Self {
+        self.process = process;
+        self
     }
 }
 
@@ -246,8 +275,8 @@ impl Tool for GhIssueListTool {
         let input: GhIssueListInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid input: {e}")))?;
 
-        check_gh_available().await?;
-        check_github_repo().await?;
+        check_gh_available_with(self.process.as_ref()).await?;
+        check_github_repo_with(self.process.as_ref()).await?;
 
         let limit = input.limit.unwrap_or(30);
         let limit_str = limit.to_string();
@@ -281,7 +310,7 @@ impl Tool for GhIssueListTool {
             args.extend(["--labels", labels]);
         }
 
-        let (stdout, stderr, success) = run_gh(&args).await?;
+        let (stdout, stderr, success) = run_gh_with(self.process.as_ref(), &args).await?;
 
         if !success {
             return Ok(ToolOutput::error(format!(
@@ -337,6 +366,8 @@ pub struct GhIssueViewInput {
 /// Tool for viewing a specific GitHub issue
 pub struct GhIssueViewTool {
     description: String,
+    /// Process world backing gh/git invocations (§4.11).
+    process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
 }
 
 impl Default for GhIssueViewTool {
@@ -349,7 +380,16 @@ impl GhIssueViewTool {
     pub fn new() -> Self {
         Self {
             description: "View a specific GitHub issue with comments".to_string(),
+            process: crate::defaults::process(),
         }
+    }
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(
+        mut self,
+        process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+    ) -> Self {
+        self.process = process;
+        self
     }
 }
 
@@ -385,8 +425,8 @@ impl Tool for GhIssueViewTool {
         let input: GhIssueViewInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid input: {e}")))?;
 
-        check_gh_available().await?;
-        check_github_repo().await?;
+        check_gh_available_with(self.process.as_ref()).await?;
+        check_github_repo_with(self.process.as_ref()).await?;
 
         let include_comments = input.include_comments.unwrap_or(true);
 
@@ -399,7 +439,7 @@ impl Tool for GhIssueViewTool {
             "number,title,state,htmlUrl,user,comments,createdAt,updatedAt,body",
         ];
 
-        let (stdout, stderr, success) = run_gh(&issue_args).await?;
+        let (stdout, stderr, success) = run_gh_with(self.process.as_ref(), &issue_args).await?;
 
         if !success {
             return Ok(ToolOutput::error(format!("Failed to view issue: {stderr}")));
@@ -433,7 +473,7 @@ impl Tool for GhIssueViewTool {
             ];
 
             let (comments_stdout, _comments_stderr, comments_success) =
-                run_gh(&comments_args).await?;
+                run_gh_with(self.process.as_ref(), &comments_args).await?;
 
             if comments_success {
                 if let Ok(comments) = serde_json::from_str::<Vec<GhComment>>(&comments_stdout) {
@@ -478,6 +518,8 @@ pub struct GhPrCreateInput {
 /// Tool for creating a pull request
 pub struct GhPrCreateTool {
     description: String,
+    /// Process world backing gh/git invocations (§4.11).
+    process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
 }
 
 impl Default for GhPrCreateTool {
@@ -490,7 +532,16 @@ impl GhPrCreateTool {
     pub fn new() -> Self {
         Self {
             description: "Create a pull request on GitHub".to_string(),
+            process: crate::defaults::process(),
         }
+    }
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(
+        mut self,
+        process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+    ) -> Self {
+        self.process = process;
+        self
     }
 }
 
@@ -546,8 +597,8 @@ impl Tool for GhPrCreateTool {
         let input: GhPrCreateInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid input: {e}")))?;
 
-        check_gh_available().await?;
-        check_github_repo().await?;
+        check_gh_available_with(self.process.as_ref()).await?;
+        check_github_repo_with(self.process.as_ref()).await?;
 
         let mut args = vec!["pr", "create", "--title", &input.title];
 
@@ -577,7 +628,7 @@ impl Tool for GhPrCreateTool {
             }
         }
 
-        let (stdout, stderr, success) = run_gh(&args).await?;
+        let (stdout, stderr, success) = run_gh_with(self.process.as_ref(), &args).await?;
 
         if !success {
             return Ok(ToolOutput::error(format!("Failed to create PR: {stderr}")));
@@ -607,6 +658,8 @@ pub struct GhPrListInput {
 /// Tool for listing pull requests
 pub struct GhPrListTool {
     description: String,
+    /// Process world backing gh/git invocations (§4.11).
+    process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
 }
 
 impl Default for GhPrListTool {
@@ -619,7 +672,16 @@ impl GhPrListTool {
     pub fn new() -> Self {
         Self {
             description: "List pull requests for the current repository".to_string(),
+            process: crate::defaults::process(),
         }
+    }
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(
+        mut self,
+        process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+    ) -> Self {
+        self.process = process;
+        self
     }
 }
 
@@ -660,8 +722,8 @@ impl Tool for GhPrListTool {
         let input: GhPrListInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid input: {e}")))?;
 
-        check_gh_available().await?;
-        check_github_repo().await?;
+        check_gh_available_with(self.process.as_ref()).await?;
+        check_github_repo_with(self.process.as_ref()).await?;
 
         let limit = input.limit.unwrap_or(30);
         let limit_str = limit.to_string();
@@ -691,7 +753,7 @@ impl Tool for GhPrListTool {
             args.extend(["--author", author]);
         }
 
-        let (stdout, stderr, success) = run_gh(&args).await?;
+        let (stdout, stderr, success) = run_gh_with(self.process.as_ref(), &args).await?;
 
         if !success {
             return Ok(ToolOutput::error(format!("Failed to list PRs: {stderr}")));
@@ -751,6 +813,8 @@ pub struct GhPrViewInput {
 /// Tool for viewing a specific pull request
 pub struct GhPrViewTool {
     description: String,
+    /// Process world backing gh/git invocations (§4.11).
+    process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
 }
 
 impl Default for GhPrViewTool {
@@ -763,7 +827,16 @@ impl GhPrViewTool {
     pub fn new() -> Self {
         Self {
             description: "View a specific pull request with optional diff".to_string(),
+            process: crate::defaults::process(),
         }
+    }
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(
+        mut self,
+        process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+    ) -> Self {
+        self.process = process;
+        self
     }
 }
 
@@ -799,8 +872,8 @@ impl Tool for GhPrViewTool {
         let input: GhPrViewInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid input: {e}")))?;
 
-        check_gh_available().await?;
-        check_github_repo().await?;
+        check_gh_available_with(self.process.as_ref()).await?;
+        check_github_repo_with(self.process.as_ref()).await?;
 
         let include_diff = input.include_diff.unwrap_or(false);
 
@@ -813,7 +886,7 @@ impl Tool for GhPrViewTool {
             "number,title,state,htmlUrl,user,head,base,createdAt,updatedAt,body,mergeable,reviewDecision,additions,deletions,changedFiles",
         ];
 
-        let (stdout, stderr, success) = run_gh(&pr_args).await?;
+        let (stdout, stderr, success) = run_gh_with(self.process.as_ref(), &pr_args).await?;
 
         if !success {
             return Ok(ToolOutput::error(format!("Failed to view PR: {stderr}")));
@@ -856,7 +929,8 @@ impl Tool for GhPrViewTool {
         // Get diff if requested
         if include_diff {
             let diff_args = ["pr", "diff", &input.number.to_string()];
-            let (diff_stdout, diff_stderr, diff_success) = run_gh(&diff_args).await?;
+            let (diff_stdout, diff_stderr, diff_success) =
+                run_gh_with(self.process.as_ref(), &diff_args).await?;
 
             if diff_success {
                 content.push_str("--- Diff ---\n\n");

@@ -11,8 +11,8 @@ use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_tool_interface::{ProcessProvider, ProcessRequest};
 use std::collections::HashMap;
-use std::process::Command;
 
 // ---------------------------------------------------------------------------
 // Helper: run a git command and capture output
@@ -53,20 +53,33 @@ fn validate_git_arg(arg: &str) -> Result<&str, ToolError> {
     Ok(arg)
 }
 
-/// Run a git command in a given working directory and return stdout, stderr, exit status.
-fn run_git(args: &[&str], cwd: Option<&str>) -> Result<(String, String, bool), ToolError> {
-    let mut cmd = Command::new("git");
-    cmd.args(args);
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
-    }
-    let output = cmd
-        .output()
+/// Run a git command in a given working directory and return stdout, stderr,
+/// exit status, spawning through the injected process world (§4.11).
+///
+/// This module never builds a raw spawn invocation itself; `run_git` remains
+/// as the default-world convenience wrapper used by tests and non-injected
+/// callers.
+#[allow(clippy::too_many_arguments)]
+fn run_git_with(
+    process: &dyn shannon_tool_interface::ProcessProvider,
+    args: &[&str],
+    cwd: Option<&str>,
+) -> Result<(String, String, bool), ToolError> {
+    let mut request = ProcessRequest::new("git", args);
+    request.cwd = cwd.map(std::path::PathBuf::from);
+    let output = process
+        .run_blocking(&request)
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to execute git: {e}")))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    Ok((stdout, stderr, output.status.success()))
+    Ok((stdout, stderr, output.exit.success))
+}
+
+/// Default-world wrapper (no injection): legacy shape kept for existing tests.
+#[allow(dead_code)] // KEEP: exercised by the existing git test fixtures
+fn run_git(args: &[&str], cwd: Option<&str>) -> Result<(String, String, bool), ToolError> {
+    run_git_with(crate::defaults::process().as_ref(), args, cwd)
 }
 
 /// Find the git root starting from the current directory (or a given path).
@@ -90,8 +103,11 @@ fn find_git_root(start: Option<&str>) -> Result<String, ToolError> {
 }
 
 /// Get the current branch name.
-fn current_branch(cwd: Option<&str>) -> Result<String, ToolError> {
-    let (stdout, _, success) = run_git(&["rev-parse", "--abbrev-ref", "HEAD"], cwd)?;
+fn current_branch_with(
+    process: &dyn shannon_tool_interface::ProcessProvider,
+    cwd: Option<&str>,
+) -> Result<String, ToolError> {
+    let (stdout, _, success) = run_git_with(process, &["rev-parse", "--abbrev-ref", "HEAD"], cwd)?;
     if !success {
         return Err(ToolError::ExecutionFailed(
             "Failed to determine current branch".to_string(),
@@ -100,15 +116,30 @@ fn current_branch(cwd: Option<&str>) -> Result<String, ToolError> {
     Ok(stdout.trim().to_string())
 }
 
+/// Default-world wrapper (no injection): legacy shape kept for existing tests.
+#[allow(dead_code)] // KEEP: exercised by the existing git test fixtures
+fn current_branch(cwd: Option<&str>) -> Result<String, ToolError> {
+    current_branch_with(crate::defaults::process().as_ref(), cwd)
+}
+
 /// Check whether the working directory has uncommitted changes.
-fn is_working_dir_dirty(cwd: Option<&str>) -> Result<bool, ToolError> {
-    let (stdout, _, success) = run_git(&["status", "--porcelain"], cwd)?;
+fn is_working_dir_dirty_with(
+    process: &dyn shannon_tool_interface::ProcessProvider,
+    cwd: Option<&str>,
+) -> Result<bool, ToolError> {
+    let (stdout, _, success) = run_git_with(process, &["status", "--porcelain"], cwd)?;
     if !success {
         return Err(ToolError::ExecutionFailed(
             "Failed to check working directory status".to_string(),
         ));
     }
     Ok(!stdout.trim().is_empty())
+}
+
+/// Default-world wrapper (no injection): legacy shape kept for existing tests.
+#[allow(dead_code)] // KEEP: exercised by the existing git test fixtures
+fn is_working_dir_dirty(cwd: Option<&str>) -> Result<bool, ToolError> {
+    is_working_dir_dirty_with(crate::defaults::process().as_ref(), cwd)
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +175,8 @@ pub struct GitBranchInput {
 /// Git branch management tool.
 pub struct GitBranchTool {
     description: String,
+    /// Process world backing git invocations (§4.11).
+    process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
 }
 
 impl Default for GitBranchTool {
@@ -156,12 +189,24 @@ impl GitBranchTool {
     pub fn new() -> Self {
         Self {
             description: "List, create, switch, and delete git branches".to_string(),
+            process: crate::defaults::process(),
         }
+    }
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(
+        mut self,
+        process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+    ) -> Self {
+        self.process = process;
+        self
     }
 
     fn list_branches(&self, cwd: Option<&str>) -> Result<ToolOutput, ToolError> {
-        let (stdout, stderr, success) =
-            run_git(&["branch", "-a", "--color=never", "-v", "--no-abbrev"], cwd)?;
+        let (stdout, stderr, success) = run_git_with(
+            self.process.as_ref(),
+            &["branch", "-a", "--color=never", "-v", "--no-abbrev"],
+            cwd,
+        )?;
         if !success {
             return Ok(ToolOutput {
                 content: format!("Failed to list branches: {stderr}"),
@@ -171,7 +216,8 @@ impl GitBranchTool {
         }
 
         // Also get current branch
-        let current = current_branch(cwd).unwrap_or_else(|_| "unknown".to_string());
+        let current = current_branch_with(self.process.as_ref(), cwd)
+            .unwrap_or_else(|_| "unknown".to_string());
 
         Ok(ToolOutput {
             content: stdout,
@@ -203,7 +249,7 @@ impl GitBranchTool {
             vec!["branch", name]
         };
 
-        let (stdout, stderr, success) = run_git(&args, cwd)?;
+        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), &args, cwd)?;
         if !success {
             return Ok(ToolOutput {
                 content: format!("Failed to create branch '{name}': {stderr}"),
@@ -242,14 +288,15 @@ impl GitBranchTool {
         validate_git_arg(name)?;
 
         // Safety check: warn if working directory is dirty
-        if is_working_dir_dirty(cwd)? {
+        if is_working_dir_dirty_with(self.process.as_ref(), cwd)? {
             tracing::warn!(
                 branch = %name,
                 "Switching branches with uncommitted changes — may cause conflicts"
             );
         }
 
-        let (stdout, stderr, success) = run_git(&["checkout", name], cwd)?;
+        let (stdout, stderr, success) =
+            run_git_with(self.process.as_ref(), &["checkout", name], cwd)?;
         if !success {
             return Ok(ToolOutput {
                 content: format!("Failed to switch to branch '{}': {}", name, stderr.trim()),
@@ -281,7 +328,7 @@ impl GitBranchTool {
         validate_git_arg(name)?;
 
         // Safety: refuse to delete the current branch
-        let current = current_branch(cwd)?;
+        let current = current_branch_with(self.process.as_ref(), cwd)?;
         if current == name {
             return Err(ToolError::ExecutionFailed(format!(
                 "Cannot delete the current branch '{name}'. Switch to another branch first."
@@ -307,7 +354,8 @@ impl GitBranchTool {
             });
         }
 
-        let (stdout, stderr, success) = run_git(&["branch", "-d", name], cwd)?;
+        let (stdout, stderr, success) =
+            run_git_with(self.process.as_ref(), &["branch", "-d", name], cwd)?;
         if !success {
             return Ok(ToolOutput {
                 content: format!(
@@ -421,6 +469,8 @@ pub struct GitDiffInput {
 /// Enhanced git diff tool.
 pub struct GitDiffTool {
     description: String,
+    /// Process world backing git invocations (§4.11).
+    process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
 }
 
 impl Default for GitDiffTool {
@@ -434,7 +484,16 @@ impl GitDiffTool {
         Self {
             description: "Show git diffs with support for staged, unstaged, and commit range diffs"
                 .to_string(),
+            process: crate::defaults::process(),
         }
+    }
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(
+        mut self,
+        process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+    ) -> Self {
+        self.process = process;
+        self
     }
 
     fn build_diff_args(&self, input: &GitDiffInput) -> Result<Vec<String>, ToolError> {
@@ -530,7 +589,7 @@ impl Tool for GitDiffTool {
             full_args.push(arg.as_str());
         }
 
-        let (stdout, stderr, success) = run_git(&full_args, None)?;
+        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), &full_args, None)?;
 
         if !success && !stderr.is_empty() {
             return Ok(ToolOutput {
@@ -611,6 +670,8 @@ pub struct GitLogInput {
 /// Git log viewer tool.
 pub struct GitLogTool {
     description: String,
+    /// Process world backing git invocations (§4.11).
+    process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
 }
 
 impl Default for GitLogTool {
@@ -624,7 +685,16 @@ impl GitLogTool {
         Self {
             description: "View git commit history with filtering and formatting options"
                 .to_string(),
+            process: crate::defaults::process(),
         }
+    }
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(
+        mut self,
+        process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+    ) -> Self {
+        self.process = process;
+        self
     }
 
     fn build_log_args(&self, input: &GitLogInput) -> Result<Vec<String>, ToolError> {
@@ -730,7 +800,7 @@ impl Tool for GitLogTool {
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         full_args.extend(&arg_refs);
 
-        let (stdout, stderr, success) = run_git(&full_args, None)?;
+        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), &full_args, None)?;
 
         if !success {
             return Ok(ToolOutput {
@@ -807,6 +877,8 @@ pub struct GitStashInput {
 /// Git stash management tool.
 pub struct GitStashTool {
     description: String,
+    /// Process world backing git invocations (§4.11).
+    process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
 }
 
 impl Default for GitStashTool {
@@ -820,11 +892,21 @@ impl GitStashTool {
         Self {
             description: "Manage git stashes: list, push, pop, drop, and apply stashed changes"
                 .to_string(),
+            process: crate::defaults::process(),
         }
+    }
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(
+        mut self,
+        process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+    ) -> Self {
+        self.process = process;
+        self
     }
 
     fn list_stashes(&self) -> Result<ToolOutput, ToolError> {
-        let (stdout, stderr, success) = run_git(&["stash", "list"], None)?;
+        let (stdout, stderr, success) =
+            run_git_with(self.process.as_ref(), &["stash", "list"], None)?;
         if !success {
             return Ok(ToolOutput {
                 content: format!("Failed to list stashes: {}", stderr.trim()),
@@ -859,7 +941,7 @@ impl GitStashTool {
     }
 
     fn push_stash(&self, input: &GitStashInput) -> Result<ToolOutput, ToolError> {
-        if !is_working_dir_dirty(None)? {
+        if !is_working_dir_dirty_with(self.process.as_ref(), None)? {
             return Ok(ToolOutput {
                 content: "Nothing to stash: working directory is clean.".to_string(),
                 is_error: false,
@@ -877,7 +959,7 @@ impl GitStashTool {
         }
 
         let arg_refs: Vec<&str> = full_args.iter().map(|s| s.as_str()).collect();
-        let (stdout, stderr, success) = run_git(&arg_refs, None)?;
+        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), &arg_refs, None)?;
 
         if !success {
             return Ok(ToolOutput {
@@ -909,7 +991,7 @@ impl GitStashTool {
         let index_str = format!("stash@{{{index}}}");
         let args = &["stash", "pop", &index_str];
 
-        let (stdout, stderr, success) = run_git(args, None)?;
+        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), args, None)?;
 
         if !success {
             return Ok(ToolOutput {
@@ -939,7 +1021,7 @@ impl GitStashTool {
         let index_str = format!("stash@{{{index}}}");
         let args = &["stash", "drop", &index_str];
 
-        let (stdout, stderr, success) = run_git(args, None)?;
+        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), args, None)?;
 
         if !success {
             return Ok(ToolOutput {
@@ -969,7 +1051,7 @@ impl GitStashTool {
         let index_str = format!("stash@{{{index}}}");
         let args = &["stash", "apply", &index_str];
 
-        let (stdout, stderr, success) = run_git(args, None)?;
+        let (stdout, stderr, success) = run_git_with(self.process.as_ref(), args, None)?;
 
         if !success {
             return Ok(ToolOutput {
@@ -1079,6 +1161,8 @@ pub struct SafetyCheckResult {
 /// Git safety check tool.
 pub struct GitSafetyTool {
     description: String,
+    /// Process world backing git invocations (§4.11).
+    process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
 }
 
 impl Default for GitSafetyTool {
@@ -1091,7 +1175,16 @@ impl GitSafetyTool {
     pub fn new() -> Self {
         Self {
             description: "Check if a git command is safe before executing it".to_string(),
+            process: crate::defaults::process(),
         }
+    }
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(
+        mut self,
+        process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+    ) -> Self {
+        self.process = process;
+        self
     }
 
     /// Analyze a git command for safety.
@@ -1323,6 +1416,8 @@ fn default_true() -> bool {
 /// - Checks for GitSafety violations before staging.
 pub struct AutoCommitTool {
     description: String,
+    /// Process world backing git invocations (§4.11).
+    process: std::sync::Arc<dyn ProcessProvider>,
 }
 
 impl Default for AutoCommitTool {
@@ -1339,16 +1434,24 @@ impl AutoCommitTool {
                 semantic commit messages from diffs, and creates commits. Supports dry-run preview \
                 and co-author trailers. Shows git status and diff stats before committing."
                     .to_string(),
+            process: crate::defaults::process(),
         }
     }
 
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(mut self, process: std::sync::Arc<dyn ProcessProvider>) -> Self {
+        self.process = process;
+        self
+    }
+
     /// Generate a commit message from the staged diff stats.
-    fn generate_message(cwd: Option<&str>) -> Result<String, ToolError> {
+    fn generate_message(&self, cwd: Option<&str>) -> Result<String, ToolError> {
         // Get short stat from diff
-        let (stat, _, success) = run_git(&["diff", "--stat", "--cached"], cwd)?;
+        let (stat, _, success) =
+            run_git_with(self.process.as_ref(), &["diff", "--stat", "--cached"], cwd)?;
         if !success {
             // Fallback to unstaged diff if no cached changes yet
-            let (stat2, _, _) = run_git(&["diff", "--stat"], cwd)?;
+            let (stat2, _, _) = run_git_with(self.process.as_ref(), &["diff", "--stat"], cwd)?;
             return Ok(Self::message_from_stat(&stat2));
         }
         Ok(Self::message_from_stat(&stat))
@@ -1497,7 +1600,8 @@ impl Tool for AutoCommitTool {
         let _git_root = find_git_root(cwd)?;
 
         // Gather current status
-        let (status_out, _, status_ok) = run_git(&["status", "--porcelain"], cwd)?;
+        let (status_out, _, status_ok) =
+            run_git_with(self.process.as_ref(), &["status", "--porcelain"], cwd)?;
         if !status_ok {
             return Ok(ToolOutput {
                 content: "Failed to check git status.".to_string(),
@@ -1514,7 +1618,7 @@ impl Tool for AutoCommitTool {
         }
 
         // Safety check: get current branch
-        let branch = current_branch(cwd)?;
+        let branch = current_branch_with(self.process.as_ref(), cwd)?;
 
         // Stage changes: specific files or all tracked
         if !parsed.files.is_empty() {
@@ -1522,7 +1626,7 @@ impl Tool for AutoCommitTool {
             let file_args: Vec<&str> = parsed.files.iter().map(|s| s.as_str()).collect();
             let mut add_args = vec!["add"];
             add_args.extend(&file_args);
-            let (_, stderr, success) = run_git(&add_args, cwd)?;
+            let (_, stderr, success) = run_git_with(self.process.as_ref(), &add_args, cwd)?;
             if !success {
                 return Ok(ToolOutput {
                     content: format!("Failed to stage files: {stderr}"),
@@ -1531,7 +1635,7 @@ impl Tool for AutoCommitTool {
                 });
             }
         } else if parsed.add_all {
-            let (_, stderr, success) = run_git(&["add", "-u"], cwd)?;
+            let (_, stderr, success) = run_git_with(self.process.as_ref(), &["add", "-u"], cwd)?;
             if !success {
                 return Ok(ToolOutput {
                     content: format!("Failed to stage changes: {stderr}"),
@@ -1542,12 +1646,14 @@ impl Tool for AutoCommitTool {
         }
 
         // Get staged diff stats for commit context
-        let (stat, _, _) = run_git(&["diff", "--stat", "--cached"], cwd)?;
+        let (stat, _, _) =
+            run_git_with(self.process.as_ref(), &["diff", "--stat", "--cached"], cwd)?;
 
         // Dry run: show what would be committed
         if parsed.dry_run {
             let message = parsed.message.clone().unwrap_or_else(|| {
-                Self::generate_message(cwd).unwrap_or_else(|_| "chore: update files".to_string())
+                self.generate_message(cwd)
+                    .unwrap_or_else(|_| "chore: update files".to_string())
             });
             let co_author_line = parsed
                 .co_author
@@ -1566,7 +1672,7 @@ impl Tool for AutoCommitTool {
         // Generate or use provided commit message
         let message = match parsed.message {
             Some(msg) => msg,
-            None => Self::generate_message(cwd)?,
+            None => self.generate_message(cwd)?,
         };
 
         // Build commit message with optional co-author trailer
@@ -1576,7 +1682,8 @@ impl Tool for AutoCommitTool {
         };
 
         // Commit
-        let (_, stderr, success) = run_git(&["commit", "-m", &full_message], cwd)?;
+        let (_, stderr, success) =
+            run_git_with(self.process.as_ref(), &["commit", "-m", &full_message], cwd)?;
         if !success {
             return Ok(ToolOutput {
                 content: format!("Commit failed: {stderr}"),
@@ -1586,7 +1693,11 @@ impl Tool for AutoCommitTool {
         }
 
         // Get the short hash of the new commit
-        let (hash, _, _) = run_git(&["rev-parse", "--short", "HEAD"], cwd)?;
+        let (hash, _, _) = run_git_with(
+            self.process.as_ref(),
+            &["rev-parse", "--short", "HEAD"],
+            cwd,
+        )?;
         let hash = hash.trim();
 
         Ok(ToolOutput {
@@ -1609,6 +1720,10 @@ impl Tool for AutoCommitTool {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    // Fixture-only: existing tests build real repositories with real spawns;
+    // production paths spawn exclusively through `ProcessProvider` (§4.11).
+    #[allow(unused_imports)]
+    use std::process::Command;
 
     // ---- GitBranchTool tests ----
 
