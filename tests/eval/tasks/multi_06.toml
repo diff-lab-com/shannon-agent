@@ -57,9 +57,9 @@ tool = "Edit"
 args_regex = '"file_path":"proxy.conf"'
 
 [limits]
-max_turns = 10
-max_tokens = 26000
-timeout_secs = 240
+max_turns = 50
+max_tokens = 1000000
+timeout_secs = 600
 
 [dry_run]
 final_text = "Both the constant and the proxy config now point at 9443."

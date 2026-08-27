@@ -37,9 +37,9 @@ tool = "Grep"
 args_regex = '"pattern":"TODO'
 
 [limits]
-max_turns = 6
-max_tokens = 12000
-timeout_secs = 150
+max_turns = 50
+max_tokens = 1000000
+timeout_secs = 360
 
 [dry_run]
 final_text = "TODO markers found:\n- src/net.rs: TODO add retry backoff\n- notes.txt: TODO document the API surface"

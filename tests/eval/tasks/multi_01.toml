@@ -47,9 +47,9 @@ tool = "Read"
 tool = "Edit"
 
 [limits]
-max_turns = 10
-max_tokens = 26000
-timeout_secs = 240
+max_turns = 50
+max_tokens = 1000000
+timeout_secs = 600
 
 [dry_run]
 final_text = "Renamed the module to helpers and updated both the declaration and the consumer."

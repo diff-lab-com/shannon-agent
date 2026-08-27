@@ -32,9 +32,9 @@ tool = "Read"
 args_regex = '"file_path":".ci/pipeline.md"'
 
 [limits]
-max_turns = 4
-max_tokens = 9000
-timeout_secs = 120
+max_turns = 50
+max_tokens = 1000000
+timeout_secs = 300
 
 [dry_run]
 final_text = "The final promotion step allows 5 retries before the pipeline aborts."

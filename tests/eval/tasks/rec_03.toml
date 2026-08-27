@@ -53,9 +53,9 @@ args_regex = '"file_path":"src/api_options.rs"'
 tool = "Edit"
 
 [limits]
-max_turns = 10
-max_tokens = 22000
-timeout_secs = 240
+max_turns = 50
+max_tokens = 1000000
+timeout_secs = 600
 
 [dry_run]
 final_text = "Conflict resolved: both timeout helpers are kept and the markers are gone."

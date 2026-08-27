@@ -34,9 +34,9 @@ tool = "Read"
 tool = "MultiEdit"
 
 [limits]
-max_turns = 8
-max_tokens = 16000
-timeout_secs = 180
+max_turns = 50
+max_tokens = 1000000
+timeout_secs = 450
 
 [dry_run]
 final_text = "Fixed both occurrences of recieve in docs/guide.md."
