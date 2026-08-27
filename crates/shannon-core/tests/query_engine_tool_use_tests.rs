@@ -1009,3 +1009,228 @@ mod openai_truncation_continuation_tests {
         );
     }
 }
+
+// ── Zhipu/GLM coding-plan tool-use broadcast regression (2026-08-27) ──
+
+mod zhipu_tool_use_broadcast_tests {
+    //! Zhipu's OpenAI-compatible endpoint (`/api/coding/paas/v4`, glm-4.7 /
+    //! glm-5.3-flash) splits `delta.tool_calls` across frames and repeats the
+    //! SAME call id on EVERY frame while streaming argument fragments, then
+    //! packs `finish_reason: "tool_calls"` AND the real usage into ONE
+    //! terminal chunk. That terminal chunk used to take the usage early-return
+    //! in `normalize_openai_event`, skipping the finish_reason branch that
+    //! synthesizes `ContentBlockStop` — so the engine executed the tools via
+    //! its silent post-MessageDelta flush and `QueryEvent::ToolUseRequest`
+    //! was never broadcast (dogfood 2026-08-27: glm-5.3-flash 20/20 tasks,
+    //! L0 tool/call rows = 0, NDJSON tool_call lines = 0, while the wire
+    //! layer showed the model emitting dozens of tool calls per task).
+    //!
+    //! MiniMax never hit this because its real usage arrives in a separate
+    //! `choices: []` frame AFTER the finish chunk, so its tool turns always
+    //! reached the finish_reason branch. These tests pin the zhipu shape.
+
+    use async_trait::async_trait;
+    use futures::StreamExt;
+    use mockito::Server;
+    use serde_json::{Value, json};
+    use shannon_core::query_engine::{
+        QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
+    };
+    use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
+    use shannon_engine::api::{LlmClientConfig, LlmProvider};
+    use shannon_engine::permissions::PermissionManager;
+    use shannon_engine::state::StateManager;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    struct EchoTool;
+    #[async_trait]
+    impl Tool for EchoTool {
+        async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+            Ok(ToolOutput::success("echo-ok".to_string()))
+        }
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn description(&self) -> &str {
+            "echo test tool"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object", "properties": {}})
+        }
+    }
+
+    /// Zhipu-shaped tool turn: tool-call frames (same id repeated), then the
+    /// terminal chunk carrying `finish_reason: "tool_calls"` + real usage
+    /// TOGETHER, then [DONE].
+    fn zhipu_sse_tool_turn() -> String {
+        let chunks = [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_z1","type":"function","function":{"name":"echo","arguments":""}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_z1","function":{"arguments":"{\"task\":"}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_z1","function":{"arguments":"\"write tests\"}"}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}"#,
+        ];
+        let mut body = String::new();
+        for c in &chunks {
+            body.push_str("data: ");
+            body.push_str(c);
+            body.push_str("\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    /// Zhipu-shaped text turn: content delta, then terminal chunk with
+    /// `finish_reason: "stop"` + usage together, then [DONE].
+    fn zhipu_sse_text_turn() -> String {
+        let chunks = [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":"all done"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":200,"completion_tokens":30,"total_tokens":230}}"#,
+        ];
+        let mut body = String::new();
+        for c in &chunks {
+            body.push_str("data: ");
+            body.push_str(c);
+            body.push_str("\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    async fn setup_zhipu_engine(bodies: Vec<String>) -> (QueryEngine, mockito::ServerGuard) {
+        let mut server = Server::new_async().await;
+        for body in bodies {
+            server
+                .mock("POST", "/v1/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(body)
+                .expect(1)
+                .create();
+        }
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.url(),
+            model: "glm-5.3-flash".to_string(),
+            max_tokens: 4096,
+            timeout_seconds: 10,
+            api_version: "2023-06-01".to_string(),
+            provider: LlmProvider::OpenAI,
+            extra_headers: HashMap::new(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 0,
+            budget_tokens: None,
+            reasoning_effort: None,
+        };
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool)).unwrap();
+        let engine = QueryEngine::new(
+            shannon_engine::api::LlmClient::new(config),
+            registry,
+            PermissionManager::new(),
+            StateManager::new(),
+            QueryEngineConfig::default(),
+        );
+        (engine, server)
+    }
+
+    async fn run_query(engine: &QueryEngine) -> Vec<QueryEvent> {
+        let ctx = QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message: "use the echo tool".to_string(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: Some(4096),
+                model: "glm-5.3-flash".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        };
+        let stream = engine.process_query(ctx, None).await;
+        let mut events = Vec::new();
+        let mut s = Box::pin(stream);
+        while let Some(Ok(event)) = s.next().await {
+            events.push(event);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn zhipu_tool_turn_broadcasts_tool_use_request_exactly_once_with_full_input() {
+        let (engine, _server) =
+            setup_zhipu_engine(vec![zhipu_sse_tool_turn(), zhipu_sse_text_turn()]).await;
+        let events = run_query(&engine).await;
+
+        // Exactly ONE ToolUseRequest, with the FULLY PARSED input assembled
+        // from the split argument fragments.
+        let requests: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                QueryEvent::ToolUseRequest {
+                    tool_use_id,
+                    tool_name,
+                    tool_input,
+                    ..
+                } => Some((tool_use_id.clone(), tool_name.clone(), tool_input.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            requests.len(),
+            1,
+            "ToolUseRequest must broadcast exactly once, got {requests:?}"
+        );
+        let (tool_use_id, tool_name, tool_input) = &requests[0];
+        assert_eq!(tool_use_id, "call_z1");
+        assert_eq!(tool_name, "echo");
+        assert_eq!(
+            tool_input,
+            &json!({"task": "write tests"}),
+            "tool_input must be the complete JSON assembled from multi-frame fragments"
+        );
+
+        // The tool must have executed exactly once (no double-run), after
+        // the request was broadcast.
+        let results: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                QueryEvent::ToolUseResult {
+                    tool_name,
+                    is_error,
+                    ..
+                } => Some((tool_name.clone(), *is_error)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            results.len(),
+            1,
+            "tool must execute exactly once, got {results:?}"
+        );
+        assert!(!results[0].1, "tool result must not be an error");
+
+        let req_idx = events
+            .iter()
+            .position(|e| matches!(e, QueryEvent::ToolUseRequest { .. }))
+            .expect("ToolUseRequest present");
+        let res_idx = events
+            .iter()
+            .position(|e| matches!(e, QueryEvent::ToolUseResult { .. }))
+            .expect("ToolUseResult present");
+        assert!(
+            req_idx < res_idx,
+            "ToolUseRequest must precede ToolUseResult"
+        );
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, QueryEvent::Completed { .. })),
+            "query must complete after the tool turn"
+        );
+    }
+}

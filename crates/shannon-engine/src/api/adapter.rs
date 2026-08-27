@@ -869,12 +869,31 @@ fn normalize_openai_event(
             .and_then(|d| d.cached_tokens)
             .unwrap_or(0);
         if input > 0 || output > 0 || cached > 0 {
+            // Zhipu/GLM coding-plan (and other OpenAI-compatible gateways)
+            // pack `finish_reason` AND the real usage into ONE terminal
+            // chunk — unlike MiniMax, whose real usage arrives in a separate
+            // `choices: []` frame AFTER the finish chunk. The finish_reason
+            // branch below never runs for such a chunk, so without this
+            // synthesis the open tool indices are never closed: the engine
+            // only sees its post-MessageDelta flush, tools execute, but
+            // `QueryEvent::ToolUseRequest` is never broadcast (dogfood
+            // 2026-08-27 glm-5.3-flash 20/20 tasks: L0 tool/call rows = 0).
+            // Mirror the finish_reason branch: synthesize one
+            // ContentBlockStop per open tool call BEFORE the terminal
+            // MessageDelta so the engine's single canonical broadcast path
+            // (ContentBlockStop handler) fires exactly once with the fully
+            // parsed input.
+            let mut events: Vec<Result<StreamEvent, ApiError>> = Vec::new();
+            for idx in state.open_tool_indices.drain(..) {
+                events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
+            }
+            state.reset();
             let raw_reason = chunk.choices.first().and_then(|c| c.finish_reason.clone());
             let normalized_reason = raw_reason.map(|r| match r.as_str() {
                 "stop" | "STOP" => "end_turn".to_string(),
                 other => other.to_string(),
             });
-            return vec![Ok(StreamEvent::MessageDelta {
+            events.push(Ok(StreamEvent::MessageDelta {
                 delta: MessageDeltaDelta {
                     stop_reason: normalized_reason,
                     stop_sequence: None,
@@ -885,7 +904,8 @@ fn normalize_openai_event(
                     cache_read_input_tokens: cached,
                     ..Default::default()
                 },
-            })];
+            }));
+            return events;
         }
         // usage is present but all-zero (M3 sentinel): fall through.
     }
