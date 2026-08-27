@@ -1,0 +1,12 @@
+---
+source: crates/shannon-cli/tests/trace_commands.rs
+expression: out
+---
+#000 t0 session ▸ model=claude-sonnet-4, provider=anthropic
+#001 t1 turn ▸ start
+#002 t1 user ▸ list files
+#003 t1 tool ▸ Bash ({"command":"ls"})
+#004 t1 permission ▸ allow tool=Bash
+#005 t1 tool-ok ▸ [Bash] src Cargo.toml
+#006 t1 assistant ▸ Two entries found.
+#008 t1 turn ▸ end reason=completed (in=42 out=9 cache_w=7 cache_r=$0.0200)

@@ -1,0 +1,10 @@
+{"seq":0,"ts_ns":1700000000000000000,"session_id":"fx-code_generation","turn":1,"kind":"session/start","model":"test-model"}
+{"seq":1,"ts_ns":1700000000001000000,"session_id":"fx-code_generation","turn":1,"kind":"user/message","content":"create a new Calculator module with add, subtract, multiply","source":"user"}
+{"seq":2,"ts_ns":1700000000002000000,"session_id":"fx-code_generation","turn":1,"kind":"request/header","model":"test","adapter_defaults":{},"tools":[],"config_snapshot":{},"reason":"turn"}
+{"seq":3,"ts_ns":1700000000003000000,"session_id":"fx-code_generation","turn":1,"kind":"assistant/message","content":"I'll create the calculator module.","interrupted":false}
+{"seq":4,"ts_ns":1700000000004000000,"session_id":"fx-code_generation","turn":1,"kind":"assistant/message","content":"I'll create the calculator module.","interrupted":false}
+{"seq":5,"ts_ns":1700000000005000000,"session_id":"fx-code_generation","turn":1,"kind":"tool/call","tool_use_id":"toolu_0005","tool_name":"Write","arguments":"{\"path\":\"src/calculator.rs\",\"content\":\"pub struct Calculator;\\n\\nimpl Calculator {\\n    pub fn add(a: f64, b: f64) -> f64 { a + b }\\n    pub fn subtract(a: f64, b: f64) -> f64 { a - b }\\n    pub fn multiply(a: f64, b: f64) -> f64 { a * b }\\n}\"}"}
+{"seq":6,"ts_ns":1700000000006000000,"session_id":"fx-code_generation","turn":1,"kind":"tool/result","tool_use_id":"toolu_0005","tool_name":"Write","output":"file created","is_error":false,"meta":{},"duration_ms":5}
+{"seq":7,"ts_ns":1700000000007000000,"session_id":"fx-code_generation","turn":1,"kind":"assistant/message","content":"Now let me verify it compiles.","interrupted":false}
+{"seq":8,"ts_ns":1700000000008000000,"session_id":"fx-code_generation","turn":1,"kind":"tool/call","tool_use_id":"toolu_0008","tool_name":"Bash","arguments":"{\"command\":\"cargo check\"}"}
+{"seq":9,"ts_ns":1700000000009000000,"session_id":"fx-code_generation","turn":1,"kind":"tool/result","tool_use_id":"toolu_0008","tool_name":"Bash","output":"Finished dev [unoptimized] target(s) in 0.5s","is_error":false,"meta":{},"duration_ms":500}

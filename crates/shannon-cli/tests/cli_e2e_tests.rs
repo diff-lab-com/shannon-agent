@@ -1579,55 +1579,69 @@ fn shannon_with_sessions(provider: &str, server_url: &str, home_dir: &std::path:
     cmd
 }
 
-/// Write a session file directly into the isolated sessions directory.
+/// Seed an L0 session log directly into the isolated sessions directory
+/// (§4.6): alternating user/assistant prompts become `user/message` +
+/// `assistant/message` rows, with turn/start per prompt.
 fn write_session_file(
     home_dir: &std::path::Path,
     session_id: &str,
     messages: Vec<serde_json::Value>,
 ) {
-    let sessions_dir = home_dir.join(".shannon").join("sessions");
-    std::fs::create_dir_all(&sessions_dir).unwrap();
+    use shannon_types::session_event::{
+        AssistantMessagePayload, SessionEventBody, SessionStartPayload, TurnEndPayload,
+        TurnStartPayload, UserMessagePayload,
+    };
 
-    let session_data = serde_json::json!({
-        "session_id": session_id,
-        "metadata": {
-            "model": "test-model",
-            "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-05-01T00:00:00Z",
-            "total_input_tokens": 0,
-            "total_output_tokens": 0,
-            "turn_count": messages.len() / 2,
-            "title": "Test session",
-            "parent_session_id": null,
-            "branch_point_message_index": null
-        },
-        "messages": messages
-    });
+    let container = home_dir.join(".shannon").join("sessions");
+    std::fs::create_dir_all(&container).unwrap();
+    let mut w = shannon_core::session_log::SessionLogWriter::open_layout(&container, session_id)
+        .expect("open fresh log");
 
-    let path = sessions_dir.join(format!("{session_id}.json"));
-    std::fs::write(&path, serde_json::to_string_pretty(&session_data).unwrap()).unwrap();
+    // Match the legacy fixture semantics: title from the store's preview.
+    w.record(SessionEventBody::SessionStart(SessionStartPayload {
+        model: "test-model".into(),
+        provider: None,
+        cwd: None,
+        app_version: None,
+    }));
+
+    for pair in messages.chunks(2) {
+        w.record(SessionEventBody::TurnStart(TurnStartPayload {
+            query_id: None,
+        }));
+        if let Some(user) = pair.first() {
+            w.record(SessionEventBody::UserMessage(UserMessagePayload {
+                source: UserMessagePayload::SOURCE_USER.into(),
+                content: user["content"].as_str().unwrap_or_default().into(),
+            }));
+        }
+        if let Some(reply) = pair.get(1) {
+            w.record(SessionEventBody::AssistantMessage(
+                AssistantMessagePayload {
+                    content: reply["content"].as_str().unwrap_or_default().into(),
+                    usage: None,
+                    interrupted: false,
+                },
+            ));
+        }
+        w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+            reason: TurnEndPayload::REASON_COMPLETED.into(),
+            usage: None,
+            error: None,
+        }));
+    }
+
+    w.close().expect("close seeded log");
 }
 
-/// Find the most recent session UUID in the isolated HOME dir.
+/// Find the most recent L0 session in the isolated HOME dir.
 fn find_latest_session_id(home_dir: &std::path::Path) -> Option<String> {
-    let sessions_dir = home_dir.join(".shannon").join("sessions");
-    if !sessions_dir.exists() {
-        return None;
-    }
-    let mut latest: Option<(std::time::SystemTime, String)> = None;
-    for entry in std::fs::read_dir(&sessions_dir).ok()? {
-        let entry = entry.ok()?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
-        let modified = entry.metadata().ok()?.modified().ok()?;
-        let name = path.file_stem()?.to_str()?.to_string();
-        if latest.as_ref().is_none_or(|(t, _)| modified > *t) {
-            latest = Some((modified, name));
-        }
-    }
-    latest.map(|(_, id)| id)
+    shannon_core::session_log::SessionStore::new(home_dir.join(".shannon").join("sessions"))
+        .list()
+        .ok()?
+        .into_iter()
+        .next()
+        .map(|info| info.session_id.to_string())
 }
 
 /// Generate N turns of conversation messages with a unique marker in turn 2.

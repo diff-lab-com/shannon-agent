@@ -34,7 +34,6 @@ jobs:
         run: |
           cargo bench --bench query_engine -- --save-baseline pr
           cargo bench --bench core_benchmarks -- --save-baseline pr
-          cargo bench --bench recording_benchmarks -- --save-baseline pr
           cargo bench --bench compact_bench -- --save-baseline pr
           cargo bench --bench context_budget_bench -- --save-baseline pr
         continue-on-error: true

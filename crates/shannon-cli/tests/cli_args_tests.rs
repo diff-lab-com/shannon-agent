@@ -415,3 +415,53 @@ fn test_unknown_flag_fails() {
 fn test_invalid_repl_args() {
     shannon().args(["repl", "--nonexistent"]).assert().failure();
 }
+
+// ── Trace Subcommand (§4.6 L0 session-log surface) ──────────────────────
+
+#[serial]
+#[test]
+fn test_trace_help_lists_four_subcommands() {
+    shannon()
+        .args(["trace", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("show"))
+        .stdout(predicate::str::contains("replay"))
+        .stdout(predicate::str::contains("diff"))
+        .stdout(predicate::str::contains("export"));
+}
+
+#[serial]
+#[test]
+fn test_trace_show_requires_session_argument() {
+    shannon().args(["trace", "show"]).assert().failure();
+}
+
+#[serial]
+#[test]
+fn test_trace_diff_requires_two_sessions() {
+    shannon()
+        .args(["trace", "diff", "only-one"])
+        .assert()
+        .failure();
+}
+
+#[serial]
+#[test]
+fn test_trace_show_missing_session_errors_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    let container = dir.path().join("sessions");
+    std::fs::create_dir_all(&container).unwrap();
+
+    shannon()
+        .args([
+            "trace",
+            "show",
+            "00000000-0000-4000-8000-ffffffffffff",
+            "--dir",
+            container.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no events.jsonl"));
+}

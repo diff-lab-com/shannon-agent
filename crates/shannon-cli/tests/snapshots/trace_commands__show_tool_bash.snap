@@ -1,0 +1,5 @@
+---
+source: crates/shannon-cli/tests/trace_commands.rs
+expression: tools
+---
+#003 t1 tool ▸ Bash ({"command":"ls"})

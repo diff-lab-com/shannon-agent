@@ -121,9 +121,8 @@ pub mod help_utils {
 pub mod export_utils {
     pub use super::export::{
         ExportFormat, ExportMessage, ExportOptions, ExportSession, SessionMetadata,
-        export_session_from_store, export_session_from_transcript, export_to_json,
-        export_to_markdown, generate_filename, maybe_build_session_from_args, parse_export_args,
-        write_export,
+        export_session_from_store, export_to_json, export_to_markdown, generate_filename,
+        parse_export_args, write_export,
     };
 }
 
