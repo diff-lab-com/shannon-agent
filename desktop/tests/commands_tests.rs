@@ -101,6 +101,13 @@ struct AppState {
 }
 
 impl AppState {
+    /// L0 session store over this test app's sessions dir (§4.6).
+    fn l0_store(&self) -> shannon_core::session_log::SessionStore {
+        shannon_core::session_log::SessionStore::new(
+            self.state_manager.sessions_dir().to_path_buf(),
+        )
+    }
+
     fn new() -> Self {
         Self {
             messages: Arc::new(Mutex::new(Vec::new())),
@@ -126,6 +133,95 @@ fn chrono_timestamp() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+// ── L0 seeding helpers (§4.6 cutover) ───────────────────────────────
+//
+// The snapshot API is gone; tests seed real events.jsonl logs instead.
+
+fn seed_empty_session(
+    state: &AppState,
+    uuid: uuid::Uuid,
+    title: Option<&str>,
+) -> Result<(), String> {
+    let store = state.l0_store();
+    shannon_core::session_log::SessionTee::open_in_container(
+        store.container(),
+        &uuid.to_string(),
+        "test",
+        None,
+    )
+    .close();
+    if let Some(t) = title {
+        store
+            .save_sidecar(
+                &uuid,
+                &shannon_core::session_log::SessionSidecar {
+                    title: Some(t.to_string()),
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn seed_messages_session(
+    state: &AppState,
+    uuid: uuid::Uuid,
+    core_messages: &[shannon_engine::api::Message],
+) -> Result<(), String> {
+    use shannon_types::session_event::{
+        AssistantChunkPayload, TurnEndPayload, TurnStartPayload, UserMessagePayload,
+    };
+    let store = state.l0_store();
+    let mut w = shannon_core::session_log::SessionLogWriter::open_layout(
+        store.container(),
+        &uuid.to_string(),
+    )
+    .map_err(|e| e.to_string())?;
+    for m in core_messages {
+        match m.role.as_str() {
+            "user" => {
+                w.record(shannon_types::session_event::SessionEventBody::TurnStart(
+                    TurnStartPayload { query_id: None },
+                ));
+                let text = match &m.content {
+                    shannon_engine::api::MessageContent::Text(t) => t.clone(),
+                    _ => String::new(),
+                };
+                w.record(shannon_types::session_event::SessionEventBody::UserMessage(
+                    UserMessagePayload {
+                        source: UserMessagePayload::SOURCE_USER.into(),
+                        content: text,
+                    },
+                ));
+            }
+            _ => {
+                let text = match &m.content {
+                    shannon_engine::api::MessageContent::Text(t) => t.clone(),
+                    _ => String::new(),
+                };
+                w.record(
+                    shannon_types::session_event::SessionEventBody::AssistantChunk(
+                        AssistantChunkPayload {
+                            delta: text,
+                            thinking: false,
+                        },
+                    ),
+                );
+                w.record(shannon_types::session_event::SessionEventBody::TurnEnd(
+                    TurnEndPayload {
+                        reason: TurnEndPayload::REASON_COMPLETED.into(),
+                        usage: None,
+                        error: None,
+                    },
+                ));
+            }
+        }
+    }
+    w.close().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ── Replicated logic (mirror of command bodies) ───────────────────
@@ -463,45 +559,12 @@ async fn new_session(state: &AppState) -> Result<String, String> {
         sessions.push(session_meta);
     }
 
-    // Persist empty session to state_manager
+    // Seed an empty L0 session log
     let uuid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let metadata = shannon_engine::state::SessionPersistMetadata {
-        model: "test".to_string(),
-        turn_count: 0,
-        title: Some(title),
-        ..Default::default()
-    };
-    state
-        .state_manager
-        .save_session(&uuid, &[], &metadata)
-        .map_err(|e| e.to_string())?;
+    seed_empty_session(&state, uuid, Some(&title))?;
 
-    // Save current session before switching (mirrors production behavior)
-    {
-        let current_id = state.current_session_id.lock().await;
-        if let Some(ref old_id) = *current_id {
-            let messages = state.messages.lock().await;
-            let core_messages: Vec<shannon_engine::api::Message> = messages
-                .iter()
-                .map(|m| shannon_engine::api::Message {
-                    role: m.role.clone(),
-                    content: shannon_engine::api::MessageContent::Text(m.content.clone()),
-                })
-                .collect();
-            if let Ok(old_uuid) = uuid::Uuid::parse_str(old_id) {
-                let model = state.client_config.read().await.model.clone();
-                let md = shannon_engine::state::SessionPersistMetadata {
-                    model,
-                    turn_count: core_messages.len() / 2,
-                    title: None,
-                    ..Default::default()
-                };
-                let _ = state
-                    .state_manager
-                    .save_session(&old_uuid, &core_messages, &md);
-            }
-        }
-    }
+    // (§4.6) Snapshot-before-switch is obsolete: events.jsonl already holds
+    // every turn durably.
 
     // Set current session ID and clear messages (mirrors production new_session)
     {
@@ -532,10 +595,7 @@ async fn load_session(state: &AppState, id: &str) -> Result<Vec<ChatMessage>, St
     drop(sessions);
 
     let uuid = uuid::Uuid::parse_str(id).map_err(|e| e.to_string())?;
-    let session_data = state
-        .state_manager
-        .load_session(&uuid)
-        .map_err(|e| e.to_string())?;
+    let session_data = state.l0_store().load(&uuid).map_err(|e| e.to_string())?;
 
     let messages = match session_data {
         Some(data) => {
@@ -588,17 +648,8 @@ async fn delete_session(state: &AppState, id: &str) -> Result<bool, String> {
     if removed {
         if let Ok(uuid) = uuid::Uuid::parse_str(id) {
             let _ = state.state_manager.delete_session(uuid);
-            // Also delete session file from disk (StateManager only removes from memory)
-            let home = std::env::var("HOME")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .ok();
-            if let Some(home) = home {
-                let path = std::path::PathBuf::from(home)
-                    .join(".shannon")
-                    .join("sessions")
-                    .join(format!("{uuid}.json"));
-                let _ = std::fs::remove_file(&path);
-            }
+            // (§4.6) Remove the whole session directory (log + sidecar).
+            let _ = state.l0_store().delete(&uuid);
         }
     }
 
@@ -609,30 +660,7 @@ async fn delete_session(state: &AppState, id: &str) -> Result<bool, String> {
 async fn switch_session(state: &AppState, target_id: &str) -> Result<Vec<ChatMessage>, String> {
     // Save current session if one is active
     {
-        let current_id = state.current_session_id.lock().await;
-        if let Some(ref id) = *current_id {
-            let messages = state.messages.lock().await;
-            let core_messages: Vec<shannon_engine::api::Message> = messages
-                .iter()
-                .map(|m| shannon_engine::api::Message {
-                    role: m.role.clone(),
-                    content: shannon_engine::api::MessageContent::Text(m.content.clone()),
-                })
-                .collect();
-
-            if let Ok(uuid) = uuid::Uuid::parse_str(id) {
-                let model = state.client_config.read().await.model.clone();
-                let metadata = shannon_engine::state::SessionPersistMetadata {
-                    model,
-                    turn_count: core_messages.len() / 2,
-                    title: None,
-                    ..Default::default()
-                };
-                let _ = state
-                    .state_manager
-                    .save_session(&uuid, &core_messages, &metadata);
-            }
-        }
+        // (§4.6) Nothing to snapshot on switch.
     }
 
     // Load target session
@@ -1290,10 +1318,9 @@ async fn session_persistence_creates_file() {
 
     // Verify session file was created
     let session_uuid = uuid::Uuid::parse_str(&id).unwrap();
-    let session_data = state.state_manager.load_session(&session_uuid).unwrap();
     assert!(
-        session_data.is_some(),
-        "Session file should exist after creation"
+        state.l0_store().load(&session_uuid).unwrap().is_some(),
+        "Session log should exist after creation"
     );
 }
 
@@ -1317,17 +1344,7 @@ async fn session_persistence_loads_messages() {
         },
     ];
 
-    let metadata = shannon_engine::state::SessionPersistMetadata {
-        model: "test-model".to_string(),
-        turn_count: 1,
-        title: Some("Test Session".to_string()),
-        ..Default::default()
-    };
-
-    state
-        .state_manager
-        .save_session(&session_uuid, &messages, &metadata)
-        .unwrap();
+    seed_messages_session(&state, session_uuid, &messages).unwrap();
 
     // Load the session
     let loaded_messages = load_session(&state, &id).await.unwrap();
@@ -1345,17 +1362,18 @@ async fn session_persistence_deletes_file() {
     let id = new_session(&state).await.unwrap();
     let session_uuid = uuid::Uuid::parse_str(&id).unwrap();
 
-    // Verify file exists
-    let session_data = state.state_manager.load_session(&session_uuid).unwrap();
-    assert!(session_data.is_some());
+    // Verify the log exists
+    assert!(state.l0_store().load(&session_uuid).unwrap().is_some());
 
     // Delete session
     let deleted = delete_session(&state, &id).await.unwrap();
     assert!(deleted);
 
-    // Verify file was deleted
-    let session_data = state.state_manager.load_session(&session_uuid).unwrap();
-    assert!(session_data.is_none(), "Session file should be deleted");
+    // Verify the session is gone
+    assert!(
+        state.l0_store().load(&session_uuid).unwrap().is_none(),
+        "Session file should be deleted"
+    );
 }
 
 #[tokio::test]
@@ -1615,15 +1633,32 @@ async fn load_session_sets_current_session_id() {
 // ── switch_session ────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn switch_session_saves_current_and_loads_target() {
+async fn switch_session_loads_target_messages() {
     let state = AppState::new();
 
-    // Create two sessions
+    fn make_msgs(user_text: &str) -> Vec<shannon_engine::api::Message> {
+        vec![
+            shannon_engine::api::Message {
+                role: "user".into(),
+                content: shannon_engine::api::MessageContent::Text(user_text.into()),
+            },
+            shannon_engine::api::Message {
+                role: "assistant".into(),
+                content: shannon_engine::api::MessageContent::Text("ack".into()),
+            },
+        ]
+    }
+
+    // Create two sessions and seed their logs (§4.6 stands in for a query run).
     let id1 = new_session(&state).await.unwrap();
+    let u1 = uuid::Uuid::parse_str(&id1).unwrap();
     let _ = send_message(&state, "hello from session 1".into()).await;
+    seed_messages_session(&state, u1, &make_msgs("hello from session 1")).unwrap();
 
     let _id2 = new_session(&state).await.unwrap();
     let _ = send_message(&state, "hello from session 2".into()).await;
+    let u2 = uuid::Uuid::parse_str(&_id2).unwrap();
+    seed_messages_session(&state, u2, &make_msgs("hello from session 2")).unwrap();
 
     // Switch back to session 1
     let messages = switch_session(&state, &id1).await.unwrap();
@@ -1661,13 +1696,19 @@ async fn switch_session_returns_error_for_unknown() {
 async fn switch_session_preserves_data_across_switches() {
     let state = AppState::new();
 
-    // Session 1: send message
-    let id1 = new_session(&state).await.unwrap();
-    let _ = send_message(&state, "msg in s1".into()).await;
+    fn make_single(text: &str) -> Vec<shannon_engine::api::Message> {
+        vec![shannon_engine::api::Message {
+            role: "user".into(),
+            content: shannon_engine::api::MessageContent::Text(text.into()),
+        }]
+    }
 
-    // Session 2: send different message
+    // Seed distinct persisted prompts per session (stand-in for live queries).
+    let id1 = new_session(&state).await.unwrap();
+    seed_messages_session(&state, id1.parse().unwrap(), &make_single("msg in s1")).unwrap();
+
     let id2 = new_session(&state).await.unwrap();
-    let _ = send_message(&state, "msg in s2".into()).await;
+    seed_messages_session(&state, id2.parse().unwrap(), &make_single("msg in s2")).unwrap();
 
     // Switch back to 1
     let msgs1 = switch_session(&state, &id1).await.unwrap();

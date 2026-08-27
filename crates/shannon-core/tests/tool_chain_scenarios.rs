@@ -1,38 +1,65 @@
-//! Tool chain scenario tests — verify tool orchestration patterns from fixtures.
+//! Tool chain scenario tests over L0 session-log fixtures (§4.6 cutover).
 //!
-//! These tests load session fixtures and validate that tool call sequences
-//! follow expected patterns (search-driven fix, parallel reads, cascading edits, etc.).
+//! Same orchestration assertions as before, but trajectories now come from
+//! typed `events.jsonl` rows (`tool/call` paired with its `tool/result`),
+//! exercising the production reader instead of legacy recording entries.
 
 use serde_json::Value;
-use std::fs;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/sessions")
+fn fixture_root(name: &str) -> PathBuf {
+    // Call sites keep the legacy `.jsonl` names; strip it for the dir.
+    let stem = name.strip_suffix(".jsonl").unwrap_or(name);
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/session_l0")
+        .join(stem)
 }
 
+/// Load `(tool_name, parsed_input, is_error)` triples for one fixture.
+///
+/// Calls and results arrive as separate vocabulary rows in real logs; this
+/// pairs them by `tool_use_id`, preserving call order for subsequence
+/// assertions while attaching each result's error flag to its request.
 fn load_tool_calls(name: &str) -> Vec<(String, Value, bool)> {
-    let path = fixtures_dir().join(name);
-    let content = fs::read_to_string(&path).expect("read fixture");
-    content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|line| {
-            let v: Value = serde_json::from_str(line).ok()?;
-            if v.get("type").and_then(|t| t.as_str()) == Some("ToolCall") {
-                let tool = v
-                    .get("tool")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let input = v.get("input").cloned().unwrap_or(Value::Null);
-                let is_error = v.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false);
-                Some((tool, input, is_error))
-            } else {
-                None
+    use shannon_types::session_event::{SessionEventBody, ToolCallPayload, ToolResultPayload};
+
+    let path = fixture_root(name).join("events.jsonl");
+    let reader =
+        shannon_core::session_log::SessionLogReader::open(&path).expect("open events.jsonl");
+    let events = reader.read_events(false).expect("read events");
+
+    let mut calls: Vec<(String, Value, bool)> = Vec::new();
+    let mut positions: HashMap<String, usize> = HashMap::new();
+
+    for event in &events {
+        match &event.body {
+            SessionEventBody::ToolCall(ToolCallPayload {
+                tool_use_id,
+                tool_name,
+                arguments,
+                ..
+            }) => {
+                let input: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
+                positions.insert(tool_use_id.clone(), calls.len());
+                calls.push((tool_name.clone(), input, false));
             }
-        })
-        .collect()
+            SessionEventBody::ToolResult(ToolResultPayload {
+                tool_use_id,
+                is_error,
+                ..
+            }) => {
+                if let Some(index) = positions.get(tool_use_id) {
+                    if let Some(call) = calls.get_mut(*index) {
+                        call.2 = *is_error;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    calls
 }
 
 fn load_tool_names(name: &str) -> Vec<String> {

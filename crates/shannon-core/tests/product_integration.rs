@@ -644,7 +644,6 @@ mod permissions_tests {
 // ============================================================================
 
 mod state_extra_tests {
-    use shannon_engine::api::{Message, MessageContent};
     use shannon_engine::state::StateManager;
     use uuid::Uuid;
 
@@ -674,23 +673,55 @@ mod state_extra_tests {
 
     #[test]
     fn test_list_sessions_empty() {
-        let (mgr, _dir) = make_mgr();
-        let sessions = mgr.list_persisted_sessions().unwrap();
-        assert!(sessions.is_empty());
+        let (_dir, container) = temp_container();
+        let store = shannon_core::session_log::SessionStore::new(&container);
+        assert!(store.list().unwrap().is_empty());
+    }
+
+    /// Distinct temp root so L0 listings never see other tests' data.
+    fn temp_container() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let container = dir.path().join("sessions");
+        std::fs::create_dir_all(&container).unwrap();
+        (dir, container)
     }
 
     #[test]
     fn test_large_session_messages() {
-        let (mgr, _dir) = make_mgr();
+        use shannon_types::session_event::{AssistantChunkPayload, UserMessagePayload};
+        let (_dir, container) = temp_container();
+        let store = shannon_core::session_log::SessionStore::new(&container);
         let id = Uuid::new_v4();
-        let msgs: Vec<Message> = (0..100)
-            .map(|i| Message {
-                role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
-                content: MessageContent::Text(format!("Message {i}")),
-            })
-            .collect();
-        mgr.save_session(&id, &msgs, &Default::default()).unwrap();
-        let loaded = mgr.load_session(&id).unwrap().unwrap();
+
+        // 100 alternating user/assistant messages written to the log.
+        let mut w =
+            shannon_core::session_log::SessionLogWriter::open_layout(&container, &id.to_string())
+                .unwrap();
+        for i in 0..100 {
+            if i % 2 == 0 {
+                w.record(shannon_types::session_event::SessionEventBody::TurnStart(
+                    shannon_types::session_event::TurnStartPayload { query_id: None },
+                ));
+                w.record(shannon_types::session_event::SessionEventBody::UserMessage(
+                    UserMessagePayload {
+                        source: UserMessagePayload::SOURCE_USER.into(),
+                        content: format!("Message {i}"),
+                    },
+                ));
+            } else {
+                w.record(
+                    shannon_types::session_event::SessionEventBody::AssistantChunk(
+                        AssistantChunkPayload {
+                            delta: format!("Message {i}"),
+                            thinking: false,
+                        },
+                    ),
+                );
+            }
+        }
+        w.close().unwrap();
+
+        let loaded = store.load(&id).unwrap().unwrap();
         assert_eq!(loaded.messages.len(), 100);
         assert_eq!(loaded.metadata.turn_count, 50);
     }

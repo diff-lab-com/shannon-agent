@@ -1,0 +1,15 @@
+{"seq":0,"ts_ns":1700000000000000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"session/start","model":"test-model"}
+{"seq":1,"ts_ns":1700000000001000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"user/message","content":"implement a fizzbuzz function using TDD","source":"user"}
+{"seq":2,"ts_ns":1700000000002000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"request/header","model":"test","adapter_defaults":{},"tools":[],"config_snapshot":{},"reason":"turn"}
+{"seq":3,"ts_ns":1700000000003000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"assistant/message","content":"TDD step 1: Write the test first.","interrupted":false}
+{"seq":4,"ts_ns":1700000000004000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"tool/call","tool_use_id":"toolu_0004","tool_name":"Write","arguments":"{\"path\":\"tests/fizzbuzz_test.rs\",\"content\":\"...\"}"}
+{"seq":5,"ts_ns":1700000000005000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"tool/result","tool_use_id":"toolu_0004","tool_name":"Write","output":"file created","is_error":false,"meta":{},"duration_ms":3}
+{"seq":6,"ts_ns":1700000000006000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"assistant/message","content":"Step 2: Run tests \u2014 should fail.","interrupted":false}
+{"seq":7,"ts_ns":1700000000007000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"tool/call","tool_use_id":"toolu_0007","tool_name":"Bash","arguments":"{\"command\":\"cargo test fizzbuzz 2>&1\"}"}
+{"seq":8,"ts_ns":1700000000008000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"tool/result","tool_use_id":"toolu_0007","tool_name":"Bash","output":"error[E0433]: failed to resolve: module `fizzbuzz` not found\ntest result: FAILED","is_error":true,"meta":{},"duration_ms":500}
+{"seq":9,"ts_ns":1700000000009000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"assistant/message","content":"Good, test fails as expected. Step 3: Implement.","interrupted":false}
+{"seq":10,"ts_ns":1700000000010000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"tool/call","tool_use_id":"toolu_0010","tool_name":"Write","arguments":"{\"path\":\"src/fizzbuzz.rs\",\"content\":\"...\"}"}
+{"seq":11,"ts_ns":1700000000011000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"tool/result","tool_use_id":"toolu_0010","tool_name":"Write","output":"file created","is_error":false,"meta":{},"duration_ms":3}
+{"seq":12,"ts_ns":1700000000012000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"assistant/message","content":"Step 4: Run tests \u2014 should pass.","interrupted":false}
+{"seq":13,"ts_ns":1700000000013000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"tool/call","tool_use_id":"toolu_0013","tool_name":"Bash","arguments":"{\"command\":\"cargo test fizzbuzz 2>&1\"}"}
+{"seq":14,"ts_ns":1700000000014000000,"session_id":"fx-tdd_cycle","turn":1,"kind":"tool/result","tool_use_id":"toolu_0013","tool_name":"Bash","output":"test test_fizzbuzz ... ok\ntest result: ok. 1 passed","is_error":false,"meta":{},"duration_ms":400}

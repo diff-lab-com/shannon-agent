@@ -1,0 +1,12 @@
+{"seq":0,"ts_ns":1700000000000000000,"session_id":"fx-session_resume_check","turn":1,"kind":"session/start","model":"test-model"}
+{"seq":1,"ts_ns":1700000000001000000,"session_id":"fx-session_resume_check","turn":1,"kind":"user/message","content":"continue from where we left off - we were adding validation to the form","source":"user"}
+{"seq":2,"ts_ns":1700000000002000000,"session_id":"fx-session_resume_check","turn":1,"kind":"request/header","model":"test","adapter_defaults":{},"tools":[],"config_snapshot":{},"reason":"turn"}
+{"seq":3,"ts_ns":1700000000003000000,"session_id":"fx-session_resume_check","turn":1,"kind":"assistant/message","content":"Let me check the current state of the form module.","interrupted":false}
+{"seq":4,"ts_ns":1700000000004000000,"session_id":"fx-session_resume_check","turn":1,"kind":"tool/call","tool_use_id":"toolu_0004","tool_name":"Read","arguments":"{\"path\":\"src/form.rs\"}"}
+{"seq":5,"ts_ns":1700000000005000000,"session_id":"fx-session_resume_check","turn":1,"kind":"tool/result","tool_use_id":"toolu_0004","tool_name":"Read","output":"pub struct Form {\n    pub name: String,\n    pub email: String,\n}\n\nimpl Form {\n    pub fn new(name: String, email: String) -> Self {\n        Self { name, email }\n    }\n}","is_error":false,"meta":{},"duration_ms":3}
+{"seq":6,"ts_ns":1700000000006000000,"session_id":"fx-session_resume_check","turn":1,"kind":"assistant/message","content":"I see the form struct exists but no validation yet. Let me add email validation.","interrupted":false}
+{"seq":7,"ts_ns":1700000000007000000,"session_id":"fx-session_resume_check","turn":1,"kind":"tool/call","tool_use_id":"toolu_0007","tool_name":"Edit","arguments":"{\"path\":\"src/form.rs\"}"}
+{"seq":8,"ts_ns":1700000000008000000,"session_id":"fx-session_resume_check","turn":1,"kind":"tool/result","tool_use_id":"toolu_0007","tool_name":"Edit","output":"edited","is_error":false,"meta":{},"duration_ms":3}
+{"seq":9,"ts_ns":1700000000009000000,"session_id":"fx-session_resume_check","turn":1,"kind":"assistant/message","content":"","interrupted":false}
+{"seq":10,"ts_ns":1700000000010000000,"session_id":"fx-session_resume_check","turn":1,"kind":"tool/call","tool_use_id":"toolu_0010","tool_name":"Bash","arguments":"{\"command\":\"cargo test 2>&1\"}"}
+{"seq":11,"ts_ns":1700000000011000000,"session_id":"fx-session_resume_check","turn":1,"kind":"tool/result","tool_use_id":"toolu_0010","tool_name":"Bash","output":"test result: ok. 3 passed","is_error":false,"meta":{},"duration_ms":400}

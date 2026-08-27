@@ -1394,15 +1394,6 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             repl.state.tokens_used = pre_stream_tokens + tokens;
             repl.tools_invoked = pre_stream_tools + tools;
 
-            // Record LLM exchange if session recording is active
-            if let Some(ref mut recorder) = repl.session_recorder {
-                use serde_json::json;
-                recorder.record_llm_exchange(
-                    &json!({"message": input}),
-                    &json!({"text": response, "tokens": tokens}),
-                );
-            }
-
             // Record billing for this turn
             let turn_cost = repl.state.total_cost_usd - pre_stream_cost;
             if turn_cost > 0.0 {
@@ -1479,29 +1470,18 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             // patterns, persist them to the memory store automatically.
             auto_save_memory(repl, &response);
 
-            // Auto-save session state after each turn
+            // Sidecar persistence after each turn (§4.6): the turn's data is
+            // already durable in events.jsonl via the engine tee — only a
+            // /rename / auto-title needs writing, merged onto lineage.
             if let Some(ref engine) = repl.query_engine {
-                let messages = engine.conversation_history();
-                let metadata = shannon_engine::state::SessionPersistMetadata {
-                    model: repl.state.model.clone().unwrap_or_default(),
-                    created_at: repl.session_started_at.unwrap_or_else(chrono::Utc::now),
-                    updated_at: chrono::Utc::now(),
-                    total_input_tokens: repl.state.tokens_used,
-                    total_output_tokens: 0,
-                    turn_count: repl.current_turn,
-                    // Persist any /rename title; save_session also merges with
-                    // existing on-disk metadata so this won't clobber branch
-                    // lineage or creation time.
-                    title: repl.state.session_title.clone(),
-                    parent_session_id: None,
-                    branch_point_message_index: None,
-                    project_path: Some(repl.state.working_directory.clone()),
-                };
-                if let Err(e) =
-                    repl.state_manager
-                        .save_session(&engine.session_id(), &messages, &metadata)
-                {
-                    tracing::debug!("Auto-save session error: {e}");
+                if let Err(e) = repl.l0_store().save_sidecar(
+                    &engine.session_id(),
+                    &shannon_core::session_log::SessionSidecar {
+                        title: repl.state.session_title.clone(),
+                        ..Default::default()
+                    },
+                ) {
+                    tracing::debug!("Session sidecar save error: {e}");
                 }
             }
 

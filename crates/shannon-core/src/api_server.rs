@@ -1460,35 +1460,36 @@ mod tests {
 
     #[test]
     fn test_attach_session_loads_prior_history_and_aligns_id() {
-        use shannon_engine::api::{Message, MessageContent};
-        use shannon_engine::state::SessionPersistMetadata;
-
         let dir = p0e_temp_sessions_dir();
-        let state = StateManager::with_sessions_dir(dir).unwrap();
-
-        // Persist a prior turn under session_id.
         let session_id = Uuid::new_v4();
-        let prior = vec![Message {
-            role: "user".to_string(),
-            content: MessageContent::Text("hello from the past".to_string()),
-        }];
-        state
-            .save_session(
-                &session_id,
-                &prior,
-                &SessionPersistMetadata {
-                    model: "m".to_string(),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
+        // Seed a prior turn's L0 log under session_id, shaped like real
+        // tee-driven writes so restore exercises the §4.6 projection path.
+        {
+            let writer_dir = dir.join("sessions");
+            let mut tee = crate::session_log::SessionTee::open_in_container(
+                &writer_dir,
+                &session_id.to_string(),
+                "m",
+                Some("anthropic"),
+            );
+            tee.record_user_message("hello from the past");
+            tee.record_turn_start(None);
+            tee.record_query_event(&QueryEvent::Text {
+                query_id: Uuid::new_v4(),
+                content: "prior reply".into(),
+            });
+            tee.record_query_event(&QueryEvent::Completed {
+                query_id: Uuid::new_v4(),
+            });
+            tee.close();
+        }
 
-        // Fresh engine sharing the same disk-backed state.
+        // Fresh engine pointing at the same sessions container.
         let mut engine = QueryEngine::with_defaults(
             LlmClient::new(test_config()),
             ToolRegistry::new(),
             PermissionManager::new(),
-            state,
+            StateManager::with_sessions_dir(dir.join("sessions")).unwrap(),
         );
 
         // Before: the engine has its own random id and no history.
@@ -1497,9 +1498,9 @@ mod tests {
 
         attach_session(&mut engine, session_id);
 
-        // After: history restored, save key aligned to the caller's session.
+        // After: history restored from L0, id aligned to the caller's session.
         assert_eq!(engine.session_id, session_id);
-        assert_eq!(engine.conversation.messages.len(), 1);
+        assert_eq!(engine.conversation.messages.len(), 2);
     }
 
     #[test]

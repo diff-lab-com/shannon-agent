@@ -16,12 +16,23 @@
 //! directory per session, leaving room for projections and metadata.
 
 pub mod l0_subscriber;
+pub mod projections;
 pub mod reader;
+pub mod session_store;
 pub mod tee;
 pub mod writer;
 
 pub use l0_subscriber::L0TeeSubscriber;
+pub use projections::{
+    ConversationProjection, SearchHit, SessionAnalytics, SessionScanEntry, ToolAggregate,
+    cutoff_seq_for_message_index, project_analytics_jsonl, project_conversation,
+    project_permission_decisions, project_session_analytics, scan_session_summaries, search_events,
+};
 pub use reader::{SessionEventIter, SessionLogReader};
+pub use session_store::{
+    SessionSidecar, SessionStore, SessionStoreError, StoredSession, StoredSessionInfo,
+    StoredSessionMeta, default_store,
+};
 pub use tee::{SessionTee, TeeHandle};
 pub use writer::{FlushPolicy, SessionLogWriter};
 
@@ -102,6 +113,33 @@ pub fn session_events_path(base_dir: &Path, session_id: &str) -> PathBuf {
         .join("sessions")
         .join(session_id)
         .join("events.jsonl")
+}
+
+/// Resolve the events file when `dir` **is** the sessions container:
+/// `<dir>/<session_id>/events.jsonl`.
+///
+/// This is the layout listed and scanned since §4.6 ([`projections`] works
+/// over containers; writers persist through [`SessionLogWriter::open_layout`]).
+pub fn session_log_container_path(dir: &Path, session_id: &str) -> PathBuf {
+    dir.join(session_id).join("events.jsonl")
+}
+
+/// Resolve the sidecar metadata file for one session in a container:
+/// `<dir>/<session_id>/meta.json` (user-curation fields only; every other
+/// value is projected from the event log).
+pub fn session_meta_container_path(dir: &Path, session_id: &str) -> PathBuf {
+    dir.join(session_id).join("meta.json")
+}
+
+/// Effective log container for an active engine: `SHANNON_HOME` relocates
+/// the whole Shannon root (legacy override, still beats everything); without
+/// it the sessions container owned by the caller's `StateManager` wins —
+/// which honors `SHANNON_SESSIONS_DIR` redirections wired into that manager.
+pub fn effective_log_container(state_sessions_dir: &Path) -> PathBuf {
+    match std::env::var("SHANNON_HOME") {
+        Ok(home) if !home.trim().is_empty() => PathBuf::from(home).join("sessions"),
+        _ => state_sessions_dir.to_path_buf(),
+    }
 }
 
 /// Resolve the default Shannon home directory: `$SHANNON_HOME` when set,

@@ -7,7 +7,6 @@ use std::time::Instant;
 
 use serde_json::json;
 
-use shannon_core::recording::RecordingEntry;
 use shannon_core::testing::mock_dsl::{anthropic_sse, text_response, tool_call_response};
 use shannon_core::testing::snapshot::{RenderMode, render_request_snapshot};
 use shannon_core::token_estimation::{ConversationMessageSummary, TokenEstimator};
@@ -73,46 +72,51 @@ fn build_conversation(turns: usize) -> Vec<Message> {
     messages
 }
 
-/// Build recording entries for a session with `count` entries.
-fn build_recording_entries(count: usize) -> Vec<RecordingEntry> {
-    let mut entries = Vec::with_capacity(count);
-    entries.push(RecordingEntry::SessionStart {
-        session_id: "perf-test-session".to_string(),
-        model: "claude-3-opus".to_string(),
-        timestamp: "2026-05-22T10:00:00Z".to_string(),
-    });
+use shannon_types::session_event::{SessionEventBody, ToolCallPayload, UserMessagePayload};
+
+/// Build `count` L0 event bodies for a synthetic session (mixed kinds).
+fn build_session_bodies(count: usize) -> Vec<SessionEventBody> {
+    use shannon_types::session_event::{
+        AssistantMessagePayload, SessionStartPayload, TurnStartPayload,
+    };
+    let mut bodies = Vec::with_capacity(count);
+    bodies.push(SessionEventBody::SessionStart(SessionStartPayload {
+        model: "claude-3-opus".into(),
+        provider: Some("anthropic".into()),
+        cwd: None,
+        app_version: None,
+    }));
     for i in 1..count {
-        match i % 5 {
-            0 => entries.push(RecordingEntry::UserMessage {
+        match i % 4 {
+            0 => bodies.push(SessionEventBody::TurnStart(TurnStartPayload {
+                query_id: None,
+            })),
+            1 => bodies.push(SessionEventBody::UserMessage(UserMessagePayload {
+                source: UserMessagePayload::SOURCE_USER.into(),
                 content: format!("Help with task {i}"),
-                turn: i / 5,
-            }),
-            1 => entries.push(RecordingEntry::ToolCall {
-                tool: "Read".to_string(),
-                input: json!({"path": format!("src/file_{i}.rs")}),
-                result: format!("// file {i} contents"),
-                is_error: false,
-                duration_ms: 10,
-            }),
-            2 => entries.push(RecordingEntry::LlmResponse {
-                turn: i / 5,
-                body: json!({"content": "response text"}),
-            }),
-            3 => entries.push(RecordingEntry::LlmRequest {
-                turn: i / 5,
-                request_hash: format!("hash_{i}"),
-                body: json!({"model": "claude-3-opus"}),
-            }),
-            _ => entries.push(RecordingEntry::ToolCall {
-                tool: "Bash".to_string(),
-                input: json!({"command": format!("echo {i}")}),
-                result: format!("{i}"),
-                is_error: false,
-                duration_ms: 5,
-            }),
+            })),
+            2 => bodies.push(SessionEventBody::ToolCall(ToolCallPayload {
+                tool_use_id: format!("toolu_{i}"),
+                tool_name: if i % 8 == 1 { "Read" } else { "Bash" }.into(),
+                arguments: json!({"path": format!("src/file_{i}.rs")}).to_string(),
+            })),
+            _ => bodies.push(SessionEventBody::AssistantMessage(
+                AssistantMessagePayload {
+                    content: "response text".into(),
+                    usage: None,
+                    interrupted: false,
+                },
+            )),
         }
     }
-    entries
+    bodies.push(SessionEventBody::TurnEnd(
+        shannon_types::session_event::TurnEndPayload {
+            reason: shannon_types::session_event::TurnEndPayload::REASON_COMPLETED.into(),
+            usage: None,
+            error: None,
+        },
+    ));
+    bodies
 }
 
 /// Parse SSE body into individual events, extract content text.
@@ -158,32 +162,32 @@ fn compaction_100_turns_under_2s() {
 }
 
 #[test]
-fn session_load_200_entries_under_500ms() {
-    let entries = build_recording_entries(200);
+fn session_load_200_events_under_500ms() {
+    // §4.6: the L0 log replaced recording fixtures as the durable record;
+    // this guard keeps full-log load + typed parse inside the same budget.
+    use shannon_core::session_log::{SessionLogReader, SessionLogWriter};
+
     let dir = tempfile::tempdir().expect("tempdir");
-
-    // Write JSONL
-    let path = dir.path().join("session.jsonl");
-    {
-        use std::io::Write;
-        let mut file = std::fs::File::create(&path).expect("create file");
-        for entry in &entries {
-            let line = serde_json::to_string(entry).expect("serialize entry");
-            writeln!(file, "{line}").expect("write line");
-        }
+    let container = dir.path().join("sessions");
+    std::fs::create_dir_all(&container).unwrap();
+    let mut writer =
+        SessionLogWriter::open_layout(&container, "perf-test-session").expect("open log");
+    for body in build_session_bodies(200) {
+        writer.record(body);
     }
+    writer.close().expect("close log");
 
-    // Benchmark reading back
+    let path =
+        shannon_core::session_log::session_log_container_path(&container, "perf-test-session");
+
+    // Benchmark reading back (full typed parse).
     let start = Instant::now();
-    let content = std::fs::read_to_string(&path).expect("read file");
-    let parsed: Vec<RecordingEntry> = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|line| serde_json::from_str(line).expect("parse entry"))
-        .collect();
+    let events = SessionLogReader::open(&path)
+        .and_then(|r| r.read_events(false))
+        .expect("read events");
     let elapsed = start.elapsed();
 
-    assert_eq!(parsed.len(), 200, "should parse all 200 entries");
+    assert_eq!(events.len(), 201, "should parse every row in the log");
     assert!(
         elapsed.as_millis() < 500,
         "session load took {elapsed:?}, expected < 500ms"

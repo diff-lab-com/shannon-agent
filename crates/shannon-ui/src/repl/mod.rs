@@ -55,9 +55,7 @@ use shannon_commands::{
     Command, CommandBase, CommandParser, CommandRegistry, ExecutionContext, PromptCommand,
     SharedExecutor, builtin_commands,
 };
-use shannon_core::{
-    PromptInfo, query_engine::QueryEngine, recording::SessionRecorder, tools::ToolRegistry,
-};
+use shannon_core::{PromptInfo, query_engine::QueryEngine, tools::ToolRegistry};
 use shannon_engine::{api::LlmClientConfig, permissions::PermissionManager, state::StateManager};
 
 // Tool registration
@@ -95,7 +93,7 @@ pub struct Repl {
     pub(crate) running: bool,
     /// Query engine for AI processing
     pub(crate) query_engine: Option<QueryEngine>,
-    /// State manager for session persistence (separate from QueryEngine's internal one)
+    /// State manager (process-lifetime registry; its sessions dir anchors the L0 store)
     pub(crate) state_manager: StateManager,
     /// Command registry with all built-in commands
     pub(crate) command_registry: CommandRegistry,
@@ -112,7 +110,7 @@ pub struct Repl {
     pub(crate) permission_req_tx:
         tokio::sync::mpsc::UnboundedSender<shannon_core::query_engine::PermissionRequest>,
     /// Last session listing cache (for /resume by number)
-    pub(crate) last_session_list: Vec<shannon_engine::state::SessionInfo>,
+    pub(crate) last_session_list: Vec<shannon_core::session_log::StoredSessionInfo>,
     /// Command history with cursor navigation
     pub(crate) command_history: ReplHistory,
     /// Saved input before history navigation (to restore on down-to-bottom)
@@ -178,8 +176,6 @@ pub struct Repl {
     pub(crate) update_check_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     /// Shared plan-mode flag (clone of the one in QueryEngine)
     pub(crate) plan_mode_flag: std::sync::Arc<std::sync::RwLock<bool>>,
-    /// Session recorder for deterministic replay testing
-    pub(crate) session_recorder: Option<SessionRecorder>,
 }
 
 /// State for tab completion cycling
@@ -296,6 +292,15 @@ fn extract_domain_from_tool(tool_name: &str, tool_input: &serde_json::Value) -> 
 }
 
 impl Repl {
+    /// The L0 session store over this REPL's sessions directory.
+    ///
+    /// Every listing, resume projection, and sidecar write goes through it —
+    /// `events.jsonl` is the single authoritative record (§4.6).
+    pub(crate) fn l0_store(&self) -> shannon_core::session_log::SessionStore {
+        shannon_core::session_log::SessionStore::new(
+            self.state_manager.sessions_dir().to_path_buf(),
+        )
+    }
     /// Minimal REPL for test mode — skips MCP, skills, memory, project instructions,
     /// but includes a lightweight query_engine with an unauthenticated LLM client.
     fn new_minimal(runtime: Runtime) -> Result<Self> {
@@ -378,7 +383,6 @@ impl Repl {
             diagnostic_rx: None,
             update_check_rx: None,
             plan_mode_flag: std::sync::Arc::new(std::sync::RwLock::new(false)),
-            session_recorder: None,
         };
 
         // Wire provider/model/tier into chat welcome StatusCard via the single
@@ -1424,7 +1428,6 @@ impl Repl {
             diagnostic_rx: None,
             update_check_rx: None,
             plan_mode_flag: plan_mode_flag.clone(),
-            session_recorder: None,
         };
 
         // Wire provider/model/tier into chat welcome StatusCard via the single
@@ -1841,29 +1844,18 @@ impl Repl {
                 }
             });
 
-            // Auto-save session for --resume support
+            // Persist user-curation metadata (§4.6 cutover): the
+            // conversation already lives in events.jsonl — only a /rename
+            // title needs writing, merged onto existing branch lineage.
             if self.current_turn > 0 {
-                let messages = engine.conversation_history();
-                let metadata = shannon_engine::state::SessionPersistMetadata {
-                    model: self.state.model.clone().unwrap_or_default(),
-                    created_at: self.session_started_at.unwrap_or_else(chrono::Utc::now),
-                    updated_at: chrono::Utc::now(),
-                    total_input_tokens: self.state.tokens_used,
-                    total_output_tokens: 0,
-                    turn_count: messages.iter().filter(|m| m.role == "user").count(),
-                    // Persist any /rename title; save_session merges with the
-                    // existing on-disk metadata so this won't clobber branch
-                    // lineage or the original creation time.
-                    title: self.state.session_title.clone(),
-                    parent_session_id: None,
-                    branch_point_message_index: None,
-                    project_path: Some(self.state.working_directory.clone()),
-                };
-                if let Err(e) =
-                    self.state_manager
-                        .save_session(&engine.session_id(), &messages, &metadata)
-                {
-                    tracing::debug!("Auto-save session error: {e}");
+                if let Err(e) = self.l0_store().save_sidecar(
+                    &engine.session_id(),
+                    &shannon_core::session_log::SessionSidecar {
+                        title: self.state.session_title.clone(),
+                        ..Default::default()
+                    },
+                ) {
+                    tracing::debug!("Session sidecar save error: {e}");
                 }
             }
         }
