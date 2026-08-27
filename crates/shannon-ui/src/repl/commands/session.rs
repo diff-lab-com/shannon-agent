@@ -45,7 +45,7 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     };
 
-    match repl.state_manager.load_session(&session_id) {
+    match repl.l0_store().load(&session_id) {
         Ok(Some(data)) => {
             repl.chat.clear();
             let title = data.metadata.title.as_deref().unwrap_or("Untitled");
@@ -141,7 +141,7 @@ pub(crate) fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     // Load parent to get message count for default branch point
-    let parent_data = match repl.state_manager.load_session(&session_id) {
+    let parent_data = match repl.l0_store().load(&session_id) {
         Ok(Some(data)) => data,
         Ok(None) => {
             repl.chat
@@ -183,7 +183,7 @@ pub(crate) fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
 
     // Create the branch
     match repl
-        .state_manager
+        .l0_store()
         .create_branch(&session_id, branch_point, None)
     {
         Ok(branch_data) => {
@@ -1165,10 +1165,7 @@ pub(crate) fn handle_session(repl: &mut Repl, args: &str) -> Result<()> {
 
     match subcmd {
         "list" | "ls" | "" => {
-            let sessions = repl
-                .state_manager
-                .list_persisted_sessions()
-                .unwrap_or_default();
+            let sessions = repl.l0_store().list().unwrap_or_default();
 
             if sessions.is_empty() {
                 repl.chat

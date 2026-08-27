@@ -1,0 +1,5 @@
+---
+source: crates/shannon-cli/tests/trace_commands.rs
+expression: perms
+---
+#004 t1 permission ▸ allow tool=Bash

@@ -16,6 +16,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
+uuid = { workspace = true }
 shannon-types = { path = "../shannon-types" }
 shannon-core = { path = "../shannon-core" }
 shannon-codegen = { path = "../shannon-codegen", default-features = false, features = ["rust", "python", "javascript", "typescript", "go"] }
@@ -40,3 +41,4 @@ toml = "0.8"
 [dev-dependencies]
 tokio-test = "0.4"
 insta = { workspace = true }
+tempfile = "3"

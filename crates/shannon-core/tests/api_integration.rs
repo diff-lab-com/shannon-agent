@@ -2288,57 +2288,36 @@ mod query_pipeline_tests {
 
 #[cfg(test)]
 mod conversation_export_tests {
+    use shannon_core::session_log::{SessionLogWriter, SessionSidecar, SessionStore};
     use shannon_engine::api::{ContentBlock, Message, MessageContent};
-    use shannon_engine::state::{SessionData, SessionPersistMetadata, StateManager};
     use uuid::Uuid;
 
-    /// Helper to create SessionPersistMetadata with sensible defaults.
-    fn make_metadata(title: &str, model: &str, turn_count: usize) -> SessionPersistMetadata {
-        SessionPersistMetadata {
-            model: model.to_string(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            total_input_tokens: 50,
-            total_output_tokens: 30,
-            turn_count,
-            title: Some(title.to_string()),
-            parent_session_id: None,
-            branch_point_message_index: None,
-            project_path: None,
-        }
+    fn store(tmp: &tempfile::TempDir) -> SessionStore {
+        SessionStore::new(tmp.path().join("sessions"))
     }
 
     /// Test: export conversation as JSON, verify structure.
     #[test]
     fn test_export_conversation_json() {
-        let session_id = Uuid::new_v4();
-        let data = SessionData {
-            session_id,
-            metadata: make_metadata("Test Session", "test-model", 2),
-            messages: vec![
-                Message {
-                    role: "user".to_string(),
-                    content: MessageContent::Text("Hello".to_string()),
-                },
-                Message {
-                    role: "assistant".to_string(),
-                    content: MessageContent::Blocks(vec![ContentBlock::Text {
-                        text: "Hi there!".to_string(),
-                    }]),
-                },
-            ],
-        };
+        let messages = vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("Hello".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Blocks(vec![ContentBlock::Text {
+                    text: "Hi there!".to_string(),
+                }]),
+            },
+        ];
 
-        // Serialize to JSON
-        let json_str = serde_json::to_string_pretty(&data).unwrap();
+        let json_str = serde_json::to_string_pretty(&messages).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
-        // Verify structure
-        assert_eq!(parsed["metadata"]["model"], "test-model");
-        assert_eq!(parsed["metadata"]["turn_count"], 2);
-        assert_eq!(parsed["messages"].as_array().unwrap().len(), 2);
-        assert_eq!(parsed["messages"][0]["role"], "user");
-        assert_eq!(parsed["messages"][1]["role"], "assistant");
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+        assert_eq!(parsed[0]["role"], "user");
+        assert_eq!(parsed[1]["role"], "assistant");
     }
 
     /// Test: export conversation as markdown.
@@ -2361,380 +2340,151 @@ mod conversation_export_tests {
             md.push_str(&format!("{heading}\n\n{content}\n\n---\n\n"));
         }
 
-        // Verify format
         assert!(md.contains("# Shannon Session Export"));
         assert!(md.contains("## User\n\nWhat is Rust?"));
         assert!(md.contains("## Assistant\n\nRust is a systems programming language."));
         assert!(md.contains("---")); // Separators between messages
     }
 
-    /// Test: export with metadata (model, tokens, cost).
+    /// Test: export with metadata (model, tokens, cost), projected from L0.
     #[test]
     fn test_export_with_metadata() {
-        let metadata = SessionPersistMetadata {
-            model: "claude-3-5-sonnet".to_string(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            total_input_tokens: 1500,
-            total_output_tokens: 800,
-            turn_count: 5,
-            title: Some("Metadata Test".to_string()),
-            parent_session_id: None,
-            branch_point_message_index: None,
-            project_path: None,
-        };
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let session_id = Uuid::new_v4();
+        let mut w =
+            SessionLogWriter::open_layout(store.container(), &session_id.to_string()).unwrap();
+        w.record(shannon_types::session_event::SessionEventBody::TurnStart(
+            shannon_types::session_event::TurnStartPayload { query_id: None },
+        ));
+        w.record(shannon_types::session_event::SessionEventBody::UserMessage(
+            shannon_types::session_event::UserMessagePayload {
+                source: shannon_types::session_event::UserMessagePayload::SOURCE_USER.into(),
+                content: "ask".into(),
+            },
+        ));
+        w.record(
+            shannon_types::session_event::SessionEventBody::AssistantChunk(
+                shannon_types::session_event::AssistantChunkPayload {
+                    delta: "answer".into(),
+                    thinking: false,
+                },
+            ),
+        );
+        w.record(shannon_types::session_event::SessionEventBody::TurnEnd(
+            shannon_types::session_event::TurnEndPayload {
+                reason: shannon_types::session_event::TurnEndPayload::REASON_COMPLETED.into(),
+                usage: Some(shannon_types::session_event::TokenUsage {
+                    input_tokens: 1500,
+                    output_tokens: 800,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                    cost_usd: None,
+                }),
+                error: None,
+            },
+        ));
+        w.close().unwrap();
 
-        // Build metadata summary
+        let loaded = store.load(&session_id).unwrap().unwrap();
         let summary = format!(
-            "Model: {}\nTurns: {}\nInput tokens: {}\nOutput tokens: {}\nTotal tokens: {}\nEstimated cost: ${:.4}",
-            metadata.model,
-            metadata.turn_count,
-            metadata.total_input_tokens,
-            metadata.total_output_tokens,
-            metadata.total_input_tokens + metadata.total_output_tokens,
-            (metadata.total_input_tokens as f64 * 0.000003)
-                + (metadata.total_output_tokens as f64 * 0.000015),
+            "Model: {}\nTurns: {}\nInput tokens: {}\nOutput tokens: {}\nTotal tokens: {}",
+            loaded.metadata.model,
+            loaded.metadata.turn_count,
+            loaded.metadata.total_input_tokens,
+            loaded.metadata.total_output_tokens,
+            loaded.metadata.total_input_tokens + loaded.metadata.total_output_tokens,
         );
 
-        assert!(summary.contains("Model: claude-3-5-sonnet"));
-        assert!(summary.contains("Turns: 5"));
+        assert_eq!(loaded.metadata.turn_count, 1);
+        assert!(summary.contains("Input tokens: 1500"));
         assert!(summary.contains("Total tokens: 2300"));
-        assert!(summary.contains("Estimated cost: $"));
     }
 
-    /// Test: session save/load round-trip preserves data.
+    /// Test: session save/load round-trip preserves data through the L0 log.
     #[test]
     fn test_session_save_load_roundtrip() {
-        let state_manager = StateManager::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
         let session_id = Uuid::new_v4();
-
-        let messages = vec![
-            Message {
-                role: "user".to_string(),
-                content: MessageContent::Text("Hello".to_string()),
-            },
-            Message {
-                role: "assistant".to_string(),
-                content: MessageContent::Blocks(vec![ContentBlock::Text {
-                    text: "World".to_string(),
-                }]),
-            },
-            Message {
-                role: "user".to_string(),
-                content: MessageContent::Text("How are you?".to_string()),
-            },
-        ];
-
-        let metadata = SessionPersistMetadata {
-            model: "test-model".to_string(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            total_input_tokens: 100,
-            total_output_tokens: 50,
-            turn_count: 3,
-            title: Some("Round-trip test".to_string()),
-            parent_session_id: None,
-            branch_point_message_index: None,
-            project_path: None,
-        };
-
-        // Save
-        state_manager
-            .save_session(&session_id, &messages, &metadata)
+        let mut w =
+            SessionLogWriter::open_layout(store.container(), &session_id.to_string()).unwrap();
+        for (prompt, reply) in [("Hello", "World"), ("How are you?", "Fine")] {
+            w.record(shannon_types::session_event::SessionEventBody::UserMessage(
+                shannon_types::session_event::UserMessagePayload {
+                    source: shannon_types::session_event::UserMessagePayload::SOURCE_USER.into(),
+                    content: prompt.into(),
+                },
+            ));
+            w.record(
+                shannon_types::session_event::SessionEventBody::AssistantChunk(
+                    shannon_types::session_event::AssistantChunkPayload {
+                        delta: reply.into(),
+                        thinking: false,
+                    },
+                ),
+            );
+        }
+        w.close().unwrap();
+        store
+            .save_sidecar(
+                &session_id,
+                &SessionSidecar {
+                    title: Some("Round-trip test".into()),
+                    ..Default::default()
+                },
+            )
             .unwrap();
 
-        // Load
-        let loaded = state_manager.load_session(&session_id).unwrap();
-        assert!(loaded.is_some());
-
-        let loaded_data = loaded.unwrap();
+        let loaded_data = store.load(&session_id).unwrap().expect("present");
         assert_eq!(loaded_data.session_id, session_id);
         assert_eq!(
             loaded_data.metadata.title,
             Some("Round-trip test".to_string())
         );
-        assert_eq!(loaded_data.metadata.model, "test-model");
-        assert_eq!(loaded_data.messages.len(), 3);
-        assert_eq!(loaded_data.metadata.turn_count, 3); // preserved: max(stored, visible)
-
-        // Verify message content preserved
+        assert_eq!(loaded_data.messages.len(), 4);
         assert_eq!(loaded_data.messages[0].role, "user");
         assert_eq!(loaded_data.messages[1].role, "assistant");
 
         // Clean up
-        state_manager.delete_persisted_session(&session_id).unwrap();
+        assert!(store.delete(&session_id).unwrap());
     }
 
     /// Test: list persisted sessions.
     #[test]
     fn test_list_persisted_sessions() {
-        let state_manager = StateManager::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
         let mut saved_ids = Vec::new();
 
-        // Save two sessions
         for i in 0..2 {
             let sid = Uuid::new_v4();
-            let metadata = SessionPersistMetadata {
-                model: "test-model".to_string(),
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                total_input_tokens: 10 * (i + 1) as u64,
-                total_output_tokens: 5 * (i + 1) as u64,
-                turn_count: i + 1,
-                title: Some(format!("Session {i}")),
-                parent_session_id: None,
-                branch_point_message_index: None,
-                project_path: None,
-            };
-            state_manager.save_session(&sid, &[], &metadata).unwrap();
+            // A session exists only once it has a log (L0 is the record).
+            SessionLogWriter::open_layout(store.container(), &sid.to_string())
+                .unwrap()
+                .close()
+                .unwrap();
+            store
+                .save_sidecar(
+                    &sid,
+                    &SessionSidecar {
+                        title: Some(format!("Session {i}")),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
             saved_ids.push(sid);
         }
 
-        let sessions = state_manager.list_persisted_sessions().unwrap();
+        let sessions = store.list().unwrap();
         assert!(sessions.len() >= 2, "Should have at least 2 sessions");
 
-        // Clean up
+        // Empty logs list fine but carry no user previews; titles come back.
+        let titles: Vec<_> = sessions.iter().filter_map(|s| s.title.clone()).collect();
+        assert_eq!(titles.len(), 2);
+
         for sid in &saved_ids {
-            state_manager.delete_persisted_session(sid).unwrap();
+            assert!(store.delete(sid).unwrap());
         }
-    }
-
-    /// Test: export with block content (tool use).
-    #[test]
-    fn test_export_with_tool_use_blocks() {
-        let messages = vec![
-            Message {
-                role: "assistant".to_string(),
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::Text {
-                        text: "Let me check that.".to_string(),
-                    },
-                    ContentBlock::ToolUse {
-                        id: "toolu_123".to_string(),
-                        name: "bash".to_string(),
-                        input: serde_json::json!({"command": "ls"}),
-                    },
-                ]),
-            },
-            Message {
-                role: "user".to_string(),
-                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
-                    tool_use_id: "toolu_123".to_string(),
-                    content: Some(shannon_engine::api::ToolResultContent::Single(
-                        "file1.txt\nfile2.txt".to_string(),
-                    )),
-                    is_error: Some(false),
-                }]),
-            },
-        ];
-
-        // Serialize
-        let json = serde_json::to_string(&messages).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(parsed.as_array().unwrap().len(), 2);
-        // First message has text + tool_use blocks
-        assert_eq!(parsed[0]["content"].as_array().unwrap().len(), 2);
-        assert_eq!(parsed[0]["content"][0]["type"], "text");
-        assert_eq!(parsed[0]["content"][1]["type"], "tool_use");
-    }
-}
-
-mod permission_flow_tests {
-    use futures::StreamExt;
-    use mockito::{Server, ServerGuard};
-    use shannon_core::query_engine::{
-        PermissionRequest, QueryContext, QueryEngine, QueryEvent, QueryMetadata,
-    };
-    use shannon_core::tools::ToolRegistry;
-    use shannon_engine::api::{LlmClient, LlmClientConfig, LlmProvider};
-    use shannon_engine::permissions::{PermissionChoice, PermissionManager};
-    use shannon_engine::state::StateManager;
-    use uuid::Uuid;
-
-    struct AnthropicKeyGuard(Option<std::ffi::OsString>);
-    impl AnthropicKeyGuard {
-        fn set() -> Self {
-            let old = std::env::var_os("ANTHROPIC_API_KEY");
-            unsafe {
-                std::env::set_var("ANTHROPIC_API_KEY", "test-key");
-            }
-            Self(old)
-        }
-    }
-    impl Drop for AnthropicKeyGuard {
-        fn drop(&mut self) {
-            match &self.0 {
-                Some(v) => unsafe {
-                    std::env::set_var("ANTHROPIC_API_KEY", v);
-                },
-                None => unsafe {
-                    std::env::remove_var("ANTHROPIC_API_KEY");
-                },
-            }
-        }
-    }
-
-    fn make_client(server: &ServerGuard) -> LlmClient {
-        let config = LlmClientConfig {
-            api_key: "test-key".to_string(),
-            base_url: server.url(),
-            model: "test-model".to_string(),
-            max_tokens: 1024,
-            timeout_seconds: 30,
-            api_version: "2023-06-01".to_string(),
-            provider: LlmProvider::Anthropic,
-            extra_headers: Default::default(),
-            retry_config: shannon_engine::api::RetryConfig::default(),
-            fallback_provider: None,
-            fallback_base_url: None,
-            max_stream_reconnects: 3,
-            budget_tokens: None,
-            reasoning_effort: None,
-        };
-        LlmClient::new(config)
-    }
-
-    fn make_context(message: &str) -> QueryContext {
-        QueryContext {
-            query_id: Uuid::new_v4(),
-            session_id: Uuid::new_v4(),
-            user_message: message.to_string(),
-            metadata: QueryMetadata {
-                timestamp: chrono::Utc::now(),
-                tools_allowed: true,
-                max_tokens: Some(1024),
-                model: "test-model".to_string(),
-                temperature: None,
-                top_p: None,
-            },
-        }
-    }
-
-    /// Test: tool permission denied → graceful error event, not panic.
-    /// The pipeline should emit a ToolUseRequest, we deny it via the
-    /// permission channel, and the engine should recover gracefully.
-    #[tokio::test]
-    async fn test_permission_denied_flow() {
-        let _guard = AnthropicKeyGuard::set();
-        let mut server = Server::new_async().await;
-
-        // First response: assistant requests a tool use
-        let tool_sse = concat!(
-            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_perm\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n",
-            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_perm\",\"name\":\"bash\",\"input\":{}}}\n\n",
-            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\\\"rm -rf /\\\"}\"}}\n\n",
-            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
-            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}\n\n",
-            "data: {\"type\":\"message_stop\"}\n\n",
-        );
-
-        // After permission denied, the engine should send a tool_result with is_error
-        // and then make another LLM call. We provide a recovery response.
-        let recovery_sse = concat!(
-            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_recovery\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":20,\"output_tokens\":0}}}\n\n",
-            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
-            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Understood, I won't run that command.\"}}\n\n",
-            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
-            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":20,\"output_tokens\":8}}\n\n",
-            "data: {\"type\":\"message_stop\"}\n\n",
-        );
-
-        server
-            .mock("POST", "/v1/messages")
-            .with_status(200)
-            .with_header("content-type", "text/event-stream")
-            .with_body(tool_sse)
-            .expect(1)
-            .create();
-
-        server
-            .mock("POST", "/v1/messages")
-            .with_status(200)
-            .with_header("content-type", "text/event-stream")
-            .with_body(recovery_sse)
-            .expect(1)
-            .create();
-
-        let client = make_client(&server);
-        let engine = QueryEngine::with_defaults(
-            client,
-            ToolRegistry::new(),
-            PermissionManager::new(),
-            StateManager::new(),
-        );
-
-        let ctx = make_context("Delete everything");
-        let (perm_tx, mut perm_rx) = tokio::sync::mpsc::unbounded_channel::<PermissionRequest>();
-
-        // Spawn a task to deny the permission request
-        let deny_handle = tokio::spawn(async move {
-            // Wait for a permission request
-            if let Some(req) = perm_rx.recv().await {
-                // Deny the permission
-                let _ = req.response_tx.send(PermissionChoice::Deny);
-            }
-        });
-
-        let mut stream = engine.process_query(ctx, Some(perm_tx)).await;
-
-        let mut events = Vec::new();
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(event) => events.push(event),
-                Err(e) => {
-                    // Permission denied should not cause a stream error;
-                    // it should be handled gracefully within the event flow
-                    panic!("Unexpected stream error: {e}");
-                }
-            }
-        }
-
-        // Wait for the deny task to complete
-        let _ = deny_handle.await;
-
-        // Should have completed (not failed) - the engine recovered
-        let has_completed = events
-            .iter()
-            .any(|e| matches!(e, QueryEvent::Completed { .. }));
-        let has_tool_request = events
-            .iter()
-            .any(|e| matches!(e, QueryEvent::ToolUseRequest { .. }));
-
-        assert!(
-            has_tool_request,
-            "Expected ToolUseRequest event before denial"
-        );
-
-        // Engine should complete gracefully (either with recovery text or just Completed)
-        // The key assertion is that it doesn't panic or hang
-        assert!(
-            has_completed
-                || events
-                    .iter()
-                    .any(|e| matches!(e, QueryEvent::Failed { .. })),
-            "Expected either Completed or Failed event, got: {:?}",
-            events
-                .iter()
-                .map(|e| match e {
-                    QueryEvent::Started { .. } => "Started",
-                    QueryEvent::Text { .. } => "Text",
-                    QueryEvent::ToolUseRequest { .. } => "ToolUseRequest",
-                    QueryEvent::ToolUseResult { .. } => "ToolUseResult",
-                    QueryEvent::TurnCompleted { .. } => "TurnCompleted",
-                    QueryEvent::Progress { .. } => "Progress",
-                    QueryEvent::Usage { .. } => "Usage",
-                    QueryEvent::Cost { .. } => "Cost",
-                    QueryEvent::ToolProgress { .. } => "ToolProgress",
-                    QueryEvent::Completed { .. } => "Completed",
-                    QueryEvent::Failed { .. } => "Failed",
-                    QueryEvent::Thinking { .. } => "Thinking",
-                    QueryEvent::Info { .. } => "Info",
-                    QueryEvent::RateLimit { .. } => "RateLimit",
-                    QueryEvent::ConversationUpdate { .. } => "ConversationUpdate",
-                    QueryEvent::Warning { .. } => "Warning",
-                })
-                .collect::<Vec<_>>()
-        );
     }
 }

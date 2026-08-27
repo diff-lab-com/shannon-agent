@@ -1,0 +1,13 @@
+{"seq":0,"ts_ns":1700000000000000000,"session_id":"fx-git_workflow","turn":1,"kind":"session/start","model":"test-model"}
+{"seq":1,"ts_ns":1700000000001000000,"session_id":"fx-git_workflow","turn":1,"kind":"user/message","content":"commit my changes with a good message","source":"user"}
+{"seq":2,"ts_ns":1700000000002000000,"session_id":"fx-git_workflow","turn":1,"kind":"request/header","model":"test","adapter_defaults":{},"tools":[],"config_snapshot":{},"reason":"turn"}
+{"seq":3,"ts_ns":1700000000003000000,"session_id":"fx-git_workflow","turn":1,"kind":"assistant/message","content":"Let me check the current state.","interrupted":false}
+{"seq":4,"ts_ns":1700000000004000000,"session_id":"fx-git_workflow","turn":1,"kind":"assistant/message","content":"Let me check the current state.","interrupted":false}
+{"seq":5,"ts_ns":1700000000005000000,"session_id":"fx-git_workflow","turn":1,"kind":"tool/call","tool_use_id":"toolu_0005","tool_name":"Bash","arguments":"{\"command\":\"git status\"}"}
+{"seq":6,"ts_ns":1700000000006000000,"session_id":"fx-git_workflow","turn":1,"kind":"tool/result","tool_use_id":"toolu_0005","tool_name":"Bash","output":"Changes not staged for commit:\n  modified: src/main.rs","is_error":false,"meta":{},"duration_ms":50}
+{"seq":7,"ts_ns":1700000000007000000,"session_id":"fx-git_workflow","turn":1,"kind":"assistant/message","content":"Let me see what changed.","interrupted":false}
+{"seq":8,"ts_ns":1700000000008000000,"session_id":"fx-git_workflow","turn":1,"kind":"tool/call","tool_use_id":"toolu_0008","tool_name":"Bash","arguments":"{\"command\":\"git diff src/main.rs\"}"}
+{"seq":9,"ts_ns":1700000000009000000,"session_id":"fx-git_workflow","turn":1,"kind":"tool/result","tool_use_id":"toolu_0008","tool_name":"Bash","output":"-fn main() { }\\n+fn main() { println!(\"hello\"); }","is_error":false,"meta":{},"duration_ms":30}
+{"seq":10,"ts_ns":1700000000010000000,"session_id":"fx-git_workflow","turn":1,"kind":"assistant/message","content":"Added hello world output. Let me commit.","interrupted":false}
+{"seq":11,"ts_ns":1700000000011000000,"session_id":"fx-git_workflow","turn":1,"kind":"tool/call","tool_use_id":"toolu_0011","tool_name":"Bash","arguments":"{\"command\":\"git add src/main.rs && git commit -m \\\"feat: add hello world output to main\\\"\"}"}
+{"seq":12,"ts_ns":1700000000012000000,"session_id":"fx-git_workflow","turn":1,"kind":"tool/result","tool_use_id":"toolu_0011","tool_name":"Bash","output":"[main abc1234] feat: add hello world output to main\n 1 file changed, 1 insertion(+), 1 deletion(-)","is_error":false,"meta":{},"duration_ms":100}

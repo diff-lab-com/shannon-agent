@@ -8,6 +8,7 @@ mod crash_hook;
 mod loop_command;
 mod mcp_install;
 mod notifications;
+mod trace;
 mod triggered_command;
 use shannon_commands::preset_utils::ConversationPreset;
 use shannon_core::{
@@ -485,6 +486,65 @@ struct Cli {
     command: Option<Commands>,
 }
 
+/// Sessions directory override shared by `trace` commands (`--dir`).
+#[derive(Subcommand, Debug)]
+enum TraceCommand {
+    /// Show durable rows of one session, optionally filtered.
+    Show {
+        /// Session id: full UUID, unique prefix, or `latest`.
+        session: String,
+
+        /// Only rows from this turn number.
+        #[arg(long)]
+        turn: Option<u64>,
+
+        /// Only tool activity for this tool name.
+        #[arg(long)]
+        tool: Option<String>,
+
+        /// Only permission decisions.
+        #[arg(long, alias = "perms")]
+        permission: bool,
+
+        /// Sessions root (defaults to ~/.shannon/sessions).
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+    },
+    /// Replay a session end-to-end (chunks folded into steps).
+    Replay {
+        /// Session id: full UUID, unique prefix, or `latest`.
+        session: String,
+
+        /// Sessions root override.
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+    },
+    /// Compare two session logs at seq/kind/payload-digest granularity.
+    Diff {
+        /// Left session reference.
+        a: String,
+        /// Right session reference.
+        b: String,
+
+        /// Sessions root override.
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+    },
+    /// Export events + analytics + summary bundle for evaluation/sharing.
+    Export {
+        /// Session id: full UUID, unique prefix, or `latest`.
+        session: String,
+
+        /// Output root directory (defaults to <tmp>/shannon-trace-export).
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+
+        /// Sessions root override.
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+    },
+}
+
 /// Shannon CLI commands
 #[derive(Subcommand, Debug)]
 enum Commands {
@@ -653,6 +713,17 @@ enum Commands {
         /// Emit JSON instead of the table.
         #[arg(long)]
         json: bool,
+    },
+
+    /// Inspect, replay, diff, or export a session's L0 event log (§4.6).
+    ///
+    /// The event log under `<sessions>/<uuid>/events.jsonl` is the single
+    /// authoritative record of every session; these commands are its
+    /// human/CI surface. Session references accept a full UUID, an unambiguous
+    /// prefix, or `latest`.
+    Trace {
+        #[command(subcommand)]
+        command: TraceCommand,
     },
 
     /// Manage provider profiles (add/remove).
@@ -1029,14 +1100,26 @@ fn headless_state_manager() -> Result<shannon_engine::state::StateManager> {
     }
 }
 
-/// Load a session for resumption.
+/// Resolve the sessions container for headless flows: `SHANNON_SESSIONS_DIR`
+/// overrides; otherwise `SHANNON_HOME/sessions`, else `~/.shannon/sessions`.
+fn sessions_container_from_env() -> std::path::PathBuf {
+    match std::env::var("SHANNON_SESSIONS_DIR") {
+        Ok(dir) if !dir.is_empty() => std::path::PathBuf::from(dir),
+        _ => shannon_core::session_log::SessionStore::default_container(),
+    }
+}
+
+/// Load a session for resumption from its L0 event log (§4.6 cutover).
 ///
 /// If `session_id_str` is provided, loads that specific session by UUID.
-/// Otherwise, loads the most recent session from the sessions directory.
+/// Otherwise, loads the most recent session from the sessions container.
 ///
-/// Returns the loaded `SessionData` on success.
-fn load_resume_session(session_id_str: Option<&str>) -> Result<shannon_engine::state::SessionData> {
-    let state_mgr = headless_state_manager()?;
+/// Returns the projected [`StoredSession`] on success. Legacy snapshot files
+/// are neither read nor migrated (DP4).
+fn load_resume_session(
+    session_id_str: Option<&str>,
+) -> Result<shannon_core::session_log::StoredSession> {
+    let store = shannon_core::session_log::SessionStore::new(sessions_container_from_env());
 
     if let Some(id_str) = session_id_str {
         let uuid = uuid::Uuid::parse_str(id_str).map_err(|e| {
@@ -1047,18 +1130,19 @@ fn load_resume_session(session_id_str: Option<&str>) -> Result<shannon_engine::s
             };
             anyhow::anyhow!("Invalid session UUID '{display}': {e}")
         })?;
-        state_mgr
-            .load_session(&uuid)?
+        store
+            .load(&uuid)?
             .ok_or_else(|| anyhow::anyhow!("Session {uuid} not found"))
     } else {
-        let sessions = state_mgr.list_persisted_sessions()?;
-        let latest = sessions
+        let latest = store
+            .list()?
             .into_iter()
             .next()
             .ok_or_else(|| anyhow::anyhow!("No previous sessions found to resume"))?;
-        state_mgr
-            .load_session(&latest.session_id)?
-            .ok_or_else(|| anyhow::anyhow!("Session {} not found on disk", latest.session_id))
+        let id = latest.session_id;
+        store
+            .load(&id)?
+            .ok_or_else(|| anyhow::anyhow!("Session {id} not found on disk"))
     }
 }
 
@@ -1072,7 +1156,7 @@ fn run_noninteractive_query(
     stream: bool,
     config: &CliConfig,
     bypass_all: bool,
-    resume_session: Option<shannon_engine::state::SessionData>,
+    resume_session: Option<shannon_core::session_log::StoredSession>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
 
@@ -1482,7 +1566,7 @@ fn run_headless_query(
     exit_on_error: bool,
     quiet: bool,
     diff_only: bool,
-    resume_session: Option<shannon_engine::state::SessionData>,
+    resume_session: Option<shannon_core::session_log::StoredSession>,
     schema_config: Option<&shannon_core::StructuredOutputConfig>,
     notify: bool,
 ) -> Result<()> {
@@ -1590,11 +1674,6 @@ fn run_headless_query(
         let mut permissions = shannon_engine::permissions::PermissionManager::new();
         permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
         let state = headless_state_manager()?;
-        // Separate handle for per-turn checkpoints: the engine takes `state`
-        // by value; both managers write the same (possibly redirected) dir,
-        // and save_session is a plain file write, so this is race-free.
-        let checkpoint_state = headless_state_manager().ok();
-
         let mut engine = QueryEngine::with_defaults(client, tools, permissions, state)
             .with_plan_mode_active(plan_mode_flag);
 
@@ -1823,30 +1902,11 @@ fn run_headless_query(
                     _turn_count = turn_number;
                     total_tokens += tokens_used;
                     eprintln!("[headless: turn {turn_number}, {tokens_used} tokens]");
-                    // Session checkpoint (dogfood L-tier resume): persist the
-                    // conversation after every turn when SHANNON_SESSIONS_DIR
-                    // redirected the sessions dir, so a run killed mid-flight
-                    // (supervisor timeout/hang) can be resumed with
-                    // `--resume <session_id>`. Unset env => no-op, previous
-                    // behaviour (engine saves once at completion).
-                    if let Some(state) = checkpoint_state.as_ref() {
-                        let metadata = shannon_engine::state::SessionPersistMetadata {
-                            model: config
-                                .model()
-                                .unwrap_or_else(|| "default".to_string()),
-                            turn_count: turn_number,
-                            total_input_tokens,
-                            total_output_tokens,
-                            ..Default::default()
-                        };
-                        if let Err(e) = state.save_session(
-                            &engine.session_id(),
-                            engine.conversation_messages(),
-                            &metadata,
-                        ) {
-                            eprintln!("Warning: session checkpoint failed: {e}");
-                        }
-                    }
+                    // (§4.6) No per-turn file checkpoint needed: every turn is
+                    // already durable in <container>/<id>/events.jsonl via the
+                    // engine tee, including crash-window tail recovery — so a
+                    // run killed mid-flight resumes with `--resume <session_id>`
+                    // without extra writes here.
                     // Check max turns
                     if let Some(max) = max_turns {
                         if turn_number >= max as usize {
@@ -4052,7 +4112,8 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         | Some(Commands::Update)
         | Some(Commands::Doctor { .. })
         | Some(Commands::ListProviders { .. })
-        | Some(Commands::Providers { .. }) => CliConfig::default(),
+        | Some(Commands::Providers { .. })
+        | Some(Commands::Trace { .. }) => CliConfig::default(),
     };
 
     // Initialize tracing if debug mode enabled
@@ -4311,6 +4372,35 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         }) => {
             run_desktop_command(build, no_build, install, foreground)?;
         }
+        Some(Commands::Trace { command }) => match command {
+            TraceCommand::Show {
+                session,
+                turn,
+                tool,
+                permission,
+                dir,
+            } => {
+                let container = trace::resolve_container(dir.as_deref());
+                let rendered = trace::cmd_show(&container, &session, turn, tool, permission)?;
+                println!("{rendered}");
+            }
+            TraceCommand::Replay { session, dir } => {
+                let container = trace::resolve_container(dir.as_deref());
+                let rendered = trace::cmd_replay(&container, &session)?;
+                println!("{rendered}");
+            }
+            TraceCommand::Diff { a, b, dir } => {
+                let container = trace::resolve_container(dir.as_deref());
+                let rendered = trace::cmd_diff(&container, &a, &b)?;
+                println!("{rendered}");
+            }
+            TraceCommand::Export { session, out, dir } => {
+                let container = trace::resolve_container(dir.as_deref());
+                let dest = trace::cmd_export(&container, &session, out.as_deref())?;
+                println!("export bundle: {}", dest.display());
+            }
+        },
+
         Some(Commands::Gateway { command }) => {
             run_gateway_command(command)?;
         }
