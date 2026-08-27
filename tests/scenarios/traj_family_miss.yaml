@@ -1,0 +1,26 @@
+name: traj_family_miss
+description: "Negative: mandatory family step with no compatible call must fail"
+prompt: "Apply the rename refactor"
+provider: anthropic
+
+setup:
+  files:
+    - path: src/main.rs
+      content: |
+        fn fetch_data() {}
+
+mock_responses:
+  - response:
+      type: tool_use
+      tool: Grep
+      tool_id: toolu_1
+      input: { "pattern": "fetch_data" }
+  - response:
+      type: text
+      content: "Looks renamable."
+
+validate:
+  - rule: trajectory_contains
+    sequence:
+      - tools: ["Edit", "MultiEdit", "rename_symbol"]
+        args_regex: '"old_name":"fetch_data"'
