@@ -214,11 +214,13 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
     return [
       { id: 'rename', label: t('chat.session.rename'), icon: 'edit', onSelect: () => startRename(session) },
       { id: 'pin', label: pinned ? t('chat.session.unpin') : t('chat.session.pin'), icon: 'push_pin', onSelect: () => togglePin(session.id) },
+      // §4.14 — visualize the session's turns/tools/token-cost curve.
+      { id: 'timeline', label: t('chat.session.timeline'), icon: 'timeline', onSelect: () => navigate(`/timeline/${session.id}`) },
       { id: 'export', label: t('chat.session.export'), icon: 'download', onSelect: () => { void exportSessionAsMarkdown(session.id, sessions, t) } },
       { id: 'print', label: t('chat.session.print'), icon: 'print', onSelect: () => { void printSession(session.id, sessions, t) } },
       { id: 'delete', label: t('chat.session.delete'), icon: 'delete', destructive: true, onSelect: () => setDeleteTarget(session.id) },
     ]
-  }, [pinnedIds, t, sessions, startRename, togglePin])
+  }, [pinnedIds, t, sessions, startRename, togglePin, navigate])
 
   return (
     <div className="flex flex-col h-full min-h-0">

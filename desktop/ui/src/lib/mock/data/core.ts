@@ -8,11 +8,13 @@ import type {
   SkillInfo,
   McpServerInfo,
   BackgroundTaskInfo,
+  TurnTimeline,
 } from '@/types'
 import type { PluginInfo } from '../../tauri-api'
 
 const now = Date.now()
 const dayMs = 86400_000
+const minMs = 60_000
 const sec = (n: number) => Math.floor((now - n * dayMs) / 1000)
 
 export const MOCK_TASKS: TaskItem[] = [
@@ -518,3 +520,71 @@ export const MOCK_BACKGROUND_TASKS: BackgroundTaskInfo[] = [
     output: 'Translated 42 files in 9m 54s.',
   },
 ]
+
+// §4.14 — Turn Timeline demo fixture (trace_timeline). Deterministic ~5.5
+// minute span, two turns; turn 1 carries a failed Bash call and turn 2 an
+// interrupted Grep call — the shapes the panel (and e2e) must render.
+const tlStart = now - 6 * minMs
+const tlMin = minMs
+export const MOCK_TURN_TIMELINE: TurnTimeline = {
+  session_id: 'sess-001',
+  model: 'claude-sonnet-4-20250514',
+  started_ts_ns: tlStart * 1e6,
+  ended_ts_ns: (tlStart + 5.5 * tlMin) * 1e6,
+  turns: [
+    {
+      turn: 1,
+      start_ts_ns: tlStart * 1e6,
+      end_ts_ns: (tlStart + 2 * tlMin) * 1e6,
+      reason: 'completed',
+      input_tokens: 4820,
+      output_tokens: 1240,
+      cache_creation_tokens: 1200,
+      cache_read_tokens: 3600,
+      cost_usd: 0.0214,
+      tools: [
+        {
+          tool_use_id: 'tl-tu-001',
+          tool_name: 'Read',
+          start_ts_ns: (tlStart + 20_000) * 1e6,
+          end_ts_ns: (tlStart + 26_000) * 1e6,
+          duration_ms: 6_000,
+          is_error: false,
+        },
+        {
+          tool_use_id: 'tl-tu-002',
+          tool_name: 'Bash',
+          start_ts_ns: (tlStart + 55_000) * 1e6,
+          end_ts_ns: (tlStart + 58_000) * 1e6,
+          duration_ms: 3_000,
+          is_error: true,
+        },
+      ],
+    },
+    {
+      turn: 2,
+      start_ts_ns: (tlStart + 2 * tlMin) * 1e6,
+      end_ts_ns: (tlStart + 5.5 * tlMin) * 1e6,
+      reason: 'completed',
+      input_tokens: 6110,
+      output_tokens: 890,
+      cache_creation_tokens: 0,
+      cache_read_tokens: 4800,
+      cost_usd: 0.0127,
+      tools: [
+        {
+          tool_use_id: 'tl-tu-003',
+          tool_name: 'Grep',
+          start_ts_ns: (tlStart + 145_000) * 1e6,
+          end_ts_ns: (tlStart + 149_000) * 1e6,
+          duration_ms: 4_000,
+          is_error: false,
+        },
+      ],
+    },
+  ],
+  cumulative: [
+    { ts_ns: (tlStart + 2 * tlMin) * 1e6, output_tokens_total: 1240, cost_total_usd: 0.0214 },
+    { ts_ns: (tlStart + 5.5 * tlMin) * 1e6, output_tokens_total: 2130, cost_total_usd: 0.0341 },
+  ],
+}

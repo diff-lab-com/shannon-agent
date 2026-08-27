@@ -18,17 +18,20 @@
 pub mod l0_subscriber;
 pub mod projections;
 pub mod reader;
+pub mod redaction;
 pub mod session_store;
 pub mod tee;
 pub mod writer;
 
 pub use l0_subscriber::L0TeeSubscriber;
 pub use projections::{
-    ConversationProjection, SearchHit, SessionAnalytics, SessionScanEntry, ToolAggregate,
-    cutoff_seq_for_message_index, project_analytics_jsonl, project_conversation,
-    project_permission_decisions, project_session_analytics, scan_session_summaries, search_events,
+    ConversationProjection, SearchHit, SessionAnalytics, SessionScanEntry, TimelineCumulativePoint,
+    TimelineToolEntry, TimelineTurn, ToolAggregate, TurnTimeline, cutoff_seq_for_message_index,
+    project_analytics_jsonl, project_conversation, project_permission_decisions,
+    project_session_analytics, project_turn_timeline, scan_session_summaries, search_events,
 };
 pub use reader::{SessionEventIter, SessionLogReader};
+pub use redaction::{REDACTED, RedactionPolicy};
 pub use session_store::{
     SessionSidecar, SessionStore, SessionStoreError, StoredSession, StoredSessionInfo,
     StoredSessionMeta, default_store,
