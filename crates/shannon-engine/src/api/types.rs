@@ -94,6 +94,9 @@ pub enum LlmProvider {
     ZhipuInternational,
     /// Zhipu Coding Plan (Anthropic-compatible wire format at open.bigmodel.cn/api/anthropic)
     ZhipuCoding,
+    /// GLM Coding Plan subscription quota — OpenAI-compatible endpoint at
+    /// /api/coding/paas/v4 with a plain Bearer API key.
+    ZhipuCodingPlan,
     /// Moonshot / Kimi (api.moonshot.cn)
     Moonshot,
     /// MiniMax (api.minimax.chat)
@@ -156,6 +159,8 @@ impl LlmProvider {
             LlmProvider::ZhipuInternational
         } else if url.contains("bigmodel.cn/api/anthropic") {
             LlmProvider::ZhipuCoding
+        } else if url.contains("bigmodel.cn/api/coding") {
+            LlmProvider::ZhipuCodingPlan
         } else if url.contains("bigmodel.cn") || url.contains("zhipuai.cn") {
             LlmProvider::Zhipu
         } else if url.contains("moonshot.cn") || url.contains("kimi") {
@@ -197,6 +202,7 @@ impl LlmProvider {
             LlmProvider::Zhipu => "/api/paas/v4/chat/completions",
             LlmProvider::ZhipuInternational => "/api/paas/v4/chat/completions",
             LlmProvider::ZhipuCoding => "/v1/messages",
+            LlmProvider::ZhipuCodingPlan => "/chat/completions",
             LlmProvider::Moonshot => "/v1/chat/completions",
             LlmProvider::Minimax => "/v1/chat/completions",
             LlmProvider::DashScope => "/compatible-mode/v1/chat/completions",
@@ -228,6 +234,7 @@ impl LlmProvider {
             LlmProvider::Zhipu => "https://open.bigmodel.cn",
             LlmProvider::ZhipuInternational => "https://open.international.bigmodel.cn",
             LlmProvider::ZhipuCoding => "https://open.bigmodel.cn/api/anthropic",
+            LlmProvider::ZhipuCodingPlan => "https://open.bigmodel.cn/api/coding/paas/v4",
             LlmProvider::Moonshot => "https://api.moonshot.cn",
             LlmProvider::Minimax => "https://api.minimax.chat",
             LlmProvider::DashScope => "https://dashscope.aliyuncs.com",
@@ -245,7 +252,8 @@ impl LlmProvider {
             Self::Anthropic | Self::Custom | Self::Bedrock | Self::ZhipuCoding => {
                 WireFormat::Anthropic
             }
-            Self::OpenAI
+            Self::ZhipuCodingPlan
+            | Self::OpenAI
             | Self::Azure
             | Self::Mistral
             | Self::DeepSeek
@@ -298,7 +306,7 @@ impl LlmProvider {
             Self::Xai => Some("XAI_API_KEY"),
             Self::Ai21 => Some("AI21_API_KEY"),
             Self::SiliconFlow => Some("SILICONFLOW_API_KEY"),
-            Self::Zhipu | Self::ZhipuCoding => Some("ZHIPU_API_KEY"),
+            Self::Zhipu | Self::ZhipuCoding | Self::ZhipuCodingPlan => Some("ZHIPU_API_KEY"),
             Self::ZhipuInternational => Some("ZHIPU_INTL_API_KEY"),
             Self::Moonshot => Some("MOONSHOT_API_KEY"),
             Self::Minimax => Some("MINIMAX_API_KEY"),
@@ -348,6 +356,7 @@ impl std::fmt::Display for LlmProvider {
             LlmProvider::Zhipu => write!(f, "zhipu"),
             LlmProvider::ZhipuInternational => write!(f, "zhipu-international"),
             LlmProvider::ZhipuCoding => write!(f, "zhipu-coding"),
+            LlmProvider::ZhipuCodingPlan => write!(f, "zhipu-coding-plan"),
             LlmProvider::Moonshot => write!(f, "moonshot"),
             LlmProvider::Minimax => write!(f, "minimax"),
             LlmProvider::DashScope => write!(f, "dashscope"),
@@ -1115,6 +1124,25 @@ fn default_num_ctx() -> usize {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_zhipu_coding_plan_endpoint_composition() {
+        // The Coding Plan subscription quota lives at /api/coding/paas/v4;
+        // recognition must WIN over the generic bigmodel.cn branch and the
+        // composed URL must be exactly the plan's chat-completions path.
+        let provider = LlmProvider::from_base_url("https://open.bigmodel.cn/api/coding/paas/v4");
+        assert_eq!(provider, LlmProvider::ZhipuCodingPlan);
+        assert_eq!(
+            format!("{}{}", provider.default_base_url(), provider.endpoint()),
+            "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
+        );
+        // The generic-domain fallback still classifies the classic endpoint.
+        assert_eq!(
+            LlmProvider::from_base_url("https://open.bigmodel.cn"),
+            LlmProvider::Zhipu
+        );
+        assert_eq!(provider.canonical_api_key_env(), Some("ZHIPU_API_KEY"));
+    }
 
     #[test]
     fn test_image_source_base64_constructor() {

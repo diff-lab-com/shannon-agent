@@ -222,6 +222,14 @@ impl LlmClient {
                     format!("Bearer {}", self.config.api_key),
                 ));
             }
+            LlmProvider::ZhipuCodingPlan => {
+                // Coding Plan quota accepts a plain Bearer API key (verified
+                // against /api/coding/paas/v4 — JWT not required).
+                headers.push((
+                    "Authorization".to_string(),
+                    format!("Bearer {}", self.config.api_key),
+                ));
+            }
             LlmProvider::Zhipu | LlmProvider::ZhipuInternational => {
                 let token = generate_zhipu_jwt(&self.config.api_key)
                     .unwrap_or_else(|| self.config.api_key.clone());

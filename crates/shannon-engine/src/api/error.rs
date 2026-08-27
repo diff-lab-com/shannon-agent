@@ -141,6 +141,7 @@ impl ApiError {
                 | LlmProvider::SiliconFlow
                 | LlmProvider::Zhipu
                 | LlmProvider::ZhipuInternational
+                | LlmProvider::ZhipuCodingPlan
                 | LlmProvider::Moonshot
                 | LlmProvider::Minimax
                 | LlmProvider::DashScope
