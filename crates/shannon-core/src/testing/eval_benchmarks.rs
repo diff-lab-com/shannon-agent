@@ -1416,6 +1416,7 @@ fn run_regression_rep(
         dry_run: options.dry_run,
         out_dir_override: Some(run_dir.join(format!("{}_rep{}", case.native_id, rep_index))),
         failure_rules: options.failure_rules.clone(),
+        instruction_directive: None,
     };
     let began = Instant::now();
     match run_suite(std::slice::from_ref(task), &rep_options) {

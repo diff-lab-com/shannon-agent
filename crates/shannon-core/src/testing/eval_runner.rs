@@ -715,6 +715,9 @@ pub struct RunReport {
     pub dry_run: bool,
     /// Engine binary designation recorded for provenance ("" for dry-run).
     pub shannon_bin: String,
+    /// A/B arm marker: the experimental prompt directive in force, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directive: Option<String>,
     pub tasks_total: usize,
     pub tasks_passed: usize,
     pub tasks_failed: usize,
@@ -774,6 +777,7 @@ impl RunReport {
             "metrics_source": self.metrics_source,
             "app_version": self.app_version,
             "failure_rules_fingerprint": self.failure_rules_fingerprint,
+            "directive_present": self.directive.is_some(),
             "records": self.records.iter().map(TaskRunRecord::stable_view).collect::<Vec<_>>(),
         });
         serde_json::to_string_pretty(&body).expect("digest serialization")
@@ -929,6 +933,12 @@ pub struct EvalOptions {
     /// [`run_suite`] is this path → `SHANNON_EVAL_FAILURE_RULES` env → the
     /// embedded default table.
     pub failure_rules: Option<PathBuf>,
+    /// Experimental directive appended to every task prompt (A/B harness for
+    /// separating strategy differences from capability differences). `None`
+    /// leaves task prompts byte-identical to their TOML definitions; the
+    /// active value is stamped into the report's top-level `directive` field
+    /// so `eval-diff` and the dashboard can tell the arms apart.
+    pub instruction_directive: Option<String>,
 }
 
 impl Default for EvalOptions {
@@ -938,6 +948,7 @@ impl Default for EvalOptions {
             dry_run: true,
             out_dir_override: None,
             failure_rules: None,
+            instruction_directive: None,
         }
     }
 }
@@ -1024,6 +1035,7 @@ pub fn run_suite(
         metrics_source: primary_metrics_source(&records),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         failure_rules_fingerprint: rules.fingerprint().to_string(),
+        directive: options.instruction_directive.clone(),
         records,
     };
 
@@ -1260,6 +1272,7 @@ pub fn run_task(task: &EvalTask, options: &EvalOptions, run_dir: &Path) -> TaskR
             &run_dir.join(&task.id).join(L0_HOME_DIRNAME),
             limits.max_turns,
             limits.timeout_secs,
+            options.instruction_directive.as_deref(),
         )
     };
 
@@ -1550,11 +1563,18 @@ fn spawn_engine(
     l0_home: &Path,
     max_turns: u32,
     timeout_secs: u64,
+    directive: Option<&str>,
 ) -> ProducedStream {
+    // The directive rides at the END of the user prompt, clearly fenced, so
+    // the task text itself stays byte-stable across arms.
+    let prompt = match directive {
+        Some(d) => format!("{}\n\n【实验指令】{}", task.prompt, d),
+        None => task.prompt.clone(),
+    };
     let mut command = Command::new(bin);
     command
         .arg("--prompt")
-        .arg(&task.prompt)
+        .arg(&prompt)
         .arg("--output-format")
         .arg("json-stream")
         .arg("--max-turns")
@@ -2570,6 +2590,7 @@ input = { file_path = "meta.txt" }
             dry_run: true,
             out_dir_override: Some(out.to_path_buf()),
             failure_rules: None,
+            instruction_directive: None,
         }
     }
 
@@ -2735,6 +2756,7 @@ input = { file_path = "meta.txt" }
             dry_run: false,
             out_dir_override: Some(run_root.path().to_path_buf()),
             failure_rules: None,
+            instruction_directive: None,
         };
         let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
 
@@ -2789,6 +2811,7 @@ input = { file_path = "meta.txt" }
             dry_run: false,
             out_dir_override: Some(run_root.path().to_path_buf()),
             failure_rules: None,
+            instruction_directive: None,
         };
 
         let began = Instant::now();
@@ -2857,6 +2880,7 @@ input = { file_path = "meta.txt" }
             dry_run: false,
             out_dir_override: Some(run_root.path().to_path_buf()),
             failure_rules: None,
+            instruction_directive: None,
         };
         let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
         assert_eq!(report.records[0].status, RunStatus::SpawnError);
@@ -2916,6 +2940,7 @@ input = { file_path = "meta.txt" }
             dry_run: false,
             out_dir_override: Some(run_root.path().to_path_buf()),
             failure_rules: None,
+            instruction_directive: None,
         };
         let (report, run_dir) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
         let record = &report.records[0];

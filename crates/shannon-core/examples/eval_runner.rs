@@ -25,6 +25,7 @@ struct RunArgs {
     out_override: Option<PathBuf>,
     bin_path: Option<PathBuf>,
     rules: Option<PathBuf>,
+    directive: Option<String>,
     real: bool,
     list_only: bool,
 }
@@ -69,6 +70,7 @@ fn parse_run_args(raw: &[String]) -> Result<RunArgs, String> {
         out_override: None,
         bin_path: None,
         rules: None,
+        directive: None,
         real: false,
         list_only: false,
     };
@@ -112,6 +114,10 @@ fn parse_run_args(raw: &[String]) -> Result<RunArgs, String> {
             }
             "--rules" => {
                 args.rules = Some(PathBuf::from(value_at(i + 1)?));
+                i += 1;
+            }
+            "--directive" => {
+                args.directive = Some(value_at(i + 1)?.to_string());
                 i += 1;
             }
             "--real" => args.real = true,
@@ -192,6 +198,7 @@ fn cmd_run(args: RunArgs) -> ExitCode {
         dry_run: !args.real,
         out_dir_override: args.out_override.clone(),
         failure_rules: args.rules.clone(),
+        instruction_directive: args.directive.clone(),
     };
     if args.real && options.bin_path.is_none() {
         match resolve_bin(None) {

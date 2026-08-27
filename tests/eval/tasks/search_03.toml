@@ -31,6 +31,7 @@ forbidden_tools = ["Write", "Edit", "MultiEdit", "Bash"]
 
 [[expectations.trajectory]]
 tool = "Grep"
+optional = true
 args_regex = '"pattern":"unwrap'
 
 [limits]

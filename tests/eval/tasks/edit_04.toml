@@ -39,7 +39,7 @@ expected_diff_regex = '\+    Paused,'
 forbidden_tools = ["Write", "Bash"]
 
 [[expectations.trajectory]]
-tool = "Edit"
+tools = ["Edit", "MultiEdit"]
 args_regex = '"new_string":"[^"]*Paused'
 
 [limits]

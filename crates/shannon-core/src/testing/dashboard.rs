@@ -395,6 +395,7 @@ mod tests {
             })
             .collect();
         RunReport {
+            directive: None,
             run_id: run_id.to_string(),
             started_at_utc: format!(
                 "2026-08-2{}T00:00:00+00:00",

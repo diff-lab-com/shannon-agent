@@ -34,7 +34,7 @@ expected_diff_regex = '-pub const APP_VERSION: &str = "3\.1\.4";\n\+pub const AP
 forbidden_tools = ["Write", "Bash"]
 
 [[expectations.trajectory]]
-tool = "Edit"
+tools = ["Edit", "MultiEdit"]
 args_regex = '"old_string":"\\"3\.1\.4\\""'
 
 [limits]

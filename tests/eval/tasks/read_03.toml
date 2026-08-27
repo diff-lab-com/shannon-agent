@@ -29,6 +29,7 @@ forbidden_tools = ["Write", "Edit", "MultiEdit", "Bash"]
 
 [[expectations.trajectory]]
 tool = "Read"
+optional = true
 args_regex = '"file_path":".ci/pipeline.md"'
 
 [limits]

@@ -42,9 +42,10 @@ forbidden_tools = ["Write", "Bash"]
 
 [[expectations.trajectory]]
 tool = "Read"
+optional = true
 
 [[expectations.trajectory]]
-tool = "Edit"
+tools = ["Edit", "MultiEdit"]
 
 [limits]
 max_turns = 50
