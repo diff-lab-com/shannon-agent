@@ -411,6 +411,8 @@ impl SessionTee {
     /// `Started` QueryEvent, so the tee owns this boundary.
     pub fn record_turn_start(&mut self, query_id: Option<String>) {
         self.turn_open = true;
+        // §4.15 online signals: re-arm the per-turn takeover latch.
+        crate::signals::observe_turn_start();
         self.record_body(SessionEventBody::TurnStart(TurnStartPayload { query_id }));
     }
 
@@ -503,6 +505,10 @@ impl SessionTee {
             return;
         }
         self.turn_open = false;
+        // §4.15 online signals: every terminal close (completed/failed/
+        // interrupted/…) funnels through here, so this is the single
+        // counting point for turn denominators and interruption numerators.
+        crate::signals::observe_turn_end(reason);
         let usage = self.turn_usage.take().or_else(|| {
             self.bare_tokens.map(|tokens| TokenUsage {
                 input_tokens: 0,

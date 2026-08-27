@@ -8,6 +8,7 @@ mod crash_hook;
 mod loop_command;
 mod mcp_install;
 mod notifications;
+mod signals;
 mod trace;
 mod triggered_command;
 use shannon_commands::preset_utils::ConversationPreset;
@@ -745,6 +746,36 @@ enum Commands {
         #[command(subcommand)]
         command: ProvidersSubcommand,
     },
+
+    /// Record explicit session feedback (§4.15 anonymous aggregate signal).
+    ///
+    /// Only a count travels anywhere: `up`/`down` increments the local
+    /// analytics projection and — solely when upload is opted in via
+    /// `SHANNON_SIGNALS_UPLOAD` + `SHANNON_SIGNALS_ENDPOINT` — queues the
+    /// aggregate payload. Free-text comments are not accepted by design.
+    Feedback {
+        /// Direction: up | down (aliases +1/-1, 👍/👎)
+        direction: String,
+    },
+
+    /// Inspect or flush the §4.15 aggregate usage counters.
+    ///
+    /// Counters accumulate in memory and persist to
+    /// `<home>/analytics/counters.jsonl` on flush; nothing is ever sent
+    /// unless `SHANNON_SIGNALS_UPLOAD` opts in.
+    Signals {
+        #[command(subcommand)]
+        command: SignalsSubcommand,
+    },
+}
+
+/// Subcommands for `shannon signals`.
+#[derive(Subcommand, Debug)]
+enum SignalsSubcommand {
+    /// Print the current in-memory snapshot plus effective switch state.
+    Status,
+    /// Flush counters to the local projection and queue upload when opted in.
+    Push,
 }
 
 /// Subcommands for `shannon providers <add|remove>`.
@@ -4159,6 +4190,8 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         | Some(Commands::Doctor { .. })
         | Some(Commands::ListProviders { .. })
         | Some(Commands::Providers { .. })
+        | Some(Commands::Feedback { .. })
+        | Some(Commands::Signals { .. })
         | Some(Commands::Trace { .. }) => CliConfig::default(),
     };
 
@@ -4503,7 +4536,32 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 }
             }
         },
+
+        Some(Commands::Feedback { direction }) => match signals::run_feedback(&direction) {
+            Ok(message) => println!("{message}"),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        },
+
+        Some(Commands::Signals { command }) => match command {
+            SignalsSubcommand::Status => println!("{}", signals::status_report()),
+            SignalsSubcommand::Push => match signals::push_now() {
+                Ok(message) => println!("{message}"),
+                Err(e) => {
+                    eprintln!("signals push failed: {e}");
+                    std::process::exit(1);
+                }
+            },
+        },
     }
+
+    // §4.15 online signals: best-effort aggregate-counter flush so every CLI
+    // exit path (REPL included — it runs inside this process) persists its
+    // counters locally. Upload only happens when opted in via env switches;
+    // failures are logged inside and never fail the command.
+    shannon_core::signals::try_flush_default();
 
     Ok(())
 }

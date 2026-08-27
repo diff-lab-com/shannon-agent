@@ -84,3 +84,57 @@ Tools are auto-discovered via `tools/list`.
 | `auto-allow` | Auto-approve everything except critical |
 
 Set via config or `SHANNON_PERMISSION_PROFILE` env var.
+
+## Usage Signals (Opt-in Analytics)
+
+Shannon can report **anonymous aggregate counters** about product usage
+(§4.15). The feature ships **disabled** and, even when enabled, transmits
+counts only — never conversation content, tool arguments, file paths,
+repository names, or session ids.
+
+### Switches
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SHANNON_SIGNALS_UPLOAD` | Enable outbound posting (`1`/`true`) | unset = off |
+| `SHANNON_SIGNALS_ENDPOINT` | Target URL receiving the JSON payload | unset |
+| `SHANNON_SIGNALS_SECRET` | Optional HMAC-SHA256 secret (`X-Shannon-Signature` header) | unset |
+
+With all three unset the counters live only on your disk: every CLI exit
+appends one aggregate line to `<home>/analytics/counters.jsonl`
+(`$SHANNON_HOME` respected, default `~/.shannon`). No network client is ever
+constructed while the switch is off.
+
+### Data items (complete list)
+
+| Counter | Meaning |
+|---------|---------|
+| `feedback_up` / `feedback_down` | `shannon feedback up|down` counts |
+| `turns_ended` | turns reaching any terminal close |
+| `turns_interrupted` | turns closed as interrupted (interruption rate) |
+| `turns_user_takeover` | turns where a human answered a permission prompt (takeover rate) |
+| `permission_prompts` | permission asks surfaced |
+| `rewind_conversation` / `rewind_code` / `rewind_both` / `rewind_file` | `/rewind` usage by kind |
+
+The wire payload adds only four metadata fields:
+`schema`, `app_version`, `generated_at_utc`, `period_day_utc`.
+
+### Commands
+
+```bash
+shannon feedback up      # +1 to feedback_up, flush per switches
+shannon signals status   # print counters, rates and switch state (local only)
+shannon signals push     # flush now; upload only when opted in
+```
+
+### Version trend dashboard
+
+```bash
+cargo run -p shannon-core --example eval_runner    # produce runs/
+cargo run -p shannon-core --example signals_dashboard
+# open $SHANNON_HOME/eval/dashboard.html
+```
+
+The board is a static, offline page (inline CSS; no scripts, no external
+references): a version×metric comparison matrix plus the chronological run
+sequence over `runs/<run-id>/report.json`.

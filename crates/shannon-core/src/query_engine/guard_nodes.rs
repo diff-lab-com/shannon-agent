@@ -199,6 +199,10 @@ pub fn emit_decision(
     mode: &str,
     elapsed_ms: u128,
 ) {
+    // §4.15 online signals: `ask` counts a surfaced prompt; a concrete
+    // allow/deny labeled `USER` marks a human-taken (manual takeover)
+    // decision. Rule-based outcomes stay uncounted.
+    crate::signals::observe_permission_decision(decision, Some(mode));
     bus.dispatch(
         permission_decision_event(shannon_types::session_event::PermissionDecisionPayload {
             tool_name: Some(tool_name.to_string()),
