@@ -770,6 +770,7 @@ mod tests {
                 LlmProvider::Zhipu => "zhipu",
                 LlmProvider::ZhipuInternational => "zhipu_international",
                 LlmProvider::ZhipuCoding => "zhipu_coding",
+                LlmProvider::ZhipuCodingPlan => "zhipu_coding_plan",
                 LlmProvider::Moonshot => "moonshot",
                 LlmProvider::Minimax => "minimax",
                 LlmProvider::DashScope => "dashscope",
