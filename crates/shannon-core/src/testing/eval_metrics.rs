@@ -204,6 +204,100 @@ pub fn missing_fields(metrics: &TaskMetrics) -> Vec<&'static str> {
         .collect()
 }
 
+// ── Metadata anchor (W1 §4①) ───────────────────────────────────────────
+
+/// The tally-only bucket for failed rows no rule fired on (design §6 阶段 1).
+/// Deliberately NOT a [`FAILURE_CLASSES`] member: the rule table cannot claim
+/// it, so reports record the residue instead of pretending a class exists.
+pub const UNCLASSIFIED_CLASS: &str = "unclassified";
+
+/// Model id stamped into anchors for dry-run rehearsals (§4①): the stub never
+/// talks to a provider, so the anchor is a constant marker, not a model name.
+pub const DRY_RUN_ANCHOR_MODEL: &str = "dry-run-stub";
+
+/// Metadata anchor: which model/provider/profile a run executed under.
+/// `None` fields mean "honestly unknown" (e.g. logs written before the
+/// request-header tee existed) and are never guessed from elsewhere.
+///
+/// This is the W1 diff-protocol input: `eval-diff` compares anchors before
+/// any stability/regression verdict and refuses to issue one when they
+/// disagree (ATTRIBUTE-SPLIT), so a model swap can never masquerade as a
+/// code-change regression.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunAnchor {
+    /// Model id as the provider saw it (`request/header` `wire_body.model`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    /// Provider id when the engine recorded one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// sha256 (16 hex) over the request header's `config_snapshot` — the
+    /// closest honest witness of the profile/config in force at run time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_digest: Option<String>,
+}
+
+impl RunAnchor {
+    /// True when every dimension is unknown.
+    pub fn is_unknown(&self) -> bool {
+        self.model_id.is_none() && self.provider.is_none() && self.profile_digest.is_none()
+    }
+}
+
+/// Extract a run anchor from one task's L0 events. The first
+/// `request/header` wins — its `wire_body.model` is the wire product the
+/// provider actually received, the most honest model observation — falling
+/// back to the `session/start` banner for logs written without a header.
+pub fn extract_anchor(events: &[SessionEvent]) -> RunAnchor {
+    let mut anchor = RunAnchor::default();
+    for event in events {
+        match &event.body {
+            SessionEventBody::SessionStart(start) => {
+                if anchor.model_id.is_none() {
+                    anchor.model_id = Some(start.model.clone());
+                }
+                if anchor.provider.is_none() {
+                    anchor.provider = start.provider.clone();
+                }
+            }
+            SessionEventBody::RequestHeader(header) => {
+                anchor.model_id = Some(
+                    header
+                        .wire_body
+                        .as_ref()
+                        .and_then(|body| body.get("model"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| header.model.clone()),
+                );
+                anchor.provider = header.provider.clone();
+                anchor.profile_digest = snapshot_fingerprint(&header.config_snapshot);
+                // The opening header decides; later reason="change" re-headers
+                // describe mid-run switches, not what the run started under.
+                break;
+            }
+            _ => {}
+        }
+    }
+    anchor
+}
+
+/// sha256 (16 hex) over a header config snapshot; null/empty snapshots stay
+/// unknown rather than hashing into a constant that would masquerade as
+/// provenance.
+fn snapshot_fingerprint(snapshot: &serde_json::Value) -> Option<String> {
+    match snapshot {
+        serde_json::Value::Null => None,
+        value => {
+            let rendered = value.to_string();
+            (rendered != "{}").then(|| {
+                let digest = Sha256::digest(rendered.as_bytes());
+                hex::encode(&digest[..8])
+            })
+        }
+    }
+}
+
 // ── Signature hashing ──────────────────────────────────────────────────
 
 /// Canonical argument encoding: parsed JSON re-serialized with recursively
@@ -809,9 +903,12 @@ mod tests {
     use super::*;
     use crate::session_log::SessionLogWriter;
     use shannon_types::session_event::{
-        ErrorPayload, SurfaceReplacePayload, TodoSnapshotEntry, TodoWritePayload, ToolCallPayload,
+        ErrorPayload, RequestHeaderPayload, SessionStartPayload, SurfaceReplacePayload,
+        TodoSnapshotEntry, TodoWritePayload, ToolCallPayload, UserMessagePayload,
     };
     use tempfile::TempDir;
+
+    use serde_json::Value;
 
     fn sig(tool: &str, args: &str) -> String {
         call_signature(tool, args)
@@ -1378,5 +1475,142 @@ mod tests {
                 "{field} must serialize even at defaults"
             );
         }
+    }
+
+    // ── W1 §4① metadata anchor ────────────────────────────────────────
+
+    fn header_event(
+        model: &str,
+        provider: Option<&str>,
+        snapshot: Value,
+        wire_model: &str,
+    ) -> SessionEventBody {
+        SessionEventBody::RequestHeader(RequestHeaderPayload {
+            model: model.into(),
+            provider: provider.map(str::to_owned),
+            adapter_defaults: Value::Null,
+            system: None,
+            tools: Vec::new(),
+            config_snapshot: snapshot,
+            reason: Some("initial".into()),
+            wire_body: Some(serde_json::json!({"model": wire_model, "messages": []})),
+        })
+    }
+
+    #[test]
+    fn extract_anchor_prefers_wire_body_and_digests_config_snapshot() {
+        let events = vec![SessionEvent::new(
+            0,
+            1,
+            "s",
+            1,
+            header_event(
+                "declared-model",
+                Some("anthropic"),
+                serde_json::json!({"profile": "full_auto"}),
+                "wire-model",
+            ),
+        )];
+
+        let anchor = extract_anchor(&events);
+        assert_eq!(
+            anchor.model_id.as_deref(),
+            Some("wire-model"),
+            "wire_body.model is what the provider actually received"
+        );
+        assert_eq!(anchor.provider.as_deref(), Some("anthropic"));
+        let digest = anchor
+            .profile_digest
+            .clone()
+            .expect("config snapshot digested");
+        assert_eq!(digest.len(), 16, "fingerprint style: 16 hex chars");
+
+        // Deterministic, and sensitive to the snapshot content.
+        assert_eq!(anchor, extract_anchor(&events));
+        let mut other_snapshot = events;
+        let SessionEventBody::RequestHeader(header) = &mut other_snapshot[0].body else {
+            unreachable!("header event constructed");
+        };
+        header.config_snapshot = serde_json::json!({"profile": "read_only"});
+        let reanchored = extract_anchor(&other_snapshot);
+        assert_ne!(
+            anchor.profile_digest, reanchored.profile_digest,
+            "a different config in force must digest differently"
+        );
+    }
+
+    #[test]
+    fn extract_anchor_falls_back_to_session_start_banner() {
+        let banner = SessionEvent::new(
+            0,
+            1,
+            "s",
+            1,
+            SessionEventBody::SessionStart(SessionStartPayload {
+                model: "banner-model".into(),
+                provider: Some("mock".into()),
+                cwd: None,
+                app_version: None,
+            }),
+        );
+
+        // Banner only: model+provider come from session/start, no digest.
+        let anchor = extract_anchor(std::slice::from_ref(&banner));
+        assert_eq!(anchor.model_id.as_deref(), Some("banner-model"));
+        assert_eq!(anchor.provider.as_deref(), Some("mock"));
+        assert!(anchor.profile_digest.is_none());
+
+        // A header without wire_body: the declared header model wins over the
+        // banner, and a null config snapshot stays unknown.
+        let header_no_wire_model = SessionEvent::new(
+            1,
+            2,
+            "s",
+            1,
+            SessionEventBody::RequestHeader(RequestHeaderPayload {
+                model: "header-model".into(),
+                provider: Some("mock".into()),
+                adapter_defaults: Value::Null,
+                system: None,
+                tools: Vec::new(),
+                config_snapshot: Value::Null,
+                reason: Some("initial".into()),
+                wire_body: Some(serde_json::json!({"messages": []})),
+            }),
+        );
+        let anchor = extract_anchor(&[banner, header_no_wire_model]);
+        assert_eq!(anchor.model_id.as_deref(), Some("header-model"));
+        assert_eq!(anchor.provider.as_deref(), Some("mock"));
+        assert!(
+            anchor.profile_digest.is_none(),
+            "null snapshot must stay unknown, not hash to a constant"
+        );
+    }
+
+    #[test]
+    fn extract_anchor_without_anchors_stays_honestly_unknown() {
+        let anchor = extract_anchor(&[]);
+        assert!(anchor.is_unknown());
+
+        let no_metadata = vec![SessionEvent::new(
+            0,
+            1,
+            "s",
+            1,
+            SessionEventBody::UserMessage(UserMessagePayload {
+                source: UserMessagePayload::SOURCE_USER.into(),
+                content: "task".into(),
+            }),
+        )];
+        assert!(extract_anchor(&no_metadata).is_unknown());
+    }
+
+    #[test]
+    fn unclassified_is_a_tally_bucket_not_a_rule_class() {
+        assert_eq!(UNCLASSIFIED_CLASS, "unclassified");
+        assert!(
+            !FAILURE_CLASSES.contains(&UNCLASSIFIED_CLASS),
+            "the residue bucket must never be claimable by a rule"
+        );
     }
 }

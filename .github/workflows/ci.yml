@@ -61,6 +61,41 @@ jobs:
         # the steps above; this only builds the doctest binaries.
         run: cargo test --workspace --doc
 
+  eval-dry-run:
+    # W1 §7① PR quick gate (design: docs/plans/2026-08-28-eval-system-design.md):
+    # the zero-API-key dry-run rehearsal of the L1 suite (`just eval`) plus
+    # the eval-harness unit tests. This gates the EVAL ASSETS themselves —
+    # task TOMLs parse/validate, the runner + assertion vocabulary + rule
+    # table don't regress, dry_run stubs stay in sync. Real-model capability
+    # is deliberately NEVER a PR gate (cost, variance, flakiness).
+    # Standalone on purpose: no `needs:` coupling and a bounded timeout, so
+    # a GHA cold-cache stall (known runner flake) can be retried in
+    # isolation without re-running the rest of CI.
+    name: Eval Dry-Run Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+      - name: Install just
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: just
+      - name: Install nextest
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-nextest
+      - name: Eval dry-run suite (no API key)
+        # `just eval` = cargo run -p shannon-core --example eval_runner
+        # (dry-run stub executor over the full tests/eval/tasks suite;
+        # exits non-zero when any rehearsal fails).
+        run: just eval
+      - name: Eval harness tests
+        run: cargo nextest run -p shannon-core -E 'test(eval)'
+
   vscode:
     name: VS Code Extension
     runs-on: ubuntu-latest

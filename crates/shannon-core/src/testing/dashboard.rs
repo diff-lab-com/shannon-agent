@@ -333,7 +333,7 @@ pub fn generate(runs_root: &Path, out_path: &Path) -> Result<(usize, usize), Eva
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::testing::eval_metrics::{MetricSource, TaskMetrics};
+    use crate::testing::eval_metrics::{MetricSource, RunAnchor, TaskMetrics};
     use crate::testing::eval_runner::{RecordedRuleOutcome, RunStatus, TaskRunRecord};
 
     /// Build a minimal persisted-looking report. Timestamps encode the
@@ -349,6 +349,7 @@ mod tests {
             .map(|i| TaskRunRecord {
                 id: format!("task_{i}"),
                 tier: "edit".to_string(),
+                horizon: "short".to_string(),
                 status: if failed_class.is_some() && i == 0 {
                     RunStatus::Failed
                 } else {
@@ -390,6 +391,8 @@ mod tests {
                     None
                 },
                 failure_evidence: vec![],
+                over_expected: None,
+                anchor: RunAnchor::default(),
                 workspace: PathBuf::from("/tmp"),
                 task_file: PathBuf::from("/tmp/task.toml"),
             })
@@ -403,6 +406,7 @@ mod tests {
             ),
             dry_run: false,
             shannon_bin: "shannon".to_string(),
+            anchors: RunAnchor::default(),
             tasks_total: total,
             tasks_passed: passed,
             tasks_failed: total - passed,
