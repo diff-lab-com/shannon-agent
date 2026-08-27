@@ -18,9 +18,11 @@
 //! - **Truncation**: single-event payloads over [`MAX_EVENT_BYTES`] keep the
 //!   first [`TRUNCATION_HEAD_BYTES`] plus a `[shannon:truncated …]` marker
 //!   carrying the original length and sha256 of the full content.
-//! - **Minimal redaction** (full policy in plan §4.14): well-known token
-//!   prefixes (`sk-`, `ghp_`, `xoxb-`, …) and the values of env vars whose
-//!   name suggests a secret are masked in every logged string.
+//! - **Redaction at write time** (§4.14): every string passes through one
+//!   immutable [`RedactionPolicy`] snapshot — built-in token prefixes,
+//!   user-configured prefixes/regexes/values from
+//!   `<shannon-home>/redaction.toml`, and env-secret values. Disk is clean;
+//!   no post-hoc scrubbing exists or is needed.
 //!
 //! ## Switch and storage
 //!
@@ -32,8 +34,6 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use once_cell::sync::Lazy;
-use regex::Regex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use shannon_types::session_event::{
@@ -42,8 +42,14 @@ use shannon_types::session_event::{
 };
 use tracing::warn;
 
+use super::redaction::RedactionPolicy;
 use super::{SessionLogWriter, query_event_to_session_body, token_usage_from_event};
 use crate::QueryEvent;
+
+// Compat surface: the masking entry points moved to `super::redaction`;
+// re-exported so `session_log::tee::{redact_string, redact_value,
+// redact_with_secrets}` keeps resolving for any caller.
+pub use super::redaction::{redact_string, redact_value, redact_with_secrets};
 
 /// Payloads larger than this are truncated (request headers exempt).
 pub const MAX_EVENT_BYTES: usize = 256 * 1024;
@@ -54,71 +60,9 @@ pub const TRUNCATION_HEAD_BYTES: usize = 64 * 1024;
 pub const SWITCH_ENV: &str = "SHANNON_SESSION_LOG";
 
 // ============================================================================
-// Minimal redaction (plan §4.14 owns the full policy)
+// Redaction (§4.14) — the policy lives in [`super::redaction`]; the tee
+// snapshots one immutable instance per query at open time.
 // ============================================================================
-
-/// Token shapes masked wherever they appear: provider keys, GitHub PATs,
-/// Slack tokens, GitLab PATs.
-static SECRET_PREFIX_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(concat!(
-        r"(sk-[A-Za-z0-9_-]{8,}",
-        r"|ghp_[A-Za-z0-9]{8,}",
-        r"|github_pat_[A-Za-z0-9_]{8,}",
-        r"|xox[abp]-[A-Za-z0-9-]{8,}",
-        r"|glpat-[A-Za-z0-9_-]{8,})",
-    ))
-    .expect("static redaction regex compiles")
-});
-
-/// Values of env vars whose name suggests a secret (KEY/SECRET/TOKEN/
-/// PASSWORD). Snapshotted once; a value must be at least 8 chars so trivial
-/// values (e.g. "1") do not shred ordinary text.
-static ENV_SECRET_VALUES: Lazy<Vec<String>> = Lazy::new(|| {
-    let mut values = Vec::new();
-    for (key, value) in std::env::vars() {
-        let upper = key.to_uppercase();
-        let looks_secret = upper.contains("KEY")
-            || upper.contains("SECRET")
-            || upper.contains("TOKEN")
-            || upper.contains("PASSWORD");
-        if looks_secret && value.len() >= 8 && value != "[REDACTED]" {
-            values.push(value);
-        }
-    }
-    values
-});
-
-/// Mask secret-shaped tokens and known env secret values in `text`.
-pub fn redact_string(text: &str) -> String {
-    redact_with_secrets(text, &ENV_SECRET_VALUES)
-}
-
-/// Core redaction: mask token-shaped prefixes plus each value in `secrets`.
-pub fn redact_with_secrets(text: &str, secrets: &[String]) -> String {
-    let mut out = SECRET_PREFIX_REGEX
-        .replace_all(text, "[REDACTED]")
-        .into_owned();
-    for secret in secrets {
-        if out.contains(secret.as_str()) {
-            out = out.replace(secret.as_str(), "[REDACTED]");
-        }
-    }
-    out
-}
-
-/// Recursively redact every string inside a JSON value.
-pub fn redact_value(value: &Value) -> Value {
-    match value {
-        Value::String(s) => Value::String(redact_string(s)),
-        Value::Array(items) => Value::Array(items.iter().map(redact_value).collect()),
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .map(|(k, v)| (k.clone(), redact_value(v)))
-                .collect(),
-        ),
-        other => other.clone(),
-    }
-}
 
 // ============================================================================
 // Truncation
@@ -283,6 +227,10 @@ fn tools_from_wire(wire: &Value) -> Vec<ToolManifestEntry> {
 /// `process_query` call; all methods are infallible.
 pub struct SessionTee {
     writer: Option<SessionLogWriter>,
+    /// Immutable masking rules captured at open time (`redaction.toml` +
+    /// env snapshot). Write-time redaction sees one consistent policy even
+    /// if the file changes mid-turn.
+    policy: Arc<RedactionPolicy>,
     /// Usage triple accumulated from `Usage` events this turn, folded into
     /// `turn/end` (plan §4.2: tokens / cost / cache triple).
     turn_usage: Option<TokenUsage>,
@@ -315,6 +263,18 @@ impl SessionTee {
         Self::open_opt(session_id, model, provider, Some(base_dir))
     }
 
+    /// Open under an explicit base directory and policy — the deterministic
+    /// seam for hosts/tests that must not depend on `~/.shannon`.
+    pub fn open_in_dir_with_policy(
+        base_dir: &Path,
+        session_id: &str,
+        model: &str,
+        provider: Option<&str>,
+        policy: Arc<RedactionPolicy>,
+    ) -> Self {
+        Self::open_with_writer(session_id, model, provider, Some(base_dir), false, policy)
+    }
+
     /// Open the tee writing to `<container>/<session_id>/events.jsonl` where
     /// `container` is the sessions directory itself (§4.6 L0 layout). The
     /// engine uses this so log location always matches the `StateManager`
@@ -325,7 +285,26 @@ impl SessionTee {
         model: &str,
         provider: Option<&str>,
     ) -> Self {
-        Self::open_with_writer(session_id, model, provider, Some(container), true)
+        Self::open_in_container_with_policy(container, session_id, model, provider, None)
+    }
+
+    /// Open under an explicit container and policy. `None` resolves the
+    /// default [`RedactionPolicy`] (`redaction.toml` + env snapshot).
+    pub fn open_in_container_with_policy(
+        container: &Path,
+        session_id: &str,
+        model: &str,
+        provider: Option<&str>,
+        policy: Option<Arc<RedactionPolicy>>,
+    ) -> Self {
+        Self::open_with_writer(
+            session_id,
+            model,
+            provider,
+            Some(container),
+            true,
+            policy.unwrap_or_else(RedactionPolicy::resolve),
+        )
     }
 
     fn open_opt(
@@ -334,7 +313,14 @@ impl SessionTee {
         provider: Option<&str>,
         base_dir: Option<&Path>,
     ) -> Self {
-        Self::open_with_writer(session_id, model, provider, base_dir, false)
+        Self::open_with_writer(
+            session_id,
+            model,
+            provider,
+            base_dir,
+            false,
+            RedactionPolicy::resolve(),
+        )
     }
 
     fn open_with_writer(
@@ -343,6 +329,7 @@ impl SessionTee {
         provider: Option<&str>,
         base_dir: Option<&Path>,
         container_layout: bool,
+        policy: Arc<RedactionPolicy>,
     ) -> Self {
         if disabled_by_env() {
             return Self::disabled();
@@ -368,6 +355,7 @@ impl SessionTee {
                 }
                 Self {
                     writer: Some(writer),
+                    policy,
                     turn_usage: None,
                     bare_tokens: None,
                     turn_open: false,
@@ -386,6 +374,7 @@ impl SessionTee {
     fn disabled() -> Self {
         Self {
             writer: None,
+            policy: Arc::new(RedactionPolicy::default()),
             turn_usage: None,
             bare_tokens: None,
             turn_open: false,
@@ -403,7 +392,7 @@ impl SessionTee {
     pub fn record_user_message(&mut self, content: &str) {
         self.record_body(SessionEventBody::UserMessage(UserMessagePayload {
             source: UserMessagePayload::SOURCE_USER.into(),
-            content: redact_string(content),
+            content: self.policy.redact_str(content),
         }));
     }
 
@@ -538,24 +527,24 @@ impl SessionTee {
             model: model.to_string(),
             provider: provider.map(String::from),
             adapter_defaults: adapter_defaults_from_wire(wire_body),
-            system: system_from_wire(wire_body).map(|s| redact_string(&s)),
+            system: system_from_wire(wire_body).map(|s| self.policy.redact_str(&s)),
             tools: tools_from_wire(wire_body),
-            config_snapshot: redact_value(&config_snapshot),
+            config_snapshot: self.policy.redact_value(&config_snapshot),
             reason: Some(reason.into()),
             // The exact wire product — never truncated, so the log alone can
             // byte-reconstruct this request.
-            wire_body: Some(redact_value(wire_body)),
+            wire_body: Some(self.policy.redact_value(wire_body)),
         };
         self.record_body(SessionEventBody::RequestHeader(payload));
     }
 
     /// Redact, enforce the size limit, and append. Infallible by design.
     fn record_body(&mut self, body: SessionEventBody) {
+        // Redact first (immutable borrow), then hand off to the writer.
+        let body = enforce_size_limit(self.redact_body(body));
         let Some(writer) = self.writer.as_mut() else {
             return;
         };
-        let body = redact_body(body);
-        let body = enforce_size_limit(body);
         writer.record(body);
     }
 
@@ -587,46 +576,50 @@ impl Drop for SessionTee {
     }
 }
 
-/// Apply minimal redaction to every string field of a body.
-fn redact_body(body: SessionEventBody) -> SessionEventBody {
-    match body {
-        SessionEventBody::UserMessage(mut p) => {
-            p.content = redact_string(&p.content);
-            SessionEventBody::UserMessage(p)
+/// Apply the tee's policy to every string field of a body.
+impl SessionTee {
+    fn redact_body(&self, body: SessionEventBody) -> SessionEventBody {
+        match body {
+            SessionEventBody::UserMessage(mut p) => {
+                p.content = self.policy.redact_str(&p.content);
+                SessionEventBody::UserMessage(p)
+            }
+            SessionEventBody::AssistantChunk(mut p) => {
+                p.delta = self.policy.redact_str(&p.delta);
+                SessionEventBody::AssistantChunk(p)
+            }
+            SessionEventBody::AssistantMessage(mut p) => {
+                p.content = self.policy.redact_str(&p.content);
+                SessionEventBody::AssistantMessage(p)
+            }
+            SessionEventBody::ToolCall(mut p) => {
+                p.arguments = self.policy.redact_str(&p.arguments);
+                SessionEventBody::ToolCall(p)
+            }
+            SessionEventBody::ToolResult(mut p) => {
+                p.output = self.policy.redact_str(&p.output);
+                p.meta = self.policy.redact_value(&p.meta);
+                SessionEventBody::ToolResult(p)
+            }
+            SessionEventBody::TurnEnd(mut p) => {
+                p.error = p.error.as_ref().map(|e| self.policy.redact_str(e));
+                SessionEventBody::TurnEnd(p)
+            }
+            SessionEventBody::RequestHeader(mut p) => {
+                p.system = p.system.as_ref().map(|s| self.policy.redact_str(s));
+                p.config_snapshot = self.policy.redact_value(&p.config_snapshot);
+                if let Some(wire) = p.wire_body.as_ref() {
+                    p.wire_body = Some(self.policy.redact_value(wire));
+                }
+                SessionEventBody::RequestHeader(p)
+            }
+            SessionEventBody::Error(mut p) => {
+                p.message = self.policy.redact_str(&p.message);
+                p.detail = p.detail.as_ref().map(|d| self.policy.redact_value(d));
+                SessionEventBody::Error(p)
+            }
+            other => other,
         }
-        SessionEventBody::AssistantChunk(mut p) => {
-            p.delta = redact_string(&p.delta);
-            SessionEventBody::AssistantChunk(p)
-        }
-        SessionEventBody::AssistantMessage(mut p) => {
-            p.content = redact_string(&p.content);
-            SessionEventBody::AssistantMessage(p)
-        }
-        SessionEventBody::ToolCall(mut p) => {
-            p.arguments = redact_string(&p.arguments);
-            SessionEventBody::ToolCall(p)
-        }
-        SessionEventBody::ToolResult(mut p) => {
-            p.output = redact_string(&p.output);
-            p.meta = redact_value(&p.meta);
-            SessionEventBody::ToolResult(p)
-        }
-        SessionEventBody::TurnEnd(mut p) => {
-            p.error = p.error.as_ref().map(|e| redact_string(e));
-            SessionEventBody::TurnEnd(p)
-        }
-        SessionEventBody::RequestHeader(mut p) => {
-            p.system = p.system.as_ref().map(|s| redact_string(s));
-            p.config_snapshot = redact_value(&p.config_snapshot);
-            p.wire_body = p.wire_body.as_ref().map(redact_value);
-            SessionEventBody::RequestHeader(p)
-        }
-        SessionEventBody::Error(mut p) => {
-            p.message = redact_string(&p.message);
-            p.detail = p.detail.as_ref().map(redact_value);
-            SessionEventBody::Error(p)
-        }
-        other => other,
     }
 }
 
@@ -1069,8 +1062,12 @@ mod tests {
 
     #[test]
     fn test_redaction_masks_token_prefixes_and_env_values() {
+        // Explicit env-only policy (not the process-wide snapshot): keeps
+        // the assertion deterministic regardless of any local
+        // `~/.shannon/redaction.toml`.
+        let policy = RedactionPolicy::capture_env_only();
         let text = "key sk-ant-abc123456789 and pat ghp_abcdefgh12345678 slack xoxb-12345678-abcdefg plain text";
-        let redacted = redact_string(text);
+        let redacted = policy.redact_str(text);
         assert!(!redacted.contains("sk-ant-abc123456789"));
         assert!(!redacted.contains("ghp_abcdefgh12345678"));
         assert!(!redacted.contains("xoxb-12345678-abcdefg"));
@@ -1083,9 +1080,34 @@ mod tests {
             super::redact_with_secrets("curl -H auth:super-secret-value-42", &[secret.to_string()]);
         assert_eq!(out, "curl -H auth:[REDACTED]");
 
-        // Recursive value redaction.
+        // Recursive value redaction through the same policy.
         let value = json!({"a": ["sk-ant-abcdefghijk"], "b": 3});
-        assert_eq!(redact_value(&value), json!({"a": ["[REDACTED]"], "b": 3}));
+        assert_eq!(
+            policy.redact_value(&value),
+            json!({"a": ["[REDACTED]"], "b": 3})
+        );
+    }
+
+    #[test]
+    fn test_policy_file_changes_what_a_tee_writes() {
+        let dir = TempDir::new().expect("tempdir");
+        let config = dir.path().join("redaction.toml");
+        std::fs::write(&config, "[values]\nsecrets = [\"plain-internal-marker\"]\n")
+            .expect("write toml");
+        let policy = Arc::new(RedactionPolicy::load(&config));
+        {
+            let mut tee =
+                SessionTee::open_in_dir_with_policy(dir.path(), "sess-pol", "m", None, policy);
+            tee.record_user_message("leak plain-internal-marker here");
+            tee.close();
+        }
+        let path = super::super::session_events_path(dir.path(), "sess-pol");
+        let raw = std::fs::read_to_string(path).expect("read events");
+        assert!(
+            !raw.contains("plain-internal-marker"),
+            "value masked on disk"
+        );
+        assert!(raw.contains("[REDACTED]"));
     }
 
     #[test]

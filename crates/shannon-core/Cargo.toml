@@ -112,6 +112,9 @@ croner = "3.0"
 # v7 matches what shannon-ui uses for the SourceWatcher; we keep them
 # aligned to avoid two copies of differing notify ABI.
 notify = { version = "7", features = ["macos_kqueue"] }
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio", "testing"] }
+opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
 
 [features]
 default = []

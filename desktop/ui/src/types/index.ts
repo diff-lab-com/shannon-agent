@@ -966,3 +966,49 @@ export interface SkillProposal {
 export interface SkillProposalCountPayload {
   pending_count: number
 }
+
+// ---------------------------------------------------------------------------
+// Turn Timeline (§4.14) — projection of a session's L0 event log
+// ---------------------------------------------------------------------------
+
+/** One tool execution inside a timeline turn (waterfall row). */
+export interface TimelineToolEntry {
+  tool_use_id: string
+  tool_name: string
+  start_ts_ns: number
+  end_ts_ns: number
+  duration_ms?: number | null
+  is_error: boolean
+}
+
+/** One user-visible turn with its tools and usage. */
+export interface TimelineTurn {
+  turn: number
+  start_ts_ns: number
+  end_ts_ns: number
+  reason?: string | null
+  error?: string | null
+  input_tokens: number
+  output_tokens: number
+  cache_creation_tokens: number
+  cache_read_tokens: number
+  cost_usd?: number | null
+  tools: TimelineToolEntry[]
+}
+
+/** One cumulative sample on the token/cost curve (at each turn/end). */
+export interface TimelineCumulativePoint {
+  ts_ns: number
+  output_tokens_total: number
+  cost_total_usd?: number | null
+}
+
+/** The whole Turn Timeline for one session (`trace_timeline` command). */
+export interface TurnTimeline {
+  session_id: string
+  model?: string | null
+  started_ts_ns: number
+  ended_ts_ns: number
+  turns: TimelineTurn[]
+  cumulative: TimelineCumulativePoint[]
+}

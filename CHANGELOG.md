@@ -2,9 +2,50 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
+## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
+
+### Added
+
+- **OTLP telemetry bridge** (`shannon-core::telemetry`): `telemetry.rs`
+  rewritten from atomic counters into an L0→OpenTelemetry bridge. A pure
+  `build_span_tree` folds a session's events into the
+  `session → turn → tool` span hierarchy (explicit envelope
+  `span_id`/`parent_span_id` win over structural ids; interrupted tool
+  calls still render), and analytics-projection totals feed OTel counters.
+  Traces go out via OTLP gRPC (`opentelemetry-otlp`, batch processor =
+  background delivery); metrics export interval comes from the existing
+  config fields — previously dead `endpoint` / `trace_export` /
+  `metrics_export` are now wired, and `SHANNON_TELEMETRY` keeps its opt-in
+  NOOP-by-default contract (nothing is constructed when off; sinks degrade
+  instead of failing on unreachable endpoints). An in-memory receiver test
+  asserts the exported span tree shape end-to-end.
+- **Full RedactionPolicy** (`shannon-core/src/session_log/redaction.rs`),
+  replacing the §4.2 minimal mask: built-in token prefixes (unchanged,
+  fail-closed) + user extra prefixes / regexes / exact values loaded from
+  `~/.shannon/redaction.toml` (override path: `SHANNON_REDACTION_TOML`) +
+  env-secret value snapshot. Each `SessionTee` captures one immutable
+  policy snapshot per query — masking stays strictly write-time, disk stays
+  clean; an acceptance test scans a written log for injected plaintext.
+- **Desktop Turn Timeline**: new `trace_timeline(session_id)` Tauri command
+  serving `project_turn_timeline(events)` — the per-session L0 projection
+  with turn windows, tool waterfall rows (paired call→result with measured
+  durations, interrupted calls marked), and the token/cost cumulative curve.
+  The `/timeline/:id` panel renders waterfall bars plus an SVG accumulation
+  chart; reachable from every session row's ⋯ menu ("Turn Timeline").
+  Mock-mode fixture + Playwright spec included.
+
+### Changed
+
+- Deps: `opentelemetry` 0.32 (+ `opentelemetry_sdk`, `opentelemetry-otlp`)
+  added to `shannon-core` only; no workspace-level dependency changes.
+- `scripts/otel-demo/docker-compose.yml`: one-command Jaeger (UI :16686)
+  + Grafana (:3300) stack for accepting the span tree visually; usage in
+  the telemetry module docs.
+
 ## [Unreleased] — §4.10 W3-2 · manifest v2 + install-time validation + `--dump-config` + ecosystem conventions
 
 ### Added
+
 
 - **Plugin manifest v2** (`manifest_version = "2"`): MCP server references
   (`[[mcp]]` rows; the Claude `mcpServers` map parses into the same list),

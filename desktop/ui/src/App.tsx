@@ -19,6 +19,8 @@ const QuickFix = lazy(() => import('./pages/QuickFix'));
 const Editor = lazy(() => import('./pages/Editor'));
 const Memory = lazy(() => import('./pages/Memory'));
 const Usage = lazy(() => import('./pages/Usage'));
+// §4.14 — Turn Timeline (inside-of-a-turn visualization over the L0 log).
+const TurnTimeline = lazy(() => import('./pages/TurnTimeline'));
 const SkillProposalsManager = lazy(() => import('./components/skills/SkillProposalsManager'));
 const DataSources = lazy(() => import('./components/extensions/DataSources'));
 const Featured = lazy(() => import('./components/extensions/Featured'));
@@ -92,6 +94,7 @@ export default function App() {
                 <Route path="/quickfix" element={<QuickFix />} />
                 <Route path="/editor" element={<Editor />} />
                 <Route path="/memory" element={<Memory />} />
+                <Route path="/timeline/:id" element={<TurnTimeline />} />
                 {/* P2-5a spike — dev-only; never shipped to production.
                     Gates on Vite's `import.meta.env.DEV` (true under
                     `pnpm dev`, false under `pnpm build`). Production builds
