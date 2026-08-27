@@ -2021,6 +2021,29 @@ fn run_headless_query(
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
+        // OTLP bridge (§4.14): export this session's L0 log when telemetry is
+        // enabled. NOOP by default — when `SHANNON_TELEMETRY` is unset the
+        // manager is a pure no-op and we don't even read the events file
+        // (Pi contract: telemetry must never cost the main loop anything).
+        let telemetry_config = shannon_core::telemetry::TelemetryConfig::from_env();
+        if telemetry_config.enabled {
+            let sid = engine.session_id().to_string();
+            let export = (|| -> anyhow::Result<usize> {
+                let base = shannon_core::session_log::default_shannon_home()?;
+                let reader = shannon_core::session_log::SessionLogReader::open(
+                    shannon_core::session_log::session_events_path(&base, &sid),
+                )?;
+                let events = reader.read_events(false)?;
+                let telemetry =
+                    shannon_core::telemetry::TelemetryManager::new(telemetry_config.clone());
+                Ok(telemetry.export_l0(&events))
+            })();
+            match export {
+                Ok(spans) => tracing::debug!("telemetry: exported {spans} spans"),
+                Err(e) => tracing::debug!("telemetry export skipped: {e}"),
+            }
+        }
+
         // Authoritative accounting for the ledger: prefer the engine's Cost
         // totals (sum of every request in the query) over the max-locals,
         // which only see the last request. total_tokens from TurnCompleted
