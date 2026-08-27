@@ -25,10 +25,16 @@ use std::sync::Arc;
 use thiserror::Error;
 
 pub mod providers;
+pub mod sandbox;
 
 pub use providers::{
     CapturedOutput, ChainedSpawnRewrite, DirEntryInfo, FileMeta, FileSystemProvider, PipedChild,
     PipedSpawn, ProcessExit, ProcessProvider, ProcessRequest, SpawnRewrite,
+};
+pub use sandbox::{
+    ChildWorldInit, DegradeNotice, ForkInitHost, SANDBOX_DENIED_CLASSIFICATION,
+    SANDBOX_DENIED_PREFIX, SandboxDenialInfo, SandboxError, SandboxMode, SandboxPolicy,
+    SandboxProvider, path_within,
 };
 
 /// Sender for streaming tool progress updates.

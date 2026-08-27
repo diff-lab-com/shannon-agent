@@ -4,6 +4,7 @@
 //! - Bash: Execute shell commands on Unix-like systems
 //! - PowerShell: Execute commands on Windows systems
 
+use crate::sandbox::DenialClassifier;
 use crate::{BoxedProgressSender, Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -822,6 +823,11 @@ pub struct BashTool {
     /// through the §4.11 spawn hook (`SandboxExecutorRewrite` over bwrap /
     /// Seatbelt / Docker). `None` when no backend was detected.
     process_sandbox: Option<Arc<dyn ProcessProvider>>,
+    /// §4.12 sandbox denial classifier: inspects a failed captured run of an
+    /// enforcing world and, when it looks kernel-denied, yields structured
+    /// `sandbox_denied` metadata for the L0 record. `None` = no enforcing
+    /// world (the historical shape).
+    denial_classifier: Option<crate::sandbox::DenialClassifier>,
 }
 
 impl Default for BashTool {
@@ -837,6 +843,7 @@ impl BashTool {
             sandbox: None,
             direct_process: crate::defaults::process(),
             process_sandbox: None,
+            denial_classifier: None,
         }
     }
 
@@ -847,6 +854,7 @@ impl BashTool {
             sandbox: Some(DockerSandbox::new(config)),
             direct_process: crate::defaults::process(),
             process_sandbox: None,
+            denial_classifier: None,
         }
     }
 
@@ -887,7 +895,14 @@ impl BashTool {
             sandbox: None,
             direct_process: crate::defaults::process(),
             process_sandbox: sandboxed_process,
+            denial_classifier: None,
         }
+    }
+
+    /// Attach a §4.12 sandbox-denial classifier (assembly-time seam).
+    pub fn with_denial_classifier(mut self, classifier: DenialClassifier) -> Self {
+        self.denial_classifier = Some(classifier);
+        self
     }
 
     /// Update the sandbox mode
@@ -1109,6 +1124,18 @@ impl Tool for BashTool {
                 }
                 if !output.stderr.is_empty() {
                     map.insert("stderr".to_string(), json!(output.stderr));
+                }
+                // §4.12: kernel-denied operations of an enforcing world get
+                // the canonical classification so the L0 `tool/result.meta`
+                // records them.
+                if !output.success {
+                    if let Some(classifier) = self.denial_classifier.as_ref() {
+                        if let Some(denial) = classifier(&output) {
+                            for (key, value) in crate::sandbox::denial_metadata(&denial) {
+                                map.insert(key, value);
+                            }
+                        }
+                    }
                 }
                 map
             },
