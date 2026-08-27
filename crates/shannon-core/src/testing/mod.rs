@@ -7,10 +7,15 @@
 //!   sandboxed runs → dual JSON/Markdown reports)
 //! - **eval_metrics**: per-task cost/trajectory metrics from the L0 log plus
 //!   TOML-driven failure classification (§4.7 W2-M2)
+//! - **eval_benchmarks**: external benchmark trio adapters — Terminal-Bench,
+//!   SWE-bench Verified 50 subset, self-built regression pool (§4.13 W2-M3),
+//!   with pinned-workload fingerprints, n=3 variance discipline and
+//!   citability gating
 //! - **snapshot**: Request shape snapshot helpers for regression detection
 //! - **record_replay**: Record/Replay system for zero-cost CI testing
 //!   (moved to `shannon-engine`; re-exported here for backward compat)
 
+pub mod eval_benchmarks;
 pub mod eval_metrics;
 pub mod eval_runner;
 pub mod mock_dsl;

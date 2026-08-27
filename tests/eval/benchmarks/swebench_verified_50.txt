@@ -1,0 +1,84 @@
+# SWE-bench Verified — Shannon's pinned 50-instance evaluation slice (§4.13).
+#
+# PROVENANCE & ANTI-DRIFT
+#   The file IS the workload pin. Order matters and is part of the fingerprint
+#   (sha256 over newline-joined ids; embedded in every bench report and in the
+#   `bench_runner diff` anchors). One id per line; `#` starts a comment.
+#
+# VALIDATION GATE (required before any externally citable score)
+#   These ids were transcribed from a knowledge snapshot of the Verified split
+#   (princeton-nlp/SWE-bench_Verified, human-validated 500) on 2026-08-27 and
+#   have NOT yet been mechanically confirmed against the dataset itself.
+#   On first contact with the real corpus (SHANNON_SWEBENCH_HOME mounted),
+#   validate pins against the official instance-id list before scoring:
+#       bench_runner --suite swebench_verified_50 --validate-pins
+#   Any mismatch is surfaced as pin drift and supersedes this curation —
+#   scores stay `citation.citable=false` until the gate clears. Reports carry
+#   `pin_validation = pending_corpus_contact` until then.
+#
+# SAMPLING RULE (stratified, fixed at pin time; keep stable across versions):
+#   django(20) · sympy(7) · scikit-learn(6) · matplotlib(5) · astropy(5) ·
+#   xarray(2) + one each for flask / scrapy / pvlib / sphinx / pytest to keep
+#   repository diversity inside the subset.
+
+# ── django (20) ──────────────────────────────────────────────────────────
+django__django-11039
+django__django-11099
+django__django-11179
+django__django-11433
+django__django-11583
+django__django-11630
+django__django-11848
+django__django-11999
+django__django-12039
+django__django-12125
+django__django-12276
+django__django-12308
+django__django-12589
+django__django-12747
+django__django-12908
+django__django-12915
+django__django-13279
+django__django-13363
+django__django-13660
+django__django-14016
+
+# ── sympy (7) ────────────────────────────────────────────────────────────
+sympy__sympy-12481
+sympy__sympy-13031
+sympy__sympy-13480
+sympy__sympy-15346
+sympy__sympy-19254
+sympy__sympy-19487
+sympy__sympy-20590
+
+# ── scikit-learn (6) ─────────────────────────────────────────────────────
+scikit-learn__scikit-learn-10297
+scikit-learn__scikit-learn-13241
+scikit-learn__scikit-learn-13779
+scikit-learn__scikit-learn-25500
+scikit-learn__scikit-learn-25570
+scikit-learn__scikit-learn-25638
+
+# ── matplotlib (5) ───────────────────────────────────────────────────────
+matplotlib__matplotlib-22767
+matplotlib__matplotlib-23314
+matplotlib__matplotlib-23562
+matplotlib__matplotlib-23964
+matplotlib__matplotlib-24975
+
+# ── astropy (5) ──────────────────────────────────────────────────────────
+astropy__astropy-12907
+astropy__astropy-13829
+astropy__astropy-14182
+astropy__astropy-14508
+astropy__astropy-14995
+
+# ── remaining diversity picks (1–2 per repo) ─────────────────────────────
+xarray__xarray-3156
+xarray__xarray-4911
+flask__flask-4992
+scrapy__scrapy-5742
+pvlib__pvlib-python-1603
+sphinx-doc__sphinx-8595
+pytest-dev__pytest-7209

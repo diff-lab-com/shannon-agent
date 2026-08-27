@@ -1,0 +1,103 @@
+# ── Regression pool task 5/10 · §4.13 W2-M3 ────────────────────────────────
+# Source defect: CHANGELOG.md v0.5.1 → Security — "Data loss on parse error:
+# An existing settings file that fails to parse as JSON now aborts the install
+# (preserving the original file) instead of being silently reset to {}."
+# Recovery-tier rehearsal: the dry-run script injects a failing first attempt
+# before enacting the corrective edit.
+
+id = "reg_05_settings_parse_abort"
+tier = "recovery"
+description = "load_settings must surface corrupt JSON instead of silently resetting to {} (v0.5.1 .mcpb hardening)"
+prompt = """Issue report (from this repo's v0.5.1 security hardening of `mcp install`):
+When the existing settings file contained corrupt JSON, the loader swallowed
+the failure and handed back an empty settings object; a subsequent install then
+wrote that empty map to disk and every previously configured MCP server
+vanished.
+
+In src/settings_io.rs, repair load_settings so corrupt content can never be
+confused with "no configuration".
+
+Contract (keep the exact public signature):
+  pub fn load_settings(path: &str) -> Result<String, SettingsError>
+
+- Read the file; unreadable paths map onto SettingsError::Corrupt.
+- Probe PARSE the raw text before returning it: empty input or input whose
+  first non-whitespace character is neither an object nor an array start maps
+  onto SettingsError::Corrupt.
+- On success return Ok(raw_text) verbatim so callers write the original bytes.
+
+The silent "{}" fallback expression must be deleted entirely.
+"""
+
+[[setup.files]]
+path = "src/settings_io.rs"
+content = '''
+use std::fs;
+
+#[derive(Debug)]
+pub enum SettingsError {
+    Corrupt(String),
+}
+
+// Settings targets for `shannon mcp install` (Shannon v0.5.1): `.mcp.json`
+// or the user-global settings file. Post-fix contract: corrupt JSON aborts
+// the caller BEFORE any write, preserving the original file on disk.
+//
+// REGRESSION: load_settings degraded ANY read problem AND silently returned
+// an empty settings map for whatever it saw, letting installs clobber real
+// user config.
+pub fn load_settings(path: &str) -> Result<String, SettingsError> {
+    fs::read_to_string(path).unwrap_or_else(|_| "{}".to_string())
+}
+'''
+
+[verify]
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/settings_io.rs"
+contains = "SettingsError::Corrupt("
+
+script = '''
+set -e
+test -f src/settings_io.rs
+if grep -qF 'unwrap_or_else(|_| "{}".to_string())' src/settings_io.rs; then
+  echo "FAIL: silent empty-map fallback still present"; exit 1
+fi
+grep -qiE 'json' src/settings_io.rs \
+  || { echo "FAIL: json parse/probe step missing"; exit 1; }
+grep -qF 'SettingsError::Corrupt(' src/settings_io.rs \
+  || { echo "FAIL: error mapping missing"; exit 1; }
+grep -qF 'fn load_settings(path: &str) -> Result<String, SettingsError>' src/settings_io.rs \
+  || { echo "FAIL: public signature must stay unchanged"; exit 1; }
+'''
+
+[expectations]
+forbidden_tools = ["Write", "Bash"]
+
+[limits]
+max_turns = 8
+max_tokens = 20000
+timeout_secs = 180
+
+[dry_run]
+final_text = "load_settings now probes the payload before trusting it and reports Corrupt."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/settings_io.rs" }
+
+# Deliberate first stumble (recovery tier): a duplicated-function edit that
+# leaves both definitions behind fails the 'unique fn' sanity greps; the next
+# step recovers by replacing the buggy body cleanly.
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "src/settings_io.rs", old_string = "// REGRESSION: load_settings degraded ANY read problem AND silently returned\n// an empty settings map for whatever it saw, letting installs clobber real\n// user config.\npub fn load_settings(path: &str) -> Result<String, SettingsError> {\n    fs::read_to_string(path).unwrap_or_else(|_| \"{}\".to_string())\n}", new_string = "placeholder-never-applied-by-fail-step" }
+fail = true
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "src/settings_io.rs", old_string = "pub fn load_settings(path: &str) -> Result<String, SettingsError> {\n    fs::read_to_string(path).unwrap_or_else(|_| \"{}\".to_string())\n}", new_string = "pub fn load_settings(path: &str) -> Result<String, SettingsError> {\n    let raw = fs::read_to_string(path)\n        .map_err(|e| SettingsError::Corrupt(format!(\"{}: {}\", path, e)))?;\n    let head = raw.trim_start().chars().next();\n    match head {\n        // Post-fix: probe-parse before trust; malformed payloads abort here,\n        // preserving the original file for the operator to inspect.\n        Some('{') | Some('[') => {}\n        _ => {\n            return Err(SettingsError::Corrupt(format!(\n                \"{}: invalid json payload\",\n                path\n            )))\n        }\n    }\n    Ok(raw)\n}" }

@@ -1,0 +1,33 @@
+# Terminal-Bench — Shannon's pinned starter subset (§4.13, "先 Terminal-Bench").
+#
+# PROVENANCE & ANTI-DRIFT
+#   Same pin discipline as swebench_verified_50.txt: order + content are
+#   fingerprinted into every bench report and diff anchor. One task id per
+#   line; `#` starts a comment.
+#
+# VALIDATION GATE (same as SWE-bench slice)
+#   Ids were transcribed from a knowledge snapshot of the laude-institute/
+#   terminal-bench published task registry on 2026-08-27 and are NOT yet
+#   mechanically confirmed. On first contact with a mounted corpus
+#   (SHANNON_TB_TASKS_DIR), cross-check the pins before scoring:
+#       bench_runner --suite terminal_bench --validate-pins
+#   Until then reports stamp `pin_validation = pending_corpus_contact` and
+#   refuse citability.
+#
+# EXECUTION CONTRACT (real mode)
+#   Each repetition delegates to the official toolchain via
+#   SHANNON_TB_HARNESS_CMD, e.g.:
+#     SHANNON_TB_HARNESS_CMD='tb run --task-id {native_id} --agent shannon'
+#   The verdict comes ONLY from the task's own run-tests.sh inside its own
+#   container — Shannon never re-implements or approximates foreign verifiers.
+
+hello-world
+chess-best-move
+crack-7z-hash
+sanitize-git-repo
+polyglot-c-py
+path-tracing
+raman-fitting
+simple-sheets-put
+train-fasttext
+intro-sudo
