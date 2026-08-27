@@ -1,0 +1,34 @@
+# Shannon OTLP acceptance demo (§4.14): Jaeger receives OTLP spans from a
+# telemetry-enabled engine; Grafana browses Jaeger as a datasource.
+#
+# Usage (also documented in crates/shannon-core/src/telemetry.rs module docs):
+#   docker compose -f scripts/otel-demo/docker-compose.yml up -d   # start
+#   SHANNON_TELEMETRY=1 shannon ...                                # produce
+#   open http://localhost:16686                                    # inspect
+#   docker compose -f scripts/otel-demo/docker-compose.yml down    # stop
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: shannon-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: shannon-grafana
+    depends_on:
+      - jaeger
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3300:3000"     # Grafana UI
+    restart: unless-stopped

@@ -22,6 +22,7 @@ import type {
   SendMessageResponse,
   HunkAction,
   SessionInfo,
+  TurnTimeline,
   McpServerInfo,
   McpServerConfig,
   SkillInfo,
@@ -368,6 +369,11 @@ export async function newSession(): Promise<string> {
 
 export async function listSessions(): Promise<SessionInfo[]> {
   return invoke('list_sessions')
+}
+
+/** Turn Timeline (§4.14) — L0-derived turns/tools/token-cost view of one session. */
+export async function getTraceTimeline(sessionId: string): Promise<TurnTimeline> {
+  return invoke('trace_timeline', { sessionId })
 }
 
 export async function searchSessions(query: string): Promise<SessionInfo[]> {
