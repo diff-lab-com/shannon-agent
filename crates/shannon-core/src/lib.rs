@@ -44,6 +44,7 @@ pub mod bridge_service;
 pub mod bus;
 pub mod checkpoint;
 pub mod compact;
+pub mod config_dump;
 pub mod config_persist;
 pub mod config_watcher;
 pub mod diagnostics;

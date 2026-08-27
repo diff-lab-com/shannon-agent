@@ -1,0 +1,85 @@
+---
+source: crates/shannon-core/src/config_dump.rs
+expression: dump
+---
+{
+  "layers": [
+    {
+      "source": "builtin",
+      "present": true,
+      "entries": {}
+    },
+    {
+      "source": "user-global",
+      "path": "/home/alice/.shannon/config.toml",
+      "present": true,
+      "entries": {
+        "debug": {
+          "value": true
+        },
+        "temperature": {
+          "value": 0.25,
+          "overridden_by": "project"
+        }
+      }
+    },
+    {
+      "source": "project",
+      "path": "/repo/.shannon.toml",
+      "present": true,
+      "entries": {
+        "temperature": {
+          "value": 0.75
+        }
+      }
+    },
+    {
+      "source": "env-vars",
+      "present": true,
+      "entries": {
+        "debug": {
+          "value": true,
+          "env_var": "SHANNON_DEBUG"
+        },
+        "max_tokens": {
+          "value": 4096,
+          "overridden_by": "cli-overlay",
+          "env_var": "SHANNON_MAX_TOKENS"
+        }
+      }
+    },
+    {
+      "source": "connected",
+      "present": false,
+      "entries": {}
+    },
+    {
+      "source": "cli-overlay",
+      "present": true,
+      "entries": {
+        "max_tokens": {
+          "value": 8192
+        }
+      }
+    }
+  ],
+  "effective": {
+    "debug": true,
+    "enable_tools": null,
+    "max_context_tokens": null,
+    "max_tokens": 8192,
+    "notifications": null,
+    "permission_profile": null,
+    "presets": null,
+    "provider_model": {
+      "gateway": {
+        "multiplex_profiles": false,
+        "profile_routes": []
+      },
+      "profiles": {},
+      "version": 2
+    },
+    "temperature": 0.75,
+    "timeout": null
+  }
+}

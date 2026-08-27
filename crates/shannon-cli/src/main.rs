@@ -482,6 +482,16 @@ struct Cli {
     #[arg(long)]
     notify: bool,
 
+    /// Print the effective layered configuration with per-entry provenance
+    /// (§4.10 W3-2) as JSON and exit.
+    ///
+    /// Layers are reported lowest → highest precedence: builtin →
+    /// user-global (`~/.shannon/config.toml`) → project (`.shannon.toml`)
+    /// → env-vars (`SHANNON_*`) → connected (`~/.shannon/providers.toml`)
+    /// → cli-overlay (this invocation's flags).
+    #[arg(long)]
+    dump_config: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -1234,7 +1244,12 @@ fn run_noninteractive_query(
                 .join(".shannon")
                 .join("plugins");
             let mut plugin_registry = shannon_core::plugin::PluginRegistry::new(plugins_dir);
-            if let Ok(()) = plugin_registry.load_all().await {
+            // §4.10: broken manifests now surface instead of vanishing; every
+            // valid sibling still loads and proceeds below.
+            if let Err(e) = plugin_registry.load_all().await {
+                eprintln!("Warning: some plugins failed to load and were skipped:\n{e}");
+            }
+            {
                 let enabled = plugin_registry.list_enabled();
                 if !enabled.is_empty() {
                     eprintln!("Loaded {} plugin(s)", enabled.len());
@@ -3913,6 +3928,37 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         i18n::set_locale(&detected);
     }
 
+    // ── --dump-config: explainable config ladder (§4.10 W3-2) ──
+    // Runs before any engine/model setup; stdout carries the JSON payload.
+    if cli.dump_config {
+        let mut builder = shannon_core::unified_config::ConfigBuilder::new();
+        builder.load_global_toml();
+        builder.load_local_toml();
+        builder.load_env_vars();
+        builder.load_connected_profile();
+        // Reconstruct the CLI overlay from the flags this invocation carried,
+        // so the dump reflects exactly the precedence that would apply.
+        let mut overlay = shannon_core::unified_config::ShannonConfig::empty();
+        if cli.model.is_some() || cli.provider.is_some() {
+            overlay.provider_model = shannon_core::provider_resolver::synthesize_default_profile(
+                cli.model.as_deref(),
+                cli.provider.as_deref(),
+                None,
+                None,
+            )
+            .unwrap_or_default();
+        }
+        builder.set_cli_overrides(overlay);
+
+        let dump =
+            shannon_core::config_dump::build_dump(&builder.layer_snapshots(), &builder.build());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&dump).expect("ConfigDump always serializes")
+        );
+        return Ok(());
+    }
+
     // ── Team agent mode: JSON-RPC over stdin/stdout ──
     // Must be handled before anything else — stdout is reserved for JSON-RPC.
     if cli.team_agent {
@@ -4866,6 +4912,31 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
         }
     }
 
+    #[test]
+    fn test_cli_parse_dump_config_flag() {
+        // §4.10: --dump-config parses standalone and alongside model/provider
+        // overlay flags; default is off.
+        let cli = Cli::try_parse_from(["shannon", "--dump-config"]).unwrap();
+        assert!(cli.dump_config);
+        assert!(cli.command.is_none());
+
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "--dump-config",
+            "--model",
+            "claude-sonnet-4",
+            "--provider",
+            "anthropic",
+        ])
+        .unwrap();
+        assert!(cli.dump_config);
+        assert_eq!(cli.model.as_deref(), Some("claude-sonnet-4"));
+
+        let cli = Cli::try_parse_from(["shannon"]).unwrap();
+        assert!(!cli.dump_config);
+    }
+
+    #[test]
     #[test]
     fn test_cli_parse_serve_defaults() {
         let cli = Cli::try_parse_from(["shannon", "serve"]).unwrap();

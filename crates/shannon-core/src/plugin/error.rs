@@ -44,6 +44,12 @@ pub enum PluginError {
 
     #[error("Plugin '{name}' is {state}")]
     WrongState { name: String, state: String },
+
+    /// One or more plugin directories failed to parse during a scan
+    /// (§4.10): the error enumerates every failure so broken manifests are
+    /// impossible to miss, while every valid sibling plugin still loaded.
+    #[error("plugin manifest failures:\n{0}")]
+    LoadFailures(String),
 }
 
 /// Plugin result type
@@ -96,6 +102,16 @@ mod tests {
             PluginError::IndexRefreshFailed("err".into())
                 .to_string()
                 .contains("err")
+        );
+    }
+
+    #[test]
+    fn plugin_error_load_failures_lists_every_path() {
+        let err = PluginError::LoadFailures("/a/plugin.toml: bad\n/b/plugin.toml: worse".into());
+        let msg = err.to_string();
+        assert!(
+            msg.contains("/a/plugin.toml") && msg.contains("worse"),
+            "{msg}"
         );
     }
 
