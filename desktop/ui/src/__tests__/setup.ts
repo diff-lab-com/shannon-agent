@@ -240,6 +240,9 @@ vi.mock('@/lib/tauri-api', () => ({
   sendNotification: vi.fn().mockResolvedValue(undefined),
   getNotificationPrefs: vi.fn().mockResolvedValue({ master_enabled: true, dnd_enabled: false, dnd_start: null, dnd_end: null, on_completed: true, on_failed: true }),
   setNotificationPrefs: vi.fn().mockResolvedValue(undefined),
+  getWebhookConfig: vi.fn().mockResolvedValue(null),
+  saveWebhookConfig: vi.fn().mockResolvedValue(undefined),
+  clearWebhookConfig: vi.fn().mockResolvedValue(undefined),
   listPluginMarketplace: vi.fn().mockResolvedValue([]),
   listCatalogUpstreams: vi.fn().mockResolvedValue([]),
   installSkillFromRepo: vi.fn().mockResolvedValue({ id: 'skill-1', name: 'Test Skill', install_path: '/path/to/skill' }),
@@ -293,4 +296,8 @@ vi.mock('@/lib/tauri-api', () => ({
   readAttachment: vi.fn().mockResolvedValue({ mime: 'application/octet-stream', name: '', size: 0 }),
   readAttachments: vi.fn().mockResolvedValue([]),
   MAX_ATTACHMENT_COUNT: 10,
+  // LSP quick-fix panel — default to no actions; per-test overrides cover
+  // the populated-action / failure paths.
+  lspCodeActions: vi.fn().mockResolvedValue({ actions: [] }),
+  applyCodeAction: vi.fn().mockResolvedValue(0),
 }))
