@@ -320,9 +320,78 @@ impl ChildWorldInit for WorldInstall {
 // Backend
 // ---------------------------------------------------------------------------
 
+/// One probed, fully resolved execution world: the grant table, the network
+/// stance and the degrade notices discovered while probing. Shared by the
+/// tool-world backend and the plugin spawn-chain installer.
+#[cfg(target_os = "linux")]
+pub(super) struct WorldPlan {
+    pub(super) grants: Arc<Vec<Grant>>,
+    pub(super) net_denied: bool,
+    pub(super) abi_name: &'static str,
+    pub(super) notices: Vec<DegradeNotice>,
+}
+
 #[cfg(target_os = "linux")]
 mod imp {
     use super::*;
+
+    /// Probe the host and resolve `policy` into a ready-to-install world.
+    ///
+    /// ABI selection, network-ABI degrade detection and the open-check on
+    /// every configured root (fail-closed: unusable roots shrink the
+    /// allow-list) all happen once here; both consumers — [`Backend`] for the
+    /// tool assembly and [`super::child_world_install`] for plugin spawn
+    /// chains — install the same resolved world.
+    pub(super) fn plan_world(policy: &SandboxPolicy) -> Result<WorldPlan, SandboxError> {
+        let (abi_name, level) = probe_abi().map_err(hard_unsupported)?;
+        tracing::info!(abi = abi_name, "sandbox: landlock backend ready");
+
+        let mut notices = Vec::new();
+        let mut net_denied = false;
+        if !policy.network {
+            if probe_net_abi() {
+                net_denied = true;
+            } else {
+                notices.push(DegradeNotice::new(
+                    "net-abi-unavailable",
+                    "kernel lacks the Landlock network ABI (>= 6.7 / v4); children keep \
+                     normal host network permissions — combine with a firewall profile for \
+                     full network isolation",
+                ));
+            }
+        }
+
+        // Open-check each configured root; unopenable paths shrink the
+        // allow-list (fail-closed direction) and surface as loud notices.
+        let mut grants = Vec::new();
+        for candidate in resolve_grants(policy, level) {
+            if std::fs::metadata(&candidate.path).is_err() {
+                notices.push(DegradeNotice::new(
+                    "path-unreadable",
+                    format!(
+                        "{}: configured sandbox root cannot be opened; it will NOT be \
+                         granted (children lose access to it)",
+                        candidate.path.display()
+                    ),
+                ));
+                continue;
+            }
+            grants.push(candidate);
+        }
+        if grants.is_empty() {
+            return Err(SandboxError::InvalidConfig(
+                "landlock policy resolves to zero usable grants; refusing an unusable world"
+                    .to_string(),
+            ));
+        }
+
+        Ok(WorldPlan {
+            grants: Arc::new(grants),
+            net_denied,
+            abi_name,
+            notices,
+        })
+    }
 
     /// Kernel-enforced sandbox backend (Linux).
     pub struct Backend {
@@ -342,54 +411,13 @@ mod imp {
         }
 
         pub(super) fn new(policy: Arc<SandboxPolicy>) -> Result<Self, SandboxError> {
-            let (abi_name, level) = probe_abi().map_err(hard_unsupported)?;
-            tracing::info!(abi = abi_name, "sandbox: landlock backend ready");
-
-            let mut notices = Vec::new();
-            let mut net_denied = false;
-            if !policy.network {
-                if probe_net_abi() {
-                    net_denied = true;
-                } else {
-                    notices.push(DegradeNotice::new(
-                        "net-abi-unavailable",
-                        "kernel lacks the Landlock network ABI (>= 6.7 / v4); children keep \
-                         normal host network permissions — combine with a firewall profile for \
-                         full network isolation",
-                    ));
-                }
-            }
-
-            // Open-check each configured root; unopenable paths shrink the
-            // allow-list (fail-closed direction) and surface as loud notices.
-            let mut grants = Vec::new();
-            for candidate in resolve_grants(&policy, level) {
-                if std::fs::metadata(&candidate.path).is_err() {
-                    notices.push(DegradeNotice::new(
-                        "path-unreadable",
-                        format!(
-                            "{}: configured sandbox root cannot be opened; it will NOT be \
-                             granted (children lose access to it)",
-                            candidate.path.display()
-                        ),
-                    ));
-                    continue;
-                }
-                grants.push(candidate);
-            }
-            if grants.is_empty() {
-                return Err(SandboxError::InvalidConfig(
-                    "landlock policy resolves to zero usable grants; refusing an unusable world"
-                        .to_string(),
-                ));
-            }
-
+            let plan = plan_world(&policy)?;
             Ok(Self {
                 policy,
-                abi_name,
-                grants: Arc::new(grants),
-                net_denied,
-                notices,
+                abi_name: plan.abi_name,
+                grants: plan.grants,
+                net_denied: plan.net_denied,
+                notices: plan.notices,
             })
         }
     }
@@ -447,6 +475,36 @@ pub fn probe_new(policy: Arc<SandboxPolicy>) -> Result<Arc<dyn SandboxProvider>,
     #[cfg(target_os = "linux")]
     {
         Ok(Arc::new(LandlockBackend::new(policy)?))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = policy;
+        Err(hard_unsupported(
+            "this build does not include Linux Landlock support (target_os != linux)".to_string(),
+        ))
+    }
+}
+
+/// Build the fork-time child-world installer for an **arbitrary** spawn chain
+/// (§ write_files enforcement: plugin stdio servers).
+///
+/// Probing, degrade detection and grant resolution are identical to
+/// [`probe_new`]; the difference is the product — a [`ChildWorldInit`] the
+/// caller installs between fork and exec on spawns that bypass the tool
+/// provider world (the MCP adapter's `tokio::process::Command` path), instead
+/// of a decorated provider. A failed install aborts the spawn (fail-closed),
+/// exactly like the provider world.
+pub fn child_world_install(
+    policy: Arc<SandboxPolicy>,
+) -> Result<(Arc<dyn ChildWorldInit>, Vec<DegradeNotice>), SandboxError> {
+    #[cfg(target_os = "linux")]
+    {
+        let plan = imp::plan_world(&policy)?;
+        let init: Arc<dyn ChildWorldInit> = Arc::new(WorldInstall {
+            grants: plan.grants,
+            net_denied: plan.net_denied,
+        });
+        Ok((init, plan.notices))
     }
     #[cfg(not(target_os = "linux"))]
     {
