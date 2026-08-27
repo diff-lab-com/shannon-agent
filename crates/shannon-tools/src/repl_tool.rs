@@ -247,14 +247,28 @@ pub struct ReplOutput {
 /// REPL tool implementation.
 ///
 /// Executes commands directly without a shell for improved security.
-/// The command string is parsed into executable and arguments, then executed
-/// directly via std::process::Command. Supports custom working directories
-/// and environment variables.
-pub struct ReplTool;
+/// The command string is parsed into executable and arguments, then spawned
+/// through the injected process world (§4.11). Supports custom working
+/// directories and environment variables.
+pub struct ReplTool {
+    /// Process world backing captured runs (§4.11).
+    process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+}
 
 impl ReplTool {
     pub fn new() -> Self {
-        Self
+        Self {
+            process: crate::defaults::process(),
+        }
+    }
+
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(
+        mut self,
+        process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+    ) -> Self {
+        self.process = process;
+        self
     }
 }
 
@@ -310,35 +324,29 @@ impl Tool for ReplTool {
         // Step 3: Validate the executable is allowed
         validate_executable(&executable).map_err(ToolError::InvalidInput)?;
 
-        use std::process::Stdio;
-        use tokio::process::Command;
-
-        // Step 4: Execute directly without shell
-        let mut cmd = Command::new(&executable);
-        cmd.args(&args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
+        // Step 4: Execute directly without shell through the injected world
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let mut request = shannon_tool_interface::ProcessRequest::new(&executable, &arg_refs);
         if let Some(ref cwd) = repl_input.cwd {
-            cmd.current_dir(cwd);
+            request.cwd = Some(std::path::PathBuf::from(cwd));
         }
-
         if let Some(ref env) = repl_input.env {
             for (k, v) in env {
-                cmd.env(k, v);
+                request.env.push((k.clone(), v.clone()));
             }
         }
 
-        let output = cmd
-            .output()
+        let output = self
+            .process
+            .run_async(&request)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("REPL command failed: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code().unwrap_or(-1);
+        let exit_code = output.exit.code.unwrap_or(-1);
 
-        let success = output.status.success();
+        let success = output.exit.success;
 
         Ok(ToolOutput {
             content: if success {

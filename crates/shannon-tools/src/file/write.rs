@@ -3,7 +3,9 @@
 use crate::{ToolError, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_tool_interface::FileSystemProvider;
 use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WriteInput {
@@ -27,8 +29,15 @@ pub struct WriteOutput {
 }
 
 pub async fn execute(input: WriteInput) -> Result<ToolOutput, ToolError> {
-    use tokio::fs;
+    execute_with(input, crate::defaults::fs().as_ref()).await
+}
 
+/// Provider-injected entry point (§4.11): writes flow through the injected
+/// filesystem world instead of direct async filesystem APIs calls.
+pub async fn execute_with(
+    input: WriteInput,
+    fs: &dyn FileSystemProvider,
+) -> Result<ToolOutput, ToolError> {
     const MAX_WRITE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
     if input.content.len() > MAX_WRITE_SIZE {
         return Err(ToolError::InvalidInput(format!(
@@ -44,8 +53,8 @@ pub async fn execute(input: WriteInput) -> Result<ToolOutput, ToolError> {
     // approved the full path (nearest-existing-ancestor canonicalization), so
     // this cannot create directories the sandbox would reject. Without it a
     // Write into a not-yet-existing subdirectory fails with ENOENT.
-    if let Some(parent) = std::path::Path::new(&input.file_path).parent() {
-        fs::create_dir_all(parent)
+    if let Some(parent) = Path::new(&input.file_path).parent() {
+        fs.create_dir_all(parent)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create directory: {e}")))?;
     }
@@ -57,14 +66,14 @@ pub async fn execute(input: WriteInput) -> Result<ToolOutput, ToolError> {
         input.file_path,
         uuid::Uuid::new_v4().as_simple()
     );
-    fs::write(&temp_path, &input.content)
+    fs.write_bytes(Path::new(&temp_path), input.content.as_bytes())
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {e}")))?;
-    fs::rename(&temp_path, &input.file_path)
+    fs.rename(Path::new(&temp_path), Path::new(&input.file_path))
         .await
         .map_err(|e| {
             // Clean up temp file if rename fails
-            let _ = std::fs::remove_file(&temp_path);
+            let _ = fs.remove_file_blocking(Path::new(&temp_path));
             ToolError::ExecutionFailed(format!("Failed to rename temp file: {e}"))
         })?;
 

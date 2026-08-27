@@ -6539,6 +6539,7 @@ dependencies = [
  "shannon-core",
  "shannon-engine",
  "shannon-mcp",
+ "shannon-tool-interface",
  "shannon-types",
  "shell-words",
  "tempfile",

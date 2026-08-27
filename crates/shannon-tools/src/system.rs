@@ -8,12 +8,63 @@ use crate::{BoxedProgressSender, Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_core::providers::{LocalProcess, SandboxExecutorRewrite};
 use shannon_core::sandbox::{SandboxConfig, SandboxExecutor, SandboxType};
+use shannon_tool_interface::{ProcessProvider, ProcessRequest};
 use std::collections::HashMap;
-use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+
+/// Shared captured-run helper: builds the request, applies the optional
+/// timeout, and projects the provider result onto [`CommandOutput`].
+async fn run_shell_captured(
+    world: &dyn ProcessProvider,
+    program: &str,
+    shell_flag: &str,
+    command: &str,
+    cwd: Option<&str>,
+    env: Option<&std::collections::HashMap<String, String>>,
+    timeout_ms: Option<u64>,
+) -> Result<CommandOutput, std::io::Error> {
+    let mut request = ProcessRequest::new(program, &[shell_flag, command]);
+    if let Some(dir) = cwd {
+        request.cwd = Some(dir.into());
+    }
+    if let Some(env_vars) = env {
+        for (key, value) in env_vars {
+            request.env.push((key.clone(), value.clone()));
+        }
+    }
+
+    // Execute with timeout if specified
+    let output = if let Some(timeout) = timeout_ms {
+        let duration = Duration::from_millis(timeout);
+        tokio::time::timeout(duration, world.run_async(&request))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("Command timed out after {timeout}ms"),
+                )
+            })?
+            .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
+    } else {
+        world
+            .run_async(&request)
+            .await
+            .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    Ok(CommandOutput {
+        stdout,
+        stderr,
+        exit_code: output.exit.code.unwrap_or(-1),
+        success: output.exit.success,
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -555,17 +606,15 @@ impl DockerSandbox {
         if cfg!(test) {
             return false;
         }
+        // Probe docker availability through the default process world (§4.11).
+        let request = ProcessRequest::new("docker", &["info"]);
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(3),
-            Command::new("docker")
-                .arg("info")
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output(),
+            crate::defaults::process().run_async(&request),
         )
         .await;
         match result {
-            Ok(Ok(o)) => o.status.success(),
+            Ok(Ok(o)) => o.exit.success,
             _ => false,
         }
     }
@@ -646,15 +695,13 @@ impl DockerSandbox {
     ) -> Result<CommandOutput, std::io::Error> {
         let docker_args = self.build_args(command, cwd, env);
 
-        let mut cmd = Command::new("docker");
-        cmd.args(&docker_args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+        let args: Vec<&str> = docker_args.iter().map(String::as_str).collect();
+        let request = ProcessRequest::new("docker", &args);
+        let world = crate::defaults::process();
 
         let output = if let Some(timeout) = timeout_ms {
             let duration = std::time::Duration::from_millis(timeout);
-            tokio::time::timeout(duration, cmd.output())
+            tokio::time::timeout(duration, world.run_async(&request))
                 .await
                 .map_err(|_| {
                     std::io::Error::new(
@@ -664,15 +711,16 @@ impl DockerSandbox {
                 })?
                 .map_err(|e| std::io::Error::other(format!("Docker execution failed: {e}")))?
         } else {
-            cmd.output()
+            world
+                .run_async(&request)
                 .await
                 .map_err(|e| std::io::Error::other(format!("Docker execution failed: {e}")))?
         };
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code().unwrap_or(-1);
-        let success = output.status.success();
+        let exit_code = output.exit.code.unwrap_or(-1);
+        let success = output.exit.success;
 
         Ok(CommandOutput {
             stdout,
@@ -768,8 +816,12 @@ pub struct CommandOutput {
 pub struct BashTool {
     description: String,
     sandbox: Option<DockerSandbox>,
-    /// Platform sandbox (bwrap on Linux, Seatbelt on macOS)
-    process_sandbox: Option<SandboxExecutor>,
+    /// Direct (unsandboxed) execution world.
+    direct_process: Arc<dyn ProcessProvider>,
+    /// Execution world with argv-level platform sandbox wrapping installed
+    /// through the §4.11 spawn hook (`SandboxExecutorRewrite` over bwrap /
+    /// Seatbelt / Docker). `None` when no backend was detected.
+    process_sandbox: Option<Arc<dyn ProcessProvider>>,
 }
 
 impl Default for BashTool {
@@ -783,6 +835,7 @@ impl BashTool {
         Self {
             description: "Executes bash commands and returns output".to_string(),
             sandbox: None,
+            direct_process: crate::defaults::process(),
             process_sandbox: None,
         }
     }
@@ -792,8 +845,19 @@ impl BashTool {
         Self {
             description: "Executes bash commands in Docker sandbox".to_string(),
             sandbox: Some(DockerSandbox::new(config)),
+            direct_process: crate::defaults::process(),
             process_sandbox: None,
         }
+    }
+
+    /// Inject the execution worlds used for non-Docker spawns.
+    ///
+    /// `direct_process` handles plain `bash -c` runs; `sandboxed_process`
+    /// (when supplied) is consulted for sandboxed runs — typically a
+    /// [`shannon_core::providers::LocalProcess`] carrying a `SpawnRewrite`.
+    pub fn with_worlds(mut self, direct_process: Arc<dyn ProcessProvider>) -> Self {
+        self.direct_process = direct_process;
+        self
     }
 
     /// Create a BashTool with a platform process sandbox (bwrap/Seatbelt).
@@ -805,6 +869,15 @@ impl BashTool {
         let executor = SandboxExecutor::new(config);
         let sandbox_type = executor.sandbox_type();
         let has_sandbox = !matches!(sandbox_type, SandboxType::None);
+        // The legacy argv-level sandbox becomes a §4.11 SpawnRewrite installed
+        // on a LocalProcess — identical wrapping, one seam further down.
+        let sandboxed_process: Option<Arc<dyn ProcessProvider>> = if has_sandbox {
+            Some(Arc::new(LocalProcess::with_rewrite(Arc::new(
+                SandboxExecutorRewrite::new(Arc::new(executor)),
+            ))))
+        } else {
+            None
+        };
         Self {
             description: if has_sandbox {
                 format!("Executes bash commands (sandboxed via {sandbox_type})")
@@ -812,7 +885,8 @@ impl BashTool {
                 "Executes bash commands and returns output".to_string()
             },
             sandbox: None,
-            process_sandbox: if has_sandbox { Some(executor) } else { None },
+            direct_process: crate::defaults::process(),
+            process_sandbox: sandboxed_process,
         }
     }
 
@@ -832,124 +906,31 @@ impl BashTool {
         }
     }
 
-    /// Execute a command through the platform process sandbox (bwrap/Seatbelt).
+    /// Execute a command through the sandboxed execution world.
     ///
-    /// Creates a `std::process::Command`, wraps it via `SandboxExecutor`,
-    /// then converts to `tokio::process::Command` for async execution.
+    /// The platform wrap (bwrap/Seatbelt/Docker argv rewriting) happens
+    /// inside the injected [`ProcessProvider`] via its §4.11 `SpawnRewrite`
+    /// seam (`SandboxExecutorRewrite`) — this layer only describes intent.
     async fn execute_command_sandboxed(
         command: &str,
         cwd: Option<&str>,
         env: Option<&std::collections::HashMap<String, String>>,
         timeout_ms: Option<u64>,
-        executor: &SandboxExecutor,
+        world: &dyn ProcessProvider,
     ) -> Result<CommandOutput, std::io::Error> {
-        let mut cmd = std::process::Command::new("bash");
-        cmd.arg("-c")
-            .arg(command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
-        }
-
-        if let Some(env_vars) = env {
-            for (key, value) in env_vars {
-                cmd.env(key, value);
-            }
-        }
-
-        // Wrap the command with the platform sandbox (bwrap/Seatbelt).
-        executor
-            .wrap_command(&mut cmd)
-            .map_err(|e| std::io::Error::other(format!("Sandbox wrap failed: {e}")))?;
-
-        // Convert std::process::Command → tokio::process::Command
-        let mut cmd = Command::from(cmd);
-        cmd.kill_on_drop(true);
-
-        let output = if let Some(timeout) = timeout_ms {
-            let duration = std::time::Duration::from_millis(timeout);
-            tokio::time::timeout(duration, cmd.output())
-                .await
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        format!("Command timed out after {timeout}ms"),
-                    )
-                })?
-                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-        } else {
-            cmd.output()
-                .await
-                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-        };
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code().unwrap_or(-1);
-        let success = output.status.success();
-
-        Ok(CommandOutput {
-            stdout,
-            stderr,
-            exit_code,
-            success,
-        })
+        run_shell_captured(world, "bash", "-c", command, cwd, env, timeout_ms).await
     }
 
-    async fn execute_command(
+    /// Provider-injected captured run (§4.11): executes through the given
+    /// process world instead of building a spawn locally.
+    async fn execute_command_with_world(
+        world: &dyn ProcessProvider,
         command: &str,
         cwd: Option<&str>,
         env: Option<&std::collections::HashMap<String, String>>,
         timeout_ms: Option<u64>,
     ) -> Result<CommandOutput, std::io::Error> {
-        let mut cmd = Command::new("bash");
-        cmd.arg("-c")
-            .arg(command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
-        }
-
-        if let Some(env_vars) = env {
-            for (key, value) in env_vars {
-                cmd.env(key, value);
-            }
-        }
-
-        // Execute with timeout if specified
-        let output = if let Some(timeout) = timeout_ms {
-            let duration = std::time::Duration::from_millis(timeout);
-            tokio::time::timeout(duration, cmd.output())
-                .await
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        format!("Command timed out after {timeout}ms"),
-                    )
-                })?
-                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-        } else {
-            cmd.output()
-                .await
-                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-        };
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code().unwrap_or(-1);
-        let success = output.status.success();
-
-        Ok(CommandOutput {
-            stdout,
-            stderr,
-            exit_code,
-            success,
-        })
+        run_shell_captured(world, "bash", "-c", command, cwd, env, timeout_ms).await
     }
 }
 
@@ -1073,11 +1054,12 @@ impl Tool for BashTool {
                 bash_input.cwd.as_deref(),
                 bash_input.env.as_ref(),
                 bash_input.timeout,
-                ps,
+                ps.as_ref(),
             )
             .await
         } else {
-            Self::execute_command(
+            Self::execute_command_with_world(
+                self.direct_process.as_ref(),
                 &bash_input.command,
                 bash_input.cwd.as_deref(),
                 bash_input.env.as_ref(),
@@ -1216,33 +1198,38 @@ impl BashTool {
         }
 
         // Streaming path: spawn the process and read stdout line-by-line.
-        let mut cmd = Command::new("bash");
-        cmd.arg("-c")
-            .arg(&bash_input.command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
+        // The child comes from the injected process world via the §4.11
+        // piped-spawn seam; the provider keeps kill-on-drop semantics so a
+        // cancelled future cannot leave orphans behind.
+        let mut request = ProcessRequest::new("bash", &["-c", &bash_input.command]);
         if let Some(ref dir) = bash_input.cwd {
-            cmd.current_dir(dir);
+            request.cwd = Some(dir.clone().into());
         }
         if let Some(ref env_vars) = bash_input.env {
             for (key, value) in env_vars {
-                cmd.env(key, value);
+                request.env.push((key.clone(), value.clone()));
             }
         }
 
-        let mut child = cmd
-            .spawn()
+        let spec = shannon_tool_interface::PipedSpawn {
+            request,
+            pipe_stdin: false,
+            pipe_stdout: true,
+            pipe_stderr: true,
+            kill_on_drop: true,
+        };
+
+        let mut child = self
+            .direct_process
+            .spawn_piped(&spec)
+            .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn command: {e}")))?;
 
         let stdout = child
-            .stdout
-            .take()
+            .take_stdout()
             .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stdout".to_string()))?;
         let stderr = child
-            .stderr
-            .take()
+            .take_stderr()
             .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stderr".to_string()))?;
 
         let mut stdout_lines = BufReader::new(stdout).lines();
@@ -1336,8 +1323,8 @@ impl BashTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to wait for command: {e}")))?;
 
-        let exit_code = status.code().unwrap_or(-1);
-        let success = status.success();
+        let exit_code = status.code.unwrap_or(-1);
+        let success = status.success;
 
         let content = if success {
             format!("{stdout_buf}{command_description}")
@@ -1379,6 +1366,8 @@ impl BashTool {
 /// PowerShell tool implementation
 pub struct PowerShellTool {
     description: String,
+    /// Process world backing powershell invocations (§4.11).
+    process: Arc<dyn ProcessProvider>,
 }
 
 impl Default for PowerShellTool {
@@ -1391,60 +1380,33 @@ impl PowerShellTool {
     pub fn new() -> Self {
         Self {
             description: "Executes PowerShell commands and returns output".to_string(),
+            process: crate::defaults::process(),
         }
     }
 
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(mut self, process: Arc<dyn ProcessProvider>) -> Self {
+        self.process = process;
+        self
+    }
+
     async fn execute_command(
+        &self,
         command: &str,
         cwd: Option<&str>,
         env: Option<&std::collections::HashMap<String, String>>,
         timeout_ms: Option<u64>,
     ) -> Result<CommandOutput, std::io::Error> {
-        let mut cmd = Command::new("powershell");
-        cmd.arg("-Command")
-            .arg(command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
-        }
-
-        if let Some(env_vars) = env {
-            for (key, value) in env_vars {
-                cmd.env(key, value);
-            }
-        }
-
-        // Execute with timeout if specified
-        let output = if let Some(timeout) = timeout_ms {
-            let duration = std::time::Duration::from_millis(timeout);
-            tokio::time::timeout(duration, cmd.output())
-                .await
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        format!("Command timed out after {timeout}ms"),
-                    )
-                })?
-                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-        } else {
-            cmd.output()
-                .await
-                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-        };
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code().unwrap_or(-1);
-        let success = output.status.success();
-
-        Ok(CommandOutput {
-            stdout,
-            stderr,
-            exit_code,
-            success,
-        })
+        run_shell_captured(
+            self.process.as_ref(),
+            "powershell",
+            "-Command",
+            command,
+            cwd,
+            env,
+            timeout_ms,
+        )
+        .await
     }
 }
 
@@ -1528,14 +1490,15 @@ impl Tool for PowerShellTool {
             }
         }
 
-        let output = Self::execute_command(
-            &ps_input.command,
-            ps_input.cwd.as_deref(),
-            ps_input.env.as_ref(),
-            ps_input.timeout,
-        )
-        .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("Command failed: {e}")))?;
+        let output = self
+            .execute_command(
+                &ps_input.command,
+                ps_input.cwd.as_deref(),
+                ps_input.env.as_ref(),
+                ps_input.timeout,
+            )
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Command failed: {e}")))?;
 
         let content = if output.success {
             output.stdout

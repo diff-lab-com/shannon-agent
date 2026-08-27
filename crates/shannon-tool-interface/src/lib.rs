@@ -24,6 +24,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 
+pub mod providers;
+
+pub use providers::{
+    CapturedOutput, ChainedSpawnRewrite, DirEntryInfo, FileMeta, FileSystemProvider, PipedChild,
+    PipedSpawn, ProcessExit, ProcessProvider, ProcessRequest, SpawnRewrite,
+};
+
 /// Sender for streaming tool progress updates.
 /// Tools call `send(line)` to emit partial output during execution.
 pub trait ProgressSender: Send + Sync {

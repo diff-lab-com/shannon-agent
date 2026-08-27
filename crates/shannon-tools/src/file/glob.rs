@@ -10,6 +10,7 @@
 use crate::{ToolError, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_tool_interface::FileSystemProvider;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -97,12 +98,12 @@ fn format_modified_time(time: std::time::SystemTime) -> Option<String> {
 }
 
 /// Build a `GlobResult` from a file path, returning `None` on I/O errors.
-fn build_result(path: &Path) -> Option<GlobResult> {
-    let meta = std::fs::metadata(path).ok()?;
-    let modified = meta.modified().ok().and_then(format_modified_time);
+fn build_result(fs: &dyn FileSystemProvider, path: &Path) -> Option<GlobResult> {
+    let meta = fs.metadata_blocking(path).ok()?;
+    let modified = meta.modified.and_then(format_modified_time);
     Some(GlobResult {
         path: path.display().to_string(),
-        size: meta.len(),
+        size: meta.len,
         modified,
     })
 }
@@ -121,6 +122,15 @@ fn sort_results(results: &mut [GlobResult]) {
 /// Execute a glob search using the `ignore` crate for .gitignore-aware traversal
 /// and the `glob` crate for pattern matching.
 pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
+    execute_with(input, crate::defaults::fs().as_ref()).await
+}
+
+/// Provider-injected entry point (§4.11): metadata and canonicalization flow
+/// through the injected filesystem world.
+pub async fn execute_with(
+    input: GlobInput,
+    fs: &dyn FileSystemProvider,
+) -> Result<ToolOutput, ToolError> {
     let base_path = input.path.as_deref().unwrap_or(".");
     let base = PathBuf::from(base_path);
 
@@ -128,7 +138,7 @@ pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
     for component in base.components() {
         if matches!(component, std::path::Component::ParentDir) {
             // Allow if path resolves within cwd after canonicalization
-            if let Ok(canonical) = std::fs::canonicalize(&base) {
+            if let Ok(canonical) = fs.canonicalize_blocking(&base) {
                 let cwd = std::env::current_dir().unwrap_or_default();
                 if !canonical.starts_with(&cwd) {
                     return Ok(ToolOutput {
@@ -217,7 +227,7 @@ pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
                     continue;
                 }
 
-                if let Some(result) = build_result(path) {
+                if let Some(result) = build_result(fs, path) {
                     results.push(result);
                 }
             }

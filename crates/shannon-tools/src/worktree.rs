@@ -10,9 +10,9 @@ use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_tool_interface::{ProcessProvider, ProcessRequest};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::RwLock;
 use uuid::Uuid;
 
@@ -133,18 +133,35 @@ fn validate_worktree_name(name: &str) -> Result<(), ToolError> {
     Ok(())
 }
 
-/// Get the current git HEAD commit
-fn get_current_head_commit(repo_path: &Path) -> Result<Option<String>, ToolError> {
+/// Run a git command through the injected process world (§4.11); this
+/// module never builds a raw spawn invocation itself.
+fn run_git_sync(
+    process: &dyn ProcessProvider,
+    args: &[&str],
+) -> Result<(String, String, bool), ToolError> {
+    let request = ProcessRequest::new("git", args);
+    let output = process
+        .run_blocking(&request)
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to execute git: {e}")))?;
+    Ok((
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+        output.exit.success,
+    ))
+}
+
+/// Get the current git HEAD commit.
+fn get_current_head_commit(
+    process: &dyn ProcessProvider,
+    repo_path: &Path,
+) -> Result<Option<String>, ToolError> {
     let repo_str = repo_path.to_str().ok_or_else(|| {
         ToolError::ExecutionFailed("Repository path contains invalid UTF-8".to_string())
     })?;
-    let output = Command::new("git")
-        .args(["-C", repo_str, "rev-parse", "HEAD"])
-        .output()
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get HEAD commit: {e}")))?;
+    let (stdout, _, success) = run_git_sync(process, &["-C", repo_str, "rev-parse", "HEAD"])?;
 
-    if output.status.success() {
-        let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if success {
+        let commit = stdout.trim().to_string();
         Ok(Some(commit))
     } else {
         Ok(None)
@@ -190,6 +207,8 @@ fn change_directory(path: &str) -> Result<(), ToolError> {
 /// Worktree management tool
 pub struct WorktreeTool {
     description: String,
+    /// Process world backing git invocations (§4.11).
+    process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
 }
 
 impl Default for WorktreeTool {
@@ -202,7 +221,31 @@ impl WorktreeTool {
     pub fn new() -> Self {
         Self {
             description: "Manage git worktree sessions for isolated branch work".to_string(),
+            process: crate::defaults::process(),
         }
+    }
+
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(
+        mut self,
+        process: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider>,
+    ) -> Self {
+        self.process = process;
+        self
+    }
+
+    /// Run a git command through this tool's injected process world.
+    fn run_git(&self, args: &[&str]) -> Result<(String, String, bool), ToolError> {
+        let request = ProcessRequest::new("git", args);
+        let output = self
+            .process
+            .run_blocking(&request)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to execute git: {e}")))?;
+        Ok((
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+            output.exit.success,
+        ))
     }
 
     /// Enter a new worktree session
@@ -234,7 +277,7 @@ impl WorktreeTool {
         })?)?;
 
         // Get original HEAD commit
-        let original_head_commit = get_current_head_commit(&git_root).ok();
+        let original_head_commit = get_current_head_commit(self.process.as_ref(), &git_root).ok();
 
         // Generate or validate worktree name
         let worktree_name = if let Some(name) = input.name {
@@ -257,15 +300,12 @@ impl WorktreeTool {
             ToolError::ExecutionFailed("Worktree path contains invalid UTF-8".to_string())
         })?;
 
-        let output = Command::new("git")
-            .args(["worktree", "add", "-b", &branch_name, worktree_path_str])
-            .output()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create worktree: {e}")))?;
+        let (_, stderr, success) =
+            self.run_git(&["worktree", "add", "-b", &branch_name, worktree_path_str])?;
 
-        if !output.status.success() {
+        if !success {
             return Err(ToolError::ExecutionFailed(format!(
-                "Git worktree creation failed: {}",
-                String::from_utf8_lossy(&output.stderr)
+                "Git worktree creation failed: {stderr}"
             )));
         }
 
@@ -304,8 +344,9 @@ impl WorktreeTool {
         })
     }
 
-    /// Count changes in worktree
+    /// Count changes in worktree (spawns via the injected process world).
     fn count_worktree_changes(
+        &self,
         worktree_path: &Path,
         original_head: Option<&String>,
     ) -> Result<(usize, usize), ToolError> {
@@ -314,13 +355,10 @@ impl WorktreeTool {
         })?;
 
         // Count changed files
-        let status_output = Command::new("git")
-            .args(["-C", worktree_str, "status", "--porcelain"])
-            .output()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get git status: {e}")))?;
-
-        let changed_files = if status_output.status.success() {
-            String::from_utf8_lossy(&status_output.stdout)
+        let (status_stdout, _, status_success) =
+            self.run_git(&["-C", worktree_str, "status", "--porcelain"])?;
+        let changed_files = if status_success {
+            status_stdout
                 .lines()
                 .filter(|l| !l.trim().is_empty())
                 .count()
@@ -330,22 +368,15 @@ impl WorktreeTool {
 
         // Count new commits
         let commits = if let Some(original_commit) = original_head {
-            let revlist_output = Command::new("git")
-                .args([
-                    "-C",
-                    worktree_str,
-                    "rev-list",
-                    "--count",
-                    &format!("{original_commit}..HEAD"),
-                ])
-                .output()
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to count commits: {e}")))?;
-
-            if revlist_output.status.success() {
-                String::from_utf8_lossy(&revlist_output.stdout)
-                    .trim()
-                    .parse()
-                    .unwrap_or(0)
+            let (revlist_stdout, _, revlist_success) = self.run_git(&[
+                "-C",
+                worktree_str,
+                "rev-list",
+                "--count",
+                &format!("{original_commit}..HEAD"),
+            ])?;
+            if revlist_success {
+                revlist_stdout.trim().parse().unwrap_or(0)
             } else {
                 0
             }
@@ -371,7 +402,7 @@ impl WorktreeTool {
             })?
         };
 
-        let (changed_files, commits) = Self::count_worktree_changes(
+        let (changed_files, commits) = self.count_worktree_changes(
             Path::new(&session.worktree_path),
             session.original_head_commit.as_ref(),
         )?;
@@ -409,17 +440,12 @@ impl WorktreeTool {
             }
             ExitAction::Remove => {
                 // Remove worktree
-                let output = Command::new("git")
-                    .args(["worktree", "remove", &session.worktree_path])
-                    .output()
-                    .map_err(|e| {
-                        ToolError::ExecutionFailed(format!("Failed to remove worktree: {e}"))
-                    })?;
+                let (_, stderr, success) =
+                    self.run_git(&["worktree", "remove", &session.worktree_path])?;
 
-                if !output.status.success() {
+                if !success {
                     return Err(ToolError::ExecutionFailed(format!(
-                        "Failed to remove worktree: {}",
-                        String::from_utf8_lossy(&output.stderr)
+                        "Failed to remove worktree: {stderr}"
                     )));
                 }
 
