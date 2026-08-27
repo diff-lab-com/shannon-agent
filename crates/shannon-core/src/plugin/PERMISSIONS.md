@@ -48,7 +48,7 @@ declarations tighten; absence never does. Existing plugins without a
 | `mcp_tools`     | Routing model/tool-pipeline calls to `mcp__<plugin>__*` registry entries             | `ToolRegistry::attach_plugin_policy` + `check_plugin_permission` in `execute`/`execute_streaming` (covers query engine, streaming scheduler, and `ToolExecutionService` facade) |
 | `read_files`    | Host reading a command/skill extension's entry/template file during registration     | `admit_entry_read` via `admit_prompt_based_extension` |
 | `llm_api`       | Prompt-based extensions (command/skill) driving model turns                          | `admit_prompt_based_extension`; refusal skips registration of `/plugin:<name>` commands and skill triggers |
-| `write_files`   | **Reserved** — no post-manifest host-side write face exists today (installation necessarily writes before the manifest exists). Scaffolding ships as `PluginPermissionPolicy::allows_file_writes`; real enforcement arrives with the §4.11 FileSystemProvider seam, per the staged roadmap (权限强制 → 接缝化) | scaffolding only |
+| `write_files`   | **Enforced (execution world)** — the plugin's stdio server processes are *born inside* a manifest-derived sandbox at both spawn points | `PluginPermissionPolicy::spawn_sandbox_policy` derivation + `gated_discover_tools_stdio_guarded` / adapter spawn chain (`PluginSpawnGuard`) |
 
 ### Why these boundaries are honest
 
@@ -60,6 +60,46 @@ host and documents the rest, preferring narrow-and-true over wide-and-fake.
 In particular: refusing a stdio spawn blocks every effect a not-yet-running
 server could cause; interior side effects of an already-permitted server
 remain outside any host enforcement domain by construction.
+
+### write_files: declaration IS sandbox (post-§W)
+
+`write_files` is the one face whose interior effects Shannon *can* coerce —
+not by watching the child, but by building the child's execution world. A
+manifest that **declares** `write_files` gets every stdio server process
+spawned inside a sandbox derived from its own declaration:
+
+| Derived knob | Value |
+|--------------|-------|
+| writable roots | the plugin install directory + the current workspace (canonicalized) |
+| everything else | read-only (`/` readable; `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64` executable) |
+| network | allowed **only** if `network` is also declared (kernel-level where the platform supports it) |
+
+Enforcement points and platform matrix:
+
+- **Linux**: a Landlock ruleset (the §4.12 execution world) is installed
+  between fork and exec on the discovery spawn and on every per-call cold
+  spawn. A failed install aborts the spawn — a child never runs without its
+  boundary (fail-closed).
+- **macOS**: spawns are rewritten through the existing Seatbelt bridge
+  (`sandbox-exec` profiles).
+- **Anywhere the backend is missing** (pre-5.13 kernels, other platforms):
+  the spawn chain degrades to the exact legacy behavior **with a loud
+  `plugin/sandbox` warning** — never a silently fake restriction.
+
+Wiring: `PluginPermissionPolicy::spawn_sandbox_policy` (pure derivation,
+`None` for anything not explicitly declaring `write_files`) →
+`shannon_tools::sandbox::plugin_spawn_guard_for_manifest` (backend
+construction + degrade logging) → `gated_discover_tools_stdio_guarded` /
+`McpToolAdapter` (`PluginSpawnGuard` application at both spawn points).
+E2e acceptance: `crates/shannon-tools/tests/plugin_spawn_sandbox_tests.rs`
+(kernel-refused out-of-root write vs. in-root success vs. the undeclared
+compat control).
+
+Limits stated plainly: writes *inside* the declared roots are the granted
+capability and remain fully in the plugin's hands; the workspace snapshot is
+taken at plugin-load time (process CWD); and the boundary constrains the
+plugin's *own* processes only — it is not a Shannon-side tool gate and does
+not touch the permission kernel.
 
 ## Recipe: what to declare
 

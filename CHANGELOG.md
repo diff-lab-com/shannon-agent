@@ -6,6 +6,28 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ### Added
 
+- **`write_files` plugin permission enforcement — "declaration IS sandbox"**
+  (closes the last §4.9 scaffolding seam): a plugin manifest that declares
+  `write_files` now gets its stdio server processes spawned **inside a
+  manifest-derived execution world** at both spawn points (discovery +
+  per-call cold spawn). Derivation
+  (`PluginPermissionPolicy::spawn_sandbox_policy`): writable roots converge
+  to the plugin install dir + the current workspace, everything else stays
+  read-only, system binary roots stay executable, and network follows the
+  `network` declaration. Linux installs a Landlock fork-init ruleset
+  (fail-closed: a failed install aborts the spawn); macOS rides the existing
+  Seatbelt bridge; anywhere the backend is missing the spawn chain degrades
+  to legacy behavior with a loud `plugin/sandbox` warning — never a silent
+  fake sandbox. Undeclared manifests keep byte-for-byte legacy spawns (the
+  default-allow compat red line; the derivation is `None` for anything not
+  explicitly declaring `write_files`). New pieces: `plugin::spawn_sandbox`
+  (`PluginSpawnGuard`), `gated_discover_tools_stdio_guarded`,
+  `discover_tools_guarded`, `shannon_tools::sandbox::{plugin_spawn_world,
+  plugin_spawn_guard_for_manifest}`; REPL/CLI plugin loaders wired. E2e
+  acceptance in `crates/shannon-tools/tests/plugin_spawn_sandbox_tests.rs`
+  (kernel-refused out-of-root write vs. in-root success vs. undeclared
+  compat control); author-facing semantics updated in
+  `crates/shannon-core/src/plugin/PERMISSIONS.md`.
 - **OTLP telemetry bridge** (`shannon-core::telemetry`): `telemetry.rs`
   rewritten from atomic counters into an L0→OpenTelemetry bridge. A pure
   `build_span_tree` folds a session's events into the

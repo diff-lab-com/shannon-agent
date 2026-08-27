@@ -16,7 +16,7 @@
 //! | `mcp_tools`          | routing calls to `mcp__<plugin>__*` tools (host tool pipeline) | yes, via [`PluginToolPolicies`] on the tool registry |
 //! | `read_files`         | host reading the plugin entry/template file (command + skill extensions) | yes, [`PluginPermissionPolicy::admit_entry_read`] |
 //! | `llm_api`            | prompt-based extensions driving model turns | yes, [`admit_prompt_based_extension`] |
-//! | `write_files`        | host tool writes flow through the §4.11 `FileSystemProvider` seam (`WriteFilesPolicyGuard`); enforcement stays OFF | hook point ready, scaffolding only |
+//! | `write_files`        | the plugin's stdio server processes run inside a manifest-derived execution world (Linux Landlock fork-init / macOS Seatbelt bridge) | yes, [`PluginPermissionPolicy::spawn_sandbox_policy`] + [`crate::plugin::spawn_sandbox::PluginSpawnGuard`] |
 //!
 //! A manifest that **omits** `permissions` entirely deserializes to an empty
 //! list, and an empty list means "nothing declared" — every point stays open,
@@ -31,10 +31,13 @@
 //! See `PERMISSIONS.md` beside this module for the author-facing doc.
 
 use super::manifest::{PluginManifest, PluginPermission};
-use crate::mcp_tool_adapter::{DiscoveryResult, discover_tools, discover_tools_http};
+use crate::mcp_tool_adapter::{DiscoveryResult, discover_tools_guarded, discover_tools_http};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
+
+use shannon_tool_interface::sandbox::SandboxPolicy;
 
 /// Stable prefix carried by every denial raised on behalf of a manifest.
 ///
@@ -202,15 +205,61 @@ impl PluginPermissionPolicy {
         self.check(plugin, PluginPermission::ReadFiles)
     }
 
-    /// Reserved seam (§4.11 FileSystemProvider): today no Shannon-side write is
-    /// ever performed for a known manifest, so `write_files` ships as
-    /// scaffolding — consult this predicate there, not a throwing gate.
+    /// Derive the **spawn-sandbox policy** this manifest imposes on its own
+    /// stdio server processes: the write_files face closes the loop by
+    /// turning the declaration into an OS-enforced execution world
+    /// ("declaration IS sandbox") instead of an unobservable in-process
+    /// promise.
     ///
-    /// The §4.11 W3-3a task landed the execution-world seam: when enforcement
-    /// is implemented (W0 follow-up), it wraps the assembled
-    /// [`shannon_tool_interface::FileSystemProvider`] in a guard that consults
-    /// this predicate before forwarding mutating operations. Until then this
-    /// remains a pure predicate — nothing calls it from a forcing position.
+    /// Derivation:
+    ///
+    /// | trigger | result |
+    /// |---------|--------|
+    /// | `write_files` **declared** | `Some(policy)` — writable roots converge to the plugin install dir + the current workspace, everything else stays read-only, system binary roots stay executable, network follows the `network` declaration |
+    /// | anything else (including the *unspecified* allow-all default) | `None` — no boundary is built and the spawn chain stays byte-for-byte legacy |
+    ///
+    /// The membership test (not [`Self::allows_file_writes`]) is load-bearing
+    /// compatibility: an *unspecified* policy answers `allows` yes to
+    /// everything, and injecting a sandbox for every legacy plugin would
+    /// contradict the "undeclared = unchanged" contract.
+    ///
+    /// Paths are canonicalized best-effort so the kernel-facing grant table
+    /// and the user-space policy math agree on the same directories.
+    pub fn spawn_sandbox_policy(
+        &self,
+        install_dir: &Path,
+        workspace: &Path,
+    ) -> Option<SandboxPolicy> {
+        if !self.permissions.contains(&PluginPermission::WriteFiles) {
+            return None;
+        }
+        let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        Some(SandboxPolicy {
+            writable_roots: vec![canonical(install_dir), canonical(workspace)],
+            // Everything outside the writable pair stays readable: the server
+            // must still load its own interpreter, dynamic libraries and the
+            // Shannon-provided script — writes are the declared capability.
+            readable_roots: vec![PathBuf::from("/")],
+            // System binary dirs, mirroring `seed_policy`'s defaults so
+            // `sh`, the dynamic loader and common tools keep running.
+            executable_roots: ["/usr", "/bin", "/sbin", "/lib", "/lib64"]
+                .iter()
+                .map(PathBuf::from)
+                .collect(),
+            network: self.permissions.contains(&PluginPermission::Network),
+        })
+    }
+
+    /// Grant status of the write face.
+    ///
+    /// Historical scaffolding predicate (§4.9): kept because the name is
+    /// pinned by tests and doc references, but note the semantic split —
+    /// * enforcement consults [`Self::spawn_sandbox_policy`], which answers
+    ///   `None` for unspecified policies so the legacy default stays
+    ///   passthrough;
+    /// * this predicate still answers via the allow-all branch for
+    ///   unspecified policies (`true`), matching the general `allows`
+    ///   contract.
     pub fn allows_file_writes(&self) -> bool {
         self.allows(PluginPermission::WriteFiles)
     }
@@ -237,6 +286,11 @@ pub fn admit_prompt_based_extension(
 /// spawns re-check the same declaration. Errors are unified strings: denials
 /// render [`PluginPermissionError`] (recognizable via [`DENY_PREFIX`]),
 /// everything else is the regular discovery failure text.
+///
+/// This is the no-boundary form: the spawn chain is untouched. Plugins whose
+/// manifest declares `write_files` go through
+/// [`gated_discover_tools_stdio_guarded`], which additionally installs the
+/// manifest-derived execution world around every spawn (discovery included).
 pub async fn gated_discover_tools_stdio(
     policy: &Arc<PluginPermissionPolicy>,
     plugin_name: &str,
@@ -244,6 +298,27 @@ pub async fn gated_discover_tools_stdio(
     args: &[String],
     env: &HashMap<String, String>,
     timeout_secs: Option<u64>,
+) -> Result<DiscoveryResult, String> {
+    gated_discover_tools_stdio_guarded(policy, plugin_name, command, args, env, timeout_secs, None)
+        .await
+}
+
+/// [`gated_discover_tools_stdio`] with an optional execution-world boundary
+/// (§ write_files enforcement, "declaration IS sandbox").
+///
+/// When `spawn_guard` is `Some`, **every** stdio spawn of this plugin — the
+/// discovery spawn here and each adapter's per-call cold spawn — runs inside
+/// the boundary; a failed fork-time install aborts the spawn (fail-closed).
+/// `None` keeps the exact legacy path (zero overhead, no `pre_exec` hook),
+/// which is what every non-`write_files` manifest gets.
+pub async fn gated_discover_tools_stdio_guarded(
+    policy: &Arc<PluginPermissionPolicy>,
+    plugin_name: &str,
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+    timeout_secs: Option<u64>,
+    spawn_guard: Option<Arc<crate::plugin::spawn_sandbox::PluginSpawnGuard>>,
 ) -> Result<DiscoveryResult, String> {
     policy
         .check(plugin_name, PluginPermission::ExecuteCommands)
@@ -265,7 +340,8 @@ pub async fn gated_discover_tools_stdio(
         policy.permissions(),
     );
 
-    let mut result = discover_tools(plugin_name, command, args, env, timeout_secs).await?;
+    let mut result =
+        discover_tools_guarded(plugin_name, command, args, env, timeout_secs, spawn_guard).await?;
     for tool in &mut result.tools {
         tool.set_policy(Arc::clone(policy));
     }
@@ -529,5 +605,82 @@ template = "hi"
         assert!(empty_only.allows_file_writes());
         let read_only = policy(&["read_files"]);
         assert!(!read_only.allows_file_writes());
+    }
+
+    // ── write_files enforcement: spawn-sandbox derivation ──────────────
+
+    use std::path::Path;
+
+    /// Only a *declared* write_files face derives a spawn-sandbox policy —
+    /// and the derivation scopes writes to install dir + workspace, keeps
+    /// the rest read-only, and follows the network declaration. The
+    /// unspecified policy derives `None`: that membership-vs-allow-all
+    /// distinction IS the default-allow compat contract.
+    #[test]
+    fn spawn_sandbox_derivation_scopes_write_files_declaration() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let install = dir.path().join("plugins").join("probe");
+        std::fs::create_dir_all(&install).expect("install dir");
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(&workspace).expect("workspace dir");
+
+        // Compat red line: unspecified manifests never gain a boundary.
+        assert!(
+            policy(&[])
+                .spawn_sandbox_policy(&install, &workspace)
+                .is_none()
+        );
+        // Declared faces without write_files stay passthrough too.
+        assert!(
+            policy(&["read_files", "mcp_tools"])
+                .spawn_sandbox_policy(&install, &workspace)
+                .is_none()
+        );
+
+        let derived = policy(&["write_files"])
+            .spawn_sandbox_policy(&install, &workspace)
+            .expect("write_files derives a policy");
+        // Paths canonicalized (dir has no symlinks here, but resolve the
+        // tempdir's own /tmp alias on macOS before comparing).
+        let install_c = std::fs::canonicalize(&install).expect("install");
+        let workspace_c = std::fs::canonicalize(&workspace).expect("workspace");
+        assert_eq!(derived.writable_roots, vec![install_c, workspace_c]);
+        assert_eq!(derived.readable_roots, vec![Path::new("/")]);
+        assert!(
+            !derived.network,
+            "network undeclared ⇒ child world has none"
+        );
+        for root in ["/usr", "/bin", "/sbin", "/lib", "/lib64"] {
+            assert!(
+                derived
+                    .executable_roots
+                    .contains(&std::path::PathBuf::from(root)),
+                "system binary root {root} must stay executable"
+            );
+        }
+
+        // Declared network propagates into the child world.
+        let networked = policy(&["write_files", "network"])
+            .spawn_sandbox_policy(&install, &workspace)
+            .expect("derives");
+        assert!(networked.network, "network follows its declaration");
+    }
+
+    /// The derivation canonicalizes what it can and falls back verbatim for
+    /// unresolvable inputs — production roots are absolute (home-relative
+    /// plugins dir + process CWD), and the kernel boundary (`PathFd` at fork)
+    /// is the fail-closed backstop for any unusable root, never a silent
+    /// re-grant. The readable root stays the absolute `/` either way.
+    #[test]
+    fn spawn_sandbox_derivation_canonicalizes_or_falls_back_verbatim() {
+        let derived = policy(&["write_files"])
+            .spawn_sandbox_policy(Path::new("definitely/missing/dir"), Path::new("."))
+            .expect("derives");
+        assert_eq!(
+            derived.writable_roots[0],
+            Path::new("definitely/missing/dir"),
+            "unresolvable input is kept verbatim, not silently re-rooted"
+        );
+        assert_eq!(derived.readable_roots, vec![Path::new("/")]);
     }
 }

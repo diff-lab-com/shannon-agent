@@ -602,6 +602,171 @@ impl<F: Fn() -> io::Result<()> + Send + Sync> ChildWorldInit for FnChildWorldIni
     }
 }
 
+// ---------------------------------------------------------------------------
+// § write_files enforcement — plugin stdio spawn chain
+// ---------------------------------------------------------------------------
+
+/// A manifest-derived execution-world boundary ready to install around a
+/// plugin's stdio server spawn chain (write_files enforcement: "declaration
+/// IS sandbox").
+#[derive(Clone)]
+pub struct PluginSpawnWorld {
+    /// Boundary handed to `gated_discover_tools_stdio_guarded` and stamped
+    /// onto every discovered adapter (discovery + per-call cold spawns).
+    pub guard: Arc<shannon_core::plugin::PluginSpawnGuard>,
+    /// The derived policy this world enforces (kept for operator logging).
+    pub policy: SandboxPolicy,
+    /// Non-fatal degrades discovered at construction (e.g. the kernel lacks
+    /// the network ABI); surfaced to logs by the assemblers.
+    pub notices: Vec<DegradeNotice>,
+}
+
+impl std::fmt::Debug for PluginSpawnWorld {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PluginSpawnWorld")
+            .field("kind", &self.guard.kind())
+            .field("writable_roots", &self.policy.writable_roots)
+            .field("network", &self.policy.network)
+            .field("notices", &self.notices.len())
+            .finish()
+    }
+}
+
+/// Build the execution-world boundary for a manifest-derived plugin sandbox
+/// policy.
+///
+/// Platform matrix:
+///
+/// | host | boundary |
+/// |------|----------|
+/// | Linux | Landlock fork-init world ([`landlock_backend::child_world_install`]) — kernel-enforced, fail-closed per spawn |
+/// | macOS | the existing Seatbelt bridge ([`shannon_core::sandbox::SandboxExecutor`]) — spawns rewritten through `sandbox-exec` |
+/// | other / backend missing | `Err(SandboxError::Unsupported)` — callers degrade by spawning **without** a boundary plus a loud warning; a silent fake sandbox is never produced |
+pub fn plugin_spawn_world(
+    policy: SandboxPolicy,
+    workspace: &Path,
+) -> Result<PluginSpawnWorld, SandboxError> {
+    // The Linux fork-init world is fully determined by the policy; the
+    // workspace parameter exists for the macOS Seatbelt config.
+    #[cfg(target_os = "linux")]
+    let _ = workspace;
+    #[cfg(target_os = "linux")]
+    {
+        let policy = Arc::new(policy);
+        let (init, notices) = landlock_backend::child_world_install(Arc::clone(&policy))?;
+        Ok(PluginSpawnWorld {
+            guard: Arc::new(shannon_core::plugin::PluginSpawnGuard::ForkInit(init)),
+            policy: (*policy).clone(),
+            notices,
+        })
+    }
+    #[cfg(target_os = "macos")]
+    {
+        seatbelt_plugin_world(policy, workspace)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = workspace;
+        Err(SandboxError::Unsupported {
+            backend: "plugin-spawn-world".to_string(),
+            detail: "no execution-world backend for this platform".to_string(),
+        })
+    }
+}
+
+/// macOS Seatbelt arm: profile-generated argv bridge built on the existing
+/// executor, scoped to the plugin's declared writable roots.
+#[cfg(target_os = "macos")]
+fn seatbelt_plugin_world(
+    policy: SandboxPolicy,
+    workspace: &Path,
+) -> Result<PluginSpawnWorld, SandboxError> {
+    use shannon_core::sandbox::{NetworkAccess, SandboxConfig, SandboxExecutor, SandboxType};
+
+    let mut config = SandboxConfig::new(workspace);
+    for root in &policy.writable_roots {
+        if root.as_path() != workspace {
+            config = config.readwrite_mount(root);
+        }
+    }
+    if policy.network {
+        config = config.with_network(NetworkAccess::Full);
+    }
+    let executor = Arc::new(SandboxExecutor::new(config));
+    if executor.sandbox_type() != SandboxType::Seatbelt {
+        return Err(SandboxError::Unsupported {
+            backend: "seatbelt".to_string(),
+            detail: "sandbox-exec not available on this host".to_string(),
+        });
+    }
+    Ok(PluginSpawnWorld {
+        guard: Arc::new(shannon_core::plugin::PluginSpawnGuard::Seatbelt(executor)),
+        policy,
+        notices: vec![DegradeNotice::new(
+            "seatbelt-argv-bridge",
+            "plugin stdio spawns run under sandbox-exec profiles; enforcement is \
+             profile-based (argv bridge), not a fork-time kernel world",
+        )],
+    })
+}
+
+/// Derive + build the spawn-chain boundary for one loaded plugin (the single
+/// wiring point used by the REPL and CLI plugin loaders).
+///
+/// * No `write_files` declaration ⇒ `None` with nothing constructed — the
+///   zero-overhead passthrough that keeps the default-allow compat contract.
+/// * Declared and backend available ⇒ `Some(guard)`; every degrade notice is
+///   logged under the `plugin/sandbox` target.
+/// * Declared but the platform cannot enforce ⇒ loud `plugin/sandbox`
+///   warning and `None`: the spawn chain proceeds exactly as before this
+///   enforcement existed (degrade, never a silently-fake sandbox).
+pub fn plugin_spawn_guard_for_manifest(
+    policy: &shannon_core::plugin::PluginPermissionPolicy,
+    plugin_name: &str,
+    manifest_path: &Path,
+) -> Option<Arc<shannon_core::plugin::PluginSpawnGuard>> {
+    // Workspace snapshot: the process working directory at plugin-load time.
+    // Documented limitation — the boundary pins this directory for the
+    // plugin's lifetime in the session.
+    let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let derived = policy.spawn_sandbox_policy(
+        manifest_path.parent().unwrap_or_else(|| Path::new(".")),
+        &workspace,
+    )?;
+
+    match plugin_spawn_world(derived, &workspace) {
+        Ok(world) => {
+            for notice in &world.notices {
+                tracing::warn!(
+                    target: "plugin/sandbox",
+                    plugin = %plugin_name,
+                    tag = %notice.tag,
+                    "sandbox degrade: {}",
+                    notice.detail
+                );
+            }
+            tracing::info!(
+                target: "plugin/sandbox",
+                plugin = %plugin_name,
+                kind = %world.guard.kind(),
+                writable = ?world.policy.writable_roots,
+                "plugin stdio spawns sandboxed (write_files declaration = execution world)"
+            );
+            Some(world.guard)
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "plugin/sandbox",
+                plugin = %plugin_name,
+                error = %e,
+                "write_files declared but no execution-world backend is available on this \
+                 host; spawning WITHOUT the sandbox boundary (degraded, never fake-restricted)"
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -867,5 +1032,100 @@ executable = ["/usr/local"]
             0
         );
         assert_ne!(read_set, 0);
+    }
+
+    // ── § write_files enforcement: plugin spawn chain ──────────────────
+
+    fn plugin_policy(permissions: &[&str]) -> shannon_core::plugin::PluginPermissionPolicy {
+        let perms: Vec<shannon_core::plugin::PluginPermission> = permissions
+            .iter()
+            .map(|n| serde_json::from_str(&format!("\"{n}\"")).expect("known permission"))
+            .collect();
+        shannon_core::plugin::PluginPermissionPolicy::from_permissions(perms)
+    }
+
+    /// The wiring helper's compat contract: no `write_files` declaration ⇒
+    /// `None` and nothing constructed (zero-overhead passthrough).
+    #[test]
+    fn manifest_helper_passes_through_without_write_files() {
+        for perms in [
+            Vec::new(),         // unspecified (default-allow legacy)
+            vec!["read_files"], // declared, different face
+            vec!["execute_commands", "mcp_tools"],
+        ] {
+            let policy = plugin_policy(&perms);
+            assert!(
+                plugin_spawn_guard_for_manifest(&policy, "probe", Path::new("/tmp/x/plugin.toml"))
+                    .is_none(),
+                "permissions {perms:?} must not install a spawn boundary"
+            );
+        }
+    }
+
+    /// Declared `write_files`: the boundary matches host capability —
+    /// enforced where the platform has a backend, otherwise loudly degraded
+    /// to `None`. Both outcomes carry operator-visible signal; neither one
+    /// can be a silent fake restriction.
+    #[test]
+    fn manifest_helper_matches_host_capability_for_write_files() {
+        let dir = tempdir();
+        let manifest = dir.path().join("plugin.toml");
+        std::fs::write(&manifest, "# fixture\n").expect("manifest fixture");
+        let policy = plugin_policy(&["write_files", "execute_commands"]);
+
+        let guard = plugin_spawn_guard_for_manifest(&policy, "probe", &manifest);
+        match guard {
+            Some(guard) => {
+                let expected = if cfg!(target_os = "linux") {
+                    "landlock"
+                } else if cfg!(target_os = "macos") {
+                    "seatbelt"
+                } else {
+                    unreachable!("helper never constructs a guard without a backend");
+                };
+                assert_eq!(guard.kind(), expected);
+            }
+            None => {
+                // Degrade path: only legitimate when the platform lacks any
+                // execution-world backend.
+                assert!(
+                    !cfg!(any(target_os = "linux", target_os = "macos")),
+                    "degradation on Linux/macOS would mean a backend-capable host silently \
+                     lost enforcement"
+                );
+            }
+        }
+    }
+
+    /// The constructed world's policy is exactly the derived one: writable
+    /// roots converge to install dir + workspace, network follows the
+    /// declaration.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn plugin_spawn_world_policy_is_the_derived_one() {
+        let install = tempdir();
+        let workspace = tempdir();
+        let policy = plugin_policy(&["write_files"]);
+        let derived = policy
+            .spawn_sandbox_policy(install.path(), workspace.path())
+            .expect("write_files derives a policy");
+        let world = match plugin_spawn_world(derived.clone(), workspace.path()) {
+            Ok(world) => world,
+            Err(SandboxError::Unsupported { detail, .. }) => {
+                println!("host lacks landlock ({detail}); nothing to assert about a world");
+                return;
+            }
+            Err(other) => panic!("unexpected sandbox error: {other}"),
+        };
+        assert_eq!(world.policy, derived);
+        assert_eq!(world.guard.kind(), "landlock");
+        assert_eq!(
+            world.policy.writable_roots,
+            vec![
+                install.path().canonicalize().expect("install"),
+                workspace.path().canonicalize().expect("workspace"),
+            ]
+        );
+        assert!(!world.policy.network, "network follows its declaration");
     }
 }
