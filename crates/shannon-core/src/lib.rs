@@ -73,6 +73,7 @@ pub mod rate_limit_messages;
 pub mod remote_settings;
 pub mod settings;
 pub mod settings_sync;
+pub mod signals;
 pub mod smart_context;
 pub mod substitute;
 pub mod suggestions;
