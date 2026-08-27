@@ -696,18 +696,29 @@ impl Repl {
                                 &plugin.manifest,
                             ),
                         );
+                        // write_files enforcement ("declaration IS sandbox"):
+                        // a declared write_files face installs a manifest-
+                        // derived execution world around every stdio spawn
+                        // (discovery + per-call); anything else stays a
+                        // zero-overhead passthrough.
+                        let spawn_guard = shannon_tools::sandbox::plugin_spawn_guard_for_manifest(
+                            &policy,
+                            &plugin.manifest.name,
+                            &plugin.path,
+                        );
                         match plugin.manifest.kind() {
                             Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
                                 if let Some(command) = transport.command() {
                                     let args = transport.args().to_vec();
                                     match runtime.block_on(
-                                        shannon_core::plugin::gated_discover_tools_stdio(
+                                        shannon_core::plugin::gated_discover_tools_stdio_guarded(
                                             &policy,
                                             &plugin.manifest.name,
                                             command,
                                             &args,
                                             &std::collections::HashMap::new(),
                                             None,
+                                            spawn_guard,
                                         ),
                                     ) {
                                         Ok(result) => {
@@ -1183,17 +1194,26 @@ impl Repl {
                                     &plugin.manifest,
                                 ),
                             );
+                            // write_files enforcement: declared write_files ⇒
+                            // stdio spawns run inside the manifest-derived
+                            // execution world; otherwise passthrough.
+                            let spawn_guard = shannon_tools::sandbox::plugin_spawn_guard_for_manifest(
+                                &policy,
+                                &plugin.manifest.name,
+                                &plugin.path,
+                            );
                             match plugin.manifest.kind() {
                                 Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
                                     if let Some(command) = transport.command() {
                                         let args = transport.args().to_vec();
-                                        match shannon_core::plugin::gated_discover_tools_stdio(
+                                        match shannon_core::plugin::gated_discover_tools_stdio_guarded(
                                             &policy,
                                             &plugin.manifest.name,
                                             command,
                                             &args,
                                             &std::collections::HashMap::new(),
                                             None,
+                                            spawn_guard,
                                         ).await {
                                             Ok(result) => {
                                                 tool_registry.attach_plugin_policy(

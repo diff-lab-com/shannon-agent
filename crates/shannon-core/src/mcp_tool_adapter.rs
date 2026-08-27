@@ -14,6 +14,7 @@ use shannon_types::recover_lock;
 
 use crate::plugin::manifest::PluginPermission;
 use crate::plugin::permissions::{PermissionDecision, PluginPermissionPolicy, emit_decision};
+use crate::plugin::spawn_sandbox::PluginSpawnGuard;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -49,6 +50,10 @@ pub struct McpToolAdapter {
     /// Manifest-derived permission policy, attached only for plugin-sourced
     /// adapters. `None` keeps plain `.mcp.json` servers ungated.
     policy: Option<Arc<PluginPermissionPolicy>>,
+    /// Execution-world boundary installed around this plugin's stdio server
+    /// spawns (write_files enforcement, "declaration IS sandbox"). `None` —
+    /// the default — spawns byte-identically to the pre-sandbox path.
+    spawn_guard: Option<Arc<PluginSpawnGuard>>,
 }
 
 impl McpToolAdapter {
@@ -71,6 +76,24 @@ impl McpToolAdapter {
     /// The attached manifest policy, if this adapter came from a plugin.
     pub fn policy(&self) -> Option<&Arc<PluginPermissionPolicy>> {
         self.policy.as_ref()
+    }
+
+    /// Attach the execution-world boundary for this plugin's stdio spawns
+    /// (plugin loading path only; write_files-declaring manifests).
+    pub fn with_spawn_guard(mut self, guard: Arc<PluginSpawnGuard>) -> Self {
+        self.spawn_guard = Some(guard);
+        self
+    }
+
+    /// Same as [`with_spawn_guard`](Self::with_spawn_guard) for already-built
+    /// adapters.
+    pub fn set_spawn_guard(&mut self, guard: Option<Arc<PluginSpawnGuard>>) {
+        self.spawn_guard = guard;
+    }
+
+    /// The attached spawn boundary, if this plugin declared `write_files`.
+    pub fn spawn_guard(&self) -> Option<&Arc<PluginSpawnGuard>> {
+        self.spawn_guard.as_ref()
     }
 
     /// Unified gate: refuse when the owning manifest denies `required`.
@@ -130,6 +153,7 @@ impl McpToolAdapter {
             headers: HashMap::new(),
             oauth_scopes: Vec::new(),
             policy: None,
+            spawn_guard: None,
         }
     }
 
@@ -156,6 +180,7 @@ impl McpToolAdapter {
             headers,
             oauth_scopes: Vec::new(),
             policy: None,
+            spawn_guard: None,
         }
     }
 
@@ -385,9 +410,25 @@ impl Tool for McpToolAdapter {
             "stdio server spawn (tool call)",
         )?;
 
-        // Spawn the server process
-        let mut cmd = tokio::process::Command::new(program);
-        cmd.args(args)
+        // Spawn the server process. A write_files-declaring plugin carries an
+        // execution-world boundary here: the argv prep step runs first (the
+        // Seatbelt bridge may rewrite program/args), then the fork-time world
+        // installer is hooked onto the command — the child can never start
+        // without its boundary. `None` guard ⇒ exact legacy spawn shape.
+        let (spawn_program, spawn_args) = match &self.spawn_guard {
+            Some(guard) => guard
+                .prepare_program_args(program, args, &self.env)
+                .map_err(|e| {
+                    ToolError::ExecutionFailed(format!(
+                        "MCP server '{}' spawn sandbox failed: {e}",
+                        self.server_name
+                    ))
+                })?,
+            None => (program.clone(), args.to_vec()),
+        };
+
+        let mut cmd = tokio::process::Command::new(&spawn_program);
+        cmd.args(&spawn_args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -395,6 +436,10 @@ impl Tool for McpToolAdapter {
         // Set environment variables
         for (key, value) in &self.env {
             cmd.env(key, value);
+        }
+
+        if let Some(guard) = &self.spawn_guard {
+            guard.install_fork_init(&mut cmd);
         }
 
         let mut child = cmd.spawn().map_err(|e| {
@@ -518,6 +563,23 @@ pub async fn discover_tools(
     env: &HashMap<String, String>,
     timeout_secs: Option<u64>,
 ) -> Result<DiscoveryResult, String> {
+    discover_tools_guarded(server_name, command, args, env, timeout_secs, None).await
+}
+
+/// [`discover_tools`] with an optional execution-world boundary.
+///
+/// When `spawn_guard` is `Some` (write_files-declaring plugin), the
+/// discovery spawn itself runs inside the boundary **and** every returned
+/// adapter carries a clone so its per-call cold spawns are equally enforced.
+/// `None` keeps the exact legacy path.
+pub async fn discover_tools_guarded(
+    server_name: &str,
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+    timeout_secs: Option<u64>,
+    spawn_guard: Option<Arc<PluginSpawnGuard>>,
+) -> Result<DiscoveryResult, String> {
     // Build the full command
     let mut parts: Vec<String> = command.split_whitespace().map(|s| s.to_string()).collect();
     parts.extend(args.iter().cloned());
@@ -529,15 +591,28 @@ pub async fn discover_tools(
     let program = &parts[0];
     let cmd_args = &parts[1..];
 
-    // Spawn the server process
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(cmd_args)
+    // Spawn the server process. Guard prep runs before the command exists so
+    // argv-level bridges can rewrite the invocation; fork-time worlds hook
+    // onto the command itself (fail-closed).
+    let (spawn_program, spawn_args) = match &spawn_guard {
+        Some(guard) => guard
+            .prepare_program_args(program, cmd_args, env)
+            .map_err(|e| format!("MCP server '{server_name}' spawn sandbox failed: {e}"))?,
+        None => ((*program).to_string(), cmd_args.to_vec()),
+    };
+
+    let mut cmd = tokio::process::Command::new(&spawn_program);
+    cmd.args(&spawn_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     for (key, value) in env {
         cmd.env(key, value);
+    }
+
+    if let Some(guard) = &spawn_guard {
+        guard.install_fork_init(&mut cmd);
     }
 
     let mut child = cmd
@@ -641,7 +716,7 @@ pub async fn discover_tools(
                             .cloned()
                             .unwrap_or(serde_json::json!({"type": "object"}));
 
-                        discovered_tools.push(McpToolAdapter::new(
+                        let mut adapter = McpToolAdapter::new(
                             server_name.to_string(),
                             tool_name,
                             Some(command.to_string()),
@@ -649,7 +724,11 @@ pub async fn discover_tools(
                             env.clone(),
                             description,
                             input_schema,
-                        ));
+                        );
+                        if let Some(guard) = &spawn_guard {
+                            adapter.set_spawn_guard(Some(Arc::clone(guard)));
+                        }
+                        discovered_tools.push(adapter);
                     }
                 }
             }
