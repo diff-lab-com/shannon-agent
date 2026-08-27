@@ -106,6 +106,7 @@ fn every_task_passes_dry_run_individually() {
         dry_run: true,
         out_dir_override: Some(tmp.path().to_path_buf()),
         failure_rules: None,
+        instruction_directive: None,
     };
 
     let mut violations = Vec::new();
@@ -133,12 +134,14 @@ fn consecutive_runs_stay_digest_stable() {
         dry_run: true,
         out_dir_override: Some(out_a.path().to_path_buf()),
         failure_rules: None,
+        instruction_directive: None,
     };
     let options_b = EvalOptions {
         bin_path: None,
         dry_run: true,
         out_dir_override: Some(out_b.path().to_path_buf()),
         failure_rules: None,
+        instruction_directive: None,
     };
 
     let (report_a, run_dir_a) = run_suite(&tasks, &options_a).expect("suite A");
@@ -190,6 +193,7 @@ fn full_suite_metrics_are_complete_for_every_task() {
         dry_run: true,
         out_dir_override: Some(out_root.path().to_path_buf()),
         failure_rules: None,
+        instruction_directive: None,
     };
 
     let (report, run_dir) = run_suite(&tasks, &options).expect("suite runs");
@@ -265,6 +269,7 @@ fn version_comparison_diff_between_runs_reports_deltas() {
         dry_run: true,
         out_dir_override: Some(dir.to_path_buf()),
         failure_rules: None,
+        instruction_directive: None,
     };
 
     // Baseline: all green.

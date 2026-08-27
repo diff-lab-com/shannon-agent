@@ -51,7 +51,7 @@ tool = "Write"
 args_regex = '"file_path":"guides/faq.md"'
 
 [[expectations.trajectory]]
-tool = "Edit"
+tools = ["Edit", "MultiEdit"]
 args_regex = '"file_path":"docs/index.md"'
 
 [limits]

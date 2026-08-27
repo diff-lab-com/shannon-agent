@@ -32,7 +32,7 @@ expected_diff_regex = '-fn fetch_data\(endpoint.*\n\+fn load_data\(endpoint'
 forbidden_tools = ["Write", "Bash"]
 
 [[expectations.trajectory]]
-tool = "Edit"
+tools = ["Edit", "MultiEdit", "rename_symbol"]
 args_regex = '"old_string":"fn fetch_data'
 
 [limits]

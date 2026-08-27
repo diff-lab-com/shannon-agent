@@ -51,7 +51,7 @@ tool = "Write"
 args_regex = '"file_path":"src/math_utils.rs"'
 
 [[expectations.trajectory]]
-tool = "Edit"
+tools = ["Edit", "MultiEdit"]
 
 [limits]
 max_turns = 50

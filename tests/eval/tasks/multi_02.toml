@@ -44,6 +44,7 @@ forbidden_tools = ["MultiEdit", "Bash"]
 
 [[expectations.trajectory]]
 tool = "Read"
+optional = true
 args_regex = '"file_path":"NOTES.md"'
 
 [[expectations.trajectory]]

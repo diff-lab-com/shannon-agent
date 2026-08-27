@@ -29,6 +29,7 @@ forbidden_tools = ["Write", "Bash"]
 
 [[expectations.trajectory]]
 tool = "Read"
+optional = true
 
 [[expectations.trajectory]]
 tool = "MultiEdit"

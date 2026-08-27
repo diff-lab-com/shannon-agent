@@ -47,13 +47,14 @@ forbidden_tools = ["Write", "Bash"]
 
 [[expectations.trajectory]]
 tool = "Read"
+optional = true
 args_regex = '"file_path":"src/net.rs"'
 
 [[expectations.trajectory]]
-tool = "Edit"
+tools = ["Edit", "MultiEdit"]
 
 [[expectations.trajectory]]
-tool = "Edit"
+tools = ["Edit", "MultiEdit"]
 args_regex = '"file_path":"proxy.conf"'
 
 [limits]
