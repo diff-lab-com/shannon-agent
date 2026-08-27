@@ -2401,6 +2401,19 @@ impl QueryEngine {
                                             // a prior synthesized stop event). Drain every
                                             // remaining per-index entry — multiple parallel tool
                                             // calls may have been mid-flight.
+                                            //
+                                            // This is a BROADCAST path, not just a
+                                            // bookkeeping path: entries here reached the
+                                            // engine without a ContentBlockStop, so the
+                                            // canonical ToolUseRequest emission (P3-8)
+                                            // never fired for them. Emitting here keeps
+                                            // OpenAI-style providers on parity with the
+                                            // Anthropic path (one event, fully parsed
+                                            // input) even when an adapter gap strands
+                                            // state. The P3-10 query-scope dedup applies
+                                            // exactly as in the ContentBlockStop handler:
+                                            // a dropped duplicate is also withheld from
+                                            // tool_inputs so the id runs once.
                                             for (id, name, raw) in
                                                 tool_call_state.drain().map(|(_, v)| v)
                                             {
@@ -2408,6 +2421,25 @@ impl QueryEngine {
                                                     &raw,
                                                 ) {
                                                     Ok(json_val) => {
+                                                        if !seen_tool_use_ids_query
+                                                            .insert(id.clone())
+                                                        {
+                                                            tracing::warn!(
+                                                                "tool_use_id dedup (post-stream \
+                                                                 flush): dropping duplicate \
+                                                                 emission for '{name}' (id={id})"
+                                                            );
+                                                            continue;
+                                                        }
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::ToolUseRequest {
+                                                                query_id,
+                                                                tool_use_id: id.clone(),
+                                                                tool_name: name.clone(),
+                                                                tool_input: json_val.clone(),
+                                                            }
+                                                        );
                                                         tool_inputs.push((
                                                             id.clone(),
                                                             name.clone(),

@@ -603,6 +603,73 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_zhipu_terminal_chunk_with_usage_synthesizes_content_block_stop() {
+        // Zhipu/GLM coding-plan shape: delta.tool_calls frames repeat the SAME
+        // id while streaming argument fragments, and the TERMINAL chunk packs
+        // `finish_reason: "tool_calls"` AND real usage into one frame. The
+        // usage early-return in normalize_openai_event used to skip the
+        // finish_reason branch entirely, so no ContentBlockStop was ever
+        // synthesized and the engine broadcast no ToolUseRequest for the tool
+        // call (dogfood 2026-08-27). The terminal chunk must close open tool
+        // blocks BEFORE the usage MessageDelta.
+        let lines = vec![
+            r#"data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_z1","type":"function","function":{"name":"bash","arguments":""}}]},"finish_reason":null}]}"#,
+            r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_z1","function":{"arguments":"{\"command\":"}}]},"finish_reason":null}]}"#,
+            r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_z1","function":{"arguments":"\"ls\"}"}}]},"finish_reason":null}]}"#,
+            r#"data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}"#,
+            "data: [DONE]",
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
+
+        // Exactly one ContentBlockStart despite the id repeating every frame.
+        let starts: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Ok(StreamEvent::ContentBlockStart { index, .. }) => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts, vec![0], "one start for the one real tool call");
+
+        // Argument fragments stream as InputJsonDelta (including the empty
+        // first-frame arguments:"").
+        let arg_fragments: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Ok(StreamEvent::ContentBlockDelta {
+                    delta: ContentDelta::InputJsonDelta { partial_json },
+                    ..
+                }) => Some(partial_json.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(arg_fragments, vec!["", "{\"command\":", "\"ls\"}"]);
+
+        // The synthesized ContentBlockStop must precede the usage MessageDelta.
+        let stop_idx = events
+            .iter()
+            .position(|e| matches!(e, Ok(StreamEvent::ContentBlockStop { index }) if *index == 0));
+        let msg_delta_idx = events
+            .iter()
+            .position(|e| matches!(e, Ok(StreamEvent::MessageDelta { .. })));
+        assert_eq!(stop_idx, Some(4), "stop synthesized after the three deltas");
+        assert!(
+            stop_idx.is_some() && msg_delta_idx.is_some() && stop_idx < msg_delta_idx,
+            "ContentBlockStop (idx {stop_idx:?}) must precede MessageDelta (idx {msg_delta_idx:?})"
+        );
+
+        // Terminal MessageDelta carries BOTH the stop reason and the usage.
+        match &events[msg_delta_idx.expect("checked above")] {
+            Ok(StreamEvent::MessageDelta { delta, usage, .. }) => {
+                assert_eq!(delta.stop_reason, Some("tool_calls".to_string()));
+                assert_eq!(usage.input_tokens, 100);
+                assert_eq!(usage.output_tokens, 20);
+            }
+            other => panic!("Expected terminal MessageDelta, got {other:?}"),
+        }
+    }
+
     // -- Ollama SSE parsing --
 
     #[test]
