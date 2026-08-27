@@ -678,7 +678,12 @@ impl Repl {
                 .join(".shannon")
                 .join("plugins");
             let mut plugin_registry = shannon_core::plugin::PluginRegistry::new(plugins_dir);
-            if runtime.block_on(plugin_registry.load_all()).is_ok() {
+            // §4.10: report broken manifests instead of silently skipping;
+            // valid siblings still load and proceed.
+            if let Err(e) = runtime.block_on(plugin_registry.load_all()) {
+                tracing::warn!("some plugins failed to load and were skipped:\n{e}");
+            }
+            {
                 let enabled = plugin_registry.list_enabled();
                 if !enabled.is_empty() {
                     tracing::info!("Loaded {} plugin(s)", enabled.len());
@@ -1160,7 +1165,12 @@ impl Repl {
                     .join(".shannon")
                     .join("plugins");
                 let mut plugin_registry = shannon_core::plugin::PluginRegistry::new(plugins_dir);
-                if plugin_registry.load_all().await.is_ok() {
+                // §4.10: report broken manifests instead of silently
+                // skipping; valid siblings still load and proceed.
+                if let Err(e) = plugin_registry.load_all().await {
+                    tracing::warn!("some plugins failed to load and were skipped:\n{e}");
+                }
+                {
                     let enabled = plugin_registry.list_enabled();
                     if !enabled.is_empty() {
                         tracing::info!("Loaded {} plugin(s)", enabled.len());

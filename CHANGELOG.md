@@ -2,6 +2,47 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
+## [Unreleased] — §4.10 W3-2 · manifest v2 + install-time validation + `--dump-config` + ecosystem conventions
+
+### Added
+
+- **Plugin manifest v2** (`manifest_version = "2"`): MCP server references
+  (`[[mcp]]` rows; the Claude `mcpServers` map parses into the same list),
+  reserved hook-subscription declarations (`[[hooks]]`, validated against
+  `HookEventType` at install time), a Shannon compat window
+  (`[compat] min/max`), and the reserved `type = "wasm"` slot for the
+  deferred §4.16 pilot (clear "reserved, cannot load yet" error instead of
+  "unknown plugin type").
+- **Install-time validation** shared by git/path/`.dxt`/`.mcpb` installs and
+  plugin updates: structural schema checks plus permission-completeness —
+  the faces a plugin's shape implies (stdio ⇒ `execute_commands`, remote ⇒
+  `network`, tool routing ⇒ `mcp_tools`, command/skill entry reads + prompt
+  turns ⇒ `read_files` + `llm_api`) must be declared. **v2 manifests refuse
+  to install on gaps; v1/claude legacy manifests install with loud
+  warnings**, keeping upgrade paths non-breaking.
+- **`shannon --dump-config`**: prints the effective configuration as JSON
+  with per-entry provenance. Layers render lowest → highest precedence
+  (builtin → user-global `~/.shannon/config.toml` → project
+  `.shannon.toml` → env-vars → connected `~/.shannon/providers.toml` →
+  cli-overlay); each entry is annotated with the nearer high-precedence
+  layer that overrides it (`overridden_by`) and its feeding env var where
+  applicable. Golden-snapshot tested.
+- **Ecosystem conventions doc**: `crates/shannon-core/src/plugin/ECOSYSTEM.md`
+  — GitHub topic `shannon-plugin`, three authoring templates (skill /
+  command / tool) in v2 TOML, v1-TOML / v2-TOML / claude-JSON reading
+  matrix, and the install-validation rule list.
+
+### Changed
+
+- **Broken plugin manifests can no longer vanish silently**
+  (`registry.load_all`). A directory holding a corrupt `plugin.toml` /
+  `plugin.json` is now reported via an aggregated `LoadFailures` error that
+  names every bad path and reason; all valid sibling plugins still load.
+  Manifest-less directories remain benign skips. REPL/CLI load sites print
+  the aggregated report as a warning.
+- MCP references accept `stdio` transport rows without an explicit
+  `type = "stdio"` (inferred default), matching hand-written shorthand.
+
 ## [Unreleased] — §4.6 W1-P1 · L0 becomes the only authoritative session record (breaking, DP4)
 
 ### ⚠️ Breaking changes
