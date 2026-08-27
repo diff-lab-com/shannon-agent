@@ -136,6 +136,8 @@ scenario_parse_test!(parse_multi_tool, "multi_tool.yaml");
 scenario_parse_test!(parse_complex_refactor, "complex_refactor.yaml");
 // W2-M1a behavioral assertion vocabulary: positive/negative pairs.
 scenario_parse_test!(parse_traj_contains_hit, "traj_contains_hit.yaml");
+scenario_parse_test!(parse_traj_family_hit, "traj_family_hit.yaml");
+scenario_parse_test!(parse_traj_family_miss, "traj_family_miss.yaml");
 scenario_parse_test!(parse_traj_contains_miss, "traj_contains_miss.yaml");
 scenario_parse_test!(
     parse_forbidden_tool_respected,
@@ -403,6 +405,32 @@ fn trajectory_contains_yaml_positive_and_negative() {
     assert!(!outcome.passed);
     assert!(
         outcome.details[0].starts_with("trajectory_contains: step"),
+        "unexpected detail: {:?}",
+        outcome.details
+    );
+}
+
+#[test]
+fn trajectory_family_and_optional_yaml_positive_and_negative() {
+    // Positive: optional recon never issued; family step satisfied by the
+    // rename tool (args_regex matched against the raw input JSON).
+    let hit = parse_scenario(&scenarios_dir().join("traj_family_hit.yaml")).expect("parse hit");
+    let dir = create_scenario_workspace(&hit.setup);
+    let trace = ToolCallTrace::from_mock_turns(&hit.mock_responses);
+    let ctx = ValidationContext::new(dir.path(), "success", "").with_trajectory(&trace);
+    let outcomes = evaluate_rules(&hit.validate, &ctx);
+    assert!(outcomes[0].passed, "{:?}", outcomes[0].details);
+
+    // Negative: family step is mandatory — recon-only stream must fail and
+    // the failure message names the whole candidate family.
+    let miss = parse_scenario(&scenarios_dir().join("traj_family_miss.yaml")).expect("parse miss");
+    let trace_miss = ToolCallTrace::from_mock_turns(&miss.mock_responses);
+    let ctx = ValidationContext::new(dir.path(), "success", "").with_trajectory(&trace_miss);
+    let outcomes = evaluate_rules(&miss.validate, &ctx);
+    let outcome = rule_outcome(&outcomes, "trajectory_contains");
+    assert!(!outcome.passed);
+    assert!(
+        outcome.details[0].contains("'Edit|MultiEdit|rename_symbol'"),
         "unexpected detail: {:?}",
         outcome.details
     );

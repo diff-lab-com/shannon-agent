@@ -110,11 +110,40 @@ pub struct MockTurn {
 /// `args_regex` is optional; when present it is matched against the tool input
 /// serialized as compact JSON (`{"path":"src/main.rs",...}`), so patterns must
 /// not assume whitespace after `:` or `,`.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Default, Deserialize, Clone)]
 pub struct TrajectoryStep {
+    /// Legacy single-tool spelling. Kept for backward compatibility with the
+    /// original YAML/TOML shapes; normalized into [`Self::tools`] by
+    /// [`Self::candidates`].
+    #[serde(default)]
     pub tool: String,
+    /// Candidate tool family: the step is satisfied when the observed call's
+    /// tool is any of these (e.g. `["Edit", "MultiEdit", "rename_symbol"]`).
+    #[serde(default)]
+    pub tools: Vec<String>,
     #[serde(default)]
     pub args_regex: String,
+    /// Means-not-contract step: the matcher skips it when the observed stream
+    /// supplies no compatible call, and an unmet optional never fails the
+    /// rule (recon steps like "Read the file first" belong here).
+    #[serde(default)]
+    pub optional: bool,
+}
+
+impl TrajectoryStep {
+    /// Every tool name this step accepts (legacy `tool` first, then the
+    /// `tools` family), de-duplicated in order.
+    pub fn candidates(&self) -> impl Iterator<Item = &str> {
+        let legacy = (!self.tool.is_empty()).then_some(self.tool.as_str());
+        legacy
+            .into_iter()
+            .chain(self.tools.iter().map(String::as_str))
+    }
+
+    /// Tool-name membership check (args_regex is applied by the matcher).
+    fn tool_matches(&self, call: &ToolCallTrace) -> bool {
+        self.candidates().any(|t| t == call.tool)
+    }
 }
 
 /// Granularity of a `cost_below` budget assertion.
@@ -656,52 +685,74 @@ fn check_subsequence(
     observed: &[ToolCallTrace],
     out: &mut Vec<String>,
 ) {
-    let mut cursor = 0usize;
+    let matches_call = |step: &TrajectoryStep, call: &ToolCallTrace| -> Result<bool, String> {
+        if !step.tool_matches(call) {
+            return Ok(false);
+        }
+        if step.args_regex.is_empty() {
+            return Ok(true);
+        }
+        Regex::new(&step.args_regex)
+            .map(|re| re.is_match(&call.input_json))
+            .map_err(|e| e.to_string())
+    };
+    let mut invalid_regex = |step: &TrajectoryStep, idx: usize, err: String| {
+        out.push(format!(
+            "trajectory_contains: invalid args_regex '{}' on step {} ('{}'): {err}",
+            step.args_regex,
+            idx,
+            step.candidates().collect::<Vec<_>>().join("|")
+        ));
+    };
 
-    for (want_idx, step) in sequence.iter().enumerate() {
-        let mut matched = false;
-        while cursor < observed.len() {
-            let call = &observed[cursor];
-            cursor += 1;
-            let hit = if call.tool != step.tool {
-                Ok(false)
-            } else if step.args_regex.is_empty() {
-                Ok(true)
-            } else {
-                Regex::new(&step.args_regex)
-                    .map(|re| re.is_match(&call.input_json))
-                    .map_err(|e| e.to_string())
-            };
-            match hit {
-                Ok(true) => {
-                    matched = true;
-                    break;
-                }
-                Ok(false) => {}
-                Err(err) => {
-                    out.push(format!(
-                        "trajectory_contains: invalid args_regex '{}' on step {} ('{}'): {err}",
-                        step.args_regex,
-                        want_idx + 1,
-                        step.tool
-                    ));
+    let mut si = 0usize;
+    for call in observed {
+        // Optional steps this call cannot satisfy are skipped (they are
+        // means-not-contract); a compatible optional is consumed like any
+        // other match.
+        while si < sequence.len() && sequence[si].optional {
+            let hit = match matches_call(&sequence[si], call) {
+                Ok(v) => v,
+                Err(e) => {
+                    invalid_regex(&sequence[si], si + 1, e);
                     return;
                 }
-            }
-        }
-        if !matched {
-            let expectation = if step.args_regex.is_empty() {
-                String::new()
-            } else {
-                format!(" matching '{}'", step.args_regex)
             };
-            out.push(format!(
-                "trajectory_contains: step {} ('{}'{expectation}) not found in observed trajectory",
-                want_idx + 1,
-                step.tool
-            ));
-            return;
+            if hit {
+                break;
+            }
+            si += 1;
         }
+        if si >= sequence.len() {
+            break;
+        }
+        let hit = match matches_call(&sequence[si], call) {
+            Ok(v) => v,
+            Err(e) => {
+                invalid_regex(&sequence[si], si + 1, e);
+                return;
+            }
+        };
+        if hit {
+            si += 1;
+        }
+    }
+
+    for (want_idx, step) in sequence.iter().enumerate().skip(si) {
+        if step.optional {
+            continue;
+        }
+        let candidates = step.candidates().collect::<Vec<_>>().join("|");
+        let expectation = if step.args_regex.is_empty() {
+            String::new()
+        } else {
+            format!(" matching '{}'", step.args_regex)
+        };
+        out.push(format!(
+            "trajectory_contains: step {} ('{}'{expectation}) not found in observed trajectory",
+            want_idx + 1,
+            candidates
+        ));
     }
 }
 
@@ -1322,10 +1373,12 @@ validate: []
             TrajectoryStep {
                 tool: "Read".to_string(),
                 args_regex: r#""path":"src/main\.rs""#.to_string(),
+                ..Default::default()
             },
             TrajectoryStep {
                 tool: "Edit".to_string(),
                 args_regex: String::new(),
+                ..Default::default()
             },
         ];
         let outcomes = evaluate_rules(
@@ -1351,6 +1404,7 @@ validate: []
                 sequence: vec![TrajectoryStep {
                     tool: "Grep".to_string(),
                     args_regex: String::new(),
+                    ..Default::default()
                 }],
             }],
             &ctx,
@@ -1363,12 +1417,69 @@ validate: []
                 sequence: vec![TrajectoryStep {
                     tool: "Read".to_string(),
                     args_regex: "([".to_string(),
+                    ..Default::default()
                 }],
             }],
             &ctx,
         );
         assert!(!outcomes[0].passed);
+
         assert!(outcomes[0].details[0].contains("invalid args_regex"));
+    }
+
+    #[test]
+    fn trajectory_family_and_optional_step_semantics() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let observed = vec![
+            ToolCallTrace::new("Grep", r#"{"pattern":"TODO"}"#),
+            ToolCallTrace::new("rename_symbol", r#"{"old_name":"fetch_data"}"#),
+        ];
+        let ctx = ValidationContext::new(tmp.path(), "success", "").with_trajectory(&observed);
+
+        // Family: any candidate tool satisfies the step (args_regex rides along).
+        let family = ValidationRule::TrajectoryContains {
+            sequence: vec![TrajectoryStep {
+                tools: vec!["Edit".to_string(), "rename_symbol".to_string()],
+                args_regex: r#""old_name":"fetch_data""#.to_string(),
+                ..Default::default()
+            }],
+        };
+        let outcomes = evaluate_rules(&[family], &ctx);
+        assert!(outcomes[0].passed, "{:?}", outcomes[0].details);
+
+        // Optional recon step is skipped when the stream never issues it.
+        let optional_recon = ValidationRule::TrajectoryContains {
+            sequence: vec![
+                TrajectoryStep {
+                    tool: "Read".to_string(),
+                    optional: true,
+                    ..Default::default()
+                },
+                TrajectoryStep {
+                    tools: vec!["rename_symbol".to_string()],
+                    ..Default::default()
+                },
+            ],
+        };
+        let outcomes = evaluate_rules(&[optional_recon], &ctx);
+        assert!(outcomes[0].passed, "{:?}", outcomes[0].details);
+
+        // Mandatory steps still fail when unmet — optionality never loosens
+        // a required step, and family spelling shows up in the message.
+        let missing = ValidationRule::TrajectoryContains {
+            sequence: vec![TrajectoryStep {
+                tools: vec!["Edit".to_string(), "MultiEdit".to_string()],
+                args_regex: r#""old_string":"x""#.to_string(),
+                ..Default::default()
+            }],
+        };
+        let outcomes = evaluate_rules(&[missing], &ctx);
+        assert!(!outcomes[0].passed);
+        assert!(
+            outcomes[0].details[0].contains("'Edit|MultiEdit'"),
+            "{:?}",
+            outcomes[0].details
+        );
     }
 
     #[test]

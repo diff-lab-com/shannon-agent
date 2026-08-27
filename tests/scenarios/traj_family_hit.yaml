@@ -1,0 +1,28 @@
+name: traj_family_hit
+description: "Positive: optional recon skipped, family step satisfied by any candidate tool"
+prompt: "Apply the rename refactor"
+provider: anthropic
+
+setup:
+  files:
+    - path: src/main.rs
+      content: |
+        fn fetch_data() {}
+
+mock_responses:
+  - response:
+      type: tool_use
+      tool: rename_symbol
+      tool_id: toolu_1
+      input: { "old_name": "fetch_data", "new_name": "load_data" }
+  - response:
+      type: text
+      content: "Renamed."
+
+validate:
+  - rule: trajectory_contains
+    sequence:
+      - tool: Read
+        optional: true
+      - tools: ["Edit", "MultiEdit", "rename_symbol"]
+        args_regex: '"old_name":"fetch_data"'
