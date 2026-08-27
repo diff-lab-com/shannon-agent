@@ -12,7 +12,7 @@
 
 mod reconciliation {
     use shannon_core::QueryEvent;
-    use shannon_core::bus::{BusInput, BusSubscriber, DispatchMode, EventBus, TopicFilter};
+    use shannon_core::bus::{BusInput, BusSubscriber, EventBus, TopicFilter};
     use shannon_core::session_log::{
         L0TeeSubscriber, SessionLogReader, TeeHandle, query_event_to_bus_inputs,
     };
