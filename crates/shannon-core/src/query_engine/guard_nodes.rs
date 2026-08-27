@@ -460,7 +460,7 @@ fn decode_trigger(trigger_type: &str, payload: &Value) -> Option<HookEvent> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::bus::{DispatchMode, TopicFilter};
+    use crate::bus::TopicFilter;
     use crate::session_log::{L0TeeSubscriber, TeeHandle, session_events_path};
 
     fn empty_manager() -> Arc<tokio::sync::RwLock<HookManager>> {

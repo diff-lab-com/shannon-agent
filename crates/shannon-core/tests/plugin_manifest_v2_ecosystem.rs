@@ -13,8 +13,7 @@
 //! equivalent to `clone → install`.
 
 use shannon_core::plugin::{
-    DENY_PREFIX, PluginKind, PluginPermission, PluginPermissionPolicy,
-    admit_prompt_based_extension, gated_discover_tools_stdio,
+    DENY_PREFIX, PluginKind, PluginPermission, PluginPermissionPolicy, admit_prompt_based_extension,
 };
 use shannon_tool_interface::Tool as _;
 use std::fs;

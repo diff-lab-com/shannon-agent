@@ -36,6 +36,7 @@ fn one_turn(query_id: Uuid) -> Vec<QueryEvent> {
         tool_name: "Bash".into(),
         result: "Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.34s".repeat(4),
         is_error: false,
+        meta: Box::new(serde_json::Value::Null),
     });
     events.push(QueryEvent::ToolProgress {
         query_id,
