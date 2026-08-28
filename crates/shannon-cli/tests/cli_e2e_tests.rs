@@ -1573,9 +1573,18 @@ fn session_home_dir() -> std::path::PathBuf {
 }
 
 /// Build a shannon command with isolated HOME for session testing.
+///
+/// The child's project dir (CWD) is pinned to the isolated home dir: the
+/// engine's repo-map injector cold-builds a tree-sitter symbol map of the CWD
+/// on startup, and its disk cache (`$HOME/.shannon/repomap/`) is keyed by CWD
+/// — always cold here because HOME is per-test. With the default /tmp CWD
+/// that walk parses every source file in the machine's temp directory and can
+/// burn tens of seconds of CPU per invocation, blowing past the test
+/// timeouts. An empty CWD keeps the walk O(1) and makes the tests hermetic.
 fn shannon_with_sessions(provider: &str, server_url: &str, home_dir: &std::path::Path) -> Command {
     let mut cmd = shannon_with_mock(provider, server_url);
     cmd.env("HOME", home_dir.to_string_lossy().to_string());
+    cmd.current_dir(home_dir);
     cmd
 }
 
