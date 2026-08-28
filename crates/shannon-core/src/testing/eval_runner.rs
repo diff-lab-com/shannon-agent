@@ -1334,16 +1334,33 @@ fn enrich_with_metrics(
 
     let task_dir = run_dir.join(&task.id);
     let stream_path = task_dir.join("stream.ndjson");
-    let extracted: ExtractedTask = if !options.dry_run {
+    let stream_text = std::fs::read_to_string(&stream_path).unwrap_or_default();
+    let mut extracted: ExtractedTask = if !options.dry_run {
         let l0_home = task_dir.join(L0_HOME_DIRNAME);
         let logs = find_event_logs(&l0_home);
         match extract_from_events_log(&logs) {
             Ok(extracted) if !logs.is_empty() => extracted,
-            _ => derive_from_stream(&std::fs::read_to_string(&stream_path).unwrap_or_default()),
+            _ => derive_from_stream(&stream_text),
         }
     } else {
-        derive_from_stream(&std::fs::read_to_string(&stream_path).unwrap_or_default())
+        derive_from_stream(&stream_text)
     };
+
+    // The engine's L0 vocabulary turn is the whole user-visible round: one
+    // `turn/start` per query, every row of the run stamped `turn = 1`. The
+    // envelope turn max is therefore structurally 1 for a headless run no
+    // matter how many LLM steps the agent took. Reconcile with the stream's
+    // `done.turns_used` — the step count `--max-turns` actually bounds — so
+    // the reported turns statistic is the real value, not a constant.
+    if extracted.metrics.source == MetricSource::EventsLog {
+        if let Some(NdjsonLine::Done {
+            turns_used: Some(stream_turns),
+            ..
+        }) = observe_stream(&stream_text).done
+        {
+            extracted.metrics.turns = extracted.metrics.turns.max(stream_turns);
+        }
+    }
 
     // Classification context merges runner verdicts with extractor signals.
     let context = ClassifyContext {
@@ -3382,6 +3399,74 @@ input = { file_path = "meta.txt" }
         // §4.7 honesty: nothing ran, so no metrics blob may be fabricated.
         assert!(report.records[0].metrics.is_none());
         assert_eq!(report.metrics_source, "none");
+    }
+
+    /// Regression (2026-08-28 RCA): `metrics.turns` read the L0 envelope
+    /// `turn` max, but the engine opens exactly one L0 vocabulary turn per
+    /// query — every row of a headless run is stamped `turn = 1` no matter
+    /// how many LLM steps the agent took — so the reported turns statistic
+    /// was a constant 1 and turn-based budgeting was blind. The enrichment
+    /// must reconcile with the stream's `done.turns_used` (the step count
+    /// `--max-turns` actually bounds). The fixture below mirrors the real
+    /// engine shape: every L0 row at `turn: 1`, seven steps on the stream.
+    #[cfg(unix)]
+    #[test]
+    fn real_mode_metrics_turns_reconciles_constant_one_envelope_with_stream() {
+        let bin_tmp = tempfile::TempDir::new().expect("binroot");
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+
+        let script = concat!(
+            "mkdir -p \"$SHANNON_HOME/sessions/sid-turns\"\n",
+            "cat > \"$SHANNON_HOME/sessions/sid-turns/events.jsonl\" <<'EVT'\n",
+            "{\"seq\":0,\"ts_ns\":1000000000,\"session_id\":\"sid-turns\",\"turn\":1,\"kind\":\"session/start\",\"model\":\"fake\",\"provider\":\"mock\",\"app_version\":\"9.9.9\"}\n",
+            "{\"seq\":1,\"ts_ns\":1100000000,\"session_id\":\"sid-turns\",\"turn\":1,\"kind\":\"tool/call\",\"tool_use_id\":\"a1\",\"tool_name\":\"Read\",\"arguments\":\"{}\"}\n",
+            "{\"seq\":2,\"ts_ns\":1200000000,\"session_id\":\"sid-turns\",\"turn\":1,\"kind\":\"tool/result\",\"tool_use_id\":\"a1\",\"tool_name\":\"Read\",\"output\":\"ok\",\"is_error\":false}\n",
+            "{\"seq\":3,\"ts_ns\":1300000000,\"session_id\":\"sid-turns\",\"turn\":1,\"kind\":\"turn/end\",\"reason\":\"completed\",\"usage\":{\"input_tokens\":70,\"output_tokens\":9,\"cache_creation_tokens\":0,\"cache_read_tokens\":0,\"cost_usd\":null}}\n",
+            "EVT\n",
+            "printf '%s\\n' ",
+            "'{\"type\":\"start\",\"prompt\":\"-\",\"model\":\"fake\",\"session_id\":\"sid-turns\"}' ",
+            "'{\"type\":\"text_delta\",\"content\":\"all done\"}' ",
+            "'{\"type\":\"done\",\"exit_code\":0,\"turns_used\":7,\"tokens_used\":79,\"tokens_in\":70,\"tokens_out\":9}'\n",
+            "exit 0\n"
+        );
+        let bin = fake_bin(bin_tmp.path(), "shannon-turns", script);
+
+        let task_body = concat!(
+            "id = \"turns_reconcile\"\ntier = \"multi_step\"\nprompt = \"take steps\"\n",
+            "[[verify.rules]]\nrule = \"response_contains\"\ntext = \"all done\"\n",
+            "[limits]\nmax_turns = 50\nmax_tokens = 90000\ntimeout_secs = 20\n\n",
+            "[dry_run]\nfinal_text = \"unused\"\n"
+        );
+        let task = parse_task(&write_task(
+            tasks_root.path(),
+            "turns_reconcile.toml",
+            task_body,
+        ))
+        .expect("parse");
+
+        let options = EvalOptions {
+            bin_path: Some(bin),
+            dry_run: false,
+            out_dir_override: Some(run_root.path().to_path_buf()),
+            failure_rules: None,
+            instruction_directive: None,
+        };
+        let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
+        let record = &report.records[0];
+        assert_eq!(record.status, RunStatus::Passed, "{:?}", record.violations);
+
+        let metrics = record.metrics.as_ref().expect("metrics present");
+        assert_eq!(
+            metrics.source,
+            MetricSource::EventsLog,
+            "fixture must exercise the L0 path"
+        );
+        // The L0 envelope alone reads 1 (every row stamped turn = 1); the
+        // reconciliation must lift the reported statistic to the real
+        // step count carried by the stream's done line.
+        assert_eq!(metrics.turns, 7, "turns must reflect real LLM steps");
+        assert_eq!(record.turns, 7, "runner-side record agrees with the stream");
     }
 
     /// §4.7 end-to-end plumbing in REAL mode: the child sees an isolated
