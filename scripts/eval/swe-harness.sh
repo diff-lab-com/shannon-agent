@@ -50,7 +50,14 @@ if [ "$SMOKE" = "1" ] && [ -n "${SWE_SMOKE_ID:-}" ] && [ "$native_id" != "$SWE_S
 fi
 
 SB_HOME="${SHANNON_SWEBENCH_HOME:-/home/ed/datasets/swebench}"
-PARQUET="${SWE_DATASET_PARQUET:-$SB_HOME/SWE-bench_Verified_test.parquet}"
+# Dataset: swebench 5.x run_evaluation needs the v5 schema (image/eval_script
+# columns). The 2026-08-27-era local dump lacks them; the HF snapshot copy is
+# the v5 source (see copy command in scripts/ev?l/README batch-3 notes).
+PARQUET="${SWE_DATASET_PARQUET:-}"
+if [ -z "$PARQUET" ]; then
+  PARQUET="$SB_HOME/SWE-bench_Verified_test_v5schema.parquet"
+  [ -f "$PARQUET" ] || PARQUET="$SB_HOME/SWE-bench_Verified_test.parquet"
+fi
 REPOS="$SB_HOME/repos"
 PYBIN="${SWE_HARNESS_PYTHON:-/tmp/swebench-probe/venv/bin/python}"
 AGENT="${SHANNON_SB_AGENT_BIN:-${SHANNON_EVAL_BIN:-/tmp/shannon-zhipu/shannon-glm-plan}}"
@@ -69,6 +76,19 @@ fail() { emit false null null null "$1"; say "FAILED: $1"; exit 1; }
 
 [ -f "$PARQUET" ] || fail "Verified parquet not found at $PARQUET (set SWE_DATASET_PARQUET / SHANNON_SWEBENCH_HOME)"
 [ -x "$PYBIN" ] || fail "python with swebench not found at $PYBIN (set SWE_HARNESS_PYTHON)"
+
+# v5 schema guard: the official harness (step 6) hard-needs image/eval_script;
+# feeding the old-schema dump fails mid-judgment, after the agent already ran.
+schema="$($PYBIN - "$PARQUET" <<'PYEOF'
+import sys
+import pyarrow.parquet as pq
+cols = set(pq.ParquetFile(sys.argv[1]).schema_arrow.names)
+need = {"instance_id", "problem_statement", "base_commit", "repo", "image", "eval_script"}
+missing = sorted(need - cols)
+print("OK" if not missing else "MISSING:" + ",".join(missing))
+PYEOF
+)" || fail "could not read parquet schema at $PARQUET"
+[ "$schema" = "OK" ] || fail "parquet $PARQUET lacks v5 columns ($schema) — feed the HF snapshot as SWE_DATASET_PARQUET (v5schema copy convention)"
 
 # ── 1. instance record from the local parquet (offline) ────────────────────
 mkdir -p "$ws"
@@ -145,25 +165,29 @@ PYEOF
 # ── honest billing observations from the agent's L0 session log ────────────
 # Prints "<tokens_in> <tokens_out> <cost> <seen>"; seen=0 means no session
 # log was produced (callers must emit nulls then — never fabricate zeros).
+# The engine's sessions container follows SHANNON_SESSIONS_DIR (this harness
+# sets it to <ws>/sessions), while SHANNON_HOME only relocates other state —
+# so BOTH roots are scanned; missing both is the only `seen=0` path.
 usage_sums() {
-  python3 - "$ws/shannon-home" <<'PYEOF'
+  python3 - "$ws/shannon-home" "$ws/sessions" <<'PYEOF'
 import json, glob, sys
 ti = to = 0
 cost = 0.0
 seen = False
-for path in glob.glob(f"{sys.argv[1]}/sessions/*/events.jsonl"):
-    seen = True
-    for line in open(path, encoding="utf-8"):
-        try:
-            ev = json.loads(line)
-        except Exception:
-            continue
-        u = ev.get("usage") or {}
-        ti += int(u.get("input_tokens") or 0)
-        to += int(u.get("output_tokens") or 0)
-        c = u.get("cost_usd")
-        if isinstance(c, (int, float)):
-            cost += c
+for base in sys.argv[1:]:
+    for path in glob.glob(f"{base}/sessions/*/events.jsonl"):
+        seen = True
+        for line in open(path, encoding="utf-8"):
+            try:
+                ev = json.loads(line)
+            except Exception:
+                continue
+            u = ev.get("usage") or {}
+            ti += int(u.get("input_tokens") or 0)
+            to += int(u.get("output_tokens") or 0)
+            c = u.get("cost_usd")
+            if isinstance(c, (int, float)):
+                cost += c
 print(f"{ti} {to} {cost:.6f} {int(seen)}")
 PYEOF
 }
