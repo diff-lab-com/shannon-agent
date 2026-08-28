@@ -5,80 +5,133 @@
 #   (sha256 over newline-joined ids; embedded in every bench report and in the
 #   `bench_runner diff` anchors). One id per line; `#` starts a comment.
 #
+#   WORKLOAD FINGERPRINT (current): sha256:7f40a07ef270e5a08b0a99b1de98ac00a4f12d0e725fe933531979e8c63b65ae
+#
 # VALIDATION GATE (required before any externally citable score)
-#   These ids were transcribed from a knowledge snapshot of the Verified split
-#   (princeton-nlp/SWE-bench_Verified, human-validated 500) on 2026-08-27 and
-#   have NOT yet been mechanically confirmed against the dataset itself.
-#   On first contact with the real corpus (SHANNON_SWEBENCH_HOME mounted),
-#   validate pins against the official instance-id list before scoring:
-#       bench_runner --suite swebench_verified_50 --validate-pins
+#   The original 50 ids were transcribed from a knowledge snapshot of the
+#   Verified split (princeton-nlp/SWE-bench_Verified, human-validated 500) on
+#   2026-08-27 without mechanical confirmation. On first corpus contact
+#   (2026-08-28, SHANNON_SWEBENCH_HOME=/home/ed/datasets/swebench) the pins
+#   were cross-checked against pin_resolution.csv + the Verified parquet:
+#   23 resolved as Verified hits (kept below), 27 were pin drift
+#   (full-only in SWE-bench full, wrong-id shapes, or repos absent from
+#   Verified entirely — 2 hallucinated repos).
 #   Any mismatch is surfaced as pin drift and supersedes this curation —
 #   scores stay `citation.citable=false` until the gate clears. Reports carry
 #   `pin_validation = pending_corpus_contact` until then.
 #
+# 2026-08-28: 27 slots re-selected Verified-only per ed-approved rule
+#   (original offline snapshot had 27 drifts incl. 2 hallucinated repos);
+#   deterministic selection algorithm in-file:
+#     1. candidate set = all 500 instances of SWE-bench_Verified_test.parquet,
+#        excluding the 23 confirmed pins and the 27 drifted ids;
+#     2. repo-diversity slots first: each per-repo-1-task slot of the
+#        original sampling rule takes that repo's lexicographically-first
+#        satisfiable Verified instance — pydata/xarray (2 slots),
+#        pallets/flask (1), pytest-dev/pytest (1); the sphinx slot was
+#        already satisfied by kept sphinx-doc__sphinx-8595; scrapy and
+#        pvlib do not exist in Verified, so those 2 slots merged onward;
+#     3. remaining stratified quota slots (django +9, sympy +3,
+#        scikit-learn +4, matplotlib +4, astropy +1) take each repo's
+#        instances in instance_id lexicographic order;
+#     4. the 2 merged slots stay 1-per-repo: Verified repos not yet
+#        represented, ordered by their lexicographically-first instance_id —
+#        mwaskom/seaborn then psf/requests (one instance each);
+#     5. each new instance records its base_commit from the parquet
+#        (2026-08-28 snapshot).
+#   New-slot base_commits (id @ base_commit):
+#     django__django-10097 @ b9cf764be62e77b4777b3a75ec256f6209a57671
+#     django__django-10554 @ 14d026cccb144c6877294ba4cd4e03ebf0842498
+#     django__django-10880 @ 838e432e3e5519c5383d12018e6c78f8ec7833c1
+#     django__django-10914 @ e7fd69d051eaa67cb17f172a39b57253e9cb831a
+#     django__django-10973 @ ddb293685235fd09e932805771ae97f72e817181
+#     django__django-10999 @ 36300ef336e3f130a0dadc1143163ff3d23dc843
+#     django__django-11066 @ 4b45b6c8e4d7c9701a332e80d3b1c84209dc36e2
+#     django__django-11087 @ 8180ffba21bf10f4be905cb0d4890dc2bcff2788
+#     django__django-11095 @ 7d49ad76562e8c0597a0eb66046ab423b12888d8
+#     sympy__sympy-11618 @ 360290c4c401e386db60723ddb0109ed499c9f6e
+#     sympy__sympy-12096 @ d7c3045115693e887bcd03599b7ca4650ac5f2cb
+#     sympy__sympy-12419 @ 479939f8c65c8c2908bbedc959549a257a7c0b0b
+#     scikit-learn__scikit-learn-10844 @ 97523985b39ecde369d83352d7c3baf403b60a22
+#     scikit-learn__scikit-learn-10908 @ 67d06b18c68ee4452768f8a1e868565dd4354abf
+#     scikit-learn__scikit-learn-11310 @ 553b5fb8f84ba05c8397f26dd079deece2b05029
+#     scikit-learn__scikit-learn-11578 @ dd69361a0d9c6ccde0d2353b00b86e0e7541a3e3
+#     matplotlib__matplotlib-13989 @ a3e2897bfaf9eaac1d6649da535c4e721c89fa69
+#     matplotlib__matplotlib-14623 @ d65c9ca20ddf81ef91199e6d819f9d3506ef477c
+#     matplotlib__matplotlib-20488 @ b7ce415c15eb39b026a097a2865da73fbcf15c9c
+#     matplotlib__matplotlib-20676 @ 6786f437df54ca7780a047203cbcfaa1db8dc542
+#     astropy__astropy-13033 @ 298ccb478e6bf092953bca67a3d29dc6c35f6752
+#     mwaskom__seaborn-3069 @ 54cab15bdacfaa05a88fbc5502a5b322d99f148e
+#     pallets__flask-5014 @ 7ee9ceb71e868944a46e1ff00b506772a53a4f1d
+#     psf__requests-1142 @ 22623bd8c265b78b161542663ee980738441c307
+#     pydata__xarray-2905 @ 7c4e2ac83f7b4306296ff9b7b51aaf016e5ad614
+#     pydata__xarray-3095 @ 1757dffac2fa493d7b9a074b84cf8c830a706688
+#     pytest-dev__pytest-10051 @ aa55975c7d3f6c9f6d7f68accc41bb7cadf0eb9a
+
 # SAMPLING RULE (stratified, fixed at pin time; keep stable across versions):
 #   django(20) · sympy(7) · scikit-learn(6) · matplotlib(5) · astropy(5) ·
 #   xarray(2) + one each for flask / scrapy / pvlib / sphinx / pytest to keep
 #   repository diversity inside the subset.
-
-# ── django (20) ──────────────────────────────────────────────────────────
-django__django-11039
+#   2026-08-28 re-selection: scrapy + pvlib slots (absent from Verified)
+#   merged to seaborn + requests (1 each); all other quotas preserved.
+# ── django (20) ──────────────────────────────────────────────────
+django__django-10097
+django__django-10554
+django__django-10880
+django__django-10914
+django__django-10973
+django__django-10999
+django__django-11066
+django__django-11087
+django__django-11095
 django__django-11099
 django__django-11179
 django__django-11433
-django__django-11583
-django__django-11630
 django__django-11848
 django__django-11999
 django__django-12039
 django__django-12125
 django__django-12276
 django__django-12308
-django__django-12589
-django__django-12747
-django__django-12908
-django__django-12915
 django__django-13279
 django__django-13363
-django__django-13660
-django__django-14016
 
-# ── sympy (7) ────────────────────────────────────────────────────────────
+# ── sympy (7) ────────────────────────────────────────────────────
+sympy__sympy-11618
+sympy__sympy-12096
+sympy__sympy-12419
 sympy__sympy-12481
 sympy__sympy-13031
 sympy__sympy-13480
-sympy__sympy-15346
-sympy__sympy-19254
-sympy__sympy-19487
 sympy__sympy-20590
 
-# ── scikit-learn (6) ─────────────────────────────────────────────────────
+# ── scikit-learn (6) ─────────────────────────────────────────────
 scikit-learn__scikit-learn-10297
-scikit-learn__scikit-learn-13241
+scikit-learn__scikit-learn-10844
+scikit-learn__scikit-learn-10908
+scikit-learn__scikit-learn-11310
+scikit-learn__scikit-learn-11578
 scikit-learn__scikit-learn-13779
-scikit-learn__scikit-learn-25500
-scikit-learn__scikit-learn-25570
-scikit-learn__scikit-learn-25638
 
-# ── matplotlib (5) ───────────────────────────────────────────────────────
-matplotlib__matplotlib-22767
+# ── matplotlib (5) ───────────────────────────────────────────────
+matplotlib__matplotlib-13989
+matplotlib__matplotlib-14623
+matplotlib__matplotlib-20488
+matplotlib__matplotlib-20676
 matplotlib__matplotlib-23314
-matplotlib__matplotlib-23562
-matplotlib__matplotlib-23964
-matplotlib__matplotlib-24975
 
-# ── astropy (5) ──────────────────────────────────────────────────────────
+# ── astropy (5) ──────────────────────────────────────────────────
 astropy__astropy-12907
-astropy__astropy-13829
+astropy__astropy-13033
 astropy__astropy-14182
 astropy__astropy-14508
 astropy__astropy-14995
 
-# ── remaining diversity picks (1–2 per repo) ─────────────────────────────
-xarray__xarray-3156
-xarray__xarray-4911
-flask__flask-4992
-scrapy__scrapy-5742
-pvlib__pvlib-python-1603
+# ── remaining diversity picks (1–2 per repo; scrapy/pvlib slots merged to seaborn/requests) ──
+mwaskom__seaborn-3069
+pallets__flask-5014
+psf__requests-1142
+pydata__xarray-2905
+pydata__xarray-3095
+pytest-dev__pytest-10051
 sphinx-doc__sphinx-8595
-pytest-dev__pytest-7209
