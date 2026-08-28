@@ -165,9 +165,12 @@ PYEOF
 # ── honest billing observations from the agent's L0 session log ────────────
 # Prints "<tokens_in> <tokens_out> <cost> <seen>"; seen=0 means no session
 # log was produced (callers must emit nulls then — never fabricate zeros).
-# The engine's sessions container follows SHANNON_SESSIONS_DIR (this harness
-# sets it to <ws>/sessions), while SHANNON_HOME only relocates other state —
-# so BOTH roots are scanned; missing both is the only `seen=0` path.
+# BOTH roots are scanned: the L0 writer resolves SHANNON_HOME/sessions while
+# the resume/checkpoint store honors SHANNON_SESSIONS_DIR — whichever layout
+# a given build uses, one glob hits it. Usage persists only on completed
+# turns (turn/end reason=completed); an agent killed by the wall-clock cap
+# leaves NO usage row — the caller's ledger then UNDERCOUNTS that rep, which
+# is declared in the batch report instead of being papered over here.
 usage_sums() {
   python3 - "$ws/shannon-home" "$ws/sessions" <<'PYEOF'
 import json, glob, sys
@@ -193,8 +196,13 @@ PYEOF
 }
 
 read_usage_or_null() { # sets TIN/TOUT/COST (null when no session log)
-  local tin tout cost seen
-  read -r tin tout cost seen <<<"$(usage_sums)"
+  # POSIX-only on purpose: bench_runner templates invoke `sh <gate|harness>`,
+  # and dash chokes on `<<<` herestrings — found by the batch-3 wave-0 real
+  # run AFTER a full 1800 s agent pass (the expensive way to find out).
+  local sums tin tout cost seen
+  sums="$(usage_sums)"
+  set -- $sums
+  tin="$1" tout="$2" cost="$3" seen="$4"
   if [ "${seen:-0}" = "1" ]; then
     TIN="$tin" TOUT="$tout" COST="$cost"
   else
