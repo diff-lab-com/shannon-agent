@@ -24,7 +24,10 @@
 //! |------------------------|---------------------------------------------------------|
 //! | `tokens_in/out`, cache | sum over `turn/end.usage.{input,output,…}`              |
 //! | `cost_usd`             | sum over `turn/end.usage.cost_usd` (`null` if unobserved) |
-//! | `turns`                | highest envelope `turn` on any event                    |
+//! | `turns`                | highest envelope `turn` on any event; the runner then   |
+//! |                        | reconciles upward with the stream's `done.turns_used`   |
+//! |                        | (L0 turns are one per query by design, so the envelope  |
+//! |                        | alone reads 1 for any single headless run)              |
 //! | `tool_calls`           | count of `tool/call`                                    |
 //! | `wall_clock_ms`        | last − first event `ts_ns`                              |
 //! | `loops`                | ≥3 consecutive identical `(tool, args-hash)` invocations |
@@ -156,7 +159,10 @@ pub struct TaskMetrics {
     /// USD cost summed from turn-end observations; `null` when the provider
     /// reported none (honest unknown — never fabricated).
     pub cost_usd: Option<f64>,
-    /// Highest envelope turn number seen.
+    /// Agent turns actually taken. L0 source: highest envelope `turn`,
+    /// reconciled upward with the stream's `done.turns_used` (the engine
+    /// opens one L0 vocabulary turn per query, so the envelope alone reads
+    /// 1 regardless of LLM step count).
     pub turns: u32,
     /// Count of `tool/call` events (dry-run: trajectory length).
     pub tool_calls: u32,

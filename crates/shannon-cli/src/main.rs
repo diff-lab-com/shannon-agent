@@ -640,10 +640,6 @@ enum Commands {
         #[arg(long)]
         max_tokens: Option<usize>,
 
-        /// Output format (text, json, markdown)
-        #[arg(long, default_value_t = String::from("text"))]
-        output: String,
-
         /// Disable streaming output (wait for complete response)
         #[arg(long)]
         no_stream: bool,
@@ -1613,11 +1609,15 @@ fn load_schema(input: &str) -> Result<shannon_core::StructuredOutputConfig> {
 ///
 /// Features:
 /// - Skips TUI entirely
-/// - Restricts tools to `--allowed-tools` list (exit code 2 on violation)
-/// - Limits turns via `--max-turns` (exit code 3 when exceeded)
+/// - Restricts tools to `--allowed-tools` list (violations are soft-denied
+///   as recoverable tool errors the model can route around; they do not
+///   abort the run)
+/// - Limits turns via `--max-turns` (exit code 2 when exceeded)
 /// - Outputs structured JSON with `--output-format json`
 ///
-/// Exit codes: 0 success, 1 error, 2 tool denied, 3 max turns reached.
+/// Exit codes (`HeadlessExitCode`): 0 success, 1 error, 2 max turns
+/// reached, 3 timeout (reserved, currently unused), 4 rate limited,
+/// 5 context overflow, 6 permission denied.
 #[allow(clippy::too_many_arguments)]
 fn run_headless_query(
     prompt: &str,
@@ -4357,10 +4357,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             }
         }
         Some(Commands::Query {
-            query,
-            output: _output_format,
-            no_stream,
-            ..
+            query, no_stream, ..
         }) => {
             let resume_data = if should_resume {
                 load_resume_session(resume_session_id).ok()
@@ -5691,29 +5688,6 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
     }
 
     #[test]
-    fn test_cli_parse_query_output_format() {
-        let cli = Cli::try_parse_from(["shannon", "query", "--output", "json", "test"]).unwrap();
-        match cli.command {
-            Some(Commands::Query { query, output, .. }) => {
-                assert_eq!(query, "test");
-                assert_eq!(output, "json");
-            }
-            _ => panic!("Expected Query command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parse_query_default_output() {
-        let cli = Cli::try_parse_from(["shannon", "query", "test"]).unwrap();
-        match cli.command {
-            Some(Commands::Query { output, .. }) => {
-                assert_eq!(output, "text");
-            }
-            _ => panic!("Expected Query command"),
-        }
-    }
-
-    #[test]
     fn test_cli_parse_query_defaults() {
         let cli = Cli::try_parse_from(["shannon", "query", "test"]).unwrap();
         match cli.command {
@@ -5722,14 +5696,12 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
                 model,
                 provider,
                 max_tokens,
-                output,
                 no_stream,
             }) => {
                 assert_eq!(query, "test");
                 assert!(model.is_none());
                 assert!(provider.is_none());
                 assert!(max_tokens.is_none());
-                assert_eq!(output, "text");
                 assert!(!no_stream);
             }
             _ => panic!("Expected Query command"),
@@ -5753,8 +5725,6 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             "anthropic",
             "--max-tokens",
             "4096",
-            "--output",
-            "json",
             "--no-stream",
             "你用的什么模型",
         ])
@@ -5765,14 +5735,12 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
                 model,
                 provider,
                 max_tokens,
-                output,
                 no_stream,
             }) => {
                 assert_eq!(query, "你用的什么模型");
                 assert_eq!(model.as_deref(), Some("claude-sonnet-4"));
                 assert_eq!(provider.as_deref(), Some("anthropic"));
                 assert_eq!(max_tokens, Some(4096));
-                assert_eq!(output, "json");
                 assert!(no_stream);
             }
             _ => panic!("Expected Query command"),
