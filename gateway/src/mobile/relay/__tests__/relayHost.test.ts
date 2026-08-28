@@ -351,6 +351,9 @@ describe("startRelayHost", () => {
     // Wait for the response to arrive
     const phoneRecv1 = new E2eChannel(sessionKey);
     await nextDecodedMessage(phoneWs1, phoneRecv1);
+    // §G precondition: the host's phone-direction recv counter really advanced
+    // to 1 before the drop (phone's first sealed frame carries counter 1).
+    expect(phoneSend1.sendCounter).toBe(1);
 
     // Phone disconnects (peer_gone)
     phoneWs1.close();
@@ -364,9 +367,15 @@ describe("startRelayHost", () => {
     // Phone 2 sends a message with counter starting at 1 (fresh channel)
     const phoneSend2 = new E2eChannel(sessionKey);
     const phoneRecv2 = new E2eChannel(sessionKey);
-    phoneWs2.send(phoneSend2.seal(Buffer.from(
+    const rejoinFrame = phoneSend2.seal(Buffer.from(
       JSON.stringify({ jsonrpc: "2.0", id: 2, method: "shannon/health" }), "utf8",
-    )));
+    ));
+    // §G contract pin (cross-repo-adaptation-spec §G4): the re-joining phone's
+    // FIRST frame is wire-level counter 1, and the host must ACCEPT this exact
+    // frame after re-pair — not merely survive the reconnect.
+    expect(rejoinFrame[0]).toBe(0x01); // frame version
+    expect(rejoinFrame.readBigUInt64BE(1)).toBe(1n); // counter = 1
+    phoneWs2.send(rejoinFrame);
 
     // Host should respond (recv counter was reset, so counter 1 is accepted)
     const responseText = await nextDecodedMessage(phoneWs2, phoneRecv2);
