@@ -131,7 +131,9 @@ pub fn load(path: Option<&Path>) -> Option<ProviderModelConfig> {
             warn!(
                 path = %path.display(),
                 error = %e,
-                "providers.toml unreadable; ignoring and falling back to synthesis"
+                "providers.toml unreadable; ignoring and falling back to synthesis. \
+                 The file is left untouched, and writes to it are refused until \
+                 it is fixed or removed"
             );
             None
         }
@@ -156,6 +158,86 @@ pub fn connected_slugs() -> std::collections::HashSet<String> {
         .unwrap_or_default()
 }
 
+/// Diagnose the providers.toml at `path` (or [`default_path`]) for the
+/// read-side failure mode that silently disables user configuration: the
+/// file exists but cannot be parsed as a [`ProviderModelConfig`] (one
+/// unknown/misspelled field in a hand-edited block is enough — the
+/// `ProviderProfile` schema is `deny_unknown_fields`, so the WHOLE file is
+/// rejected). Returns the parse error text in that case, and `None` when
+/// the file is absent, empty, or parses cleanly.
+///
+/// Read-only. Command surfaces (e.g. `shannon providers …`) call this to
+/// warn users that their file is being ignored instead of failing silently;
+/// the write side enforces the same condition hard via
+/// [`ensure_safe_to_overwrite`].
+pub fn parse_error(path: Option<&Path>) -> Option<String> {
+    let path = path.map(Path::to_path_buf).or_else(default_path)?;
+    let content = fs::read_to_string(&path).ok()?;
+    if content.trim().is_empty() {
+        return None;
+    }
+    toml::from_str::<ProviderModelConfig>(&content)
+        .err()
+        .map(|e| e.to_string())
+}
+
+/// Data-integrity guard for every `providers.toml` write: **never overwrite
+/// a file we cannot parse.**
+///
+/// Persistence here is a whole-file rewrite of the in-memory
+/// [`ProviderModelConfig`]. When the on-disk file fails the schema (a
+/// hand-edited block with one unknown field, a missing required field, an
+/// invalid `kind`/`credential` value — [`ProviderProfile`] is
+/// `deny_unknown_fields`, so any of these rejects the entire document),
+/// [`load`] degrades to `None` and every writer proceeds from an EMPTY
+/// in-memory config. Without this guard, the next semantic write
+/// (`/connect`, `/model --save`, `providers add`, the desktop's
+/// `configure()`, …) silently replaced the file with freshly synthesized
+/// content — permanently destroying the user's hand edits, including the
+/// parts that were perfectly valid.
+///
+/// The guard keeps reads graceful (a corrupt file never blocks launch — the
+/// synthesis fallback still applies) but makes writes conservative: the
+/// caller gets an `InvalidData` error naming the file and the underlying
+/// parse error, and the on-disk bytes are left byte-identical. The user
+/// fixes or removes the file and retries.
+///
+/// Allowed through: absent target (first save), empty/degenerate file
+/// (nothing to destroy), and any file that parses as a
+/// [`ProviderModelConfig`] (the normal load-mutate-save flow).
+fn ensure_safe_to_overwrite(path: &Path) -> io::Result<()> {
+    let existing = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(io::Error::new(
+                e.kind(),
+                format!(
+                    "refusing to overwrite {}: the existing file cannot be read ({e}); \
+                     fix its permissions or remove it first",
+                    path.display()
+                ),
+            ));
+        }
+    };
+    if existing.trim().is_empty() {
+        return Ok(());
+    }
+    match toml::from_str::<ProviderModelConfig>(&existing) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to overwrite {}: the existing file is not a valid provider config, \
+                 and rewriting it would silently destroy user content. Underlying parse \
+                 error: {e}. Fix the file (or rename/remove it) and retry; it was left \
+                 untouched.",
+                path.display()
+            ),
+        )),
+    }
+}
+
 /// Atomically persist `cfg` to `path` (or [`default_path`]), creating parent
 /// directories and setting owner-only (`0600`) permissions. Returns the path
 /// written.
@@ -164,6 +246,14 @@ pub fn connected_slugs() -> std::collections::HashSet<String> {
 /// never observable in a world-readable state and a crash mid-write cannot
 /// leave a partial profile (a stale `<name>.toml.tmp` is harmless and ignored
 /// by [`load`]).
+///
+/// # Data-integrity guard
+///
+/// Refuses (with `InvalidData`) to overwrite an existing file that does not
+/// parse as a [`ProviderModelConfig`] — see [`ensure_safe_to_overwrite`].
+/// This is what stops "unparseable hand edit → next write silently destroys
+/// the whole file" data loss; the absent / empty / parseable cases proceed
+/// unchanged.
 ///
 /// Acquires an exclusive cross-process `flock(LOCK_EX)` on the sidecar
 /// `<path>.lock` file for the entire write so a concurrent shannon process
@@ -211,6 +301,10 @@ pub fn save(cfg: &ProviderModelConfig, path: Option<&Path>) -> io::Result<PathBu
 /// safe outer wrappers; desktop callers that already wrap a load-mutate-save
 /// in a flock must call `save_locked` to avoid double-locking.
 fn save_locked(cfg: &ProviderModelConfig, path: &Path) -> io::Result<PathBuf> {
+    // Data-integrity guard first: an unparseable on-disk file is never
+    // clobbered, even though our in-memory snapshot could not have come
+    // from it (load degrades to None). See `ensure_safe_to_overwrite`.
+    ensure_safe_to_overwrite(path)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -1435,6 +1529,256 @@ mod tests {
                 "thread B's profile {i} must be on disk; got {ids:?}"
             );
         }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- Hand-appended block preservation (providers.toml data integrity) ----
+    //
+    // Field report (2026-08): a hand-appended `[[profiles.default.providers]]`
+    // block (id = "glm-plan", placed after the trailing `[gateway]` table —
+    // legal TOML) vanished from `~/.shannon/providers.toml` after subsequent
+    // CLI activity. These fixtures reproduce that file shape: a canonical
+    // tool-written config (one minimax provider, `[gateway]` last) plus the
+    // hand append, once schema-valid and once with a single schema-invalid
+    // detail (`ProviderProfile` is `deny_unknown_fields`).
+
+    /// Canonical tool-written shape (matches what `/connect` / `providers add`
+    /// persist) + a hand-appended glm-plan block AFTER `[gateway]`.
+    const HAND_APPENDED_VALID: &str = r#"version = 2
+
+[profiles.default]
+name = "default"
+credential_scope = "shared"
+
+[profiles.default.active_target]
+provider_id = "minimax"
+model_id = "MiniMax-M3"
+scope = "global"
+
+[[profiles.default.providers]]
+id = "minimax"
+kind = "openai-compatible"
+display_name = "minimax"
+base_url = "https://api.minimax.chat"
+
+[profiles.default.providers.credential]
+backend = "store"
+service = "minimax"
+
+[profiles.default.providers.quirks]
+temperature_strategy = "default"
+send_temperature = true
+
+[profiles.default.providers.tiers]
+
+[gateway]
+multiplex_profiles = false
+profile_routes = []
+
+[[profiles.default.providers]]
+id = "glm-plan"
+kind = "openai-compatible"
+display_name = "glm-plan"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+
+[profiles.default.providers.credential]
+backend = "store"
+service = "glm-plan"
+"#;
+
+    /// Same file, but the hand block carries one unknown field (`env_key`).
+    /// tomllib parses it fine; Shannon's serde schema rejects the WHOLE file
+    /// for it (`deny_unknown_fields` on `ProviderProfile`).
+    const HAND_APPENDED_UNKNOWN_FIELD: &str = r#"version = 2
+
+[profiles.default]
+name = "default"
+credential_scope = "shared"
+
+[profiles.default.active_target]
+provider_id = "minimax"
+model_id = "MiniMax-M3"
+scope = "global"
+
+[[profiles.default.providers]]
+id = "minimax"
+kind = "openai-compatible"
+display_name = "minimax"
+base_url = "https://api.minimax.chat"
+
+[profiles.default.providers.credential]
+backend = "store"
+service = "minimax"
+
+[profiles.default.providers.quirks]
+temperature_strategy = "default"
+send_temperature = true
+
+[profiles.default.providers.tiers]
+
+[gateway]
+multiplex_profiles = false
+profile_routes = []
+
+[[profiles.default.providers]]
+id = "glm-plan"
+kind = "openai-compatible"
+display_name = "glm-plan"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+env_key = "ZHIPU_API_KEY"
+
+[profiles.default.providers.credential]
+backend = "store"
+service = "glm-plan"
+"#;
+
+    /// A schema-valid hand append after `[gateway]` must round-trip: a
+    /// semantic write (load → mutate → save) must keep both the tool-written
+    /// minimax slot and the hand-appended glm-plan slot.
+    #[test]
+    fn semantic_write_preserves_valid_hand_appended_block_after_gateway() {
+        let dir = std::env::temp_dir().join(format!(
+            "shannon_pcs_handok_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("providers.toml");
+        fs::write(&path, HAND_APPENDED_VALID).unwrap();
+
+        // The append must load cleanly (the layout itself is legal for the
+        // `toml` crate, not just tomllib).
+        let loaded = load(Some(&path)).expect("valid hand append must parse");
+        let ids: Vec<&str> = loaded.profiles["default"]
+            .providers
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert!(ids.contains(&"minimax") && ids.contains(&"glm-plan"));
+
+        // Semantic write: upsert a third provider through the store.
+        let mut store = ProviderConfigStore::load_or_default_at(&path);
+        store.upsert_profile(
+            sample_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+            ),
+            "claude-sonnet-4-20250514",
+        );
+        store.save().expect("semantic write must succeed");
+
+        let after = load(Some(&path)).expect("post-write file must parse");
+        let ids: Vec<&str> = after.profiles["default"]
+            .providers
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert!(
+            ids.contains(&"minimax") && ids.contains(&"glm-plan") && ids.contains(&"anthropic"),
+            "hand-appended glm-plan must survive a semantic write; got {ids:?}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The defect: one schema-invalid detail in the hand block (here: an
+    /// unknown field) makes the WHOLE file fail Shannon's schema, `load`
+    /// degrades to `None` (read-side graceful — pinned contract), and a
+    /// subsequent semantic write rebuilds the store from an EMPTY in-memory
+    /// config. Pre-fix that write silently overwrote the file, permanently
+    /// destroying the user's content (the tool-written minimax provider AND
+    /// the hand block). The write path must refuse instead: an error is
+    /// returned, the on-disk bytes are left byte-identical.
+    #[test]
+    fn semantic_write_refuses_to_destroy_unparseable_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "shannon_pcs_handbad_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("providers.toml");
+        fs::write(&path, HAND_APPENDED_UNKNOWN_FIELD).unwrap();
+
+        // Read side: graceful degradation (the whole file is ignored —
+        // including the perfectly valid minimax slot).
+        assert!(
+            load(Some(&path)).is_none(),
+            "schema-invalid hand block degrades the whole file to None (read-side contract)"
+        );
+
+        // Write side: must refuse, not clobber.
+        let mut store = ProviderConfigStore::load_or_default_at(&path);
+        store.upsert_profile(
+            sample_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+            ),
+            "claude-sonnet-4-20250514",
+        );
+        let result = store.save();
+        assert!(
+            result.is_err(),
+            "semantic write must refuse to overwrite an unparseable providers.toml"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains(&path.display().to_string()),
+            "error must name the offending file; got: {err}"
+        );
+        assert!(
+            err.contains("refusing to overwrite") && err.contains("unknown field `env_key`"),
+            "error must surface the guard and the offending field; got: {err}"
+        );
+
+        // The user's bytes are untouched.
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            on_disk, HAND_APPENDED_UNKNOWN_FIELD,
+            "a refused write must leave the file byte-identical"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// No false positives: a save over an ABSENT, EMPTY, or VALID existing
+    /// file must proceed exactly as before.
+    #[test]
+    fn save_still_allows_overwrite_of_absent_empty_or_valid_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "shannon_pcs_handok3_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        // Absent target.
+        let absent = dir.join("absent.toml");
+        save(&anthropic_connect_config(), Some(&absent)).expect("save to absent path");
+        assert!(absent.exists());
+
+        // Empty (degenerate) target — nothing to destroy.
+        let empty = dir.join("empty.toml");
+        fs::write(&empty, "").unwrap();
+        save(&anthropic_connect_config(), Some(&empty)).expect("save over empty file");
+
+        // Valid target (the normal load-mutate-save flow).
+        let valid = dir.join("valid.toml");
+        fs::write(&valid, HAND_APPENDED_VALID).unwrap();
+        save(&anthropic_connect_config(), Some(&valid))
+            .expect("save over a parseable file must proceed");
 
         let _ = fs::remove_dir_all(&dir);
     }
