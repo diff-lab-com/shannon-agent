@@ -89,13 +89,37 @@ pub struct LlmClient {
 }
 
 impl LlmClient {
-    /// Build a reqwest client with the given timeout (seconds).
+    /// Connect-phase deadline (TCP + TLS handshake), shared by every
+    /// request. Chosen independently of `timeout_seconds`: connecting is
+    /// bounded by network RTT, not by how long a model may legitimately
+    /// keep a response stream open.
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Build the shared reqwest client.
+    ///
+    /// Deliberately sets **no total request timeout**: reqwest's client-level
+    /// `timeout` spans "start connecting until the response body has
+    /// finished", so any SSE stream running longer than the budget was
+    /// hard-killed mid-generation (review 2026-08-28 PERF-2) and then paid
+    /// for again by a full-message reconnect. Instead the timeout decomposes
+    /// into:
+    ///
+    /// - [`Self::CONNECT_TIMEOUT`] bounds the connect/handshake phase;
+    /// - `read_timeout` bounds the gap between two body reads (idle
+    ///   timeout). `timeout_seconds` is reused as that idle bound — a
+    ///   connection that produced nothing for a whole legacy budget is
+    ///   stalled by any definition, while a stream that keeps producing
+    ///   chunks is never cut no matter how long the total transfer runs;
+    /// - non-streaming requests re-add a total deadline per-request via
+    ///   `RequestBuilder::timeout` (see `send_message`), preserving their
+    ///   previous end-to-end semantics exactly.
     ///
     /// Falls back to a default client if TLS initialization fails,
     /// logging the error instead of panicking.
     fn build_client(timeout_secs: u64) -> Client {
         Client::builder()
-            .timeout(Duration::from_secs(timeout_secs))
+            .connect_timeout(Self::CONNECT_TIMEOUT)
+            .read_timeout(Duration::from_secs(timeout_secs.max(1)))
             .build()
             .unwrap_or_else(|e| {
                 tracing::error!("Failed to build HTTP client with timeout ({timeout_secs}s): {e}; falling back to default");
@@ -118,7 +142,8 @@ impl LlmClient {
     /// Create a new LLM API client, returning an error if client construction fails.
     pub fn try_new(config: LlmClientConfig) -> Result<Self, ApiError> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(config.timeout_seconds))
+            .connect_timeout(Self::CONNECT_TIMEOUT)
+            .read_timeout(Duration::from_secs(config.timeout_seconds.max(1)))
             .build()
             .map_err(|e| ApiError::InvalidResponse(format!("Failed to create HTTP client: {e}")))?;
         Ok(Self {
@@ -800,6 +825,11 @@ impl LlmClient {
             request = request.header(&key, &value);
         }
 
+        // Non-streaming: keep the total request deadline the shared client
+        // used to provide. The full response body must arrive within
+        // `timeout_seconds` — streaming paths get no such cap (idle-only).
+        request = request.timeout(Duration::from_secs(self.config.timeout_seconds));
+
         let response = request.send().await.map_err(|e| match e.status() {
             Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
             Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded {
@@ -1253,6 +1283,182 @@ mod tests {
             retry_config: Default::default(),
             reasoning_effort: None,
         }
+    }
+
+    // ── Stream timeouts (review 2026-08-28 PERF-2) ──────────────────────
+
+    const STREAM_TIMEOUT_SECS: u64 = 2;
+
+    /// Streaming config against the mock server: `timeout_seconds` doubles
+    /// as the read-idle bound (see `build_client`); reconnects are disabled
+    /// so the timeout behavior is observed in isolation.
+    fn slow_stream_config(base_url: String) -> LlmClientConfig {
+        LlmClientConfig {
+            provider: LlmProvider::Anthropic,
+            api_key: "test-key".to_string(),
+            model: "claude-3-5-sonnet-20241022".to_string(),
+            base_url,
+            max_tokens: 64,
+            api_version: "2023-06-01".to_string(),
+            timeout_seconds: STREAM_TIMEOUT_SECS,
+            max_stream_reconnects: 0,
+            extra_headers: Default::default(),
+            budget_tokens: None,
+            fallback_provider: None,
+            fallback_base_url: None,
+            retry_config: Default::default(),
+            reasoning_effort: None,
+        }
+    }
+
+    fn user_message() -> Message {
+        Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("hi".to_string()),
+        }
+    }
+
+    /// A slow-drip SSE stream — chunk gaps (700ms) far below the idle
+    /// budget (2s) but a total transfer (3.5s) far above the legacy
+    /// client-level total timeout (2s) — must run to completion. Under the
+    /// pre-PERF-2 build this stream was hard-killed at 2s mid-generation
+    /// and then replayed from scratch by the reconnect path.
+    #[tokio::test]
+    async fn slow_stream_survives_past_legacy_total_timeout() {
+        use futures::StreamExt;
+        use std::io::Write as _;
+        use std::sync::Arc;
+        use std::time::Instant;
+
+        let mut server = mockito::Server::new_async().await;
+        let pieces: Vec<String> = vec![
+            format!(
+                "data: {}\n\n",
+                r#"{"type":"message_start","message":{"id":"msg_slow","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}"#
+            ),
+            format!(
+                "data: {}\n\n",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}"#
+            ),
+            format!(
+                "data: {}\n\n",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"b"}}"#
+            ),
+            format!(
+                "data: {}\n\n",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"c"}}"#
+            ),
+            "data: [DONE]\n\n".to_string(),
+        ];
+        let drip = Arc::new(pieces);
+        let drip_for_handler = Arc::clone(&drip);
+        let mock = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |w| {
+                for piece in drip_for_handler.iter() {
+                    w.write_all(piece.as_bytes())?;
+                    w.flush()?;
+                    std::thread::sleep(std::time::Duration::from_millis(700));
+                }
+                Ok(())
+            })
+            .create_async()
+            .await;
+
+        let client = LlmClient::new(slow_stream_config(server.url()));
+        let started = Instant::now();
+        let mut stream = client
+            .send_message_stream(vec![user_message()], None, None)
+            .await
+            .expect("stream must open");
+
+        let mut text = String::new();
+        let mut saw_stop = false;
+        while let Some(event) = stream.next().await {
+            match event.expect("chunks must keep flowing; no timeout may fire") {
+                StreamEvent::ContentBlockDelta {
+                    delta: ContentDelta::TextDelta { text: t },
+                    ..
+                } => text.push_str(&t),
+                StreamEvent::MessageStop => saw_stop = true,
+                _ => {}
+            }
+        }
+        let elapsed = started.elapsed();
+
+        mock.assert();
+        assert_eq!(text, "abc", "every dripped delta must be delivered");
+        assert!(saw_stop, "stream must end via MessageStop, not a cut");
+        assert!(
+            elapsed >= std::time::Duration::from_millis(2_500),
+            "transfer ran {elapsed:?}; the legacy 2s total timeout is gone"
+        );
+    }
+
+    /// The inverse contract: a genuinely stalled stream (no bytes for
+    /// longer than the idle bound) is still cut — removing the total
+    /// timeout must not mean removing all timeouts.
+    #[tokio::test]
+    async fn stalled_stream_is_cut_by_read_idle_timeout() {
+        use futures::StreamExt;
+        use std::io::Write as _;
+        use std::time::{Duration, Instant};
+
+        let mut server = mockito::Server::new_async().await;
+        let first = format!(
+            "data: {}\n\n",
+            r#"{"type":"message_start","message":{"id":"msg_stall","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}"#
+        );
+        let mock = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |w| {
+                w.write_all(first.as_bytes())?;
+                w.flush()?;
+                // Stall well past the 2s idle budget before sending more.
+                std::thread::sleep(Duration::from_secs(4));
+                let _ = w.write_all(b"data: [DONE]\n\n");
+                let _ = w.flush();
+                Ok(())
+            })
+            .create_async()
+            .await;
+
+        let client = LlmClient::new(slow_stream_config(server.url()));
+        let started = Instant::now();
+        let mut stream = client
+            .send_message_stream(vec![user_message()], None, None)
+            .await
+            .expect("stream must open");
+
+        // First chunk arrives, then the idle cut.
+        let mut first_ok = false;
+        let mut cut = None;
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(_) => first_ok = true,
+                Err(e) => {
+                    cut = Some(e);
+                    break;
+                }
+            }
+        }
+        let elapsed = started.elapsed();
+
+        assert!(first_ok, "the pre-stall chunk must be delivered");
+        assert!(cut.is_some(), "the stalled stream must surface an error");
+        assert!(
+            elapsed >= Duration::from_millis(1_500),
+            "cut at {elapsed:?} — must not fire before the stall"
+        );
+        assert!(
+            elapsed < Duration::from_millis(3_900),
+            "cut at {elapsed:?} — the idle timeout (2s), not the server's 4s close, ended it"
+        );
+        mock.assert(); // note: cut client leaves body unread; mockito tolerates
     }
 
     // ── Construction ────────────────────────────────────────────────────
