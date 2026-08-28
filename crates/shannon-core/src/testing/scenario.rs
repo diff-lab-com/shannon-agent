@@ -25,8 +25,12 @@
 //!   matching: a pattern spelling a relative path still matches an observed
 //!   workspace-absolute value (models follow the tools' "Absolute path"
 //!   contract), while non-path arguments are compared verbatim.
-//! - `forbidden_tool { tool }` — fails if the tool appears anywhere in the
-//!   observed trajectory.
+//! - `forbidden_tool { tool, strict? }` — flags the tool when it appears
+//!   anywhere in the observed trajectory. `strict` defaults to `true` and a
+//!   hit fails the run; with `strict = false` the hit is recorded as a soft
+//!   flag on the rule outcome (visible in reports, `passed` untouched) — the
+//!   "means, not contract" mode used for tool-choice guidance whose violation
+//!   should not override a correct outcome (RCA 2026-08-28 §5 决策点 1).
 //! - `cost_below { max_usd, per }` — budget assertion where `per` is either
 //!   `task` (sum of per-turn costs ≤ `max_usd`) or `turn` (every turn cost ≤
 //!   `max_usd`). No recorded cost data is treated as an unverifiable claim and
@@ -85,6 +89,13 @@ pub struct ScenarioYaml {
 
 fn default_model() -> String {
     "test-model".to_string()
+}
+
+/// Serde default keeping `forbidden_tool` strict unless a scenario opts out —
+/// pre-soft scenarios (and the negative YAML fixture) keep their exact
+/// fail-on-hit semantics.
+fn default_true() -> bool {
+    true
 }
 
 /// Setup configuration for the test workspace.
@@ -218,8 +229,17 @@ pub enum ValidationRule {
     #[serde(rename = "trajectory_contains")]
     TrajectoryContains { sequence: Vec<TrajectoryStep> },
     /// Tool that must NOT appear anywhere in the observed trajectory.
+    ///
+    /// `strict` defaults to `true` — a hit fails the rule. With
+    /// `strict = false` a hit lands in [`RuleOutcome::soft_flags`] instead of
+    /// `details`: the rule stays passed and the run is not failed, while the
+    /// report still records the detour (tool-choice guidance, not contract).
     #[serde(rename = "forbidden_tool")]
-    ForbiddenTool { tool: String },
+    ForbiddenTool {
+        tool: String,
+        #[serde(default = "default_true")]
+        strict: bool,
+    },
     /// Budget ceiling for recorded per-turn costs.
     #[serde(rename = "cost_below")]
     CostBelow { max_usd: f64, per: CostBasis },
@@ -237,6 +257,11 @@ pub struct RuleOutcome {
     /// report several details (e.g. `file_content` with both `contains` and
     /// `matches_regex` violated).
     pub details: Vec<String>,
+    /// Soft observations: violations that deliberately do NOT fail the rule.
+    /// Populated only by lenient rules — a `strict = false` `forbidden_tool`
+    /// hit lands here instead of `details`, so the outcome passes while
+    /// reports can still surface the tool-choice detour.
+    pub soft_flags: Vec<String>,
 }
 
 /// Compact trajectory summary carried on [`ScenarioResult`] for runner reports.
@@ -505,6 +530,7 @@ fn violated(rule_tag: &str, details: Vec<String>) -> RuleOutcome {
         rule: rule_tag.to_string(),
         passed: false,
         details,
+        soft_flags: Vec::new(),
     }
 }
 
@@ -513,11 +539,13 @@ fn passed(rule_tag: &str) -> RuleOutcome {
         rule: rule_tag.to_string(),
         passed: true,
         details: Vec::new(),
+        soft_flags: Vec::new(),
     }
 }
 
 fn evaluate_rule(rule: &ValidationRule, ctx: &ValidationContext) -> RuleOutcome {
     let mut failures = Vec::new();
+    let mut soft_flags = Vec::new();
 
     match rule {
         ValidationRule::FileExists { path } => {
@@ -593,9 +621,17 @@ fn evaluate_rule(rule: &ValidationRule, ctx: &ValidationContext) -> RuleOutcome 
         ValidationRule::TrajectoryContains { sequence } => {
             check_subsequence(sequence, ctx.trajectory, &mut failures);
         }
-        ValidationRule::ForbiddenTool { tool } => {
+        ValidationRule::ForbiddenTool { tool, strict } => {
             if ctx.trajectory.iter().any(|call| call.tool == *tool) {
-                failures.push(format!("forbidden_tool: '{tool}' was invoked"));
+                let flag = format!("forbidden_tool: '{tool}' was invoked");
+                if *strict {
+                    failures.push(flag);
+                } else {
+                    // Soft mode: record, never fail (§5 决策点 1 — tool
+                    // choice is a means; the outcome assertions stay the
+                    // contract).
+                    soft_flags.push(flag);
+                }
             }
         }
         ValidationRule::CostBelow { max_usd, per } => {
@@ -604,7 +640,9 @@ fn evaluate_rule(rule: &ValidationRule, ctx: &ValidationContext) -> RuleOutcome 
     }
 
     if failures.is_empty() {
-        passed(rule_tag(rule))
+        let mut outcome = passed(rule_tag(rule));
+        outcome.soft_flags = soft_flags;
+        outcome
     } else {
         violated(rule_tag(rule), failures)
     }
@@ -1566,6 +1604,7 @@ validate: []
         let outcomes = evaluate_rules(
             &[ValidationRule::ForbiddenTool {
                 tool: "Bash".to_string(),
+                strict: true,
             }],
             &clean,
         );
@@ -1575,11 +1614,105 @@ validate: []
         let outcomes = evaluate_rules(
             &[ValidationRule::ForbiddenTool {
                 tool: "Bash".to_string(),
+                strict: true,
             }],
             &dirty,
         );
         assert!(!outcomes[0].passed);
         assert_eq!(outcomes[0].details[0], "forbidden_tool: 'Bash' was invoked");
+    }
+
+    #[test]
+    fn forbidden_tool_soft_mode_flags_without_failing() {
+        let observed = [ToolCallTrace::new("Bash", r#"{"command":"cargo test"}"#)];
+        let dir = tempfile::TempDir::new().expect("dir");
+        let dirty = ValidationContext::new(dir.path(), "success", "").with_trajectory(&observed);
+
+        let outcomes = evaluate_rules(
+            &[ValidationRule::ForbiddenTool {
+                tool: "Bash".to_string(),
+                strict: false,
+            }],
+            &dirty,
+        );
+        assert!(outcomes[0].passed, "soft mode must not fail the rule");
+        assert!(outcomes[0].details.is_empty(), "{:?}", outcomes[0].details);
+        assert_eq!(
+            outcomes[0].soft_flags,
+            vec!["forbidden_tool: 'Bash' was invoked".to_string()]
+        );
+
+        // A clean run under soft mode carries no flags either way.
+        let clean = ValidationContext::new(dir.path(), "success", "");
+        let outcomes = evaluate_rules(
+            &[ValidationRule::ForbiddenTool {
+                tool: "Bash".to_string(),
+                strict: false,
+            }],
+            &clean,
+        );
+        assert!(outcomes[0].passed);
+        assert!(outcomes[0].soft_flags.is_empty());
+
+        // The legacy failure-string projection stays silent on soft flags —
+        // they must never leak into the run's failure list.
+        let outcomes = evaluate_rules(
+            &[ValidationRule::ForbiddenTool {
+                tool: "Bash".to_string(),
+                strict: false,
+            }],
+            &dirty,
+        );
+        assert!(outcomes_failures(&outcomes).is_empty());
+    }
+
+    #[test]
+    fn forbidden_tool_strict_defaults_true_in_yaml() {
+        let f = write_temp_yaml(
+            r#"
+name: ban-default
+prompt: "Do the thing"
+setup:
+  files: []
+mock_responses:
+  - response:
+      type: text
+      content: "done"
+validate:
+  - rule: forbidden_tool
+    tool: Bash
+"#,
+        );
+        let scenario = parse_scenario(f.path()).expect("parse");
+        assert!(matches!(
+            &scenario.validate[0],
+            ValidationRule::ForbiddenTool { strict: true, .. }
+        ));
+
+        let soft = write_temp_yaml(
+            r#"
+name: ban-soft
+prompt: "Do the thing"
+setup:
+  files: []
+mock_responses:
+  - response:
+      type: text
+      content: "done"
+validate:
+  - rule: forbidden_tool
+    tool: Bash
+    strict: false
+"#,
+        );
+        let scenario = parse_scenario(soft.path()).expect("parse");
+        assert!(matches!(
+            &scenario.validate[0],
+            ValidationRule::ForbiddenTool {
+                tool,
+                strict: false
+            } if tool == "Bash"
+        ));
     }
 
     #[test]
@@ -1751,7 +1884,7 @@ validate:
         ));
         assert!(matches!(
             &scenario.validate[2],
-            ValidationRule::ForbiddenTool { tool } if tool == "Bash"
+            ValidationRule::ForbiddenTool { tool, strict: true } if tool == "Bash"
         ));
         assert!(matches!(
             &scenario.validate[3],
