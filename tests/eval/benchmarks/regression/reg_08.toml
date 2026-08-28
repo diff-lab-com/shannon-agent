@@ -89,7 +89,7 @@ forbidden_tools = ["Bash"]
 
 [limits]
 max_turns = 8
-max_tokens = 16000
+max_tokens = 300000
 timeout_secs = 180
 
 [dry_run]

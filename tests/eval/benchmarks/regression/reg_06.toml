@@ -78,7 +78,7 @@ args_regex = '"old_string":"pub const DELIVERY_TIMEOUT_MS: u64 = 3000'
 
 [limits]
 max_turns = 6
-max_tokens = 16000
+max_tokens = 300000
 timeout_secs = 180
 
 [dry_run]

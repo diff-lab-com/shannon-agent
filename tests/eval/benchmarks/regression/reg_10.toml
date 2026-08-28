@@ -90,7 +90,7 @@ args_regex = 'price_per_mtok'
 
 [limits]
 max_turns = 6
-max_tokens = 12000
+max_tokens = 300000
 timeout_secs = 180
 
 [dry_run]
