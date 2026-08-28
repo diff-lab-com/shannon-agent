@@ -156,16 +156,18 @@ cost = 0.0
 passed = total = 0
 def metrics_sum(metrics, ext=None):
     global tin, tout, cache, cost
-    if not isinstance(metrics, dict):
-        return
-    tin += int(metrics.get("tokens_in") or 0)
-    tout += int(metrics.get("tokens_out") or 0)
-    if scope == "all":
-        cache += int(metrics.get("cache_creation_tokens") or 0)
-        cache += int(metrics.get("cache_read_tokens") or 0)
-    c = metrics.get("cost_usd")
-    if isinstance(c, (int, float)):
-        cost += c
+    # metrics and ext are independent sources: pipeline reps carry `metrics`,
+    # delegated reps carry only `external_metrics` (metrics is null) — the
+    # early-return must not skip the ext branch (TB batch-2 ledger bug).
+    if isinstance(metrics, dict):
+        tin += int(metrics.get("tokens_in") or 0)
+        tout += int(metrics.get("tokens_out") or 0)
+        if scope == "all":
+            cache += int(metrics.get("cache_creation_tokens") or 0)
+            cache += int(metrics.get("cache_read_tokens") or 0)
+        c = metrics.get("cost_usd")
+        if isinstance(c, (int, float)):
+            cost += c
     if isinstance(ext, dict):
         tin += int(ext.get("tokens_in") or 0)
         tout += int(ext.get("tokens_out") or 0)
