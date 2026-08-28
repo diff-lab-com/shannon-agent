@@ -609,6 +609,16 @@ async fn approval_respond_handler(
     }
 }
 
+// NOTE (cross-repo contract, mobile spec §G): there is currently NO host-side
+// relay dialer here — the gateway owns that role (gateway/src/mobile/relay/
+// relayHost.ts). When a Rust host relay is added, it MUST create a fresh
+// phone-direction E2E recv channel on every `paired` control frame that
+// follows `peer_gone(phone_left)`: a reconnecting phone restarts its send
+// counter at 1, and a host that keeps its old recv counter silently rejects
+// every re-joined frame as a replay. Contract:
+// shannon-mobile docs/cross-repo-adaptation-spec.md §G (G4); reference
+// behavior + test: relayHost.test.ts "re-pairs after phone reconnects
+// (recv counter resets)".
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws_socket(socket, state))
 }
