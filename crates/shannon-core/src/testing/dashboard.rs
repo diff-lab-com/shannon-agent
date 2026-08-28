@@ -364,10 +364,12 @@ mod tests {
                 total_tokens: 600,
                 session_id: None,
                 violations: vec![],
+                soft_flags: vec![],
                 rule_outcomes: vec![RecordedRuleOutcome {
                     rule: "verify_exit_zero".to_string(),
                     passed: failed_class.is_none() || i != 0,
                     details: vec![],
+                    soft_flags: vec![],
                 }],
                 trajectory_tools: vec!["Read".to_string()],
                 metrics: Some(TaskMetrics {

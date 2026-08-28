@@ -589,6 +589,7 @@ mod tests {
             total_tokens: 0,
             session_id: None,
             violations: Vec::new(),
+            soft_flags: Vec::new(),
             rule_outcomes: Vec::new(),
             trajectory_tools: Vec::new(),
             metrics: None,
