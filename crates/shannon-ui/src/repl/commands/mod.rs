@@ -364,6 +364,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         "files",
         "select-tools",
         "tools",
+        "notools",
         "debug",
         "dbg",
         "dev",
@@ -808,5 +809,141 @@ mod tests {
         );
         // Inline shell, env-var dumps, etc. are not /connect.
         assert_eq!(redact_secret_command("!echo $HOME"), "!echo $HOME");
+    }
+
+    /// Regression guard for the `/notools` dispatch drift (2026-08-28
+    /// review PM-1): the `match cmd_name` arm existed, but neither
+    /// `repl_only_commands` nor the builtin registry provided the name, so
+    /// the gate rejected `/notools` as an unknown command. Every alias
+    /// group in the dispatch match must be reachable through at least one
+    /// alias: the repl-only list or a registered builtin (name or alias).
+    #[test]
+    fn every_dispatch_match_arm_is_reachable_from_the_gate() {
+        let src = include_str!("mod.rs");
+
+        // Pull the repl-only list body out of this very file so the check
+        // can never drift from the compiled list.
+        let list_start = src
+            .find("let repl_only_commands = [")
+            .expect("repl_only_commands array present");
+        let list_slice = &src[list_start..];
+        let list_end = list_slice
+            .find("];")
+            .expect("repl_only_commands array terminated");
+        let list: std::collections::HashSet<String> = list_slice[..list_end]
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_string)
+            .collect();
+        assert!(
+            list.contains("notools"),
+            "sanity: the fixed drift entry must stay in the list"
+        );
+
+        // Bound the `match cmd_name { ... }` block with a brace-counting
+        // scan that skips string literals (arm bodies carry format strings).
+        let match_start = src
+            .find("match cmd_name {")
+            .expect("dispatch match present");
+        let bytes = src.as_bytes();
+        let mut depth = 0i32;
+        let mut in_string = false;
+        let mut cursor = match_start;
+        let mut match_end = None;
+        while cursor < bytes.len() {
+            match bytes[cursor] {
+                b'"' if !in_string => in_string = true,
+                b'"' => in_string = false,
+                b'\\' if in_string => {
+                    cursor += 1; // skip escaped character
+                }
+                b'{' if !in_string => depth += 1,
+                b'}' if !in_string => {
+                    depth -= 1;
+                    if depth == 0 {
+                        match_end = Some(cursor);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            cursor += 1;
+        }
+        let match_body = &src[match_start..match_end.expect("dispatch match terminated")];
+
+        // Collect alias groups from arm heads at the outermost arm level
+        // (`"a" | "b" => ...`, i.e. brace depth 1 of the dispatch match).
+        // Nested matches sit deeper and are ignored.
+        let mut groups: Vec<Vec<String>> = Vec::new();
+        let mut line_depth = 0i32;
+        for line in match_body.lines() {
+            let mut opens = 0i32;
+            let mut closes = 0i32;
+            let mut chars = line.chars().peekable();
+            let mut line_in_string = false;
+            while let Some(ch) = chars.next() {
+                match ch {
+                    '"' => line_in_string = !line_in_string,
+                    '\\' if line_in_string => {
+                        chars.next();
+                    }
+                    '{' if !line_in_string => opens += 1,
+                    '}' if !line_in_string => closes += 1,
+                    _ => {}
+                }
+            }
+            let trimmed = line.trim_start();
+            if line_depth == 1
+                && !line_in_string
+                && trimmed.starts_with('"')
+                && trimmed.contains("=>")
+            {
+                let head = &trimmed[..trimmed.find("=>").expect("arrow checked")];
+                let aliases: Vec<String> = head
+                    .split('"')
+                    .skip(1)
+                    .step_by(2)
+                    .map(str::to_string)
+                    .collect();
+                if !aliases.is_empty() {
+                    groups.push(aliases);
+                }
+            }
+            line_depth += opens - closes;
+        }
+
+        // Non-vacuous coverage: known-first and known-drifted arms.
+        let has = |name: &str| groups.iter().any(|g| g.iter().any(|a| a == name));
+        assert!(has("help"), "dispatch arm extraction failed (no `help`)");
+        assert!(
+            has("notools"),
+            "dispatch arm extraction failed (no `notools`)"
+        );
+
+        let registry_names: std::collections::HashSet<String> =
+            shannon_commands::builtin_commands::all_commands()
+                .iter()
+                .flat_map(|command| {
+                    let mut names = vec![command.name().to_string()];
+                    names.extend(command.aliases().iter().cloned());
+                    names
+                })
+                .collect();
+
+        let unreachable: Vec<String> = groups
+            .into_iter()
+            .filter(|group| {
+                !group
+                    .iter()
+                    .any(|alias| list.contains(alias) || registry_names.contains(alias))
+            })
+            .flatten()
+            .collect();
+        assert!(
+            unreachable.is_empty(),
+            "dispatch arms unreachable from the gate (add to repl_only_commands \
+             or the builtin registry): {unreachable:?}"
+        );
     }
 }
