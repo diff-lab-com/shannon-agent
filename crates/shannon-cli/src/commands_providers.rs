@@ -34,6 +34,22 @@ use shannon_types::provider_config::{CredentialRef, ProviderKind, ProviderProfil
 #[allow(dead_code)] // KEEP: doc-only reference for accepted tier names; runtime validation lives in `validate_canonical_tier`.
 const CANONICAL_TIERS: &[&str] = &["fast", "standard", "pro"];
 
+/// Warn on stderr when `~/.shannon/providers.toml` exists but cannot be
+/// parsed as a provider config (one unknown field in a hand-edited block is
+/// enough — the schema is `deny_unknown_fields`). Without this, every read
+/// surface silently shows "nothing connected" and the user has no hint why
+/// (the `tracing` warn in `load` sits below the CLI's default `error` log
+/// level). Writes to the file are refused by the store's data-integrity
+/// guard with the full parse error; this warning is the read-side hint.
+pub fn warn_if_providers_toml_unparseable() {
+    if let Some(err) = shannon_core::provider_config_store::parse_error(None) {
+        eprintln!(
+            "warning: ~/.shannon/providers.toml exists but is not a valid provider config; \
+             it is being ignored until fixed (writes to it are refused):\n  {err}"
+        );
+    }
+}
+
 /// Default `LlmProvider::default_base_url()` per known `ProviderKind`. Used
 /// when `--base-url` is omitted for a kind that has a canonical endpoint.
 ///

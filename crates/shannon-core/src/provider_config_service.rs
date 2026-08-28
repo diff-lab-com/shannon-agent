@@ -1023,6 +1023,156 @@ mod tests {
         }
     }
 
+    // ===== Hand-appended block preservation (providers.toml data integrity) =====
+    //
+    // Regression tests for the field-reported data loss: a hand-appended
+    // `[[profiles.default.providers]]` block placed after the trailing
+    // `[gateway]` table must survive a semantic write when schema-valid, and
+    // the write must REFUSE (leaving the file untouched) when the file fails
+    // Shannon's schema — never silently destroy it. The store-level pins live
+    // in `provider_config_store::tests`; these exercise the service path
+    // (`connect` = lock → reload → mutate → save_locked) end to end.
+
+    /// Canonical tool-written config + hand-appended glm-plan block after
+    /// `[gateway]`, schema-valid. `connect` must keep it.
+    const HAND_APPEND_VALID: &str = r#"version = 2
+
+[profiles.default]
+name = "default"
+credential_scope = "shared"
+
+[profiles.default.active_target]
+provider_id = "minimax"
+model_id = "MiniMax-M3"
+scope = "global"
+
+[[profiles.default.providers]]
+id = "minimax"
+kind = "openai-compatible"
+display_name = "minimax"
+base_url = "https://api.minimax.chat"
+
+[profiles.default.providers.credential]
+backend = "store"
+service = "minimax"
+
+[profiles.default.providers.quirks]
+temperature_strategy = "default"
+send_temperature = true
+
+[profiles.default.providers.tiers]
+
+[gateway]
+multiplex_profiles = false
+profile_routes = []
+
+[[profiles.default.providers]]
+id = "glm-plan"
+kind = "openai-compatible"
+display_name = "glm-plan"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+
+[profiles.default.providers.credential]
+backend = "store"
+service = "glm-plan"
+"#;
+
+    /// Same shape, but the hand block carries one unknown field — enough for
+    /// `deny_unknown_fields` on `ProviderProfile` to reject the WHOLE file.
+    const HAND_APPEND_BROKEN: &str = r#"version = 2
+
+[profiles.default]
+name = "default"
+credential_scope = "shared"
+
+[profiles.default.active_target]
+provider_id = "minimax"
+model_id = "MiniMax-M3"
+scope = "global"
+
+[[profiles.default.providers]]
+id = "minimax"
+kind = "openai-compatible"
+display_name = "minimax"
+base_url = "https://api.minimax.chat"
+
+[profiles.default.providers.credential]
+backend = "store"
+service = "minimax"
+
+[profiles.default.providers.quirks]
+temperature_strategy = "default"
+send_temperature = true
+
+[profiles.default.providers.tiers]
+
+[gateway]
+multiplex_profiles = false
+profile_routes = []
+
+[[profiles.default.providers]]
+id = "glm-plan"
+kind = "openai-compatible"
+display_name = "glm-plan"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+env_key = "ZHIPU_API_KEY"
+
+[profiles.default.providers.credential]
+backend = "store"
+service = "glm-plan"
+"#;
+
+    #[test]
+    fn connect_keeps_valid_hand_appended_block_after_gateway() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("providers.toml");
+        std::fs::write(&path, HAND_APPEND_VALID).expect("seed hand-edited file");
+
+        let mut svc = ProviderConfigService::load_at(&path);
+        svc.connect(LlmProvider::Anthropic, None, None, true)
+            .expect("connect over a hand-edited but valid file");
+
+        let on_disk = std::fs::read_to_string(&path).expect("file exists");
+        let reloaded =
+            crate::provider_config_store::load(Some(&path)).expect("post-connect file must parse");
+        let ids: Vec<&str> = reloaded.profiles["default"]
+            .providers
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert!(
+            ids.contains(&"minimax") && ids.contains(&"glm-plan") && ids.contains(&"anthropic"),
+            "hand-appended glm-plan must survive /connect; got {ids:?} in:\n{on_disk}"
+        );
+    }
+
+    #[test]
+    fn connect_refuses_and_preserves_file_when_unparseable() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("providers.toml");
+        std::fs::write(&path, HAND_APPEND_BROKEN).expect("seed broken hand-edited file");
+
+        let mut svc = ProviderConfigService::load_at(&path);
+        let result = svc.connect(LlmProvider::Anthropic, None, None, true);
+        assert!(
+            result.is_err(),
+            "connect must refuse to rewrite an unparseable providers.toml"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("refusing to overwrite") && err.contains("env_key"),
+            "error must name the guard and the offending field; got: {err}"
+        );
+
+        // Byte-identical preservation — the user's hand edit (valid minimax
+        // slot included) is untouched.
+        let on_disk = std::fs::read_to_string(&path).expect("file still exists");
+        assert_eq!(
+            on_disk, HAND_APPEND_BROKEN,
+            "a refused connect must leave the file byte-identical"
+        );
+    }
+
     // ===== P2-2 S1-1: LockedService (RAII) =====
 
     /// L1: `lock()` returns a usable `LockedService`; mutating through
