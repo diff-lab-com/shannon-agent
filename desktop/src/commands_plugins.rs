@@ -102,14 +102,26 @@ pub async fn install_plugin(
 }
 
 /// Install a plugin from a git URL (clones with `git clone --depth 1`).
+///
+/// `allow_unverified` is the explicit SEC-1 opt-in: when the remote
+/// manifest declares no `permissions`, the default (`None`/`Some(false)`)
+/// refuses the install (`PluginError::UnverifiedRemote`). The UI should
+/// pass `Some(true)` only after the user has explicitly confirmed the
+/// default-allow risk.
 #[tauri::command]
 pub async fn install_plugin_from_git(
     state: tauri::State<'_, AppState>,
     repo_url: String,
+    allow_unverified: Option<bool>,
 ) -> Result<String, String> {
+    let consent = if allow_unverified.unwrap_or(false) {
+        shannon_core::plugin::RemoteInstallConsent::allow_unverified()
+    } else {
+        shannon_core::plugin::RemoteInstallConsent::default()
+    };
     let mut registry = state.plugin_registry.write().await;
     registry
-        .install_from_git(&repo_url)
+        .install_from_git(&repo_url, consent)
         .await
         .map_err(|e| e.to_string())
 }

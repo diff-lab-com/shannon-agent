@@ -22,6 +22,35 @@ pub struct InstalledPlugin {
     pub enabled: bool,
 }
 
+/// Trust decision for a **remote (git)** plugin install (review 2026-08-28
+/// SEC-1).
+///
+/// A remote manifest that declares no `permissions` would run under the
+/// runtime's default-allow compat contract — undeclared = every capability
+/// face (`execute_commands`, `network`, `mcp_tools`, …) open. Cloning an
+/// arbitrary URL with one call must not silently acquire that surface, so
+/// the default [`RemoteInstallConsent::default`] refuses it with
+/// [`PluginError::UnverifiedRemote`]; interactive callers set
+/// [`RemoteInstallConsent::allow_unverified`] only after the user
+/// explicitly accepted the risk.
+///
+/// Local-path installs (`install_from_path`) are the developer flow and
+/// deliberately keep the legacy behavior.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RemoteInstallConsent {
+    /// Install despite an undeclared (default-allow-all) permission surface.
+    pub allow_unverified: bool,
+}
+
+impl RemoteInstallConsent {
+    /// Explicit opt-in for an unverified (permissions-less) remote manifest.
+    pub fn allow_unverified() -> Self {
+        Self {
+            allow_unverified: true,
+        }
+    }
+}
+
 /// Plugin registry
 #[derive(Debug)]
 pub struct PluginRegistry {
@@ -125,8 +154,21 @@ impl PluginRegistry {
         }
     }
 
-    /// Install a plugin from a git repository
-    pub async fn install_from_git(&mut self, repo_url: &str) -> PluginResult<String> {
+    /// Install a plugin from a git repository.
+    ///
+    /// `consent` carries the trust decision for manifests that declare no
+    /// [`PluginManifest::permissions`]: by default such a **remote** install
+    /// is refused ([`PluginError::UnverifiedRemote`]) because the runtime's
+    /// default-allow contract would grant every capability face to whatever
+    /// the URL serves (review 2026-08-28 SEC-1). Pass
+    /// [`RemoteInstallConsent::allow_unverified()`] only after an explicit
+    /// user confirmation; the half-cloned directory is removed on refusal so
+    /// a later `load_all` scan cannot resurrect the plugin from disk.
+    pub async fn install_from_git(
+        &mut self,
+        repo_url: &str,
+        consent: RemoteInstallConsent,
+    ) -> PluginResult<String> {
         self.ensure_dir().await?;
 
         // Extract plugin name from repo URL
@@ -160,6 +202,25 @@ impl PluginRegistry {
         // Load manifest and gate installation on it (§4.10 install-time checks)
         let manifest = self.load_manifest_from_dir(&target_dir).await?;
         Self::admit_for_install(&manifest)?;
+
+        // SEC-1 gate: an *undeclared* remote manifest would run allow-all at
+        // runtime (declaration = allow-set; empty = every face open). Unlike
+        // a local path the user pointed at, a one-shot `git clone` of an
+        // arbitrary URL must not acquire that surface silently. Refuse unless
+        // explicitly opted in — and drop the clone, because a leftover
+        // manifest-carrying directory would be picked up by `load_all` on the
+        // next scan and effectively self-install.
+        if manifest.permissions.is_empty() && !consent.allow_unverified {
+            let name = manifest.name.clone();
+            if let Err(cleanup_err) = fs::remove_dir_all(&target_dir).await {
+                tracing::warn!(
+                    path = %target_dir.display(),
+                    error = %cleanup_err,
+                    "refused unverified plugin install; failed to remove the cloned directory"
+                );
+            }
+            return Err(PluginError::UnverifiedRemote(name));
+        }
 
         let name = manifest.name.clone();
 
@@ -834,5 +895,150 @@ template = "t"
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("neither plugin.toml nor .claude-plugin/plugin.json"));
+    }
+
+    // ---------- SEC-1: remote installs need a declared permission set ----
+
+    const UNDECLARED_V1_SKILL_TOML: &str = r#"
+name = "shady"
+version = "1.0.0"
+description = "declares nothing"
+type = "skill"
+entry = "t.md"
+trigger = "/shady"
+template = "hi"
+"#;
+
+    const DECLARED_V1_SKILL_TOML: &str = r#"
+name = "honest"
+version = "1.0.0"
+description = "declares its faces"
+type = "skill"
+entry = "t.md"
+trigger = "/honest"
+template = "hi"
+permissions = ["read_files", "llm_api"]
+"#;
+
+    /// Materialize a local git repo as an offline stand-in remote
+    /// (`git clone <path>` works against plain paths). Every git invocation
+    /// pins `current_dir` and a null global config so the test neither
+    /// touches nor depends on the surrounding checkout.
+    fn init_git_plugin_repo(dir: &Path, manifest_toml: &str) -> String {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("plugin.toml"), manifest_toml).unwrap();
+        std::fs::write(dir.join("t.md"), "Hello!").unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_AUTHOR_NAME", "test")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_NAME", "test")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com")
+                .output()
+                .expect("git is available")
+        };
+        run(&["init", "-q"]);
+        run(&["add", "-A"]);
+        let commit = run(&["commit", "-q", "-m", "init"]);
+        assert!(
+            commit.status.success(),
+            "git commit failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+        dir.to_string_lossy().to_string()
+    }
+
+    /// Undeclared permissions + remote source + default (non-interactive)
+    /// consent = refused, with no half-clone left for `load_all` to
+    /// resurrect on the next scan.
+    #[tokio::test]
+    async fn remote_install_without_permissions_refused_and_clone_removed() {
+        let temp_dir = TempDir::new().unwrap();
+        let remote = init_git_plugin_repo(
+            &temp_dir.path().join("remote-no-perms"),
+            UNDECLARED_V1_SKILL_TOML,
+        );
+
+        let plugins_dir = temp_dir.path().join("plugins");
+        let mut registry = PluginRegistry::new(plugins_dir.clone());
+        let err = registry
+            .install_from_git(&remote, RemoteInstallConsent::default())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, PluginError::UnverifiedRemote(_)), "{err}");
+        assert!(
+            err.to_string().contains("allow_unverified"),
+            "refusal must name the explicit opt-in: {err}"
+        );
+        assert!(!registry.contains("shady"));
+        assert!(
+            !plugins_dir.join("remote-no-perms").exists(),
+            "the refused clone must be removed"
+        );
+
+        // A fresh scan must not find the refused plugin on disk either.
+        let mut fresh = PluginRegistry::new(plugins_dir);
+        fresh.load_all().await.expect("scan clean");
+        assert!(fresh.is_empty());
+    }
+
+    /// The explicit opt-in unlocks the same install.
+    #[tokio::test]
+    async fn remote_install_unverified_with_explicit_opt_in_installs() {
+        let temp_dir = TempDir::new().unwrap();
+        let remote = init_git_plugin_repo(
+            &temp_dir.path().join("remote-no-perms"),
+            UNDECLARED_V1_SKILL_TOML,
+        );
+
+        let mut registry = PluginRegistry::new(temp_dir.path().join("plugins"));
+        let name = registry
+            .install_from_git(&remote, RemoteInstallConsent::allow_unverified())
+            .await
+            .expect("opt-in installs the unverified remote plugin");
+        assert_eq!(name, "shady");
+        assert!(registry.contains("shady"));
+    }
+
+    /// A remote manifest that *declares* its permission set installs with
+    /// the default consent — the gate targets only the undeclared case.
+    #[tokio::test]
+    async fn remote_install_with_declared_permissions_needs_no_opt_in() {
+        let temp_dir = TempDir::new().unwrap();
+        let remote = init_git_plugin_repo(
+            &temp_dir.path().join("remote-declared"),
+            DECLARED_V1_SKILL_TOML,
+        );
+
+        let mut registry = PluginRegistry::new(temp_dir.path().join("plugins"));
+        let name = registry
+            .install_from_git(&remote, RemoteInstallConsent::default())
+            .await
+            .expect("declared remote manifest installs without opt-in");
+        assert_eq!(name, "honest");
+    }
+
+    /// Local-path installs are the developer flow and keep the legacy
+    /// behavior: an undeclared manifest still installs (red line — the
+    /// SEC-1 gate never touches `install_from_path`).
+    #[tokio::test]
+    async fn local_path_install_of_unverified_plugin_still_works() {
+        let temp_dir = TempDir::new().unwrap();
+        let source = temp_dir.path().join("dev-plugin");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("plugin.toml"), UNDECLARED_V1_SKILL_TOML).unwrap();
+        std::fs::write(source.join("t.md"), "Hello!").unwrap();
+
+        let mut registry = PluginRegistry::new(temp_dir.path().join("plugins"));
+        let name = registry
+            .install_from_path(&source)
+            .await
+            .expect("local undeclared plugin keeps installing");
+        assert_eq!(name, "shady");
     }
 }
