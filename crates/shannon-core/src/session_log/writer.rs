@@ -22,7 +22,12 @@ pub const DEFAULT_CHUNK_FLUSH_INTERVAL: Duration = Duration::from_millis(50);
 
 /// When the buffered writer drains to the OS. `assistant/chunk` events are
 /// aggregated; `tool/result`, `turn/end`, and `request/header` events force
-/// an immediate flush (they mark replay-safe boundaries).
+/// an immediate flush **plus `sync_data()`** (they mark replay-safe
+/// boundaries and must survive power loss — see [`SessionLogWriter`]).
+///
+/// The chunk-aggregation path stays plain-flush (page cache only): syncing
+/// there would put one fdatasync per aggregated burst on the turn's hot
+/// path and break the <2% P95 pipeline budget.
 #[derive(Debug, Clone)]
 pub struct FlushPolicy {
     /// Flush after this many buffered chunk events.
@@ -71,6 +76,15 @@ struct TailScan {
 /// - **Tail recovery**: opening a log whose last line was truncated (crash
 ///   mid-write) truncates back to the last complete line and appends an
 ///   `error` event (`log-corruption`) describing the repair.
+/// - **Durability at boundaries**: because `events.jsonl` is the single
+///   authoritative session record, every replay-safe boundary
+///   (`tool/result`, `turn/end`, `request/header`) and every explicit
+///   [`flush`](Self::flush) is pushed past the page cache with
+///   `sync_data()` (fdatasync). `sync_data` skips non-essential metadata
+///   (e.g. mtime) and is therefore cheaper than `sync_all`, while still
+///   guaranteeing the appended event bytes are retrievable after power
+///   loss — the property the "authoritative record" promise needs. Chunk
+///   aggregation stays flush-only; see [`FlushPolicy`].
 pub struct SessionLogWriter {
     out: BufWriter<File>,
     path: PathBuf,
@@ -85,9 +99,14 @@ pub struct SessionLogWriter {
     policy: FlushPolicy,
     /// Write/flush failures since open (degraded-mode counter).
     failures: u64,
+    /// Successful `sync_data` calls since open (observability / test seam).
+    syncs: u64,
     /// Test seam: force the next write attempt to fail once.
     #[cfg(test)]
     fail_next_write: bool,
+    /// Test seam: force the next sync attempt to fail once.
+    #[cfg(test)]
+    fail_next_sync: bool,
 }
 
 impl SessionLogWriter {
@@ -149,8 +168,11 @@ impl SessionLogWriter {
             last_flush: Instant::now(),
             policy: FlushPolicy::default(),
             failures: 0,
+            syncs: 0,
             #[cfg(test)]
             fail_next_write: false,
+            #[cfg(test)]
+            fail_next_sync: false,
         };
 
         if scan.trailing_bytes > 0 {
@@ -242,7 +264,11 @@ impl SessionLogWriter {
         );
         let chunk_due = self.chunk_since_flush >= self.policy.chunk_count
             || self.last_flush.elapsed() >= self.policy.chunk_interval;
-        if force || (kind == SessionEventKind::AssistantChunk && chunk_due) {
+        if force {
+            // Replay-safe boundary: the record must survive power loss.
+            self.do_flush_durable();
+        } else if kind == SessionEventKind::AssistantChunk && chunk_due {
+            // Aggregation path: page-cache flush keeps the P95 budget.
             self.do_flush();
         }
     }
@@ -263,9 +289,45 @@ impl SessionLogWriter {
         self.last_flush = Instant::now();
     }
 
-    /// Explicitly flush buffered events, surfacing the error.
+    /// [`Self::do_flush`] followed by `sync_data()`: the drained bytes are
+    /// durable, not merely in the page cache. A sync failure is degraded
+    /// (counted + warned), never propagated — same contract as flush.
+    fn do_flush_durable(&mut self) {
+        self.do_flush();
+        #[cfg(test)]
+        if self.fail_next_sync {
+            self.fail_next_sync = false;
+            let e = std::io::Error::other("simulated sync failure");
+            self.failures += 1;
+            warn!(
+                path = %self.path.display(),
+                error = %e,
+                failures = self.failures,
+                "session log sync_data failed; boundary events may not survive power loss"
+            );
+            return;
+        }
+        if let Err(e) = self.out.get_ref().sync_data() {
+            self.failures += 1;
+            warn!(
+                path = %self.path.display(),
+                error = %e,
+                failures = self.failures,
+                "session log sync_data failed; boundary events may not survive power loss"
+            );
+        } else {
+            self.syncs += 1;
+        }
+    }
+
+    /// Explicitly flush buffered events and make them durable
+    /// (`sync_data`), surfacing the error. Used by `close` and by callers
+    /// that need the log readable-and-complete right now (the automatic
+    /// chunk path stays flush-only, see [`FlushPolicy`]).
     pub fn flush(&mut self) -> Result<(), SessionLogError> {
         self.out.flush()?;
+        self.out.get_ref().sync_data()?;
+        self.syncs += 1;
         self.chunk_since_flush = 0;
         self.last_flush = Instant::now();
         Ok(())
@@ -307,6 +369,21 @@ impl SessionLogWriter {
     /// Write/flush failures since open (degraded-mode counter).
     pub fn failures(&self) -> u64 {
         self.failures
+    }
+
+    /// Successful durable syncs (`sync_data`) since open.
+    ///
+    /// Observability seam for the durability contract: replay-safe
+    /// boundaries and explicit flushes must each produce exactly one.
+    pub fn durable_syncs(&self) -> u64 {
+        self.syncs
+    }
+
+    /// Test seam: make the next `sync_data` attempt fail exactly once,
+    /// exercising the degraded durability path (count + warn, never-fail).
+    #[cfg(test)]
+    pub(crate) fn simulate_sync_failure(&mut self) {
+        self.fail_next_sync = true;
     }
 
     /// True once any write/flush failure occurred.
@@ -738,5 +815,81 @@ mod tests {
         let policy = FlushPolicy::default();
         assert_eq!(policy.chunk_count, 50);
         assert_eq!(policy.chunk_interval, Duration::from_millis(50));
+    }
+
+    /// Durability contract, observable via the sync counter: chunk events
+    /// on the aggregation path never sync, every replay-safe boundary
+    /// (`tool/result`) syncs exactly once, and `close` syncs the remainder.
+    #[test]
+    fn test_forced_boundaries_sync_durable_and_chunks_do_not() {
+        let dir = TempDir::new().expect("tempdir");
+        let mut writer =
+            SessionLogWriter::open_in_dir(dir.path(), "sess-sync").expect("open writer");
+        // Pin the aggregation thresholds so only the forced boundary can
+        // flush during the chunk phase.
+        writer.set_flush_policy(FlushPolicy {
+            chunk_count: 10_000,
+            chunk_interval: Duration::from_secs(3_600),
+        });
+        assert_eq!(writer.durable_syncs(), 0);
+
+        writer.record(chunk("buffered"));
+        writer.record(chunk("still buffered"));
+        // Aggregation path: drained nowhere, synced nowhere.
+        assert_eq!(writer.durable_syncs(), 0);
+
+        writer.record(tool_result());
+        assert_eq!(
+            writer.durable_syncs(),
+            1,
+            "tool/result is a durable boundary"
+        );
+
+        writer.record(chunk("again buffered"));
+        assert_eq!(writer.durable_syncs(), 1, "chunks must not sync");
+
+        // close() consumes the writer; capture the count first.
+        let before_close = writer.durable_syncs();
+        writer.close().expect("close");
+        assert_eq!(
+            before_close + 1,
+            2,
+            "explicit flush (close) is the second durable point"
+        );
+    }
+
+    /// A failed `sync_data` degrades (counted, surfaced by `is_degraded`)
+    /// instead of failing the never-fail write path — exercised through the
+    /// injected sync-failure seam.
+    #[test]
+    fn test_sync_failure_degrades_not_crashes() {
+        let dir = TempDir::new().expect("tempdir");
+        let mut writer =
+            SessionLogWriter::open_in_dir(dir.path(), "sess-syncfail").expect("open writer");
+        writer.record(tool_result());
+        assert_eq!(writer.durable_syncs(), 1);
+        assert!(!writer.is_degraded());
+
+        writer.simulate_sync_failure();
+        writer.record(tool_result());
+        // The boundary still flushed, but the durability step failed and
+        // must surface through the degraded counter, not a panic.
+        assert_eq!(
+            writer.durable_syncs(),
+            1,
+            "failed sync is not counted as durable"
+        );
+        assert!(
+            writer.is_degraded(),
+            "sync failure must mark the writer degraded"
+        );
+        assert_eq!(writer.failures(), 1);
+
+        // Recovery: the next boundary syncs again and the failure stays a
+        // one-shot injection.
+        writer.record(tool_result());
+        assert_eq!(writer.durable_syncs(), 2);
+        assert_eq!(writer.failures(), 1);
+        writer.close().expect("close after recovery");
     }
 }

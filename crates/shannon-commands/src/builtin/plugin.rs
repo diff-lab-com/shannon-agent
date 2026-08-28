@@ -287,8 +287,16 @@ pub fn create_index() -> PluginIndex {
     )
 }
 
-/// Install a plugin from a source (index name, git URL, or local path)
-pub async fn install_from_source(source: &str) -> Result<String, String> {
+/// Install a plugin from a source (index name, git URL, or local path).
+///
+/// `consent` applies to the **remote (git)** branches: a remote manifest
+/// with no declared `permissions` is refused by default (SEC-1); pass
+/// [`RemoteInstallConsent::allow_unverified()`] only after an explicit
+/// user confirmation. Local-path installs ignore it.
+pub async fn install_from_source(
+    source: &str,
+    consent: shannon_core::plugin::RemoteInstallConsent,
+) -> Result<String, String> {
     let mut registry = create_registry();
     registry
         .ensure_dir()
@@ -300,7 +308,7 @@ pub async fn install_from_source(source: &str) -> Result<String, String> {
     {
         // Git URL
         registry
-            .install_from_git(source)
+            .install_from_git(source, consent)
             .await
             .map_err(|e| format!("Failed to install from git: {e}"))
     } else if Path::new(source).exists() {
@@ -321,7 +329,7 @@ pub async fn install_from_source(source: &str) -> Result<String, String> {
         if let Some(entry) = index.get(source) {
             // Found in index, install from git
             registry
-                .install_from_git(&entry.repository)
+                .install_from_git(&entry.repository, consent)
                 .await
                 .map_err(|e| format!("Failed to install from index: {e}"))
         } else {
@@ -477,8 +485,12 @@ pub async fn execute_plugin_subcommand(arg: &str) -> io::Result<()> {
                 )
             })?;
 
+            // No interactive confirm flow is wired here yet (scaffold), so
+            // the remote path keeps the SEC-1 safe default: undeclared
+            // permission manifests are refused with an actionable error.
+            let consent = shannon_core::plugin::RemoteInstallConsent::default();
             println!("Installing plugin from '{source}'...");
-            match install_from_source(&source).await {
+            match install_from_source(&source, consent).await {
                 Ok(name) => println!("✓ Plugin '{name}' installed successfully"),
                 Err(e) => println!("✗ Installation failed: {e}"),
             }
