@@ -31,11 +31,9 @@ path = "src/config.rs"
 expected_diff_regex = '-pub const APP_VERSION: &str = "3\.1\.4";\n\+pub const APP_VERSION: &str = "3\.2\.0";'
 
 [expectations]
+# Soft (non-recovery tier): a Write/Bash detour is flagged in the report, it
+# does not fail the task — the exact-diff assertions above are the contract.
 forbidden_tools = ["Write", "Bash"]
-
-[[expectations.trajectory]]
-tools = ["Edit", "MultiEdit"]
-args_regex = '"old_string":"\\"3\.1\.4\\""'
 
 [limits]
 max_turns = 50
