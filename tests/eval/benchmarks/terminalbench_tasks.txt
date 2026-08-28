@@ -21,6 +21,10 @@
 #   The verdict comes ONLY from the task's own run-tests.sh inside its own
 #   container — Shannon never re-implements or approximates foreign verifiers.
 
+#
+# CORPUS CONTACT (2026-08-28)
+#   2026-08-28: intro-sudo removed (hallucinated in offline snapshot; 6-source exhaustive check by corpus agent) — suite is 9 tasks
+#   WORKLOAD FINGERPRINT (current): sha256:e1aeed1af8cd06ce264854d184700ceb45d1bcb243ed3cbaba677e3f4278b146
 hello-world
 chess-best-move
 crack-7z-hash
@@ -30,4 +34,3 @@ path-tracing
 raman-fitting
 simple-sheets-put
 train-fasttext
-intro-sudo
