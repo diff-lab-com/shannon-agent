@@ -79,6 +79,19 @@
 //!   shipped suite still carries no cost ceilings until real-run baselines
 //!   exist. As before, the rule fails loudly on empty cost observations
 //!   rather than passing vacuously.
+//!
+//! ## Soft forbidden tools (RCA 2026-08-28 §5 决策点 1/2)
+//!
+//! `expectations.forbidden_tools` folds into the rule set with tier-dependent
+//! strictness: **recovery-tier (`rec_*`) tasks keep the hard contract** — a
+//! forbidden-tool hit there still fails the run — while every other tier
+//! injects the ban as `strict = false`. Outside recovery, tool choice is a
+//! means to the verified outcome, not the contract: a Bash detour (e.g.
+//! multi_04 self-verifying TOML via shell) no longer overrides a correct
+//! result. Violations are never dropped — they surface as `soft_flags` on
+//! [`TaskRunRecord`] and in the report's `soft` column, mirroring the
+//! observational `over_expected` marker. The YAML-scenario default stays
+//! `strict = true`, so existing scenario fixtures keep their semantics.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -783,6 +796,11 @@ pub struct RecordedRuleOutcome {
     pub rule: String,
     pub passed: bool,
     pub details: Vec<String>,
+    /// Soft observations recorded without failing the rule (lenient
+    /// `forbidden_tool` bans); empty for hard rules. Kept beside `details`
+    /// so reports can show the detour without counting it as a failure.
+    #[serde(default)]
+    pub soft_flags: Vec<String>,
 }
 
 impl From<&RuleOutcome> for RecordedRuleOutcome {
@@ -791,6 +809,7 @@ impl From<&RuleOutcome> for RecordedRuleOutcome {
             rule: outcome.rule.clone(),
             passed: outcome.passed,
             details: outcome.details.clone(),
+            soft_flags: outcome.soft_flags.clone(),
         }
     }
 }
@@ -817,6 +836,11 @@ pub struct TaskRunRecord {
     pub session_id: Option<String>,
     /// Assertion violations, oldest-first.
     pub violations: Vec<String>,
+    /// Soft-rule observations (lenient `forbidden_tool` bans, RCA 2026-08-28
+    /// §5 决策点 1): recorded for the report, never counted as failures —
+    /// `passed`/`status` are computed before this field is populated.
+    #[serde(default)]
+    pub soft_flags: Vec<String>,
     /// Independent per-rule outcomes, verification order.
     pub rule_outcomes: Vec<RecordedRuleOutcome>,
     /// Observed trajectory (tool names in invocation order).
@@ -861,6 +885,7 @@ impl TaskRunRecord {
             "tokens_out": self.tokens_out,
             "total_tokens": self.total_tokens,
             "violations": self.violations,
+            "soft_flags": self.soft_flags,
             "rule_outcomes": self
                 .rule_outcomes
                 .iter()
@@ -1004,13 +1029,13 @@ impl RunReport {
         ));
 
         md.push_str(
-            "| tier | id | status | rules | turns | tokens (in/out) | budget | horizon | ms |\n",
+            "| tier | id | status | rules | turns | tokens (in/out) | budget | horizon | soft | ms |\n",
         );
-        md.push_str("|---|---|---|---|---|---|---|---|---|\n");
+        md.push_str("|---|---|---|---|---|---|---|---|---|---|\n");
         for record in &self.records {
             let rules_failed = record.rule_outcomes.iter().filter(|o| !o.passed).count();
             md.push_str(&format!(
-                "| {} | {} | {} | {}/{} ok | {} | {}/{} | {} | {} | {} |\n",
+                "| {} | {} | {} | {}/{} ok | {} | {}/{} | {} | {} | {} | {} |\n",
                 record.tier,
                 record.id,
                 record.status.as_str(),
@@ -1021,6 +1046,7 @@ impl RunReport {
                 record.tokens_out,
                 render_over_expected(record.over_expected),
                 record.horizon,
+                render_soft_flags(&record.soft_flags),
                 record.duration_ms,
             ));
         }
@@ -1124,6 +1150,17 @@ fn render_over_expected(over: Option<OverExpected>) -> String {
         "-".to_string()
     } else {
         parts.join(" ")
+    }
+}
+
+/// Markdown cell for soft-rule observations: `-` when none, otherwise the
+/// flag texts joined with `; `. Purely informational — soft flags never
+/// contribute to the `rules x/y ok` tally or the run status.
+fn render_soft_flags(flags: &[String]) -> String {
+    if flags.is_empty() {
+        "-".to_string()
+    } else {
+        flags.join("; ")
     }
 }
 
@@ -1648,6 +1685,31 @@ fn classify_exit(exit_code: i32) -> RunStatus {
     }
 }
 
+/// Assertion set for one task: the declared `verify.rules` plus the
+/// expectations folded into the same [`ValidationRule`] vocabulary. The
+/// trajectory template folds in as a hard `trajectory_contains`; the
+/// forbidden-tool bans fold in with tier-dependent strictness — **strict in
+/// the recovery tier** (the recovery contract is precisely "recover without
+/// the banned shortcut"), **soft everywhere else** (RCA 2026-08-28 §5
+/// 决策点 1/2: outside recovery a Bash/Write detour is a means to the
+/// verified outcome, not the contract — a hit is flagged, never fatal).
+fn effective_rules_for(task: &EvalTask) -> Vec<ValidationRule> {
+    let mut rules: Vec<ValidationRule> = task.verify.rules.clone();
+    if !task.expectations.trajectory.is_empty() {
+        rules.push(ValidationRule::TrajectoryContains {
+            sequence: task.expectations.trajectory.clone(),
+        });
+    }
+    let strict = task.tier == EvalTier::Recovery;
+    for banned in &task.expectations.forbidden_tools {
+        rules.push(ValidationRule::ForbiddenTool {
+            tool: banned.clone(),
+            strict,
+        });
+    }
+    rules
+}
+
 /// Common decision path shared by stub and real streams: derive the status
 /// (limit classes take precedence, in ascending harshness: token < turn <
 /// wall-clock), gather evidence, then evaluate assertions (always, so the
@@ -1735,17 +1797,7 @@ fn finalize_record(
         .map(|f| (f.path.clone(), f.content.clone()))
         .collect();
 
-    let mut effective_rules: Vec<ValidationRule> = task.verify.rules.clone();
-    if !task.expectations.trajectory.is_empty() {
-        effective_rules.push(ValidationRule::TrajectoryContains {
-            sequence: task.expectations.trajectory.clone(),
-        });
-    }
-    for banned in &task.expectations.forbidden_tools {
-        effective_rules.push(ValidationRule::ForbiddenTool {
-            tool: banned.clone(),
-        });
-    }
+    let effective_rules = effective_rules_for(task);
 
     let answer = observation.answer_text.clone();
     let exit_word = if exit_for_classification == 0 {
@@ -1770,6 +1822,12 @@ fn finalize_record(
     for outcome in &outcomes {
         violations.extend(outcome.details.iter().cloned());
     }
+    // Soft-rule observations ride along untouched by the failure list —
+    // visible in the report, never verdict-changing (RCA §5 决策点 1).
+    let soft_flags: Vec<String> = outcomes
+        .iter()
+        .flat_map(|outcome| outcome.soft_flags.iter().cloned())
+        .collect();
     // Shell-script verification (unix workers only).
     if !task.verify.script.trim().is_empty() {
         let script_result = run_verify_script(&task.verify.script, &workspace);
@@ -1780,6 +1838,7 @@ fn finalize_record(
             rule: "verify_script".to_string(),
             passed: failure.is_none(),
             details,
+            soft_flags: Vec::new(),
         });
     }
 
@@ -1814,6 +1873,7 @@ fn finalize_record(
         total_tokens,
         session_id: observation.session_id.clone(),
         violations,
+        soft_flags,
         rule_outcomes: recorded,
         trajectory_tools: observation
             .trajectory
@@ -1876,6 +1936,7 @@ fn base_record(
         total_tokens: 0,
         session_id: None,
         violations,
+        soft_flags: Vec::new(),
         rule_outcomes: Vec::new(),
         trajectory_tools: Vec::new(),
         metrics: None,
@@ -2471,6 +2532,7 @@ fn raw_deltas(a: &RunReport, b: &RunReport) -> String {
                 "tokens_out",
                 "total_tokens",
                 "violations",
+                "soft_flags",
                 "trajectory_tools",
                 "failure_class",
                 "over_expected",
@@ -3103,6 +3165,120 @@ input = { file_path = "meta.txt" }
             failure_rules: None,
             instruction_directive: None,
         }
+    }
+
+    #[test]
+    fn effective_rules_for_keeps_recovery_strict_softens_other_tiers() {
+        let dir = tempfile::TempDir::new().expect("tmp");
+        let body = |tier: &str| {
+            format!(
+                "id = \"probe\"\ntier = \"{tier}\"\nprompt = \"p\"\n\n\
+                 [expectations]\nforbidden_tools = [\"Bash\"]\n\n\
+                 [dry_run]\nfinal_text = \"t\"\n\n\
+                 [[dry_run.steps]]\ntool = \"Read\"\ninput = {{ file_path = \"x\" }}\n"
+            )
+        };
+        let edit_tier =
+            parse_task(&write_task(dir.path(), "e.toml", &body("edit"))).expect("parse");
+        let recovery_tier =
+            parse_task(&write_task(dir.path(), "r.toml", &body("recovery"))).expect("parse");
+
+        let edit_rules = effective_rules_for(&edit_tier);
+        assert_eq!(edit_rules.len(), 1);
+        assert!(matches!(
+            &edit_rules[0],
+            ValidationRule::ForbiddenTool { tool, strict: false } if tool == "Bash"
+        ));
+
+        let recovery_rules = effective_rules_for(&recovery_tier);
+        assert_eq!(recovery_rules.len(), 1);
+        assert!(matches!(
+            &recovery_rules[0],
+            ValidationRule::ForbiddenTool { tool, strict: true } if tool == "Bash"
+        ));
+    }
+
+    /// RCA 2026-08-28 §5 决策点 1/2: a stub `Write` step violates the ban.
+    /// Edit tier — flagged, still green (means-not-contract). Recovery
+    /// tier — the same hit fails the run (trajectory is the contract).
+    #[test]
+    fn forbidden_tool_soft_flags_pass_strict_fails() {
+        let body = |id: &str, tier: &str| {
+            format!(
+                "id = \"{id}\"\ntier = \"{tier}\"\nprompt = \"write the file\"\n\n\
+                 [[verify.rules]]\nrule = \"file_content\"\npath = \"out.txt\"\ncontains = \"done\"\n\n\
+                 [expectations]\nforbidden_tools = [\"Write\", \"Bash\"]\n\n\
+                 [dry_run]\nfinal_text = \"Wrote.\"\n\n\
+                 [[dry_run.steps]]\ntool = \"Write\"\ninput = {{ file_path = \"out.txt\", content = \"done\" }}\n"
+            )
+        };
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+        let soft = parse_task(&write_task(
+            tasks_root.path(),
+            "soft.toml",
+            &body("soft_probe", "edit"),
+        ))
+        .expect("parse");
+        let hard = parse_task(&write_task(
+            tasks_root.path(),
+            "hard.toml",
+            &body("hard_probe", "recovery"),
+        ))
+        .expect("parse");
+
+        let options = options_into(run_root.path());
+        let tasks = vec![soft, hard];
+        let (report, _) = run_suite(&tasks, &options).expect("suite");
+
+        let soft_record = report
+            .records
+            .iter()
+            .find(|r| r.id == "soft_probe")
+            .expect("row");
+        assert_eq!(
+            soft_record.status,
+            RunStatus::Passed,
+            "{:?}",
+            soft_record.violations
+        );
+        assert!(soft_record.passed);
+        assert!(soft_record.violations.is_empty());
+        assert_eq!(
+            soft_record.soft_flags,
+            vec!["forbidden_tool: 'Write' was invoked".to_string()]
+        );
+        assert!(
+            soft_record
+                .rule_outcomes
+                .iter()
+                .any(|o| o.rule == "forbidden_tool" && o.passed && o.soft_flags.len() == 1),
+            "{:?}",
+            soft_record.rule_outcomes
+        );
+
+        let strict_record = report
+            .records
+            .iter()
+            .find(|r| r.id == "hard_probe")
+            .expect("row");
+        assert_eq!(strict_record.status, RunStatus::Failed);
+        assert!(!strict_record.passed);
+        assert!(strict_record.soft_flags.is_empty());
+        assert!(
+            strict_record
+                .violations
+                .iter()
+                .any(|v| v.contains("forbidden_tool: 'Write' was invoked")),
+            "{:?}",
+            strict_record.violations
+        );
+
+        // The report keeps the soft detour visible without counting it as a
+        // failure: markdown `soft` column + digest key.
+        let md = report.render_markdown();
+        assert!(md.contains("forbidden_tool: 'Write' was invoked"), "{md}");
+        assert!(report.stable_digest().contains("soft_flags"));
     }
 
     #[test]
