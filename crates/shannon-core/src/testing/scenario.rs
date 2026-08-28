@@ -20,7 +20,11 @@
 //!   tool calls must contain these steps as an *ordered subsequence* (extra calls
 //!   may interleave; relative order is enforced). When `args_regex` is present it
 //!   must match the step's tool input rendered as compact JSON
-//!   (`{"path":"x",...}`); when omitted only the tool name is compared.
+//!   (`{"path":"x",...}`); when omitted only the tool name is compared. Path
+//!   arguments (`file_path` / `path`) additionally accept suffix-normalized
+//!   matching: a pattern spelling a relative path still matches an observed
+//!   workspace-absolute value (models follow the tools' "Absolute path"
+//!   contract), while non-path arguments are compared verbatim.
 //! - `forbidden_tool { tool }` — fails if the tool appears anywhere in the
 //!   observed trajectory.
 //! - `cost_below { max_usd, per }` — budget assertion where `per` is either
@@ -110,6 +114,13 @@ pub struct MockTurn {
 /// `args_regex` is optional; when present it is matched against the tool input
 /// serialized as compact JSON (`{"path":"src/main.rs",...}`), so patterns must
 /// not assume whitespace after `:` or `,`.
+///
+/// Path-class values get one leniency: when the pattern names a path argument
+/// (`file_path` / `path`) and the observed call carries a longer (typically
+/// workspace-absolute) value, suffix variants of that value — basename and
+/// workspace-relative tails — are also tried, so a pattern spelling the
+/// relative form still matches an absolute invocation. Every other argument
+/// (`command`, `old_string`, `pattern`, ...) is compared verbatim.
 #[derive(Debug, Default, Deserialize, Clone)]
 pub struct TrajectoryStep {
     /// Legacy single-tool spelling. Kept for backward compatibility with the
@@ -693,7 +704,10 @@ fn check_subsequence(
             return Ok(true);
         }
         Regex::new(&step.args_regex)
-            .map(|re| re.is_match(&call.input_json))
+            .map(|re| {
+                re.is_match(&call.input_json)
+                    || matches_with_path_normalization(&re, &call.input_json)
+            })
             .map_err(|e| e.to_string())
     };
     let mut invalid_regex = |step: &TrajectoryStep, idx: usize, err: String| {
@@ -754,6 +768,67 @@ fn check_subsequence(
             candidates
         ));
     }
+}
+
+// ── Path normalization for args_regex ─────────────────────────────────
+
+/// Argument keys whose values carry file-system paths. Real engine runs see
+/// models emit workspace-absolute values for these (the tool schemas say
+/// "Absolute path to the file" and the system prompt injects the working
+/// directory), while task `args_regex` expectations usually spell the
+/// workspace-relative form (`"file_path":"CHANGELOG.md"`). A verbatim
+/// substring comparison then fails even though the model touched the right
+/// file — the systematic false-negative this normalization exists to fix.
+const PATH_ARGUMENT_KEYS: [&str; 2] = ["file_path", "path"];
+
+/// Every `/`-suffix of a path value, longest first: `/a/b/src/main.rs` yields
+/// `a/b/src/main.rs`, `b/src/main.rs`, `src/main.rs`, `main.rs`. The last
+/// entry is the basename form; the intermediate entries cover task patterns
+/// spelled as multi-segment relative paths (`"file_path":"src/main.rs"`).
+/// The candidate set is bounded by the path's segment count — no wildcarding.
+fn path_suffix_variants(value: &str) -> Vec<String> {
+    let segments: Vec<&str> = value
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    (0..segments.len())
+        .map(|start| segments[start..].join("/"))
+        .collect()
+}
+
+/// Retry `re` against `input_json` with each path-class field's value swapped
+/// for one of its suffix variants. Only fields whose key is named in the
+/// pattern participate, so patterns over non-path arguments see byte-identical
+/// input and a path pattern still has to match the rewritten value in full —
+/// this loosens the path *prefix* only, never the asserted token itself.
+fn matches_with_path_normalization(re: &Regex, input_json: &str) -> bool {
+    let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(input_json) else {
+        return false;
+    };
+    for key in PATH_ARGUMENT_KEYS {
+        let Some(Value::String(raw)) = fields.get(key) else {
+            continue;
+        };
+        if !raw.contains('/') || !re.as_str().contains(&format!("\"{key}\"")) {
+            continue;
+        }
+        let Ok(original) = serde_json::to_string(raw) else {
+            continue;
+        };
+        for variant in path_suffix_variants(raw) {
+            if variant == *raw {
+                continue;
+            }
+            let Ok(replacement) = serde_json::to_string(&variant) else {
+                continue;
+            };
+            let rewritten = input_json.replacen(original.as_str(), &replacement, 1);
+            if re.is_match(&rewritten) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Render a line-based diff (`-removed` / `+added` lines only) between two
@@ -1769,5 +1844,167 @@ validate:
         assert!(!bad.passed);
         assert_eq!(bad.failures, vec!["forbidden_tool: 'Bash' was invoked"]);
         assert_eq!(bad.rule_outcomes.len(), 2);
+    }
+
+    /// Build a `trajectory_contains` outcome for one observed call / one step.
+    fn single_step_outcome(tool: &str, args_regex: &str, call: &ToolCallTrace) -> RuleOutcome {
+        let dir = tempfile::TempDir::new().expect("dir");
+        let observed = [call.clone()];
+        let ctx = ValidationContext::new(dir.path(), "success", "").with_trajectory(&observed);
+        evaluate_rules(
+            &[ValidationRule::TrajectoryContains {
+                sequence: vec![TrajectoryStep {
+                    tool: tool.to_string(),
+                    args_regex: args_regex.to_string(),
+                    ..Default::default()
+                }],
+            }],
+            &ctx,
+        )
+        .remove(0)
+    }
+
+    #[test]
+    fn trajectory_args_regex_matches_absolute_path_for_relative_pattern() {
+        // Absolute observed value, workspace-relative task pattern: the exact
+        // shape of the path mismatch that caused the baseline false verdicts.
+        let call = ToolCallTrace::new(
+            "Write",
+            r##"{"content":"# Changelog\n","file_path":"/tmp/run-abc/workspace/CHANGELOG.md"}"##,
+        );
+        let outcome = single_step_outcome("Write", r#""file_path":"CHANGELOG\.md""#, &call);
+        assert!(outcome.passed, "{:?}", outcome.details);
+    }
+
+    #[test]
+    fn trajectory_args_regex_basename_normalization() {
+        // Basename variant satisfies a basename-spelled pattern regardless of
+        // how deep the observed directory prefix is.
+        let call = ToolCallTrace::new(
+            "Edit",
+            r#"{"file_path":"/home/u/proj/a/b/c/proxy.conf","old_string":"9100","new_string":"9443"}"#,
+        );
+        let outcome = single_step_outcome("Edit", r#""file_path":"proxy\.conf""#, &call);
+        assert!(outcome.passed, "{:?}", outcome.details);
+
+        // ...but a pattern naming a different file still fails: normalization
+        // never fabricates a basename the call did not carry.
+        let outcome = single_step_outcome("Edit", r#""file_path":"net\.rs""#, &call);
+        assert!(!outcome.passed, "{:?}", outcome.details);
+    }
+
+    #[test]
+    fn trajectory_args_regex_multi_segment_relative_pattern() {
+        // Multi-segment relative pattern (e.g. rec_03's `src/api_options.rs`)
+        // matches the matching suffix of an absolute observed path.
+        let call = ToolCallTrace::new(
+            "Read",
+            r#"{"file_path":"/home/u/.shannon/runs/rec_03/workspace/src/api_options.rs"}"#,
+        );
+        let outcome = single_step_outcome("Read", r#""file_path":"src/api_options\.rs""#, &call);
+        assert!(outcome.passed, "{:?}", outcome.details);
+
+        // A different intermediate tail that does not end with the asserted
+        // segment sequence must not match.
+        let call = ToolCallTrace::new(
+            "Read",
+            r#"{"file_path":"/home/u/.shannon/runs/rec_03/workspace/docs/api_options.rs"}"#,
+        );
+        let outcome = single_step_outcome("Read", r#""file_path":"src/api_options\.rs""#, &call);
+        assert!(!outcome.passed, "{:?}", outcome.details);
+    }
+
+    #[test]
+    fn trajectory_args_regex_leaves_non_path_fields_verbatim() {
+        // `command` contains slashes and a shared basename, but it is not a
+        // path-class key — no suffix normalization may rescue the pattern.
+        let call = ToolCallTrace::new("Bash", r#"{"command":"cat /workspace/notes/CHANGELOG.md"}"#);
+        let outcome = single_step_outcome("Bash", r#""command":"CHANGELOG\.md""#, &call);
+        assert!(!outcome.passed, "{:?}", outcome.details);
+
+        // `old_string`/`new_string` are not path fields either (edit_03-style
+        // granularity assertions keep their exact semantics).
+        let call = ToolCallTrace::new(
+            "Edit",
+            r#"{"file_path":"/w/src/main.rs","old_string":"a/b/c","new_string":"x"}"#,
+        );
+        let outcome = single_step_outcome("Edit", r#""old_string":"c""#, &call);
+        assert!(!outcome.passed, "{:?}", outcome.details);
+
+        // A path pattern over a non-matching path still fails: normalization
+        // loosens the prefix, not the asserted value.
+        let call = ToolCallTrace::new("Read", r#"{"file_path":"/w/src/main.rs"}"#);
+        let outcome = single_step_outcome("Read", r#""file_path":"src/other\.rs""#, &call);
+        assert!(!outcome.passed, "{:?}", outcome.details);
+    }
+
+    #[test]
+    fn trajectory_args_regex_verbatim_path_still_matches() {
+        // Relative observed value against the identical relative pattern —
+        // the pre-normalization behavior — keeps matching untouched.
+        let call = ToolCallTrace::new("Read", r#"{"path":"src/main.rs"}"#);
+        let outcome = single_step_outcome("Read", r#""path":"src/main\.rs""#, &call);
+        assert!(outcome.passed, "{:?}", outcome.details);
+    }
+
+    #[test]
+    fn trajectory_args_regex_matches_real_baseline_run_samples() {
+        // Inputs captured verbatim from the glm-5.3-flash official baseline
+        // run `~/.shannon/eval/v1-official/20260827175908-6d21325f/` (multi_02
+        // stream.ndjson Write + rec_03 l0 events.jsonl Read/Edit); the
+        // patterns are the original, unmodified task.toml args_regex values.
+        // Before path normalization every one of these steps was a false
+        // "not found" verdict against content-perfect runs.
+        let rec_03_read = ToolCallTrace::new(
+            "Read",
+            r#"{"file_path":"/home/ed/.shannon/eval/v1-official/20260827175908-6d21325f/rec_03/workspace/src/api_options.rs"}"#,
+        );
+        let rec_03_pattern = r#""file_path":"src/api_options.rs""#;
+
+        // Sanity: the raw input alone genuinely misses the old regex — the
+        // normalization is what closes the gap.
+        let raw = Regex::new(rec_03_pattern)
+            .expect("valid pattern")
+            .is_match(rec_03_read.input_json.as_str());
+        assert!(!raw, "raw absolute input must miss the relative pattern");
+        let outcome = single_step_outcome("Read", rec_03_pattern, &rec_03_read);
+        assert!(outcome.passed, "{:?}", outcome.details);
+
+        // multi_02 Write with leading content field, absolute path tail.
+        let multi_02_write = ToolCallTrace::new(
+            "Write",
+            r##"{"content":"# Changelog\n- fixed the login crash on empty username\n- added retry logic to sync jobs\n","file_path":"/home/ed/.shannon/eval/v1-official/20260827175908-6d21325f/multi_02/workspace/CHANGELOG.md"}"##,
+        );
+        let outcome =
+            single_step_outcome("Write", r#""file_path":"CHANGELOG.md""#, &multi_02_write);
+        assert!(outcome.passed, "{:?}", outcome.details);
+
+        // Full rec_03-shaped ordered subsequence: Read (path pattern) then
+        // Edit (no pattern) — previously step 1 starved the pointer and step 2
+        // was misreported "not found" despite having happened.
+        let rec_03_edit = ToolCallTrace::new(
+            "Edit",
+            r#"{"file_path":"/home/ed/.shannon/eval/v1-official/20260827175908-6d21325f/rec_03/workspace/src/api_options.rs","new_string":"pub fn timeout_seconds() -> u64 {\n    30\n}\n\npub fn request_timeout_ms() -> u64 {\n    30000\n}","old_string":"<<<<<<< HEAD\npub fn timeout_seconds() -> u64 {\n    30\n}\n=======\npub fn request_timeout_ms() -> u64 {\n    30000\n}\n>>>>>>> feature/tuning","replace_all":false}"#,
+        );
+        let observed = [rec_03_read.clone(), rec_03_edit];
+        let dir = tempfile::TempDir::new().expect("dir");
+        let ctx = ValidationContext::new(dir.path(), "success", "").with_trajectory(&observed);
+        let outcomes = evaluate_rules(
+            &[ValidationRule::TrajectoryContains {
+                sequence: vec![
+                    TrajectoryStep {
+                        tool: "Read".to_string(),
+                        args_regex: rec_03_pattern.to_string(),
+                        ..Default::default()
+                    },
+                    TrajectoryStep {
+                        tool: "Edit".to_string(),
+                        ..Default::default()
+                    },
+                ],
+            }],
+            &ctx,
+        );
+        assert!(outcomes[0].passed, "{:?}", outcomes[0].details);
     }
 }
