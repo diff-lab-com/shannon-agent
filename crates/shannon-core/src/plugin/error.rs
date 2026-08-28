@@ -50,6 +50,19 @@ pub enum PluginError {
     /// impossible to miss, while every valid sibling plugin still loaded.
     #[error("plugin manifest failures:\n{0}")]
     LoadFailures(String),
+
+    /// A **remote (git) install was refused** because the manifest declares
+    /// no `permissions` (review 2026-08-28 SEC-1): the runtime's
+    /// default-allow compat contract would hand every capability face
+    /// (execute_commands, network, mcp_tools, …) to a plugin cloned from an
+    /// arbitrary URL. Local-path installs are unaffected. Installing anyway
+    /// requires the explicit `RemoteInstallConsent::allow_unverified()`
+    /// opt-in.
+    #[error(
+        "plugin '{0}': remote manifest declares no permissions — installing it would grant every capability face (default-allow). \
+Re-run with explicit opt-in (allow_unverified) to install anyway, or ask the plugin author to declare its permissions"
+    )]
+    UnverifiedRemote(String),
 }
 
 /// Plugin result type
@@ -102,6 +115,11 @@ mod tests {
             PluginError::IndexRefreshFailed("err".into())
                 .to_string()
                 .contains("err")
+        );
+        let unverified = PluginError::UnverifiedRemote("sketchy".into()).to_string();
+        assert!(
+            unverified.contains("sketchy") && unverified.contains("allow_unverified"),
+            "{unverified}"
         );
     }
 
