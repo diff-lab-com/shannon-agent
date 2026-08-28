@@ -33,5 +33,5 @@ pub use permissions::{
 };
 pub use spawn_sandbox::PluginSpawnGuard;
 
-pub use registry::{InstalledPlugin, PluginRegistry};
+pub use registry::{InstalledPlugin, PluginRegistry, RemoteInstallConsent};
 pub use validate::{validate_for_install, warn_about};
