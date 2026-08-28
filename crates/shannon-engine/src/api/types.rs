@@ -375,6 +375,12 @@ pub struct LlmClientConfig {
     pub base_url: String,
     pub model: String,
     pub max_tokens: u32,
+    /// Non-streaming requests: total request deadline (connect → body read,
+    /// applied per-request by `send_message`). Streaming requests: the
+    /// read-**idle** bound — the maximum gap between two body chunks; a
+    /// stream that keeps producing is never cut, no matter how long the
+    /// total transfer runs (review 2026-08-28 PERF-2 — see
+    /// `LlmClient::build_client`).
     pub timeout_seconds: u64,
     pub api_version: String,
     pub provider: LlmProvider,
