@@ -4531,6 +4531,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         Some(Commands::ListProviders { json }) => {
             // Engine store reads from `~/.shannon/providers.toml`. The CLI
             // and the desktop join the same file (ADR-0005 Phase 2 task 4).
+            commands_providers::warn_if_providers_toml_unparseable();
             let store = shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
             if let Err(e) = commands_providers::run_list_providers(&store, json) {
                 eprintln!("list-providers failed: {e:?}");
@@ -4560,6 +4561,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
 
                 let mut store =
                     shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+                commands_providers::warn_if_providers_toml_unparseable();
                 if let Err(e) = commands_providers::run_providers_add(&mut store, &cli_args) {
                     eprintln!("providers add failed: {e:?}");
                     std::process::exit(1);
@@ -4569,6 +4571,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 let remove_args = commands_providers::RemoveProviderArgs { id: id.clone() };
                 let mut store =
                     shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+                commands_providers::warn_if_providers_toml_unparseable();
                 if let Err(e) = commands_providers::run_providers_remove(&mut store, &remove_args) {
                     eprintln!("providers remove failed: {e:?}");
                     std::process::exit(1);
