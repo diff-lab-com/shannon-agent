@@ -1613,11 +1613,15 @@ fn load_schema(input: &str) -> Result<shannon_core::StructuredOutputConfig> {
 ///
 /// Features:
 /// - Skips TUI entirely
-/// - Restricts tools to `--allowed-tools` list (exit code 2 on violation)
-/// - Limits turns via `--max-turns` (exit code 3 when exceeded)
+/// - Restricts tools to `--allowed-tools` list (violations are soft-denied
+///   as recoverable tool errors the model can route around; they do not
+///   abort the run)
+/// - Limits turns via `--max-turns` (exit code 2 when exceeded)
 /// - Outputs structured JSON with `--output-format json`
 ///
-/// Exit codes: 0 success, 1 error, 2 tool denied, 3 max turns reached.
+/// Exit codes (`HeadlessExitCode`): 0 success, 1 error, 2 max turns
+/// reached, 3 timeout (reserved, currently unused), 4 rate limited,
+/// 5 context overflow, 6 permission denied.
 #[allow(clippy::too_many_arguments)]
 fn run_headless_query(
     prompt: &str,
