@@ -5,6 +5,9 @@
 //! - **test_env**: TestShannonBuilder for one-call test environment setup
 //! - **eval_runner**: Tiered L1 evaluation suite runner (§4.4; TOML tasks →
 //!   sandboxed runs → dual JSON/Markdown reports)
+//! - **eval_aggregate**: cross-run aggregation with flaky isolation (§4③④;
+//!   stable_pass / flaky / stable_fail buckets, per-task resolved k/n,
+//!   stable-scope pass-rate interval, ATTRIBUTE-SPLIT carryover)
 //! - **eval_metrics**: per-task cost/trajectory metrics from the L0 log plus
 //!   TOML-driven failure classification (§4.7 W2-M2)
 //! - **eval_benchmarks**: external benchmark trio adapters — Terminal-Bench,
@@ -18,6 +21,7 @@
 //!   (moved to `shannon-engine`; re-exported here for backward compat)
 
 pub mod dashboard;
+pub mod eval_aggregate;
 pub mod eval_benchmarks;
 pub mod eval_metrics;
 pub mod eval_runner;
