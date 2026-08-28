@@ -427,7 +427,13 @@ struct Cli {
     /// With a UUID argument, loads that specific session.
     /// Example: shannon --resume           (most recent)
     ///          shannon --resume abc-123... (specific session)
-    #[arg(short = 'r', long, value_name = "UUID", num_args = 0..=1)]
+    #[arg(
+        short = 'r',
+        long,
+        value_name = "UUID",
+        num_args = 0..=1,
+        default_missing_value = ""
+    )]
     resume: Option<String>,
 
     /// Resume a specific session by UUID (explicit alternative to --resume `<UUID>`).
@@ -5258,14 +5264,22 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
     // ── Resume flag tests ────────────────────────────────────────────────
 
     #[test]
-    fn test_cli_resume_bare_flag_is_none() {
-        // With num_args = 0..=1, bare --resume (no value) gives None
-        // because clap treats "value absent" as None for Option<String>.
-        // Use --continue or -c for "resume most recent" behavior.
+    fn test_cli_resume_bare_flag_requests_most_recent() {
+        // num_args = 0..=1 + default_missing_value = "": bare --resume (no
+        // value) yields Some("") — `should_resume` becomes true and the empty
+        // value resolves to "most recent session" (None id) in run_with_cli.
+        // This matches the documented contract in --help:
+        // `shannon --resume` (most recent).
         let cli = Cli::try_parse_from(["shannon", "--resume"]).unwrap();
-        assert!(cli.resume.is_none());
+        assert_eq!(cli.resume.as_deref(), Some(""));
         assert!(!cli.r#continue);
         assert!(cli.resume_id.is_none());
+        // Empty value must resolve to "no explicit id" (most recent).
+        let resolved: Option<&str> = cli
+            .resume_id
+            .as_deref()
+            .or_else(|| cli.resume.as_deref().filter(|s| !s.is_empty()));
+        assert_eq!(resolved, None);
     }
 
     #[test]
