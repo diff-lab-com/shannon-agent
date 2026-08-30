@@ -67,9 +67,42 @@ HARNESS_TEST_SECS="${SWE_TEST_TIMEOUT_SECS:-1800}"
 
 say() { echo "[swe-harness] $*"; }
 
-emit() { # emit <resolved true|false> <notes...>
-  printf '{"resolved": %s, "tokens_in": %s, "tokens_out": %s, "cost_usd": %s, "notes": "%s"}\n' \
-    "$1" "${2:-null}" "${3:-null}" "${4:-null}" "$5" > "$verdict"
+# T2.2: stamp `model_id` + `provider` into every verdict.json so batch
+# reports can slice per-provider (e.g. "did the parse-error fix recover
+# the 3 minimax batch-3 tasks?"). Both derive from $SWE_MODEL_NAME — the
+# canonical env form is `shannon:<provider>-<model>-<rest>` (see MODEL_NAME
+# at step 5 for the equivalent name-with-prefix form used by the official
+# harness to namespace its report files). Computed up front so even an
+# early `fail()` (before step 5 sets MODEL_NAME) writes the attribution.
+# Falls back to `<unknown>` when $SWE_MODEL_NAME is unset so a missing
+# override never silently breaks the verdict contract.
+MODEL_ID="${SWE_MODEL_NAME:-unknown}"
+case "$MODEL_ID" in
+  shannon:*) MODEL_ID="${MODEL_ID#shannon:}" ;;
+esac
+PROVIDER="unknown"
+case "$MODEL_ID" in
+  shannon-*)
+    _after_prefix="${MODEL_ID#shannon-}"
+    case "$_after_prefix" in
+      *-*) PROVIDER="${_after_prefix%%-*}" ;;
+      *) PROVIDER="$_after_prefix" ;;
+    esac
+    ;;
+esac
+say "verdict attribution: model_id=$MODEL_ID provider=$PROVIDER"
+
+emit() { # emit <resolved true|false> <tokens_in|null> <tokens_out|null> <cost_usd|null> <notes...>
+  # JSON-escape the attribution via python (model_id may contain `:` after
+  # the `shannon:` prefix is preserved upstream; defensive against future
+  # naming schemes that include quotes/backslashes).
+  local model_id_json provider_json
+  model_id_json="$(printf '%s' "$MODEL_ID" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')"
+  provider_json="$(printf '%s' "$PROVIDER" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')"
+  printf '{"resolved": %s, "tokens_in": %s, "tokens_out": %s, "cost_usd": %s, "model_id": %s, "provider": %s, "notes": "%s"}\n' \
+    "$1" "${2:-null}" "${3:-null}" "${4:-null}" \
+    "$model_id_json" "$provider_json" \
+    "$5" > "$verdict"
 }
 
 fail() { emit false null null null "$1"; say "FAILED: $1"; exit 1; }
