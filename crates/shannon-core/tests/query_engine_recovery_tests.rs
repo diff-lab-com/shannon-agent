@@ -1053,4 +1053,191 @@ mod engine_recovery_tests {
         );
         assert_eq!(engine.session_id(), session_id, "Session preserved");
     }
+
+    // ── Parse-error bail-out regression (batch-3 finding) ──
+    //
+    // The engine used to bail out after a single malformed tool-call JSON,
+    // even though the framework had already synthesized a tool_result with
+    // the parse failure. Root cause: `engine.rs:3793` checked
+    //   `!has_content && tool_inputs.is_empty() && phase != Finalized`
+    // but NOT `assistant_tool_uses.is_empty()` — the parse-error path
+    // pushes a null-input ToolUse block into `assistant_tool_uses`, so
+    // the bail-out fired before the synthetic tool_result could be sent
+    // back to the model for a retry.
+    //
+    // Symptom in batch-3: 3/50 tasks (matplotlib-23314, sympy-12481,
+    // django-10914) had tokens_in<100K + tokens_out<100 + resolved=False
+    // despite agent rc=0. Fix adds the missing `assistant_tool_uses.is_empty()`
+    // check so the engine pushes the parse-error tool_result and continues.
+
+    /// SSE body for a tool_use whose `input` JSON is truncated mid-string
+    /// (the closing quote is missing). The engine accumulates partial_json
+    /// across `input_json_delta` events; `serde_json::from_str` on
+    /// `ContentBlockStop` will fail with "EOF while parsing a string".
+    fn setup_malformed_tool_use_mock(server: &mut ServerGuard) -> mockito::Mock {
+        let body = "\
+event: message_start\n\
+data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-20250514\",\"stop_reason\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\
+\n\
+event: content_block_start\n\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_parse_err_1\",\"name\":\"Bash\",\"input\":{}}}\n\
+\n\
+event: content_block_delta\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\": \\\"echo hello\"}}\n\
+\n\
+event: content_block_stop\n\
+data: {\"type\":\"content_block_stop\",\"index\":0}\n\
+\n\
+event: message_delta\n\
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}\n\
+\n\
+event: message_stop\n\
+data: {\"type\":\"message_stop\"}\n\
+\n";
+
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .expect_at_least(1)
+            .create()
+    }
+
+    #[test]
+    fn test_engine_continues_after_malformed_tool_use_json() {
+        // Pre-fix: the 2nd mock would NOT be consumed because the engine
+        // bailed out after the parse error. Post-fix: the 2nd mock IS
+        // consumed because the engine pushes the synthetic tool_result
+        // and makes a retry API call.
+        //
+        // mockito matches mocks in FIFO order when multiple mocks satisfy the
+        // request and more than one is missing hits. So the malformed mock
+        // MUST be created first so the engine's first API call hits it;
+        // otherwise the engine gets the clean retry response first and the
+        // malformed response never fires — the test would then be a no-op
+        // for the bug it's supposed to cover.
+        let mut server = Server::new();
+        let mock_url = server.url();
+
+        // 1st response: malformed tool_use (parse error on ContentBlockStop).
+        let m1 = setup_malformed_tool_use_mock(&mut server);
+
+        // 2nd response: a clean end_turn. Without this, the retry API
+        // call would hit 404 and abort the test with a network error
+        // before we could check the conversation history.
+        let retry_body = "\
+event: message_start\n\
+data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_retry\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-20250514\",\"stop_reason\":null,\"usage\":{\"input_tokens\":20,\"output_tokens\":0}}}\n\
+\n\
+event: content_block_start\n\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\
+\n\
+event: content_block_delta\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"retry succeeded\"}}\n\
+\n\
+event: content_block_stop\n\
+data: {\"type\":\"content_block_stop\",\"index\":0}\n\
+\n\
+event: message_delta\n\
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":20,\"output_tokens\":5}}\n\
+\n\
+event: message_stop\n\
+data: {\"type\":\"message_stop\"}\n\
+\n";
+        let m2 = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(retry_body)
+            .create();
+
+        let engine = create_engine(&mock_url);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = make_query_context();
+
+        let events = rt.block_on(async {
+            use futures::StreamExt;
+            let stream = engine.process_query(ctx, None).await;
+            Box::pin(stream).collect::<Vec<_>>().await
+        });
+
+        // Debug: print event sequence to verify the path
+        eprintln!("--- events ---");
+        for (i, ev) in events.iter().enumerate() {
+            eprintln!(
+                "[{}] {:?}",
+                i,
+                ev.as_ref()
+                    .map(|e| match e {
+                        shannon_core::query_engine::QueryEvent::ToolUseRequest {
+                            tool_name,
+                            ..
+                        } => format!("ToolUseRequest({tool_name})"),
+                        shannon_core::query_engine::QueryEvent::ToolUseResult {
+                            tool_name,
+                            is_error,
+                            ..
+                        } => format!("ToolUseResult({tool_name}, err={is_error})"),
+                        shannon_core::query_engine::QueryEvent::ConversationUpdate {
+                            messages,
+                            ..
+                        } => format!("ConversationUpdate({} msgs)", messages.len()),
+                        shannon_core::query_engine::QueryEvent::Completed { .. } =>
+                            "Completed".to_string(),
+                        shannon_core::query_engine::QueryEvent::Failed { error, .. } =>
+                            format!("Failed({error})"),
+                        shannon_core::query_engine::QueryEvent::Text { content, .. } =>
+                            format!("Text({content:?})"),
+                        shannon_core::query_engine::QueryEvent::Usage {
+                            input_tokens,
+                            output_tokens,
+                            ..
+                        } => format!("Usage({input_tokens}/{output_tokens})"),
+                        shannon_core::query_engine::QueryEvent::TurnCompleted {
+                            turn_number,
+                            ..
+                        } => format!("TurnCompleted({turn_number})"),
+                        _ => "<other>".to_string(),
+                    })
+                    .unwrap_or_else(|e| format!("Err({e:?})"))
+            );
+        }
+        eprintln!("--- /events ---");
+
+        // Key assertion #1: malformed mock was consumed (parse-error path fired).
+        m1.assert();
+
+        // Key assertion #1b: retry mock was consumed (engine continued past the
+        // parse error and made a second API call). Without the parse-error
+        // recovery block, the engine returns after the first turn and m2 is
+        // never hit — m2.assert() would panic with "Expected 1 request(s),
+        // received 0".
+        m2.assert();
+
+        // Key assertion #2: at least one ConversationUpdate carries the
+        // full sequence (user → assistant with tool_use → user with
+        // tool_result). Pre-fix the local conversation was discarded
+        // before the synthetic tool_result could be added, so no event
+        // would have 3+ messages.
+        let mut found_full_history = false;
+        for ev in &events {
+            if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate {
+                messages, ..
+            }) = ev
+            {
+                if messages.len() >= 3 {
+                    found_full_history = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            found_full_history,
+            "Engine should continue past malformed tool_use: conversation \
+             must include assistant ToolUse + user ToolResult (>= 3 messages \
+             in a ConversationUpdate). Pre-fix, the bail-out at \
+             engine.rs:3793 fires before the synthetic tool_result is pushed."
+        );
+    }
 }
