@@ -2291,8 +2291,17 @@ impl QueryEngine {
                                                                 ),
                                                             }
                                                         );
+                                                        // Preserve the real tool_use_id in both
+                                                        // the synthetic tool_result AND the
+                                                        // synthetic ToolUse block. The
+                                                        // Anthropic API requires the two to
+                                                        // match on the next request; pairing
+                                                        // the real id with a null-input ToolUse
+                                                        // lets the model see "Malformed tool
+                                                        // input" as a tool_result and retry
+                                                        // with corrected JSON.
                                                         tool_results.push(ToolResultEntry {
-                                                            tool_use_id: id,
+                                                            tool_use_id: id.clone(),
                                                             content: format!(
                                                                 "Malformed tool input: {e}"
                                                             ),
@@ -2301,7 +2310,7 @@ impl QueryEngine {
                                                         });
                                                         assistant_tool_uses.push(
                                                             ContentBlock::ToolUse {
-                                                                id: String::new(),
+                                                                id,
                                                                 name,
                                                                 input: serde_json::Value::Null,
                                                             },
@@ -3428,6 +3437,41 @@ impl QueryEngine {
                                                 // save a duplicate assistant message).
                                                 break;
                                             } else {
+                                                // Parse-error recovery: model emitted a malformed
+                                                // tool_call (no text content, no parsed tool inputs,
+                                                // but a synthetic tool_result was queued and a
+                                                // null-input ToolUse block with the real tool_use_id
+                                                // was captured). Save the assistant message so the
+                                                // next API call has the required
+                                                // assistant(tool_use) → user(tool_result) sequence;
+                                                // the agent loop drains tool_results on the next
+                                                // iteration and the model retries with corrected JSON.
+                                                //
+                                                // This was the silent-task-loss root cause for 3/50
+                                                // SWE-bench batch-3 tasks (matplotlib-23314,
+                                                // sympy-12481, django-10914, all minimax provider).
+                                                if assistant_text.is_empty()
+                                                    && !assistant_tool_uses.is_empty()
+                                                    && !tool_results.is_empty()
+                                                {
+                                                    let mut blocks: Vec<ContentBlock> = Vec::new();
+                                                    blocks.append(&mut assistant_tool_uses);
+                                                    conversation.messages.push(Message {
+                                                        role: "assistant".to_string(),
+                                                        content: MessageContent::Blocks(blocks),
+                                                    });
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::ConversationUpdate {
+                                                            query_id,
+                                                            messages: conversation.messages.clone(),
+                                                        }
+                                                    );
+                                                    turn += 1;
+                                                    phase = StreamingPhase::Finalized;
+                                                    break;
+                                                }
+
                                                 // No tool uses — save assistant text to conversation
                                                 if assistant_text.is_empty()
                                                     && total_output_tokens > 0
@@ -3790,6 +3834,47 @@ impl QueryEngine {
                             }
                         }
 
+                        // Parse-error recovery: when the model emitted a malformed
+                        // tool_call (no text content, no successfully-parsed tool
+                        // inputs, but a synthetic tool_result was queued and a
+                        // null-input ToolUse block with the real tool_use_id was
+                        // captured), persist the assistant message so the next API
+                        // call has the required assistant(tool_use) →
+                        // user(tool_result) sequence. The agent loop drains
+                        // tool_results on the next iteration, the model sees
+                        // "Malformed tool input" as a tool_result, and retries
+                        // with corrected JSON.
+                        //
+                        // This was the silent-task-loss root cause for 3/50
+                        // SWE-bench batch-3 tasks (matplotlib-23314, sympy-12481,
+                        // django-10914, all minimax provider).
+                        if !has_content
+                            && tool_inputs.is_empty()
+                            && !assistant_tool_uses.is_empty()
+                            && !tool_results.is_empty()
+                            && phase != StreamingPhase::Finalized
+                        {
+                            let mut blocks: Vec<ContentBlock> = Vec::new();
+                            blocks.append(&mut assistant_tool_uses);
+                            conversation.messages.push(Message {
+                                role: "assistant".to_string(),
+                                content: MessageContent::Blocks(blocks),
+                            });
+                            send_event!(
+                                tx,
+                                QueryEvent::ConversationUpdate {
+                                    query_id,
+                                    messages: conversation.messages.clone(),
+                                }
+                            );
+                            turn += 1;
+                            continue;
+                        }
+
+                        // Bail out only when the model produced NOTHING usable
+                        // (no text content, no tool_uses, no parsed tool inputs).
+                        // The parse-error recovery block above handles the case
+                        // where a synthetic null-input ToolUse was queued.
                         if !has_content
                             && tool_inputs.is_empty()
                             && phase != StreamingPhase::Finalized
