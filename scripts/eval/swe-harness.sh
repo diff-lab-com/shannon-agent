@@ -121,10 +121,73 @@ say "instance $native_id · repo=$REPO_DIR · base=$base_commit"
 # ── 2. disposable worktree at base_commit ──────────────────────────────────
 WT="$ws/repo-wt"
 rm -rf "$WT"
+REPO_PATH="$REPOS/$repo_base"
 # prune stale registrations first: a deleted rep workspace leaves the path
 # "lost but registered" in the shared clone and would fail the add below.
-git -C "$REPOS/$repo_base" worktree prune
-git -C "$REPOS/$repo_base" worktree add --detach "$WT" "$base_commit" >"$ws/worktree.log" 2>&1 \
+git -C "$REPO_PATH" worktree prune
+
+# Ensure base_commit is locally reachable BEFORE worktree add.
+# The dataset clones under /home/ed/datasets/swebench/repos/ ship with a
+# stale .git/shallow that lists several SWE-bench base_commits as shallow
+# roots, even though HEAD itself is already fully unshallowed. When git
+# worktree add targets one of those shallow-root commits, it tries to
+# negotiate parents with the remote — which on this runner flakes on
+# github.com:443 (HTTP/2 framing, GnuTLS -110, 130 s timeouts) and burns
+# the 1800 s budget before the agent ever runs. We saw 5 instances die
+# this way in wave-1 (django-10973) and wave-2 (sympy-12419,
+# scikit-learn-10297, scikit-learn-13779, astropy-14995).
+#
+# Repair strategy (idempotent, one-time per repo):
+#   1. if HEAD is already deep (rev-list count ≫ shallow size), the
+#      .git/shallow file is stale — delete it. Worktree add then sees a
+#      fully unshallowed history and skips the remote round-trip.
+#   2. otherwise deepen: fetch the default branch (best-effort --depth),
+#      then --unshallow if still shallow. This re-uses any blobs already
+#      present locally; on the runner we measured 1–20 s per repo.
+ensure_local() {
+  # Step 1 — stale .git/shallow when HEAD is already deep.
+  local depth revcount shallow_lines
+  depth="$(git -C "$REPO_PATH" rev-list --count HEAD 2>/dev/null || echo 0)"
+  shallow_lines=0
+  [ -f "$REPO_PATH/.git/shallow" ] && shallow_lines=$(wc -l < "$REPO_PATH/.git/shallow")
+  if [ "$depth" -gt 100 ] 2>/dev/null && [ "$shallow_lines" -lt "$depth" ]; then
+    say "stale shallow (HEAD depth=$depth vs shallow_lines=$shallow_lines); removing"
+    rm -f "$REPO_PATH/.git/shallow"
+    git -C "$REPO_PATH" config --unset remote.origin.fetch 2>/dev/null || true
+    if git -C "$REPO_PATH" merge-base --is-ancestor "$base_commit" HEAD 2>/dev/null; then
+      say "base_commit $base_commit reachable after shallow removal"
+      return 0
+    fi
+  fi
+
+  # Step 2 — pull more history. Best-effort default-branch fetch first
+  # (cheap if the pack is warm), then --unshallow as a hard fallback.
+  if git -C "$REPO_PATH" merge-base --is-ancestor "$base_commit" HEAD 2>/dev/null; then
+    say "base_commit $base_commit already local"
+    return 0
+  fi
+  say "deepening $REPO_PATH from origin (depth=$depth)"
+  local br
+  br="$(git -C "$REPO_PATH" ls-remote --symref origin HEAD 2>/dev/null \
+        | awk '/^ref:/ {print $2}' | sed -e 's|refs/heads/||' -e 's|\tHEAD||')"
+  br="${br:-main}"
+  if ! git -C "$REPO_PATH" fetch --depth 10000 origin \
+       "+refs/heads/${br}:refs/remotes/origin/${br}" \
+       >>"$ws/worktree.log" 2>&1; then
+    say "depth-10000 fetch on $br failed; trying --unshallow"
+    git -C "$REPO_PATH" fetch --unshallow origin "$br" \
+      >>"$ws/worktree.log" 2>&1 \
+      || { say "WARN: both fetches failed (network?); worktree add will retry"; return 0; }
+  fi
+  if git -C "$REPO_PATH" merge-base --is-ancestor "$base_commit" HEAD 2>/dev/null; then
+    say "base_commit $base_commit reachable after pre-fetch"
+  else
+    say "WARN: $base_commit still not local; worktree add will fall back to its own fetch"
+  fi
+}
+ensure_local
+
+git -C "$REPO_PATH" worktree add --detach "$WT" "$base_commit" >>"$ws/worktree.log" 2>&1 \
   || fail "git worktree add failed (see worktree.log)"
 
 # ── 3. agent run (headless, cwd = worktree) ────────────────────────────────
