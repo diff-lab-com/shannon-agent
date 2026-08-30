@@ -1,0 +1,125 @@
+name: Agent Eval (nightly)
+
+# T2.3 — nightly real-model L1 eval. Catches capability regressions the
+# mock-only PR smoke (pr-smoke-test.yml) and the dry-run gate (ci.yml's
+# eval-dry-run job) can't see — both of those exercise the harness
+# without a real model. This workflow runs the cheapest tier subset
+# (read/edit/search) against the live API and uploads the report as a
+# workflow artifact for human review.
+#
+# Cost guard: tier subset (3 of 5 tiers), single run per cron. ~$1-2 per
+# execution. Failures here do NOT block PRs (this is a scheduled workflow);
+# they show up as red runs in the Actions tab for triage.
+#
+# Future work (T2.3 phase 2, separate PR):
+#   - Auto-detect baseline from tests/eval/baselines/<latest>/aggregate.json
+#     and fail on >X% pass-rate drop.
+#   - Auto-publish to dashboard-data branch via DASHBOARD_PUBLISH_TOKEN.
+#
+# Secrets:
+#   SHANNON_API_KEY — provider API key, same secret as shannon-review.yml.
+
+on:
+  schedule:
+    # 02:00 UTC, Mon–Fri (skip weekends; bench-regression still runs weekly).
+    - cron: '0 2 * * 1-5'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  agent-eval:
+    name: Real-model L1 eval (read/edit/search)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # Pinned commit SHAs for supply-chain hardening (matches ci.yml).
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+      - name: Install just
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: just
+
+      - name: Build
+        run: cargo build --workspace
+
+      - name: Run real-model L1 eval (tier-filtered)
+        id: eval
+        env:
+          SHANNON_API_KEY: ${{ secrets.SHANNON_API_KEY }}
+          SHANNON_EVAL_BIN: ${{ github.workspace }}/target/debug/shannon
+        run: |
+          mkdir -p eval-out
+          # `just eval-real` already passes --real + --tasks internally;
+          # we layer the per-tier filter and override --out. Per-task
+          # budgets live in the TOML suite — there is no CLI budget knob.
+          # Tier subset (read, edit, search) keeps cost bounded at ~$1-2.
+          set -o pipefail
+          just eval-real \
+            --bin "$SHANNON_EVAL_BIN" \
+            --out "$GITHUB_WORKSPACE/eval-out" \
+            --tier read \
+            --tier edit \
+            --tier search \
+            2>&1 | tee "$GITHUB_WORKSPACE/eval-out/driver.log"
+
+      - name: Locate report.json
+        id: locate
+        run: |
+          report="$(find "$GITHUB_WORKSPACE/eval-out" -name 'report.json' | head -1)"
+          if [ -z "$report" ]; then
+            echo "::error::report.json not found under eval-out"
+            exit 2
+          fi
+          echo "report=$report" >> "$GITHUB_OUTPUT"
+
+      - name: Render summary
+        if: always()
+        env:
+          REPORT: ${{ steps.locate.outputs.report }}
+        run: |
+          python3 - "$REPORT" <<'PYEOF'
+          """One-page summary: pass rate, per-tier breakdown, run anchor."""
+          import json, sys
+          with open(sys.argv[1]) as fh:
+              r = json.load(fh)
+          total = r["tasks_total"]
+          passed = r["tasks_passed"]
+          rate = passed / max(total, 1) * 100
+          anchor = r.get("anchors", {})
+          print(f"::notice::Agent eval {r['run_id']}: {passed}/{total} passed ({rate:.1f}%)")
+          print(f"::notice::anchor: model={anchor.get('model_id','?')} provider={anchor.get('provider','?')}")
+          by_tier = {}
+          for rec in r.get("records", []):
+              t = rec.get("tier", "?")
+              by_tier.setdefault(t, [0, 0])
+              by_tier[t][1] += 1
+              if rec.get("passed"):
+                  by_tier[t][0] += 1
+          for tier in sorted(by_tier):
+              p, t = by_tier[tier]
+              print(f"::notice::  {tier}: {p}/{t} ({p*100/max(t,1):.0f}%)")
+          PYEOF
+
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874
+        with:
+          name: agent-eval-${{ github.run_id }}
+          path: |
+            eval-out/**/*.json
+            eval-out/**/*.md
+            eval-out/driver.log
+          if-no-files-found: warn
+          retention-days: 90
