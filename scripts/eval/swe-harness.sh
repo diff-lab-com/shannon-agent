@@ -212,12 +212,19 @@ git -C "$WT" diff --cached "$base_commit" > "$ws/model.patch" 2>>"$ws/worktree.l
 say "patch bytes: $(wc -c < "$ws/model.patch")"
 
 # ── 5. predictions (official v5 schema) ────────────────────────────────────
-$PYBIN - "$native_id" "$ws/model.patch" "$ws/predictions.jsonl" "$AGENT" <<'PYEOF'
-import json, sys, os
-native_id, patch_path, out_path, agent = sys.argv[1:5]
+# model_name_or_path is what the official harness namespaces reports under
+# (`<model_name_with_slashes_replaced>.<run_id>.json` — see step 7). It MUST
+# be stable across runs of the same agent so the report lookup below finds
+# it. We pin it to a per-provider tag derived from the SWE_MODEL_NAME
+# override (or `basename(AGENT)`) so multiple agents coexist in the same
+# run-root without colliding on report filenames.
+MODEL_NAME="${SWE_MODEL_NAME:-shannon:$(basename "$AGENT")}"
+$PYBIN - "$native_id" "$ws/model.patch" "$ws/predictions.jsonl" "$MODEL_NAME" <<'PYEOF'
+import json, sys
+native_id, patch_path, out_path, model_name = sys.argv[1:5]
 pred = {
     "instance_id": native_id,
-    "model_name_or_path": f"shannon:{os.path.basename(agent)}",
+    "model_name_or_path": model_name,
     "model_patch": open(patch_path, encoding="utf-8").read(),
 }
 with open(out_path, "w", encoding="utf-8") as fh:
@@ -296,8 +303,12 @@ harness_rc=$?
 say "official harness rc=$harness_rc in $(( $(date +%s) - t1 ))s (see run_evaluation.log)"
 
 # ── 7. resolved_ids from the official report → verdict ─────────────────────
-REPORT="$ws/report/predictions.$RUN_ID.json"
-[ -f "$REPORT" ] || fail "official report missing: $REPORT"
+# swebench 5.0.2 reporting.py constructs the report path as
+#   <report_dir>/<model_name_with_slashes_replaced>.<run_id>.json
+# (NO `predictions.` prefix — that was an older convention). model_name may
+# also contain `:` (our namespace separator); the harness keeps those verbatim.
+REPORT="$ws/report/${MODEL_NAME//\//__}.${RUN_ID}.json"
+[ -f "$REPORT" ] || fail "official report missing: $REPORT (model_name=$MODEL_NAME)"
 resolved="$($PYBIN - "$REPORT" "$native_id" <<'PYEOF'
 import json, sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
