@@ -108,16 +108,18 @@ esac
 say "verdict attribution: eval_label=$EVAL_LABEL provider=$PROVIDER"
 
 emit() { # emit <resolved true|false> <tokens_in|null> <tokens_out|null> <cost_usd|null> <notes...>
-  # JSON-escape the attribution via python (eval_label may contain `:` after
-  # the `shannon:` prefix is preserved upstream; defensive against future
-  # naming schemes that include quotes/backslashes).
-  local eval_label_json provider_json
+  # JSON-escape every string field via python so a `"`, `\`, or control char
+  # in any field (notably `notes` — failure reasons can contain quotes and
+  # paths) cannot corrupt the verdict JSON. Eval_label / provider were already
+  # escaped; notes was raw `%s` until 2026-08-31.
+  local eval_label_json provider_json notes_json
   eval_label_json="$(printf '%s' "$EVAL_LABEL" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')"
   provider_json="$(printf '%s' "$PROVIDER" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')"
-  printf '{"resolved": %s, "tokens_in": %s, "tokens_out": %s, "cost_usd": %s, "eval_label": %s, "provider": %s, "notes": "%s"}\n' \
+  notes_json="$(printf '%s' "$5" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')"
+  printf '{"resolved": %s, "tokens_in": %s, "tokens_out": %s, "cost_usd": %s, "eval_label": %s, "provider": %s, "notes": %s}\n' \
     "$1" "${2:-null}" "${3:-null}" "${4:-null}" \
     "$eval_label_json" "$provider_json" \
-    "$5" > "$verdict"
+    "$notes_json" > "$verdict"
 }
 
 fail() { emit false null null null "$1"; say "FAILED: $1"; exit 1; }
@@ -357,14 +359,27 @@ say "official harness rc=$harness_rc in $(( $(date +%s) - t1 ))s (see run_evalua
 # also contain `:` (our namespace separator); the harness keeps those verbatim.
 REPORT="$ws/report/${MODEL_NAME//\//__}.${RUN_ID}.json"
 [ -f "$REPORT" ] || fail "official report missing: $REPORT (model_name=$MODEL_NAME)"
-resolved="$($PYBIN - "$REPORT" "$native_id" <<'PYEOF'
+# Capture the official failure_reason into a stderr file so we can fold it
+# into the verdict notes on the fail path. Stderr → file (not capture) so the
+# Python heredoc stays a single-process, single-PID invocation; stdout still
+# carries the resolved= true|false verdict.
+"$PYBIN" - "$REPORT" "$native_id" 2>"$ws/harness.stderr" <<'PYEOF' >"$ws/harness.stdout" \
+  || fail "could not read resolved_ids from $REPORT"
 import json, sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
-print("true" if sys.argv[2] in report.get("resolved_ids", []) else "false")
-print(report.get("failure_reasons", {}).get(sys.argv[2], ""), file=sys.stderr)
+inst = sys.argv[2]
+resolved = inst in report.get("resolved_ids", [])
+print("true" if resolved else "false")
+if not resolved:
+    reason = report.get("failure_reasons", {}).get(inst, "")
+    if reason:
+        print(f"official failure_reason: {reason}", file=sys.stderr)
 PYEOF
-)" || fail "could not read resolved_ids from $REPORT"
-resolved="$(echo "$resolved" | head -1)"
+resolved="$(cat "$ws/harness.stdout")"
+failure_note=""
+if [ -s "$ws/harness.stderr" ]; then
+  failure_note=" — $(cat "$ws/harness.stderr")"
+fi
 
 read_usage_or_null
 if [ "$resolved" = "true" ]; then
@@ -373,6 +388,6 @@ if [ "$resolved" = "true" ]; then
   exit 0
 else
   emit false "$TIN" "$TOUT" "$COST" \
-    "official harness: $native_id NOT resolved (run_id=$RUN_ID)"
+    "official harness: $native_id NOT resolved (run_id=$RUN_ID${failure_note})"
   exit 1
 fi
