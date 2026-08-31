@@ -1162,49 +1162,6 @@ data: {\"type\":\"message_stop\"}\n\
             Box::pin(stream).collect::<Vec<_>>().await
         });
 
-        // Debug: print event sequence to verify the path
-        eprintln!("--- events ---");
-        for (i, ev) in events.iter().enumerate() {
-            eprintln!(
-                "[{}] {:?}",
-                i,
-                ev.as_ref()
-                    .map(|e| match e {
-                        shannon_core::query_engine::QueryEvent::ToolUseRequest {
-                            tool_name,
-                            ..
-                        } => format!("ToolUseRequest({tool_name})"),
-                        shannon_core::query_engine::QueryEvent::ToolUseResult {
-                            tool_name,
-                            is_error,
-                            ..
-                        } => format!("ToolUseResult({tool_name}, err={is_error})"),
-                        shannon_core::query_engine::QueryEvent::ConversationUpdate {
-                            messages,
-                            ..
-                        } => format!("ConversationUpdate({} msgs)", messages.len()),
-                        shannon_core::query_engine::QueryEvent::Completed { .. } =>
-                            "Completed".to_string(),
-                        shannon_core::query_engine::QueryEvent::Failed { error, .. } =>
-                            format!("Failed({error})"),
-                        shannon_core::query_engine::QueryEvent::Text { content, .. } =>
-                            format!("Text({content:?})"),
-                        shannon_core::query_engine::QueryEvent::Usage {
-                            input_tokens,
-                            output_tokens,
-                            ..
-                        } => format!("Usage({input_tokens}/{output_tokens})"),
-                        shannon_core::query_engine::QueryEvent::TurnCompleted {
-                            turn_number,
-                            ..
-                        } => format!("TurnCompleted({turn_number})"),
-                        _ => "<other>".to_string(),
-                    })
-                    .unwrap_or_else(|e| format!("Err({e:?})"))
-            );
-        }
-        eprintln!("--- /events ---");
-
         // Key assertion #1: malformed mock was consumed (parse-error path fired).
         m1.assert();
 
