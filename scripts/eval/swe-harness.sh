@@ -67,41 +67,56 @@ HARNESS_TEST_SECS="${SWE_TEST_TIMEOUT_SECS:-1800}"
 
 say() { echo "[swe-harness] $*"; }
 
-# T2.2: stamp `model_id` + `provider` into every verdict.json so batch
+# T2.2: stamp `eval_label` + `provider` into every verdict.json so batch
 # reports can slice per-provider (e.g. "did the parse-error fix recover
-# the 3 minimax batch-3 tasks?"). Both derive from $SWE_MODEL_NAME — the
-# canonical env form is `shannon:<provider>-<model>-<rest>` (see MODEL_NAME
-# at step 5 for the equivalent name-with-prefix form used by the official
-# harness to namespace its report files). Computed up front so even an
-# early `fail()` (before step 5 sets MODEL_NAME) writes the attribution.
-# Falls back to `<unknown>` when $SWE_MODEL_NAME is unset so a missing
-# override never silently breaks the verdict contract.
-MODEL_ID="${SWE_MODEL_NAME:-unknown}"
-case "$MODEL_ID" in
-  shannon:*) MODEL_ID="${MODEL_ID#shannon:}" ;;
+# the 3 minimax batch-3 tasks?").
+#
+# Naming note (T2.2 honesty follow-up): the field is called `eval_label`
+# because it is the value the driver passed in $SWE_MODEL_NAME — a *label*
+# distinguishing this eval run from prior runs. It is NOT necessarily the
+# model the API was actually called with: e.g. the SWE-bench eval wrapper
+# at /tmp/shannon-minimax/shannon hardcodes `--model MiniMax-M3` and
+# ignores $SWE_MODEL_NAME. The label still has signal — it ties a row to
+# the run that produced it (batch-3 vs batch-4 vs batch-5) — but if you
+# need the *actual* model called, cross-check against the wrapper script
+# or log scraping. Future wrappers should read $SWE_MODEL_NAME so the
+# label and the actual model converge; see memory/swe-batch4-rca-2026-08-31.
+#
+# `provider` is extracted from the canonical
+# `shannon:<provider>-<model>-<rest>` form (see MODEL_NAME at step 5 for
+# the equivalent name-with-prefix form used by the official harness to
+# namespace its report files).
+#
+# Computed up front so even an early `fail()` (before step 5 sets
+# MODEL_NAME) writes the attribution. Falls back to `<unknown>` when
+# $SWE_MODEL_NAME is unset so a missing override never silently breaks
+# the verdict contract.
+EVAL_LABEL="${SWE_MODEL_NAME:-unknown}"
+case "$EVAL_LABEL" in
+  shannon:*) EVAL_LABEL="${EVAL_LABEL#shannon:}" ;;
 esac
 PROVIDER="unknown"
-case "$MODEL_ID" in
+case "$EVAL_LABEL" in
   shannon-*)
-    _after_prefix="${MODEL_ID#shannon-}"
+    _after_prefix="${EVAL_LABEL#shannon-}"
     case "$_after_prefix" in
       *-*) PROVIDER="${_after_prefix%%-*}" ;;
       *) PROVIDER="$_after_prefix" ;;
     esac
     ;;
 esac
-say "verdict attribution: model_id=$MODEL_ID provider=$PROVIDER"
+say "verdict attribution: eval_label=$EVAL_LABEL provider=$PROVIDER"
 
 emit() { # emit <resolved true|false> <tokens_in|null> <tokens_out|null> <cost_usd|null> <notes...>
-  # JSON-escape the attribution via python (model_id may contain `:` after
+  # JSON-escape the attribution via python (eval_label may contain `:` after
   # the `shannon:` prefix is preserved upstream; defensive against future
   # naming schemes that include quotes/backslashes).
-  local model_id_json provider_json
-  model_id_json="$(printf '%s' "$MODEL_ID" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')"
+  local eval_label_json provider_json
+  eval_label_json="$(printf '%s' "$EVAL_LABEL" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')"
   provider_json="$(printf '%s' "$PROVIDER" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')"
-  printf '{"resolved": %s, "tokens_in": %s, "tokens_out": %s, "cost_usd": %s, "model_id": %s, "provider": %s, "notes": "%s"}\n' \
+  printf '{"resolved": %s, "tokens_in": %s, "tokens_out": %s, "cost_usd": %s, "eval_label": %s, "provider": %s, "notes": "%s"}\n' \
     "$1" "${2:-null}" "${3:-null}" "${4:-null}" \
-    "$model_id_json" "$provider_json" \
+    "$eval_label_json" "$provider_json" \
     "$5" > "$verdict"
 }
 
