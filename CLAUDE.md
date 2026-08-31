@@ -41,6 +41,12 @@ Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` ha
 | `shannon-tool-interface` | Tool trait definitions | n/a |
 | `shannon-codegen` | Code generation utilities | n/a |
 | `shannon-agent` | Single agent runtime (binary crate) | n/a |
+| `shannon-engine` | LLM API client, streaming adapter, context compression (extracted from shannon-core D1 Phase 2; new home of `api/`) | [metrics.md](./docs/metrics.md) |
+| `shannon-api-protocol` | Stable wire types for the `api_server` REST/SSE/WS contract — single source of truth consumed by gateway (via gen-ts), desktop, and future clients | [metrics.md](./docs/metrics.md) |
+| `shannon-mcp-saas` | SaaS MCP servers (GitHub/Slack/Jira/Notion/Linear) — P1-3 | [metrics.md](./docs/metrics.md) |
+| `shannon-repomap` | Tree-sitter repo symbol map for LLM context (Rust + TS + Python + Go) — P1-4 Phase B | [metrics.md](./docs/metrics.md) |
+| `shannon-server` | axum-based HTTP API server exposing Shannon sessions (REST + SSE) | [metrics.md](./docs/metrics.md) |
+| `shannon-stability-attr` | Proc-macro `#[stable_api]` / `#[unstable_api]` attribute markers feeding `docs/STABILITY.md` | n/a |
 
 ### First-Screen UX
 
