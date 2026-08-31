@@ -71,16 +71,22 @@ say() { echo "[swe-harness] $*"; }
 # reports can slice per-provider (e.g. "did the parse-error fix recover
 # the 3 minimax batch-3 tasks?").
 #
-# Naming note (T2.2 honesty follow-up): the field is called `eval_label`
-# because it is the value the driver passed in $SWE_MODEL_NAME — a *label*
-# distinguishing this eval run from prior runs. It is NOT necessarily the
-# model the API was actually called with: e.g. the SWE-bench eval wrapper
-# at /tmp/shannon-minimax/shannon hardcodes `--model MiniMax-M3` and
-# ignores $SWE_MODEL_NAME. The label still has signal — it ties a row to
-# the run that produced it (batch-3 vs batch-4 vs batch-5) — but if you
-# need the *actual* model called, cross-check against the wrapper script
-# or log scraping. Future wrappers should read $SWE_MODEL_NAME so the
-# label and the actual model converge; see memory/swe-batch4-rca-2026-08-31.
+# Naming note (T2.2 honesty, corrected after batch-5 RCA — see
+# memory/swe-batch5-rca-2026-08-31.md): the field is called `eval_label`
+# because it is the value the driver passed in $SWE_MODEL_NAME — a *run
+# label* distinguishing this eval run from prior runs (batch-3 vs batch-4
+# vs batch-5 etc.). It is NOT the model the API was actually called with:
+# the eval wrapper at /tmp/shannon-minimax/shannon hardcodes
+# `--model MiniMax-M3` (the minimax catalog model_id) and ignores
+# $SWE_MODEL_NAME. The namespaced form `shannon:shannon-minimax-m3` is a
+# run-identifier convention, NOT a real catalog model id — passing it as
+# `--model` to the API would return `unknown model 'shannon-minimax-m3'`
+# on every call (that's what happened in batch-5 before the wrapper fix).
+#
+# The label still has signal — it ties a row to the run that produced it
+# so TSVs can be sliced per batch. The actual API model is recoverable
+# from the wrapper script (`grep MODEL_FLAG /tmp/shannon-minimax/shannon`)
+# or by grepping provider config.
 #
 # `provider` is extracted from the canonical
 # `shannon:<provider>-<model>-<rest>` form (see MODEL_NAME at step 5 for
@@ -90,7 +96,8 @@ say() { echo "[swe-harness] $*"; }
 # Computed up front so even an early `fail()` (before step 5 sets
 # MODEL_NAME) writes the attribution. Falls back to `<unknown>` when
 # $SWE_MODEL_NAME is unset so a missing override never silently breaks
-# the verdict contract.
+# the verdict contract (callers can still tell "this row has no run
+# label" apart from a row with an explicit label).
 EVAL_LABEL="${SWE_MODEL_NAME:-unknown}"
 case "$EVAL_LABEL" in
   shannon:*) EVAL_LABEL="${EVAL_LABEL#shannon:}" ;;
