@@ -248,12 +248,32 @@ git -C "$REPO_PATH" worktree add --detach "$WT" "$base_commit" >>"$ws/worktree.l
   || fail "git worktree add failed (see worktree.log)"
 
 # ── 3. agent run (headless, cwd = worktree) ────────────────────────────────
+# SWE_AGENT_HINT (default 1): prepend a short hint block to the user prompt.
+# Without it, the SWE-bench v5 container's lack of a `python` symlink sends
+# the model into a 10-turn "which python / find / apt-get install" dead end
+# instead of writing a fix. batch-7 RCA: 18/30 failures = context_thrash
+# ($8.92 wasted). Set SWE_AGENT_HINT=0 to revert to bare issue prompt.
+SWE_AGENT_HINT="${SWE_AGENT_HINT:-1}"
+AGENT_PROMPT="$(cat "$ISSUE")"
+if [ "$SWE_AGENT_HINT" = "1" ]; then
+  AGENT_PROMPT="$(cat <<'HINT_END'
+[Environment hint — overrides default assumptions]
+- The eval container has `python3` (NOT `python`). Use `python3 -c '...'`.
+  If `python3` is missing, skip local verification and write the fix anyway —
+  the official harness will judge correctness.
+- You have a finite turn budget. After ~15 turns of exploring/reading, if
+  you have not called Edit/Write yet, STOP exploring and commit a fix.
+  A wrong or partial fix is better than an empty patch.
+
+HINT_END
+)$AGENT_PROMPT"
+fi
 if [ "$SMOKE" != "1" ]; then
   mkdir -p "$ws/shannon-home" "$ws/sessions"
   t0=$(date +%s)
   ( cd "$WT" \
     && SHANNON_HOME="$ws/shannon-home" SHANNON_SESSIONS_DIR="$ws/sessions" \
-       timeout "$AGENT_SECS" "$AGENT" --prompt "$(cat "$ISSUE")" \
+       timeout "$AGENT_SECS" "$AGENT" --prompt "$AGENT_PROMPT" \
        --output-format json --max-turns "$AGENT_MAX_TURNS" \
     > "$ws/agent-out.json" 2> "$ws/agent-err.log" )
   agent_rc=$?
