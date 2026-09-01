@@ -342,3 +342,10 @@ echo "[batch] DONE: $DONE_REPS new, $SKIPPED skipped, $ROWS total"
 date -Iseconds > "$EXIT_MARKER"
 echo "[batch] exit marker: $EXIT_MARKER"
 [ -s "$FAIL_LIST" ] && echo "[batch] FAILURES (exhausted retries):" && cat "$FAIL_LIST"
+
+# Failure-mode classifier (always runs — failure modes are actionable signal)
+if [ -x "scripts/eval/swe-classify-failures.py" ]; then
+  echo
+  echo "[batch] failure-mode classification:"
+  python3 scripts/eval/swe-classify-failures.py "$PER_TASK" 2>&1 | tail -25
+fi
