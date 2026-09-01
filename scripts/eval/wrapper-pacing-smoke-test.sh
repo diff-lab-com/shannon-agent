@@ -110,15 +110,16 @@ echo "$OLD_MS" > "$STATE_FILE"
 ELAPSED=$(time_it env "HOME=$TEST_HOME" "SHANNON_BIN=/bin/true" \
   "SWE_PACING_STATE_FILE=$STATE_FILE" "SWE_MIN_DELAY_MS=500" \
   bash "$WRAPPER" </dev/null)
-# Threshold 500ms gives CI margin while still failing if a 500ms sleep fires.
-expect_time "T4: MIN_DELAY_MS=500 with 5s-old state → no sleep" "$ELAPSED" 0 500
+# Wrapper overhead alone is ~500ms (4 python3 calls + bash startup); allow
+# up to 800ms so the test still fails if the 500ms sleep actually runs.
+expect_time "T4: MIN_DELAY_MS=500 with 5s-old state → no sleep" "$ELAPSED" 0 800
 
 # T5: garbage state file → treated as 0 (no sleep)
 echo "garbage-not-a-number" > "$STATE_FILE"
 ELAPSED=$(time_it env "HOME=$TEST_HOME" "SHANNON_BIN=/bin/true" \
   "SWE_PACING_STATE_FILE=$STATE_FILE" "SWE_MIN_DELAY_MS=500" \
   bash "$WRAPPER" </dev/null)
-expect_time "T5: garbage state file → no sleep" "$ELAPSED" 0 500
+expect_time "T5: garbage state file → no sleep" "$ELAPSED" 0 800
 
 # T6: state file updated with millis timestamp after each call
 rm -f "$STATE_FILE"
