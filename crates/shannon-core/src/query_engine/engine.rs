@@ -1644,47 +1644,6 @@ impl QueryEngine {
                     break;
                 }
 
-                // ── P-B: turn-N checkpoint ─────────────────────────────────
-                // Fires ONCE per query when `turn` (the count of completed
-                // turns, incremented at the bottom of each iteration) first
-                // reaches the configured checkpoint AND Edit/Write hasn't
-                // been called this session. Forces the agent out of an
-                // explore-only loop (SWE-bench context_thrash mode).
-                // Production default = off (opt-in via SHANNON_TURN_CHECKPOINT).
-                if let Some(checkpoint) = config.turn_checkpoint_turn {
-                    let turn_u32 = turn as u32;
-                    if !turn_checkpoint_fired && turn_u32 >= checkpoint && !session_file_edits_made
-                    {
-                        tracing::info!(
-                            turn = turn_u32,
-                            checkpoint,
-                            "turn-N checkpoint fired — injecting commit-now reminder"
-                        );
-                        send_event!(
-                            tx,
-                            QueryEvent::Progress {
-                                query_id,
-                                message: format!(
-                                    "Turn checkpoint {turn_u32} reached without file edits — \
-                                     injecting commit reminder"
-                                ),
-                            }
-                        );
-                        let reminder = format!(
-                            "[Turn {turn_u32} reminder] You have used {turn_u32} of your turn \
-                             budget and have NOT yet called Edit or Write. STOP exploring and \
-                             commit a fix now — a wrong or partial fix is better than an empty \
-                             patch. The official harness will judge correctness; you do not \
-                             need to verify locally."
-                        );
-                        conversation.messages.push(Message {
-                            role: "user".to_string(),
-                            content: MessageContent::Text(reminder),
-                        });
-                        turn_checkpoint_fired = true;
-                    }
-                }
-
                 // Build messages for API call
                 let mut messages = conversation.messages.clone();
 
@@ -1716,6 +1675,58 @@ impl QueryEngine {
                     };
                     messages.push(tool_msg.clone());
                     conversation.messages.push(tool_msg);
+                }
+
+                // ── P-B: turn-N checkpoint ─────────────────────────────────
+                // Fires ONCE per query when `turn` (the count of completed
+                // turns, incremented at the bottom of each iteration) first
+                // reaches the configured checkpoint AND Edit/Write hasn't
+                // been called this session. Forces the agent out of an
+                // explore-only loop (SWE-bench context_thrash mode).
+                // Production default = off (opt-in via SHANNON_TURN_CHECKPOINT).
+                //
+                // Placed AFTER tool_results drain so the synthetic user message
+                // lands after `user(tool_result)` in the conversation —
+                // inserting it before would produce
+                // `assistant(tool_use) → user(synthetic) → user(tool_result)`
+                // which violates the Anthropic API contract and was the root
+                // cause of 16/50 batch-10 "invalid params 400 (2013)" errors
+                // (every failing task died at exactly the checkpoint turn
+                // with no Edit yet recorded).
+                if let Some(checkpoint) = config.turn_checkpoint_turn {
+                    let turn_u32 = turn as u32;
+                    if !turn_checkpoint_fired && turn_u32 >= checkpoint && !session_file_edits_made
+                    {
+                        tracing::info!(
+                            turn = turn_u32,
+                            checkpoint,
+                            "turn-N checkpoint fired — injecting commit-now reminder"
+                        );
+                        send_event!(
+                            tx,
+                            QueryEvent::Progress {
+                                query_id,
+                                message: format!(
+                                    "Turn checkpoint {turn_u32} reached without file edits — \
+                                     injecting commit reminder"
+                                ),
+                            }
+                        );
+                        let reminder = format!(
+                            "[Turn {turn_u32} reminder] You have used {turn_u32} of your turn \
+                             budget and have NOT yet called Edit or Write. STOP exploring and \
+                             commit a fix now — a wrong or partial fix is better than an empty \
+                             patch. The official harness will judge correctness; you do not \
+                             need to verify locally."
+                        );
+                        let synth_msg = Message {
+                            role: "user".to_string(),
+                            content: MessageContent::Text(reminder),
+                        };
+                        messages.push(synth_msg.clone());
+                        conversation.messages.push(synth_msg);
+                        turn_checkpoint_fired = true;
+                    }
                 }
 
                 // Resolve effective max context FIRST: Ollama num_ctx > model registry > fallback.
@@ -1810,10 +1821,18 @@ impl QueryEngine {
                                  the task — wrap up exploration, commit a fix, and stop re-reading \
                                  the same code."
                             );
-                            conversation.messages.push(Message {
+                            let synth_msg = Message {
                                 role: "user".to_string(),
                                 content: MessageContent::Text(reminder),
-                            });
+                            };
+                            // Push to BOTH `messages` (the API payload) and
+                            // `conversation.messages` so the sync at line ~2040
+                            // doesn't drop it. Pre-fix this only pushed to
+                            // conversation.messages, where it was overwritten
+                            // by the sync — meaning the warning never reached
+                            // the model.
+                            messages.push(synth_msg.clone());
+                            conversation.messages.push(synth_msg);
                             token_warning_60_fired = true;
                             tracing::info!(pct, "P-M 60% token-budget synthetic message fired");
                         }
@@ -1830,10 +1849,15 @@ impl QueryEngine {
                              ({estimated_tokens}/{max_context} tokens). Compaction is imminent. \
                              Finalize your fix NOW — write the patch, do not start new exploration."
                         );
-                        conversation.messages.push(Message {
+                        let synth_msg = Message {
                             role: "user".to_string(),
                             content: MessageContent::Text(reminder),
-                        });
+                        };
+                        // Same dual-push fix as the 60% warning — see comment
+                        // there. Without pushing to `messages`, the sync at
+                        // line ~2040 silently drops the synthetic.
+                        messages.push(synth_msg.clone());
+                        conversation.messages.push(synth_msg);
                         token_warning_80_fired = true;
                         tracing::info!(pct, "P-M 80% token-budget synthetic message fired");
                     }
