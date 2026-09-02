@@ -6,8 +6,10 @@
 //! definition files (discover / create / delete).
 
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 
 use crate::commands::AppState;
+use crate::events::event_names;
 
 /// Agent info for the agents UI surface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +144,7 @@ fn list_message_team_dirs(
 #[tauri::command]
 pub async fn record_agent_message(
     state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     team: String,
     from: String,
     to: String,
@@ -165,6 +168,11 @@ pub async fn record_agent_message(
     state
         .agent_message_history
         .record(&record)
+        .inspect(|message_id| {
+            // Live-update listeners (AgentMessagesPanel) so they don't have
+            // to poll. Best-effort, matching the house emit style.
+            let _ = app_handle.emit(event_names::AGENT_MESSAGES_UPDATED, message_id);
+        })
         .map_err(|e| e.to_string())
 }
 

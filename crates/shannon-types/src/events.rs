@@ -302,6 +302,12 @@ pub mod event_names {
     pub const DIFF_REVIEW_AVAILABLE: &str = "diff-review-available";
     pub const BACKGROUND_TASK_UPDATE: &str = "background-task-update";
     pub const BACKGROUND_TASKS_UPDATED: &str = "background-tasks-updated";
+    /// Emitted whenever a record is written to the agent-message history.
+    /// Frontend: AgentMessagesPanel reloads on this instead of polling.
+    pub const AGENT_MESSAGES_UPDATED: &str = "agent-messages-updated";
+    /// Emitted whenever triage items change (new item, read, archive).
+    /// Frontend: sidebar triage badge refreshes on this instead of polling.
+    pub const TRIAGE_UPDATED: &str = "triage-updated";
     pub const UPDATE_AVAILABLE: &str = "update-available";
     pub const UPDATE_PROGRESS: &str = "update-progress";
     pub const UPDATE_COMPLETED: &str = "update-completed";

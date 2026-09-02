@@ -27,6 +27,7 @@ use shannon_core::scheduled_runs::{ScheduledRun, ScheduledRunsStore};
 use shannon_core::scheduled_task_store::ScheduledTaskStore;
 use shannon_core::triggered_routines::TriggeredRoutineRegistry;
 use tokio::sync::RwLock;
+use tauri::Emitter;
 
 use crate::commands::AppState;
 
@@ -734,21 +735,38 @@ pub async fn list_triage_items(
 }
 
 /// Mark a triage item as read.
+///
+/// Emits `triage-updated` so the sidebar badge refreshes on the event
+/// instead of polling (P2-6).
 #[tauri::command]
 pub async fn mark_triage_read(
     state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<TriageItem, String> {
-    state.triage_store().mark_read(&id)
+    let item = state.triage_store().mark_read(&id)?;
+    let _ = app_handle.emit(
+        crate::events::event_names::TRIAGE_UPDATED,
+        &item,
+    );
+    Ok(item)
 }
 
 /// Archive a triage item (also marks it read).
+///
+/// Emits `triage-updated`, same contract as [`mark_triage_read`].
 #[tauri::command]
 pub async fn archive_triage_item(
     state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<TriageItem, String> {
-    state.triage_store().archive(&id)
+    let item = state.triage_store().archive(&id)?;
+    let _ = app_handle.emit(
+        crate::events::event_names::TRIAGE_UPDATED,
+        &item,
+    );
+    Ok(item)
 }
 
 /// Aggregate triage counts for sidebar badges.
