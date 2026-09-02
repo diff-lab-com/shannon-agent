@@ -422,6 +422,16 @@ struct Cli {
     #[arg(long = "allowed-tools", hide = true)]
     team_allowed_tools: Option<String>,
 
+    /// Comma-separated list of tool names to forbid in headless mode.
+    /// Maps to the same `!pattern` filter that `set_allowed_tools` accepts,
+    /// so internally it's translated to `["!<tool>" for tool in disallowed]`.
+    /// Use to ban specific tools (e.g. `WebFetch,WebSearch`) without
+    /// spelling out the full positive allowlist. Composes with
+    /// `--allowed-tools` — exclude patterns win.
+    /// Repeatable: pass the flag multiple times to union deny lists.
+    #[arg(long = "disallowed-tools", value_name = "TOOL", num_args = 0.., hide = true)]
+    disallowed_tools: Vec<String>,
+
     /// Resume the most recent session, or a specific session by UUID.
     /// Without a UUID argument, loads the most recent session.
     /// With a UUID argument, loads that specific session.
@@ -1623,6 +1633,7 @@ fn run_headless_query(
     prompt: &str,
     config: &CliConfig,
     allowed_tools: Option<&[String]>,
+    disallowed_tools: &[String],
     output_format: OutputFormat,
     max_turns: Option<u32>,
     exit_on_error: bool,
@@ -1696,6 +1707,25 @@ fn run_headless_query(
         // Apply tool access restrictions from --allowed-tools
         if let Some(allowed) = allowed_tools {
             tools.set_allowed_tools(Some(allowed.to_vec()));
+        }
+        // Apply --disallowed-tools: each entry becomes a `!pattern` filter that
+        // excludes that tool. Composes with the positive allowlist above
+        // (exclude wins per ToolFilter semantics). If only disallowed is set,
+        // every other tool remains available.
+        if !disallowed_tools.is_empty() {
+            let mut patterns: Vec<String> = match allowed_tools {
+                Some(a) => a.to_vec(),
+                None => Vec::new(),
+            };
+            for tool in disallowed_tools {
+                for t in tool.split(',') {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        patterns.push(format!("!{t}"));
+                    }
+                }
+            }
+            tools.set_allowed_tools(Some(patterns));
         }
 
         // Build LLM client
@@ -4093,6 +4123,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             headless_prompt,
             &config,
             allowed_vec.as_deref(),
+            &cli.disallowed_tools,
             cli.output_format,
             cli.max_turns,
             cli.exit_on_error,
