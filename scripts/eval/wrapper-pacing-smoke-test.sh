@@ -170,17 +170,17 @@ expect_time "T8: state 1h in future + MIN=500 → clamped to ~500ms" "$ELAPSED" 
 
 # T9: SWE_DISALLOWED_TOOLS forwarding. Default = "WebFetch WebSearch";
 # unset → defaults applied; empty → disabled; custom list honored.
-# Uses the T7 fake-shannon (echoes args) so we can grep for --disallowedTools.
+# Uses the T7 fake-shannon (echoes args) so we can grep for --disallowed-tools.
 T9_OUT=$(env "HOME=$TEST_HOME" "SHANNON_BIN=$FAKE_BIN" \
   "SWE_PACING_STATE_FILE=$STATE_FILE" "SWE_MIN_DELAY_MS=0" \
   bash "$WRAPPER" </dev/null 2>&1)
-expect_match "T9a: default --disallowedTools forwards WebFetch" "--disallowedTools WebFetch" "$T9_OUT"
-expect_match "T9a: default --disallowedTools forwards WebSearch" "--disallowedTools WebSearch" "$T9_OUT"
+expect_match "T9a: default --disallowed-tools forwards WebFetch" "--disallowed-tools WebFetch" "$T9_OUT"
+expect_match "T9a: default --disallowed-tools forwards WebSearch" "--disallowed-tools WebSearch" "$T9_OUT"
 T9B_OUT=$(env "HOME=$TEST_HOME" "SHANNON_BIN=$FAKE_BIN" \
   "SWE_PACING_STATE_FILE=$STATE_FILE" "SWE_MIN_DELAY_MS=0" "SWE_DISALLOWED_TOOLS=Bash" \
   bash "$WRAPPER" </dev/null 2>&1)
-expect_match "T9b: custom list replaces default" "--disallowedTools Bash" "$T9B_OUT"
-if [[ "$T9B_OUT" == *"--disallowedTools WebFetch"* ]]; then
+expect_match "T9b: custom list replaces default" "--disallowed-tools Bash" "$T9B_OUT"
+if [[ "$T9B_OUT" == *"--disallowed-tools WebFetch"* ]]; then
   echo "FAIL: T9b: WebFetch leaked when SWE_DISALLOWED_TOOLS=Bash"
   FAIL=$((FAIL+1))
 else
@@ -190,8 +190,8 @@ fi
 T9C_OUT=$(env "HOME=$TEST_HOME" "SHANNON_BIN=$FAKE_BIN" \
   "SWE_PACING_STATE_FILE=$STATE_FILE" "SWE_MIN_DELAY_MS=0" "SWE_DISALLOWED_TOOLS=" \
   bash "$WRAPPER" </dev/null 2>&1)
-if [[ "$T9C_OUT" == *"--disallowedTools"* ]]; then
-  echo "FAIL: T9c: --disallowedTools present when SWE_DISALLOWED_TOOLS=''"
+if [[ "$T9C_OUT" == *"--disallowed-tools"* ]]; then
+  echo "FAIL: T9c: --disallowed-tools present when SWE_DISALLOWED_TOOLS=''"
   FAIL=$((FAIL+1))
 else
   echo "PASS: T9c: empty value disables forwarding"
@@ -200,7 +200,7 @@ fi
 T9D_OUT=$(env -u SWE_DISALLOWED_TOOLS "HOME=$TEST_HOME" "SHANNON_BIN=$FAKE_BIN" \
   "SWE_PACING_STATE_FILE=$STATE_FILE" "SWE_MIN_DELAY_MS=0" \
   bash "$WRAPPER" </dev/null 2>&1)
-expect_match "T9d: unset → defaults still applied" "--disallowedTools WebFetch" "$T9D_OUT"
+expect_match "T9d: unset → defaults still applied" "--disallowed-tools WebFetch" "$T9D_OUT"
 
 echo
 echo "===== WRAPPER PACING SMOKE TEST: $PASS pass, $FAIL fail ====="

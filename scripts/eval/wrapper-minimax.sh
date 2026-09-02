@@ -79,7 +79,7 @@ SWE_DISALLOWED_TOOLS="${SWE_DISALLOWED_TOOLS-WebFetch WebSearch}"
 DISALLOWED_FLAGS=()
 if [ -n "$SWE_DISALLOWED_TOOLS" ]; then
   for tool in $SWE_DISALLOWED_TOOLS; do
-    DISALLOWED_FLAGS+=("--disallowedTools" "$tool")
+    DISALLOWED_FLAGS+=("--disallowed-tools" "$tool")
   done
 fi
 
