@@ -92,7 +92,7 @@ async fn team_manifest_lists_members() {
                 allowed_tools: vec![],
                 permission_mode: None,
                 isolation: None,
-            disallowed_tools: None,
+                disallowed_tools: None,
             },
         )
         .await

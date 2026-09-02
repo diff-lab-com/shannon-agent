@@ -621,9 +621,13 @@ impl AgentTool {
                         working_directory: std::path::PathBuf::from("."),
                         max_turns: def.map(|d| d.max_concurrent_tasks as u32).unwrap_or(50),
                         team: Some(team_name.clone()),
-                        // Team pre-spawn doesn't carry a per-agent denylist;
-                        // parent's process-level --disallowed-tools still applies.
-                        disallowed_tools: Vec::new(),
+                        // Inherit the parent's --disallowed-tools denylist as the
+                        // baseline. Each sub-agent runs as a fresh `shannon --team-agent`
+                        // process and does NOT auto-inherit the parent's CLI flags,
+                        // so a sub-agent could otherwise regain a tool the parent
+                        // revoked. `create_team` has no per-call denylist, so the
+                        // baseline IS the denylist here.
+                        disallowed_tools: ctx.parent_disallowed_tools.clone(),
                     };
                 let agent = ctx.registry.spawn(config).await.map_err(|e| {
                     ToolError::ExecutionFailed(format!("Failed to spawn {agent_type}: {e}"))
