@@ -1,54 +1,45 @@
+import { useT } from '@/i18n'
 import type { RefObject } from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/ui/button'
 import WelcomeState from '@/components/WelcomeState'
 import { MessageBubble } from '@/components/chat/MessageBubble'
 import StreamingResponse from '@/components/chat/StreamingResponse'
-import type { ChatMessage, ToolCall } from '@/types'
+import { useChat } from '@/context/ChatContext'
+import { useCatalog } from '@/context/CatalogContext'
+import { useComposer } from './ComposerContext'
+
+// Virtualization only kicks in past the threshold. Below it, the overhead
+// of measuring/positioning outweighs the win from fewer DOM nodes — and
+// jsdom can't provide real dimensions, so tests would render zero items.
+const VIRTUALIZE_THRESHOLD = 30
 
 interface MessageAreaProps {
-  t: (id: string) => string
   scrollParentRef: RefObject<HTMLDivElement | null>
   messagesEndRef: RefObject<HTMLDivElement | null>
-  messages: ChatMessage[]
-  streamingText: string
-  thinkingText: string
-  activeToolCalls: ToolCall[]
-  error: string | null
   virtualizer: Virtualizer<HTMLDivElement, Element>
-  shouldVirtualize: boolean
-  setInput: (s: string) => void
-  handleSend: () => void
   setDiffPath: (p: string | null) => void
   setDiffPaths: (p: string[] | null) => void
-  input: string
 }
 
 // Virtualized + non-virtualized message list. Below the threshold (30
 // messages) we render everything in a flat log so jsdom tests still see the
 // bubbles — virtualization's measureElement needs a real DOM with height.
 export default function MessageArea({
-  t,
   scrollParentRef,
   messagesEndRef,
-  messages,
-  streamingText,
-  thinkingText,
-  activeToolCalls,
-  error,
   virtualizer,
-  shouldVirtualize,
-  setInput,
-  handleSend,
   setDiffPath,
   setDiffPaths,
-  input,
 }: MessageAreaProps) {
+  const { messages, streamingText, thinkingText, activeToolCalls } = useChat()
+  const { error } = useCatalog()
+  const t = useT()
+  const shouldVirtualize = messages.length > VIRTUALIZE_THRESHOLD
+
   return (
     <div ref={scrollParentRef} className="flex-1 overflow-y-auto px-xl pt-lg pb-32">
-      {messages.length === 0 && !streamingText && (
-        <WelcomeState onSelectPrompt={setInput} />
-      )}
+      {messages.length === 0 && !streamingText && <ComposerWelcome />}
 
       {messages.length > 0 && shouldVirtualize && (
         <div
@@ -97,11 +88,32 @@ export default function MessageArea({
       {error && (
         <div className="mx-auto max-w-md p-md bg-error/10 border border-error/20 rounded-xl text-center">
           <p className="text-body-sm text-error">{error}</p>
-          <Button variant="ghost" className="mt-sm text-error hover:bg-error/10 text-label-md cursor-pointer" onClick={() => { if (input.trim()) handleSend() }}>{t('chat.error.retry')}</Button>
+          <ComposerRetryButton />
         </div>
       )}
 
       <div ref={messagesEndRef} />
     </div>
+  )
+}
+
+// Leaf consumers of the composer context — keeping them out of MessageArea's
+// render means the message list does not re-render on every keystroke.
+function ComposerWelcome() {
+  const { setInput } = useComposer()
+  return <WelcomeState onSelectPrompt={setInput} />
+}
+
+function ComposerRetryButton() {
+  const { input, handleSend } = useComposer()
+  const t = useT()
+  return (
+    <Button
+      variant="ghost"
+      className="mt-sm text-error hover:bg-error/10 text-label-md cursor-pointer"
+      onClick={() => { if (input.trim()) handleSend() }}
+    >
+      {t('chat.error.retry')}
+    </Button>
   )
 }

@@ -11,6 +11,8 @@ import { useT } from '@/i18n'
 import EmptyState from '@/components/ui/empty-state'
 import { ListSkeleton } from '@/components/SkeletonLoader'
 import { Button } from '@/components/ui/button'
+import { useTauriEvent } from '@/hooks/useTauriEvent'
+import { EVENT_NAMES } from '@/types'
 import * as api from '@/lib/tauri-api'
 import { cn } from '@/lib/utils'
 import type { AgentMessageEntry } from '@/types'
@@ -92,12 +94,14 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
     void reload()
   }, [reload])
 
-  // Poll for new messages every 5s when auto-refresh is enabled.
-  useEffect(() => {
-    if (!autoRefresh) return
-    const id = window.setInterval(() => void reload(), 5000)
-    return () => window.clearInterval(id)
-  }, [autoRefresh, reload])
+  // Live updates: the backend emits agent-messages-updated whenever a record
+  // is written (replaces the former 5s poll). The toggle freezes the view;
+  // manual refresh stays available. Coverage note: externally written JSONL
+  // (team agents running in the CLI) doesn't emit yet — that needs a
+  // file-watch hook in AppState.
+  useTauriEvent(EVENT_NAMES.AGENT_MESSAGES_UPDATED, () => {
+    if (autoRefresh) void reload()
+  })
 
   const handleInject = useCallback(async () => {
     if (!content.trim()) return

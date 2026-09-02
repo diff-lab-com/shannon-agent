@@ -313,7 +313,7 @@ export default function AdvancedSettings() {
               {updateInfo && !updateInfo.error && (
                 <Button
                   variant="ghost"
-                  className="flex items-center gap-xs text-primary font-label-md text-[14px] hover:underline cursor-pointer"
+                  className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer"
                   onClick={handleOpenReleasePage}
                 >
                   <span className="material-symbols-outlined icon-sm">open_in_new</span>
@@ -343,12 +343,12 @@ export default function AdvancedSettings() {
             <div className="flex-1">
               <p className="text-on-surface-variant text-body-sm mb-md">{t('settings.advanced.devOptionsDesc')}</p>
               <div className="flex items-center gap-md">
-                <Button variant="ghost" className="flex items-center gap-xs text-primary font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowLogs(true)}>
+                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowLogs(true)}>
                   <span className="material-symbols-outlined icon-sm">description</span>
                   {t('settings.advanced.viewLogs')}
                 </Button>
                 <span className="text-outline-variant">|</span>
-                <Button variant="ghost" className="flex items-center gap-xs text-primary font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowApiKeys(true)}>
+                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowApiKeys(true)}>
                   <span className="material-symbols-outlined icon-sm">api</span>
                   {t('settings.advanced.manageApiKeys')}
                 </Button>

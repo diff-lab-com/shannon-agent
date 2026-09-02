@@ -406,9 +406,8 @@ describe('Welcome — env provider detection (T7.A)', () => {
     })
     wrap()
     await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
-    // envHasKey is set; the Step 1 Continue button should be enabled when
-    // the env-detected provider matches the recommended one (default task =
-    // general → anthropic).
+    // envProviderReady is set; the Step 1 Continue button should be enabled
+    // without requiring manual provider setup (default task = general).
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => {
       const continueBtns = screen.getAllByRole('button', { name: /Continue/ })

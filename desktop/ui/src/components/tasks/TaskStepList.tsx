@@ -80,7 +80,7 @@ export default function TaskStepList({ taskId, active = true }: TaskStepListProp
                 <p className="font-body-sm text-error mt-xs opacity-80">{step.error}</p>
               )}
             </div>
-            <time className="font-label-sm text-outline shrink-0">
+            <time className="font-label-sm text-on-surface-variant shrink-0">
               {new Date(step.timestampMs).toLocaleTimeString()}
             </time>
           </li>

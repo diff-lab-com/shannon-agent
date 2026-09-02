@@ -162,7 +162,7 @@ export const ResearchReportModal = memo(function ResearchReportModal({
                             href={c.url}
                             target="_blank"
                             rel="noreferrer"
-                            className="inline-flex items-center gap-xs text-label-sm text-primary hover:underline mt-xs"
+                            className="inline-flex items-center gap-xs text-label-sm text-link hover:underline mt-xs"
                           >
                             <span className="material-symbols-outlined text-[14px]">open_in_new</span>
                             {t('chat.report.openSource')}

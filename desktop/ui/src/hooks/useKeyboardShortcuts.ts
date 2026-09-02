@@ -27,10 +27,6 @@ export function useKeyboardShortcuts(
       'mod+shift+n': () => navigate('/chat'),
       'mod+k': () => onTogglePalette?.(),
       'mod+d': () => window.dispatchEvent(new Event('shannon:change-wd')),
-      'mod+/': () => {
-        const sidebar = document.querySelector('[data-sidebar]')
-        sidebar?.classList.toggle('collapsed')
-      },
       'mod+1': () => navigate('/chat'),
       'mod+2': () => navigate('/tasks'),
       'mod+3': () => navigate('/extensions'),

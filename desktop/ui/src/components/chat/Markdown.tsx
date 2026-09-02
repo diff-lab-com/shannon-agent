@@ -67,6 +67,7 @@ export const Markdown = memo(function Markdown({ children, className }: Markdown
 /** Dispatches `language-chart` to the chart renderer; everything else
  *  goes to the generic CodeBlock. */
 function PreOrChart(props: React.HTMLAttributes<HTMLPreElement>) {
+  const intl = useIntl()
   const child = Array.isArray(props.children) ? props.children[0] : props.children
   if (child && typeof child === 'object' && 'props' in child) {
     const codeProps = (child as { props: { className?: string; children?: ReactNode } }).props
@@ -77,7 +78,7 @@ function PreOrChart(props: React.HTMLAttributes<HTMLPreElement>) {
       return (
         <div className="my-md p-sm rounded-lg bg-error-container/20 border border-error/30 text-label-sm text-error">
           <span className="material-symbols-outlined text-[14px] align-middle mr-xs">error</span>
-          Invalid chart spec — expected JSON with type and data[].
+          {intl.formatMessage({ id: 'chat.chart.invalidSpec' })}
         </div>
       )
     }
@@ -253,7 +254,7 @@ function ExternalLink(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
       href={href}
       target={isExternal ? '_blank' : undefined}
       rel={isExternal ? 'noopener noreferrer' : undefined}
-      className="text-primary hover:underline inline-flex items-baseline gap-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
+      className="text-link hover:underline inline-flex items-baseline gap-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
       onMouseEnter={handleEnter}
       onFocus={handleEnter}
       onPointerEnter={handleEnter}

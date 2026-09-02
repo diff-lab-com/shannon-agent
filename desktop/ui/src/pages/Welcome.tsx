@@ -42,7 +42,9 @@ export default function Welcome() {
   const [pickedDir, setPickedDir] = useState<string | null>(null)
   const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({})
   const [devMode, setDevMode] = useState(false)
-  const [envHasKey, setEnvHasKey] = useState(false)
+  // True once a usable provider was detected from the environment (API key
+  // present, or a local engine like Ollama that needs no key).
+  const [envProviderReady, setEnvProviderReady] = useState(false)
   const envCheckedRef = useRef(false)
   const [providerSaved, setProviderSaved] = useState(false)
   const [showAddProviderModal, setShowAddProviderModal] = useState(false)
@@ -50,9 +52,14 @@ export default function Welcome() {
     Record<string, { status: 'idle' | 'installing' | 'installed' | 'failed'; error?: string }>
   >({})
 
-  const currentTask = TASKS.find(t => t.id === task)!
-  const canAdvanceFromModel =
-    providerSaved || (envHasKey && provider === currentTask.recommendedProvider)
+  // task is always one of the TaskId union, so the lookup can only miss on
+  // programmer error — fall back to the first task instead of asserting.
+  const currentTask = TASKS.find(t => t.id === task) ?? TASKS[0]
+  // A working env-detected provider is enough to move on, even when it is
+  // not the task's recommendation — the recommendation is a default, not a
+  // gate (previously this dead-ended env-key users on non-recommended
+  // providers and forced manual API-key entry).
+  const canAdvanceFromModel = providerSaved || envProviderReady
   const enabledToolCount = Object.values(enabledTools).filter(Boolean).length
 
   // On mount, probe the shell for a pre-configured provider so the user can
@@ -66,9 +73,11 @@ export default function Welcome() {
         if (!detected) return
         setProvider(detected.provider)
         if (detected.provider === 'ollama') {
+          // Ollama runs locally — detected means usable, no key involved.
+          setEnvProviderReady(true)
           toast.info(intl.formatMessage({ id: 'welcome.envDetected.ollama' }))
         } else if (detected.has_api_key) {
-          setEnvHasKey(true)
+          setEnvProviderReady(true)
           toast.success(intl.formatMessage({ id: 'welcome.envDetected.toast' }, { provider: detected.provider }))
         }
       })

@@ -61,7 +61,7 @@ function MessageHeader({
       : t('chat.message.header.assistant')
   const time = timestamp ? new Date(timestamp).toLocaleTimeString(intl.locale, { hour: '2-digit', minute: '2-digit' }) : ''
   return (
-    <div className="flex items-center gap-xs text-label-xs text-on-surface-variant/70 mb-xs" aria-hidden="true">
+    <div className="flex items-center gap-xs text-label-xs text-on-surface-variant mb-xs" aria-hidden="true">
       <span className="font-label-xs uppercase tracking-wide font-medium">{label}</span>
       {isBranch && (
         <>
@@ -175,7 +175,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   }
 
   const handleRegenerate = () => {
-    sendMessage('Regenerate the previous response').catch((e) => toastError(t('chat.toast.regenerateFailed'), e))
+    sendMessage(t('chat.regenerate.prompt')).catch((e) => toastError(t('chat.toast.regenerateFailed'), e))
   }
 
   const handleBranch = () => {

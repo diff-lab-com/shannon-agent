@@ -184,6 +184,7 @@ export default function MemoryPanel() {
           <select
             value={projectFilter}
             onChange={(e) => setProjectFilter(e.target.value)}
+            aria-label={t('memory.filter.projectAria')}
             className="px-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md transition-colors hover:border-primary/30 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none cursor-pointer"
           >
             <option value="all">{t('memory.filter.allProjects')}</option>
@@ -197,6 +198,7 @@ export default function MemoryPanel() {
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value as CategoryFilter)}
+            aria-label={t('memory.filter.categoryAria')}
             className="px-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md transition-colors hover:border-primary/30 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none cursor-pointer"
           >
             {CATEGORIES.map((c) => (

@@ -27,6 +27,9 @@ export interface CatalogContextValue {
   permissionRequest: PermissionRequest | null
   error: string | null
   loading: boolean
+  /** Set when the initial data load fails for any surface; cleared by retryInit. */
+  initError: string | null
+  retryInit: () => Promise<void>
   refreshStatus: () => Promise<void>
   refreshConfig: () => Promise<void>
   refreshModels: () => Promise<void>
@@ -34,7 +37,7 @@ export interface CatalogContextValue {
   refreshAgents: () => Promise<void>
   refreshMcpServers: () => Promise<void>
   refreshBackgroundTasks: () => Promise<void>
-  respondPermission: (requestId: string, allow: boolean, note?: string) => Promise<void>
+  respondPermission: (requestId: string, allow: boolean, options?: { note?: string; scope?: 'once' | 'always_tool' }) => Promise<void>
 }
 
 export const CatalogContext = createContext<CatalogContextValue | null>(null)

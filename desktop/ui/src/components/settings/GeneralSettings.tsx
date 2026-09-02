@@ -103,10 +103,11 @@ export default function GeneralSettings() {
             <input
               className="w-full appearance-none bg-outline-variant/30 h-1 rounded-full cursor-pointer outline-none slider-thumb-primary"
               max={APPROVAL_MODE_KEYS.length - 1} min={0} type="range" value={approvalMode}
+              aria-label={intl.formatMessage({ id: 'settings.general.approvalMode.sliderAria' })}
               aria-valuenow={approvalMode} aria-valuemin={0} aria-valuemax={APPROVAL_MODE_KEYS.length - 1}
               onChange={e => handleModeChange(Number(e.target.value))}
             />
-            <div className="flex justify-between font-label-sm text-outline px-1">
+            <div className="flex justify-between font-label-sm text-on-surface-variant px-1">
               {APPROVAL_MODE_KEYS.map((m, i) => (
                 <Button
                   key={m.value}

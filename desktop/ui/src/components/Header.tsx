@@ -254,13 +254,16 @@ export function Header() {
                 <pre className="text-body-sm text-on-surface-variant bg-surface-container p-sm rounded-lg overflow-x-auto max-h-[200px] mt-sm">{JSON.stringify(permissionRequest.input as object, null, 2)}</pre>
               ) : null}
             </div>
-            {/* U3: the "Always allow" checkbox was removed — it was a stateless
-                dead control. Real "remember allow" needs an approval scope in
-                respond_permission (PermissionRuleChecker allow rules); tracked
-                as a follow-up task, out of phase-3 scope. */}
+            {/* U3 follow-up: "Always allow" persists an allow rule for the
+                tool (respond_permission scope="always_tool" → user
+                settings.json permissions.allow). The engine's rule checker
+                consumes those rules (Deny > Ask > Allow). */}
             <div className="flex gap-md">
               <Button autoFocus className="flex-1 py-sm bg-surface-container text-on-surface rounded-xl hover:bg-surface-container-high transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, false)}>
                 {t('header.permRequest.deny')}
+              </Button>
+              <Button className="flex-1 py-sm border border-primary/40 bg-transparent text-primary rounded-xl hover:bg-primary/10 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true, { scope: 'always_tool' })}>
+                {t('header.permRequest.allowAlways')}
               </Button>
               <Button className="flex-1 py-sm bg-primary text-on-primary rounded-xl hover:shadow-md hover:shadow-primary/30 active:scale-95 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true)}>
                 {t('header.permRequest.allowOnce')}

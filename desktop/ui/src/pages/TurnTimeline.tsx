@@ -46,7 +46,10 @@ function formatTime(tsNs: number): string {
 }
 
 const nf = new Intl.NumberFormat()
-const cf = new Intl.NumberFormat(undefined, {
+// The engine's usage ledger reports costs in USD; format them as USD
+// regardless of OS locale — the currency is a property of the data,
+// not of the user's locale.
+const COST_FORMAT = new Intl.NumberFormat(undefined, {
   style: 'currency',
   currency: 'USD',
 })
@@ -160,7 +163,7 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
           <SummaryChip icon="build" label={t('timeline.stat.tools', { count: totalTools })} />
           <SummaryChip icon="token" label={nf.format(totalOutputTokens)} />
           {totalCost != null && (
-            <SummaryChip icon="payments" label={cf.format(totalCost)} />
+            <SummaryChip icon="payments" label={COST_FORMAT.format(totalCost)} />
           )}
         </div>
       </div>
@@ -248,7 +251,11 @@ function CumulativeCurve({
   const tokenPath = cumulative
     .map((p, i) => point(i, p.output_tokens_total, yMax).join(','))
     .join(' ')
-  const costKnown = cumulative.some(p => p.cost_total_usd != null)
+  // Cost is plotted against its own 0..costMax scale — sharing the token
+  // axis would flatten a few cents against tens of thousands of tokens,
+  // drawing a meaningless line glued to the bottom edge.
+  const costMax = Math.max(...cumulative.map(p => p.cost_total_usd ?? 0), 0)
+  const showCost = cumulative.some(p => p.cost_total_usd != null) && costMax > 0
 
   return (
     <figure>
@@ -265,10 +272,10 @@ function CumulativeCurve({
           strokeWidth={2}
           className="text-primary"
         />
-        {costKnown && (
+        {showCost && (
           <polyline
             points={cumulative
-              .map((p, i) => point(i, p.cost_total_usd ?? 0, yMax).join(','))
+              .map((p, i) => point(i, p.cost_total_usd ?? 0, costMax).join(','))
               .join(' ')}
             fill="none"
             strokeWidth={1.5}
@@ -279,7 +286,15 @@ function CumulativeCurve({
       </svg>
       <figcaption className="mt-1 flex items-center justify-between font-label-xs text-xs text-on-surface-variant">
         <span>{formatTime(cumulative[0]?.ts_ns ?? 0)}</span>
-        <span>{t('timeline.curve.tokens', { count: yMax })}</span>
+        <span>
+          {t('timeline.curve.tokens', { count: yMax })}
+          {showCost && (
+            <>
+              <span aria-hidden="true" className="mx-1">·</span>
+              {t('timeline.curve.cost', { cost: COST_FORMAT.format(costMax) })}
+            </>
+          )}
+        </span>
         <span>{formatTime(x1)}</span>
       </figcaption>
     </figure>
@@ -338,7 +353,7 @@ function TurnCard({
           {turn.cost_usd != null && (
             <span className="inline-flex items-center gap-1">
               <Icon name="payments" size="xs" />
-              {cf.format(turn.cost_usd)}
+              {COST_FORMAT.format(turn.cost_usd)}
             </span>
           )}
         </div>

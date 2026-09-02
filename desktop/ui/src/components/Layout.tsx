@@ -4,6 +4,8 @@ import { useIntl } from 'react-intl';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { Banner } from '@/components/ui/banner';
+import { Button } from '@/components/ui/button';
 import CommandPalette from './CommandPalette';
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
 import { useChat } from '@/context/ChatContext';
@@ -24,7 +26,7 @@ export const useSidebar = () => useContext(SidebarContext)
 export function Layout() {
   const { usage } = useChat();
   const { createSession } = useSessions();
-  const { backgroundTasks, config, loading } = useCatalog();
+  const { backgroundTasks, config, loading, initError, retryInit } = useCatalog();
   const navigate = useNavigate();
   const intl = useIntl();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -69,6 +71,17 @@ export function Layout() {
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
         <KeyboardShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
         <main role="main" className="pt-16 pb-footer h-screen flex flex-col relative" style={{ marginLeft: 'var(--sidebar-w)', width: 'calc(100% - var(--sidebar-w))' }}>
+          {initError && (
+            <Banner tone="error" className="items-center shrink-0">
+              <span className="material-symbols-outlined icon-md text-error shrink-0" aria-hidden="true">error</span>
+              <p className="flex-1 min-w-0 font-label-md text-on-surface">
+                {intl.formatMessage({ id: 'app.init.failed' })}
+              </p>
+              <Button variant="outline" size="sm" className="shrink-0" onClick={() => void retryInit()}>
+                {intl.formatMessage({ id: 'app.init.retry' })}
+              </Button>
+            </Banner>
+          )}
           <ErrorBoundary><Outlet /></ErrorBoundary>
         </main>
         <footer role="contentinfo" className="fixed bottom-0 right-0 h-footer bg-surface-container-low/90 backdrop-blur-sm border-t border-outline-variant/20 flex items-center justify-between px-lg z-40" style={{ left: 'var(--sidebar-w)' }}>
@@ -94,13 +107,13 @@ export function Layout() {
           </span>
           <div className="flex items-center gap-md font-label-sm text-label-sm text-on-surface-variant">
             {activeBgTasks > 0 && (
-              <span className="flex items-center gap-xs text-primary">
+              <span className="flex items-center gap-xs text-on-surface-variant">
                 <span className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
                 {intl.formatMessage({ id: 'footer.tasks' }, { count: activeBgTasks })}
               </span>
             )}
             {version && (
-              <span className="hidden md:inline text-outline-variant">v{version}</span>
+              <span className="hidden md:inline text-on-surface-variant">v{version}</span>
             )}
           </div>
         </footer>

@@ -64,7 +64,7 @@ export default function TaskCalendarView({
       {/* Full-Width Calendar Grid */}
       <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-lg shadow-sm">
         <div className="grid grid-cols-7 text-center mb-sm">
-          {[1, 2, 3, 4, 5, 6, 0].map(jsDay => <span key={jsDay} className="text-[11px] font-bold text-outline uppercase py-sm">{weekdayName(intl.locale, jsDay, 'short')}</span>)}
+          {[1, 2, 3, 4, 5, 6, 0].map(jsDay => <span key={jsDay} className="text-[11px] font-bold text-on-surface-variant uppercase py-sm">{weekdayName(intl.locale, jsDay, 'short')}</span>)}
         </div>
         <div className="grid grid-cols-7 gap-1">
           {Array.from({ length: startDay }, (_, i) => (
@@ -106,7 +106,7 @@ export default function TaskCalendarView({
       {/* Tasks for Selected Day */}
       {selectedDay !== null && (
         <div>
-          <h4 className="font-label-md text-label-md text-outline uppercase tracking-[0.1em] mb-md pl-xs">
+          <h4 className="font-label-md text-label-md text-on-surface-variant uppercase tracking-[0.1em] mb-md pl-xs">
             {monthName(intl.locale, viewMonth)} {selectedDay} — {t('tasks.taskCalendarView.tasks')}
           </h4>
           <div className="space-y-md">

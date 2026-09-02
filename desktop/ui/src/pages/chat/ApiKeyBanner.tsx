@@ -1,14 +1,15 @@
 import { Button } from '@/components/ui/button'
 import { Banner } from '@/components/ui/banner'
+import { useT } from '@/i18n'
 
 interface ApiKeyBannerProps {
-  t: (id: string) => string
   visible: boolean
   onDismiss: () => void
   onOpenSettings: () => void
 }
 
-export default function ApiKeyBanner({ t, visible, onDismiss, onOpenSettings }: ApiKeyBannerProps) {
+export default function ApiKeyBanner({ visible, onDismiss, onOpenSettings }: ApiKeyBannerProps) {
+  const t = useT()
   if (!visible) return null
   return (
     <Banner

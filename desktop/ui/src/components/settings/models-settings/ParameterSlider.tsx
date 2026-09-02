@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import * as api from '@/lib/tauri-api'
 
 export function ParameterSlider({ label, value, min, max, step, formatValue, lowLabel, highLabel, configKey }: {
@@ -13,6 +13,7 @@ export function ParameterSlider({ label, value, min, max, step, formatValue, low
   configKey?: string
 }) {
   const [local, setLocal] = useState(value)
+  const inputId = useId()
   // Keep the slider in sync with the persisted config value so it reflects
   // reality (initial load + external updates) instead of a stale literal.
   useEffect(() => { setLocal(value) }, [value])
@@ -28,10 +29,11 @@ export function ParameterSlider({ label, value, min, max, step, formatValue, low
   return (
     <div>
       <div className="flex justify-between items-center mb-sm">
-        <label className="font-label-md text-on-surface-variant">{label}</label>
+        <label htmlFor={inputId} className="font-label-md text-on-surface-variant">{label}</label>
         <span className="font-label-sm text-primary bg-primary-container/20 px-sm py-xs rounded">{display}</span>
       </div>
       <input
+        id={inputId}
         className="w-full appearance-none bg-outline-variant/30 h-1 rounded-full cursor-pointer outline-none slider-thumb-primary"
         min={min} max={max} step={step} type="range" value={local}
         onChange={e => handleChange(Number(e.target.value))}

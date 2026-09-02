@@ -17,7 +17,7 @@ interface ModelStepProps {
 
 export function ModelStep({ task, saving, canContinue, onOpenAddProvider, onBack, onContinue }: ModelStepProps) {
   const intl = useIntl()
-  const currentTask = TASKS.find(t => t.id === task)!
+  const currentTask = TASKS.find(t => t.id === task) ?? TASKS[0]
   const recommendedProvider = PROVIDERS.find(p => p.id === currentTask.recommendedProvider)
   return (
     <WelcomeCard

@@ -183,7 +183,7 @@ function InstalledRow({ row, isLast }: { row: InstalledAddonSummary; isLast: boo
           </p>
         )}
         {row.installed_at && (
-          <p className="text-label-xs text-outline mt-[2px]">
+          <p className="text-label-xs text-on-surface-variant mt-[2px]">
             {intl.formatMessage({ id: 'extensions.installed.installedAt' }, { date: formatDate(row.installed_at) })}
           </p>
         )}
