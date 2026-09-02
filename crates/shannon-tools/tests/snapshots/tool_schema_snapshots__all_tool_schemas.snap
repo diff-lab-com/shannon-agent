@@ -1,5 +1,6 @@
 ---
 source: crates/shannon-tools/tests/tool_schema_snapshots.rs
+assertion_line: 38
 expression: output
 ---
 ## Agent
@@ -34,6 +35,13 @@ expression: output
     "description": {
       "description": "Team description",
       "type": "string"
+    },
+    "disallowed_tools": {
+      "description": "Optional tool denylist forwarded as --disallowed-tools to the sub-agent process. Use to forward the parent's --disallowed-tools so a sub-agent cannot regain tools the parent denied (e.g. ['WebFetch', 'WebSearch']).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "force": {
       "description": "Force shutdown",
