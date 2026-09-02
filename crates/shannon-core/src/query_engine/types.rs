@@ -698,6 +698,16 @@ pub struct QueryEngineConfig {
     /// Anti-loop guards (`max_iterations`, `total_timeout_secs`,
     /// `no_progress_strikes`) cap the iteration count.
     pub auto_test: Option<crate::auto_test::AutoTestConfig>,
+    /// P-B (eval-only): inject a synthetic user message once at this turn
+    /// if Edit/Write hasn't been called yet. Forces the agent out of an
+    /// explore-only loop. None = disabled. Driven by env var
+    /// `SHANNON_TURN_CHECKPOINT` (parsed in `QueryEngine::with_defaults`).
+    /// Production should leave this None; SWE-bench eval sets it via env.
+    pub turn_checkpoint_turn: Option<u32>,
+    /// P-M: when context-window usage crosses 60% / 80%, inject synthetic
+    /// user messages nudging the agent to wrap up. Default `true`; opt-out
+    /// via env `SHANNON_TOKEN_BUDGET_WARNING=false`.
+    pub token_budget_warning: bool,
 }
 
 impl Default for QueryEngineConfig {
@@ -752,6 +762,8 @@ impl Default for QueryEngineConfig {
             repo_map_budget_tokens: 2_000,
             repo_map_root: None,
             auto_test: None,
+            turn_checkpoint_turn: None,
+            token_budget_warning: true,
         }
     }
 }

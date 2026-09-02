@@ -610,7 +610,8 @@ impl QueryEngine {
             client.model(),
             None, // defaults have no user override
         );
-        let defaults = QueryEngineConfig::default();
+        let mut defaults = QueryEngineConfig::default();
+        Self::apply_env_overrides(&mut defaults);
         let repo_map_injector = RepoMapInjector::new(
             defaults.repo_map_root.as_deref(),
             defaults.repo_map_budget_tokens,
@@ -636,6 +637,41 @@ impl QueryEngine {
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
+        }
+    }
+
+    /// Read `SHANNON_*` env vars and mutate the config accordingly.
+    ///
+    /// Phase B env-var surface (eval-driven; opt-in for real users):
+    /// - `SHANNON_TURN_CHECKPOINT=<N>` (P-B): turn at which a synthetic user
+    ///   message fires IF Edit/Write hasn't been called yet. 0 / unset = off.
+    ///   SWE-bench harness sets `15`. Forces the agent out of an explore-only
+    ///   loop. Production users should leave it unset; the message interrupts
+    ///   long-running interactive sessions.
+    /// - `SHANNON_TOKEN_BUDGET_WARNING=false` (P-M): disable the 60% / 80%
+    ///   context-usage synthetic injections. Default = on (helpful for any
+    ///   long session — SWE-bench or production).
+    ///
+    /// Both are read with `${VAR-default}` so an empty value disables (matches
+    /// the wrapper convention used in `scripts/eval/wrapper-minimax.sh`).
+    pub fn apply_env_overrides(config: &mut QueryEngineConfig) {
+        let cp = std::env::var("SHANNON_TURN_CHECKPOINT").ok();
+        if let Some(s) = cp {
+            if !s.is_empty() {
+                if let Ok(n) = s.parse::<u32>() {
+                    if n > 0 {
+                        config.turn_checkpoint_turn = Some(n);
+                    }
+                }
+            }
+        }
+        let tbw = std::env::var("SHANNON_TOKEN_BUDGET_WARNING").ok();
+        if let Some(v) = tbw {
+            if !v.is_empty() {
+                let lower = v.to_lowercase();
+                config.token_budget_warning =
+                    !matches!(lower.as_str(), "false" | "0" | "no" | "off");
+            }
         }
     }
 
@@ -1536,6 +1572,15 @@ impl QueryEngine {
             let mut total_input_tokens: u64 = 0;
             let mut total_output_tokens: u64 = 0;
             let mut file_edits_made = false;
+            // P-B: session-scoped file-edits flag. file_edits_made resets every
+            // turn; session_file_edits_made sticks for the lifetime of this
+            // query so the turn-N checkpoint can decide whether to inject.
+            let mut session_file_edits_made = false;
+            // P-B: fires once per query when the checkpoint turn is reached.
+            let mut turn_checkpoint_fired = false;
+            // P-M: fires once per threshold per query (60% and 80% independently).
+            let mut token_warning_60_fired = false;
+            let mut token_warning_80_fired = false;
             let mut compaction_failures: u32 = 0;
             const MAX_COMPACTION_FAILURES: u32 = 2;
 
@@ -1597,6 +1642,47 @@ impl QueryEngine {
                     send_event!(tx, QueryEvent::Completed { query_id });
 
                     break;
+                }
+
+                // ── P-B: turn-N checkpoint ─────────────────────────────────
+                // Fires ONCE per query when `turn` (the count of completed
+                // turns, incremented at the bottom of each iteration) first
+                // reaches the configured checkpoint AND Edit/Write hasn't
+                // been called this session. Forces the agent out of an
+                // explore-only loop (SWE-bench context_thrash mode).
+                // Production default = off (opt-in via SHANNON_TURN_CHECKPOINT).
+                if let Some(checkpoint) = config.turn_checkpoint_turn {
+                    let turn_u32 = turn as u32;
+                    if !turn_checkpoint_fired && turn_u32 >= checkpoint && !session_file_edits_made
+                    {
+                        tracing::info!(
+                            turn = turn_u32,
+                            checkpoint,
+                            "turn-N checkpoint fired — injecting commit-now reminder"
+                        );
+                        send_event!(
+                            tx,
+                            QueryEvent::Progress {
+                                query_id,
+                                message: format!(
+                                    "Turn checkpoint {turn_u32} reached without file edits — \
+                                     injecting commit reminder"
+                                ),
+                            }
+                        );
+                        let reminder = format!(
+                            "[Turn {turn_u32} reminder] You have used {turn_u32} of your turn \
+                             budget and have NOT yet called Edit or Write. STOP exploring and \
+                             commit a fix now — a wrong or partial fix is better than an empty \
+                             patch. The official harness will judge correctness; you do not \
+                             need to verify locally."
+                        );
+                        conversation.messages.push(Message {
+                            role: "user".to_string(),
+                            content: MessageContent::Text(reminder),
+                        });
+                        turn_checkpoint_fired = true;
+                    }
                 }
 
                 // Build messages for API call
@@ -1698,7 +1784,10 @@ impl QueryEngine {
                     let max_context = effective_max_context.max(1); // Guard against division by zero
                     let usage_ratio = estimated_tokens as f32 / max_context as f32;
 
-                    // Pre-compaction warning at 60% — gives users visibility before compression fires
+                    // Pre-compaction warning at 60% — gives users visibility before compression fires.
+                    // P-M: also inject a SYNTHETIC USER MESSAGE at 60% so the model itself
+                    // sees the warning (not just the TUI/headless observer). Production
+                    // default = on; opt-out via SHANNON_TOKEN_BUDGET_WARNING=false.
                     if usage_ratio > 0.6 && usage_ratio <= config.compression_threshold {
                         send_event!(
                             tx,
@@ -1713,6 +1802,40 @@ impl QueryEngine {
                                 ),
                             }
                         );
+                        if config.token_budget_warning && !token_warning_60_fired {
+                            let pct = (usage_ratio * 100.0).round() as u32;
+                            let reminder = format!(
+                                "[Token budget at {pct}%] ~{pct}% of the context window used \
+                                 ({estimated_tokens}/{max_context} tokens). Focus on completing \
+                                 the task — wrap up exploration, commit a fix, and stop re-reading \
+                                 the same code."
+                            );
+                            conversation.messages.push(Message {
+                                role: "user".to_string(),
+                                content: MessageContent::Text(reminder),
+                            });
+                            token_warning_60_fired = true;
+                            tracing::info!(pct, "P-M 60% token-budget synthetic message fired");
+                        }
+                    }
+
+                    // P-M: 80% warning (pre-compaction imminent). Fires once.
+                    // Distinct from the existing USD-budget warning at line ~2457
+                    // (CostTracker budget_warned) — this is *token-usage* against the
+                    // context window, which is what SWE-bench agents actually need.
+                    if usage_ratio > 0.8 && config.token_budget_warning && !token_warning_80_fired {
+                        let pct = (usage_ratio * 100.0).round() as u32;
+                        let reminder = format!(
+                            "[Token budget at {pct}%] ~{pct}% of the context window used \
+                             ({estimated_tokens}/{max_context} tokens). Compaction is imminent. \
+                             Finalize your fix NOW — write the patch, do not start new exploration."
+                        );
+                        conversation.messages.push(Message {
+                            role: "user".to_string(),
+                            content: MessageContent::Text(reminder),
+                        });
+                        token_warning_80_fired = true;
+                        tracing::info!(pct, "P-M 80% token-budget synthetic message fired");
                     }
 
                     if usage_ratio > config.compression_threshold {
@@ -3192,6 +3315,9 @@ impl QueryEngine {
                                                                             "Edit" | "Write"
                                                                         ) {
                                                                             file_edits_made = true;
+                                                                            // P-B: session-level flag for the
+                                                                            // turn-N checkpoint decision.
+                                                                            session_file_edits_made = true;
                                                                         }
                                                                     }
                                                                     Err(e) => {
