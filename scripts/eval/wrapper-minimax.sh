@@ -67,6 +67,22 @@ fi
 # real engine). Production: unset → /home/ed/workspace/.../target/debug/shannon.
 SHANNON_BIN="${SHANNON_BIN:-/home/ed/workspace/app/work/shannon/shannon-mono/target/debug/shannon}"
 
+# Disallow web tools in eval. Real users need WebFetch/WebSearch; SWE-bench
+# tasks don't, and the model wastes budget on `curl | head -1000` instead of
+# reading code. Pass a space-separated list via $SWE_DISALLOWED_TOOLS (e.g.
+# "WebFetch WebSearch"); default kills both. The flags are passed through
+# `--disallowedTools` to the Shannon engine, which respects them in its tool
+# allow-list. Set SWE_DISALLOWED_TOOLS="" to disable.
+# Note: use ${VAR-default} (no colon) so an explicit empty value disables,
+# while unset → default. ${VAR:-default} would treat empty as unset.
+SWE_DISALLOWED_TOOLS="${SWE_DISALLOWED_TOOLS-WebFetch WebSearch}"
+DISALLOWED_FLAGS=()
+if [ -n "$SWE_DISALLOWED_TOOLS" ]; then
+  for tool in $SWE_DISALLOWED_TOOLS; do
+    DISALLOWED_FLAGS+=("--disallowedTools" "$tool")
+  done
+fi
+
 # Pacing block — see header comment.
 MIN_DELAY_MS="${SWE_MIN_DELAY_MS:-0}"
 if [[ "$MIN_DELAY_MS" =~ ^[0-9]+$ ]] && [ "$MIN_DELAY_MS" -gt 0 ]; then
@@ -105,4 +121,4 @@ fi
 
 exec env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u ZHIPU_API_KEY -u GLM_API_KEY -u MINIMAX_API_KEY \
   "$SHANNON_BIN" \
-  --provider minimax --model "$MODEL_FLAG" "$@"
+  --provider minimax --model "$MODEL_FLAG" "${DISALLOWED_FLAGS[@]}" "$@"

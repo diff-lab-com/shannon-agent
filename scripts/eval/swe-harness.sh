@@ -264,6 +264,11 @@ if [ "$SWE_AGENT_HINT" = "1" ]; then
 - You have a finite turn budget. After ~15 turns of exploring/reading, if
   you have not called Edit/Write yet, STOP exploring and commit a fix.
   A wrong or partial fix is better than an empty patch.
+- After Edit/Write, run a focused verification (e.g. `python3 -m pytest -x
+  <test_file>::<test_name>` for the relevant test). This is process guidance,
+  not secret info — you're only running tests you already see in the repo.
+- Prefer Grep (not Bash grep) for symbol search; it indexes once and is
+  far cheaper on tokens for repeated queries.
 
 HINT_END
 )$AGENT_PROMPT"

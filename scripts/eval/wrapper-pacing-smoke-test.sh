@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # Smoke test for wrapper-minimax.sh pacing logic.
 #
-# Verifies (8 cases):
-#   T1. Missing KEY_FILE → exits 9 (no pacing code reached)
-#   T2. SWE_MIN_DELAY_MS=0 → no sleep, no error
-#   T3. SWE_MIN_DELAY_MS=500 with state stamped 100ms ago → sleeps ~400ms
-#   T4. SWE_MIN_DELAY_MS=500 with state stamped 5s ago → no sleep (overhead only)
-#   T5. Garbage state file → treated as 0 (no sleep)
-#   T6. State file updated with millis timestamp after each call
-#   T7. SWE_MODEL override changes --model flag passed to binary
-#   T8. SWE_MIN_DELAY_MS=500 with state 1h in the future → sleeps ~500ms
-#       (clock-skew safety — must NOT sleep 1h)
+# Verifies (12 cases):
+#   T1.  Missing KEY_FILE → exits 9 (no pacing code reached)
+#   T2.  SWE_MIN_DELAY_MS=0 → no sleep, no error
+#   T3.  SWE_MIN_DELAY_MS=500 with state stamped 100ms ago → sleeps ~400ms
+#   T4.  SWE_MIN_DELAY_MS=500 with state stamped 5s ago → no sleep (overhead only)
+#   T5.  Garbage state file → treated as 0 (no sleep)
+#   T6.  State file updated with millis timestamp after each call
+#   T7.  SWE_MODEL override changes --model flag passed to binary
+#   T8.  SWE_MIN_DELAY_MS=500 with state 1h in the future → sleeps ~500ms
+#        (clock-skew safety — must NOT sleep 1h)
+#   T9a. SWE_DISALLOWED_TOOLS default → forwards WebFetch + WebSearch
+#   T9b. SWE_DISALLOWED_TOOLS=Bash → custom list replaces default
+#   T9c. SWE_DISALLOWED_TOOLS='' → empty value disables forwarding
+#   T9d. SWE_DISALLOWED_TOOLS unset → defaults still applied
 #
 # Hermetic: uses temp HOME + temp state file via SWE_PACING_STATE_FILE. The
 # real /tmp/shannon-minimax/.pacing-state is NEVER touched (so a live eval
@@ -163,6 +167,40 @@ ELAPSED=$(time_it env "HOME=$TEST_HOME" "SHANNON_BIN=/bin/true" \
   bash "$WRAPPER" </dev/null)
 # Expected: full 500ms sleep + overhead (~200-500ms). Range 500-1500ms.
 expect_time "T8: state 1h in future + MIN=500 → clamped to ~500ms" "$ELAPSED" 500 1500
+
+# T9: SWE_DISALLOWED_TOOLS forwarding. Default = "WebFetch WebSearch";
+# unset → defaults applied; empty → disabled; custom list honored.
+# Uses the T7 fake-shannon (echoes args) so we can grep for --disallowedTools.
+T9_OUT=$(env "HOME=$TEST_HOME" "SHANNON_BIN=$FAKE_BIN" \
+  "SWE_PACING_STATE_FILE=$STATE_FILE" "SWE_MIN_DELAY_MS=0" \
+  bash "$WRAPPER" </dev/null 2>&1)
+expect_match "T9a: default --disallowedTools forwards WebFetch" "--disallowedTools WebFetch" "$T9_OUT"
+expect_match "T9a: default --disallowedTools forwards WebSearch" "--disallowedTools WebSearch" "$T9_OUT"
+T9B_OUT=$(env "HOME=$TEST_HOME" "SHANNON_BIN=$FAKE_BIN" \
+  "SWE_PACING_STATE_FILE=$STATE_FILE" "SWE_MIN_DELAY_MS=0" "SWE_DISALLOWED_TOOLS=Bash" \
+  bash "$WRAPPER" </dev/null 2>&1)
+expect_match "T9b: custom list replaces default" "--disallowedTools Bash" "$T9B_OUT"
+if [[ "$T9B_OUT" == *"--disallowedTools WebFetch"* ]]; then
+  echo "FAIL: T9b: WebFetch leaked when SWE_DISALLOWED_TOOLS=Bash"
+  FAIL=$((FAIL+1))
+else
+  echo "PASS: T9b: WebFetch not present when overridden"
+  PASS=$((PASS+1))
+fi
+T9C_OUT=$(env "HOME=$TEST_HOME" "SHANNON_BIN=$FAKE_BIN" \
+  "SWE_PACING_STATE_FILE=$STATE_FILE" "SWE_MIN_DELAY_MS=0" "SWE_DISALLOWED_TOOLS=" \
+  bash "$WRAPPER" </dev/null 2>&1)
+if [[ "$T9C_OUT" == *"--disallowedTools"* ]]; then
+  echo "FAIL: T9c: --disallowedTools present when SWE_DISALLOWED_TOOLS=''"
+  FAIL=$((FAIL+1))
+else
+  echo "PASS: T9c: empty value disables forwarding"
+  PASS=$((PASS+1))
+fi
+T9D_OUT=$(env -u SWE_DISALLOWED_TOOLS "HOME=$TEST_HOME" "SHANNON_BIN=$FAKE_BIN" \
+  "SWE_PACING_STATE_FILE=$STATE_FILE" "SWE_MIN_DELAY_MS=0" \
+  bash "$WRAPPER" </dev/null 2>&1)
+expect_match "T9d: unset → defaults still applied" "--disallowedTools WebFetch" "$T9D_OUT"
 
 echo
 echo "===== WRAPPER PACING SMOKE TEST: $PASS pass, $FAIL fail ====="
