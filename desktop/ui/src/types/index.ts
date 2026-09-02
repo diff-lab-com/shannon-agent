@@ -915,6 +915,8 @@ export const EVENT_NAMES = {
   DIFF_REVIEW_AVAILABLE: 'diff-review-available',
   BACKGROUND_TASK_UPDATE: 'background-task-update',
   BACKGROUND_TASKS_UPDATED: 'background-tasks-updated',
+  AGENT_MESSAGES_UPDATED: 'agent-messages-updated',
+  TRIAGE_UPDATED: 'triage-updated',
 } as const
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]

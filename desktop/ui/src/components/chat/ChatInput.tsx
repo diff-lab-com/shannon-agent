@@ -285,7 +285,7 @@ export default function ChatInput({
           </span>
           <textarea
             ref={textareaRef}
-            className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-outline-variant/80 text-on-surface resize-none min-h-[24px] max-h-[200px]"
+            className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-on-surface-variant/70 text-on-surface resize-none min-h-[24px] max-h-[200px]"
             placeholder={isQuerying ? t('chat.input.processing') : t('chat.input.placeholder')}
             aria-label={t('chat.input.ariaLabel')}
             value={value}

@@ -83,7 +83,7 @@ export default function CalendarSidebarWidget({
         </div>
       </div>
       <div className="grid grid-cols-7 text-center mb-sm">
-        {[1, 2, 3, 4, 5, 6, 0].map(jsDay => <span key={jsDay} className="text-[10px] font-bold text-outline uppercase">{weekdayName(intl.locale, jsDay, 'short')}</span>)}
+        {[1, 2, 3, 4, 5, 6, 0].map(jsDay => <span key={jsDay} className="text-[10px] font-bold text-on-surface-variant uppercase">{weekdayName(intl.locale, jsDay, 'short')}</span>)}
       </div>
       <div className="grid grid-cols-7 gap-1 text-center font-label-md">
         {Array.from({ length: startDay }, (_, i) => (
@@ -105,7 +105,7 @@ export default function CalendarSidebarWidget({
       </div>
 
       <div className="mt-lg pt-lg border-t border-outline-variant/20">
-        <h5 className="font-label-sm text-outline uppercase tracking-wider mb-md">{t('tasks.calendarSidebarWidget.activeNow')}</h5>
+        <h5 className="font-label-sm text-on-surface-variant uppercase tracking-wider mb-md">{t('tasks.calendarSidebarWidget.activeNow')}</h5>
         <div className="space-y-md">
           {activeTasks.map(task => (
             <div
@@ -128,7 +128,7 @@ export default function CalendarSidebarWidget({
 
       {scheduledTasks.length > 0 && (
         <div className="mt-lg pt-lg border-t border-outline-variant/20">
-          <h5 className="font-label-sm text-outline uppercase tracking-wider mb-md">{t('tasks.calendarSidebarWidget.routines')}</h5>
+          <h5 className="font-label-sm text-on-surface-variant uppercase tracking-wider mb-md">{t('tasks.calendarSidebarWidget.routines')}</h5>
           <div className="space-y-sm">
             {scheduledTasks.slice(0, 6).map(r => (
               <Button

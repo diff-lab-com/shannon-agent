@@ -1,14 +1,15 @@
 import type { ToolCall, UsagePayload } from '@/types'
 import { cn } from '@/lib/utils'
+import { useT } from '@/i18n'
 
 interface ContextPanelProps {
-  t: (id: string) => string
   open: boolean
   usage: UsagePayload | null
   activeToolCalls: ToolCall[]
 }
 
-export default function ContextPanel({ t, open, usage, activeToolCalls }: ContextPanelProps) {
+export default function ContextPanel({ open, usage, activeToolCalls }: ContextPanelProps) {
+  const t = useT()
   return (
     <aside
       aria-label={t('chat.context.aria')}

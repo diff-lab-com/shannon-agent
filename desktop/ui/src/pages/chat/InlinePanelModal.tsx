@@ -1,9 +1,9 @@
 import { Suspense, type ComponentType } from 'react'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
+import { useT } from '@/i18n'
 
 interface InlinePanelModalProps {
-  t: (id: string) => string
   open: boolean
   onClose: () => void
   /** Title shown in the sticky modal header. */
@@ -25,7 +25,6 @@ const LoadingFallback = () => (
 )
 
 export default function InlinePanelModal({
-  t,
   open,
   onClose,
   title,
@@ -34,6 +33,7 @@ export default function InlinePanelModal({
   modalClassName,
   bodyClassName,
 }: InlinePanelModalProps) {
+  const t = useT()
   return (
     <Modal
       open={open}

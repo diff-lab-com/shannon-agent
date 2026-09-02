@@ -11,6 +11,8 @@ import { useCatalog } from '@/context/CatalogContext';
 import { SessionsSection } from './SidebarSessions';
 import { useSidebar } from './Layout';
 import { useTriageStats } from '@/hooks/scheduled-tasks';
+import { useTauriEvent } from '@/hooks/useTauriEvent';
+import { EVENT_NAMES } from '@/types';
 import { formatShortcut } from '@/lib/platform';
 
 const MIN_W = 200
@@ -142,19 +144,16 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   const intl = useIntl();
   const { stats: triageStats, refresh: refreshTriageStats } = useTriageStats();
 
-  // Refresh triage stats every 30s, but only while the window is visible —
-  // no point polling a desktop app that's backgrounded. Resumes + immediately
-  // refreshes on focus. (Full event-driven refresh would need a backend
-  // triage-updated emission; see claudedocs/comprehensive-audit-2026-06-29.md P2-6.)
+  // P2-6: triage stats refresh on the backend `triage-updated` event instead
+  // of a 30s poll. An immediate refresh on window focus still catches
+  // external changes (e.g. triage.jsonl edited while backgrounded).
+  useTauriEvent(EVENT_NAMES.TRIAGE_UPDATED, () => { void refreshTriageStats() });
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    let interval: ReturnType<typeof setInterval> | undefined;
-    const stop = () => { if (interval) { clearInterval(interval); interval = undefined; } };
-    const start = () => { stop(); refreshTriageStats(); interval = setInterval(refreshTriageStats, 30000); };
-    const onVisibility = () => { if (document.hidden) { stop(); } else { start(); } };
-    start();
+    const onVisibility = () => { if (!document.hidden) refreshTriageStats(); };
+    refreshTriageStats();
     document.addEventListener('visibilitychange', onVisibility);
-    return () => { stop(); document.removeEventListener('visibilitychange', onVisibility); };
+    return () => { document.removeEventListener('visibilitychange', onVisibility); };
   }, [refreshTriageStats]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -217,7 +216,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
     cn(
       "flex items-center gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300",
       isActive
-        ? "text-primary bg-primary/10 font-bold shadow-sm"
+        ? "text-on-surface bg-primary/10 font-bold shadow-sm"
         : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5"
     );
 
@@ -266,7 +265,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
           <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>cognitive</span>
         </div>
         <div>
-          <h1 className="font-headline-md text-[20px] font-bold text-primary leading-tight">Shannon</h1>
+          <h1 className="font-headline-md text-[20px] font-bold text-on-surface leading-tight">Shannon</h1>
           <p className="font-body-sm text-[12px] text-on-surface-variant leading-none">
             {intl.formatMessage({ id: 'nav.tagline' })}
           </p>
@@ -384,7 +383,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
               variant="ghost"
               onClick={() => toggleNav('extensions')}
               aria-expanded={navOpen.extensions}
-              className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isExtensionsActive ? "bg-primary/10 text-primary font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
+              className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isExtensionsActive ? "bg-primary/10 text-on-surface font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
             >
               <div className="flex items-center gap-3">
                 <span className="material-symbols-outlined">grid_view</span>
@@ -446,7 +445,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
           variant="ghost"
           onClick={() => toggleNav('settings')}
           aria-expanded={navOpen.settings}
-          className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isSettingsActive ? "bg-primary/10 text-primary font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
+          className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isSettingsActive ? "bg-primary/10 text-on-surface font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
         >
           <div className="flex items-center gap-3">
             <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>settings</span>

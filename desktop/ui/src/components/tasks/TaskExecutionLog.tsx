@@ -21,7 +21,7 @@ export default function TaskExecutionLog({ tasks, onCancel }: TaskExecutionLogPr
   if (tasks.length === 0) return null
   return (
     <div className="pt-lg">
-      <h4 className="font-label-md text-label-md text-outline uppercase tracking-[0.1em] mb-md pl-xs">{t('tasks.taskExecutionLog.title')}</h4>
+      <h4 className="font-label-md text-label-md text-on-surface-variant uppercase tracking-[0.1em] mb-md pl-xs">{t('tasks.taskExecutionLog.title')}</h4>
       <div className="relative pl-8 border-l border-outline-variant/30 space-y-lg ml-md">
         {tasks.map(bt => {
           const badge = statusBadge(bt.status)

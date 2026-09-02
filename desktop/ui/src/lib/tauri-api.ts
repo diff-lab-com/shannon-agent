@@ -428,8 +428,19 @@ export async function requestPermission(tool: string, input: unknown, risk: stri
   return invoke('request_permission', { tool, input, risk })
 }
 
-export async function respondPermission(requestId: string, allow: boolean, note?: string): Promise<void> {
-  await invoke('respond_permission', { requestId, allow, note: note ?? null })
+export type PermissionScope = 'once' | 'always_tool'
+
+export async function respondPermission(
+  requestId: string,
+  allow: boolean,
+  options?: { note?: string; scope?: PermissionScope },
+): Promise<void> {
+  await invoke('respond_permission', {
+    requestId,
+    allow,
+    note: options?.note ?? null,
+    scope: options?.scope ?? null,
+  })
 }
 
 // --- Files & Diffs ---

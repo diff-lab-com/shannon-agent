@@ -408,7 +408,7 @@ export default function Triage() {
                   {t(allSelected ? 'triage.select.deselectAll' : 'triage.select.selectAll')}
                 </span>
               </label>
-              <span className="font-label-sm text-outline ml-auto">
+              <span className="font-label-sm text-on-surface-variant ml-auto">
                 {intl.formatMessage({ id: 'triage.select.shown' }, { visible: visibleItems.length, total: items.length })}
               </span>
             </div>

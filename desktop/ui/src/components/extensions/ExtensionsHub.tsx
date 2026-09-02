@@ -112,7 +112,7 @@ export default function ExtensionsHub() {
         ) : (
           sortedCategories.map(cat => (
             <div key={cat} className="mb-lg">
-              <h4 className="font-label-md text-label-md text-outline uppercase tracking-widest mb-md">{cat}</h4>
+              <h4 className="font-label-md text-label-md text-on-surface-variant uppercase tracking-widest mb-md">{cat}</h4>
               <div className="flex flex-wrap gap-md">
                 {sortedSkills(cat).map(skill => (
                   <div key={skill.name} role="button" tabIndex={0} className="group cursor-pointer bg-surface-container-lowest border border-outline-variant/50 rounded-xl p-md flex items-center gap-md hover:border-primary transition-all shadow-sm focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={() => setSelectedSkill(selectedSkill?.name === skill.name ? null : skill)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedSkill(selectedSkill?.name === skill.name ? null : skill) } }}>

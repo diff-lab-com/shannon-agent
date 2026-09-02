@@ -1,43 +1,41 @@
+import { useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import ChatInput from '@/components/chat/ChatInput'
+import { useT } from '@/i18n'
+import { useChat } from '@/context/ChatContext'
+import { useSessions } from '@/context/SessionContext'
+import { useCatalog } from '@/context/CatalogContext'
+import { changeSessionWorkingDir } from '@/lib/sessionActions'
 import { formatDirBreadcrumb } from './utils'
+import { useComposer } from './ComposerContext'
 
 interface ComposerPanelProps {
-  t: (id: string) => string
-  input: string
-  setInput: (s: string) => void
-  handleSend: () => void
-  attachedFiles: string[]
-  handleAttach: (files: string[]) => void
-  handleDetachAll: () => void
-  isQuerying: boolean
-  cancelQuery: () => Promise<void>
-  currentSessionId: string | null
-  sessionWorkingDir: string
-  handleChangeWorkingDir: () => Promise<void>
   setQuickFixOpen: (open: boolean) => void
   setEditorOpen: (open: boolean) => void
 }
 
 // U2: the composer footer keeps the working-directory picker (the app's only
 // WD entry point) but no longer mirrors provider/model — the global Header
-// is the single model surface.
-export default function ComposerPanel({
-  t,
-  input,
-  setInput,
-  handleSend,
-  attachedFiles,
-  handleAttach,
-  handleDetachAll,
-  isQuerying,
-  cancelQuery,
-  currentSessionId,
-  sessionWorkingDir,
-  handleChangeWorkingDir,
-  setQuickFixOpen,
-  setEditorOpen,
-}: ComposerPanelProps) {
+// is the single model surface. Composer state and the working directory both
+// resolve here via contexts instead of being drilled from the page (the
+// Cmd/Ctrl+D WD-picker shortcut is handled by this panel too — it owns the
+// picker button).
+export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: ComposerPanelProps) {
+  const { input, setInput, handleSend, attachedFiles, handleAttach, handleDetachAll } = useComposer()
+  const { isQuerying, cancelQuery } = useChat()
+  const { sessions, currentSessionId } = useSessions()
+  const { config } = useCatalog()
+  const t = useT()
+
+  const currentSession = sessions.find(s => s.id === currentSessionId)
+  const sessionWorkingDir = currentSession?.working_dir ?? config?.working_dir ?? ''
+
+  useEffect(() => {
+    const handler = () => void changeSessionWorkingDir(currentSessionId, t)
+    window.addEventListener('shannon:change-wd', handler)
+    return () => window.removeEventListener('shannon:change-wd', handler)
+  }, [currentSessionId, t])
+
   // U9: offset derives from the footer height token (32px) — mobile sits
   // 8px above it, ≥md 16px — instead of bare bottom-6/12 magic numbers.
   return (
@@ -62,7 +60,7 @@ export default function ComposerPanel({
           <Button
             type="button"
             variant="ghost"
-            onClick={handleChangeWorkingDir}
+            onClick={() => void changeSessionWorkingDir(currentSessionId, t)}
             disabled={!currentSessionId}
             className="flex items-center gap-xs min-w-0 hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title={sessionWorkingDir || t('chat.input.footer.workingDir.unset')}

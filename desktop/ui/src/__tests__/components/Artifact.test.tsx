@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
+import { ThemeProvider } from '@/context/ThemeContext'
 import { detectArtifacts } from '@/components/artifact/detectArtifact'
 import { ArtifactProvider, useArtifact } from '@/components/artifact/ArtifactContext'
 import { ArtifactChip } from '@/components/artifact/ArtifactChip'
@@ -325,7 +326,7 @@ describe('HtmlRenderer security', () => {
 describe('MermaidRenderer', () => {
   it('renders iframe with sandbox attribute', async () => {
     const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
-    const { container } = render(<MermaidRenderer source="graph TD\nA-->B" />)
+    const { container } = render(<ThemeProvider><MermaidRenderer source="graph TD\nA-->B" /></ThemeProvider>)
     const iframe = container.querySelector('iframe')
     expect(iframe).toBeTruthy()
     expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts')
@@ -334,7 +335,7 @@ describe('MermaidRenderer', () => {
 
   it('injects CSP allowing only the mermaid CDN', async () => {
     const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
-    const { container } = render(<MermaidRenderer source="graph TD\nA-->B" />)
+    const { container } = render(<ThemeProvider><MermaidRenderer source="graph TD\nA-->B" /></ThemeProvider>)
     const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
     expect(srcDoc).toContain('Content-Security-Policy')
     expect(srcDoc).toContain('cdn.jsdelivr.net/npm/mermaid@11')
@@ -343,7 +344,7 @@ describe('MermaidRenderer', () => {
 
   it('embeds source as JSON-encoded string', async () => {
     const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
-    const { container } = render(<MermaidRenderer source="graph TD\nA-->B" />)
+    const { container } = render(<ThemeProvider><MermaidRenderer source="graph TD\nA-->B" /></ThemeProvider>)
     const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
     expect(srcDoc).toContain('graph TD')
     expect(srcDoc).toContain('securityLevel')

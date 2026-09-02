@@ -166,7 +166,7 @@ export default function SkillDetailDrawer({
                     href={entry.homepage_url}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-label-md text-primary hover:underline break-all inline-flex items-center gap-xs"
+                    className="text-label-md text-link hover:underline break-all inline-flex items-center gap-xs"
                   >
                     <span className="material-symbols-outlined text-[14px]">open_in_new</span>
                     {entry.homepage_url}

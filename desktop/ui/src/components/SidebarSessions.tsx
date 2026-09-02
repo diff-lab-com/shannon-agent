@@ -228,7 +228,7 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
         <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
           {t('sidebar.sessions.title')}
         </span>
-        <span className="font-label-sm text-label-sm text-outline-variant">
+        <span className="font-label-sm text-label-sm text-on-surface-variant">
           {filtered.length}{filtered.length !== sessions.length ? `/${sessions.length}` : ''}
         </span>
       </div>
@@ -238,11 +238,11 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
         onChange={e => setQuery(e.target.value)}
         placeholder={t('sidebar.sessions.search.placeholder')}
         aria-label={t('sidebar.sessions.search.aria')}
-        className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-outline-variant focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0"
+        className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-on-surface-variant/70 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0"
       />
       <ScrollArea className="flex-1 min-h-0">
         {filtered.length === 0 ? (
-          <div className="px-2 py-3 text-center font-label-sm text-label-sm text-outline-variant">
+          <div className="px-2 py-3 text-center font-label-sm text-label-sm text-on-surface-variant">
             {t('sidebar.sessions.noResults')}
           </div>
         ) : (

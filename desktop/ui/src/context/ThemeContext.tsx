@@ -5,6 +5,11 @@ export type ThemeName = 'material' | 'tokyo-night' | 'tokyo-night-light' | 'catp
 
 type ResolvedTheme = Exclude<ThemeName, 'system'>
 
+/** The light/dark scheme each resolved theme renders as — mirrors THEME_SCHEMES. */
+export function themeModeOf(resolved: ResolvedTheme): 'light' | 'dark' {
+  return THEME_SCHEMES[resolved]
+}
+
 interface ThemeContextValue {
   theme: ThemeName
   setTheme: (theme: ThemeName) => void
@@ -26,14 +31,18 @@ export function useTheme() {
 // mirrors it onto <html data-theme-mode>, and index.css's `dark:` variant
 // keys off that attribute — adding a theme means one THEMES entry + one
 // line here (+ its token block in index.css), no CSS selector list to hunt.
+// The registry must match the authored token blocks: e2e/themes.spec.ts
+// asserts each theme's surface luminance against its registered scheme, so
+// a mismatch (e.g. a light token block registered as 'dark', which made the
+// `dark:` variants misfire on ember/slate) fails CI instead of shipping.
 const THEME_SCHEMES: Record<ResolvedTheme, 'light' | 'dark'> = {
   'material': 'light',
   'tokyo-night': 'dark',
   'tokyo-night-light': 'light',
   'catppuccin': 'dark',
   'nord': 'dark',
-  'ember': 'dark',
-  'slate': 'dark',
+  'ember': 'light',
+  'slate': 'light',
   'solarized': 'dark',
   'solarized-light': 'light',
   'dracula': 'dark',

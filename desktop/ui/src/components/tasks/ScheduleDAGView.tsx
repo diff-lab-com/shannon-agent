@@ -9,10 +9,10 @@
 // falling back to depth 0.
 //
 // Node fill reflects trigger_type (cron=primary, interval=tertiary,
-// webhook=secondary, event=error). Strikethrough opacity for disabled routines.
-
+// webhook=secondary, event=error) via semantic token utilities, so nodes
+// re-color with the active theme. Strikethrough opacity for disabled routines.
 import { useMemo } from 'react'
-import { useIntl } from 'react-intl'
+import { useIntl, type PrimitiveType } from 'react-intl'
 import type { ScheduledRoutine } from '@/types'
 
 interface ScheduleDAGViewProps {
@@ -91,18 +91,20 @@ function layout(routines: ScheduledRoutine[]): { nodes: PositionedNode[]; width:
   return { nodes, width, height }
 }
 
-function triggerStyle(triggerType: string, enabled: boolean): { fill: string; stroke: string; icon: string } {
-  if (!enabled) return { fill: '#f1f5f9', stroke: '#cbd5e1', icon: 'block' }
-  if (triggerType === 'cron') return { fill: '#eef2ff', stroke: '#6366f1', icon: 'schedule' }
-  if (triggerType === 'interval') return { fill: '#ecfdf5', stroke: '#10b981', icon: 'timer' }
-  if (triggerType === 'webhook') return { fill: '#fef3c7', stroke: '#d97706', icon: 'webhook' }
-  if (triggerType === 'event') return { fill: '#fce7f3', stroke: '#db2777', icon: 'bolt' }
-  return { fill: '#f1f5f9', stroke: '#cbd5e1', icon: 'circle' }
+/** Token-derived surface classes per trigger type — never raw hex, so the
+ *  DAG renders correctly under every theme (light and dark schemes). */
+function triggerClasses(triggerType: string, enabled: boolean): string {
+  if (!enabled) return 'fill-surface-container stroke-outline-variant'
+  if (triggerType === 'cron') return 'fill-primary-container stroke-primary'
+  if (triggerType === 'interval') return 'fill-tertiary-container stroke-tertiary'
+  if (triggerType === 'webhook') return 'fill-secondary-container stroke-secondary'
+  if (triggerType === 'event') return 'fill-error-container stroke-error'
+  return 'fill-surface-container stroke-outline-variant'
 }
 
 export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleDAGViewProps) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const { nodes, width, height } = useMemo(() => layout(routines), [routines])
   const nodeById = useMemo(() => new Map(nodes.map(n => [n.routine.id, n])), [nodes])
 
@@ -145,7 +147,7 @@ export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleD
         <svg width={width} height={height} role="img" aria-label={intl.formatMessage({ id: 'tasks.scheduleDAGView.ariaLabel' })}>
           <defs>
             <marker id="sched-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8" />
+              <path d="M 0 0 L 10 5 L 0 10 z" className="fill-outline-variant" />
             </marker>
           </defs>
 
@@ -159,7 +161,7 @@ export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleD
               <path
                 key={`edge-${i}`}
                 d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
-                stroke="#94a3b8"
+                className="stroke-outline-variant"
                 strokeWidth={1.5}
                 fill="none"
                 markerEnd="url(#sched-arrow)"
@@ -168,7 +170,7 @@ export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleD
           })}
 
           {nodes.map(n => {
-            const style = triggerStyle(n.routine.trigger_type, n.routine.enabled)
+            const nodeClass = triggerClasses(n.routine.trigger_type, n.routine.enabled)
             return (
               <g
                 key={n.routine.id}
@@ -176,29 +178,28 @@ export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleD
                 onClick={() => onSelectRoutine?.(n.routine.id)}
                 className={onSelectRoutine ? 'cursor-pointer' : ''}
                 role="button"
-                aria-label={`Routine ${n.routine.name}`}
+                aria-label={t('tasks.scheduleDAGView.nodeAria', { name: n.routine.name })}
               >
                 <rect
                   width={NODE_W}
                   height={NODE_H}
                   rx={8}
-                  fill={style.fill}
-                  stroke={style.stroke}
+                  className={nodeClass}
                   strokeWidth={1.5}
                 />
-                <text x={12} y={20} fontSize={12} fontWeight={600} fill="#0f172a">
+                <text x={12} y={20} fontSize={12} fontWeight={600} className="fill-on-surface">
                   {n.routine.name.length > 22 ? n.routine.name.slice(0, 20) + '…' : n.routine.name}
                 </text>
-                <text x={12} y={38} fontSize={10} fill="#475569" fontFamily="ui-monospace, monospace">
+                <text x={12} y={38} fontSize={10} className="fill-on-surface-variant" fontFamily="ui-monospace, monospace">
                   {n.routine.trigger_type === 'cron'
                     ? n.routine.cron_expr ?? '0 0 * * *'
                     : n.routine.trigger_type === 'interval'
-                      ? `every ${Math.round(n.routine.interval_secs / 60)}m`
+                      ? t('tasks.scheduleDAGView.every', { mins: Math.round(n.routine.interval_secs / 60) })
                       : n.routine.trigger_type}
                 </text>
-                <text x={12} y={56} fontSize={9} fill={n.routine.enabled ? '#10b981' : '#94a3b8'}>
-                  {n.routine.enabled ? '● active' : '○ disabled'}
-                  {n.routine.fire_count > 0 ? ` · ${n.routine.fire_count}× fired` : ''}
+                <text x={12} y={56} fontSize={9} className={n.routine.enabled ? 'fill-tertiary' : 'fill-outline'}>
+                  {n.routine.enabled ? '● ' + t('tasks.scheduleDAGView.active') : '○ ' + t('tasks.scheduleDAGView.disabled')}
+                  {n.routine.fire_count > 0 ? ' ' + t('tasks.scheduleDAGView.fired', { count: n.routine.fire_count }) : ''}
                 </text>
               </g>
             )

@@ -35,11 +35,11 @@ export function MemoryCard({ entry, onEdit, onDelete }: MemoryCardProps) {
               {t(`memory.category.${entry.category}`)}
             </span>
             <span className="text-label-xs text-on-surface-variant">{entry.project}</span>
-            <span className="text-label-xs text-on-surface-variant/60">
+            <span className="text-label-xs text-on-surface-variant">
               · {fmtDate(entry.created_at)}
             </span>
             {entry.access_count > 0 && (
-              <span className="text-label-xs text-on-surface-variant/60">
+              <span className="text-label-xs text-on-surface-variant">
                 · {intl.formatMessage({ id: 'memory.used' }, { count: entry.access_count })}
               </span>
             )}

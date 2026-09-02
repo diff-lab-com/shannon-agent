@@ -65,6 +65,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  // First paint of the app depends on these loads succeeding; a silent
+  // failure here used to leave the user on an empty UI with only a generic
+  // chat-canvas error and no retry. initError is surfaced by the Layout
+  // banner; retryInit re-runs the whole load.
+  const [initError, setInitError] = useState<string | null>(null)
   const [_currentQueryId, setCurrentQueryId] = useState<string | null>(null)
 
   // Mirror streamingText into a ref so the QUERY_COMPLETED handler can read
@@ -197,9 +202,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e) { setError(String(e)) }
   }, [refreshSessions])
 
-  const respondPermissionAction = useCallback(async (requestId: string, allow: boolean, note?: string) => {
+  const respondPermissionAction = useCallback(async (
+    requestId: string,
+    allow: boolean,
+    options?: { note?: string; scope?: 'once' | 'always_tool' },
+  ) => {
     try {
-      await api.respondPermission(requestId, allow, note)
+      await api.respondPermission(requestId, allow, options)
       setPermissionRequest(null)
     } catch (e) { setError(String(e)) }
   }, [])
@@ -294,20 +303,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Initial data load
+  // Initial data load. Each surface's failure is recorded (the refresh*
+  // wrappers still console.warn for the log) and the first failure is raised
+  // as initError so the UI can offer a retry instead of rendering empty.
+  const loadInitialData = useCallback(async () => {
+    setLoading(true)
+    setInitError(null)
+    const failures: string[] = []
+    const record = (label: string, p: Promise<unknown>) =>
+      p.catch((e: unknown) => {
+        console.warn(`${label} failed:`, e)
+        failures.push(`${label}: ${String(e)}`)
+      })
+    await Promise.all([
+      record('refreshStatus', refreshStatus()),
+      record('refreshConfig', refreshConfig()),
+      record('refreshSessions', refreshSessions()),
+      record('refreshModels', refreshModels()),
+      record('refreshTasks', refreshTasks()),
+      record('refreshAgents', refreshAgents()),
+      record('refreshMcpServers', refreshMcpServers()),
+      record('refreshBackgroundTasks', refreshBackgroundTasks()),
+      record('getConversation', api.getConversation().then(setMessages)),
+    ])
+    if (failures.length > 0) setInitError(failures[0])
+    setLoading(false)
+  }, [refreshStatus, refreshConfig, refreshSessions, refreshModels, refreshTasks,
+    refreshAgents, refreshMcpServers, refreshBackgroundTasks])
+
   useEffect(() => {
-    Promise.all([
-      refreshStatus(),
-      refreshConfig(),
-      refreshSessions(),
-      refreshModels(),
-      refreshTasks(),
-      refreshAgents(),
-      refreshMcpServers(),
-      refreshBackgroundTasks(),
-      api.getConversation().then(setMessages).catch(e => console.warn('Failed to load conversation:', e)),
-    ]).finally(() => setLoading(false))
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    void loadInitialData()
+  }, [loadInitialData])
 
   const chatValue = useMemo<ChatContextValue>(() => ({
     messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage,
@@ -322,10 +348,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const catalogValue = useMemo<CatalogContextValue>(() => ({
     status, config, models, agents, tasks, mcpServers, backgroundTasks, permissionRequest,
-    error, loading, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
+    error, loading, initError, retryInit: loadInitialData, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
     refreshMcpServers, refreshBackgroundTasks, respondPermission: respondPermissionAction,
   }), [status, config, models, agents, tasks, mcpServers, backgroundTasks, permissionRequest,
-    error, loading, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
+    error, loading, initError, loadInitialData, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
     refreshMcpServers, refreshBackgroundTasks, respondPermissionAction])
 
   return (

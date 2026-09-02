@@ -3,6 +3,7 @@
 
 export { default as ApiKeyBanner } from './ApiKeyBanner'
 export { default as ComposerPanel } from './ComposerPanel'
+export { ComposerContext, useComposer } from './ComposerContext'
 export { default as ContextPanel } from './ContextPanel'
 export { default as InlinePanelModal } from './InlinePanelModal'
 export { default as MessageArea } from './MessageArea'

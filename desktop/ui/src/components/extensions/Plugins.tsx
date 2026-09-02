@@ -249,7 +249,7 @@ export default function Plugins() {
               href={entry.homepage_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-label-sm text-primary hover:underline inline-flex items-center gap-xs"
+              className="text-label-sm text-link hover:underline inline-flex items-center gap-xs"
             >
               <span className="material-symbols-outlined text-[14px]">open_in_new</span>
               {t("extensions.plugins.homepage")}
@@ -285,7 +285,7 @@ export default function Plugins() {
 
       {upstreams.length > 0 && (
         <div className="mb-lg">
-          <h3 className="text-label-sm font-bold text-outline uppercase tracking-widest mb-sm">
+          <h3 className="text-label-sm font-bold text-on-surface-variant uppercase tracking-widest mb-sm">
             {t("extensions.plugins.source.label")}
           </h3>
           <div className="flex flex-wrap gap-xs">
