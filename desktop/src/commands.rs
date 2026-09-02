@@ -21,6 +21,7 @@ use tokio::sync::{Mutex, RwLock, oneshot};
 use crate::commands_agents::resolve_working_dir;
 #[cfg(test)]
 use crate::commands_billing::iso_days_ago;
+use crate::commands_permissions::PendingPermission;
 use crate::config::{self, DesktopConfig};
 use crate::events::event_names;
 use crate::events::{self};
@@ -93,8 +94,9 @@ pub struct AppState {
     qe_config: Arc<RwLock<shannon_core::query_engine::QueryEngineConfig>>,
     /// Desktop config (persisted).
     pub(crate) desktop_config: Arc<RwLock<DesktopConfig>>,
-    /// Pending permission requests (request_id -> sender).
-    pub(crate) pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    /// Pending permission requests (request_id -> sender + tool name, so
+    /// "always allow" can persist a rule for the tool).
+    pub(crate) pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
     /// Session metadata for session list. (P0-4: kept on AppState for
     /// now; this is the *display* list (titles, message counts), not the
     /// per-session query state. Migrating this into the registry is

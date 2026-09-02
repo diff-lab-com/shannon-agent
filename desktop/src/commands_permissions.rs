@@ -7,8 +7,17 @@
 use crate::commands::AppState;
 use crate::events;
 use crate::events::event_names;
+use shannon_core::settings::SettingsManager;
 use tauri::Emitter;
 use tokio::sync::oneshot;
+
+/// A pending permission prompt: the oneshot channel back to the tool
+/// executor, plus the tool name so `"always allow"` can persist an allow
+/// rule for it.
+pub(crate) struct PendingPermission {
+    pub(crate) tx: oneshot::Sender<bool>,
+    pub(crate) tool: String,
+}
 
 #[tauri::command]
 pub async fn request_permission(
@@ -24,7 +33,7 @@ pub async fn request_permission(
     // Store the sender
     {
         let mut pending = state.pending_permissions.lock().await;
-        pending.insert(request_id.clone(), tx);
+        pending.insert(request_id.clone(), PendingPermission { tx, tool: tool.clone() });
     }
 
     // Emit event to frontend
@@ -56,18 +65,47 @@ pub async fn request_permission(
 }
 
 /// Respond to a permission request.
+///
+/// `scope` extends the decision: `"once"` (default) answers only this
+/// request; `"always_tool"` also persists an allow rule for the tool in the
+/// user's `~/.shannon/settings.json` (`permissions.allow`, evaluated as
+/// Deny > Ask > Allow by the engine's rule checker). Deny never persists.
 #[tauri::command]
 pub async fn respond_permission(
     state: tauri::State<'_, AppState>,
     request_id: String,
     allow: bool,
+    scope: Option<String>,
 ) -> Result<(), String> {
-    let mut pending = state.pending_permissions.lock().await;
-    if let Some(tx) = pending.remove(&request_id) {
-        // Send response, ignoring errors if receiver dropped
-        let _ = tx.send(allow);
-        Ok(())
-    } else {
-        Err(format!("Permission request not found: {request_id}"))
+    let pending = {
+        let mut map = state.pending_permissions.lock().await;
+        map.remove(&request_id)
+    };
+    let Some(pending) = pending else {
+        return Err(format!("Permission request not found: {request_id}"));
+    };
+
+    // Persist before answering: the executor may proceed the moment the
+    // oneshot resolves, and the rule should already be on disk. Best-effort
+    // on save failure — the one-shot answer still goes through.
+    if allow && scope.as_deref() == Some("always_tool") {
+        let mut manager = SettingsManager::new();
+        if let Err(e) = manager.load_from_files() {
+            eprintln!("always-allow: failed to load settings: {e}");
+        } else {
+            {
+                let rules = &mut manager.settings_mut().permissions;
+                if !rules.allow.iter().any(|p| p == &pending.tool) {
+                    rules.allow.push(pending.tool.clone());
+                }
+            }
+            if let Err(e) = manager.save() {
+                eprintln!("always-allow: failed to save settings: {e}");
+            }
+        }
     }
+
+    // Send response, ignoring errors if receiver dropped
+    let _ = pending.tx.send(allow);
+    Ok(())
 }
