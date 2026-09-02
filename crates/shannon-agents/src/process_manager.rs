@@ -68,6 +68,12 @@ pub struct AgentProcessConfig {
     /// If set, only these tool names are accessible to this agent.
     #[serde(default)]
     pub allowed_tools: Option<Vec<String>>,
+    /// Tool denylist forwarded to the child process as `--disallowed-tools`.
+    /// Empty / None means no extra denylist beyond the parent's process-level
+    /// `--disallowed-tools`. Each entry is comma-joined and passed as a single
+    /// CLI flag (the clap parser accepts `--disallowed-tools A,B,C`).
+    #[serde(default)]
+    pub disallowed_tools: Option<Vec<String>>,
     /// Maximum seconds to wait for the agent to send `agent_ready` before killing it.
     /// Default: 60 seconds.
     #[serde(default = "default_startup_timeout")]
@@ -337,6 +343,18 @@ impl AgentProcessManager {
         }
         if let Some(ref tools) = config.allowed_tools {
             cmd.arg("--allowed-tools").arg(tools.join(","));
+        }
+        // Forward the parent-side denylist so a sub-agent cannot regain tools
+        // the parent denied via `--disallowed-tools`. Each tool becomes its own
+        // `--disallowed-tools` entry; clap accepts repeated flags and unions
+        // them. We pass them one-at-a-time rather than comma-joined because
+        // the CLI parser is `num_args = 0..` per occurrence.
+        if let Some(ref denied) = config.disallowed_tools {
+            for tool in denied {
+                if !tool.is_empty() {
+                    cmd.arg("--disallowed-tools").arg(tool);
+                }
+            }
         }
         cmd.args(&config.args);
         // Filter dangerous env vars that could enable code injection
@@ -1150,6 +1168,7 @@ mod tests {
             agent_name: "test-agent".to_string(),
             permission_mode: None,
             allowed_tools: None,
+            disallowed_tools: None,
             startup_timeout_secs: 60,
         };
         let result = mgr.spawn_agent(config).await;
@@ -1208,6 +1227,7 @@ mod tests {
             agent_name: "test-agent".to_string(),
             permission_mode: Some("auto".to_string()),
             allowed_tools: Some(vec!["Read".to_string(), "Write".to_string()]),
+            disallowed_tools: None,
             startup_timeout_secs: 30,
         };
         let json = serde_json::to_string(&config).unwrap();
@@ -1462,6 +1482,7 @@ mod tests {
                 "Grep".to_string(),
                 "Bash".to_string(),
             ]),
+            disallowed_tools: Some(vec!["WebFetch".to_string()]),
             startup_timeout_secs: 120,
         };
         let json = serde_json::to_string(&config).unwrap();
@@ -2516,6 +2537,7 @@ mod tests {
                 "Edit".to_string(),
                 "Grep".to_string(),
             ]),
+            disallowed_tools: None,
             startup_timeout_secs: 90,
         };
 

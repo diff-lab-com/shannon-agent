@@ -2428,6 +2428,7 @@ async fn agent_respond_error(id: i64, error: shannon_agents::JsonRpcError) {
 /// `shannon` binary. It gives agents full access to the query engine, tool
 /// registry, MCP servers, plugins, and the LLM client — everything the REPL
 /// has, minus the interactive UI.
+#[allow(clippy::too_many_arguments)]
 fn run_team_agent_mode(
     name: &str,
     model: Option<&str>,
@@ -2436,6 +2437,7 @@ fn run_team_agent_mode(
     workdir: Option<&str>,
     permission_mode: Option<&str>,
     allowed_tools: Option<&str>,
+    disallowed_tools: &[String],
 ) -> Result<()> {
     // Change working directory if specified
     if let Some(dir) = workdir {
@@ -2571,15 +2573,31 @@ fn run_team_agent_mode(
         ))).unwrap_or_else(|e| eprintln!("Warning: tool registration failed: {e}"));
         let coordinator_channel_for_loop = coordinator_channel.clone();
 
-        // Apply tool access restrictions from agent definition
+        // Apply tool access restrictions from agent definition, then layer the
+        // parent's --disallowed-tools denylist on top. The denylist is forwarded
+        // by `process_manager::spawn_agent` so a sub-agent cannot regain tools
+        // the parent denied via --disallowed-tools (see AgentSpawnInput.disallowed_tools).
+        // Both lists use the same `!pattern` filter convention as --prompt mode:
+        // exclude patterns win, so composing them preserves the deny semantics.
+        let mut patterns: Vec<String> = Vec::new();
         if let Some(tools_list) = allowed_tools {
-            let allowed: Vec<String> = tools_list.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            if !allowed.is_empty() {
-                tools.set_allowed_tools(Some(allowed));
+            for t in tools_list.split(',') {
+                let t = t.trim();
+                if !t.is_empty() {
+                    patterns.push(t.to_string());
+                }
             }
+        }
+        for tool in disallowed_tools {
+            for t in tool.split(',') {
+                let t = t.trim();
+                if !t.is_empty() {
+                    patterns.push(format!("!{t}"));
+                }
+            }
+        }
+        if !patterns.is_empty() {
+            tools.set_allowed_tools(Some(patterns));
         }
 
         let llm_provider = client_config.provider.clone();
@@ -4079,6 +4097,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.workdir.as_deref(),
             cli.permission_mode.as_deref(),
             cli.team_allowed_tools.as_deref(),
+            &cli.disallowed_tools,
         );
     }
 

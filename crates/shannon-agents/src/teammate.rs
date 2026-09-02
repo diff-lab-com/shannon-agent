@@ -46,6 +46,11 @@ pub struct TeammateConfig {
     /// overriding the global `enable_worktree_isolation` flag.
     #[serde(default)]
     pub isolation: Option<String>,
+    /// Tool denylist forwarded as `--disallowed-tools` to the spawned
+    /// `shannon --team-agent` process. Empty / None = no denylist applied
+    /// beyond the parent's process-level `--disallowed-tools`.
+    #[serde(default)]
+    pub disallowed_tools: Option<Vec<String>>,
 }
 
 impl Default for TeammateConfig {
@@ -62,6 +67,7 @@ impl Default for TeammateConfig {
             allowed_tools: Vec::new(),
             permission_mode: None,
             isolation: None,
+            disallowed_tools: None,
         }
     }
 }
@@ -979,6 +985,7 @@ mod tests {
             allowed_tools: vec!["bash".into()],
             permission_mode: Some("auto".into()),
             isolation: Some("worktree".into()),
+            disallowed_tools: Some(vec!["WebFetch".into()]),
         };
         let json = serde_json::to_string(&config).unwrap();
         let de: TeammateConfig = serde_json::from_str(&json).unwrap();

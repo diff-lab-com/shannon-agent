@@ -1088,6 +1088,7 @@ Agent definitions are loaded from:
                 working_directory: PathBuf::from("."),
                 max_turns: def.max_concurrent_tasks as u32,
                 team: None,
+                disallowed_tools: Vec::new(),
             };
 
             let registry = match repl.agent_registry.as_ref() {

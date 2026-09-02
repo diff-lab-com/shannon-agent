@@ -33,6 +33,7 @@ fn test_orphan_cleanup_on_crash() {
         working_directory: std::env::current_dir().unwrap(),
         max_turns: 10,
         team: Some("crash-team".to_string()),
+        disallowed_tools: Vec::new(),
     };
 
     let mut agent = SubAgent::new(config);
@@ -401,6 +402,7 @@ fn test_agent_timeout_kill() {
         working_directory: Default::default(),
         max_turns: 10,
         team: None,
+        disallowed_tools: Vec::new(),
     });
 
     agent.mark_idle();
@@ -682,6 +684,7 @@ async fn test_process_manager_failure_paths() {
         permission_mode: None,
         allowed_tools: None,
         startup_timeout_secs: 60,
+        disallowed_tools: None,
     };
     let result = mgr.spawn_agent(config).await;
     assert!(

@@ -48,6 +48,12 @@ pub struct AgentConfig {
     /// Team to assign this agent to (optional)
     #[serde(default)]
     pub team: Option<String>,
+    /// Optional tool denylist forwarded to the spawned sub-agent process as
+    /// `--disallowed-tools`. Defaults to empty (no denylist applied beyond the
+    /// parent's process-level deny). See `shannon_tools::AgentSpawnInput`
+    /// for the user-facing field; this struct carries the resolved value.
+    #[serde(default)]
+    pub disallowed_tools: Vec<String>,
 }
 
 fn default_model() -> String {
@@ -243,6 +249,11 @@ impl SubAgentRegistry {
             allowed_tools: vec![],
             permission_mode: None,
             isolation: None,
+            disallowed_tools: if config.disallowed_tools.is_empty() {
+                None
+            } else {
+                Some(config.disallowed_tools.clone())
+            },
         };
 
         self.coordinator
@@ -408,6 +419,10 @@ pub struct AgentSpawnInput {
     pub team: Option<String>,
     /// Maximum conversation turns
     pub max_turns: Option<u32>,
+    /// Tool denylist forwarded as `--disallowed-tools` to the spawned
+    /// sub-agent process. Defaults to None (no extra denylist beyond the
+    /// parent's process-level `--disallowed-tools`).
+    pub disallowed_tools: Option<Vec<String>>,
 }
 
 /// Tool that spawns a sub-agent as a subprocess.
@@ -495,6 +510,7 @@ impl Tool for AgentSpawnTool {
             working_directory: PathBuf::from("."),
             max_turns: parsed.max_turns.unwrap_or_else(default_max_turns),
             team: parsed.team,
+            disallowed_tools: parsed.disallowed_tools.unwrap_or_default(),
         };
 
         let agent = self
@@ -729,6 +745,7 @@ impl Default for AgentConfig {
             working_directory: PathBuf::from("."),
             max_turns: default_max_turns(),
             team: None,
+            disallowed_tools: Vec::new(),
         }
     }
 }
@@ -777,6 +794,7 @@ mod tests {
             working_directory: PathBuf::from("/tmp"),
             max_turns: 10,
             team: None,
+            disallowed_tools: vec!["WebFetch".into()],
         };
         let agent = SubAgent::new(config);
 
