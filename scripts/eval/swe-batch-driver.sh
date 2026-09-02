@@ -111,11 +111,20 @@ echo "[batch] RESUME=$RESUME  RL_MAX_RETRIES=$RL_MAX_RETRIES  RL_DELAY_SECS=$RL_
 if [ "$SKIP_SMOKE" != "1" ]; then
   echo
   echo "[batch] pre-flight wrapper pacing smoke test:"
-  if ! bash "$SMOKE" >/dev/null 2>&1; then
-    echo "FATAL: wrapper pacing smoke test failed — aborting" >&2
+  SMOKE_OUT="$(bash "$SMOKE" 2>&1)"
+  SMOKE_RC=$?
+  if [ "$SMOKE_RC" -ne 0 ]; then
+    echo "$SMOKE_OUT"
+    echo "FATAL: wrapper pacing smoke test failed (rc=$SMOKE_RC) — aborting" >&2
     exit 8
   fi
-  echo "[batch]   wrapper pacing: 8/8 PASS"
+  # Parse "<n> pass, <m> fail" from the smoke summary line
+  SMOKE_SUMMARY="$(echo "$SMOKE_OUT" | tail -1 | sed -nE 's/.*: ([0-9]+) pass, ([0-9]+) fail.*/\1 \2/p')"
+  if [ -n "$SMOKE_SUMMARY" ]; then
+    echo "[batch]   wrapper pacing: $SMOKE_SUMMARY PASS"
+  else
+    echo "[batch]   wrapper pacing: PASS (count unavailable)"
+  fi
 fi
 
 # Pre-flight 2: retry+resume smoke test
