@@ -278,6 +278,8 @@ if [ "$SMOKE" != "1" ]; then
   t0=$(date +%s)
   ( cd "$WT" \
     && SHANNON_HOME="$ws/shannon-home" SHANNON_SESSIONS_DIR="$ws/sessions" \
+       ${SHANNON_TURN_CHECKPOINT:+SHANNON_TURN_CHECKPOINT="$SHANNON_TURN_CHECKPOINT"} \
+       ${SHANNON_TOKEN_BUDGET_WARNING:+SHANNON_TOKEN_BUDGET_WARNING="$SHANNON_TOKEN_BUDGET_WARNING"} \
        timeout "$AGENT_SECS" "$AGENT" --prompt "$AGENT_PROMPT" \
        --output-format json --max-turns "$AGENT_MAX_TURNS" \
     > "$ws/agent-out.json" 2> "$ws/agent-err.log" )

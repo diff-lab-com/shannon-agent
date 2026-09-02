@@ -165,6 +165,8 @@ if [ "$RESUME" != "1" ] && [ "$SKIP_PROBE" != "1" ]; then
     SWE_AGENT_MAX_TURNS=80 \
     SWE_MODEL_NAME="$MODEL" \
     SWE_MIN_DELAY_MS="$PACING_MS" \
+    SHANNON_TURN_CHECKPOINT="${SHANNON_TURN_CHECKPOINT:-15}" \
+    SHANNON_TOKEN_BUDGET_WARNING="${SHANNON_TOKEN_BUDGET_WARNING:-true}" \
       timeout 600 "$HARNESS" "$PROBE_TASK" > "$PROBE_DIR/harness.log" 2>&1
   PROBE_RC=$?
   END_TS=$(date +%s)
@@ -244,6 +246,8 @@ run_rep() {
     SWE_AGENT_MAX_TURNS=80 \
     SWE_MODEL_NAME="$MODEL" \
     SWE_MIN_DELAY_MS="$PACING_MS" \
+    SHANNON_TURN_CHECKPOINT="${SHANNON_TURN_CHECKPOINT:-15}" \
+    SHANNON_TOKEN_BUDGET_WARNING="${SHANNON_TOKEN_BUDGET_WARNING:-true}" \
       timeout 1800 "$HARNESS" "$native_id" > "$rep_dir/harness.log" 2>&1
     local rc=$?
 
