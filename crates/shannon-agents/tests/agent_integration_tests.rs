@@ -497,6 +497,7 @@ mod sub_agent_integration {
             working_directory: PathBuf::from("/tmp"),
             max_turns: 5,
             team: None,
+            disallowed_tools: Vec::new(),
         };
 
         let mut agent = SubAgent::new(config);
@@ -588,6 +589,7 @@ mod sub_agent_integration {
             working_directory: PathBuf::from("/workspace"),
             max_turns: 25,
             team: Some("team-x".to_string()),
+            disallowed_tools: Vec::new(),
         };
         let mut agent = SubAgent::new(config);
         agent.mark_idle();
@@ -618,6 +620,7 @@ mod sub_agent_integration {
                 working_directory: PathBuf::from("."),
                 max_turns: 10,
                 team: None,
+                disallowed_tools: Vec::new(),
             })
             .await
             .unwrap();
@@ -631,6 +634,7 @@ mod sub_agent_integration {
                 working_directory: PathBuf::from("."),
                 max_turns: 20,
                 team: None,
+                disallowed_tools: Vec::new(),
             })
             .await
             .unwrap();

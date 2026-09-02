@@ -638,6 +638,7 @@ mod sub_agent_tests {
             working_directory: "/tmp/work".into(),
             max_turns: 100,
             team: Some("backend".to_string()),
+            disallowed_tools: vec!["WebFetch".into()],
         };
 
         let json = serde_json::to_string(&config).expect("serialize AgentConfig");
@@ -662,6 +663,7 @@ mod sub_agent_tests {
             working_directory: Default::default(),
             max_turns: 10,
             team: None,
+            disallowed_tools: Vec::new(),
         };
 
         let agent = SubAgent::new(config);
@@ -684,6 +686,7 @@ mod sub_agent_tests {
             working_directory: Default::default(),
             max_turns: 10,
             team: None,
+            disallowed_tools: Vec::new(),
         };
 
         let mut agent = SubAgent::new(config);
@@ -711,6 +714,7 @@ mod sub_agent_tests {
             working_directory: Default::default(),
             max_turns: 10,
             team: None,
+            disallowed_tools: Vec::new(),
         };
 
         let mut agent = SubAgent::new(config);
@@ -731,6 +735,7 @@ mod sub_agent_tests {
             working_directory: Default::default(),
             max_turns: 3,
             team: None,
+            disallowed_tools: Vec::new(),
         };
 
         let mut agent = SubAgent::new(config);
@@ -763,6 +768,7 @@ mod sub_agent_tests {
             working_directory: Default::default(),
             max_turns: 10,
             team: None,
+            disallowed_tools: Vec::new(),
         };
 
         let mut agent = SubAgent::new(config);
@@ -1132,6 +1138,7 @@ mod teammate_tests {
             allowed_tools: vec![],
             permission_mode: None,
             isolation: None,
+            disallowed_tools: None,
         };
 
         let json = serde_json::to_string(&config).expect("serialize TeammateConfig");
@@ -1548,6 +1555,7 @@ mod teammate_metadata_tests {
             allowed_tools: vec![],
             permission_mode: None,
             isolation: None,
+            disallowed_tools: None,
         };
         Teammate::new("test-agent".to_string(), config)
     }
@@ -1624,6 +1632,7 @@ mod conversation_history_tests {
             allowed_tools: vec![],
             permission_mode: None,
             isolation: None,
+            disallowed_tools: None,
         };
         let executor = Arc::new(MockAgentExecutor::new("response text"));
         Teammate::with_executor("test-agent".to_string(), config, executor)
@@ -1642,6 +1651,7 @@ mod conversation_history_tests {
             allowed_tools: vec![],
             permission_mode: None,
             isolation: None,
+            disallowed_tools: None,
         };
         Teammate::new("test-agent".to_string(), config)
     }
@@ -1766,6 +1776,7 @@ mod sub_agent_context_tests {
             working_directory: std::env::current_dir().unwrap(),
             max_turns: 10,
             team: None,
+            disallowed_tools: Vec::new(),
         };
 
         assert_eq!(config.name, "reviewer");
@@ -1786,6 +1797,7 @@ mod sub_agent_context_tests {
             working_directory: std::env::current_dir().unwrap(),
             max_turns: 5,
             team: Some("bugfix-team".to_string()),
+            disallowed_tools: vec![],
         };
 
         assert_eq!(config.team.as_deref(), Some("bugfix-team"));

@@ -555,6 +555,7 @@ impl AgentCoordinator {
         } else {
             Some(config.allowed_tools.clone())
         };
+        let config_disallowed_tools = config.disallowed_tools.clone();
         let config_isolation = config.isolation.clone();
 
         let teammate = Teammate::new(agent_name.clone(), config);
@@ -650,6 +651,7 @@ impl AgentCoordinator {
                     agent_name: agent_name.clone(),
                     permission_mode: Some("bypassPermissions".to_string()),
                     allowed_tools: config_allowed_tools,
+                    disallowed_tools: config_disallowed_tools,
                     startup_timeout_secs: 60,
                 };
 
