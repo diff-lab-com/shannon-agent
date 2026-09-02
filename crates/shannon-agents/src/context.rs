@@ -48,6 +48,18 @@ pub struct TeamContext {
     pub permission_mode: String,
     /// Custom agent definitions loaded from .shannon/agents/*.toml
     pub agent_definitions: AgentDefinitionRegistry,
+    /// Parent's process-level `--disallowed-tools` denylist, forwarded to
+    /// every sub-agent spawned through this context (both via `create_team`
+    /// pre-spawn and via `agent_spawn` / `process_manager::spawn_agent`).
+    ///
+    /// **Why this field exists**: each sub-agent is invoked as a fresh
+    /// `shannon --team-agent <args>` process — the parent's CLI flags do
+    /// NOT inherit automatically. Without this baseline, a sub-agent could
+    /// regain tools the parent denied via `--disallowed-tools`.
+    ///
+    /// Callers (e.g. `shannon-cli::main`) set this from the parsed CLI flag
+    /// after constructing the context; defaults to empty (no denylist).
+    pub parent_disallowed_tools: Vec<String>,
 }
 
 impl std::fmt::Debug for TeamContext {
@@ -108,6 +120,7 @@ impl TeamContext {
             executor: None,
             permission_mode: "default".to_string(),
             agent_definitions,
+            parent_disallowed_tools: Vec::new(),
         })
     }
 
@@ -147,6 +160,7 @@ impl TeamContext {
             executor: None,
             permission_mode: "default".to_string(),
             agent_definitions,
+            parent_disallowed_tools: Vec::new(),
         })
     }
 

@@ -1210,6 +1210,7 @@ fn run_noninteractive_query(
     config: &CliConfig,
     bypass_all: bool,
     resume_session: Option<shannon_core::session_log::StoredSession>,
+    disallowed_tools: Vec<String>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
 
@@ -1383,11 +1384,16 @@ fn run_noninteractive_query(
 
         // Inject team context into AgentTool for sub-agent execution + team coordination
         match shannon_tools::AgentToolContext::new(client_config.clone()).await {
-            Ok(ctx) => {
+            Ok(mut ctx) => {
                 // Register team coordination tools (team_task_create/update/list)
                 if let Err(e) = shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone()) {
                     eprintln!("Warning: Team tool registration failed: {e}");
                 }
+                // Forward the parent's --disallowed-tools denylist so sub-agents
+                // spawned via `create_team` / `agent_spawn` cannot regain tools
+                // the parent revoked. Each runs as a fresh `shannon --team-agent`
+                // process; CLI flags do NOT inherit automatically.
+                ctx.parent_disallowed_tools = disallowed_tools.clone();
                 if let Ok(mut guard) = agent_context_handle.lock() {
                     *guard = Some(ctx);
                 }
@@ -1731,10 +1737,14 @@ fn run_headless_query(
         // Build LLM client
         let client_config = build_llm_config_from_builder(config);
         match shannon_tools::AgentToolContext::new(client_config.clone()).await {
-            Ok(ctx) => {
+            Ok(mut ctx) => {
                 if let Err(e) = shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone()) {
                     eprintln!("Warning: Team tool registration failed: {e}");
                 }
+                // Forward parent's --disallowed-tools denylist (see site 1385 comment).
+                // `disallowed_tools` here is &[String] (run_headless_query param),
+                // so use `to_vec()` to materialize a Vec<String>.
+                ctx.parent_disallowed_tools = disallowed_tools.to_vec();
                 if let Ok(mut guard) = agent_context_handle.lock() {
                     *guard = Some(ctx);
                 }
@@ -2333,6 +2343,7 @@ fn run_serve_command(
     auth_token: Option<String>,
     allow_nonloopback: bool,
     config: &CliConfig,
+    disallowed_tools: Vec<String>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
@@ -2352,12 +2363,14 @@ fn run_serve_command(
 
         // Inject team context into AgentTool for sub-agent execution + team coordination
         match shannon_tools::AgentToolContext::new(client_config.clone()).await {
-            Ok(ctx) => {
+            Ok(mut ctx) => {
                 if let Err(e) =
                     shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone())
                 {
                     eprintln!("Warning: Team tool registration failed: {e}");
                 }
+                // Forward parent's --disallowed-tools denylist (see site 1385 comment).
+                ctx.parent_disallowed_tools = disallowed_tools.clone();
                 if let Ok(mut guard) = agent_context_handle.lock() {
                     *guard = Some(ctx);
                 }
@@ -2528,10 +2541,14 @@ fn run_team_agent_mode(
 
         // Team context
         match shannon_tools::AgentToolContext::new(client_config.clone()).await {
-            Ok(ctx) => {
+            Ok(mut ctx) => {
                 if let Err(e) = shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone()) {
                     tracing::warn!("Team tool registration failed: {e}");
                 }
+                // Forward parent's --disallowed-tools denylist (see site 1385 comment).
+                // `disallowed_tools` here is &[String] (function parameter), so
+                // use `to_vec()` to materialize a Vec<String>.
+                ctx.parent_disallowed_tools = disallowed_tools.to_vec();
                 if let Ok(mut guard) = agent_context_handle.lock() {
                     *guard = Some(ctx);
                 }
@@ -4175,7 +4192,14 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             false,
             HashMap::new(),
         );
-        return run_noninteractive_query(&prompt, true, &config, cli.yes, None);
+        return run_noninteractive_query(
+            &prompt,
+            true,
+            &config,
+            cli.yes,
+            None,
+            cli.disallowed_tools.clone(),
+        );
     }
 
     // Bare prompt case: handle directly with explicit config
@@ -4194,7 +4218,14 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         } else {
             None
         };
-        return run_noninteractive_query(&prompt, true, &config, cli.yes, resume_data);
+        return run_noninteractive_query(
+            &prompt,
+            true,
+            &config,
+            cli.yes,
+            resume_data,
+            cli.disallowed_tools.clone(),
+        );
     }
 
     // No prompt argument: check stdin for piped input
@@ -4214,7 +4245,14 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         } else {
             None
         };
-        return run_noninteractive_query(&stdin_content, true, &config, cli.yes, resume_data);
+        return run_noninteractive_query(
+            &stdin_content,
+            true,
+            &config,
+            cli.yes,
+            resume_data,
+            cli.disallowed_tools.clone(),
+        );
     }
 
     // Build configuration from CLI options (no more unsafe set_var calls)
@@ -4414,7 +4452,14 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             } else {
                 None
             };
-            run_noninteractive_query(&query, !no_stream, &config, cli.yes, resume_data)?;
+            run_noninteractive_query(
+                &query,
+                !no_stream,
+                &config,
+                cli.yes,
+                resume_data,
+                cli.disallowed_tools.clone(),
+            )?;
         }
         Some(Commands::Serve {
             port,
@@ -4428,6 +4473,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 auth_token.clone(),
                 allow_nonloopback,
                 &config,
+                cli.disallowed_tools.clone(),
             )?;
         }
         Some(Commands::Screenshot { dir }) => {

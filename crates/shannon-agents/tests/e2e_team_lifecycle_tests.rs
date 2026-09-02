@@ -32,7 +32,7 @@ fn teammate(name: &str) -> TeammateConfig {
         allowed_tools: vec![],
         permission_mode: None,
         isolation: None,
-    disallowed_tools: None,
+        disallowed_tools: None,
     }
 }
 

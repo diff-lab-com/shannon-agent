@@ -276,6 +276,39 @@ impl Default for AgentProcessManager {
     }
 }
 
+/// Normalize a tool list into the per-element argv shape that the CLI's
+/// `num_args = 0..` `--allowed-tools` / `--disallowed-tools` parser expects.
+///
+/// Both the parent's CLI parser and the run_team_agent_mode parser split
+/// their input on commas, so this helper produces one argv entry per
+/// normalized tool name. Skips empty entries and logs a warning for any
+/// entry containing characters outside the ToolFilter glob alphabet
+/// (`A-Za-z0-9_?-*`), so a malformed denylist cannot accidentally glob over
+/// unintended tools or be used to inject shell metacharacters via argv.
+fn normalize_tool_list(tools: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(tools.len());
+    for entry in tools {
+        for piece in entry.split(',') {
+            let trimmed = piece.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if !trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '?' | '*' | '-'))
+            {
+                tracing::warn!(
+                    tool = %trimmed,
+                    "ignoring tool name with characters outside `[A-Za-z0-9_?-*-]`",
+                );
+                continue;
+            }
+            out.push(trimmed.to_string());
+        }
+    }
+    out
+}
+
 impl AgentProcessManager {
     /// Create a new process manager.
     pub fn new() -> Self {
@@ -305,7 +338,6 @@ impl AgentProcessManager {
     }
 
     /// Spawn a new agent process.
-    ///
     /// The process is started and reads JSON-RPC from stdin, writes to stdout.
     /// Logs go to stderr (captured by the coordinator at trace level).
     pub async fn spawn_agent(
@@ -341,20 +373,20 @@ impl AgentProcessManager {
         if let Some(ref mode) = config.permission_mode {
             cmd.arg("--permission-mode").arg(mode);
         }
-        if let Some(ref tools) = config.allowed_tools {
-            cmd.arg("--allowed-tools").arg(tools.join(","));
+        // Both `--allowed-tools` and `--disallowed-tools` use `num_args = 0..` on
+        // the CLI side. Forward each normalized tool name as its own argv
+        // entry so the two flags stay symmetric (no comma-joining on one
+        // side and iteration on the other) and so the same comma-splitting
+        // happens at every layer.
+        for tool in normalize_tool_list(config.allowed_tools.as_deref().unwrap_or(&[])) {
+            cmd.arg("--allowed-tools").arg(tool);
         }
         // Forward the parent-side denylist so a sub-agent cannot regain tools
         // the parent denied via `--disallowed-tools`. Each tool becomes its own
         // `--disallowed-tools` entry; clap accepts repeated flags and unions
-        // them. We pass them one-at-a-time rather than comma-joined because
-        // the CLI parser is `num_args = 0..` per occurrence.
-        if let Some(ref denied) = config.disallowed_tools {
-            for tool in denied {
-                if !tool.is_empty() {
-                    cmd.arg("--disallowed-tools").arg(tool);
-                }
-            }
+        // them.
+        for tool in normalize_tool_list(config.disallowed_tools.as_deref().unwrap_or(&[])) {
+            cmd.arg("--disallowed-tools").arg(tool);
         }
         cmd.args(&config.args);
         // Filter dangerous env vars that could enable code injection
