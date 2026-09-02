@@ -5,6 +5,7 @@ use futures::StreamExt;
 
 mod commands_providers;
 mod crash_hook;
+mod eval_cmd;
 mod loop_command;
 mod mcp_install;
 mod notifications;
@@ -778,6 +779,16 @@ enum Commands {
     Signals {
         #[command(subcommand)]
         command: SignalsSubcommand,
+    },
+
+    /// Evaluate the agent against the L1 task suite (§4.4, journey J7).
+    ///
+    /// Dry-run by default so the pipeline can be rehearsed without an API
+    /// key; `--real` drives actual model runs. Reports land under
+    /// `~/.shannon/eval/runs/<run-id>/` (`--out` overrides the root).
+    Eval {
+        #[command(subcommand)]
+        command: eval_cmd::EvalCommand,
     },
 }
 
@@ -4319,6 +4330,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         | Some(Commands::Providers { .. })
         | Some(Commands::Feedback { .. })
         | Some(Commands::Signals { .. })
+        | Some(Commands::Eval { .. })
         | Some(Commands::Trace { .. }) => CliConfig::default(),
     };
 
@@ -4582,6 +4594,11 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             foreground,
         }) => {
             run_desktop_command(build, no_build, install, foreground)?;
+        }
+        Some(Commands::Eval { command }) => {
+            // `shannon eval` owns its exit code: 0 pass / 1 failures /
+            // 2 config or load error (see eval_cmd module docs).
+            std::process::exit(eval_cmd::execute(command));
         }
         Some(Commands::Trace { command }) => match command {
             TraceCommand::Show {
