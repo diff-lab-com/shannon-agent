@@ -153,7 +153,7 @@ if [ "$RESUME" != "1" ] && [ "$SKIP_PROBE" != "1" ]; then
   START_TS=$(date +%s)
   SWE_PACING_RESET=1 SHANNON_BENCH_VERDICT_FILE="$PWD/verdict.json" \
     SHANNON_SB_AGENT_BIN="$WRAPPER" \
-    SWE_AGENT_MAX_TURNS=30 \
+    SWE_AGENT_MAX_TURNS=80 \
     SWE_MODEL_NAME="$MODEL" \
     SWE_MIN_DELAY_MS="$PACING_MS" \
       timeout 600 "$HARNESS" "$PROBE_TASK" > "$PROBE_DIR/harness.log" 2>&1
@@ -232,7 +232,7 @@ run_rep() {
 
     SHANNON_BENCH_VERDICT_FILE="$PWD/verdict.json" \
     SHANNON_SB_AGENT_BIN="$WRAPPER" \
-    SWE_AGENT_MAX_TURNS=30 \
+    SWE_AGENT_MAX_TURNS=80 \
     SWE_MODEL_NAME="$MODEL" \
     SWE_MIN_DELAY_MS="$PACING_MS" \
       timeout 1800 "$HARNESS" "$native_id" > "$rep_dir/harness.log" 2>&1
