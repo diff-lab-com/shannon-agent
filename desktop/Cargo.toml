@@ -25,6 +25,7 @@ shannon-core   .workspace = true
 shannon-engine .workspace = true
 shannon-types  .workspace = true
 shannon-tools  .workspace = true
+shannon-remote = { path = "../crates/shannon-remote" }
 shannon-mcp    .workspace = true
 shannon-skills .workspace = true
 shannon-agents .workspace = true

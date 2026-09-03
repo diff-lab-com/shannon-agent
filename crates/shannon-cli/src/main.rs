@@ -22,7 +22,7 @@ use shannon_core::{
     unified_config::{ConfigBuilder, ShannonConfig},
 };
 use shannon_engine::{api::LlmClientConfig, state::StateManager};
-use shannon_tools::register_default_tools_with_project_dir_ex;
+use shannon_tools::register_default_tools_with_project_dir_ex_with_providers;
 use shannon_types::model_ref::ModelRef;
 use shannon_types::provider_config::ProviderModelConfig;
 use shannon_ui::Repl;
@@ -377,6 +377,12 @@ struct Cli {
     ///          cat file.txt | shannon --pipe "summarize this"
     #[arg(long)]
     pipe: bool,
+
+    /// Run all tool execution on a remote target (SSH host or Docker
+    /// container) registered in ~/.shannon/remotes.toml or discovered from
+    /// ~/.ssh/config. Overrides SHANNON_TARGET.
+    #[arg(long, value_name = "NAME")]
+    target: Option<String>,
 
     /// LLM model to use (e.g., claude-sonnet-4, gpt-4o)
     #[arg(short, long)]
@@ -1227,10 +1233,14 @@ fn run_noninteractive_query(
 
     rt.block_on(async {
         // Build tool registry with all standard tools (sandboxed to project dir)
-        let project_dir = std::env::current_dir().unwrap_or_default();
+        let (project_dir, providers) =
+            shannon_remote::assembly::assemble_for_headless()
+                .await
+                .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
         let mut tools = ToolRegistry::new();
-        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
-            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let reg_result =
+            register_default_tools_with_project_dir_ex_with_providers(&mut tools, &project_dir, &providers)
+                .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -1668,10 +1678,14 @@ fn run_headless_query(
         let start = Instant::now();
 
         // Build tool registry with all standard tools (sandboxed to project dir)
-        let project_dir = std::env::current_dir().unwrap_or_default();
+        let (project_dir, providers) =
+            shannon_remote::assembly::assemble_for_headless()
+                .await
+                .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
         let mut tools = ToolRegistry::new();
-        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
-            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let reg_result =
+            register_default_tools_with_project_dir_ex_with_providers(&mut tools, &project_dir, &providers)
+                .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -2359,10 +2373,14 @@ fn run_serve_command(
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         // Build tool registry with default tools (sandboxed to project dir).
-        let project_dir = std::env::current_dir().unwrap_or_default();
+        let (project_dir, providers) =
+            shannon_remote::assembly::assemble_for_headless()
+                .await
+                .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
         let mut tools = shannon_core::ToolRegistry::new();
-        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
-            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let reg_result =
+            register_default_tools_with_project_dir_ex_with_providers(&mut tools, &project_dir, &providers)
+                .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let _plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -2477,10 +2495,14 @@ fn run_team_agent_mode(
         let config = build_cli_config(model, provider, None, None, None, false, HashMap::new());
 
         // ── Build full tool registry (sandboxed to project dir) ──
-        let project_dir = std::env::current_dir().unwrap_or_default();
+        let (project_dir, providers) =
+            shannon_remote::assembly::assemble_for_headless()
+                .await
+                .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
         let mut tools = ToolRegistry::new();
-        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
-            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let reg_result =
+            register_default_tools_with_project_dir_ex_with_providers(&mut tools, &project_dir, &providers)
+                .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -4066,6 +4088,14 @@ fn main() -> Result<()> {
 /// Main CLI dispatch logic, factored out so it can be called from either the
 /// normal `clap::parse()` path or the deep-link transformation path.
 fn run_with_cli(cli: Cli) -> Result<()> {
+    // Promote an explicit --target into SHANNON_TARGET before any worker
+    // threads exist (single source of truth for every assembly site below;
+    // set_var is unsafe only because of concurrent readers, none of which
+    // exist at this point in main).
+    if let Some(target) = cli.target.as_deref().filter(|t| !t.is_empty()) {
+        unsafe { std::env::set_var("SHANNON_TARGET", target) };
+    }
+
     // Initialize i18n — auto-detect system language, allow --lang override
     if let Some(ref lang) = cli.lang {
         i18n::set_locale(lang);

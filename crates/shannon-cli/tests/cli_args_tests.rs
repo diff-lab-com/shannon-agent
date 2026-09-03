@@ -13,6 +13,36 @@ fn shannon() -> Command {
     Command::cargo_bin(BIN).unwrap()
 }
 
+// ── Remote Target Flag ──────────────────────────────────────────────────
+
+#[test]
+fn test_target_flag_is_accepted() {
+    // Parse-level check only: an unknown target name must surface as a
+    // "not found" style error, not an argument error.
+    let output = shannon()
+        .arg("--target")
+        .arg("definitely-not-a-registered-host")
+        .arg("--prompt")
+        .arg("hello")
+        .env("SHANNON_HEADLESS_SILENT", "1")
+        .output()
+        .expect("binary runs");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("unexpected argument '--target'"),
+        "--target must be a recognized flag, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_target_flag_requires_value() {
+    shannon()
+        .arg("--target")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires a value"));
+}
+
 // ── Version Flag ────────────────────────────────────────────────────────
 
 #[serial]
