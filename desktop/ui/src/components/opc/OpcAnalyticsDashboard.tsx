@@ -113,7 +113,10 @@ export default function OpcAnalyticsDashboard() {
         />
       </div>
 
-      <div>
+      {/* First-screen density: daily chart (2/3) beside the status/priority
+          breakdowns (right column) so both read without scrolling. */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-md items-start">
+        <div className="lg:col-span-2">
         <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
           <span className="material-symbols-outlined text-[14px] text-on-surface-variant">bar_chart</span>
           {t('opc.analytics.dailyActivity')}
@@ -178,7 +181,7 @@ export default function OpcAnalyticsDashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
+        <div className="flex flex-col gap-md">
         <div>
           <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
             <span className="material-symbols-outlined text-[14px] text-on-surface-variant">bubble_chart</span>
@@ -229,6 +232,7 @@ export default function OpcAnalyticsDashboard() {
               ))}
             </ul>
           )}
+        </div>
         </div>
       </div>
 
