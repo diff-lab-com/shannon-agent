@@ -2017,13 +2017,6 @@
   "tasks.dependsOnEditor.selectedCount": "{count, plural, =1 {1 selected} other {{count} selected}}",
   "tasks.resultRoutingEditor.targetAria": "{kind} target",
   "tasks.scheduleDAGView.routineCount": "{count, plural, =1 {1 routine} other {{count} routines}}",
-  "chat.copyCode.aria": "Copy code",
-  "chat.copyCode.copy": "Copy",
-  "chat.copyCode.copied": "Copied",
-  "chat.code.language.text": "text",
-  "chat.code.language.aria": "Code language",
-  "chat.code.lineNumbers.show": "Show line numbers",
-  "chat.code.lineNumbers.hide": "Hide line numbers",
   "chat.context.activeTools": "Active Tools",
   "chat.header.workingDir.changed": "Working directory updated",
   "chat.header.workingDir.changeFailed": "Failed to change working directory",
@@ -2404,5 +2397,12 @@
   "settings.feedback.upAria": "thumbs up",
   "settings.feedback.downAria": "thumbs down",
   "tasks.tab.routines": "Routines",
-  "tasks.tab.pipelines": "Pipelines"
+  "tasks.tab.pipelines": "Pipelines",
+  "code.language.aria": "Code language",
+  "code.language.text": "text",
+  "code.lineNumbers.show": "Show line numbers",
+  "code.lineNumbers.hide": "Hide line numbers",
+  "code.copy.aria": "Copy code",
+  "code.copy.copy": "Copy",
+  "code.copy.copied": "Copied"
 }

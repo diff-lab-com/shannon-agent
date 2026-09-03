@@ -2017,13 +2017,6 @@
   "tasks.dependsOnEditor.selectedCount": "{count, plural, =1 {已选 1 个} other {已选 {count} 个}}",
   "tasks.resultRoutingEditor.targetAria": "{kind} 目标",
   "tasks.scheduleDAGView.routineCount": "{count, plural, =1 {1 个例行任务} other {{count} 个例行任务}}",
-  "chat.copyCode.aria": "复制代码",
-  "chat.copyCode.copy": "复制",
-  "chat.copyCode.copied": "已复制",
-  "chat.code.language.text": "纯文本",
-  "chat.code.language.aria": "代码语言",
-  "chat.code.lineNumbers.show": "显示行号",
-  "chat.code.lineNumbers.hide": "隐藏行号",
   "chat.context.activeTools": "活跃工具",
   "chat.header.workingDir.changed": "工作目录已更新",
   "chat.header.workingDir.changeFailed": "切换工作目录失败",
@@ -2404,5 +2397,12 @@
   "settings.feedback.upAria": "点赞",
   "settings.feedback.downAria": "点踩",
   "tasks.tab.routines": "例行程序",
-  "tasks.tab.pipelines": "执行流水线"
+  "tasks.tab.pipelines": "执行流水线",
+  "code.language.aria": "代码语言",
+  "code.language.text": "纯文本",
+  "code.lineNumbers.show": "显示行号",
+  "code.lineNumbers.hide": "隐藏行号",
+  "code.copy.aria": "复制代码",
+  "code.copy.copy": "复制",
+  "code.copy.copied": "已复制"
 }

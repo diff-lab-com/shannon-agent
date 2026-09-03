@@ -10,7 +10,7 @@ vi.mock('@/context/ChatContext', () => ({
     checkpoints: [],
     rewindSession: vi.fn(),
     feedback: {},
-    recordFeedback: vi.fn(),
+    recordFeedback: vi.fn().mockResolvedValue(undefined),
   }),
 }))
 vi.mock('@/context/SessionContext', () => ({

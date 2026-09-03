@@ -26,7 +26,7 @@ const ctx = vi.hoisted(() => ({
   checkpoints: [] as unknown[],
   rewindSession: vi.fn(),
   feedback: {} as Record<string, string>,
-  recordFeedback: vi.fn(),
+  recordFeedback: vi.fn().mockResolvedValue(undefined),
   createSession: vi.fn(),
   switchSession: vi.fn(),
   renameSession: vi.fn(),
