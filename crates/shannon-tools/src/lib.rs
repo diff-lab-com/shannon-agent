@@ -190,6 +190,9 @@ pub struct ToolProviders {
     /// §4.12: classifier tagging kernel-denied bash runs as `sandbox_denied`.
     /// `None` unless a kernel-enforcing backend produced this set.
     pub denial_classifier: Option<crate::sandbox::DenialClassifier>,
+    /// Shared world-roots override for swappable execution worlds (remote
+    /// targets). `None` keeps every tool's sandbox fully local.
+    pub world_sandbox: Option<std::sync::Arc<crate::file::sandbox::WorldSandboxHandle>>,
 }
 
 impl Default for ToolProviders {
@@ -198,6 +201,7 @@ impl Default for ToolProviders {
             fs: defaults::fs(),
             process: defaults::process(),
             denial_classifier: None,
+            world_sandbox: None,
         }
     }
 }
@@ -215,6 +219,7 @@ fn register_all_tools(
         fs,
         process,
         denial_classifier,
+        world_sandbox,
     } = providers;
 
     // Project-scoped sandbox when a project directory is given (same config
@@ -227,8 +232,17 @@ fn register_all_tools(
         }),
         None => PathSandbox::new(),
     };
-    // TOCTOU canonicalization follows the injected world too.
-    let sandbox = sandbox_base.with_fs_provider(fs.clone());
+    // TOCTOU canonicalization follows the injected world too; a shared
+    // world-roots handle lets remote assemblies retarget every tool's
+    // sandbox at runtime (`/remote use`) without a registry rebuild.
+    let sandbox = match world_sandbox {
+        Some(handle) => {
+            sandbox_base
+                .with_fs_provider(fs.clone())
+                .with_world_sandbox(handle.clone())
+        }
+        None => sandbox_base.with_fs_provider(fs.clone()),
+    };
 
     // ── File-history snapshots (shared manager for file-level `/undo`; W6-2) ──
     // Wired only by the project-dir entry points (pre-provider semantics);
@@ -407,6 +421,7 @@ fn register_all_tools(
     Ok(ToolRegistrationResult {
         agent_context_handle,
         plan_manager,
+        file_history: history,
     })
 }
 
@@ -463,6 +478,10 @@ pub struct ToolRegistrationResult {
     /// The `PlanManager` shared by `EnterPlanMode`/`ExitPlanMode`/`GetPlanStatus`.
     /// Use `plan_manager.plan_mode_flag()` to obtain the flag for the query engine.
     pub plan_manager: PlanManager,
+    /// The provider-wired file history the file tools share. REPL-side
+    /// `/rewind` must reuse this same manager or it reads a different
+    /// (local-only) snapshot store than the tools wrote.
+    pub file_history: Option<Arc<std::sync::Mutex<FileHistoryManager>>>,
 }
 
 /// Register all standard tools with project-specific sandbox configuration.
