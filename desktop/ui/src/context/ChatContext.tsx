@@ -16,6 +16,7 @@
 
 import { createContext, useContext, type ReactNode } from 'react'
 import { ChatV2RuntimeProvider } from '@/lib/runtime/ChatV2RuntimeProvider'
+import type { CheckpointInfo, FeedbackRating } from '@/lib/tauri-api'
 import type { ChatMessage, ToolCall, UsagePayload } from '@/types'
 
 export interface ChatContextValue {
@@ -27,6 +28,14 @@ export interface ChatContextValue {
   usage: UsagePayload | null
   sendMessage: (message: string, filePaths?: string[]) => Promise<void>
   cancelQuery: () => Promise<void>
+  /** /rewind: completed checkpoints for the current session (turn indices). */
+  checkpoints: CheckpointInfo[]
+  /** Rewind to before `turnIndex`: drops that turn and everything after. */
+  rewindSession: (turnIndex: number) => Promise<void>
+  /** PM-12: persisted message ratings for the current session. */
+  feedback: Record<string, FeedbackRating>
+  /** Set/clear a message's rating (null clears). Optimistic, then persisted. */
+  recordFeedback: (key: string, rating: FeedbackRating | null) => Promise<void>
   /** U2: ContextPanel open state lives here so the global Header (in
    * Layout, outside the /chat route) can toggle the panel that Chat renders. */
   contextPanelOpen: boolean

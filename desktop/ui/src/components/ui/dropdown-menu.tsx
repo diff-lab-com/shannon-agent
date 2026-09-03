@@ -144,7 +144,7 @@ export function DropdownMenu({
         // Match the shadcn base-nova surface tokens (rounded-xl, surface
         // container lowest, shadow-e3) so a future migration to the
         // Base UI composition will look identical.
-        "absolute z-50 min-w-[200px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-[var(--shadow-e3)] py-xs",
+        "absolute z-modal min-w-[200px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-[var(--shadow-e3)] py-xs",
         align === "end" ? "right-0 top-full mt-sm" : "left-0 top-full mt-sm",
         className
       )}

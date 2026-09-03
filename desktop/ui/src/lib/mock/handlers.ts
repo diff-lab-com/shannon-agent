@@ -155,6 +155,12 @@ export const handlers: Record<string, MockHandler> = {
     return src ? { ...clone(src), id: `sess-${Date.now()}`, title: `${src.title} copy` } : null
   },
   async export_session() { await delay(120); return '# Exported session\n\n(mock content)' },
+  // /rewind: demo has no checkpoints (record_turn runs in the desktop Rust
+  // process), so the rewind affordance stays hidden and these are safety nets.
+  async list_checkpoints() { await delay(30); return [] },
+  async list_message_feedback() { await delay(30); return {} },
+  async record_message_feedback() { await delay(30) },
+  async rewind_session() { await delay(80); return clone(MOCK_MESSAGES) },
   // §4.14 — Turn Timeline: demo data regardless of id (sessions come from
   // MOCK_SESSIONS, which do not have real L0 logs to project).
   async trace_timeline() { await delay(); return clone(MOCK_TURN_TIMELINE) },

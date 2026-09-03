@@ -7,6 +7,10 @@ import type { ChatMessage } from '@/types'
 vi.mock('@/context/ChatContext', () => ({
   useChat: () => ({
     sendMessage: vi.fn(),
+    checkpoints: [],
+    rewindSession: vi.fn(),
+    feedback: {},
+    recordFeedback: vi.fn(),
   }),
 }))
 vi.mock('@/context/SessionContext', () => ({

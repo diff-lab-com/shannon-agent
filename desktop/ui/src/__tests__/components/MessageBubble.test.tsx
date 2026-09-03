@@ -1,11 +1,15 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { MessageBubble } from '@/components/chat/MessageBubble'
 import type { ChatMessage } from '@/types'
 
 vi.mock('@/context/ChatContext', () => ({
-  useChat: () => ({ sendMessage: vi.fn() }),
+  useChat: () => ({
+    sendMessage: vi.fn(),
+    feedback: {},
+    recordFeedback: vi.fn().mockResolvedValue(undefined),
+  }),
 }))
 vi.mock('@/context/SessionContext', () => ({
   useSessions: () => ({
@@ -107,5 +111,40 @@ describe('MessageBubble — a11y structure', () => {
     ))
     const time = screen.getAllByText((_, el) => !!el?.tagName.match(/TIME/i))[0]
     expect(time).toBeDefined()
+  })
+})
+
+describe('MessageBubble — rewind (/rewind desktop)', () => {
+  it('hides the rewind button when the message is not rewindable', () => {
+    render(wrap(<MessageBubble message={baseUser()} messageIndex={0} onViewDiff={vi.fn()} />))
+    expect(screen.queryByRole('button', { name: 'Rewind conversation to this message' })).not.toBeInTheDocument()
+  })
+
+  it('shows the rewind button and fires onRewind after confirmation', async () => {
+    const onRewind = vi.fn().mockResolvedValue(undefined)
+    render(
+      wrap(
+        <MessageBubble
+          message={baseUser()}
+          messageIndex={0}
+          onViewDiff={vi.fn()}
+          rewindTurnIndex={1}
+          onRewind={onRewind}
+        />,
+      ),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Rewind conversation to this message' }))
+    // Confirmation gate — files may be reverted, so rewind is opt-in.
+    expect(screen.getByText('Rewind to here?')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Rewind' }))
+    await waitFor(() => expect(onRewind).toHaveBeenCalledWith(1))
+  })
+})
+
+describe('MessageBubble — persisted feedback (PM-12)', () => {
+  it('assistant bubble exposes like and dislike toggles', () => {
+    render(wrap(<MessageBubble message={baseAssistant()} messageIndex={0} onViewDiff={vi.fn()} />))
+    expect(screen.getByRole('button', { name: 'Like message' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'Dislike response' })).toHaveAttribute('aria-pressed', 'false')
   })
 })

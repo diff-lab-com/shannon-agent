@@ -154,6 +154,22 @@
   --shadow-e4: 0 20px 25px -5px rgb(0 0 0 / 0.12), 0 8px 10px -6px rgb(0 0 0 / 0.05);
   --shadow-e5: 0 25px 50px -12px rgb(0 0 0 / 0.25);
 
+  /* Z-index scale — single source (the old tokens.css scale had zero
+     references; values here preserve what call sites actually use today).
+     raised: in-component elevation (menus, chips) · sticky: spare ·
+     subheader: sticky section headers · header: sticky app chrome ·
+     modal: dialogs/side panels/popovers · scrim: modal backdrops ·
+     drawer: mobile sidebar · flash: topmost overlay (primary modal).
+     Sonner toasts self-manage their z-index — not part of this scale. */
+  --z-index-raised: 10;
+  --z-index-sticky: 20;
+  --z-index-subheader: 30;
+  --z-index-header: 40;
+  --z-index-modal: 50;
+  --z-index-scrim: 60;
+  --z-index-drawer: 70;
+  --z-index-flash: 100;
+
   /* Motion duration tokens */
   --duration-fast: 100ms;
   --duration-normal: 160ms;

@@ -116,7 +116,7 @@ export function ArtifactPanel() {
     ? { width: '100vw', height: '100vh' }
     : { width: `${Math.min(width, Math.floor(window.innerWidth * 0.6))}px` }
   const panelClass = fullscreen
-    ? 'fixed inset-0 z-50 bg-surface-container-lowest flex flex-col'
+    ? 'fixed inset-0 z-modal bg-surface-container-lowest flex flex-col'
     : 'shrink-0 overflow-hidden border-l border-outline-variant/20 bg-surface-container-lowest flex flex-col relative'
 
   return (
@@ -129,7 +129,7 @@ export function ArtifactPanel() {
       {!fullscreen && (
         <div
           onPointerDown={startResize}
-          className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 transition-colors z-10"
+          className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 transition-colors z-raised"
           aria-label={t('chat.artifact.resize.aria')}
         />
       )}

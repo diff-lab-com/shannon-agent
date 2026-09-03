@@ -134,16 +134,10 @@
   --duration-slower: 400ms;      /* Page transitions */
 
   /* ───── Z-index scale ────────────────────────────────────────── */
-  /* Use sparingly. Most layout should NOT need z-index.        */
-  --z-base: 0;
-  --z-dropdown: 10;
-  --z-sticky: 20;
-  --z-header: 30;
-  --z-overlay: 40;
-  --z-modal: 50;
-  --z-popover: 60;
-  --z-toast: 70;
-  --z-tooltip: 80;
+  /* Removed — the live scale now lives in index.css @theme as
+     --z-index-* keys (z-raised / z-subheader / z-header / z-modal /
+     z-scrim / z-drawer / z-flash utilities). This block had zero
+     references; keeping two scales was the drift trap. */
 }
 
 /* Inline icon sizing — short Tailwind utility helpers */

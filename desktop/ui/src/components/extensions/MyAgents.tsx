@@ -146,7 +146,7 @@ export default function MyAgents() {
                     <Button variant="ghost" className="p-2 rounded-lg border border-outline-variant hover:text-primary transition-colors cursor-pointer flex items-center justify-center relative" onClick={() => setShowMenu(showMenu === agent.id ? null : agent.id)}>
                       <span className="material-symbols-outlined">more_horiz</span>
                       {showMenu === agent.id && (
-                        <div ref={menuRef} className="absolute right-0 top-full mt-1 bg-surface-container-lowest border border-outline-variant/30 rounded-lg shadow-lg py-xs z-10 min-w-[140px]">
+                        <div ref={menuRef} className="absolute right-0 top-full mt-1 bg-surface-container-lowest border border-outline-variant/30 rounded-lg shadow-lg py-xs z-raised min-w-[140px]">
                           <Button variant="ghost" className="w-full justify-start px-md py-sm text-label-md hover:bg-surface-container-high rounded-none" onClick={() => { setConfiguring(configuring === agent.id ? null : agent.id); setShowMenu(null) }}>{t('extensions.myAgents.viewStatus')}</Button>
                           <Button variant="ghost" className="w-full justify-start px-md py-sm text-label-md hover:bg-surface-container-high text-error rounded-none" onClick={async () => { setShowMenu(null); try { await api.cancelBackgroundTask(agent.id); toast.success(intl.formatMessage({ id: 'extensions.myAgents.stopped' }, { name: agent.name })) } catch (e) { toastError(t('extensions.myAgents.stopFailed'), e) } }}>{t('extensions.myAgents.stopAgent')}</Button>
                         </div>

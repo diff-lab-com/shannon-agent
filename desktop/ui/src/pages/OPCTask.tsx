@@ -53,7 +53,7 @@ export default function OPCTask() {
                     {agents.map((agent) => {
                       const isActive = agent.status === 'active' || agent.status === 'running'
                       return (
-                        <div key={agent.id} className="relative z-10 flex flex-col items-center gap-2 shrink-0">
+                        <div key={agent.id} className="relative z-raised flex flex-col items-center gap-2 shrink-0">
                           <div className={cn('w-12 h-12 rounded-full flex items-center justify-center shrink-0',
                             isActive ? 'bg-primary/10' : 'border border-outline-variant bg-surface-container-lowest'
                           )}>
@@ -122,7 +122,7 @@ export default function OPCTask() {
                     const isActive = agent.status === 'active' || agent.status === 'running'
                     return (
                     <div key={agent.id} className="relative flex items-start gap-4">
-                      <div className={cn('w-8 h-8 rounded-full flex items-center justify-center shrink-0 relative z-10 md:ml-2',
+                      <div className={cn('w-8 h-8 rounded-full flex items-center justify-center shrink-0 relative z-raised md:ml-2',
                         isActive ? 'bg-primary text-on-primary shadow-sm ring-4 ring-primary/10' : 'border-2 border-outline-variant/40 bg-surface-container-lowest text-on-surface-variant'
                       )}>
                         <span className="material-symbols-outlined icon-sm">smart_toy</span>

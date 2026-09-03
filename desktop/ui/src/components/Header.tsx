@@ -107,7 +107,7 @@ export function Header() {
 
   return (
     <>
-      <header className="fixed top-0 right-0 z-40 flex justify-between items-center h-16 px-lg bg-surface/80 backdrop-blur-md shadow-sm border-b border-outline-variant/10" style={{ left: 'var(--sidebar-w)' }}>
+      <header className="fixed top-0 right-0 z-header flex justify-between items-center h-16 px-lg bg-surface/80 backdrop-blur-md shadow-sm border-b border-outline-variant/10" style={{ left: 'var(--sidebar-w)' }}>
         <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
           <span className="material-symbols-outlined icon-lg">menu</span>
         </Button>
@@ -159,7 +159,7 @@ export function Header() {
               <span className="material-symbols-outlined icon-sm">expand_more</span>
             </Button>
             {modelOpen && models.length > 0 && (
-              <div className="absolute right-0 top-full mt-sm w-[280px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-xl z-50 py-sm" role="listbox" onKeyDown={e => {
+              <div className="absolute right-0 top-full mt-sm w-[280px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-xl z-modal py-sm" role="listbox" onKeyDown={e => {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setModelFocus(f => Math.min(f + 1, models.length - 1)) }
                 else if (e.key === 'ArrowUp') { e.preventDefault(); setModelFocus(f => Math.max(f - 1, 0)) }
                 else if (e.key === 'Enter' && modelFocus >= 0) { handleModelSwitch(models[modelFocus].id) }

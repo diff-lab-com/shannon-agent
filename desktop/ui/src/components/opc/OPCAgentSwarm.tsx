@@ -154,7 +154,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                   aria-label={intl.formatMessage({ id: 'opc.agentSwarm.actions.name' }, { name: agent.name })}
                   aria-haspopup="menu"
                   aria-expanded={isMenuOpen}
-                  className="absolute right-2 top-2 z-10 rounded text-on-surface-variant hover:bg-surface-container-high/60"
+                  className="absolute right-2 top-2 z-raised rounded text-on-surface-variant hover:bg-surface-container-high/60"
                   onClick={e => { e.stopPropagation(); setOpenMenuId(isMenuOpen ? null : agent.id) }}
                 >
                   <span className="material-symbols-outlined icon-sm">more_vert</span>
@@ -198,7 +198,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                     ref={menuRef}
                     role="menu"
                     aria-label={`${agent.name} actions`}
-                    className="absolute right-2 top-12 z-50 w-40 bg-surface-container-lowest border border-outline-variant/30 rounded-lg shadow-lg py-1 text-on-surface"
+                    className="absolute right-2 top-12 z-modal w-40 bg-surface-container-lowest border border-outline-variant/30 rounded-lg shadow-lg py-1 text-on-surface"
                     onClick={e => e.stopPropagation()}
                   >
                     <Button variant="ghost" size="sm" role="menuitem" className="w-full justify-start h-auto px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 gap-2" onClick={() => handleStopAgent(agent.id, agent.name)}>

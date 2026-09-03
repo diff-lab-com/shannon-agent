@@ -59,7 +59,7 @@ export function Layout() {
       <div className="bg-background text-on-surface font-body-md overflow-hidden min-h-screen">
         {/* Mobile sidebar overlay */}
         {sidebarOpen && (
-          <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm md:hidden" onClick={closeSidebar} />
+          <div className="fixed inset-0 z-scrim bg-black/40 backdrop-blur-sm md:hidden" onClick={closeSidebar} />
         )}
         <div className="md:hidden">
           <Sidebar mobile />
@@ -84,7 +84,7 @@ export function Layout() {
           )}
           <ErrorBoundary><Outlet /></ErrorBoundary>
         </main>
-        <footer role="contentinfo" className="fixed bottom-0 right-0 h-footer bg-surface-container-low/90 backdrop-blur-sm border-t border-outline-variant/20 flex items-center justify-between px-lg z-40" style={{ left: 'var(--sidebar-w)' }}>
+        <footer role="contentinfo" className="fixed bottom-0 right-0 h-footer bg-surface-container-low/90 backdrop-blur-sm border-t border-outline-variant/20 flex items-center justify-between px-lg z-header" style={{ left: 'var(--sidebar-w)' }}>
           {/* U2: footer carries runtime + usage only — tokens/cost, active
               tasks, version. Provider/model live in the Header and the
               session count is visible in the sidebar rail (U1). U9: the

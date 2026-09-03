@@ -361,6 +361,41 @@ export async function getTools(): Promise<ToolInfo[]> {
   return invoke('list_tools')
 }
 
+// --- Rewind (/rewind desktop) ---
+export interface CheckpointInfo {
+  turn_index: number
+  timestamp: number
+  description: string
+  files_changed: string[]
+  prompt_preview: string | null
+}
+
+export async function listCheckpoints(sessionId: string): Promise<CheckpointInfo[]> {
+  return invoke('list_checkpoints', { sessionId })
+}
+
+/** Drops `turnIndex` and everything after it; returns the surviving messages. */
+export async function rewindSession(sessionId: string, turnIndex: number): Promise<ChatMessage[]> {
+  return invoke('rewind_session', { sessionId, turnIndex })
+}
+
+// --- Message feedback (PM-12) ---
+export type FeedbackRating = 'up' | 'down'
+
+export async function recordMessageFeedback(
+  sessionId: string,
+  key: string,
+  rating: FeedbackRating | null,
+): Promise<void> {
+  return invoke('record_message_feedback', { sessionId, key, rating })
+}
+
+export async function listMessageFeedback(
+  sessionId: string,
+): Promise<Record<string, FeedbackRating>> {
+  return invoke('list_message_feedback', { sessionId })
+}
+
 // --- Sessions ---
 
 export async function newSession(): Promise<string> {

@@ -2,6 +2,8 @@ import { useState, memo } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
+import { messageFeedbackKey } from '@/lib/feedbackKey'
+import type { FeedbackRating } from '@/lib/tauri-api'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
@@ -33,6 +35,9 @@ interface MessageBubbleProps {
   isBranch?: boolean
   onViewDiff: (path: string) => void
   onViewDiffMulti?: (paths: string[]) => void
+  /** Conversation turn this message owns, when it is rewindable (/rewind). */
+  rewindTurnIndex?: number | null
+  onRewind?: (turnIndex: number) => Promise<void>
 }
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
@@ -159,16 +164,27 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   )
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind }: MessageBubbleProps) {
   const isUser = message.role === 'user'
-  const [liked, setLiked] = useState(false)
   const [isBranching, setIsBranching] = useState(false)
   const [pendingBranch, setPendingBranch] = useState(false)
+  const [pendingRewind, setPendingRewind] = useState(false)
+  const [isRewinding, setIsRewinding] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
-  const { sendMessage } = useChat()
+  const { sendMessage, feedback, recordFeedback } = useChat()
   const { currentSessionId, switchSession, refreshSessions } = useSessions()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+
+  // PM-12: the rating lives in the persisted per-session store, not in a
+  // local useState that died with the component tree.
+  const feedbackKey = messageFeedbackKey(message.timestamp, message.content)
+  const myRating = feedback[feedbackKey] ?? null
+
+  const toggleFeedback = (rating: FeedbackRating) => {
+    recordFeedback(feedbackKey, myRating === rating ? null : rating)
+      .catch((e) => toastError(t('chat.message.feedback.failed'), e))
+  }
 
   const handleCopy = () => {
     navigator.clipboard.writeText(message.content).catch((e) => toastError(t('chat.toast.copyFailed'), e))
@@ -176,6 +192,20 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
 
   const handleRegenerate = () => {
     sendMessage(t('chat.regenerate.prompt')).catch((e) => toastError(t('chat.toast.regenerateFailed'), e))
+  }
+
+  const confirmRewind = async () => {
+    if (rewindTurnIndex == null || !onRewind) return
+    setPendingRewind(false)
+    setIsRewinding(true)
+    try {
+      await onRewind(rewindTurnIndex)
+      toast.success(t('chat.message.rewind.success'))
+    } catch (error) {
+      toastError(t('chat.message.rewind.failed'), error)
+    } finally {
+      setIsRewinding(false)
+    }
   }
 
   const handleBranch = () => {
@@ -238,6 +268,19 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                 {isBranching ? 'hourglass_empty' : 'fork_right'}
               </span>
             </Button>
+            {rewindTurnIndex != null && (
+              <Button
+                aria-label={t('chat.message.rewind.aria')}
+                onClick={() => setPendingRewind(true)}
+                disabled={isRewinding}
+                className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                title={t('chat.message.rewind.button')}
+              >
+                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                  {isRewinding ? 'hourglass_empty' : 'undo'}
+                </span>
+              </Button>
+            )}
           </ActionToolbar>
         </MessageContent>
       </Message>
@@ -250,6 +293,16 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
         busy={isBranching}
         onConfirm={() => void confirmBranch()}
         onCancel={() => setPendingBranch(false)}
+      />
+      <ConfirmDialog
+        open={pendingRewind}
+        title={t('chat.message.rewind.confirm.title')}
+        message={t('chat.message.rewind.confirm.message')}
+        confirmLabel={t('chat.message.rewind.confirm.confirm')}
+        cancelLabel={t('chat.message.rewind.confirm.cancel')}
+        busy={isRewinding}
+        onConfirm={() => void confirmRewind()}
+        onCancel={() => setPendingRewind(false)}
       />
     </>
   )
@@ -322,8 +375,11 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
           </Button>
           {!isTool && (
             <>
-              <Button aria-label={t('chat.message.like.aria')} aria-pressed={liked} onClick={() => setLiked(!liked)} className={cn('flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30', liked ? 'text-primary' : 'text-on-surface-variant')}>
-                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{liked ? 'thumb_up' : 'thumb_up_off_alt'}</span>
+              <Button aria-label={t('chat.message.like.aria')} aria-pressed={myRating === 'up'} onClick={() => toggleFeedback('up')} className={cn('flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30', myRating === 'up' ? 'text-primary' : 'text-on-surface-variant')}>
+                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{myRating === 'up' ? 'thumb_up' : 'thumb_up_off_alt'}</span>
+              </Button>
+              <Button aria-label={t('chat.message.dislike.aria')} aria-pressed={myRating === 'down'} onClick={() => toggleFeedback('down')} className={cn('flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30', myRating === 'down' ? 'text-error' : 'text-on-surface-variant')}>
+                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{myRating === 'down' ? 'thumb_down' : 'thumb_down_off_alt'}</span>
               </Button>
               <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
                 <span className="material-symbols-outlined text-[18px]" aria-hidden="true">refresh</span>

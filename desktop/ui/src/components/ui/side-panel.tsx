@@ -60,7 +60,7 @@ export function SidePanel({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Backdrop
           className={cn(
-            'fixed inset-0 isolate z-50 bg-black/40 backdrop-blur-sm duration-100',
+            'fixed inset-0 isolate z-modal bg-black/40 backdrop-blur-sm duration-100',
             'data-open:animate-in data-open:fade-in-0',
             'data-closed:animate-out data-closed:fade-out-0',
           )}
@@ -70,7 +70,7 @@ export function SidePanel({
           aria-modal="true"
           aria-label={ariaLabel ?? title}
           className={cn(
-            'fixed inset-y-0 right-0 z-50 h-full w-full bg-surface-container-lowest shadow-2xl border-l border-outline-variant/30 overflow-y-auto outline-none',
+            'fixed inset-y-0 right-0 z-modal h-full w-full bg-surface-container-lowest shadow-2xl border-l border-outline-variant/30 overflow-y-auto outline-none',
             'duration-100',
             'data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-right',
             'data-closed:animate-out data-closed:fade-out-0 data-closed:slide-out-to-right',

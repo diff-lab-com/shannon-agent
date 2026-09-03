@@ -363,7 +363,7 @@ export default function AdvancedSettings() {
 
         {/* Critical System Reset */}
         <div className="lg:col-span-2 border-2 border-error/20 bg-error/5 p-lg rounded-xl mt-sm relative overflow-hidden">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-lg relative z-10">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-lg relative z-raised">
             <div className="flex items-start gap-md">
               <div className="p-2 bg-error/10 rounded-lg text-error shrink-0 flex items-center justify-center">
                 <span className="material-symbols-outlined">warning</span>
