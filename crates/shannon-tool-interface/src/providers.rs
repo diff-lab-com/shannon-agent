@@ -242,6 +242,19 @@ impl SpawnRewrite for ChainedSpawnRewrite {
     }
 }
 
+/// Capability flags describing how a process world executes requests.
+///
+/// Worlds route through the same trait, but some call sites need to know
+/// whether execution leaves the local machine — the bash tool gates its
+/// local-PTY and argv-sandbox branches on [`ExecCaps::is_remote`] so remote
+/// sessions never fall back to local-only paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ExecCaps {
+    /// Commands run on a different host/container than the one Shannon
+    /// itself runs on.
+    pub is_remote: bool,
+}
+
 /// Pluggable process execution world.
 ///
 /// Consumers never build `std::process::Command` / `tokio::process::Command`
@@ -265,6 +278,11 @@ pub trait ProcessProvider: Send + Sync + 'static {
     /// decorators may additionally override this to make wrapping explicit.
     fn prepare_spawn(&self, request: ProcessRequest) -> Result<ProcessRequest, String> {
         Ok(request)
+    }
+
+    /// What this world can do (default: plain local execution).
+    fn capabilities(&self) -> ExecCaps {
+        ExecCaps { is_remote: false }
     }
 }
 
