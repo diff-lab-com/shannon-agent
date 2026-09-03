@@ -42,6 +42,7 @@ function renderChatInput(props: Partial<React.ComponentProps<typeof ChatInput>> 
     value: '',
     onChange: vi.fn(),
     onSend: vi.fn(),
+    onExecuteSlash: vi.fn(),
     attachedFiles: [],
     onAttach: vi.fn(),
     onDetachAll: vi.fn(),
@@ -320,5 +321,68 @@ describe('ChatInput', () => {
         expect.objectContaining({ description: 'engine down' }),
       )
     })
+  })
+})
+
+describe('ChatInput — slash-command menu', () => {
+  it('opens the menu on "/" and runs the highlighted command on Enter', async () => {
+    const onChange = vi.fn()
+    const onExecuteSlash = vi.fn()
+    const { container } = renderChatInput({ value: '/', onChange, onExecuteSlash })
+    const menu = screen.getByRole('listbox', { name: 'Slash commands' })
+    expect(menu).toBeInTheDocument()
+
+    // Navigate down once (context -> cost) and run it with Enter.
+    fireEvent.keyDown(container.querySelector('textarea')!, { key: 'ArrowDown' })
+    fireEvent.keyDown(container.querySelector('textarea')!, { key: 'Enter' })
+    expect(onExecuteSlash).toHaveBeenCalledTimes(1)
+    expect(onExecuteSlash.mock.calls[0][0].name).toBe('cost')
+    expect(onChange).toHaveBeenCalledWith('')
+  })
+
+  it('filters by prefix and runs a clicked entry', () => {
+    const onChange = vi.fn()
+    const onExecuteSlash = vi.fn()
+    renderChatInput({ value: '/dif', onChange, onExecuteSlash })
+    fireEvent.mouseDown(screen.getByRole('option', { selected: true }))
+    expect(onExecuteSlash).toHaveBeenCalledTimes(1)
+    expect(onExecuteSlash.mock.calls[0][0].name).toBe('diff')
+  })
+
+  it('hides the menu on Escape and keeps the text', () => {
+    const onChange = vi.fn()
+    const onSend = vi.fn()
+    const view = renderChatInput({ value: '/', onChange, onSend })
+    fireEvent.keyDown(view.container.querySelector('textarea')!, { key: 'Escape' })
+    expect(screen.queryByRole('listbox', { name: 'Slash commands' })).toBeNull()
+    expect(onSend).not.toHaveBeenCalled()
+    // A new query re-opens the menu (the parent owns the value).
+    view.rerender(
+      <I18nProvider>
+        <ChatInput
+          value="/con"
+          onChange={onChange}
+          onSend={onSend}
+          onExecuteSlash={vi.fn()}
+          attachedFiles={[]}
+          onAttach={vi.fn()}
+          onDetachAll={vi.fn()}
+          disabled={false}
+          isQuerying={false}
+          onCancelQuery={vi.fn()}
+          onOpenQuickFix={vi.fn()}
+          onOpenEditor={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+    expect(screen.getByRole('listbox', { name: 'Slash commands' })).toBeInTheDocument()
+  })
+
+  it('sends unknown single tokens (e.g. pasted paths) as plain text', () => {
+    const onSend = vi.fn()
+    const { container } = renderChatInput({ value: '/usr/local/bin', onSend })
+    expect(screen.queryByRole('listbox', { name: 'Slash commands' })).toBeNull()
+    fireEvent.keyDown(container.querySelector('textarea')!, { key: 'Enter' })
+    expect(onSend).toHaveBeenCalledTimes(1)
   })
 })

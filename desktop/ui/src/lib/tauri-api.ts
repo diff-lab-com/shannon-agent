@@ -407,6 +407,50 @@ export async function listFeedbackSessions(): Promise<FeedbackSessionSummary[]> 
   return invoke('list_feedback_sessions')
 }
 
+// --- Slash-command backends (/context · /cost · /diff) ---
+
+export interface SessionContextStats {
+  /** CJK-aware estimate of the projected conversation, incl. system prompt. */
+  estimated_tokens: number
+  /** Null when the window is genuinely unknown (no fabricated fallback). */
+  context_window: number | null
+}
+
+export async function getSessionContextStats(sessionId: string): Promise<SessionContextStats> {
+  return invoke('get_session_context_stats', { sessionId })
+}
+
+export interface SessionUsageSummary {
+  input_tokens: number
+  output_tokens: number
+  cache_creation_tokens: number
+  cache_read_tokens: number
+  cost_usd: number
+  /** Ledger events seen for this session (0 may mean a pre-attribution log). */
+  events: number
+}
+
+export async function getSessionUsage(sessionId: string): Promise<SessionUsageSummary> {
+  return invoke('get_session_usage', { sessionId })
+}
+
+export interface GitDiffFile {
+  path: string
+  insertions: number
+  deletions: number
+}
+
+export interface GitDiffSummary {
+  is_repo: boolean
+  files: GitDiffFile[]
+  patch: string
+  truncated: boolean
+}
+
+export async function getSessionGitDiff(workingDir: string): Promise<GitDiffSummary> {
+  return invoke('get_session_git_diff', { workingDir })
+}
+
 // --- Sessions ---
 
 export async function newSession(): Promise<string> {

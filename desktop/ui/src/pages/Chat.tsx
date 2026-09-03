@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, lazy } from 'react'
+import { useState, useRef, useEffect, useCallback, lazy } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -8,6 +8,9 @@ import DiffDialog from '@/components/diff/DiffDialog'
 import DiffDialogMulti from '@/components/diff/DiffDialogMulti'
 import { useChat } from '@/context/ChatContext'
 import { useCatalog } from '@/context/CatalogContext'
+import { useSessions } from '@/context/SessionContext'
+import { parseSlashInput, type SlashCommand, type SlashResult } from '@/lib/slash/commands'
+import { toastError } from '@/lib/errorToast'
 import {
   ApiKeyBanner,
   ComposerPanel,
@@ -28,11 +31,12 @@ export default function Chat() {
     messages, streamingText, isQuerying, usage, activeToolCalls,
     sendMessage, contextPanelOpen,
   } = useChat()
+  const { sessions, currentSessionId, createSession } = useSessions()
   const { config } = useCatalog()
   const intl = useIntl()
+  const t = useCallback((id: string) => intl.formatMessage({ id }), [intl])
   const navigate = useNavigate()
   const location = useLocation()
-  const t = (id: string) => intl.formatMessage({ id })
 
   // Composer state (draft + attachments) is provided through the page-local
   // ComposerContext — MessageArea / ComposerPanel consume it directly instead
@@ -77,9 +81,37 @@ export default function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streamingText])
 
+  const [slashResult, setSlashResult] = useState<SlashResult | null>(null)
+  const dismissSlashResult = useCallback(() => setSlashResult(null), [])
+
+  const executeSlash = useCallback((cmd: SlashCommand) => {
+    void cmd.run({
+      navigate,
+      sessionId: currentSessionId,
+      workingDir: sessions.find(s => s.id === currentSessionId)?.working_dir
+        ?? config?.working_dir
+        ?? '',
+      sessions,
+      createSession,
+      showResult: setSlashResult,
+      toastError,
+      t,
+    })
+  }, [navigate, currentSessionId, sessions, config?.working_dir, createSession, t])
+
   const handleSend = () => {
     const trimmed = input.trim()
     if (!trimmed || isQuerying) return
+    // Slash commands never reach the model: a bare `/name` runs locally
+    // (the desktop's counterpart of the REPL command line), and anything
+    // else starting with `/` — typically a pasted absolute path — is sent
+    // as plain text.
+    const slashCommand = parseSlashInput(trimmed)
+    if (slashCommand) {
+      executeSlash(slashCommand)
+      setInput('')
+      return
+    }
     const filePaths = attachedFiles.length > 0 ? attachedFiles : undefined
     sendMessage(trimmed, filePaths)
     setInput('')
@@ -101,6 +133,7 @@ export default function Chat() {
   const composerValue = {
     input, setInput, handleSend,
     attachedFiles, handleAttach, handleDetachAll,
+    executeSlash, slashResult, dismissSlashResult,
   }
 
   const showApiKeyBanner =

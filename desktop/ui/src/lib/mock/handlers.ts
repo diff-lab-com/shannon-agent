@@ -162,6 +162,20 @@ export const handlers: Record<string, MockHandler> = {
   async record_message_feedback() { await delay(30) },
   async list_feedback_sessions() { await delay(30); return [] },
   async rewind_session() { await delay(80); return clone(MOCK_MESSAGES) },
+  // Slash-command backends: /context and /cost return readable demo numbers,
+  // /diff reports a non-repo so the demo composer shows the calm notice.
+  async get_session_context_stats() {
+    await delay(30)
+    return { estimated_tokens: 4820, context_window: 200000 }
+  },
+  async get_session_usage() {
+    await delay(30)
+    return { input_tokens: 12400, output_tokens: 3150, cache_creation_tokens: 0, cache_read_tokens: 9800, cost_usd: 0.0731, events: 6 }
+  },
+  async get_session_git_diff() {
+    await delay(30)
+    return { is_repo: false, files: [], patch: '', truncated: false }
+  },
   // §4.14 — Turn Timeline: demo data regardless of id (sessions come from
   // MOCK_SESSIONS, which do not have real L0 logs to project).
   async trace_timeline() { await delay(); return clone(MOCK_TURN_TIMELINE) },

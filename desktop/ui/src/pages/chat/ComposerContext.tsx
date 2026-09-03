@@ -1,9 +1,10 @@
-// Composer state (draft text + attachments) lives here instead of being
-// drilled Chat → MessageArea / ComposerPanel → ChatInput. Input updates are
-// high-frequency, so this is deliberately a page-local context and NOT part
-// of the chat slice — useChat() consumers (the message list) must not
-// re-render on every keystroke.
+// Composer state (draft text + attachments + slash-command surface) lives
+// here instead of being drilled Chat → MessageArea / ComposerPanel →
+// ChatInput. Input updates are high-frequency, so this is deliberately a
+// page-local context and NOT part of the chat slice — useChat() consumers
+// (the message list) must not re-render on every keystroke.
 import { createContext, useContext } from 'react'
+import type { SlashCommand, SlashResult } from '@/lib/slash/commands'
 
 export interface ComposerContextValue {
   input: string
@@ -12,6 +13,11 @@ export interface ComposerContextValue {
   attachedFiles: string[]
   handleAttach: (files: string[]) => void
   handleDetachAll: () => void
+  /** Runs a slash command resolved from the composer. */
+  executeSlash: (cmd: SlashCommand) => void
+  /** Output of the last slash command; rendered by ComposerPanel. */
+  slashResult: SlashResult | null
+  dismissSlashResult: () => void
 }
 
 export const ComposerContext = createContext<ComposerContextValue | null>(null)
