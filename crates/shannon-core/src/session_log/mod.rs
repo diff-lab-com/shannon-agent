@@ -1,6 +1,7 @@
 //! # Session Log (L0 unified event log)
 //!
-//! The append-only JSONL log of typed [`SessionEvent`]s — the single
+//! The append-only JSONL log of typed
+//! [`SessionEvent`](shannon_types::session_event::SessionEvent)s — the single
 //! authoritative record of a session. Built on the vocabulary in
 //! `shannon_types::session_event` (plan §4.1, W1-P0a):
 //!

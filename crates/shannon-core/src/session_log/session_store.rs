@@ -2,7 +2,8 @@
 //!
 //! The L0-backed replacement for the deleted single-file session snapshot.
 //! `events.jsonl` is the only authoritative record; this store derives
-//! [`StoredSession`]s from it via [`project_conversation`] and persists only
+//! [`StoredSession`]s from it via
+//! [`project_conversation`](super::projections::project_conversation) and persists only
 //! the user-curation fields that cannot be derived (title, branch lineage)
 //! as a `meta.json` sidecar next to each log.
 //!
@@ -662,17 +663,21 @@ mod tests {
         let loaded = store.load(&id).unwrap().expect("session survives");
         assert_eq!(loaded.metadata.turn_count, 2);
         assert_eq!(loaded.messages.len(), 4); // 2 × (user, assistant)
-        let texts: Vec<_> = loaded.messages.iter().map(|m| match &m.content {
-            shannon_engine::api::MessageContent::Text(t) => t.clone(),
-            shannon_engine::api::MessageContent::Blocks(blocks) => blocks
-                .iter()
-                .filter_map(|b| match b {
-                    shannon_engine::api::ContentBlock::Text { text } => Some(text.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join(""),
-        }).collect();
+        let texts: Vec<_> = loaded
+            .messages
+            .iter()
+            .map(|m| match &m.content {
+                shannon_engine::api::MessageContent::Text(t) => t.clone(),
+                shannon_engine::api::MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        shannon_engine::api::ContentBlock::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+            })
+            .collect();
         assert!(texts.contains(&"question 0".to_string()));
         assert!(texts.contains(&"answer 1".to_string()));
         assert!(!texts.iter().any(|t| t.contains("question 2")));
@@ -700,12 +705,17 @@ mod tests {
         let id = Uuid::new_v4();
         seed_three_turn_session(&store, &id);
 
-        let dropped = store.truncate_to_turn(&id, 50).unwrap().expect("log exists");
+        let dropped = store
+            .truncate_to_turn(&id, 50)
+            .unwrap()
+            .expect("log exists");
         assert_eq!(dropped, 0);
 
         // A later writer must resume cleanly from the truncated log.
         let mut w = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
-        w.record(SessionEventBody::TurnStart(TurnStartPayload { query_id: None }));
+        w.record(SessionEventBody::TurnStart(TurnStartPayload {
+            query_id: None,
+        }));
         w.record(SessionEventBody::UserMessage(UserMessagePayload {
             source: UserMessagePayload::SOURCE_USER.into(),
             content: "after rewind".into(),
@@ -720,7 +730,12 @@ mod tests {
     fn truncate_to_turn_on_missing_log_returns_none() {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(&tmp);
-        assert!(store.truncate_to_turn(&Uuid::new_v4(), 1).unwrap().is_none());
+        assert!(
+            store
+                .truncate_to_turn(&Uuid::new_v4(), 1)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

@@ -97,7 +97,7 @@ pub enum PermissionDecision {
 ///
 /// All gates report here with a stable target (`permission/decision`).
 /// Since §4.8 each decision is additionally forwarded to the bus world via
-/// [`crate::bus::broadcast_plugin_decision`] so both decision sources
+/// `crate::bus::broadcast_plugin_decision` so both decision sources
 /// (permission manager and plugin gates) persist into L0 with one schema
 /// ([`SessionEventKind::PermissionDecision`](shannon_types::session_event::SessionEventKind)).
 pub fn emit_decision(

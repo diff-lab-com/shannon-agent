@@ -105,7 +105,7 @@ pub struct FailureSignals {
     pub turn_interrupted: bool,
     /// Count of `surface/replace` events with reason `compaction`.
     pub compaction_events: u32,
-    /// Human-readable loop evidence for archives ("Read ×4 <hash>").
+    /// Human-readable loop evidence for archives ("Read ×4 `<hash>`").
     pub loop_notes: Vec<String>,
 }
 

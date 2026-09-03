@@ -71,8 +71,8 @@ pub async fn get_session_context_stats(
     state: tauri::State<'_, AppState>,
     session_id: String,
 ) -> Result<SessionContextStats, String> {
-    let uuid =
-        uuid::Uuid::parse_str(&session_id).map_err(|_| format!("invalid session id {session_id}"))?;
+    let uuid = uuid::Uuid::parse_str(&session_id)
+        .map_err(|_| format!("invalid session id {session_id}"))?;
     let engine = restored_engine(&state, uuid).await?;
     Ok(SessionContextStats {
         estimated_tokens: engine.estimate_conversation_tokens(),
@@ -93,7 +93,7 @@ pub struct GitDiffFile {
 pub struct GitDiffSummary {
     pub is_repo: bool,
     pub files: Vec<GitDiffFile>,
-    /// Unified patch, capped at [`MAX_PATCH_BYTES`] (larger diffs are
+    /// Unified patch, capped at `MAX_PATCH_BYTES` (larger diffs are
     /// truncated; the UI says so instead of silently clipping).
     pub patch: String,
     pub truncated: bool,
@@ -103,7 +103,11 @@ pub struct GitDiffSummary {
 const MAX_PATCH_BYTES: usize = 200_000;
 
 fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git").current_dir(dir).args(args).output().ok()?;
+    let out = Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }

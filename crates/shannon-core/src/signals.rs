@@ -217,7 +217,7 @@ pub fn observe_turn_start() {
 }
 
 /// Record a turn close. `reason` matches the
-/// [`shannon_types::session_event::TurnEndPayload::REASON_*`] constants;
+/// `TurnEndPayload::REASON_*` constants;
 /// `interrupted` feeds the interruption counter and the per-turn takeover
 /// latch folds into the totals.
 pub fn observe_turn_end(reason: &str) {

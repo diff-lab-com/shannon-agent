@@ -9,7 +9,7 @@
 //! `shannon_core::session_log`. This type keeps only the process-lifetime
 //! registry (live sessions and global key/values) plus the resolved
 //! sessions directory — the storage location shared with the L0 writer and
-//! with [`shannon_core::session_log::SessionStore`], which owns all disk
+//! with the L0 `SessionStore`, which owns all disk
 //! I/O. Legacy single-file `sessions/<uuid>.json` snapshots are gone (DP4,
 //! breaking change: no migration path).
 
