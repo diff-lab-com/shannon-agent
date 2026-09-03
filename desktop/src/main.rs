@@ -21,6 +21,8 @@ fn main() {
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
     use shannon_desktop::commands_routine_templates;
+    use shannon_desktop::commands_feedback;
+    use shannon_desktop::commands_rewind;
     use shannon_desktop::commands_sessions;
     use shannon_desktop::commands_skill_candidates;
     use shannon_desktop::commands_skill_loop;
@@ -154,6 +156,10 @@ fn main() {
             skill_pattern_detection::trigger_skill_pattern_detection,
             commands_permissions::request_permission,
             commands_permissions::respond_permission,
+            commands_rewind::list_checkpoints,
+            commands_rewind::rewind_session,
+            commands_feedback::record_message_feedback,
+            commands_feedback::list_message_feedback,
             commands_files::get_file_diff,
             commands_files::apply_diff,
             commands_files::save_text_file,
