@@ -88,6 +88,14 @@ test('every theme passes axe color-contrast on the chat page', async ({ page }) 
     }, id)
     await page.goto('/')
     await page.getByRole('listitem').first().waitFor({ state: 'visible' })
+    // axe reads PAINTED text: wait until the theme attribute is applied and
+    // one painted frame has elapsed, so a busy runner can't catch a
+    // mid-repaint state (seen once as a flake in the full suite).
+    await page.waitForFunction(
+      t => document.documentElement.getAttribute('data-theme') === t,
+      id,
+    )
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))))
     const results = await new AxeBuilder({ page })
       .withRules(['color-contrast'])
       .analyze()
