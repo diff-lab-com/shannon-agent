@@ -808,6 +808,18 @@ impl QueryEngine {
         self.session_id
     }
 
+    /// Bind the engine to an existing session without loading its history.
+    ///
+    /// `restore_session` covers "resume with history", but hosts that manage
+    /// history themselves (the desktop shell re-projects the log on every
+    /// load) still need the engine's `session_id` to match — the L0 tee
+    /// writes to `~/.shannon/sessions/<session_id>/events.jsonl` keyed by
+    /// this field, and the permission guard nodes attribute decisions with
+    /// it. A random id here silently forks the session record.
+    pub fn set_session_id(&mut self, session_id: Uuid) {
+        self.session_id = session_id;
+    }
+
     /// Start a new session: clear conversation and generate a fresh session ID.
     pub fn new_session(&mut self) -> Uuid {
         self.clear_conversation();
