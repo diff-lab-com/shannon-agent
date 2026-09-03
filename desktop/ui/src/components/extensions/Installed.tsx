@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import LoadingState from "@/components/ui/loading-state";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { useIntl } from "react-intl";
 import { listInstalledAddons } from "@/lib/tauri-api";
@@ -79,10 +80,7 @@ export default function Installed() {
   if (loading) {
     return (
       <div className="p-lg max-w-4xl mx-auto">
-        <div className="text-center py-3xl text-on-surface-variant">
-          <span className="material-symbols-outlined animate-spin text-[32px] mb-md">progress_activity</span>
-          <p className="text-body-md">{t('extensions.installed.scanning')}</p>
-        </div>
+        <LoadingState size="lg" label={t('extensions.installed.scanning')} />
       </div>
     );
   }

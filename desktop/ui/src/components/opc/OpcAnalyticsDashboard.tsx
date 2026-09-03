@@ -6,6 +6,7 @@
 // File mtime is the time-series proxy — task JSON has no created_at field.
 
 import { useEffect, useState, useCallback } from 'react'
+import StatCard from '@/components/ui/stat-card'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -258,14 +259,4 @@ export default function OpcAnalyticsDashboard() {
   )
 }
 
-function StatCard({ label, value, icon }: { label: string; value: string | number; icon: string }) {
-  return (
-    <div className="bg-surface-container-low rounded-xl p-md flex items-center gap-sm border border-outline-variant/20">
-      <span className="material-symbols-outlined icon-md text-primary">{icon}</span>
-      <div className="min-w-0">
-        <div className="font-headline-md text-[20px] font-bold text-on-surface leading-none">{value}</div>
-        <div className="font-label-sm text-[11px] text-on-surface-variant mt-1">{label}</div>
-      </div>
-    </div>
-  )
-}
+

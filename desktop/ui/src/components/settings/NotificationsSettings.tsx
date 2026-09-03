@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import LoadingState from '@/components/ui/loading-state'
 import { useT } from '@/i18n'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
@@ -166,10 +167,7 @@ function WebhookSection() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12" role="status" aria-live="polite">
-        <span className="material-symbols-outlined icon-xl text-primary animate-spin" aria-hidden="true">progress_activity</span>
-        <span className="sr-only">{t('settings.notifications.loading')}</span>
-      </div>
+      <LoadingState size="lg" label={t('settings.notifications.loading')} />
     )
   }
 

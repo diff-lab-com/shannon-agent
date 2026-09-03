@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
+import LoadingState from '@/components/ui/loading-state'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
@@ -182,9 +183,7 @@ export default function Usage() {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-3xl text-on-surface-variant">
-          <span className="material-symbols-outlined animate-spin">progress_activity</span>
-        </div>
+        <LoadingState size="lg" />
       ) : !hasData ? (
         <div className="bg-surface-container-low rounded-2xl border border-outline-variant/30 px-lg py-3xl text-center">
           <EmptyState

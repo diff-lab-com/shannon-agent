@@ -29,7 +29,7 @@ import {
 import { CATEGORIES, type CategoryFilter } from './constants'
 import { MemoryCard } from './MemoryCard'
 import { MemoryEditor, type MemorySaveInput } from './MemoryEditor'
-import { StatCard } from './StatCard'
+import StatCard from '@/components/ui/stat-card'
 
 export default function MemoryPanel() {
   const intl = useIntl()

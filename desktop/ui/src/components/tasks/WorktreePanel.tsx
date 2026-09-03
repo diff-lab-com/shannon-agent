@@ -9,6 +9,7 @@
 // pruneTaskWorktrees) was merged in shannon-code PR #18.
 
 import { useMemo, useState } from 'react'
+import { Banner } from '@/components/ui/banner'
 import { useIntl } from 'react-intl'
 import EmptyState from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
@@ -98,10 +99,14 @@ export default function WorktreePanel() {
       </div>
 
       {error ? (
-        <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/20 text-error font-label-md">
+        <Banner
+          variant="card"
+          tone="error"
+          className="text-error font-label-md"
+        >
           <span className="material-symbols-outlined text-[18px]">error</span>
-          {error}
-        </div>
+          <span className="flex-1">{error}</span>
+        </Banner>
       ) : null}
 
       {/* Create-worktree picker */}

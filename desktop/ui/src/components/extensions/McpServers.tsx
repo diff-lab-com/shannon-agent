@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import EmptyState from '@/components/ui/empty-state'
 import { useOutletContext } from "react-router-dom";
 import { useIntl } from "react-intl";
 import { toast } from "sonner";
@@ -196,16 +197,13 @@ function InstalledSection({
       {loading ? (
         <LoadingState size="sm" label={t("extensions.mcp.loading")} />
       ) : servers.length === 0 ? (
-        <div className="border border-dashed border-outline-variant/40 rounded-2xl p-lg text-center bg-surface-container-low/30">
-          <span className="material-symbols-outlined icon-xl text-on-surface-variant mb-xs inline-block">
-            dns
-          </span>
-          <div className="font-bold text-label-md text-on-surface mb-xs">
-            {t("extensions.mcp.addDialog.installed.empty.title")}
-          </div>
-          <p className="text-label-sm text-on-surface-variant max-w-md mx-auto">
-            {t("extensions.mcp.addDialog.installed.empty.body")}
-          </p>
+        <div className="border border-dashed border-outline-variant/40 rounded-2xl bg-surface-container-low/30">
+          <EmptyState
+            compact
+            icon="dns"
+            title={t('extensions.mcp.addDialog.installed.empty.title')}
+            description={t('extensions.mcp.addDialog.installed.empty.body')}
+          />
         </div>
       ) : (
         <div className="border border-outline-variant/30 rounded-2xl overflow-hidden bg-surface-container-lowest/50">

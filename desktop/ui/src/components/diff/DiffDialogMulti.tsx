@@ -14,6 +14,7 @@
 // Escape-to-close, and body scroll lock.
 
 import { useEffect, useState, useMemo, useCallback } from 'react'
+import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -305,7 +306,7 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
               </p>
             ) : currentLoading ? (
               <div className="flex items-center justify-center py-xl">
-                <span className="material-symbols-outlined animate-spin text-primary" aria-hidden="true">progress_activity</span>
+                <Spinner className="text-primary" />
                 <span className="ml-md text-body-sm text-on-surface-variant">
                   {t('diff.dialog.loading')}
                 </span>
@@ -348,7 +349,7 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
         >
           {applying ? (
             <span className="flex items-center gap-xs">
-              <span className="material-symbols-outlined animate-spin text-[16px]" aria-hidden="true">progress_activity</span>
+              <Spinner className="text-[16px]" />
               {t('diff.multi.applyAll', { count: filesWithAccepts.length })}
             </span>
           ) : (
