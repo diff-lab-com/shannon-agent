@@ -321,6 +321,66 @@ impl FileSystemProvider for SshFs {
         })
     }
 
+    fn walk_blocking(
+        &self,
+        root: &Path,
+        cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+    ) -> io::Result<()> {
+        let me = self.clone();
+        let sftp = self.sftp.clone();
+        let stat = move |p: &Path| {
+            let sftp = sftp.clone();
+            let p = p.to_path_buf();
+            block_on_anywhere(me.rt.runtime(), async move {
+                let mut guard = sftp.lock().await;
+                let mut fs = guard.fs();
+                fs.metadata(p)
+                    .await
+                    .map(|md| meta_to_filemeta(&md))
+                    .map_err(to_io)
+            })
+        };
+        let me2 = me.clone();
+        let sftp2 = me.sftp.clone();
+        let read_text = move |p: &Path| {
+            let sftp = sftp2.clone();
+            let p = p.to_path_buf();
+            block_on_anywhere(me2.rt.runtime(), async move {
+                let mut guard = sftp.lock().await;
+                let mut fs = guard.fs();
+                fs.read(p)
+                    .await
+                    .map(|b| String::from_utf8_lossy(&b).to_string())
+                    .map_err(to_io)
+            })
+        };
+        let me3 = me.clone();
+        let sftp3 = me.sftp.clone();
+        let list_dir = move |p: &Path| {
+            let sftp = sftp3.clone();
+            let root = p.to_path_buf();
+            block_on_anywhere(me3.rt.runtime(), async move {
+                let mut guard = sftp.lock().await;
+                let mut fs = guard.fs();
+                let dir = fs.open_dir(&root).await.map_err(to_io)?;
+                let mut entries = Vec::new();
+                let mut stream = dir.read_dir();
+                tokio::pin!(stream);
+                while let Some(entry) = stream.next().await {
+                    let entry = entry.map_err(to_io)?;
+                    let md = entry.metadata();
+                    entries.push(DirEntryInfo {
+                        path: root.join(entry.filename()),
+                        len: md.len().unwrap_or(0),
+                        is_dir: md.file_type().map(|t| t.is_dir()).unwrap_or(false),
+                    });
+                }
+                Ok(entries)
+            })
+        };
+        shannon_tool_interface::walk::provider_walk(&stat, &read_text, &list_dir, root, cb)
+    }
+
     fn list_dir_blocking(&self, path: &Path) -> io::Result<Vec<DirEntryInfo>> {
         let sftp = self.sftp.clone();
         let root = path.to_path_buf();

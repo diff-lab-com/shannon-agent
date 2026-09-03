@@ -26,11 +26,13 @@ use thiserror::Error;
 
 pub mod providers;
 pub mod sandbox;
+pub mod walk;
 
 pub use providers::{
     CapturedOutput, ChainedSpawnRewrite, DirEntryInfo, ExecCaps, FileMeta, FileSystemProvider,
     PipedChild, PipedSpawn, ProcessExit, ProcessProvider, ProcessRequest, SpawnRewrite,
 };
+pub use walk::{GitignoreMatcher, BUILTIN_EXCLUDES};
 pub use sandbox::{
     ChildWorldInit, DegradeNotice, ForkInitHost, SANDBOX_DENIED_CLASSIFICATION,
     SANDBOX_DENIED_PREFIX, SandboxDenialInfo, SandboxError, SandboxMode, SandboxPolicy,
