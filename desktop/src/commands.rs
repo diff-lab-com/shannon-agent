@@ -806,11 +806,14 @@ pub async fn send_message(
                         let _ = usage_store_arc.append(&crate::commands_usage::record_event(
                             &model_now,
                             &provider_now,
-                            input_tokens,
-                            output_tokens,
-                            cache_creation_tokens,
-                            cache_read_tokens,
-                            cost_usd,
+                            crate::commands_usage::UsageTotals {
+                                input_tokens,
+                                output_tokens,
+                                cache_creation_tokens,
+                                cache_read_tokens,
+                                cost_usd,
+                            },
+                            Some(&session_id.to_string()),
                         ));
                         let payload = events::UsagePayload {
                             query_id: qid_str.clone(),
@@ -1185,11 +1188,14 @@ pub async fn start_background_task(
                         let _ = usage_store.append(&crate::commands_usage::record_event(
                             &model_for_usage,
                             &provider,
-                            input_tokens,
-                            output_tokens,
-                            cache_creation_tokens,
-                            cache_read_tokens,
-                            cost_usd,
+                            crate::commands_usage::UsageTotals {
+                                input_tokens,
+                                output_tokens,
+                                cache_creation_tokens,
+                                cache_read_tokens,
+                                cost_usd,
+                            },
+                            None,
                         ));
                     }
                     QueryEvent::Completed { .. } => break,

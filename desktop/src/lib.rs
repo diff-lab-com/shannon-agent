@@ -150,6 +150,7 @@ pub mod commands_onboarding;
 pub mod commands_permissions;
 pub mod commands_feedback;
 pub mod commands_rewind;
+pub mod commands_slash;
 
 #[cfg(feature = "tauri")]
 pub mod commands_plugins;
