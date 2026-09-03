@@ -28,8 +28,8 @@ pub mod providers;
 pub mod sandbox;
 
 pub use providers::{
-    CapturedOutput, ChainedSpawnRewrite, DirEntryInfo, FileMeta, FileSystemProvider, PipedChild,
-    PipedSpawn, ProcessExit, ProcessProvider, ProcessRequest, SpawnRewrite,
+    CapturedOutput, ChainedSpawnRewrite, DirEntryInfo, ExecCaps, FileMeta, FileSystemProvider,
+    PipedChild, PipedSpawn, ProcessExit, ProcessProvider, ProcessRequest, SpawnRewrite,
 };
 pub use sandbox::{
     ChildWorldInit, DegradeNotice, ForkInitHost, SANDBOX_DENIED_CLASSIFICATION,
