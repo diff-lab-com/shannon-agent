@@ -236,6 +236,20 @@ impl StatusBarWidget {
             ));
         }
 
+        // Remote target pill (VS Code-style remote indicator)
+        if let Some((target, degraded)) = shannon_remote::dynamic::active_target_display() {
+            left.push(Span::raw(" "));
+            let (icon, color) = if degraded {
+                ("\u{26a0}", theme.error)
+            } else {
+                ("\u{21c5}", theme.primary)
+            };
+            left.push(Span::styled(
+                format!("[{icon} {target}]"),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
+        }
+
         // Model (pill-style) with effort level
         if let Some(m) = model {
             left.push(Span::styled(" ", Style::default().fg(theme.border_dim)));

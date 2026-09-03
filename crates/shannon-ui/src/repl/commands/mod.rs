@@ -1,6 +1,7 @@
 //! REPL command dispatch and handler implementations
 
 mod config;
+mod remote;
 mod cost;
 mod debug;
 mod extensions;
@@ -417,6 +418,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         "context",
         "undo",
         "rewind",
+        "remote",
         "checkpoint",
         "notify",
         "webhook",
@@ -525,6 +527,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "context" => config::handle_context(repl, args)?,
             "undo" => session::handle_undo(repl, args)?,
             "rewind" | "checkpoint" => session::handle_rewind(repl, args)?,
+            "remote" => remote::handle_remote(repl, args)?,
             "notify" => web::handle_notify(repl, args)?,
             "webhook" => web::handle_webhook(repl, args)?,
             "routine" => loop_engine::handle_routine(repl, args)?,

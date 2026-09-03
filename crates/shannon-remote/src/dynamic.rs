@@ -66,6 +66,28 @@ impl WorldState {
     }
 }
 
+static ACTIVE_STATE: RwLock<Option<Arc<WorldState>>> = RwLock::new(None);
+
+/// Register the session's world state for process-wide UI indicators
+/// (status-bar pill). One REPL per process; the desktop loopback world
+/// registers harmlessly (nothing reads it there).
+pub fn register_active_state(state: Arc<WorldState>) {
+    if let Ok(mut guard) = ACTIVE_STATE.write() {
+        *guard = Some(state);
+    }
+}
+
+/// `(target name, degraded)` for the active remote target, or `None` when
+/// running locally.
+pub fn active_target_display() -> Option<(String, bool)> {
+    let state = ACTIVE_STATE.read().ok()?.as_ref()?.clone();
+    match state.status() {
+        WorldStatus::Local => None,
+        WorldStatus::Connected => Some((state.active_target()?, false)),
+        WorldStatus::Degraded => Some((state.active_target()?, true)),
+    }
+}
+
 /// Decorator routing every provider call to the active world.
 pub struct DynamicWorld {
     local_fs: Arc<dyn FileSystemProvider>,
