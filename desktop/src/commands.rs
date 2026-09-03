@@ -4,7 +4,9 @@
 //! JavaScript as `invoke("command_name", { args })`.
 
 use serde::{Deserialize, Serialize};
-use shannon_core::query_engine::{PermissionRequest as EnginePermissionRequest, QueryContext, QueryEngine, QueryEvent};
+use shannon_core::query_engine::{
+    PermissionRequest as EnginePermissionRequest, QueryContext, QueryEngine, QueryEvent,
+};
 use shannon_core::settings::SettingsManager;
 use shannon_core::tools::ToolRegistry;
 use shannon_engine::api::client::LlmClient;
@@ -564,13 +566,13 @@ pub async fn send_message(
     // verdicts here; a forwarder task surfaces each as a Tauri
     // PERMISSION_REQUEST and maps the user's scoped answer back to a
     // PermissionChoice.
-    let (perm_tx, mut perm_rx) =
-        tokio::sync::mpsc::unbounded_channel::<EnginePermissionRequest>();
+    let (perm_tx, mut perm_rx) = tokio::sync::mpsc::unbounded_channel::<EnginePermissionRequest>();
 
     let _state_mgr = state.state_manager.clone();
     let _qe_config = state.qe_config.read().await.clone();
 
-    let mut engine = QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new());
+    let mut engine =
+        QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new());
     // Bind the engine to the REAL session and restore prior turns. Both the
     // L0 tee (events.jsonl path) and the conversation clone at the top of
     // process_query key off engine state — a fresh engine with a random id
@@ -682,8 +684,7 @@ pub async fn send_message(
         let mut tool_names_used: std::collections::HashSet<String> =
             std::collections::HashSet::new();
         // /rewind: file paths mutated by this turn's write/edit tool calls.
-        let mut turn_files: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
+        let mut turn_files: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
         // Consume the stream using futures::StreamExt
         use futures::StreamExt;

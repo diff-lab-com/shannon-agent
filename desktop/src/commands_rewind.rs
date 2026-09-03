@@ -63,7 +63,10 @@ pub(crate) fn record_turn(
     working_dir: &Path,
 ) {
     let prompt_preview: Option<String> = if prompt.chars().count() > 80 {
-        Some(format!("{}...", prompt.chars().take(77).collect::<String>()))
+        Some(format!(
+            "{}...",
+            prompt.chars().take(77).collect::<String>()
+        ))
     } else {
         Some(prompt.to_string())
     };
@@ -149,11 +152,15 @@ pub async fn rewind_session(
 
     // Refuse to rewind a session while a query is in flight on it.
     {
-        let session = state.registry.get(crate::session_registry::SessionKey(uuid));
+        let session = state
+            .registry
+            .get(crate::session_registry::SessionKey(uuid));
         if let Some(session) = session {
             let querying = session.querying.lock().await;
             if *querying {
-                return Err("A query is in progress — wait for it to finish before rewinding".into());
+                return Err(
+                    "A query is in progress — wait for it to finish before rewinding".into(),
+                );
             }
         }
     }
@@ -217,7 +224,9 @@ pub async fn rewind_session(
 
     // 4) Trim the in-memory buffer of the live session (if loaded).
     {
-        let session = state.registry.get(crate::session_registry::SessionKey(uuid));
+        let session = state
+            .registry
+            .get(crate::session_registry::SessionKey(uuid));
         if let Some(session) = session {
             let mut messages = session.messages.lock().await;
             let mut seen_users = 0usize;

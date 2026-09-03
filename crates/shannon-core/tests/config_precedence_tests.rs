@@ -10,6 +10,19 @@
 //! `max_context_tokens`) still merge independently through `ConfigBuilder`.
 
 mod config_precedence_tests {
+
+    /// Serializes the tests in this module that mutate process-global
+    /// state (current directory, SHANNON_*/provider env vars). Under
+    /// plain `cargo test` (libtest: one process, many threads — the
+    /// Nightly Coverage invocation) one test's CWD switch redirects
+    /// another's config lookup mid-flight. nextest never sees this (one
+    /// process per test); the lock restores the same isolation under
+    /// libtest.
+    fn global_state_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     use shannon_core::unified_config::{ConfigBuilder, ShannonConfig};
     use shannon_types::provider_config::{
         CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderModelConfig,
@@ -123,6 +136,7 @@ mod config_precedence_tests {
 
     #[test]
     fn test_cli_args_override_env_vars() {
+        let _guard = global_state_lock();
         clear_shannon_env();
 
         // SAFETY: see clear_shannon_env.
@@ -173,6 +187,7 @@ mod config_precedence_tests {
 
     #[test]
     fn test_env_vars_override_project_config() {
+        let _guard = global_state_lock();
         clear_shannon_env();
         // SAFETY: assert isolation between tests.
         unsafe {
@@ -241,6 +256,7 @@ temperature = 0.2
 
     #[test]
     fn test_project_config_overrides_user_config() {
+        let _guard = global_state_lock();
         clear_shannon_env();
         // SAFETY: assert isolation between tests.
         unsafe {
@@ -316,6 +332,7 @@ temperature = 0.9
 
     #[test]
     fn test_invalid_config_fallback() {
+        let _guard = global_state_lock();
         clear_shannon_env();
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join(".shannon.toml");
@@ -356,6 +373,7 @@ broken content [[[
 
     #[test]
     fn test_config_file_not_found() {
+        let _guard = global_state_lock();
         clear_shannon_env();
         clear_shannon_env();
 
@@ -387,6 +405,7 @@ broken content [[[
 
     #[test]
     fn test_config_merging_deep() {
+        let _guard = global_state_lock();
         clear_shannon_env();
         // SAFETY: assert isolation between tests.
         unsafe {
@@ -470,6 +489,7 @@ broken content [[[
 
     #[test]
     fn test_config_type_coercion() {
+        let _guard = global_state_lock();
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join(".shannon.toml");
 
@@ -515,6 +535,7 @@ max_context_tokens = 65536
 
     #[test]
     fn test_config_default_values() {
+        let _guard = global_state_lock();
         clear_shannon_env();
         // SAFETY: assert isolation between tests.
         unsafe {

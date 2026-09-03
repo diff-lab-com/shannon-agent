@@ -39,6 +39,18 @@ mod session_log_tee {
         vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
     }
 
+    /// Serializes the tests in this module: every one points the
+    /// process-global `SHANNON_HOME` at its own tempdir via [`EnvGuard`],
+    /// and under plain `cargo test` (libtest: one process, many threads —
+    /// the Nightly Coverage invocation) the guards overwrite each other,
+    /// sending one test's log writes into another test's home directory.
+    /// nextest never sees this (one process per test); this lock restores
+    /// the same isolation under libtest.
+    fn global_state_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     impl EnvGuard {
         fn set(vars: Vec<(&'static str, Option<&str>)>) -> Self {
             let mut saved = Vec::new();
@@ -197,6 +209,7 @@ mod session_log_tee {
     /// are byte-identical to the requests the engine actually sends.
     #[tokio::test]
     async fn test_request_envelope_rebuild_is_byte_identical_to_wire() {
+        let _guard = global_state_lock();
         let home = TempDir::new().expect("tempdir");
         let session_id = Uuid::new_v4();
         let _env = EnvGuard::set(vec![("SHANNON_HOME", Some(home.path().to_str().unwrap()))]);
@@ -277,6 +290,7 @@ mod session_log_tee {
     /// Verification ④: a 10-turn session stays well under 5 MB on disk.
     #[tokio::test]
     async fn test_ten_turn_session_under_5mb() {
+        let _guard = global_state_lock();
         let home = TempDir::new().expect("tempdir");
         let session_id = Uuid::new_v4();
         let _env = EnvGuard::set(vec![("SHANNON_HOME", Some(home.path().to_str().unwrap()))]);
@@ -325,6 +339,7 @@ mod session_log_tee {
     /// `SHANNON_SESSION_LOG=off` writes nothing.
     #[tokio::test]
     async fn test_switch_off_writes_nothing() {
+        let _guard = global_state_lock();
         let home = TempDir::new().expect("tempdir");
         let session_id = Uuid::new_v4();
         let _env = EnvGuard::set(vec![
@@ -358,6 +373,7 @@ mod session_log_tee {
     /// redaction, plan §4.2; the full policy lands in §4.14).
     #[tokio::test]
     async fn test_secret_in_tool_output_is_redacted() {
+        let _guard = global_state_lock();
         struct LeakyTool;
 
         #[async_trait]

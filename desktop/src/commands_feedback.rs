@@ -22,7 +22,11 @@ fn feedback_dir() -> PathBuf {
 }
 
 fn feedback_path(session_id: &str) -> Result<PathBuf, String> {
-    if session_id.is_empty() || session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
+    if session_id.is_empty()
+        || session_id.contains('/')
+        || session_id.contains('\\')
+        || session_id.contains("..")
+    {
         return Err("invalid session id".into());
     }
     Ok(feedback_dir().join(format!("{session_id}.json")))
@@ -80,9 +84,7 @@ pub async fn record_message_feedback(
 
 /// All feedback recorded for a session (missing file → empty map).
 #[tauri::command]
-pub async fn list_message_feedback(
-    session_id: String,
-) -> Result<HashMap<String, String>, String> {
+pub async fn list_message_feedback(session_id: String) -> Result<HashMap<String, String>, String> {
     Ok(read_map(&session_id))
 }
 
@@ -130,9 +132,18 @@ pub fn list_feedback_sessions_impl() -> Vec<FeedbackSessionSummary> {
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        out.push(FeedbackSessionSummary { session_id: session_id.to_string(), up, down, updated_at });
+        out.push(FeedbackSessionSummary {
+            session_id: session_id.to_string(),
+            up,
+            down,
+            updated_at,
+        });
     }
-    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.session_id.cmp(&b.session_id)));
+    out.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then(a.session_id.cmp(&b.session_id))
+    });
     out
 }
 

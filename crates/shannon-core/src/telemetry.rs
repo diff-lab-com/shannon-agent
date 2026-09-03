@@ -37,7 +37,8 @@
 //! - a bucket holding nothing but the `session/start` preamble folds into
 //!   the root span rather than emitting an empty turn row.
 //!
-//! Metrics are projection counts: [`project_session_analytics`] feeds the
+//! Metrics are projection counts:
+//! [`project_session_analytics`](crate::session_log::projections::project_session_analytics) feeds the
 //! OTel counters on every export ("metrics 由投影计数").
 //!
 //! ## Switch matrix

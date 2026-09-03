@@ -71,8 +71,8 @@ pub async fn get_session_context_stats(
     state: tauri::State<'_, AppState>,
     session_id: String,
 ) -> Result<SessionContextStats, String> {
-    let uuid =
-        uuid::Uuid::parse_str(&session_id).map_err(|_| format!("invalid session id {session_id}"))?;
+    let uuid = uuid::Uuid::parse_str(&session_id)
+        .map_err(|_| format!("invalid session id {session_id}"))?;
     let engine = restored_engine(&state, uuid).await?;
     Ok(SessionContextStats {
         estimated_tokens: engine.estimate_conversation_tokens(),
@@ -93,7 +93,7 @@ pub struct GitDiffFile {
 pub struct GitDiffSummary {
     pub is_repo: bool,
     pub files: Vec<GitDiffFile>,
-    /// Unified patch, capped at [`MAX_PATCH_BYTES`] (larger diffs are
+    /// Unified patch, capped at `MAX_PATCH_BYTES` (larger diffs are
     /// truncated; the UI says so instead of silently clipping).
     pub patch: String,
     pub truncated: bool,
@@ -103,7 +103,11 @@ pub struct GitDiffSummary {
 const MAX_PATCH_BYTES: usize = 200_000;
 
 fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git").current_dir(dir).args(args).output().ok()?;
+    let out = Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -215,7 +219,11 @@ pub struct CompactSessionResult {
 fn message_text(message: &shannon_engine::api::Message) -> Option<String> {
     match &message.content {
         shannon_engine::api::MessageContent::Text(t) => {
-            if t.trim().is_empty() { None } else { Some(t.clone()) }
+            if t.trim().is_empty() {
+                None
+            } else {
+                Some(t.clone())
+            }
         }
         shannon_engine::api::MessageContent::Blocks(blocks) => {
             let text = blocks
@@ -226,7 +234,11 @@ fn message_text(message: &shannon_engine::api::Message) -> Option<String> {
                 })
                 .collect::<Vec<_>>()
                 .join("");
-            if text.trim().is_empty() { None } else { Some(text) }
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(text)
+            }
         }
     }
 }
@@ -240,7 +252,9 @@ fn message_text(message: &shannon_engine::api::Message) -> Option<String> {
 fn build_turns(messages: &[shannon_engine::api::Message]) -> Vec<(String, String)> {
     let mut turns: Vec<(String, String)> = Vec::new();
     for m in messages {
-        let Some(text) = message_text(m) else { continue };
+        let Some(text) = message_text(m) else {
+            continue;
+        };
         if m.role == "user" {
             turns.push((text, String::new()));
         } else if let Some(last) = turns.last_mut() {
@@ -280,7 +294,7 @@ pub async fn compact_session(
         }
     }
 
-    let mut engine = restored_engine(&state, uuid).await?;
+    let engine = restored_engine(&state, uuid).await?;
     let history = engine.conversation_history();
     if history.is_empty() {
         return Ok(CompactSessionResult {

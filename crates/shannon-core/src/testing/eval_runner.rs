@@ -849,7 +849,8 @@ pub struct TaskRunRecord {
     /// spawn errors); serialized with every contracted field present.
     #[serde(default)]
     pub metrics: Option<TaskMetrics>,
-    /// Winning failure class ([`FAILURE_CLASSES`]-vocabulary) or `None` when
+    /// Winning failure class
+    /// ([`FAILURE_CLASSES`](crate::testing::eval_metrics::FAILURE_CLASSES)-vocabulary) or `None` when
     /// passed or unclassified by the rule table.
     #[serde(default)]
     pub failure_class: Option<String>,
