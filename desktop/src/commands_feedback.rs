@@ -86,6 +86,61 @@ pub async fn list_message_feedback(
     Ok(read_map(&session_id))
 }
 
+/// PM-12 display half: per-session 👍/👎 aggregates so the collected signal
+/// is actually visible. Only sessions with at least one rating are listed,
+/// most recently updated first.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FeedbackSessionSummary {
+    pub session_id: String,
+    pub up: usize,
+    pub down: usize,
+    /// File mtime (epoch seconds) — a proxy for "last feedback activity".
+    pub updated_at: i64,
+}
+
+pub fn list_feedback_sessions_impl() -> Vec<FeedbackSessionSummary> {
+    let dir = feedback_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<FeedbackSessionSummary> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&raw) else {
+            continue;
+        };
+        let up = map.values().filter(|r| r.as_str() == "up").count();
+        let down = map.values().filter(|r| r.as_str() == "down").count();
+        if up + down == 0 {
+            continue;
+        }
+        let Some(session_id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let updated_at = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        out.push(FeedbackSessionSummary { session_id: session_id.to_string(), up, down, updated_at });
+    }
+    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.session_id.cmp(&b.session_id)));
+    out
+}
+
+#[tauri::command]
+pub async fn list_feedback_sessions() -> Result<Vec<FeedbackSessionSummary>, String> {
+    Ok(list_feedback_sessions_impl())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -104,5 +159,36 @@ mod tests {
         assert!(is_valid_rating("up"));
         assert!(is_valid_rating("down"));
         assert!(!is_valid_rating("meh"));
+    }
+
+    #[test]
+    fn list_feedback_sessions_aggregates_per_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("feedback");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("sess-a.json"),
+            r#"{"k1":"up","k2":"down","k3":"up"}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("sess-b.json"), r#"{"k1":"down"}"#).unwrap();
+        std::fs::write(dir.join("sess-empty.json"), "{}").unwrap();
+        std::fs::write(dir.join("ignore.txt"), "not json").unwrap();
+
+        let prev = std::env::var("SHANNON_HOME").ok();
+        unsafe { std::env::set_var("SHANNON_HOME", tmp.path()) };
+        let mut summaries = list_feedback_sessions_impl();
+        match prev {
+            Some(prev) => unsafe { std::env::set_var("SHANNON_HOME", prev) },
+            None => unsafe { std::env::remove_var("SHANNON_HOME") },
+        }
+
+        summaries.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].session_id, "sess-a");
+        assert_eq!(summaries[0].up, 2);
+        assert_eq!(summaries[0].down, 1);
+        assert_eq!(summaries[1].session_id, "sess-b");
+        assert_eq!(summaries[1].down, 1);
     }
 }
