@@ -396,6 +396,17 @@ export async function listMessageFeedback(
   return invoke('list_message_feedback', { sessionId })
 }
 
+export interface FeedbackSessionSummary {
+  session_id: string
+  up: number
+  down: number
+  updated_at: number
+}
+
+export async function listFeedbackSessions(): Promise<FeedbackSessionSummary[]> {
+  return invoke('list_feedback_sessions')
+}
+
 // --- Sessions ---
 
 export async function newSession(): Promise<string> {

@@ -49,7 +49,11 @@ import WorktreePanel from '@/components/tasks/WorktreePanel'
 import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
 import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
 
-type Tab = 'active' | 'history' | 'worktrees'
+// IA (2026-09): tabs map to user jobs, not implementation panels —
+// active work / recurring routines / execution pipelines / history / worktrees.
+// Previously every panel (DAG, templates, hook pipeline, execution log)
+// stacked on one scrolling page.
+type Tab = 'active' | 'routines' | 'pipelines' | 'history' | 'worktrees'
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useCatalog()
@@ -182,7 +186,7 @@ export default function Tasks() {
 
         {/* P2.2: Active / History / Worktrees tab switcher */}
         <div role="tablist" aria-label={t('tasks.tabs.aria')} className="flex gap-xs mb-lg border-b border-outline-variant/30">
-          {(['active', 'history', 'worktrees'] as const).map(tabId => {
+          {(['active', 'routines', 'pipelines', 'history', 'worktrees'] as const).map(tabId => {
             const selected = tab === tabId
             return (
               <Button
@@ -206,6 +210,16 @@ export default function Tasks() {
           <HistoryView onGoToActive={() => setTab('active')} />
         ) : tab === 'worktrees' ? (
           <WorktreePanel />
+        ) : tab === 'routines' ? (
+          <div className="space-y-gutter">
+            <ScheduleDAGView routines={scheduledTasks} onSelectRoutine={setSelectedRoutineId} />
+            <RoutineTemplatesBrowser onInstantiated={() => void refreshScheduled()} />
+          </div>
+        ) : tab === 'pipelines' ? (
+          <div className="space-y-gutter">
+            <HookTaskPipeline />
+            <TaskExecutionLog tasks={backgroundTasks} onCancel={setCancelTarget} />
+          </div>
         ) : (
           <>
         {errorMsg && (
@@ -281,22 +295,11 @@ export default function Tasks() {
               />
               <EfficiencyCard percentage={efficiencyPct} variant="full" />
               <AgentAllocation agents={agents} />
-              <HookTaskPipeline />
-            </div>
-            <div className="col-span-12">
-              <ScheduleDAGView routines={scheduledTasks} onSelectRoutine={setSelectedRoutineId} />
-            </div>
-            <div className="col-span-12">
-              <TaskExecutionLog tasks={backgroundTasks} onCancel={setCancelTarget} />
             </div>
           </div>
         )}
           </>
         )}
-      </div>
-
-      <div className="mt-xl">
-        <RoutineTemplatesBrowser onInstantiated={() => void refreshScheduled()} />
       </div>
 
       <TaskDetailDrawer

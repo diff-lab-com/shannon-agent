@@ -2395,5 +2395,14 @@
   "chat.message.rewind.success": "Conversation rewound",
   "chat.message.rewind.failed": "Couldn't rewind",
   "chat.message.dislike.aria": "Dislike response",
-  "chat.message.feedback.failed": "Couldn't save your feedback"
+  "chat.message.feedback.failed": "Couldn't save your feedback",
+  "settings.feedback.title": "Message feedback",
+  "settings.feedback.help": "Ratings you gave assistant replies (👍 / 👎), aggregated per conversation.",
+  "settings.feedback.loading": "Loading feedback…",
+  "settings.feedback.empty": "No feedback recorded yet — rate a reply in any chat and it shows up here.",
+  "settings.feedback.listAria": "Feedback per conversation",
+  "settings.feedback.upAria": "thumbs up",
+  "settings.feedback.downAria": "thumbs down",
+  "tasks.tab.routines": "Routines",
+  "tasks.tab.pipelines": "Pipelines"
 }

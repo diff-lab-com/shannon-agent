@@ -160,6 +160,7 @@ export const handlers: Record<string, MockHandler> = {
   async list_checkpoints() { await delay(30); return [] },
   async list_message_feedback() { await delay(30); return {} },
   async record_message_feedback() { await delay(30) },
+  async list_feedback_sessions() { await delay(30); return [] },
   async rewind_session() { await delay(80); return clone(MOCK_MESSAGES) },
   // §4.14 — Turn Timeline: demo data regardless of id (sessions come from
   // MOCK_SESSIONS, which do not have real L0 logs to project).

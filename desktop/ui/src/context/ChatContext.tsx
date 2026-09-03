@@ -6,16 +6,12 @@
 // which owns the actual state and actions; this file only declares the slice
 // type, the context, the useChat hook, and the <ChatProvider>.
 //
-// P2-5a: <ChatProvider> wraps its children with
-// `<ChatV2RuntimeProvider>` so the assistant-ui runtime mounts (gated on the
-// `chat.v2` feature flag) without disturbing the slice contract that 19
-// existing consumers rely on. When the flag is OFF, ChatV2RuntimeProvider
-// is a passthrough — the runtime never mounts and `<ChatContext.Provider>`
-// behaves exactly as it did before P2-5a. See `docs/plans/chat-upgrade.md`
-// §3.1 acceptance criterion #3.
+// chat.v2 decision (2026-09): production chat renders the legacy path only —
+// the assistant-ui runtime mount and the dev-only /chat-v2-spike route were
+// removed. The bridge library under src/lib/runtime/ stays as a dormant,
+// tested asset; see the ChatProvider note below if that work resumes.
 
 import { createContext, useContext, type ReactNode } from 'react'
-import { ChatV2RuntimeProvider } from '@/lib/runtime/ChatV2RuntimeProvider'
 import type { CheckpointInfo, FeedbackRating } from '@/lib/tauri-api'
 import type { ChatMessage, ToolCall, UsagePayload } from '@/types'
 
@@ -51,9 +47,11 @@ export function useChat(): ChatContextValue {
 }
 
 /**
- * Provider for the chat slice. P2-5a: when chat.v2 is on, children also sit
- * inside the assistant-ui `<AssistantRuntimeProvider>`. The slice contract
- * (context value shape, `useChat()` return) is unchanged.
+ * Provider for the chat slice. chat.v2 decision (2026-09): production chat
+ * renders the legacy path only — the assistant-ui runtime mount and the
+ * dev-only /chat-v2-spike route were removed. The bridge library under
+ * src/lib/runtime/ stays as a dormant, tested asset for a future upgrade;
+ * re-wrap children in `ChatV2RuntimeProvider` if that work resumes.
  */
 export function ChatProvider({
   value,
@@ -62,9 +60,5 @@ export function ChatProvider({
   value: ChatContextValue
   children: ReactNode
 }) {
-  return (
-    <ChatV2RuntimeProvider>
-      <ChatContext.Provider value={value}>{children}</ChatContext.Provider>
-    </ChatV2RuntimeProvider>
-  )
+  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>
 }
