@@ -134,20 +134,25 @@ pub async fn execute_with(
     let base_path = input.path.as_deref().unwrap_or(".");
     let base = PathBuf::from(base_path);
 
-    // Prevent path traversal (e.g. "../../etc") by checking components
+    // Prevent path traversal (e.g. "../../etc") by checking components.
+    // Confinement compares against the *world's* canonical root: on a remote
+    // target both the path and its resolution live on the other machine, and
+    // the local cwd is meaningless there.
     for component in base.components() {
         if matches!(component, std::path::Component::ParentDir) {
-            // Allow if path resolves within cwd after canonicalization
+            // Allow if path resolves within the world's canonical base after
+            // canonicalization (symlinks resolved remotely via SFTP).
             if let Ok(canonical) = fs.canonicalize_blocking(&base) {
-                let cwd = std::env::current_dir().unwrap_or_default();
-                if !canonical.starts_with(&cwd) {
-                    return Ok(ToolOutput {
-                        content: format!(
-                            "Path traversal blocked: '{base_path}' resolves outside project"
-                        ),
-                        is_error: true,
-                        metadata: HashMap::new(),
-                    });
+                if let Ok(base_canonical) = fs.canonicalize_blocking(Path::new(".")) {
+                    if !canonical.starts_with(&base_canonical) {
+                        return Ok(ToolOutput {
+                            content: format!(
+                                "Path traversal blocked: '{base_path}' resolves outside project"
+                            ),
+                            is_error: true,
+                            metadata: HashMap::new(),
+                        });
+                    }
                 }
             }
             break;
@@ -155,7 +160,8 @@ pub async fn execute_with(
     }
 
     // If the base directory does not exist, return early with empty results.
-    if !base.exists() {
+    // (Provider-checked so the probe hits the active world's disk.)
+    if !fs.exists_blocking(&base) {
         return Ok(ToolOutput {
             content: format!("Directory not found: {base_path}"),
             is_error: true,
@@ -191,51 +197,37 @@ pub async fn execute_with(
     let glob_pattern = glob::Pattern::new(pattern)
         .map_err(|e| ToolError::InvalidInput(format!("Invalid glob pattern '{pattern}': {e}")))?;
 
-    // Use `ignore::WalkBuilder` for .gitignore-aware traversal.
-    let mut builder = ignore::WalkBuilder::new(&base);
-    builder.hidden(true); // skip hidden files
-    builder.git_ignore(true); // respect .gitignore
-    builder.git_global(true); // respect global gitignore
-    builder.git_exclude(true); // respect .git/info/exclude
-
+    // .gitignore-aware traversal through the injected filesystem world, so
+    // matching runs against the same machine the files live on.
     let mut results: Vec<GlobResult> = Vec::new();
 
-    for entry in builder.build() {
-        match entry {
-            Ok(dir_entry) => {
-                if let Some(file_type) = dir_entry.file_type() {
-                    if !file_type.is_file() {
-                        continue;
-                    }
-                }
+    fs.walk_blocking(&base, &mut |entry| {
+        if !entry.is_dir {
+            let path = entry.path.as_path();
 
-                let path = dir_entry.path();
+            // Match the path *relative* to the base directory. This ensures
+            // `*.rs` only matches files in the root, not `src/mod.rs`.
+            let rel = match path.strip_prefix(&base) {
+                Ok(r) => r,
+                Err(_) => return true,
+            };
 
-                // Match the path *relative* to the base directory. This ensures
-                // `*.rs` only matches files in the root, not `src/mod.rs`.
-                let rel = match path.strip_prefix(&base) {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
-
-                if !glob_pattern.matches_path_with(rel, MATCH_OPTS) {
-                    continue;
-                }
-
-                // Apply user-supplied exclude patterns.
-                if matches_any_exclude(rel, excludes) {
-                    continue;
-                }
-
-                if let Some(result) = build_result(fs, path) {
-                    results.push(result);
-                }
+            if !glob_pattern.matches_path_with(rel, MATCH_OPTS) {
+                return true;
             }
-            Err(err) => {
-                tracing::debug!("glob walk error: {}", err);
+
+            // Apply user-supplied exclude patterns.
+            if matches_any_exclude(rel, excludes) {
+                return true;
+            }
+
+            if let Some(result) = build_result(fs, path) {
+                results.push(result);
             }
         }
-    }
+        true
+    })
+    .map_err(|e| ToolError::ExecutionFailed(format!("glob walk failed: {e}")))?;
 
     sort_results(&mut results);
     let count = results.len();
