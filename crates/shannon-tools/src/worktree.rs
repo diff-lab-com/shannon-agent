@@ -532,6 +532,18 @@ impl WorktreeTool {
 #[async_trait]
 impl Tool for WorktreeTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
+        // Worktrees manipulate the *local* process cwd (std::env::set_current_dir),
+        // which is meaningless — and misleading — when the execution world is
+        // remote. Deny with a clear message instead of splitting the world.
+        if self.process.capabilities().is_remote {
+            return Ok(ToolOutput {
+                content: "git worktrees are local-only: they cannot be created while a \
+                          remote target is active. Disconnect with `/remote disconnect` first."
+                    .to_string(),
+                is_error: true,
+                metadata: HashMap::new(),
+            });
+        }
         // Parse operation type from input
         let operation = input
             .get("operation")
