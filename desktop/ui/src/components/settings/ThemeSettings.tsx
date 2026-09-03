@@ -61,7 +61,7 @@ export default function ThemeSettings() {
                     </div>
                   </div>
                 </div>
-                <p className={cn('text-center font-label-md', theme === opt.id ? 'text-primary font-bold' : 'text-on-surface')}>
+                <p className={cn('text-center font-label-md', theme === opt.id ? 'text-on-surface font-bold' : 'text-on-surface')}>
                   {opt.id === 'system' && <span className="material-symbols-outlined text-[14px] align-middle mr-xs">monitor</span>}
                   {opt.label}
                 </p>

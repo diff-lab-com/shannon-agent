@@ -184,7 +184,7 @@ export default function Featured() {
                     className={cn(
                       "text-label-sm mb-sm inline-flex items-center gap-xs px-sm py-xs rounded-lg",
                       feedbackForVendor.ok
-                        ? "bg-primary-container/50 text-on-primary-container"
+                        ? "bg-primary-container text-on-primary-container"
                         : "bg-error-container/50 text-on-error-container",
                     )}
                   >
@@ -265,8 +265,8 @@ function TrustBadge({ trust }: { trust: FeaturedVendor["trust"] }) {
   const t = (id: string) => intl.formatMessage({ id })
 
   const labels: Record<FeaturedVendor["trust"], { text: string; cls: string }> = {
-    verified: { text: t('extensions.featured.trust.verified'), cls: "bg-primary-container/50 text-on-primary-container" },
-    official: { text: t('extensions.featured.trust.official'), cls: "bg-secondary-container/50 text-on-secondary-container" },
+    verified: { text: t('extensions.featured.trust.verified'), cls: "bg-primary-container text-on-primary-container" },
+    official: { text: t('extensions.featured.trust.official'), cls: "bg-secondary-container text-on-secondary-container" },
     community: { text: t('extensions.featured.trust.community'), cls: "bg-tertiary-container/50 text-on-tertiary-container" },
     unknown: { text: t('extensions.featured.trust.unknown'), cls: "bg-surface-container-highest text-on-surface-variant" },
   };

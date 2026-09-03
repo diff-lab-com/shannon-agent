@@ -308,8 +308,8 @@ function AgentCard({
 }
 
 const TRUST_LABELS: Record<AgentCatalogEntry['trust'], { textKey: string; cls: string }> = {
-  verified: { textKey: "extensions.agents.trust.verified", cls: "bg-primary-container/50 text-on-primary-container" },
-  official: { textKey: "extensions.agents.trust.official", cls: "bg-secondary-container/50 text-on-secondary-container" },
+  verified: { textKey: "extensions.agents.trust.verified", cls: "bg-primary-container text-on-primary-container" },
+  official: { textKey: "extensions.agents.trust.official", cls: "bg-secondary-container text-on-secondary-container" },
   community: { textKey: "extensions.agents.trust.community", cls: "bg-tertiary-container/50 text-on-tertiary-container" },
   unknown: { textKey: "extensions.agents.trust.unknown", cls: "bg-surface-container-highest text-on-surface-variant" },
 };

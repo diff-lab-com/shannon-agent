@@ -145,40 +145,40 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
             const isActive = agent.status === 'active' || agent.status === 'running'
             const isMenuOpen = openMenuId === agent.id
             return (
-              <div
-                key={agent.id}
-                role="button"
-                tabIndex={0}
-                aria-label={`${agent.name} — ${agent.status}${agent.worktree_path ? ` (${shortWorktree(agent.worktree_path)})` : ''}`}
-                className="bg-surface-container-lowest/70 backdrop-blur-md border border-outline-variant/20 rounded-xl p-md flex flex-col shadow-sm cursor-pointer hover:border-primary/30 transition-colors group relative"
-                onClick={() => handleAgentClick(agent.id, agent.session_id)}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleAgentClick(agent.id, agent.session_id) } }}
-              >
-                <div className="flex items-center justify-between mb-sm">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                      <span className="material-symbols-outlined icon-md text-on-surface-variant opacity-70">{iconForAgent(agent.name)}</span>
+              <div key={agent.id} className="relative">
+                {/* Menu trigger lives outside the role="button" card — a
+                    nested interactive control fails axe nested-interactive. */}
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={intl.formatMessage({ id: 'opc.agentSwarm.actions.name' }, { name: agent.name })}
+                  aria-haspopup="menu"
+                  aria-expanded={isMenuOpen}
+                  className="absolute right-2 top-2 z-10 rounded text-on-surface-variant hover:bg-surface-container-high/60"
+                  onClick={e => { e.stopPropagation(); setOpenMenuId(isMenuOpen ? null : agent.id) }}
+                >
+                  <span className="material-symbols-outlined icon-sm">more_vert</span>
+                </Button>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${agent.name} — ${agent.status}${agent.worktree_path ? ` (${shortWorktree(agent.worktree_path)})` : ''}`}
+                  className="bg-surface-container-lowest/70 backdrop-blur-md border border-outline-variant/20 rounded-xl p-md flex flex-col shadow-sm cursor-pointer hover:border-primary/30 transition-colors group"
+                  onClick={() => handleAgentClick(agent.id, agent.session_id)}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleAgentClick(agent.id, agent.session_id) } }}
+                >
+                  <div className="flex items-center justify-between mb-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                        <span className="material-symbols-outlined icon-md text-on-surface-variant opacity-70">{iconForAgent(agent.name)}</span>
+                      </div>
+                      <div>
+                        <div className="font-label-md text-[14px] font-bold">{agent.name}</div>
+                        <div className="font-label-sm text-[11px] text-on-surface-variant">{agent.model || intl.formatMessage({ id: 'opc.agentSwarm.defaultModel' })}</div>
+                      </div>
                     </div>
-                    <div>
-                      <div className="font-label-md text-[14px] font-bold">{agent.name}</div>
-                      <div className="font-label-sm text-[11px] text-on-surface-variant">{agent.model || intl.formatMessage({ id: 'opc.agentSwarm.defaultModel' })}</div>
-                    </div>
+                    <span className={cn("w-2 h-2 rounded-full shrink-0 mr-6", isActive ? 'bg-tertiary animate-pulse' : 'bg-outline-variant')} />
                   </div>
-                  <div className="flex items-center gap-1">
-                    <span className={cn("w-2 h-2 rounded-full shrink-0", isActive ? 'bg-tertiary animate-pulse' : 'bg-outline-variant')} />
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={intl.formatMessage({ id: 'opc.agentSwarm.actions.name' }, { name: agent.name })}
-                      aria-haspopup="menu"
-                      aria-expanded={isMenuOpen}
-                      className="rounded text-on-surface-variant hover:bg-surface-container-high/60"
-                      onClick={e => { e.stopPropagation(); setOpenMenuId(isMenuOpen ? null : agent.id) }}
-                    >
-                      <span className="material-symbols-outlined icon-sm">more_vert</span>
-                    </Button>
-                  </div>
-                </div>
                 <div className="flex items-center gap-2">
                   <div className={cn("w-1 h-3 rounded-full shrink-0", isActive ? 'bg-tertiary' : 'bg-outline-variant')} />
                   <span className={cn("font-label-sm text-[12px]", isActive ? 'text-tertiary' : 'text-on-surface-variant italic opacity-80')}>
@@ -191,6 +191,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                     <span className="font-mono truncate max-w-[200px]" title={agent.worktree_path}>{shortWorktree(agent.worktree_path)}</span>
                   </div>
                 ) : null}
+                </div>
 
                 {isMenuOpen ? (
                   <div

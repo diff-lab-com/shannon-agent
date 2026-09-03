@@ -98,7 +98,6 @@ export function KanbanBoard({
         className={mode === 'observe'
           ? 'flex-1 overflow-x-auto overflow-y-hidden'
           : 'flex gap-4 overflow-x-auto pb-4 custom-scrollbar items-start min-h-[600px]'}
-        role="grid"
         aria-label={intl.formatMessage({ id: 'shared.kanban.board.aria' })}
       >
         <div className={mode === 'observe'
@@ -153,7 +152,6 @@ function KanbanColumn({ title, icon, dotClass, bgClass, count, observe, emptyLab
   const [isOver, setIsOver] = useState(false)
   return (
     <section
-      role="row"
       aria-label={title}
       onDragOver={onDrop ? e => { e.preventDefault(); setIsOver(true) } : undefined}
       onDragLeave={onDrop ? () => setIsOver(false) : undefined}

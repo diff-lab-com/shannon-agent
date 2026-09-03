@@ -233,7 +233,7 @@ function InstalledSection({
                       className={cn(
                         "text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0",
                         srv.connected
-                          ? "bg-primary-container/60 text-on-primary-container"
+                          ? "bg-primary-container text-on-primary-container"
                           : "bg-surface-container-highest text-on-surface-variant",
                       )}
                     >
@@ -251,12 +251,12 @@ function InstalledSection({
                   )}
                 </div>
                 <Button
-                  variant="destructive"
+                  variant="ghost"
                   size="sm"
                   type="button"
                   onClick={() => onUninstall(srv.name)}
                   disabled={isBusy}
-                  className="bg-error-container/40 text-on-error-container hover:bg-error-container/70"
+                  className="bg-error-container text-on-error-container hover:brightness-95"
                 >
                   {isBusy ? "…" : t("extensions.mcp.remove")}
                 </Button>

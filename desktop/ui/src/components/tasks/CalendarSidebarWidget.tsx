@@ -87,7 +87,7 @@ export default function CalendarSidebarWidget({
       </div>
       <div className="grid grid-cols-7 gap-1 text-center font-label-md">
         {Array.from({ length: startDay }, (_, i) => (
-          <span key={`prev-${i}`} className="py-2 text-outline/30">{prevMonthDays - startDay + i + 1}</span>
+          <span key={`prev-${i}`} aria-hidden="true" className="py-2 text-muted-foreground">{prevMonthDays - startDay + i + 1}</span>
         ))}
         {Array.from({ length: daysInMonth }, (_, i) => {
           const day = i + 1
