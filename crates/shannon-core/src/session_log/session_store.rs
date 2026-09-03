@@ -557,14 +557,17 @@ impl SessionStore {
                     parent_span_id: None,
                     body,
                 };
-                out.push_str(&serde_json::to_string(&event).map_err(|e| {
-                    SessionStoreError::Serialization(e.to_string())
-                })?);
+                out.push_str(
+                    &serde_json::to_string(&event)
+                        .map_err(|e| SessionStoreError::Serialization(e.to_string()))?,
+                );
                 out.push('\n');
                 seq += 1;
                 Ok::<(), SessionStoreError>(())
             };
-            push(SessionEventBody::TurnStart(TurnStartPayload { query_id: None }))?;
+            push(SessionEventBody::TurnStart(TurnStartPayload {
+                query_id: None,
+            }))?;
             push(SessionEventBody::UserMessage(UserMessagePayload {
                 source: UserMessagePayload::SOURCE_USER.into(),
                 content: user.clone(),
@@ -575,11 +578,13 @@ impl SessionStore {
                 delta: assistant.clone(),
                 thinking: false,
             }))?;
-            push(SessionEventBody::AssistantMessage(AssistantMessagePayload {
-                content: assistant.clone(),
-                usage: None,
-                interrupted: false,
-            }))?;
+            push(SessionEventBody::AssistantMessage(
+                AssistantMessagePayload {
+                    content: assistant.clone(),
+                    usage: None,
+                    interrupted: false,
+                },
+            ))?;
             push(SessionEventBody::TurnEnd(TurnEndPayload {
                 reason: "compact".into(),
                 usage: None,
@@ -966,8 +971,14 @@ mod tests {
         seed_session(&store, &id);
 
         let turns = vec![
-            ("compacted summary of 3 earlier turns".to_string(), "summary text".to_string()),
-            ("follow-up question".to_string(), "kept recent answer".to_string()),
+            (
+                "compacted summary of 3 earlier turns".to_string(),
+                "summary text".to_string(),
+            ),
+            (
+                "follow-up question".to_string(),
+                "kept recent answer".to_string(),
+            ),
         ];
         let written = store.rewrite_with_conversation(&id, &turns).unwrap();
         assert_eq!(written, 10); // 5 events per turn
