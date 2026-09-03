@@ -11,7 +11,8 @@
 > [Future Considerations](#future-considerations-p1-p3) — PTY terminal,
 > RepoMap, Computer Use, Surface-agnostic protocol, Guardian Agent, etc.
 > The next major effort lives in `shannon-desktop` (Scheduled Sprint 2-3 +
-> Triage queue) per `shannon-desktop/SCHEDULED-FIX-PLAN.md`.
+> Triage queue); planning docs now live under `docs/plans/` — the old
+> `shannon-desktop/SCHEDULED-FIX-PLAN.md` path no longer exists.
 
 ## Current Infrastructure Status
 
