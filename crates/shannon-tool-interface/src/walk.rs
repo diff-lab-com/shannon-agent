@@ -63,7 +63,7 @@ pub fn provider_walk(
 }
 
 fn walk_dir(
-    metadata: StatFn<'_>,
+    _metadata: StatFn<'_>,
     read_text: ReadTextFn<'_>,
     list_dir: ListDirFn<'_>,
     dir: &Path,
@@ -100,7 +100,7 @@ fn walk_dir(
         }
         let descend = cb(&entry);
         if entry.is_dir && descend {
-            walk_dir(metadata, read_text, list_dir, &entry.path, use_gitignore, levels, cb)?;
+            walk_dir(_metadata, read_text, list_dir, &entry.path, use_gitignore, levels, cb)?;
         }
     }
 
