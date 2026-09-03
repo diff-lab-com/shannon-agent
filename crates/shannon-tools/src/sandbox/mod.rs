@@ -496,6 +496,7 @@ pub fn assemble(
                     fs,
                     process: proc_world,
                     denial_classifier: Some(kernel_denial_classifier()),
+                    world_sandbox: None,
                 },
                 kind: "landlock",
                 notices,
@@ -525,6 +526,7 @@ pub fn assemble_local(settings: &SandboxSettings, project_dir: &Path) -> Assembl
             )),
             process: Arc::new(SandboxedProcess::new(proc_inner, "local", Vec::new())),
             denial_classifier: None,
+            world_sandbox: None,
         },
         kind: "local",
         notices: vec![DegradeNotice::new(
