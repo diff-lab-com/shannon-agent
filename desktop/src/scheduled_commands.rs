@@ -26,8 +26,8 @@ use shannon_core::scheduled_routines::{
 use shannon_core::scheduled_runs::{ScheduledRun, ScheduledRunsStore};
 use shannon_core::scheduled_task_store::ScheduledTaskStore;
 use shannon_core::triggered_routines::TriggeredRoutineRegistry;
-use tokio::sync::RwLock;
 use tauri::Emitter;
+use tokio::sync::RwLock;
 
 use crate::commands::AppState;
 
@@ -745,10 +745,7 @@ pub async fn mark_triage_read(
     id: String,
 ) -> Result<TriageItem, String> {
     let item = state.triage_store().mark_read(&id)?;
-    let _ = app_handle.emit(
-        crate::events::event_names::TRIAGE_UPDATED,
-        &item,
-    );
+    let _ = app_handle.emit(crate::events::event_names::TRIAGE_UPDATED, &item);
     Ok(item)
 }
 
@@ -762,10 +759,7 @@ pub async fn archive_triage_item(
     id: String,
 ) -> Result<TriageItem, String> {
     let item = state.triage_store().archive(&id)?;
-    let _ = app_handle.emit(
-        crate::events::event_names::TRIAGE_UPDATED,
-        &item,
-    );
+    let _ = app_handle.emit(crate::events::event_names::TRIAGE_UPDATED, &item);
     Ok(item)
 }
 

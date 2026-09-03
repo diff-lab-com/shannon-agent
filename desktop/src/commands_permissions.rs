@@ -46,7 +46,13 @@ pub(crate) async fn prompt_user(
     // Store the sender
     {
         let mut pending = state.pending_permissions.lock().await;
-        pending.insert(request_id.clone(), PendingPermission { tx, tool: tool.clone() });
+        pending.insert(
+            request_id.clone(),
+            PendingPermission {
+                tx,
+                tool: tool.clone(),
+            },
+        );
     }
 
     // Emit event to frontend
@@ -86,8 +92,7 @@ pub async fn request_permission(
     input: serde_json::Value,
     risk: String,
 ) -> Result<bool, String> {
-    let decision =
-        prompt_user(&state, &app_handle, tool, input, risk, 30).await;
+    let decision = prompt_user(&state, &app_handle, tool, input, risk, 30).await;
     Ok(decision != PermissionDecision::Deny)
 }
 
