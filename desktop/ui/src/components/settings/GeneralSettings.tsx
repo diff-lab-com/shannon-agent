@@ -11,6 +11,7 @@ import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type { ApprovalMode } from '@/types'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
+import { FeedbackSummaryCard } from './FeedbackSummaryCard'
 
 type ApprovalModeKey = ApprovalMode
 
@@ -189,6 +190,9 @@ export default function GeneralSettings() {
               : intl.formatMessage({ id: 'settings.notifications.testButton' })}
           </Button>
         </section>
+
+        {/* PM-12: persisted message ratings, aggregated per session */}
+        <FeedbackSummaryCard />
 
         {/* Re-run setup wizard */}
         <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">

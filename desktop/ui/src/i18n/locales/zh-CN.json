@@ -2395,5 +2395,14 @@
   "chat.message.rewind.success": "已回溯",
   "chat.message.rewind.failed": "回溯失败",
   "chat.message.dislike.aria": "点踩该回复",
-  "chat.message.feedback.failed": "保存反馈失败"
+  "chat.message.feedback.failed": "保存反馈失败",
+  "settings.feedback.title": "消息反馈",
+  "settings.feedback.help": "你在对话中给出的回复评分（👍 / 👎），按会话聚合展示。",
+  "settings.feedback.loading": "正在加载反馈……",
+  "settings.feedback.empty": "还没有反馈记录——在聊天中评价任意回复后会显示在这里。",
+  "settings.feedback.listAria": "按会话统计的反馈",
+  "settings.feedback.upAria": "点赞",
+  "settings.feedback.downAria": "点踩",
+  "tasks.tab.routines": "例行程序",
+  "tasks.tab.pipelines": "执行流水线"
 }

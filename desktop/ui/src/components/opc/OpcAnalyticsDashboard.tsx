@@ -120,13 +120,37 @@ export default function OpcAnalyticsDashboard() {
         {metrics.daily.length === 0 ? (
           <p className="font-label-sm text-on-surface-variant italic">{t('opc.analytics.noActivity')}</p>
         ) : (
-          <div className="flex items-end justify-between gap-sm h-32" role="img" aria-label={t('opc.analytics.dailyChartAria')}>
+          <div className="flex gap-sm" role="img" aria-label={t('opc.analytics.dailyChartAria')}>
+            {/* Y axis: scale ticks so bar heights are readable without hover. */}
+            <div className="relative h-32 w-8 shrink-0" aria-hidden="true">
+              {[1, 0.5, 0].map(f => (
+                <span
+                  key={f}
+                  className="absolute right-0 -translate-y-1/2 font-label-sm text-[9px] text-on-surface-variant tabular-nums"
+                  style={{ top: `${(1 - f) * 100}%` }}
+                >
+                  {Math.round(maxDaily * f)}
+                </span>
+              ))}
+            </div>
+            <div className="relative flex-1 h-32">
+              {/* Gridlines at 0 / half / max of the shared scale. */}
+              <div className="absolute inset-0" aria-hidden="true">
+                {[0, 0.5, 1].map(f => (
+                  <div
+                    key={f}
+                    className={cn('absolute inset-x-0 border-t', f === 0 ? 'border-outline-variant/40' : 'border-outline-variant/20')}
+                    style={{ top: `${f * 100}%` }}
+                  />
+                ))}
+              </div>
+              <div className="absolute inset-0 flex items-end justify-between gap-sm">
             {metrics.daily.map(d => {
               const createdH = (d.created / maxDaily) * 100
               const completedH = (d.completed / maxDaily) * 100
               const shortDay = d.date.slice(5) // MM-DD
               return (
-                <div key={d.date} className="flex-1 flex flex-col items-center gap-xs">
+                <div key={d.date} className="flex-1 flex flex-col items-center gap-xs h-full justify-end">
                   <div className="w-full flex items-end justify-center gap-0.5 h-24">
                     <div
                       className="w-3 bg-primary/70 rounded-t hover:bg-primary transition-colors"
@@ -143,6 +167,8 @@ export default function OpcAnalyticsDashboard() {
                 </div>
               )
             })}
+              </div>
+            </div>
           </div>
         )}
         <div className="flex items-center gap-md mt-sm font-label-sm text-[11px] text-on-surface-variant">

@@ -213,6 +213,12 @@ vi.mock('@/lib/tauri-api', () => ({
   duplicateSession: vi.fn().mockResolvedValue({ id: 'dup-1', title: 'Copy', created_at: 0 }),
   exportSession: vi.fn().mockResolvedValue(''),
   branchSession: vi.fn().mockResolvedValue({ id: 'branch-1', title: 'Branch', created_at: 0, message_count: 0 }),
+  // /rewind + PM-12 feedback
+  listCheckpoints: vi.fn().mockResolvedValue([]),
+  rewindSession: vi.fn().mockResolvedValue([]),
+  listMessageFeedback: vi.fn().mockResolvedValue({}),
+  recordMessageFeedback: vi.fn().mockResolvedValue(undefined),
+  listFeedbackSessions: vi.fn().mockResolvedValue([]),
   saveTextFile: vi.fn().mockResolvedValue(undefined),
   respondPermission: vi.fn().mockResolvedValue(undefined),
   getFileDiff: vi.fn().mockResolvedValue({ path: '', hunks: [] }),
