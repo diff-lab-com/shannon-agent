@@ -210,10 +210,15 @@ jobs:
         # see desktop/ui/scripts/check-overlays.sh for the whitelist.
         working-directory: desktop/ui
         run: bash scripts/check-overlays.sh
+      - name: Theme source drift check
+        # src/theme/generated/{themes.css,registry.ts} must match
+        # scripts/theme-source.json — blocks hand-edits to generated files.
+        working-directory: desktop/ui
+        run: node scripts/generate-themes.mjs --check
       - name: Theme contrast audit
-        # WCAG 2.x AA check over every [data-theme] token block in
-        # src/index.css (scripts/contrast-audit.mjs) — fails on any pair
-        # below 4.5:1 (text) / 3:1 (UI).
+        # WCAG 2.x AA check over every [data-theme] token block in the
+        # generated themes.css (scripts/contrast-audit.mjs) — fails on any
+        # pair below 4.5:1 (text) / 3:1 (UI).
         working-directory: desktop/ui
         run: node scripts/contrast-audit.mjs
       - name: Run unit tests

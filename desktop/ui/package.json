@@ -4,9 +4,10 @@
   "version": "0.6.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "demo": "VITE_MOCK_MODE=1 vite",
-    "build": "tsc && vite build",
+    "generate:themes": "node scripts/generate-themes.mjs",
+    "dev": "pnpm generate:themes && vite",
+    "demo": "pnpm generate:themes && VITE_MOCK_MODE=1 vite",
+    "build": "pnpm generate:themes && tsc && vite build",
     "preview": "vite preview",
     "test": "vitest",
     "test:e2e": "playwright test",
