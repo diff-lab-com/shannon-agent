@@ -428,6 +428,7 @@
   --color-tertiary-fixed: #3d2e10;
   --color-error: #f7768e;
   --color-error-container: #3b1d27;
+  --color-on-error-container: #e4dfe1;
   --color-on-error: #1a1b26;
   --color-surface: #1a1b26;
   --color-surface-dim: #10111a;
@@ -538,6 +539,7 @@
   --color-tertiary-fixed: #3d2e1e;
   --color-error: #f38ba8;
   --color-error-container: #3a1c28;
+  --color-on-error-container: #e3dfe1;
   --color-on-error: #1e1e2e;
   --color-surface: #1e1e2e;
   --color-surface-dim: #11111b;
@@ -593,6 +595,7 @@
   --color-tertiary-fixed: #3e3620;
   --color-error: #bf616a;
   --color-error-container: #3b2428;
+  --color-on-error-container: #e4e0e1;
   --color-on-error: #2e3440;
   --color-surface: #2e3440;
   --color-surface-dim: #232830;
@@ -758,6 +761,7 @@
   --color-tertiary-fixed: #3a2a00;
   --color-error: #dc322f;
   --color-error-container: #3a1b1a;
+  --color-on-error-container: #e3dfdf;
   --color-on-error: #002b36;
   --color-surface: #002b36;
   --color-surface-dim: #001a20;
@@ -813,6 +817,7 @@
   --color-tertiary-fixed: #1a3a25;
   --color-error: #ff5555;
   --color-error-container: #3a1b1f;
+  --color-on-error-container: #e3dfe0;
   --color-on-error: #282a36;
   --color-surface: #282a36;
   --color-surface-dim: #1c1d28;
@@ -868,6 +873,7 @@
   --color-tertiary-fixed: #2a3a25;
   --color-error: #fb4934;
   --color-error-container: #3a1b16;
+  --color-on-error-container: #e3dfde;
   --color-on-error: #282828;
   --color-surface: #282828;
   --color-surface-dim: #1d2021;
@@ -1017,4 +1023,10 @@ input[type="range"].slider-thumb-primary::-moz-range-thumb {
   cursor: pointer;
   border: none;
   box-shadow: 0 0 10px color-mix(in srgb, var(--color-primary) 30%, transparent);
+}
+/* Sonner rich-colors error toast — the stock light-theme error text
+   (#e60000) is ~4.0:1 on the pink error background; MD3 error #b3261e
+   clears 4.5:1. Light scope only: the dark theme's own --error-text passes. */
+[data-sonner-toaster][data-sonner-theme='light'] [data-sonner-toast][data-type='error'] {
+  --error-text: #b3261e;
 }

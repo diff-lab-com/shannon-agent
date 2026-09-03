@@ -417,8 +417,8 @@ function SkillCard({
 }
 
 const TRUST_LABELS: Record<SkillCatalogEntry['trust'], { key: string; cls: string }> = {
-  verified: { key: 'extensions.skills.trust.verified', cls: "bg-primary-container/50 text-on-primary-container" },
-  official: { key: 'extensions.skills.trust.official', cls: "bg-secondary-container/50 text-on-secondary-container" },
+  verified: { key: 'extensions.skills.trust.verified', cls: "bg-primary-container text-on-primary-container" },
+  official: { key: 'extensions.skills.trust.official', cls: "bg-secondary-container text-on-secondary-container" },
   community: { key: 'extensions.skills.trust.community', cls: "bg-tertiary-container/50 text-on-tertiary-container" },
   unknown: { key: 'extensions.skills.trust.unknown', cls: "bg-surface-container-highest text-on-surface-variant" },
 };

@@ -87,7 +87,7 @@ export default function ModelsSettings() {
               </Button>
             ))}
           </div>
-          <p className="mt-md text-label-sm text-on-surface-variant opacity-70 flex items-center gap-xs">
+          <p className="mt-md text-label-sm text-on-surface-variant flex items-center gap-xs">
             <span className="material-symbols-outlined icon-sm">info</span>
             {strategy === 'high-quality' ? t('settings.models.stratHighQuality') : strategy === 'speed' ? t('settings.models.stratSpeed') : t('settings.models.stratBalanced')}
           </p>
@@ -107,7 +107,7 @@ export default function ModelsSettings() {
                     <span className="font-headline-md text-primary text-lg">{currentModel}</span>
                     <span className="px-xs py-[2px] bg-primary text-on-primary rounded text-[10px] font-bold">{t('settings.models.activeBadge')}</span>
                   </div>
-                  <p className="text-label-sm text-on-surface-variant opacity-70">{intl.formatMessage({ id: 'settings.models.providerLabel' }, { provider: status?.provider })}</p>
+                  <p className="text-label-sm text-on-surface-variant">{intl.formatMessage({ id: 'settings.models.providerLabel' }, { provider: status?.provider })}</p>
                 </div>
               </div>
             </div>
@@ -209,7 +209,7 @@ export default function ModelsSettings() {
                         </span>
                       ) : null}
                     </div>
-                    <p className="text-label-sm text-on-surface-variant opacity-70">
+                    <p className="text-label-sm text-on-surface-variant">
                       {m.provider}
                       {m.context_window > 0
                         ? ' ' + intl.formatMessage({ id: 'settings.models.contextWindow' }, { count: (m.context_window / 1000).toFixed(0) })

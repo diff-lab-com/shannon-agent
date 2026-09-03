@@ -37,8 +37,8 @@ function describeSource(entry: SkillCatalogEntry): string {
 }
 
 const TRUST_LABELS: Record<SkillCatalogEntry['trust'], { cls: string }> = {
-  verified: { cls: 'bg-primary-container/50 text-on-primary-container' },
-  official: { cls: 'bg-secondary-container/50 text-on-secondary-container' },
+  verified: { cls: 'bg-primary-container text-on-primary-container' },
+  official: { cls: 'bg-secondary-container text-on-secondary-container' },
   community: { cls: 'bg-tertiary-container/50 text-on-tertiary-container' },
   unknown: { cls: 'bg-surface-container-highest text-on-surface-variant' },
 }

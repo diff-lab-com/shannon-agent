@@ -52,7 +52,7 @@ export function MemoryCard({ entry, onEdit, onDelete }: MemoryCardProps) {
               {entry.tags.map((tag) => (
                 <span
                   key={tag}
-                  className="text-label-xs px-sm py-[2px] rounded bg-primary-container/30 text-on-primary-container"
+                  className="text-label-xs px-sm py-[2px] rounded bg-primary-container text-on-primary-container"
                 >
                   #{tag}
                 </span>

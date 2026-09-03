@@ -50,7 +50,7 @@ function TriageCard({ item, selected, focused, onToggleSelected, onMarkRead, onA
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const meta = kindMeta(item.kind)
   return (
-    <div role="listitem" data-focused={focused ? 'true' : undefined} className={cn('glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80', item.read ? 'border-outline-variant/10 opacity-70' : 'border-primary/20', focused ? 'ring-2 ring-primary' : selected ? 'ring-2 ring-primary/40' : '')}>
+    <div role="listitem" data-focused={focused ? 'true' : undefined} className={cn('glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80', item.read ? 'border-outline-variant/10' : 'border-primary/20', focused ? 'ring-2 ring-primary' : selected ? 'ring-2 ring-primary/40' : '')}>
       <div className="flex items-start gap-sm">
         <label className="flex items-center pt-xs cursor-pointer shrink-0" aria-label={t('triage.select.aria', { id: item.id })}>
           <input
@@ -70,7 +70,7 @@ function TriageCard({ item, selected, focused, onToggleSelected, onMarkRead, onA
               {!item.read && <span className="w-2 h-2 rounded-full bg-primary shrink-0" title={t('triage.unread.title')} />}
               {item.archived && <span className="font-label-sm text-[11px] text-on-surface-variant">{t('triage.archived.label')}</span>}
             </div>
-            <p className="text-body-sm text-on-surface mb-xs break-words">{item.message}</p>
+            <p className={cn("text-body-sm mb-xs break-words", item.read ? "text-on-surface-variant" : "text-on-surface")}>{item.message}</p>
             <div className="flex items-center gap-md flex-wrap">
               {item.task_name && (
                 <span className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-xs">

@@ -19,7 +19,7 @@ const STATUS_TONES: Record<string, string> = {
   done: 'bg-tertiary/15 text-tertiary border-tertiary/40',
   in_progress: 'bg-primary/15 text-primary border-primary/40',
   running: 'bg-primary/15 text-primary border-primary/40',
-  pending: 'bg-secondary/15 text-secondary border-secondary/40',
+  pending: 'bg-secondary-container text-on-secondary-container border-outline-variant/40',
   todo: 'bg-outline/15 text-on-surface-variant border-outline/40',
   deprecated: 'bg-error/15 text-error border-error/40',
 }

@@ -359,7 +359,7 @@ function AdapterCard({
               {t('extensions.datasources.queryComingSoon')}
             </span>
           ) : (
-            <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-primary-container/50 text-on-primary-container shrink-0">
+            <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-primary-container text-on-primary-container shrink-0">
               {t('extensions.datasources.verified')}
             </span>
           )}
@@ -373,7 +373,7 @@ function AdapterCard({
         )}
 
         {feedback && (
-          <div className={cn("text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded", feedback.ok ? "bg-primary-container/50 text-on-primary-container" : "bg-error-container/50 text-on-error-container")}>
+          <div className={cn("text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded", feedback.ok ? "bg-primary-container text-on-primary-container" : "bg-error-container text-on-error-container")}>
             <span className="material-symbols-outlined icon-xs">{feedback.ok ? "check_circle" : "error"}</span>
             {feedback.msg}
           </div>

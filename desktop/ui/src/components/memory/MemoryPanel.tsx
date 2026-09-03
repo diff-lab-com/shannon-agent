@@ -223,7 +223,7 @@ export default function MemoryPanel() {
 
           <Button
             onClick={() => setCreating(true)}
-            className="gap-xs px-md py-sm rounded-xl text-label-md font-bold hover:brightness-110"
+            className="gap-xs px-md py-sm text-[14px] font-bold"
           >
             <span className="material-symbols-outlined text-[18px]">add</span>
             {t('memory.action.create')}
@@ -246,7 +246,7 @@ export default function MemoryPanel() {
             <p className="text-on-surface-variant mb-lg">{t('memory.empty')}</p>
             <Button
               onClick={() => setCreating(true)}
-              className="gap-xs px-md py-sm rounded-xl text-label-md font-bold"
+              className="gap-xs px-md py-sm text-[14px] font-bold"
             >
               <span className="material-symbols-outlined text-[18px]">add</span>
               {t('memory.action.createFirst')}

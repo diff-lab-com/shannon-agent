@@ -75,6 +75,7 @@ const PAIRS = [
   ['color-on-surface-variant', 'color-surface-container-high', 4.5, 'MD3 secondary text on containers'],
   ['color-on-primary', 'color-primary', 4.5, 'MD3 primary label'],
   ['color-on-primary-container', 'color-primary-container', 4.5, 'MD3 primary-container label'],
+  ['color-on-error-container', 'color-error-container', 4.5, 'MD3 error-container label'],
   ['color-link', 'background', 4.5, 'link text on background'],
   ['color-link', 'color-surface-container-lowest', 4.5, 'link text on markdown surfaces'],
   ['outline', 'background', 3.0, 'borders / iconography vs background'],

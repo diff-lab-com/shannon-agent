@@ -125,7 +125,7 @@ export const MOCK_TRIAGE_STATS: TriageStats = {
 
 export const MOCK_OPC_METRICS: OpcMetrics = {
   total: 16,
-  completion_rate: 0.27,
+  completion_rate: 27.0,
   by_status: [
     { status: 'in_progress', count: 4 },
     { status: 'pending', count: 3 },
