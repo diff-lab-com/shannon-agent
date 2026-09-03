@@ -4,19 +4,20 @@
 //! JavaScript as `invoke("command_name", { args })`.
 
 use serde::{Deserialize, Serialize};
-use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent};
+use shannon_core::query_engine::{PermissionRequest as EnginePermissionRequest, QueryContext, QueryEngine, QueryEvent};
+use shannon_core::settings::SettingsManager;
 use shannon_core::tools::ToolRegistry;
 use shannon_engine::api::client::LlmClient;
 use shannon_engine::api::types::LlmClientConfig;
-use shannon_engine::permissions::{ApprovalMode, PermissionManager};
+use shannon_engine::permissions::{ApprovalMode, PermissionManager, PermissionRuleChecker};
 use shannon_engine::state::StateManager;
 use shannon_mcp::McpProcessPool;
 use shannon_skills::SkillRegistry;
 use shannon_tools::register_default_tools;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::Emitter;
-use tokio::sync::{Mutex, RwLock, oneshot};
+use tauri::{Emitter, Manager};
+use tokio::sync::{Mutex, RwLock};
 
 use crate::commands_agents::resolve_working_dir;
 #[cfg(test)]
@@ -84,8 +85,10 @@ pub struct AppState {
     pub(crate) tools: Arc<ToolRegistry>,
     /// Permission manager.
     // KEEP: AppState owns the PermissionManager so the desktop shell can
-    // eventually consult it before dispatching tool calls. Hooked into
-    // send_message / request_permission once the permission-prompt UI lands.
+    // consult it before dispatching tool calls. The interactive prompt
+    // pipeline is wired through send_message's own engine-scoped manager
+    // (see commands_permissions::prompt_user); this shared instance remains
+    // for future cross-session policy decisions.
     #[allow(dead_code)]
     permissions: Arc<RwLock<PermissionManager>>,
     /// Session state manager.
@@ -531,9 +534,30 @@ pub async fn send_message(
     let approval_mode_str = desktop_cfg.approval_mode.as_deref().unwrap_or("confirm");
     let approval_mode = parse_approval_mode(approval_mode_str);
 
-    // Create a new PermissionManager instance configured from shared state
+    // Create a new PermissionManager instance configured from shared state.
+    // Persisted deny/ask/allow rules (~/.shannon/settings.json, including the
+    // rules written by "Always allow" in the permission modal) feed the rule
+    // checker so previously granted tools stop re-prompting.
     let mut permissions = PermissionManager::new();
     permissions.set_approval_mode(approval_mode);
+    let mut settings = SettingsManager::new();
+    if let Err(e) = settings.load_from_files() {
+        eprintln!("send_message: failed to load permission rules: {e}");
+    } else {
+        let rules = &settings.settings_mut().permissions;
+        permissions.set_rule_checker(PermissionRuleChecker::from_rule_strings(
+            &rules.deny,
+            &rules.ask,
+            &rules.allow,
+        ));
+    }
+
+    // Interactive permission channel: the engine forwards PermissionPrompt
+    // verdicts here; a forwarder task surfaces each as a Tauri
+    // PERMISSION_REQUEST and maps the user's scoped answer back to a
+    // PermissionChoice.
+    let (perm_tx, mut perm_rx) =
+        tokio::sync::mpsc::unbounded_channel::<EnginePermissionRequest>();
 
     let _state_mgr = state.state_manager.clone();
     let _qe_config = state.qe_config.read().await.clone();
@@ -592,8 +616,45 @@ pub async fn send_message(
         session_for_inproc.try_send_event(evt);
     };
     let return_qid = qid_str.clone();
+    // Engine→UI permission bridge: each prompt from the query pipeline
+    // becomes a pending Tauri permission; the scoped user decision maps back
+    // onto the engine's choice enum (AlwaysAllow also lands in the engine's
+    // in-session memory via process_permission_choice).
+    let app_for_permissions = app_handle.clone();
     tokio::spawn(async move {
-        let stream = engine.process_query(context, None).await;
+        use shannon_engine::permissions::PermissionChoice;
+        while let Some(request) = perm_rx.recv().await {
+            let prompt = &request.prompt;
+            let risk = match prompt.risk_level {
+                shannon_engine::permissions::RiskLevel::Safe
+                | shannon_engine::permissions::RiskLevel::Low => "low",
+                shannon_engine::permissions::RiskLevel::Medium => "medium",
+                shannon_engine::permissions::RiskLevel::High
+                | shannon_engine::permissions::RiskLevel::Critical => "high",
+            };
+            let decision = crate::commands_permissions::prompt_user(
+                &app_for_permissions.state::<AppState>(),
+                &app_for_permissions,
+                prompt.tool_name.clone(),
+                prompt.tool_input.clone(),
+                risk.to_string(),
+                300,
+            )
+            .await;
+            let choice = match decision {
+                crate::commands_permissions::PermissionDecision::AllowOnce => {
+                    PermissionChoice::AllowOnce
+                }
+                crate::commands_permissions::PermissionDecision::AlwaysAllow => {
+                    PermissionChoice::AlwaysAllow
+                }
+                crate::commands_permissions::PermissionDecision::Deny => PermissionChoice::Deny,
+            };
+            let _ = request.response_tx.send(choice);
+        }
+    });
+    tokio::spawn(async move {
+        let stream = engine.process_query(context, Some(perm_tx)).await;
         let mut final_content = String::new();
 
         let query_start = std::time::Instant::now();
@@ -1014,6 +1075,17 @@ pub async fn start_background_task(
             })
             .unwrap_or(ApprovalMode::FullAuto);
         permissions.set_approval_mode(mode);
+        // Honour persisted deny/allow rules (no interactive channel here —
+        // background tasks run unattended, so prompts would auto-allow anyway).
+        let mut settings = SettingsManager::new();
+        if settings.load_from_files().is_ok() {
+            let rules = &settings.settings_mut().permissions;
+            permissions.set_rule_checker(PermissionRuleChecker::from_rule_strings(
+                &rules.deny,
+                &rules.ask,
+                &rules.allow,
+            ));
+        }
 
         let engine =
             QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new());

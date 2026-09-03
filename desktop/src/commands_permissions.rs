@@ -11,22 +11,35 @@ use shannon_core::settings::SettingsManager;
 use tauri::Emitter;
 use tokio::sync::oneshot;
 
-/// A pending permission prompt: the oneshot channel back to the tool
-/// executor, plus the tool name so `"always allow"` can persist an allow
-/// rule for it.
+/// A pending permission prompt: the oneshot channel back to the requester,
+/// plus the tool name so `"always allow"` can persist an allow rule for it.
 pub(crate) struct PendingPermission {
-    pub(crate) tx: oneshot::Sender<bool>,
+    pub(crate) tx: oneshot::Sender<PermissionDecision>,
     pub(crate) tool: String,
 }
 
-#[tauri::command]
-pub async fn request_permission(
-    state: tauri::State<'_, AppState>,
-    app_handle: tauri::AppHandle,
+/// The scoped outcome of a permission prompt. `AllowOnce`/`AlwaysAllow` both
+/// mean "go ahead"; `AlwaysAllow` additionally persists a rule (done by
+/// `respond_permission`), and the engine maps it to
+/// `PermissionChoice::AlwaysAllow` so its in-session memory also learns it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PermissionDecision {
+    AllowOnce,
+    AlwaysAllow,
+    Deny,
+}
+
+/// Common body of the `request_permission` command and the engine-driven
+/// prompt forwarder in `send_message`: register a pending request, surface
+/// it on the wire, and wait for the user's (scoped) answer.
+pub(crate) async fn prompt_user(
+    state: &AppState,
+    app_handle: &tauri::AppHandle,
     tool: String,
     input: serde_json::Value,
     risk: String,
-) -> Result<bool, String> {
+    timeout_secs: u64,
+) -> PermissionDecision {
     let request_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel();
 
@@ -47,8 +60,9 @@ pub async fn request_permission(
         },
     );
 
-    // Wait for response with 30s timeout
-    let timeout = tokio::time::Duration::from_secs(30);
+    // Wait for the user's response (interactive prompts get a generous
+    // timeout; the user may be reading a diff).
+    let timeout = tokio::time::Duration::from_secs(timeout_secs);
     let result = tokio::time::timeout(timeout, rx).await;
 
     // Clean up
@@ -58,10 +72,23 @@ pub async fn request_permission(
     }
 
     match result {
-        Ok(Ok(allowed)) => Ok(allowed),
-        Ok(Err(_)) => Ok(false), // Sender dropped
-        Err(_) => Ok(false),     // Timeout
+        Ok(Ok(decision)) => decision,
+        Ok(Err(_)) => PermissionDecision::Deny, // Sender dropped
+        Err(_) => PermissionDecision::Deny,     // Timeout
     }
+}
+
+#[tauri::command]
+pub async fn request_permission(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    tool: String,
+    input: serde_json::Value,
+    risk: String,
+) -> Result<bool, String> {
+    let decision =
+        prompt_user(&state, &app_handle, tool, input, risk, 30).await;
+    Ok(decision != PermissionDecision::Deny)
 }
 
 /// Respond to a permission request.
@@ -85,10 +112,16 @@ pub async fn respond_permission(
         return Err(format!("Permission request not found: {request_id}"));
     };
 
+    let decision = match (allow, scope.as_deref()) {
+        (true, Some("always_tool")) => PermissionDecision::AlwaysAllow,
+        (true, _) => PermissionDecision::AllowOnce,
+        (false, _) => PermissionDecision::Deny,
+    };
+
     // Persist before answering: the executor may proceed the moment the
     // oneshot resolves, and the rule should already be on disk. Best-effort
     // on save failure — the one-shot answer still goes through.
-    if allow && scope.as_deref() == Some("always_tool") {
+    if decision == PermissionDecision::AlwaysAllow {
         let mut manager = SettingsManager::new();
         if let Err(e) = manager.load_from_files() {
             eprintln!("always-allow: failed to load settings: {e}");
@@ -106,6 +139,6 @@ pub async fn respond_permission(
     }
 
     // Send response, ignoring errors if receiver dropped
-    let _ = pending.tx.send(allow);
+    let _ = pending.tx.send(decision);
     Ok(())
 }
