@@ -7,7 +7,8 @@ import { WelcomeCard } from './components'
 import { TASKS, type TaskId } from './constants'
 
 interface TaskStepProps {
-  task: TaskId
+  // null until the user picks a card — Continue stays disabled.
+  task: TaskId | null
   setTask: (id: TaskId) => void
   onContinue: () => void
 }
@@ -23,6 +24,7 @@ export function TaskStep({ task, setTask, onContinue }: TaskStepProps) {
           <span />
           <Button
             onClick={onContinue}
+            disabled={task === null}
             className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
           >
             {intl.formatMessage({ id: 'welcome.task.continue' })}

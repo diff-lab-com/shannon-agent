@@ -129,9 +129,10 @@ describe('Welcome component — 4-step flow', () => {
     expect(screen.getByText('General')).toBeInTheDocument()
   })
 
-  it('defaults task selection to General', () => {
+  it('starts with no task selected and Continue disabled', () => {
     wrap()
-    expect(screen.getByRole('button', { name: /General/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: /General/ })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByText('Continue →')).toBeDisabled()
   })
 
   it('marks task as pressed when clicked', () => {
@@ -156,6 +157,7 @@ describe('Welcome component — 4-step flow', () => {
   // Step 1 — Model: now a launcher button → AddProviderModal
   it('advances to Model step with Add provider button', () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     expect(screen.getByText('Choose your AI provider')).toBeInTheDocument()
     expect(screen.getByTestId('welcome-add-provider')).toBeInTheDocument()
@@ -167,6 +169,7 @@ describe('Welcome component — 4-step flow', () => {
 
   it('Back button on Model step returns to Task step', () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     fireEvent.click(screen.getByText('← Back'))
     expect(screen.getByText('What will you use Shannon for?')).toBeInTheDocument()
@@ -174,13 +177,15 @@ describe('Welcome component — 4-step flow', () => {
 
   it('shows task-aware recommendation in Model subtitle', () => {
     wrap()
-    // Default task is 'general' → recommends Anthropic
+    // General picked → recommends Anthropic
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     expect(screen.getByText(/For General, we recommend Anthropic\./)).toBeInTheDocument()
   })
 
   it('disables Continue on Model step until provider saved or env key detected', () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     const continueButtons = screen.getAllByRole('button', { name: /Continue/ })
     const modelContinue = continueButtons[continueButtons.length - 1]
@@ -190,6 +195,7 @@ describe('Welcome component — 4-step flow', () => {
 
   it('opens AddProviderModal when the Add provider button is clicked', () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     expect(screen.queryByTestId('add-provider-modal')).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId('welcome-add-provider'))
@@ -198,6 +204,7 @@ describe('Welcome component — 4-step flow', () => {
 
   it('closes AddProviderModal when the modal cancel button is clicked', () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     fireEvent.click(screen.getByTestId('welcome-add-provider'))
     expect(screen.getByTestId('add-provider-modal')).toBeInTheDocument()
@@ -210,6 +217,7 @@ describe('Welcome component — 4-step flow', () => {
 
   it('calls saveProvider + setActiveProvider when modal saves, then advances to Tools step', async () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
     await waitFor(() => {
@@ -229,6 +237,7 @@ describe('Welcome component — 4-step flow', () => {
     wrap()
     // env detection fires on mount; let it resolve.
     await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => {
       const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
@@ -251,6 +260,7 @@ describe('Welcome component — 4-step flow', () => {
 
   it('toggles tool checkbox off when clicked', async () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
@@ -264,6 +274,7 @@ describe('Welcome component — 4-step flow', () => {
   // Step 3 — Done
   it('reaches Done step with summary and shortcuts', async () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
@@ -286,6 +297,7 @@ describe('Welcome component — 4-step flow', () => {
 
   it('Done step shows Start using Shannon button', async () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
@@ -301,6 +313,7 @@ describe('Welcome component — 4-step flow', () => {
 
   it('Done step shows advanced mode checkbox unchecked by default', async () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
@@ -313,6 +326,7 @@ describe('Welcome component — 4-step flow', () => {
 
   it('toggles advanced mode checkbox on click', async () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
@@ -325,6 +339,7 @@ describe('Welcome component — 4-step flow', () => {
 
   it('writes SIDEBAR_MODE_KEY=dev on finish when advanced mode checked', async () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
@@ -337,6 +352,7 @@ describe('Welcome component — 4-step flow', () => {
 
   it('does NOT write SIDEBAR_MODE_KEY when advanced mode unchecked', async () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
@@ -348,6 +364,7 @@ describe('Welcome component — 4-step flow', () => {
 
   it('calls seedSampleData on finish (onboarding sample data)', async () => {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
@@ -407,7 +424,8 @@ describe('Welcome — env provider detection (T7.A)', () => {
     wrap()
     await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
     // envProviderReady is set; the Step 1 Continue button should be enabled
-    // without requiring manual provider setup (default task = general).
+    // without requiring manual provider setup (task = general, picked above).
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => {
       const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
@@ -428,6 +446,7 @@ describe('Welcome — env provider detection (T7.A)', () => {
   it('shows fallback error toast when setActiveProvider rejects', async () => {
     vi.mocked(api.setActiveProvider).mockRejectedValueOnce(new Error('activate boom'))
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     fireEvent.click(screen.getByTestId('welcome-add-provider'))
     // Switch kind to anthropic + fill label so the modal can submit.
@@ -454,6 +473,7 @@ describe('Welcome — env provider detection (T7.A)', () => {
 
   async function reachDoneStep() {
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
@@ -522,6 +542,7 @@ describe('Welcome — env provider detection (T7.A)', () => {
       })
 
     wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getByText('Continue →'))
     await saveProviderViaModal()
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())

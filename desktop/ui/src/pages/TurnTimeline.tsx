@@ -288,6 +288,8 @@ function CumulativeCurve({
         <span>{formatTime(cumulative[0]?.ts_ns ?? 0)}</span>
         <span>
           {t('timeline.curve.tokens', { count: yMax })}
+          <span aria-hidden="true" className="mx-1">·</span>
+          {t('timeline.curve.samples', { count: cumulative.length })}
           {showCost && (
             <>
               <span aria-hidden="true" className="mx-1">·</span>
@@ -369,6 +371,16 @@ function TurnCard({
               ((tool.start_ts_ns - startedTs) / spanNs) * 100
             const widthPct =
               Math.max(((tool.end_ts_ns - tool.start_ts_ns) / spanNs) * 100, MIN_ROW_WIDTH_PCT)
+            // A bar narrower than ~15% of the row cannot fit its label
+            // ("Grep · 1.2s" ≈ 70px on a ~700px card) — overflow-hidden used
+            // to clip it into an unreadable sliver. Short bars render the
+            // label just outside the pill instead; when that would run off
+            // the right edge, flip to the left of the bar start.
+            const barLeft = Math.max(leftPct, 0)
+            const fitsInside = widthPct >= 15
+            const label = `${tool.tool_name}${tool.duration_ms ? ` · ${formatDuration(tool.duration_ms)}` : ''}`
+            const outsideLeft = barLeft + widthPct + 0.5
+            const flipLeft = outsideLeft + 18 > 100 && barLeft > 30
             return (
               <div key={tool.tool_use_id} className="group relative h-7">
                 <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-outline-variant/40" />
@@ -379,19 +391,43 @@ function TurnCard({
                       ? 'bg-error/15 border border-error/40'
                       : 'bg-secondary-container/70',
                   )}
-                  style={{ left: `${Math.max(leftPct, 0)}%`, width: `${widthPct}%` }}
-                  title={`${tool.tool_name}${tool.duration_ms ? ` · ${formatDuration(tool.duration_ms)}` : ''}`}
+                  style={{ left: `${barLeft}%`, width: `${widthPct}%` }}
+                  title={label}
                 >
                   {tool.is_error && (
                     <Icon name="error" size="xs" className="text-error shrink-0" />
                   )}
-                  <span className="font-label-xs text-[11px] text-on-surface truncate">
-                    {tool.tool_name}
-                  </span>
-                  <span className="ml-auto font-label-xs text-[11px] text-on-surface-variant pl-1 shrink-0">
-                    {formatDuration(tool.duration_ms)}
-                  </span>
+                  {fitsInside && (
+                    <>
+                      <span className="font-label-xs text-[11px] text-on-surface truncate">
+                        {tool.tool_name}
+                      </span>
+                      <span className="ml-auto font-label-xs text-[11px] text-on-surface-variant pl-1 shrink-0">
+                        {formatDuration(tool.duration_ms)}
+                      </span>
+                    </>
+                  )}
                 </div>
+                {!fitsInside && (
+                  <span
+                    className={cn(
+                      'absolute top-1/2 -translate-y-1/2 whitespace-nowrap font-label-xs text-[11px]',
+                      tool.is_error ? 'text-error' : 'text-on-surface',
+                    )}
+                    style={
+                      flipLeft
+                        ? { right: `${100 - barLeft + 0.5}%` }
+                        : { left: `${outsideLeft}%` }
+                    }
+                  >
+                    <span>{tool.tool_name}</span>
+                    {tool.duration_ms && (
+                      <span className="pl-1 text-on-surface-variant">
+                        · {formatDuration(tool.duration_ms)}
+                      </span>
+                    )}
+                  </span>
+                )}
               </div>
             )
           })

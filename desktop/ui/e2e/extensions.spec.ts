@@ -41,8 +41,10 @@ test.describe('OPC pages', () => {
 
   test('OPC board shows kanban columns', async ({ page }) => {
     await page.goto('/opc')
-    // Check that the kanban board structure exists
-    await expect(page.getByRole('grid', { name: /Task board/i })).toBeVisible()
+    // Check that the kanban board structure exists. (The board container
+    // lost role="grid" — an invalid grid without rows/cells fails axe's
+    // aria-required-children — and keeps its aria-label.)
+    await expect(page.locator('[aria-label="Task board"]')).toBeVisible()
     // Check that at least one column header exists
     await expect(page.getByText('Queued')).toBeVisible()
   })

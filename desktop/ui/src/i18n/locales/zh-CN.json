@@ -2349,6 +2349,7 @@
   "timeline.curve.title": "累计 Token 与成本",
   "timeline.curve.tokens": "{count} 输出 Token",
   "timeline.curve.cost": "峰值成本 {cost}",
+  "timeline.curve.samples": "{count} 个采样点",
   "timeline.empty.title": "尚未记录任何 Turn",
   "timeline.empty.hint": "开始一段对话后，各 Turn 将显示在这里。",
   "timeline.error.title": "时间线不可用",
