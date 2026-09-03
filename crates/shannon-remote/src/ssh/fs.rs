@@ -326,13 +326,13 @@ impl FileSystemProvider for SshFs {
         root: &Path,
         cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
     ) -> io::Result<()> {
-        let me = self.clone();
-        let sftp = self.sftp.clone();
+        let runtime = self.rt.runtime();
+        let stat_sftp = self.sftp.clone();
         let stat = move |p: &Path| {
-            let sftp = sftp.clone();
+            let sftp = stat_sftp.clone();
             let p = p.to_path_buf();
-            block_on_anywhere(me.rt.runtime(), async move {
-                let mut guard = sftp.lock().await;
+            block_on_anywhere(runtime, async move {
+                let guard = sftp.lock().await;
                 let mut fs = guard.fs();
                 fs.metadata(p)
                     .await
@@ -340,13 +340,13 @@ impl FileSystemProvider for SshFs {
                     .map_err(to_io)
             })
         };
-        let me2 = me.clone();
-        let sftp2 = me.sftp.clone();
+        let text_runtime = self.rt.runtime();
+        let text_sftp = self.sftp.clone();
         let read_text = move |p: &Path| {
-            let sftp = sftp2.clone();
+            let sftp = text_sftp.clone();
             let p = p.to_path_buf();
-            block_on_anywhere(me2.rt.runtime(), async move {
-                let mut guard = sftp.lock().await;
+            block_on_anywhere(text_runtime, async move {
+                let guard = sftp.lock().await;
                 let mut fs = guard.fs();
                 fs.read(p)
                     .await
@@ -354,17 +354,17 @@ impl FileSystemProvider for SshFs {
                     .map_err(to_io)
             })
         };
-        let me3 = me.clone();
-        let sftp3 = me.sftp.clone();
+        let list_runtime = self.rt.runtime();
+        let list_sftp = self.sftp.clone();
         let list_dir = move |p: &Path| {
-            let sftp = sftp3.clone();
+            let sftp = list_sftp.clone();
             let root = p.to_path_buf();
-            block_on_anywhere(me3.rt.runtime(), async move {
-                let mut guard = sftp.lock().await;
+            block_on_anywhere(list_runtime, async move {
+                let guard = sftp.lock().await;
                 let mut fs = guard.fs();
                 let dir = fs.open_dir(&root).await.map_err(to_io)?;
                 let mut entries = Vec::new();
-                let mut stream = dir.read_dir();
+                let stream = dir.read_dir();
                 tokio::pin!(stream);
                 while let Some(entry) = stream.next().await {
                     let entry = entry.map_err(to_io)?;
