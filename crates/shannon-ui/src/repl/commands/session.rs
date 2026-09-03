@@ -474,7 +474,9 @@ pub(crate) fn apply_file_rewind(
 fn run_file_rewind(repl: &mut Repl, raw_path: &str, skip_confirm: bool) -> Result<()> {
     // Reuse the registry's provider-wired manager when available so listing
     // and restoring see exactly what the file tools recorded.
+    #[allow(unused_assignments)] // initializer keeps the bindings total
     let mut owned: Option<FileHistoryManager> = None;
+    #[allow(unused_assignments)]
     let mut shared_guard: Option<std::sync::MutexGuard<'_, FileHistoryManager>> = None;
     let mgr: &mut FileHistoryManager = match repl.file_history.as_ref() {
         Some(shared) => match shared.lock() {
