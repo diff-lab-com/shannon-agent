@@ -205,11 +205,42 @@ mod session_log_tee {
             .collect()
     }
 
+    /// Pins the test process to an empty tempdir CWD for its lifetime.
+    /// The engine auto-injects smart context — a keyword search over the
+    /// current directory (`QueryEngine` system-prompt assembly) — into
+    /// every request. Scanning the real package directory makes the
+    /// request bytes depend on ambient filesystem state, and under CI load
+    /// the two query phases of the byte-exact test below can see different
+    /// search results, so the rebuilt envelope no longer matches the live
+    /// request (mockito answers 501). An empty directory yields no
+    /// injected context in either phase, making the envelope deterministic.
+    struct EmptyCwdGuard {
+        original: std::path::PathBuf,
+        #[allow(dead_code)]
+        empty: TempDir,
+    }
+
+    impl EmptyCwdGuard {
+        fn set() -> Self {
+            let original = std::env::current_dir().expect("current dir");
+            let empty = TempDir::new().expect("tempdir");
+            std::env::set_current_dir(empty.path()).expect("chdir to empty tempdir");
+            Self { original, empty }
+        }
+    }
+
+    impl Drop for EmptyCwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
+
     /// Verification ①: the request envelopes rebuilt from `events.jsonl`
     /// are byte-identical to the requests the engine actually sends.
     #[tokio::test]
     async fn test_request_envelope_rebuild_is_byte_identical_to_wire() {
         let _guard = global_state_lock();
+        let _cwd = EmptyCwdGuard::set();
         let home = TempDir::new().expect("tempdir");
         let session_id = Uuid::new_v4();
         let _env = EnvGuard::set(vec![("SHANNON_HOME", Some(home.path().to_str().unwrap()))]);
