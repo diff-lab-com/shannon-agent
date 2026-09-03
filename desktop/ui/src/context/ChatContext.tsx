@@ -12,7 +12,7 @@
 // tested asset; see the ChatProvider note below if that work resumes.
 
 import { createContext, useContext, type ReactNode } from 'react'
-import type { CheckpointInfo, FeedbackRating } from '@/lib/tauri-api'
+import type { CheckpointInfo, CompactSessionResult, FeedbackRating } from '@/lib/tauri-api'
 import type { ChatMessage, ToolCall, UsagePayload } from '@/types'
 
 export interface ChatContextValue {
@@ -28,6 +28,8 @@ export interface ChatContextValue {
   checkpoints: CheckpointInfo[]
   /** Rewind to before `turnIndex`: drops that turn and everything after. */
   rewindSession: (turnIndex: number) => Promise<void>
+  /** /compact: summarize history; resolves with the summary + new messages. */
+  compactSession: () => Promise<CompactSessionResult>
   /** PM-12: persisted message ratings for the current session. */
   feedback: Record<string, FeedbackRating>
   /** Set/clear a message's rating (null clears). Optimistic, then persisted. */

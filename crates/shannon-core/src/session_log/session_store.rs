@@ -24,7 +24,10 @@ use chrono::TimeZone;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use shannon_types::session_event::{SessionEndSeedPayload, SessionEvent, SessionEventBody};
+use shannon_types::session_event::{
+    AssistantChunkPayload, AssistantMessagePayload, SessionEndSeedPayload, SessionEvent,
+    SessionEventBody, TurnEndPayload, TurnStartPayload, UserMessagePayload,
+};
 
 use super::{
     SessionLogReader, SessionLogWriter, projections, scan_session_summaries, search_events,
@@ -517,6 +520,82 @@ impl SessionStore {
         std::fs::rename(&tmp, &path)?;
         Ok(Some(dropped))
     }
+
+    /// Replace the session's conversation history with `turns` — the L0
+    /// primitive behind desktop `/compact` ("compact as summary turn"). Each
+    /// `(user, assistant)` pair becomes one framed turn (`turn/start` +
+    /// `user/message` + `assistant/message` + `turn/end`); the previous log
+    /// is fully replaced via the same temp-file + rename rewrite as
+    /// [`SessionStore::truncate_to_turn`], with seq restarting at 0 — the
+    /// file contract (`SessionLogWriter` resumes from the last seq) holds.
+    ///
+    /// Returns the number of event lines written.
+    pub fn rewrite_with_conversation(
+        &self,
+        session_id: &Uuid,
+        turns: &[(String, String)],
+    ) -> Result<usize, SessionStoreError> {
+        let path = self.log_path(session_id);
+        let session_str = session_id.to_string();
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+
+        let mut out = String::new();
+        let mut seq = 0u64;
+        for (turn, (user, assistant)) in turns.iter().enumerate() {
+            let turn = turn as u64;
+            let mut push = |body: SessionEventBody| {
+                let event = SessionEvent {
+                    seq,
+                    ts_ns: now_ns,
+                    session_id: session_str.clone(),
+                    turn,
+                    step: None,
+                    span_id: None,
+                    parent_span_id: None,
+                    body,
+                };
+                out.push_str(&serde_json::to_string(&event).map_err(|e| {
+                    SessionStoreError::Serialization(e.to_string())
+                })?);
+                out.push('\n');
+                seq += 1;
+                Ok::<(), SessionStoreError>(())
+            };
+            push(SessionEventBody::TurnStart(TurnStartPayload { query_id: None }))?;
+            push(SessionEventBody::UserMessage(UserMessagePayload {
+                source: UserMessagePayload::SOURCE_USER.into(),
+                content: user.clone(),
+            }))?;
+            // The projection finalizes an assistant step only when a chunk
+            // stream preceded it — mirror a real (non-interrupted) turn.
+            push(SessionEventBody::AssistantChunk(AssistantChunkPayload {
+                delta: assistant.clone(),
+                thinking: false,
+            }))?;
+            push(SessionEventBody::AssistantMessage(AssistantMessagePayload {
+                content: assistant.clone(),
+                usage: None,
+                interrupted: false,
+            }))?;
+            push(SessionEventBody::TurnEnd(TurnEndPayload {
+                reason: "compact".into(),
+                usage: None,
+                error: None,
+            }))?;
+        }
+
+        // Atomic-ish rewrite: temp file in the same directory, then rename.
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension("jsonl.compact-tmp");
+        std::fs::write(&tmp, &out)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(seq as usize)
+    }
 }
 
 /// Convenience: an shared handle rooted at the default container.
@@ -877,5 +956,89 @@ mod tests {
     #[test]
     fn test_default_store_helper_points_home() {
         let _ = default_store(); // constructs without panicking under any HOME
+    }
+
+    #[test]
+    fn rewrite_with_conversation_replaces_history_and_projects_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session(&store, &id);
+
+        let turns = vec![
+            ("compacted summary of 3 earlier turns".to_string(), "summary text".to_string()),
+            ("follow-up question".to_string(), "kept recent answer".to_string()),
+        ];
+        let written = store.rewrite_with_conversation(&id, &turns).unwrap();
+        assert_eq!(written, 10); // 5 events per turn
+
+        let loaded = store.load(&id).unwrap().expect("session survives rewrite");
+        assert_eq!(loaded.metadata.turn_count, 2);
+        let text = |m: &shannon_engine::api::Message| match &m.content {
+            shannon_engine::api::MessageContent::Text(t) => t.clone(),
+            shannon_engine::api::MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .map(|b| match b {
+                    shannon_engine::api::ContentBlock::Text { text } => text.clone(),
+                    _ => String::new(),
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+            other => panic!("unexpected content: {other:?}"),
+        };
+        let texts: Vec<String> = loaded.messages.iter().map(text).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "compacted summary of 3 earlier turns",
+                "summary text",
+                "follow-up question",
+                "kept recent answer",
+            ]
+        );
+    }
+
+    #[test]
+    fn rewrite_with_conversation_then_writer_appends_cleanly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session(&store, &id);
+
+        store
+            .rewrite_with_conversation(&id, &[("u".into(), "a".into())])
+            .unwrap();
+
+        // The single-writer resumes from the rewritten file's last seq.
+        let mut w = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+        w.set_turn(1);
+        w.record(SessionEventBody::TurnStart(TurnStartPayload {
+            query_id: None,
+        }));
+        w.record(SessionEventBody::UserMessage(UserMessagePayload {
+            source: UserMessagePayload::SOURCE_USER.into(),
+            content: "post-compact prompt".into(),
+        }));
+        w.close().unwrap();
+
+        let loaded = store.load(&id).unwrap().unwrap();
+        assert_eq!(loaded.metadata.turn_count, 2);
+        let last = loaded.messages.last().unwrap();
+        match &last.content {
+            shannon_engine::api::MessageContent::Text(t) => assert_eq!(t, "post-compact prompt"),
+            other => panic!("unexpected content: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rewrite_with_conversation_on_missing_log_creates_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        let written = store
+            .rewrite_with_conversation(&id, &[("u".into(), "a".into())])
+            .unwrap();
+        assert_eq!(written, 5);
+        assert!(store.load(&id).unwrap().is_some());
     }
 }

@@ -222,6 +222,7 @@ pub async fn approve_skill_candidate(
         "skill-catalog-changed",
         serde_json::json!({ "slug": slug, "action": "approved" }),
     );
+    let _ = app.emit("skill-candidates-changed", serde_json::json!({ "action": "approved" }));
 
     Ok(skill)
 }
@@ -239,6 +240,7 @@ pub async fn reject_skill_candidate(app: tauri::AppHandle, id: String) -> Result
         "skill-catalog-changed",
         serde_json::json!({ "action": "rejected" }),
     );
+    let _ = app.emit("skill-candidates-changed", serde_json::json!({ "action": "rejected" }));
     Ok(())
 }
 

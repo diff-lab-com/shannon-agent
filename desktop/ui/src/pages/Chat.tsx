@@ -29,7 +29,7 @@ const EditorPanel = lazy(() => import('@/pages/Editor'))
 export default function Chat() {
   const {
     messages, streamingText, isQuerying, usage, activeToolCalls,
-    sendMessage, contextPanelOpen,
+    sendMessage, contextPanelOpen, compactSession,
   } = useChat()
   const { sessions, currentSessionId, createSession } = useSessions()
   const { config } = useCatalog()
@@ -93,11 +93,12 @@ export default function Chat() {
         ?? '',
       sessions,
       createSession,
+      compactSession,
       showResult: setSlashResult,
       toastError,
       t,
     })
-  }, [navigate, currentSessionId, sessions, config?.working_dir, createSession, t])
+  }, [navigate, currentSessionId, sessions, config?.working_dir, createSession, compactSession, t])
 
   const handleSend = () => {
     const trimmed = input.trim()

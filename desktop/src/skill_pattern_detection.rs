@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
+use tauri::Emitter;
 
 use crate::commands_skill_candidates::{SkillCandidate, SourceToolCall, append_candidate_in};
 
@@ -281,7 +282,10 @@ pub fn default_sessions_dir() -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub async fn trigger_skill_pattern_detection(days_back: Option<u32>) -> Result<usize, String> {
+pub async fn trigger_skill_pattern_detection(
+    app: tauri::AppHandle,
+    days_back: Option<u32>,
+) -> Result<usize, String> {
     // Privacy opt-out: when the user has disabled skill detection in
     // Settings, the detector returns 0 without touching session files.
     let cfg = crate::config::load_config();
@@ -290,7 +294,13 @@ pub async fn trigger_skill_pattern_detection(days_back: Option<u32>) -> Result<u
     }
     let dir = default_sessions_dir()?;
     let days = days_back.unwrap_or(7);
-    run_detection(&dir, days, DEFAULT_MIN_SESSIONS, DEFAULT_MIN_OCCURRENCES)
+    let detected = run_detection(&dir, days, DEFAULT_MIN_SESSIONS, DEFAULT_MIN_OCCURRENCES)?;
+    if detected > 0 {
+        // Push instead of poll: the Header badge refreshes on the event
+        // instead of sweeping the store every 30s.
+        let _ = app.emit("skill-candidates-changed", serde_json::json!({ "detected": detected }));
+    }
+    Ok(detected)
 }
 
 #[cfg(test)]

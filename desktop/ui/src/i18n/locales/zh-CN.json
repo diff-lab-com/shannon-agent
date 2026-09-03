@@ -2444,5 +2444,13 @@
   "slash.card.diff.noWorkingDir": "当前会话未设置工作目录。",
   "slash.card.error.title": "命令出错",
   "slash.card.dismiss": "关闭",
-  "models.modelsDev.title": "来自 models.dev(实时)"
+  "models.modelsDev.title": "来自 models.dev(实时)",
+  "slash.command.compact.label": "压缩上下文",
+  "slash.command.compact.description": "将本会话历史摘要化，释放上下文窗口",
+  "slash.card.compact.title": "上下文已压缩",
+  "slash.card.compact.done": "{before} → {after} tokens",
+  "slash.card.compact.nothing": "还没有可压缩的会话内容。",
+  "slash.card.compact.removed": "已摘要化 {count} 条消息",
+  "slash.card.compact.keptTurns": "保留最近 {count} 轮",
+  "slash.card.compact.hint": "历史现在从摘要轮开始;更早的回溯检查点已清除。"
 }

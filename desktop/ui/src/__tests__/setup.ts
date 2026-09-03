@@ -222,6 +222,7 @@ vi.mock('@/lib/tauri-api', () => ({
   getSessionContextStats: vi.fn().mockResolvedValue({ estimated_tokens: 1200, context_window: 200000 }),
   getSessionUsage: vi.fn().mockResolvedValue({ input_tokens: 100, output_tokens: 50, cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: 0.01, events: 2 }),
   getSessionGitDiff: vi.fn().mockResolvedValue({ is_repo: false, files: [], patch: '', truncated: false }),
+  compactSession: vi.fn().mockResolvedValue({ performed: true, nothing_to_compact: false, original_tokens: 100, compacted_tokens: 20, reduction_ratio: 0.8, messages_removed: 3, kept_turns: 1, messages: [] }),
   saveTextFile: vi.fn().mockResolvedValue(undefined),
   respondPermission: vi.fn().mockResolvedValue(undefined),
   getFileDiff: vi.fn().mockResolvedValue({ path: '', hunks: [] }),

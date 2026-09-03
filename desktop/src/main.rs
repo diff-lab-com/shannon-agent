@@ -159,6 +159,7 @@ fn main() {
             commands_permissions::respond_permission,
             commands_slash::get_session_context_stats,
             commands_slash::get_session_git_diff,
+            commands_slash::compact_session,
             commands_usage::get_session_usage,
             commands_rewind::list_checkpoints,
             commands_rewind::rewind_session,
