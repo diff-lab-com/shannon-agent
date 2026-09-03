@@ -370,31 +370,20 @@ impl Tool for GrepTool {
             .await
             .map_err(|e| ToolError::InvalidInput(format!("Path sandbox: {e}")))?;
 
-        if !search_root.exists() {
+        // Existence is provider-checked: on a remote world the search root
+        // lives on the target, so `Path::exists` would probe the wrong disk.
+        if !self.fs.exists_blocking(&search_root) {
             return Err(ToolError::ExecutionFailed(format!(
                 "Path does not exist: {search_path}"
             )));
         }
 
-        // Build walker
-        let mut builder = ignore::WalkBuilder::new(&search_root);
-        builder.hidden(true);
-        builder.git_ignore(true);
-        builder.git_global(true);
-        builder.git_exclude(true);
-
-        // Apply include pattern via the ignore crate's OverrideBuilder
-        // Exclude is handled via manual filtering in the walk loop below,
-        // since the ignore crate's gitignore-style semantics don't map
-        // cleanly to "skip these files".
-        if let Some(include) = &grep_input.include {
-            let overrides = ignore::overrides::OverrideBuilder::new(&search_root)
-                .add(include.as_str())
-                .map_err(|e| ToolError::InvalidInput(format!("Invalid include pattern: {e}")))?
-                .build()
-                .map_err(|e| ToolError::InvalidInput(format!("Invalid include pattern: {e}")))?;
-            builder.overrides(overrides);
-        }
+        // Traversal, gitignore handling and content reads all follow the
+        // injected filesystem world (local by default, SSH/Docker under a
+        // remote target). Include/exclude filtering stays in the callback.
+        let mut all_matches: Vec<GrepFileMatch> = Vec::new();
+        let mut total_matches: usize = 0;
+        let mut quota_reached = false;
 
         let show_line_numbers = grep_input.line_number.unwrap_or(true);
         let context_before = grep_input
@@ -408,58 +397,55 @@ impl Tool for GrepTool {
             .min(MAX_ALLOWED_RESULTS);
         let output_mode = grep_input.output_mode.unwrap_or_default();
 
-        // Collect results (this runs in an async context but file I/O is synchronous)
-        let mut all_matches: Vec<GrepFileMatch> = Vec::new();
-        let mut total_matches: usize = 0;
-
-        for entry in builder.build() {
-            if total_matches >= max_results {
-                break;
-            }
-
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            let path = entry.path();
-
-            // Skip directories
-            if path.is_dir() {
-                continue;
-            }
-
-            // Skip files that don't match include pattern (for simple extension matching)
-            if let Some(include) = &grep_input.include {
-                if !path_matches_glob(path, include) {
-                    continue;
+        self.fs
+            .walk_blocking(&search_root, &mut |entry| {
+                if quota_reached {
+                    return false;
                 }
-            }
+                let path = &entry.path;
 
-            // Skip files that match exclude pattern
-            if let Some(exclude) = &grep_input.exclude {
-                if path_matches_glob(path, exclude) {
-                    continue;
+                // Skip directories
+                if entry.is_dir {
+                    return true;
                 }
-            }
 
-            if let Some(mut file_match) = self.search_file(
-                path,
-                &regex,
-                show_line_numbers,
-                context_before,
-                context_after,
-            ) {
-                // Truncate matches if we'd exceed max_results
-                let remaining = max_results - total_matches;
-                if file_match.matches.len() > remaining {
-                    file_match.matches.truncate(remaining);
-                    file_match.match_count = file_match.matches.len();
+                // Skip files that don't match include pattern (for simple extension matching)
+                if let Some(include) = &grep_input.include {
+                    if !path_matches_glob(path, include) {
+                        return true;
+                    }
                 }
-                total_matches += file_match.match_count;
-                all_matches.push(file_match);
-            }
-        }
+
+                // Skip files that match exclude pattern
+                if let Some(exclude) = &grep_input.exclude {
+                    if path_matches_glob(path, exclude) {
+                        return true;
+                    }
+                }
+
+                if let Some(mut file_match) = self.search_file(
+                    path,
+                    &regex,
+                    show_line_numbers,
+                    context_before,
+                    context_after,
+                ) {
+                    // Truncate matches if we'd exceed max_results
+                    let remaining = max_results - total_matches;
+                    if file_match.matches.len() > remaining {
+                        file_match.matches.truncate(remaining);
+                        file_match.match_count = file_match.matches.len();
+                    }
+                    total_matches += file_match.match_count;
+                    all_matches.push(file_match);
+                }
+                if total_matches >= max_results {
+                    quota_reached = true;
+                    return false; // prune the rest of the walk
+                }
+                true
+            })
+            .map_err(|e| ToolError::ExecutionFailed(format!("walk failed: {e}")))?;
 
         // Format output based on mode
         let content = match output_mode {
