@@ -346,6 +346,18 @@ fn main() {
                 }
             });
 
+            // Surface CLI-written inter-agent messages in the desktop UI:
+            // watch ~/.shannon/agent-messages/ and emit the same event
+            // record_agent_message emits for in-app writes.
+            {
+                let state_ref: tauri::State<'_, commands::AppState> = app.state();
+                let watch_handle = app.handle().clone();
+                shannon_desktop::agent_message_watcher::spawn(
+                    state_ref.agent_message_history.base_dir(),
+                    watch_handle,
+                );
+            }
+
             // Register global shortcut handlers
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
