@@ -258,12 +258,28 @@ mod session_log_tee {
 
         let engine2 = make_engine(&mock_url2, session_id);
         let events2 = run_query(&engine2, "please echo alpha").await;
-        assert!(
-            events2
+        if !events2
+            .iter()
+            .any(|e| matches!(e, QueryEvent::Completed { .. }))
+        {
+            // A byte mismatch makes mockito 404 the live request. Dump
+            // everything needed to diagnose the divergence: what the engine
+            // saw (error events carry the HTTP status) and the exact bytes
+            // the matchers demanded. Without this the failure is
+            // undiagnosable from CI logs alone.
+            let expected: Vec<String> = rebuilt
                 .iter()
-                .any(|e| matches!(e, QueryEvent::Completed { .. })),
-            "phase-2 query must complete (a byte mismatch would 404 here)"
-        );
+                .map(|b| String::from_utf8_lossy(b).to_string())
+                .collect();
+            panic!(
+                "phase-2 query must complete (a byte mismatch would 404 here)\n\
+                 engine events: {events2:#?}\n\
+                 expected byte-exact bodies (rebuilt from the phase-1 log):\n\
+                 [0] = {}\n\
+                 [1] = {}",
+                expected[0], expected[1]
+            );
+        }
 
         // Exactly one hit each: the live request bytes equal the rebuilt
         // envelope bytes — no extra tolerance, no ordering leeway.
