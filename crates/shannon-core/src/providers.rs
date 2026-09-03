@@ -12,7 +12,7 @@
 //!
 //! [`SandboxExecutorRewrite`] adapts the existing platform sandbox wrappers
 //! (`sandbox.rs`: bubblewrap / Seatbelt / Docker argv rewriting) into the
-//! [`SpawnRewrite`](shannon_tool_interface::SpawnRewrite) chain applied by
+//! [`SpawnRewrite`] chain applied by
 //! [`LocalProcess`] immediately before OS fork. Landlock-backed policies land
 //! as additional rewrites or provider decorators without touching tools.
 

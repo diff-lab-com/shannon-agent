@@ -563,7 +563,7 @@ enum TraceCommand {
         /// Session id: full UUID, unique prefix, or `latest`.
         session: String,
 
-        /// Output root directory (defaults to <tmp>/shannon-trace-export).
+        /// Output root directory (defaults to `<tmp>`/shannon-trace-export).
         #[arg(long)]
         out: Option<std::path::PathBuf>,
 
@@ -1178,7 +1178,7 @@ fn sessions_container_from_env() -> std::path::PathBuf {
 /// If `session_id_str` is provided, loads that specific session by UUID.
 /// Otherwise, loads the most recent session from the sessions container.
 ///
-/// Returns the projected [`StoredSession`] on success. Legacy snapshot files
+/// Returns the projected [`StoredSession`](shannon_core::session_log::StoredSession) on success. Legacy snapshot files
 /// are neither read nor migrated (DP4).
 fn load_resume_session(
     session_id_str: Option<&str>,

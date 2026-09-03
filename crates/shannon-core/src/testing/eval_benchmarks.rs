@@ -73,7 +73,7 @@
 //! underlying observations exist.
 //!
 //! Attribution discipline (模型与 harness 变更不得同 run) is enforced at the
-//! artifact level: see [`example::bench_runner`] — pass `--bin` (engine
+//! artifact level: see the `bench_runner` example — pass `--bin` (engine
 //! under test) XOR edit the engine; the report's `app_version` +
 //! `workload fingerprints` anchors make mixed-provenance comparisons visible
 //! in `bench_runner diff`.

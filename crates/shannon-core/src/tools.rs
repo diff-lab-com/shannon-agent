@@ -129,7 +129,7 @@ fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
 ///
 /// Returns the structured denial record when a tool labeled its result as
 /// `sandbox_denied`; `Null` otherwise. The value flows into
-/// [`crate::query_engine::types::QueryEvent::ToolUseResult::meta`] and from
+/// `QueryEvent::ToolUseResult.meta` and from
 /// there into the session log's `tool/result.meta` — no new event kind, per
 /// the §4.1 vocabulary contract.
 pub fn sandbox_meta_from(
