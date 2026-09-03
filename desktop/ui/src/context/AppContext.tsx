@@ -291,6 +291,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       throw e
     }
   }, [currentSessionId, refreshSessions, refreshCheckpoints])
+  const compactSessionAction = useCallback(async () => {
+    if (!currentSessionId) throw new Error('no active session')
+    try {
+      const result = await api.compactSession(currentSessionId)
+      setMessages(result.messages)
+      setStreamingText('')
+      setThinkingText('')
+      setActiveToolCalls([])
+      await refreshSessions()
+      await refreshCheckpoints()
+      return result
+    } catch (e) {
+      setError(String(e))
+      throw e
+    }
+  }, [currentSessionId, refreshSessions, refreshCheckpoints])
 
   // Register Tauri event listeners
   useEffect(() => {
@@ -417,9 +433,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const chatValue = useMemo<ChatContextValue>(() => ({
     messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage,
     sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel,
-    checkpoints, rewindSession: rewindSessionAction,
+    checkpoints, rewindSession: rewindSessionAction, compactSession: compactSessionAction,
     feedback, recordFeedback: recordFeedbackAction,
-  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel, checkpoints, rewindSessionAction, feedback, recordFeedbackAction])
+  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 
   const sessionValue = useMemo<SessionContextValue>(() => ({
     sessions, currentSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,
