@@ -2349,6 +2349,7 @@
   "timeline.curve.title": "Accumulated tokens & cost",
   "timeline.curve.tokens": "{count} output tokens",
   "timeline.curve.cost": "peak cost {cost}",
+  "timeline.curve.samples": "{count, plural, one {# sample} other {# samples}}",
   "timeline.empty.title": "No turns recorded yet",
   "timeline.empty.hint": "Start a conversation and its turns will appear here.",
   "timeline.error.title": "Timeline unavailable",

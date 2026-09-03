@@ -36,7 +36,9 @@ export default function Welcome() {
   const navigate = useNavigate()
   const { refreshConfig, refreshStatus, config } = useCatalog()
   const [step, setStep] = useState(0)
-  const [task, setTask] = useState<TaskId>('general')
+  // No default selection — step 0 asks the user to make an explicit
+  // choice, so Continue stays disabled until a card is picked.
+  const [task, setTask] = useState<TaskId | null>(null)
   const [provider, setProvider] = useState<string>('anthropic')
   const [saving, setSaving] = useState(false)
   const [pickedDir, setPickedDir] = useState<string | null>(null)
@@ -146,6 +148,7 @@ export default function Welcome() {
   }
 
   const advanceFromTask = () => {
+    if (task === null) return
     // Default provider to the task recommendation when advancing.
     setProvider(currentTask.recommendedProvider)
     setStep(1)
@@ -215,7 +218,7 @@ export default function Welcome() {
             <TaskStep task={task} setTask={setTask} onContinue={advanceFromTask} />
           )}
 
-          {step === 1 && (
+          {step === 1 && task !== null && (
             <ModelStep
               task={task}
               saving={saving}
@@ -226,7 +229,7 @@ export default function Welcome() {
             />
           )}
 
-          {step === 2 && (
+          {step === 2 && task !== null && (
             <ToolsStep
               task={task}
               enabledTools={enabledTools}
@@ -237,7 +240,7 @@ export default function Welcome() {
             />
           )}
 
-          {step === 3 && (
+          {step === 3 && task !== null && (
             <DoneStep
               task={task}
               provider={provider}

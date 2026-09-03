@@ -7,7 +7,10 @@ interface GradientTextProps {
   className?: string
   /**
    * Tailwind gradient utility names without the `bg-gradient-to-r` prefix.
-   * Defaults to a primary→tertiary→secondary diagonal that respects `data-theme`.
+   * Defaults to a primary-anchored shimmer so the brand wordmark keeps the
+   * theme's primary hue in all 12 themes (the old via-tertiary/to-secondary
+   * defaults mixed in amber stops — material tertiary is #855000 — and the
+   * small wordmark read brown).
    */
   fromClass?: string
   viaClass?: string
@@ -31,8 +34,8 @@ export function GradientText({
   text,
   className,
   fromClass = 'from-primary',
-  viaClass = 'via-tertiary',
-  toClass = 'to-secondary',
+  viaClass = 'via-primary-container',
+  toClass = 'to-primary',
   clip = true,
 }: GradientTextProps) {
   const reduced = useReducedMotion()
