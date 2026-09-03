@@ -4,6 +4,7 @@
 // Approve/Reject buttons. Fetches proposals on mount and refreshes after actions.
 
 import { useCallback, useEffect, useState } from 'react'
+import LoadingState from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
@@ -147,11 +148,7 @@ export default function SkillProposalReviewPanel({
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
           {loading ? (
-            <div className="flex items-center justify-center py-12">
-              <span className="material-symbols-outlined icon-xl text-primary animate-spin">
-                progress_activity
-              </span>
-            </div>
+            <LoadingState size="lg" />
           ) : !current ? (
             <div className="text-center py-12">
               <p className="text-on-surface-variant">

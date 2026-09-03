@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -197,7 +198,7 @@ export default function AdvancedSettings() {
               onClick={() => setShowClearConfirm(true)}
               disabled={clearing}
             >
-              {clearing ? <span className="material-symbols-outlined animate-spin mr-sm text-[18px]">progress_activity</span> : null}
+              {clearing ? <Spinner className="mr-sm text-[18px]" /> : null}
               {clearing ? t('settings.advanced.clearing') : t('settings.advanced.clearSessionCache')}
             </Button>
           </div>

@@ -6,6 +6,7 @@
 // until real team agents are wired into the desktop runtime.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Badge } from '@/components/ui/badge'
 import { useIntl } from 'react-intl'
 import { useT } from '@/i18n'
 import EmptyState from '@/components/ui/empty-state'
@@ -261,12 +262,12 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
                       {isBroadcast ? 'campaign' : 'arrow_forward'}
                     </span>
                     <span className="font-label-md text-on-surface">{m.to}</span>
-                    <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded border', badge.bg)}>
+                    <Badge size="sm" variant="neutral" className={badge.bg}>
                       {badge.label}
-                    </span>
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-outline-variant/30 bg-surface-container-low text-on-surface-variant uppercase tracking-wider">
+                    </Badge>
+                    <Badge size="sm" variant="neutral" className="border-outline-variant/30 bg-surface-container-low">
                       {kindLabel(m.content_kind)}
-                    </span>
+                    </Badge>
                     <span className="text-label-sm text-on-surface-variant ml-auto">
                       {formatTimestamp(m.timestamp)}
                     </span>

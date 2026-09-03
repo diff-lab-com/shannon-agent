@@ -1,4 +1,5 @@
 import type { ToolCall, UsagePayload } from '@/types'
+import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { useT } from '@/i18n'
 
@@ -67,7 +68,7 @@ export default function ContextPanel({ open, usage, activeToolCalls }: ContextPa
           <section>
             <h3 className="font-label-md text-on-surface uppercase tracking-wider opacity-60 mb-md">
               {t('chat.context.activeTools')}
-              <span className="ml-xs px-xs py-[2px] bg-primary/10 text-primary text-[10px] font-bold rounded">{activeToolCalls.length}</span>
+              <Badge size="sm" variant="primary" className="ml-xs">{activeToolCalls.length}</Badge>
             </h3>
             <div className="space-y-sm">
               {activeToolCalls.map(tc => (

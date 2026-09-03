@@ -3,6 +3,7 @@
 // and callback is owned by the Editor orchestrator.
 
 import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/loading-state'
 import type { SourceFile } from '@/lib/tauri-api'
 
 interface EditorToolbarProps {
@@ -46,15 +47,11 @@ export default function EditorToolbar({
         className="flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         aria-label={t('editor.reRun')}
       >
-        <span
-          className={
-            diagLoading
-              ? 'material-symbols-outlined text-[14px] animate-spin'
-              : 'material-symbols-outlined text-[14px]'
-          }
-        >
-          {diagLoading ? 'progress_activity' : 'refresh'}
-        </span>
+        {diagLoading ? (
+          <Spinner className="text-[14px]" />
+        ) : (
+          <span className="text-[14px]">refresh</span>
+        )}
         <span>{diagLoading ? t('editor.running') : t('editor.reRun')}</span>
       </Button>
       <div className="ml-auto flex items-center gap-xs">

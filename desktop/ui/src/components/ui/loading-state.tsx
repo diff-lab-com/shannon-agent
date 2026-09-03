@@ -23,3 +23,15 @@ export default function LoadingState({ label, size = 'md' }: LoadingStateProps) 
     </div>
   )
 }
+
+/** Inline icon-only spinner for use beside text or inside buttons — the
+ *  block-level counterpart is [`LoadingState`]. Hidden from AT; pair it
+ *  with visible text (or an `sr-only` label) so the loading state is
+ *  announced. */
+export function Spinner({ className }: { className?: string }) {
+  return (
+    <span aria-hidden="true" className={cn('material-symbols-outlined animate-spin', className)}>
+      progress_activity
+    </span>
+  )
+}

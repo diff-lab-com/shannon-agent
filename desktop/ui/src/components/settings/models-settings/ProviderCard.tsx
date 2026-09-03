@@ -1,4 +1,6 @@
 import type { useIntl } from 'react-intl'
+import { Badge } from '@/components/ui/badge'
+import { Spinner } from '@/components/ui/loading-state'
 import { Button } from '@/components/ui/button'
 import type { ProviderConnection } from '@/types'
 import { KIND_INFO, kindLabel } from './types'
@@ -44,7 +46,7 @@ export function ProviderCard({
           <div className="flex items-center gap-xs">
             <span className="font-label-md font-bold text-on-surface truncate">{conn.display_name}</span>
             {isActive ? (
-              <span className="px-xs py-[1px] bg-primary text-on-primary rounded text-[10px] font-bold shrink-0">{t('settings.models.providers.activeBadge')}</span>
+              <Badge size="sm" variant="primary" className="shrink-0 bg-primary text-on-primary">{t('settings.models.providers.activeBadge')}</Badge>
             ) : null}
           </div>
           <div className="flex items-center gap-xs flex-wrap">
@@ -64,7 +66,7 @@ export function ProviderCard({
       </div>
       <div className="flex items-center gap-xs shrink-0">
         {testingId === conn.id ? (
-          <span className="material-symbols-outlined text-primary animate-spin text-[18px]">progress_activity</span>
+          <Spinner className="text-primary text-[18px]" />
         ) : (
           <Button variant="ghost" className="px-sm py-xs text-on-surface-variant hover:text-primary cursor-pointer" onClick={onTest} aria-label={t('settings.models.providers.test')}>
             <span className="material-symbols-outlined text-[18px]">cable</span>
@@ -78,7 +80,7 @@ export function ProviderCard({
             disabled={activatingId !== null}
           >
             {activatingId === conn.id ? (
-              <span className="material-symbols-outlined text-[16px] animate-spin align-middle">progress_activity</span>
+              <Spinner className="text-[16px] align-middle" />
             ) : t('settings.models.providers.activate')}
           </Button>
         ) : null}

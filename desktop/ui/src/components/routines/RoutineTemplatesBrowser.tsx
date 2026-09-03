@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import LoadingState from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
@@ -75,13 +76,7 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
         role="status"
         aria-live="polite"
       >
-        <span
-          className="material-symbols-outlined text-[28px] text-primary animate-spin"
-          aria-hidden="true"
-        >
-          progress_activity
-        </span>
-        <span className="sr-only">{t('routines.templates.loading')}</span>
+        <LoadingState size="md" label={t('routines.templates.loading')} />
       </div>
     )
   }

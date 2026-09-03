@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -140,7 +141,7 @@ export function ProvidersSection({
         >
           {testAllRunning ? (
             <>
-              <span className="material-symbols-outlined text-[18px] animate-spin">progress_activity</span>
+              <Spinner className="text-[18px]" />
               {t('settings.models.providers.testAllInProgress')}
             </>
           ) : (

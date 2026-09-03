@@ -9,6 +9,7 @@
 // on manual refresh.
 
 import { useEffect, useState, useCallback } from 'react'
+import EmptyState from '@/components/ui/empty-state'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -125,15 +126,12 @@ export default function HookTaskPipeline() {
       {loading && routines.length === 0 ? (
         <LoadingState size="sm" label={t('tasks.hookTaskPipeline.loading')} />
       ) : routines.length === 0 ? (
-        <div className="text-center py-lg">
-          <span className="material-symbols-outlined icon-xl text-on-surface-variant/40 block mb-sm">link_off</span>
-          <p className="text-body-sm text-on-surface-variant">
-            {t('tasks.hookTaskPipeline.empty')}
-          </p>
-          <p className="font-label-sm text-[11px] text-on-surface-variant mt-xs">
-            {t('tasks.hookTaskPipeline.emptyDesc')}
-          </p>
-        </div>
+        <EmptyState
+          compact
+          icon="link_off"
+          title={t('tasks.hookTaskPipeline.empty')}
+          description={t('tasks.hookTaskPipeline.emptyDesc')}
+        />
       ) : (
         <ul className="flex flex-col gap-sm" aria-label={t('tasks.hookTaskPipeline.title')}>
           {routines.map(r => {

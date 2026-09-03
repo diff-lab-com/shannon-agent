@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -228,7 +229,7 @@ export default function ModelsSettings() {
                   </div>
                     </div>
                     {switching === m.id ? (
-                      <span className="material-symbols-outlined text-primary animate-spin text-[20px]">progress_activity</span>
+                      <Spinner className="text-primary text-[20px]" />
                     ) : null}
                   </Button>
                 ))}

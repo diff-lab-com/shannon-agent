@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Spinner } from '@/components/ui/loading-state'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useIntl } from 'react-intl'
@@ -92,7 +93,7 @@ export default function GeneralSettings() {
           <div className="flex items-center gap-md mb-xs">
             <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>auto_awesome</span>
             <h3 className="font-headline-md text-headline-md">{t('settings.general.approvalMode.title')}</h3>
-            {saving && <span className="material-symbols-outlined text-primary animate-spin text-[18px]">progress_activity</span>}
+            {saving && <Spinner className="text-primary text-[18px]" />}
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">
             {intl.formatMessage({ id: 'settings.general.approvalMode.current' }, {

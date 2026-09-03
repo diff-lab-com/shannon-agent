@@ -2,6 +2,7 @@
 // DOCUMENTS_SKILLS_AVAILABLE — the section is hidden until the skill repos
 // are published. Extracted from Welcome.tsx (T3.1).
 import { useIntl } from 'react-intl'
+import { Spinner } from '@/components/ui/loading-state'
 import { Button } from '@/components/ui/button'
 import { DOCUMENTS_SKILLS, type DocumentsSkill } from './constants'
 
@@ -58,7 +59,7 @@ export function DocumentsSkillsList({ skillState, onInstall, onBrowseLater }: Do
                 aria-label={intl.formatMessage({ id: 'welcome.skills.install.aria' }, { name: intl.formatMessage({ id: skill.labelKey }) })}
               >
                 {state.status === 'installing' && (
-                  <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
+                  <Spinner className="text-[14px]" />
                 )}
                 {state.status === 'installed' ? (
                   <span className="material-symbols-outlined text-[14px]">check</span>

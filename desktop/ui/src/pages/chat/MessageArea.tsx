@@ -1,4 +1,5 @@
 import { useT } from '@/i18n'
+import { Banner } from '@/components/ui/banner'
 import type { RefObject } from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/ui/button'
@@ -107,10 +108,15 @@ export default function MessageArea({
       )}
 
       {error && (
-        <div className="mx-auto max-w-md p-md bg-error/10 border border-error/20 rounded-xl text-center">
-          <p className="text-body-sm text-error">{error}</p>
+        <Banner
+          variant="card"
+          tone="error"
+          className="mx-auto max-w-md text-error font-label-md"
+        >
+          <span className="material-symbols-outlined icon-md text-error">error</span>
+          <span className="flex-1 text-center">{error}</span>
           <ComposerRetryButton />
-        </div>
+        </Banner>
       )}
 
       <div ref={messagesEndRef} />

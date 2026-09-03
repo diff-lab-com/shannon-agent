@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Spinner } from '@/components/ui/loading-state'
 import { useOutletContext } from "react-router-dom";
 import { useIntl } from 'react-intl'
 import {
@@ -207,7 +208,7 @@ export default function Featured() {
                   >
                     {isBusy ? (
                       <>
-                        <span className="material-symbols-outlined icon-sm animate-spin">progress_activity</span>
+                        <Spinner className="icon-sm" />
                         {vendor.install_kind.type === "oauth_remote"
                           ? t('extensions.featured.authorizing')
                           : t('extensions.featured.installing')}

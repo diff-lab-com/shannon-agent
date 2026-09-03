@@ -1,4 +1,5 @@
 import { Suspense, type ComponentType } from 'react'
+import LoadingState from '@/components/ui/loading-state'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
 import { useT } from '@/i18n'
@@ -18,11 +19,7 @@ interface InlinePanelModalProps {
   bodyClassName: string
 }
 
-const LoadingFallback = () => (
-  <div className="flex items-center justify-center py-xl">
-    <span className="material-symbols-outlined animate-spin text-primary">progress_activity</span>
-  </div>
-)
+const LoadingFallback = () => <LoadingState />
 
 export default function InlinePanelModal({
   open,

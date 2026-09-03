@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -160,7 +161,7 @@ export function VoiceSttSettings() {
           onClick={handleSave}
           disabled={saving}
         >
-          {saving ? <span className="material-symbols-outlined animate-spin mr-sm text-[18px]">progress_activity</span> : null}
+          {saving ? <Spinner className="mr-sm text-[18px]" /> : null}
           {t('settings.voice.save')}
         </Button>
       </div>

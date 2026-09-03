@@ -12,6 +12,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import * as api from '@/lib/tauri-api'
+import { toastError } from '@/lib/errorToast'
 import type { CheckpointInfo, FeedbackRating } from '@/lib/tauri-api'
 import {
   EVENT_NAMES,
@@ -42,6 +43,17 @@ export type AppContextValue = ChatContextValue & SessionContextValue & CatalogCo
  */
 export function useApp(): AppContextValue {
   return { ...useCatalog(), ...useSessions(), ...useChat() }
+}
+
+
+/**
+ * Background refreshes fail soft on purpose: several of them fire after a
+ * single user action, so a toast per failure would spam during backend
+ * hiccups. The app keeps its last-known state; startup failures surface
+ * through `initError` instead. One helper keeps the policy grep-able.
+ */
+function logSoftFailure(what: string, e: unknown) {
+  console.warn(`[shannon] ${what} failed:`, e)
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -86,7 +98,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   streamingTextRef.current = streamingText
 
   const refreshSessions = useCallback(async () => {
-    try { setSessions(await api.listSessions()) } catch (e) { console.warn('refreshSessions failed:', e) }
+    try { setSessions(await api.listSessions()) } catch (e) { logSoftFailure('refresh sessions', e) }
   }, [])
 
   const toggleContextPanel = useCallback(() => {
@@ -94,31 +106,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const refreshStatus = useCallback(async () => {
-    try { setStatus(await api.getStatus()) } catch (e) { console.warn('refreshStatus failed:', e) }
+    try { setStatus(await api.getStatus()) } catch (e) { logSoftFailure('refresh status', e) }
   }, [])
 
   const refreshConfig = useCallback(async () => {
-    try { setConfig(await api.getConfig()) } catch (e) { console.warn('refreshConfig failed:', e) }
+    try { setConfig(await api.getConfig()) } catch (e) { logSoftFailure('refresh config', e) }
   }, [])
 
   const refreshModels = useCallback(async () => {
-    try { setModels(await api.listModels()) } catch (e) { console.warn('refreshModels failed:', e) }
+    try { setModels(await api.listModels()) } catch (e) { logSoftFailure('refresh models', e) }
   }, [])
 
   const refreshTasks = useCallback(async () => {
-    try { setTasks(await api.listTasks()) } catch (e) { console.warn('refreshTasks failed:', e) }
+    try { setTasks(await api.listTasks()) } catch (e) { logSoftFailure('refresh tasks', e) }
   }, [])
 
   const refreshAgents = useCallback(async () => {
-    try { setAgents(await api.listAgents()) } catch (e) { console.warn('refreshAgents failed:', e) }
+    try { setAgents(await api.listAgents()) } catch (e) { logSoftFailure('refresh agents', e) }
   }, [])
 
   const refreshMcpServers = useCallback(async () => {
-    try { setMcpServers(await api.listMcpServers()) } catch (e) { console.warn('refreshMcpServers failed:', e) }
+    try { setMcpServers(await api.listMcpServers()) } catch (e) { logSoftFailure('refresh mcp servers', e) }
   }, [])
 
   const refreshBackgroundTasks = useCallback(async () => {
-    try { setBackgroundTasks(await api.getBackgroundTasks()) } catch (e) { console.warn('refreshBackgroundTasks failed:', e) }
+    try { setBackgroundTasks(await api.getBackgroundTasks()) } catch (e) { logSoftFailure('refresh background tasks', e) }
   }, [])
 
   const sendMessage = useCallback(async (message: string, filePaths?: string[]) => {
@@ -138,7 +150,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const cancelQuery = useCallback(async () => {
-    try { await api.cancelQuery() } catch (e) { console.warn("AppContext error:", e) }
+    try { await api.cancelQuery() } catch (e) { toastError('Failed to cancel query', e) }
   }, [])
 
   const createSession = useCallback(async () => {
@@ -225,7 +237,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     try {
       setCheckpoints(await api.listCheckpoints(currentSessionId))
-    } catch (e) { console.warn('refreshCheckpoints failed:', e) }
+    } catch (e) { logSoftFailure('refresh checkpoints', e) }
   }, [currentSessionId])
 
   // Checkpoints are recorded when a query completes — refresh when the
@@ -241,7 +253,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     try {
       setFeedback(await api.listMessageFeedback(currentSessionId))
-    } catch (e) { console.warn('refreshFeedback failed:', e) }
+    } catch (e) { logSoftFailure('refresh feedback', e) }
   }, [currentSessionId])
 
   useEffect(() => {

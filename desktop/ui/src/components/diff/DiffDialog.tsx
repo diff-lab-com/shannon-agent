@@ -14,6 +14,7 @@
 // existing test contract ("Close diff") keeps working.
 
 import { useEffect, useState, useMemo } from 'react'
+import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -198,7 +199,7 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
       <ModalBody className="flex-1 overflow-auto p-lg">
         {loading ? (
           <div className="flex items-center justify-center py-xl">
-            <span className="material-symbols-outlined animate-spin text-primary" aria-hidden="true">progress_activity</span>
+            <Spinner className="text-primary" />
             <span className="ml-md text-body-sm text-on-surface-variant">{t('diff.dialog.loading')}</span>
           </div>
         ) : error ? (
@@ -238,7 +239,7 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
           >
             {applying ? (
               <span className="flex items-center gap-xs">
-                <span className="material-symbols-outlined animate-spin text-[16px]" aria-hidden="true">progress_activity</span>
+                <Spinner className="text-[16px]" />
                 {t('diff.dialog.apply', { count: acceptedCount })}
               </span>
             ) : (

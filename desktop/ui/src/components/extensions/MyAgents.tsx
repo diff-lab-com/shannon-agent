@@ -258,9 +258,11 @@ export default function MyAgents() {
               </h4>
 
               {backgroundTasks.length === 0 ? (
-                <div className="h-48 flex items-center justify-center text-on-surface-variant opacity-60">
-                  <p className="text-body-sm">{t('extensions.myAgents.noPerfData')}</p>
-                </div>
+                <EmptyState
+                  compact
+                  icon="monitoring"
+                  title={t('extensions.myAgents.noPerfData')}
+                />
               ) : (
                 <div className="space-y-sm">
                   {backgroundTasks.slice(0, 5).map(bt => (
