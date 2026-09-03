@@ -49,7 +49,7 @@ pub struct HealthReport {
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[allow(dead_code)] // documentation value for the 0 state
+#[allow(dead_code)] // KEEP: names the 0 state in the status mapping for readability
 const STATUS_LOCAL: u8 = 0;
 const STATUS_CONNECTED: u8 = 1;
 const STATUS_DEGRADED: u8 = 2;
