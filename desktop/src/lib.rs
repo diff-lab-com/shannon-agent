@@ -148,6 +148,8 @@ pub mod commands_onboarding;
 
 #[cfg(feature = "tauri")]
 pub mod commands_permissions;
+pub mod commands_feedback;
+pub mod commands_rewind;
 
 #[cfg(feature = "tauri")]
 pub mod commands_plugins;

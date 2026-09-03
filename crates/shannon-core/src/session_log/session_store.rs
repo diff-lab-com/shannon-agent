@@ -436,6 +436,86 @@ impl SessionStore {
         std::fs::remove_dir_all(dir)?;
         Ok(true)
     }
+
+    /// Truncate the session log so only the first `keep_turns` conversation
+    /// turns survive — the L0 primitive behind desktop `/rewind`. Turns are
+    /// delimited by `user/message` events (each one OPENS a turn), so keeping
+    /// `keep_turns` turns keeps user/messages `#0..#keep_turns-1` and drops
+    /// the `#keep_turns`-th row and everything after it.
+    ///
+    /// The log is rewritten in place with the surviving raw lines, preserving
+    /// seq numbering; a later [`SessionLogWriter`] resumes its seq from the
+    /// surviving line count, so appends continue cleanly.
+    ///
+    /// Returns `Ok(None)` when no log exists, otherwise `Ok(Some(dropped))`
+    /// with the number of event lines removed. `keep_turns` past the end of
+    /// the session is a no-op returning `Some(0)`.
+    pub fn truncate_to_turn(
+        &self,
+        session_id: &Uuid,
+        keep_turns: usize,
+    ) -> Result<Option<usize>, SessionStoreError> {
+        let path = self.log_path(session_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let raw = std::fs::read_to_string(&path)?;
+
+        let mut kept_lines = String::with_capacity(raw.len());
+        let mut total_lines = 0usize;
+        let mut turns_seen = 0usize;
+        // Whether the current (kept) turn already counted its opener — a
+        // turn opens at `turn/start` with `user/message` as the fallback in
+        // logs written without turn framing. Only the OPENER counts, so the
+        // user/message inside a framed turn never double-increments.
+        let mut turn_counted = false;
+        let mut cut = false;
+        for line in raw.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            total_lines += 1;
+            if !cut {
+                match serde_json::from_str::<SessionEvent>(line).map(|e| e.body) {
+                    Ok(SessionEventBody::TurnStart(_)) => {
+                        if turns_seen == keep_turns {
+                            cut = true;
+                        } else {
+                            turns_seen += 1;
+                            turn_counted = true;
+                        }
+                    }
+                    Ok(SessionEventBody::UserMessage(_)) if !turn_counted => {
+                        if turns_seen == keep_turns {
+                            cut = true;
+                        } else {
+                            turns_seen += 1;
+                            turn_counted = true;
+                        }
+                    }
+                    Ok(SessionEventBody::TurnEnd(_)) => turn_counted = false,
+                    _ => {}
+                }
+            }
+            if cut {
+                continue;
+            }
+            kept_lines.push_str(line);
+            kept_lines.push('\n');
+        }
+
+        if !cut {
+            // The boundary never arrived — keep_turns >= session turns.
+            return Ok(Some(0));
+        }
+
+        // Atomic-ish rewrite: temp file in the same directory, then rename.
+        let tmp = path.with_extension("jsonl.rewind-tmp");
+        let dropped = total_lines - kept_lines.lines().count();
+        std::fs::write(&tmp, &kept_lines)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(Some(dropped))
+    }
 }
 
 /// Convenience: an shared handle rooted at the default container.
@@ -534,6 +614,114 @@ mod tests {
         assert_eq!(ser["content"][1]["type"], "tool_use");
         let res = serde_json::to_value(&loaded.messages[2]).unwrap();
         assert_eq!(res["content"][0]["type"], "tool_result");
+    }
+
+    /// Seed a 3-turn session through the real writer (one writer handle so
+    /// seq/turn numbering behaves exactly like a live session).
+    fn seed_three_turn_session(store: &SessionStore, id: &Uuid) {
+        let mut w = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+        w.record(SessionEventBody::SessionStart(
+            shannon_types::session_event::SessionStartPayload {
+                model: "test-model".into(),
+                provider: Some("anthropic".into()),
+                cwd: Some("/proj".into()),
+                app_version: None,
+            },
+        ));
+        for turn in 0..3u64 {
+            w.record(SessionEventBody::TurnStart(TurnStartPayload {
+                query_id: None,
+            }));
+            w.record(SessionEventBody::UserMessage(UserMessagePayload {
+                source: UserMessagePayload::SOURCE_USER.into(),
+                content: format!("question {turn}"),
+            }));
+            w.record(SessionEventBody::AssistantChunk(AssistantChunkPayload {
+                delta: format!("answer {turn}"),
+                thinking: false,
+            }));
+            w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+                reason: TurnEndPayload::REASON_COMPLETED.into(),
+                usage: None,
+                error: None,
+            }));
+        }
+        w.close().unwrap();
+    }
+
+    #[test]
+    fn truncate_to_turn_keeps_leading_turns_and_drops_the_rest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_three_turn_session(&store, &id);
+
+        let dropped = store.truncate_to_turn(&id, 2).unwrap().expect("log exists");
+        assert!(dropped > 0);
+
+        let loaded = store.load(&id).unwrap().expect("session survives");
+        assert_eq!(loaded.metadata.turn_count, 2);
+        assert_eq!(loaded.messages.len(), 4); // 2 × (user, assistant)
+        let texts: Vec<_> = loaded.messages.iter().map(|m| match &m.content {
+            shannon_engine::api::MessageContent::Text(t) => t.clone(),
+            shannon_engine::api::MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    shannon_engine::api::ContentBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+            _ => String::new(),
+        }).collect();
+        assert!(texts.contains(&"question 0".to_string()));
+        assert!(texts.contains(&"answer 1".to_string()));
+        assert!(!texts.iter().any(|t| t.contains("question 2")));
+    }
+
+    #[test]
+    fn truncate_to_turn_zero_keeps_only_pre_session_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_three_turn_session(&store, &id);
+
+        store.truncate_to_turn(&id, 0).unwrap().expect("log exists");
+        let loaded = store.load(&id).unwrap().expect("session survives");
+        assert_eq!(loaded.metadata.turn_count, 0);
+        assert!(loaded.messages.is_empty());
+        // session/start survives so model/project metadata is intact.
+        assert_eq!(loaded.metadata.model, "test-model");
+    }
+
+    #[test]
+    fn truncate_to_turn_past_end_is_a_noop_and_writer_resumes_seq() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_three_turn_session(&store, &id);
+
+        let dropped = store.truncate_to_turn(&id, 50).unwrap().expect("log exists");
+        assert_eq!(dropped, 0);
+
+        // A later writer must resume cleanly from the truncated log.
+        let mut w = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+        w.record(SessionEventBody::TurnStart(TurnStartPayload { query_id: None }));
+        w.record(SessionEventBody::UserMessage(UserMessagePayload {
+            source: UserMessagePayload::SOURCE_USER.into(),
+            content: "after rewind".into(),
+        }));
+        w.close().unwrap();
+
+        let loaded = store.load(&id).unwrap().expect("session survives");
+        assert_eq!(loaded.metadata.turn_count, 4);
+    }
+
+    #[test]
+    fn truncate_to_turn_on_missing_log_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        assert!(store.truncate_to_turn(&Uuid::new_v4(), 1).unwrap().is_none());
     }
 
     #[test]

@@ -509,6 +509,12 @@ pub async fn send_message(
         });
         first
     };
+    // /rewind bookkeeping: 0-based index this turn will occupy (count of user
+    // messages before this send, computed after the push above).
+    let rewind_turn_index = {
+        let messages = active_session.messages.lock().await;
+        messages.iter().filter(|m| m.role == "user").count() - 1
+    };
 
     // Promote the first user message to the session title while the title
     // is still the generated placeholder. User renames are never touched;
@@ -663,6 +669,9 @@ pub async fn send_message(
         let mut tool_call_count: usize = 0;
         let mut tool_names_used: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        // /rewind: file paths mutated by this turn's write/edit tool calls.
+        let mut turn_files: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
 
         // Consume the stream using futures::StreamExt
         use futures::StreamExt;
@@ -704,6 +713,11 @@ pub async fn send_message(
                     } => {
                         tool_call_count += 1;
                         tool_names_used.insert(tool_name.clone());
+                        if let Some(path) =
+                            crate::commands_rewind::mutated_file_path(&tool_name, &tool_input)
+                        {
+                            turn_files.insert(path);
+                        }
                         let payload = events::ToolStartPayload {
                             query_id: qid_str.clone(),
                             tool_use_id,
@@ -814,7 +828,24 @@ pub async fn send_message(
                         }
 
                         // (§4.6) Conversation already durable in events.jsonl
-                        // via the engine tee; nothing to snapshot per turn.
+                        // via the engine tee. /rewind still needs the per-turn
+                        // checkpoint + content snapshots though — the L0 log
+                        // is append-only, so rewind reverts via these.
+                        {
+                            let files: Vec<String> = turn_files.iter().cloned().collect();
+                            let prompt = message_for_skill_loop.clone();
+                            let working_dir = crate::commands_agents::resolve_working_dir(
+                                &app.state::<AppState>(),
+                            )
+                            .await;
+                            crate::commands_rewind::record_turn(
+                                &session_id.to_string(),
+                                rewind_turn_index,
+                                &files,
+                                &prompt,
+                                &working_dir,
+                            );
+                        }
 
                         let _ = app.emit(
                             event_names::QUERY_COMPLETED,

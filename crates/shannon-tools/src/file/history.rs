@@ -761,6 +761,46 @@ impl FileHistoryManager {
         }
     }
 
+    /// Determine how to restore `file_path` to its state BEFORE conversation
+    /// `turn_index` started — the "rewind to your message N" flavor that
+    /// drops turn N and everything after it. Identical to
+    /// [`rewind_file_to_turn`](Self::rewind_file_to_turn) except the target
+    /// filter is strict (`turn_index < turn`), so a turn-0 rewind prescribes
+    /// [`RewindAction::Delete`] for files first created during the session
+    /// instead of silently keeping their end-of-turn-0 state.
+    ///
+    /// Like [`rewind_file_to_turn`](Self::rewind_file_to_turn), this only
+    /// decides; the caller writes to disk.
+    pub fn rewind_before_turn(
+        &mut self,
+        file_path: &Path,
+        turn_index: usize,
+    ) -> Result<RewindAction, FileHistoryError> {
+        self.ensure_cache_loaded()?;
+
+        let history = match self.cache.get(file_path) {
+            Some(h) => h,
+            None => return Ok(RewindAction::NoChange),
+        };
+
+        let target = history
+            .snapshots
+            .iter()
+            .filter(|s| s.turn_index.is_some_and(|t| t < turn_index))
+            .max_by_key(|s| s.turn_index);
+
+        match target {
+            Some(s) => Ok(RewindAction::Restore(s.content.clone())),
+            None => {
+                if history.snapshots.iter().any(|s| s.turn_index.is_some()) {
+                    Ok(RewindAction::Delete)
+                } else {
+                    Ok(RewindAction::NoChange)
+                }
+            }
+        }
+    }
+
     /// List all tracked files.
     pub fn list_tracked_files(&mut self) -> Result<Vec<PathBuf>, FileHistoryError> {
         self.ensure_cache_loaded()?;
@@ -1628,6 +1668,33 @@ mod tests {
         assert_eq!(
             manager.rewind_file_to_turn(path, 3).unwrap(),
             RewindAction::Delete
+        );
+    }
+
+    #[test]
+    fn test_rewind_before_turn_strict_boundary() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_before_turn.rs");
+
+        manager.record_turn_snapshot(path, "turn1", 1).unwrap();
+        manager.record_turn_snapshot(path, "turn2", 2).unwrap();
+
+        // Rewind-to-message-2 (drop turn 2 and later) → restore end-of-turn-1.
+        assert_eq!(
+            manager.rewind_before_turn(path, 2).unwrap(),
+            RewindAction::Restore("turn1".to_string())
+        );
+        // Rewind-to-message-1 → the file has no pre-session history → Delete.
+        assert_eq!(
+            manager.rewind_before_turn(path, 1).unwrap(),
+            RewindAction::Delete
+        );
+        // Untracked file → NoChange.
+        assert_eq!(
+            manager
+                .rewind_before_turn(Path::new("/tmp/never_seen.rs"), 5)
+                .unwrap(),
+            RewindAction::NoChange
         );
     }
 
