@@ -451,6 +451,27 @@ export async function getSessionGitDiff(workingDir: string): Promise<GitDiffSumm
   return invoke('get_session_git_diff', { workingDir })
 }
 
+export interface CompactSessionSummary {
+  performed: boolean
+  /** True when the session had no compactable history. */
+  nothing_to_compact: boolean
+  original_tokens: number
+  compacted_tokens: number
+  reduction_ratio: number
+  messages_removed: number
+  /** Turns the compacted L0 log now holds (summary turn + kept recents). */
+  kept_turns: number
+}
+
+export interface CompactSessionResult extends CompactSessionSummary {
+  messages: ChatMessage[]
+}
+
+/** /compact — summarize history and persist the compacted conversation. */
+export async function compactSession(sessionId: string): Promise<CompactSessionResult> {
+  return invoke('compact_session', { sessionId })
+}
+
 // --- Sessions ---
 
 export async function newSession(): Promise<string> {

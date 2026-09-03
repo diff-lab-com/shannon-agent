@@ -2444,5 +2444,13 @@
   "slash.card.diff.noWorkingDir": "This session has no working directory set.",
   "slash.card.error.title": "Command failed",
   "slash.card.dismiss": "Dismiss",
-  "models.modelsDev.title": "From models.dev (live)"
+  "models.modelsDev.title": "From models.dev (live)",
+  "slash.command.compact.label": "Compact context",
+  "slash.command.compact.description": "Summarize this session's history to free context window",
+  "slash.card.compact.title": "Context compacted",
+  "slash.card.compact.done": "{before} → {after} tokens",
+  "slash.card.compact.nothing": "No conversation to compact yet.",
+  "slash.card.compact.removed": "{count} messages summarized",
+  "slash.card.compact.keptTurns": "{count} recent turns kept",
+  "slash.card.compact.hint": "History now starts with the summary turn; older checkpoints were cleared."
 }

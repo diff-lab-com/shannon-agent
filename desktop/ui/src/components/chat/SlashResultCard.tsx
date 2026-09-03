@@ -119,6 +119,30 @@ export default function SlashResultCard({ result, onDismiss }: SlashResultCardPr
         </div>
       )
     }
+  } else if (result.kind === 'compact') {
+    const s = result.summary
+    if (s.nothing_to_compact) {
+      body = <p className="font-label-sm text-on-surface-variant">{t('slash.card.compact.nothing')}</p>
+    } else {
+      const pct = Math.round((1 - s.reduction_ratio) * 100)
+      body = (
+        <div className="flex flex-col gap-xs">
+          <p className="font-label-sm text-on-surface">
+            {t('slash.card.compact.done', {
+              before: fmt.format(s.original_tokens),
+              after: fmt.format(s.compacted_tokens),
+            })}
+            <span className="text-on-surface-variant"> · −{pct}%</span>
+          </p>
+          <p className="font-label-xs text-on-surface-variant">
+            {t('slash.card.compact.removed', { count: fmt.format(s.messages_removed) })}
+            {' · '}
+            {t('slash.card.compact.keptTurns', { count: fmt.format(s.kept_turns) })}
+          </p>
+          <p className="font-label-xs text-on-surface-variant">{t('slash.card.compact.hint')}</p>
+        </div>
+      )
+    }
   } else {
     body = <p className="font-label-sm text-on-surface">{t(result.messageKey)}</p>
   }
@@ -127,6 +151,7 @@ export default function SlashResultCard({ result, onDismiss }: SlashResultCardPr
     result.kind === 'context' ? 'slash.card.context.title'
     : result.kind === 'cost' ? 'slash.card.cost.title'
     : result.kind === 'diff' ? 'slash.card.diff.title'
+    : result.kind === 'compact' ? 'slash.card.compact.title'
     : 'slash.card.error.title'
 
   return (
@@ -140,6 +165,7 @@ export default function SlashResultCard({ result, onDismiss }: SlashResultCardPr
             {result.kind === 'context' ? 'data_usage'
               : result.kind === 'cost' ? 'payments'
               : result.kind === 'diff' ? 'difference'
+              : result.kind === 'compact' ? 'compress'
               : 'error'}
           </span>
           {t(titleKey)}
