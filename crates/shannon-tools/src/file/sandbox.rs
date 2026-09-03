@@ -101,7 +101,8 @@ impl WorldSandboxHandle {
         }
     }
 
-    fn current(&self) -> Option<WorldRoots> {
+    /// The installed override, or `None` when passthrough (empty).
+    pub fn current(&self) -> Option<WorldRoots> {
         self.inner.read().ok().map(|r| r.clone()).filter(|r| {
             !r.allowed_roots.is_empty() || r.home_dir.is_some()
         })

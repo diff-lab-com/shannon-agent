@@ -29,6 +29,7 @@ dirs = "6"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 shannon-core = { path = "../shannon-core" }
+shannon-remote = { path = "../shannon-remote" }
 shannon-types = { path = "../shannon-types" }
 shannon-engine = { path = "../shannon-engine" }
 shannon-ui = { path = "../shannon-ui" }

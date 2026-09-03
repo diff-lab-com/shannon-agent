@@ -16,7 +16,7 @@
 use shannon_core::api_server::ShannonApiServer;
 use shannon_core::tools::ToolRegistry;
 use shannon_engine::api::types::LlmClientConfig;
-use shannon_tools::register_default_tools;
+use shannon_tools::register_default_tools_with_providers;
 
 use crate::commands::AppState;
 
@@ -31,7 +31,8 @@ pub const LOOPBACK_PORT: u16 = 33420;
 /// freshly-registered default tool set. Pure construction — does not bind.
 pub fn build_server(client_config: LlmClientConfig) -> ShannonApiServer {
     let mut tools = ToolRegistry::new();
-    if let Err(e) = register_default_tools(&mut tools) {
+    let assembly = shannon_remote::assembly::assemble_dynamic();
+    if let Err(e) = register_default_tools_with_providers(&mut tools, &assembly.providers) {
         tracing::warn!("loopback engine API server: default tool registration failed: {e}");
     }
     ShannonApiServer::new(client_config)

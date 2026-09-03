@@ -14,6 +14,7 @@ pub mod target;
 pub mod ssh;
 pub mod docker;
 pub mod dynamic;
+pub mod assembly;
 
 #[cfg(test)]
 mod smoke {

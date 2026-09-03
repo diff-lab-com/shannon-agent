@@ -15,7 +15,7 @@ use shannon_engine::permissions::{ApprovalMode, PermissionManager, PermissionRul
 use shannon_engine::state::StateManager;
 use shannon_mcp::McpProcessPool;
 use shannon_skills::SkillRegistry;
-use shannon_tools::register_default_tools;
+use shannon_tools::register_default_tools_with_providers;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
@@ -314,10 +314,15 @@ impl AppState {
         let client_config =
             Self::build_client_config(&provider_store, &shannon_overrides).unwrap_or_default();
 
-        // Initialize tool registry with default tools
+        // Initialize tool registry behind a DynamicWorld decorator so a
+        // remote target can be attached later without a registry rebuild.
         let mut tool_registry = ToolRegistry::new();
-        let _agent_context =
-            register_default_tools(&mut tool_registry).expect("Failed to register default tools");
+        let assembly = shannon_remote::assembly::assemble_dynamic();
+        let _agent_context = {
+            let _ = &assembly;
+            register_default_tools_with_providers(&mut tool_registry, &assembly.providers)
+                .expect("Failed to register default tools")
+        };
 
         Self {
             registry: Arc::new(SessionRegistry::new()),
