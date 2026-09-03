@@ -672,7 +672,6 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
                 .join(""),
-            _ => String::new(),
         }).collect();
         assert!(texts.contains(&"question 0".to_string()));
         assert!(texts.contains(&"answer 1".to_string()));

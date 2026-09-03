@@ -525,6 +525,20 @@ mod tests {
     use shannon_types::session_event::TurnEndPayload;
     use std::sync::atomic::AtomicUsize;
 
+    /// Serializes every test that touches the process-global observation
+    /// registry. `report()` flushes whatever deltas are currently buffered
+    /// into the caller's directory, so a parallel test's observe/report
+    /// bleeds counts (or extra lines) into another test's counters.jsonl —
+    /// an interleaving that made file-level assertions flaky under plain
+    /// `cargo test`. nextest (one process per test) is immune either way;
+    /// the lock exists for the shared-process case.
+    fn registry_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// Per-test observation window around the shared in-process registry:
     /// read before/after snapshots so unrelated observer traffic cancels out
     /// arithmetically regardless of scheduling.
@@ -563,6 +577,7 @@ mod tests {
 
     #[test]
     fn turn_interruption_counts_as_ended_and_interrupted() {
+        let _guard = registry_lock();
         let d = Delta::take();
         observe_turn_start();
         observe_turn_end(TurnEndPayload::REASON_INTERRUPTED);
@@ -578,6 +593,7 @@ mod tests {
 
     #[test]
     fn completed_turn_without_takeover_only_counts_denominator() {
+        let _guard = registry_lock();
         let d = Delta::take();
         observe_turn_start();
         observe_turn_end(TurnEndPayload::REASON_COMPLETED);
@@ -592,6 +608,7 @@ mod tests {
 
     #[test]
     fn user_takeover_latches_per_turn_and_resets_on_next_start() {
+        let _guard = registry_lock();
         let d = Delta::take();
         observe_turn_start();
         observe_permission_decision("ask", Some("AUTO"));
@@ -616,6 +633,7 @@ mod tests {
 
     #[test]
     fn rewind_kinds_route_to_distinct_counters() {
+        let _guard = registry_lock();
         let d = Delta::take();
         observe_rewind(RewindKind::Conversation);
         observe_rewind(RewindKind::Conversation);
@@ -632,6 +650,7 @@ mod tests {
 
     #[test]
     fn feedback_directions_parse_and_count() {
+        let _guard = registry_lock();
         let d = Delta::take();
         assert_eq!(FeedbackDirection::parse("Up"), Some(FeedbackDirection::Up));
         assert_eq!(
@@ -711,6 +730,7 @@ mod tests {
 
     #[test]
     fn append_local_writes_one_jsonl_line_and_skips_empty_snapshots() {
+        let _guard = registry_lock();
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
 
@@ -886,6 +906,10 @@ mod tests {
     /// deltas matching what was observed — signed when a secret is set.
     #[tokio::test(flavor = "current_thread")]
     async fn enabled_report_posts_only_the_whitelisted_payload() {
+        let _guard = registry_lock();
+        // Purge deltas buffered by earlier tests — file assertions are
+        // absolute, unlike the Delta-window arithmetic tests.
+        take_snapshot_zeroing();
         let capture = Capture::start();
         let dir = tempfile::tempdir().unwrap();
 
@@ -992,6 +1016,10 @@ mod tests {
     /// ever reach the capture sink despite its address being the endpoint.
     #[tokio::test(flavor = "current_thread")]
     async fn disabled_report_never_touches_the_network() {
+        let _guard = registry_lock();
+        // Purge deltas buffered by earlier tests — file assertions are
+        // absolute, unlike the Delta-window arithmetic tests.
+        take_snapshot_zeroing();
         let capture = Capture::start();
         let dir = tempfile::tempdir().unwrap();
 
@@ -1040,6 +1068,10 @@ mod tests {
     /// analytics projection" requirement).
     #[tokio::test(flavor = "current_thread")]
     async fn repeated_off_state_reports_accumulate_in_the_projection() {
+        let _guard = registry_lock();
+        // Purge deltas buffered by earlier tests — file assertions are
+        // absolute, unlike the Delta-window arithmetic tests.
+        take_snapshot_zeroing();
         let dir = tempfile::tempdir().unwrap();
 
         observe_feedback(FeedbackDirection::Up);

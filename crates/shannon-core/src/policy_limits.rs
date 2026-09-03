@@ -309,9 +309,23 @@ impl Default for PolicyLimitsManager {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
+
+    /// Serializes every env-mutating test in this module: `set_var` /
+    /// `remove_var` are process-global, so parallel siblings observe (and
+    /// restore over) each other's values without this lock.
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Serializes every env-mutating test in this module: `set_var` /
+    /// `remove_var` are process-global, so parallel siblings observe (and
+    /// restore over) each other's values without this lock.
+    fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     // === PolicyLimits Tests ===
 
@@ -526,6 +540,7 @@ mod tests {
 
     #[test]
     fn test_load_from_api_no_env_falls_back_to_defaults() {
+        let _env = env_test_lock();
         // Without SHANNON_POLICY_API_URL set, load_from_api returns defaults.
         let rt = tokio::runtime::Runtime::new().unwrap();
         // Ensure the env var is not set for this test.
@@ -543,6 +558,7 @@ mod tests {
 
     #[test]
     fn test_load_from_api_with_mock_server() {
+        let _env = env_test_lock();
         use mockito::Server;
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -601,6 +617,7 @@ mod tests {
 
     #[test]
     fn test_load_from_api_partial_response_merges() {
+        let _env = env_test_lock();
         use mockito::Server;
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -644,6 +661,7 @@ mod tests {
 
     #[test]
     fn test_load_from_api_server_error_falls_back() {
+        let _env = env_test_lock();
         use mockito::Server;
 
         let rt = tokio::runtime::Runtime::new().unwrap();
