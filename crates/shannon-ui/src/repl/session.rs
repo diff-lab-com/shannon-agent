@@ -6,7 +6,7 @@ use shannon_core::{ContentBlock, MessageContent};
 impl super::Repl {
     /// Restore conversation history from an L0-projected session (§4.6).
     ///
-    /// Takes the projected [`StoredSession`] and injects it into the query
+    /// Takes the projected [`StoredSession`](shannon_core::session_log::StoredSession) and injects it into the query
     /// engine so the next user message continues the prior conversation.
     /// Also populates the chat widget so the user can see the restored
     /// history. Returns the number of messages restored.

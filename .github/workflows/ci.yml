@@ -53,7 +53,11 @@ jobs:
       - name: Compile tests
         run: cargo test --workspace --no-run
       - name: Test
-        run: cargo nextest run --workspace --config-file .config/nextest.toml
+        # `--profile ci` activates the `.config/nextest.toml` [profile.ci]
+        # settings: per-test retries (2, exponential backoff) so known
+        # load-sensitive tests (e.g. the byte-exact session-log tee mock
+        # round-trip) don't fail the whole gate on a runner hiccup.
+        run: cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
       - name: Doctests
         # nextest does not execute doctests, so a doctest-only regression
         # (e.g. an example that relies on opt-in configuration) stays green
@@ -101,7 +105,7 @@ jobs:
           cargo run -q -p shannon-cli -- eval run --list
           cargo run -q -p shannon-cli -- eval run --task read_01
       - name: Eval harness tests
-        run: cargo nextest run -p shannon-core -E 'test(eval)'
+        run: cargo nextest run -p shannon-core -E 'test(eval)' --profile ci
 
   vscode:
     name: VS Code Extension
@@ -564,7 +568,9 @@ jobs:
         # Arch-invariants tests are guarded by `cargo test` integration
         # discovery; running nextest covers the same set in addition to
         # the bin/lib unit tests, so a single invocation is enough.
-        run: cargo nextest run --workspace --config-file .config/nextest.toml
+        # `--profile ci` mirrors the Test job (retries for load-sensitive
+        # tests; a retried-then-passing snapshot test leaves no .snap.new).
+        run: cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
       - name: Reject pending snapshots
         # If any `.snap.new` file exists, the snapshot test recorded a
         # diff the contributor did not accept. Fail the build so the PR

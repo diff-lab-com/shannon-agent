@@ -42,7 +42,7 @@
 //! # Permission decisions into L0
 //!
 //! Both decision sources publish through here (route (b) agreed in §4.9):
-//! the [`super::query_engine::guard_nodes::PermissionGuardNode`] verdicts,
+//! the [`super::query_engine::guard_nodes::PermissionGateNode`] verdicts,
 //! and plugin-manifest gate outcomes routed through the process-wide sink
 //! installed by [`install_decision_sink`] (see
 //! `crate::plugin::permissions::emit_decision`). They persist as

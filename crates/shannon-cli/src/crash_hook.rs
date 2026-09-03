@@ -123,6 +123,17 @@ fn write_crash_file(info: &std::panic::PanicHookInfo<'_>) {
 mod tests {
     use super::*;
 
+    /// Serializes the tests below: the event ring and the process-global
+    /// panic hook they install are shared state, and under plain
+    /// `cargo test` (libtest: one process, many threads) concurrent tests
+    /// steal each other's hook / interleave into the same ring. nextest
+    /// never sees this (one process per test); the lock restores the same
+    /// isolation under libtest.
+    fn global_state_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "shannon-crash-hook-test-{}-{}",
@@ -138,6 +149,7 @@ mod tests {
 
     #[test]
     fn test_record_ring_caps_at_20_and_truncates_long_events() {
+        let _guard = global_state_lock();
         let dir = temp_dir();
         install_at(dir.clone());
         for i in 0..30 {
@@ -162,6 +174,7 @@ mod tests {
 
     #[test]
     fn test_panic_writes_structured_crash_json() {
+        let _guard = global_state_lock();
         let dir = temp_dir();
         // Silence the default hook for the duration of the test, then install.
         let original = std::panic::take_hook();

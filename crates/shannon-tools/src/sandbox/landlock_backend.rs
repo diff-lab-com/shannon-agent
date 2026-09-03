@@ -85,7 +85,7 @@ fn write_set_for_level(level: u32) -> u64 {
 pub struct Grant {
     /// Canonicalized absolute root directory.
     pub path: PathBuf,
-    /// Union of [`FS_*`] access bits granted beneath `path`.
+    /// Union of `FS_*` access bits granted beneath `path`.
     pub access: u64,
 }
 

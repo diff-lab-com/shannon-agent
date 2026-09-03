@@ -563,7 +563,7 @@ enum TraceCommand {
         /// Session id: full UUID, unique prefix, or `latest`.
         session: String,
 
-        /// Output root directory (defaults to <tmp>/shannon-trace-export).
+        /// Output root directory (defaults to `<tmp>`/shannon-trace-export).
         #[arg(long)]
         out: Option<std::path::PathBuf>,
 
@@ -1178,7 +1178,7 @@ fn sessions_container_from_env() -> std::path::PathBuf {
 /// If `session_id_str` is provided, loads that specific session by UUID.
 /// Otherwise, loads the most recent session from the sessions container.
 ///
-/// Returns the projected [`StoredSession`] on success. Legacy snapshot files
+/// Returns the projected [`StoredSession`](shannon_core::session_log::StoredSession) on success. Legacy snapshot files
 /// are neither read nor migrated (DP4).
 fn load_resume_session(
     session_id_str: Option<&str>,
@@ -5954,6 +5954,17 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
 
     // ── ADR-0005 Phase 4: CLI layer vs connected profile ─────────────────
 
+    /// Serializes the HOME-swapping tests below: `HOME` (and the env keys
+    /// `build_cli_config` mutates) is process-global, and under plain
+    /// `cargo test` (libtest: one process, many threads) one test's
+    /// restore_home yanks the tempdir out from under another test's
+    /// config lookup. nextest never sees this (one process per test);
+    /// the lock restores the same isolation under libtest.
+    fn home_swap_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// Stand up a temp HOME with a connected `providers.toml` (minimax,
     /// openai-compatible wire, Store credential) plus the matching store
     /// credential file, and point `HOME` at it. Returns the TempDir (keep
@@ -6018,6 +6029,7 @@ profile_routes = []
 
     #[test]
     fn test_connected_profile_wins_without_cli_overrides() {
+        let _guard = home_swap_lock();
         // Regression (ADR-0005 Phase 4): with no --model/--provider and no
         // SHANNON_BASE_URL, the CLI layer must stay empty so the connected
         // profile wins over ambient env — not synthesise an Anthropic+Env
@@ -6041,6 +6053,7 @@ profile_routes = []
 
     #[test]
     fn test_model_only_override_grafts_onto_connected_profile() {
+        let _guard = home_swap_lock();
         // A per-invocation --model changes the model, not the provider:
         // base_url and the Store credential must survive (graft, not
         // synthesis).
@@ -6071,6 +6084,7 @@ profile_routes = []
 
     #[test]
     fn test_provider_override_still_synthesises() {
+        let _guard = home_swap_lock();
         // --provider is an explicit provider switch: full synthesis wins
         // over the connected profile (pre-existing contract).
         let (_dir, saved) = temp_home_with_connected_minimax();

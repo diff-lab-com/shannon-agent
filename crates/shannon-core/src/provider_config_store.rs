@@ -169,7 +169,7 @@ pub fn connected_slugs() -> std::collections::HashSet<String> {
 /// Read-only. Command surfaces (e.g. `shannon providers …`) call this to
 /// warn users that their file is being ignored instead of failing silently;
 /// the write side enforces the same condition hard via
-/// [`ensure_safe_to_overwrite`].
+/// `ensure_safe_to_overwrite`.
 pub fn parse_error(path: Option<&Path>) -> Option<String> {
     let path = path.map(Path::to_path_buf).or_else(default_path)?;
     let content = fs::read_to_string(&path).ok()?;
@@ -250,7 +250,7 @@ fn ensure_safe_to_overwrite(path: &Path) -> io::Result<()> {
 /// # Data-integrity guard
 ///
 /// Refuses (with `InvalidData`) to overwrite an existing file that does not
-/// parse as a [`ProviderModelConfig`] — see [`ensure_safe_to_overwrite`].
+/// parse as a [`ProviderModelConfig`] — see `ensure_safe_to_overwrite`.
 /// This is what stops "unparseable hand edit → next write silently destroys
 /// the whole file" data loss; the absent / empty / parseable cases proceed
 /// unchanged.

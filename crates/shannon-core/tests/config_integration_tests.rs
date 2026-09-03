@@ -1099,6 +1099,18 @@ mod unified_config_tests {
             .expect("default profile should list the active provider")
     }
 
+    /// Serializes every test below that mutates process-global state
+    /// (current directory, `SHANNON_*` env vars). Under plain `cargo test`
+    /// (libtest: one process, many threads — the Nightly Coverage
+    /// invocation) these tests race each other: one test's CWD switch
+    /// redirects another test's `.shannon.toml` lookup, and env writes are
+    /// observed mid-flight. nextest never sees this (one process per
+    /// test); this lock restores the same isolation under libtest.
+    fn global_state_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     // -- ShannonConfig Creation ------------------------------------------------
 
     #[test]
@@ -1412,6 +1424,7 @@ mod unified_config_tests {
 
     #[test]
     fn test_builder_load_local_toml_from_temp_file() {
+        let _guard = global_state_lock();
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join(".shannon.toml");
 
@@ -1447,6 +1460,7 @@ temperature = 0.3
 
     #[test]
     fn test_builder_load_local_toml_missing_file_uses_defaults() {
+        let _guard = global_state_lock();
         let dir = tempfile::tempdir().unwrap();
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
@@ -1462,6 +1476,7 @@ temperature = 0.3
 
     #[test]
     fn test_builder_load_local_toml_json_file() {
+        let _guard = global_state_lock();
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join(".shannon.toml");
 
@@ -1495,6 +1510,7 @@ temperature = 0.3
 
     #[test]
     fn test_builder_load_local_toml_with_comments_and_blanks() {
+        let _guard = global_state_lock();
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join(".shannon.toml");
 
@@ -1527,6 +1543,7 @@ provider = "ollama"
 
     #[test]
     fn test_builder_load_local_toml_quoted_values() {
+        let _guard = global_state_lock();
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join(".shannon.toml");
 
@@ -1558,6 +1575,7 @@ debug = true
 
     #[test]
     fn test_builder_load_env_vars_reads_shannon_vars() {
+        let _guard = global_state_lock();
         // Set env vars
         let cleanup = vec![
             "SHANNON_MODEL",
@@ -1602,6 +1620,7 @@ debug = true
 
     #[test]
     fn test_builder_env_vars_with_debug() {
+        let _guard = global_state_lock();
         // SAFETY: tests in this module serialize on SHANNON_DEBUG.
         unsafe {
             std::env::remove_var("SHANNON_DEBUG");
@@ -1622,6 +1641,7 @@ debug = true
 
     #[test]
     fn test_builder_env_vars_missing_vars_produce_none() {
+        let _guard = global_state_lock();
         // Remove all SHANNON_ vars.
         let vars = [
             "SHANNON_MODEL",
@@ -1659,6 +1679,7 @@ debug = true
 
     #[test]
     fn test_full_priority_toml_then_env_then_cli() {
+        let _guard = global_state_lock();
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join(".shannon.toml");
 

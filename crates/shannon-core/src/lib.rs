@@ -26,7 +26,6 @@
 //! - [`VoiceModeService`]: Voice input/output management and keyword spotting
 //! - [`MagicDocsService`]: Automatic documentation generation from source paths
 //! - `SessionHistoryManager`: Session history listing, searching, archiving, and resumption
-//! - [`TranscriptStore`]: Persistent conversation transcript storage and search
 //! - [`ActivityManager`]: Long-running task activity tracking with progress
 //! - [`Housekeeper`]: Periodic background cleanup tasks
 

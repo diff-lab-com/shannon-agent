@@ -298,7 +298,10 @@ pub async fn trigger_skill_pattern_detection(
     if detected > 0 {
         // Push instead of poll: the Header badge refreshes on the event
         // instead of sweeping the store every 30s.
-        let _ = app.emit("skill-candidates-changed", serde_json::json!({ "detected": detected }));
+        let _ = app.emit(
+            "skill-candidates-changed",
+            serde_json::json!({ "detected": detected }),
+        );
     }
     Ok(detected)
 }
