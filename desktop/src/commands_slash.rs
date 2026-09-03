@@ -219,7 +219,11 @@ pub struct CompactSessionResult {
 fn message_text(message: &shannon_engine::api::Message) -> Option<String> {
     match &message.content {
         shannon_engine::api::MessageContent::Text(t) => {
-            if t.trim().is_empty() { None } else { Some(t.clone()) }
+            if t.trim().is_empty() {
+                None
+            } else {
+                Some(t.clone())
+            }
         }
         shannon_engine::api::MessageContent::Blocks(blocks) => {
             let text = blocks
@@ -230,7 +234,11 @@ fn message_text(message: &shannon_engine::api::Message) -> Option<String> {
                 })
                 .collect::<Vec<_>>()
                 .join("");
-            if text.trim().is_empty() { None } else { Some(text) }
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(text)
+            }
         }
     }
 }
@@ -244,7 +252,9 @@ fn message_text(message: &shannon_engine::api::Message) -> Option<String> {
 fn build_turns(messages: &[shannon_engine::api::Message]) -> Vec<(String, String)> {
     let mut turns: Vec<(String, String)> = Vec::new();
     for m in messages {
-        let Some(text) = message_text(m) else { continue };
+        let Some(text) = message_text(m) else {
+            continue;
+        };
         if m.role == "user" {
             turns.push((text, String::new()));
         } else if let Some(last) = turns.last_mut() {
