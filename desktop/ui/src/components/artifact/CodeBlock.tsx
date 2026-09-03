@@ -1,5 +1,4 @@
-import { useMemo } from 'react'
-import { hljs } from '@/lib/hljs'
+import { CodeBlock as SharedCodeBlock } from '@/components/code/CodeBlock'
 import { cn } from '@/lib/utils'
 
 const KIND_TO_LANG: Record<string, string> = {
@@ -15,28 +14,19 @@ interface CodeBlockProps {
   className?: string
 }
 
+// Artifact-panel code view: headerless shared primitive (no chrome) with
+// self-highlighting from the raw source; soft-wrapped to match the panel.
 export function CodeBlock({ source, kind, className }: CodeBlockProps) {
-  const html = useMemo(() => {
-    const lang = kind ? KIND_TO_LANG[kind] : undefined
-    try {
-      if (lang && hljs.getLanguage(lang)) {
-        return hljs.highlight(source, { language: lang }).value
-      }
-      return hljs.highlightAuto(source).value
-    } catch {
-      return source.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] ?? c))
-    }
-  }, [source, kind])
-
+  const lang = kind ? KIND_TO_LANG[kind] : undefined
   return (
-    <pre
-      className={cn("p-md text-body-sm font-mono text-on-surface whitespace-pre-wrap break-words overflow-x-auto", className)}
-    >
-      <code
-        className="hljs"
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-    </pre>
+    <SharedCodeBlock
+      code={source}
+      language={lang}
+      chrome={false}
+      lineNumbers={false}
+      className={cn('my-0 rounded-none border-0', className)}
+      contentClassName="whitespace-pre-wrap break-words font-mono text-on-surface"
+    />
   )
 }
 
