@@ -17,12 +17,19 @@
 import * as api from '@/lib/tauri-api'
 import { exportSessionAsMarkdown } from '@/lib/sessionActions'
 
-export type { SessionContextStats, SessionUsageSummary, GitDiffFile, GitDiffSummary } from '@/lib/tauri-api'
+export type {
+  SessionContextStats,
+  SessionUsageSummary,
+  GitDiffFile,
+  GitDiffSummary,
+  CompactSessionSummary,
+} from '@/lib/tauri-api'
 
 export type SlashResult =
   | { kind: 'context'; stats: api.SessionContextStats }
   | { kind: 'cost'; usage: api.SessionUsageSummary }
   | { kind: 'diff'; diff: api.GitDiffSummary; workingDir: string }
+  | { kind: 'compact'; summary: api.CompactSessionSummary }
   | { kind: 'error'; messageKey: string; values?: Record<string, string | number> }
 
 export interface SlashCommandContext {
@@ -31,6 +38,8 @@ export interface SlashCommandContext {
   workingDir: string
   sessions: { id: string; title?: string | null }[]
   createSession: () => Promise<void>
+  /** /compact — runs the chat-slice action; rejects when a query is running. */
+  compactSession: (sessionId: string) => Promise<api.CompactSessionResult>
   showResult: (result: SlashResult) => void
   toastError: (message: string, err: unknown) => void
   t: (id: string) => string
@@ -131,6 +140,23 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     descriptionKey: 'slash.command.new.description',
     run: (ctx) => {
       void ctx.createSession()
+    },
+  },
+  {
+    name: 'compact',
+    icon: 'compress',
+    labelKey: 'slash.command.compact.label',
+    descriptionKey: 'slash.command.compact.description',
+    needsSession: true,
+    run: async (ctx) => {
+      const sessionId = requireSession(ctx)
+      if (!sessionId) return
+      try {
+        const result = await ctx.compactSession(sessionId)
+        ctx.showResult({ kind: 'compact', summary: result })
+      } catch (e) {
+        ctx.toastError(ctx.t('slash.card.error.title'), e)
+      }
     },
   },
   { name: 'tasks', icon: 'task_alt', labelKey: 'nav.scheduled', descriptionKey: 'slash.command.tasks.description', run: (ctx) => ctx.navigate('/tasks') },

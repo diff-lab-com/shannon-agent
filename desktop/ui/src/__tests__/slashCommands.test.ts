@@ -25,14 +25,12 @@ describe('slash registry', () => {
   it('exposes only backend-backed or navigation commands', () => {
     const names = SLASH_COMMANDS.map(c => c.name)
     // Desktop counterparts of the REPL session commands.
-    for (const n of ['context', 'cost', 'diff', 'export', 'new']) expect(names).toContain(n)
-    // Engine-side feature the desktop does not implement yet.
-    expect(names).not.toContain('compact')
+    for (const n of ['context', 'cost', 'diff', 'export', 'new', 'compact']) expect(names).toContain(n)
   })
 
   it('filterSlashCommands matches prefixes and substrings', () => {
     expect(filterSlashCommands('').map(c => c.name)).toEqual(SLASH_COMMANDS.map(c => c.name))
-    expect(filterSlashCommands('/co').map(c => c.name)).toEqual(['context', 'cost'])
+    expect(filterSlashCommands('/co').map(c => c.name)).toEqual(['context', 'cost', 'compact'])
     expect(filterSlashCommands('/task').map(c => c.name)).toEqual(['tasks'])
   })
 
@@ -55,7 +53,6 @@ describe('slash registry', () => {
   it('parseSlashInput returns null for unknown names, paths, and multi-token input', () => {
     // Unknown single tokens are usually pasted absolute paths — plain text.
     expect(parseSlashInput('/usr/local/bin')).toBeNull()
-    expect(parseSlashInput('/compact')).toBeNull()
     expect(parseSlashInput('/context now')).toBeNull()
     expect(parseSlashInput('plain question')).toBeNull()
   })
@@ -74,6 +71,18 @@ describe('slash command execution', () => {
     const ctx = makeCtx({ workingDir: '' })
     await cmd.run(ctx)
     expect(ctx.showResult).toHaveBeenCalledWith({ kind: 'error', messageKey: 'slash.card.diff.noWorkingDir' })
+  })
+
+  it('/compact calls the chat-slice action and shows the summary', async () => {
+    const compact = parseSlashInput('/compact')!
+    const ctx = { ...makeCtx(), compactSession: vi.fn().mockResolvedValue({
+      performed: true, nothing_to_compact: false,
+      original_tokens: 100, compacted_tokens: 20, reduction_ratio: 0.8,
+      messages_removed: 3, kept_turns: 1, messages: [],
+    }) }
+    await compact.run(ctx)
+    expect(ctx.compactSession).toHaveBeenCalledWith('sess-1')
+    expect(ctx.showResult).toHaveBeenCalledWith(expect.objectContaining({ kind: 'compact' }))
   })
 
   it('/new starts a session', async () => {

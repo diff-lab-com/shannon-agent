@@ -176,6 +176,15 @@ export const handlers: Record<string, MockHandler> = {
     await delay(30)
     return { is_repo: false, files: [], patch: '', truncated: false }
   },
+  async compact_session() {
+    await delay(400)
+    return {
+      performed: true, nothing_to_compact: false,
+      original_tokens: 4820, compacted_tokens: 960, reduction_ratio: 0.8,
+      messages_removed: 11, kept_turns: 2,
+      messages: clone(MOCK_MESSAGES).slice(0, 2),
+    }
+  },
   // §4.14 — Turn Timeline: demo data regardless of id (sessions come from
   // MOCK_SESSIONS, which do not have real L0 logs to project).
   async trace_timeline() { await delay(); return clone(MOCK_TURN_TIMELINE) },
