@@ -570,7 +570,19 @@ pub async fn send_message(
     let _state_mgr = state.state_manager.clone();
     let _qe_config = state.qe_config.read().await.clone();
 
-    let engine = QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new());
+    let mut engine = QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new());
+    // Bind the engine to the REAL session and restore prior turns. Both the
+    // L0 tee (events.jsonl path) and the conversation clone at the top of
+    // process_query key off engine state — a fresh engine with a random id
+    // logged every send under a throwaway session directory and sent the
+    // model zero prior turns. Session history lives in the L0 log; restore
+    // is cheap (one projection) and keeps the log as the single source.
+    engine.set_session_id(session_id);
+    match engine.restore_session(session_id) {
+        Ok(true) => {}
+        Ok(false) => {} // brand-new session — nothing on disk yet
+        Err(e) => tracing::warn!("history restore failed for {session_id}: {e}"),
+    }
 
     // P0-4: stash the engine on the session so subsequent queries on the
     // same session reuse the same `Arc<ToolRegistry>` / hook manager /
