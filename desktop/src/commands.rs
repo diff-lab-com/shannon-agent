@@ -129,7 +129,9 @@ pub struct AppState {
     /// plus packaged `.dxt` / `.mcpb` archives.
     pub(crate) plugin_registry: Arc<tokio::sync::RwLock<shannon_core::plugin::PluginRegistry>>,
     /// Append-only inter-agent message history (`~/.shannon/agent-messages/`).
-    pub(crate) agent_message_history: Arc<shannon_agents::message_history::MessageHistoryStore>,
+    // `pub` (not `pub(crate)`) so the bin crate's main.rs setup can hand the
+    // directory to the agent_message_watcher.
+    pub agent_message_history: Arc<shannon_agents::message_history::MessageHistoryStore>,
     /// Native OS notification dispatcher (P3). Empty by default; populated
     /// with a `TauriNotificationHandler` once `AppHandle` is available in
     /// `main.rs` setup via `attach_notification_handler`.

@@ -95,6 +95,7 @@ pub(crate) fn resolve_write_target_in_working_dir(
 }
 
 #[cfg(feature = "tauri")]
+pub mod agent_message_watcher;
 pub mod commands;
 
 #[cfg(feature = "tauri")]

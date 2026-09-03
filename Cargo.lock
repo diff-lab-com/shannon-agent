@@ -6454,6 +6454,7 @@ dependencies = [
  "libc",
  "lsp-types",
  "mockito",
+ "notify",
  "percent-encoding",
  "qrcode",
  "rand 0.8.7",
