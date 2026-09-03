@@ -31,6 +31,11 @@ pub struct UsageRecord {
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
     pub cost_usd: f64,
+    /// Session the event belongs to (written since the /cost slash command).
+    /// Older ledger lines lack the field and cannot be attributed to any
+    /// session; they still count toward the Usage page aggregates.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 /// Append-only usage ledger backed by `~/.shannon/usage.jsonl`.
@@ -166,27 +171,36 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Token/cost payload of an engine `QueryEvent::Usage`, bundled so
+/// [`record_event`] stays under the clippy argument-count lint.
+#[derive(Debug, Clone, Copy)]
+pub struct UsageTotals {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cost_usd: f64,
+}
+
 /// Build a [`UsageRecord`] from an engine Usage event, attributing the
-/// current model/provider and timestamping "now". Kept here so the
+/// current model/provider, the owning session, and "now". Kept here so the
 /// `send_message` handler stays a thin call.
 pub fn record_event(
     model: &str,
     provider: &str,
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_creation_tokens: u64,
-    cache_read_tokens: u64,
-    cost_usd: f64,
+    totals: UsageTotals,
+    session_id: Option<&str>,
 ) -> UsageRecord {
     UsageRecord {
         timestamp_ms: now_ms(),
         model: model.to_string(),
         provider: provider.to_string(),
-        input_tokens,
-        output_tokens,
-        cache_creation_tokens,
-        cache_read_tokens,
-        cost_usd,
+        input_tokens: totals.input_tokens,
+        output_tokens: totals.output_tokens,
+        cache_creation_tokens: totals.cache_creation_tokens,
+        cache_read_tokens: totals.cache_read_tokens,
+        cost_usd: totals.cost_usd,
+        session_id: session_id.map(str::to_string),
     }
 }
 
@@ -329,6 +343,7 @@ fn scheduled_run_to_record(run: &ScheduledRun) -> Option<UsageRecord> {
         cache_creation_tokens: 0,
         cache_read_tokens: 0,
         cost_usd: run.cost_usd.unwrap_or(0.0),
+        session_id: None,
     })
 }
 
@@ -369,6 +384,51 @@ pub async fn get_usage_stats(days: u32) -> Result<UsageStats, String> {
     Ok(compute_stats(days, &records, now))
 }
 
+/// Per-session usage totals for the /cost slash command. Reads only the chat
+/// ledger (scheduled-routine spend has no session to attribute to). Events
+/// written before session attribution existed are invisible here by design —
+/// the summary reports how many events it saw so the UI can flag a partial
+/// picture.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionUsageSummary {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cost_usd: f64,
+    pub events: usize,
+}
+
+#[tauri::command]
+pub async fn get_session_usage(session_id: String) -> Result<SessionUsageSummary, String> {
+    Ok(summarize_session(&UsageStore::new().load(), &session_id))
+}
+
+/// Pure aggregation core of [`get_session_usage`] — records attributed to
+/// `session_id` only (see `UsageRecord::session_id` for the legacy-line
+/// caveat).
+fn summarize_session(records: &[UsageRecord], session_id: &str) -> SessionUsageSummary {
+    let mut summary = SessionUsageSummary {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_tokens: 0,
+        cache_read_tokens: 0,
+        cost_usd: 0.0,
+        events: 0,
+    };
+    for r in records {
+        if r.session_id.as_deref() == Some(session_id) {
+            summary.input_tokens += r.input_tokens;
+            summary.output_tokens += r.output_tokens;
+            summary.cache_creation_tokens += r.cache_creation_tokens;
+            summary.cache_read_tokens += r.cache_read_tokens;
+            summary.cost_usd += r.cost_usd;
+            summary.events += 1;
+        }
+    }
+    summary
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,6 +443,7 @@ mod tests {
             cache_creation_tokens: 10,
             cache_read_tokens: 5,
             cost_usd: cost,
+            session_id: None,
         }
     }
 
@@ -549,5 +610,24 @@ mod tests {
         // start() yields a Running run with no cost/tokens recorded yet.
         let run = ScheduledRun::start("t2", "No-op");
         assert!(scheduled_run_to_record(&run).is_none());
+    }
+
+    #[test]
+    fn session_summary_sums_only_matching_events() {
+        let mut a = rec(1_000, "m", "p", 0.10);
+        a.session_id = Some("s-a".into());
+        let mut b = rec(2_000, "m", "p", 0.20);
+        b.session_id = Some("s-b".into());
+        let legacy = rec(3_000, "m", "p", 0.30); // pre-attribution ledger line
+
+        let summary = summarize_session(&[a, b.clone(), legacy.clone()], "s-a");
+        assert_eq!(summary.events, 1);
+        assert_eq!(summary.input_tokens, 100);
+        assert_eq!(summary.output_tokens, 50);
+        assert!((summary.cost_usd - 0.10).abs() < 1e-9);
+
+        let none = summarize_session(&[b, legacy], "s-a");
+        assert_eq!(none.events, 0);
+        assert_eq!(none.cost_usd, 0.0);
     }
 }

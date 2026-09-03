@@ -23,6 +23,7 @@ fn main() {
     use shannon_desktop::commands_routine_templates;
     use shannon_desktop::commands_feedback;
     use shannon_desktop::commands_rewind;
+    use shannon_desktop::commands_slash;
     use shannon_desktop::commands_sessions;
     use shannon_desktop::commands_skill_candidates;
     use shannon_desktop::commands_skill_loop;
@@ -156,6 +157,9 @@ fn main() {
             skill_pattern_detection::trigger_skill_pattern_detection,
             commands_permissions::request_permission,
             commands_permissions::respond_permission,
+            commands_slash::get_session_context_stats,
+            commands_slash::get_session_git_diff,
+            commands_usage::get_session_usage,
             commands_rewind::list_checkpoints,
             commands_rewind::rewind_session,
             commands_feedback::record_message_feedback,
