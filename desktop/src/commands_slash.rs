@@ -294,7 +294,7 @@ pub async fn compact_session(
         }
     }
 
-    let mut engine = restored_engine(&state, uuid).await?;
+    let engine = restored_engine(&state, uuid).await?;
     let history = engine.conversation_history();
     if history.is_empty() {
         return Ok(CompactSessionResult {
