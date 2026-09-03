@@ -9,6 +9,7 @@ import python from 'highlight.js/lib/languages/python'
 import rust from 'highlight.js/lib/languages/rust'
 import bash from 'highlight.js/lib/languages/bash'
 import yaml from 'highlight.js/lib/languages/yaml'
+import diff from 'highlight.js/lib/languages/diff'
 
 hljs.registerLanguage('javascript', javascript)
 hljs.registerLanguage('typescript', typescript)
@@ -23,6 +24,7 @@ hljs.registerLanguage('bash', bash)
 hljs.registerLanguage('shell', bash)
 hljs.registerLanguage('yaml', yaml)
 hljs.registerLanguage('yml', yaml)
+hljs.registerLanguage('diff', diff)
 
 export { hljs }
 

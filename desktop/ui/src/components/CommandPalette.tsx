@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { useSessions } from '@/context/SessionContext'
 import { useCatalog } from '@/context/CatalogContext'
+import { exportSessionAsMarkdown } from '@/lib/sessionActions'
 import {
   CommandDialog,
   CommandEmpty,
@@ -26,7 +27,7 @@ interface PaletteItem {
 
 export default function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate()
-  const { sessions, switchSession } = useSessions()
+  const { sessions, currentSessionId, switchSession } = useSessions()
   const { models, tasks, agents, refreshConfig } = useCatalog()
   const intl = useIntl()
 
@@ -38,6 +39,14 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       { id: 'a-new-task', label: t('palette.action.newTask'), icon: 'add_task', category: t('palette.category.actions'), action: () => navigate('/tasks') },
       { id: 'a-new-agent', label: t('palette.action.browseAgents'), icon: 'smart_toy', category: t('palette.category.actions'), action: () => navigate('/extensions/agents') },
       { id: 'a-toggle-theme', label: t('palette.action.changeTheme'), icon: 'palette', category: t('palette.category.actions'), action: () => navigate('/settings/theme') },
+      // Slash-command parity: /export is self-contained (native save dialog),
+      // so it is reachable from the palette too; the diagnostics commands
+      // (/context /cost /diff) render their result in the chat composer and
+      // stay composer-only by design.
+      { id: 'a-export-chat', label: t('slash.command.export.label'), icon: 'download', category: t('palette.category.actions'), action: () => {
+          if (!currentSessionId) { toast.info(t('slash.needsSession')); return }
+          void exportSessionAsMarkdown(currentSessionId, sessions, t)
+        } },
     ]
     const pages: PaletteItem[] = [
       { id: 'p-chat', label: t('nav.chat'), icon: 'chat_bubble', category: t('palette.category.pages'), action: () => navigate('/chat') },
@@ -100,7 +109,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       map[item.category].push(item)
     }
     return map
-  }, [intl, navigate, sessions, models, tasks, agents, refreshConfig, switchSession, t])
+  }, [intl, navigate, sessions, currentSessionId, models, tasks, agents, refreshConfig, switchSession, t])
 
   return (
     <CommandDialog

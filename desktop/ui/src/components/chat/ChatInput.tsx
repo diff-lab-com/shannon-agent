@@ -8,6 +8,7 @@ import { useVoice } from '@/hooks/useVoice'
 import { MicButton } from '@/components/voice/MicButton'
 import { VoiceOrb } from '@/components/voice/VoiceOrb'
 import AttachmentChip from '@/components/chat/AttachmentChip'
+import { isSlashQuery, filterSlashCommands, type SlashCommand } from '@/lib/slash/commands'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
@@ -26,6 +27,8 @@ interface ChatInputProps {
   value: string
   onChange: (value: string) => void
   onSend: () => void
+  /** Runs a picked slash command (clears the input itself afterwards). */
+  onExecuteSlash: (cmd: SlashCommand) => void
   attachedFiles: string[]
   onAttach: (files: string[]) => void
   onDetachAll: () => void
@@ -43,6 +46,7 @@ export default function ChatInput({
   value,
   onChange,
   onSend,
+  onExecuteSlash,
   attachedFiles,
   onAttach,
   onDetachAll,
@@ -57,6 +61,26 @@ export default function ChatInput({
   const { config, refreshConfig } = useCatalog()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isDragging, setIsDragging] = useState(false)
+
+  // Slash-command autocomplete: open while the input is a single `/token`.
+  // Escape hides it until the query changes again; a space or newline closes
+  // it naturally (the query regex stops matching), turning the text back
+  // into a regular prompt.
+  const [slashDismissed, setSlashDismissed] = useState(false)
+  const [slashActive, setSlashActive] = useState(0)
+  const slashQuery = isSlashQuery(value) && !isQuerying ? value.trim() : null
+  const slashMatches = slashQuery && !slashDismissed ? filterSlashCommands(slashQuery) : []
+
+  useEffect(() => {
+    setSlashActive(0)
+    if (!isSlashQuery(value)) setSlashDismissed(false)
+  }, [value])
+
+  const executeSlash = (cmd: SlashCommand) => {
+    onChange('')
+    setSlashDismissed(false)
+    onExecuteSlash(cmd)
+  }
   const voice = useVoice({
     onTranscript: (text) => {
       const merged = value ? `${value} ${text}` : text
@@ -129,6 +153,25 @@ export default function ChatInput({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Slash menu captures the navigation keys while it is open.
+    if (slashMatches.length > 0) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const delta = e.key === 'ArrowDown' ? 1 : -1
+        setSlashActive(i => (i + delta + slashMatches.length) % slashMatches.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        executeSlash(slashMatches[slashActive] ?? slashMatches[0])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashDismissed(true)
+        return
+      }
+    }
     // Enter -> send; Shift/Ctrl+Enter -> newline. Matches VS Code's
     // Ctrl+Enter convention; preserves the legacy Enter-to-send UX.
     if (e.key === 'Enter' && !e.shiftKey && !(e.ctrlKey || e.metaKey)) {
@@ -230,6 +273,39 @@ export default function ChatInput({
       role="region"
       aria-label={t('chat.input.ariaLabel')}
     >
+      {slashMatches.length > 0 && (
+        <div
+          role="listbox"
+          aria-label={t('slash.menu.aria')}
+          className="absolute left-0 right-0 bottom-full mb-sm z-modal rounded-2xl border border-outline-variant/30 bg-surface-container-low shadow-lg overflow-hidden"
+        >
+          <ul className="max-h-64 overflow-y-auto py-xs">
+            {slashMatches.map((cmd, i) => (
+              <li key={cmd.name}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={i === slashActive}
+                  onMouseDown={e => { e.preventDefault(); executeSlash(cmd) }}
+                  onMouseEnter={() => setSlashActive(i)}
+                  className={cn(
+                    'w-full flex items-center gap-sm px-md py-xs text-left cursor-pointer transition-colors',
+                    i === slashActive ? 'bg-surface-container-high' : 'hover:bg-surface-container',
+                  )}
+                >
+                  <span className="material-symbols-outlined icon-sm text-primary shrink-0">{cmd.icon}</span>
+                  <span className="font-mono text-label-md text-on-surface shrink-0">/{cmd.name}</span>
+                  <span className="font-label-sm text-on-surface-variant truncate flex-1">{t(cmd.descriptionKey)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="px-md py-xs border-t border-outline-variant/20 text-label-xs text-on-surface-variant">
+            {t('slash.menu.hint')}
+          </div>
+        </div>
+      )}
+
       {isDragging && (
         <div className="absolute inset-0 z-raised flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm pointer-events-none">
           <div className="flex flex-col items-center gap-sm text-primary">

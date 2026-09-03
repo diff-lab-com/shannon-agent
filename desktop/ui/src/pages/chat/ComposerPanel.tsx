@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import ChatInput from '@/components/chat/ChatInput'
+import SlashResultCard from '@/components/chat/SlashResultCard'
 import { useT } from '@/i18n'
 import { useChat } from '@/context/ChatContext'
 import { useSessions } from '@/context/SessionContext'
@@ -21,7 +22,7 @@ interface ComposerPanelProps {
 // Cmd/Ctrl+D WD-picker shortcut is handled by this panel too — it owns the
 // picker button).
 export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: ComposerPanelProps) {
-  const { input, setInput, handleSend, attachedFiles, handleAttach, handleDetachAll } = useComposer()
+  const { input, setInput, handleSend, attachedFiles, handleAttach, handleDetachAll, executeSlash, slashResult, dismissSlashResult } = useComposer()
   const { isQuerying, cancelQuery } = useChat()
   const { sessions, currentSessionId } = useSessions()
   const { config } = useCatalog()
@@ -42,10 +43,12 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
     <div className="absolute bottom-[calc(var(--spacing-footer)-8px)] md:bottom-[calc(var(--spacing-footer)+16px)] w-full px-lg md:px-xl py-lg transition-colors">
       <div className="max-w-4xl mx-auto">
         <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl shadow-sm">
+          {slashResult && <SlashResultCard result={slashResult} onDismiss={dismissSlashResult} />}
           <ChatInput
             value={input}
             onChange={setInput}
             onSend={handleSend}
+            onExecuteSlash={executeSlash}
             attachedFiles={attachedFiles}
             onAttach={handleAttach}
             onDetachAll={handleDetachAll}
