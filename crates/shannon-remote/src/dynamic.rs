@@ -272,6 +272,13 @@ impl FileSystemProvider for DynamicWorld {
     fn list_dir_blocking(&self, path: &Path) -> io::Result<Vec<DirEntryInfo>> {
         self.snapshot().fs.list_dir_blocking(path)
     }
+    fn walk_blocking(
+        &self,
+        root: &Path,
+        cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+    ) -> io::Result<()> {
+        self.snapshot().fs.walk_blocking(root, cb)
+    }
 }
 
 #[async_trait]
@@ -330,6 +337,11 @@ mod tests {
         }
         fn read_prefix_blocking(&self, _p: &Path, _m: usize) -> io::Result<Vec<u8>> { Ok(Vec::new()) }
         fn list_dir_blocking(&self, _p: &Path) -> io::Result<Vec<DirEntryInfo>> { Ok(Vec::new()) }
+        fn walk_blocking(
+            &self,
+            _root: &Path,
+            _cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+        ) -> io::Result<()> { Ok(()) }
     }
 
     #[derive(Default)]

@@ -49,6 +49,58 @@ async fn run(proc: &DockerExecProcess, program: &str, args: &[String]) -> io::Re
     })
 }
 
+/// Blocking `stat -c` metadata probe.
+fn metadata_sync(proc: &DockerExecProcess, path: &Path) -> io::Result<FileMeta> {
+    let cap = run_blocking(
+        proc,
+        "stat",
+        &[
+            "-c".to_string(),
+            "%s %Y %F".to_string(),
+            path.to_string_lossy().to_string(),
+        ],
+    )?;
+    cap.ok("stat")?;
+    parse_stat(&String::from_utf8_lossy(&cap.stdout))
+        .ok_or_else(|| io::Error::other(format!("stat parse failed for {}", path.display())))
+}
+
+/// Blocking `-print0` find-based listing.
+fn list_dir_sync(proc: &DockerExecProcess, root: &Path) -> io::Result<Vec<DirEntryInfo>> {
+    let root_arg = root.to_string_lossy().to_string();
+    let dirs = run_blocking(
+        proc,
+        "find",
+        &[
+            root_arg.clone(),
+            "-mindepth".to_string(),
+            "1".to_string(),
+            "-maxdepth".to_string(),
+            "1".to_string(),
+            "-type".to_string(),
+            "d".to_string(),
+            "-print0".to_string(),
+        ],
+    )?;
+    dirs.ok("find -type d")?;
+    let files = run_blocking(
+        proc,
+        "find",
+        &[
+            root_arg,
+            "-mindepth".to_string(),
+            "1".to_string(),
+            "-maxdepth".to_string(),
+            "1".to_string(),
+            "-type".to_string(),
+            "f".to_string(),
+            "-print0".to_string(),
+        ],
+    )?;
+    files.ok("find -type f")?;
+    Ok(merge_find_entries(root, &dirs.stdout, &files.stdout))
+}
+
 /// Blocking twin of [`run`].
 fn run_blocking(
     proc: &DockerExecProcess,
@@ -236,39 +288,26 @@ impl FileSystemProvider for DockerExecFs {
         Ok(cap.stdout)
     }
 
+    fn walk_blocking(
+        &self,
+        root: &Path,
+        cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+    ) -> io::Result<()> {
+        let proc = self.proc.clone();
+        let stat = move |p: &Path| metadata_sync(&proc, p);
+        let proc2 = self.proc.clone();
+        let read_text = move |p: &Path| -> io::Result<String> {
+            let cap = run_blocking(&proc2, "cat", &[p.to_string_lossy().to_string()])?;
+            cap.ok("cat")?;
+            String::from_utf8(cap.stdout).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        };
+        let proc3 = self.proc.clone();
+        let list_dir = move |p: &Path| list_dir_sync(&proc3, p);
+        shannon_tool_interface::walk::provider_walk(&stat, &read_text, &list_dir, root, cb)
+    }
+
     fn list_dir_blocking(&self, path: &Path) -> io::Result<Vec<DirEntryInfo>> {
-        let root = path.to_path_buf();
-        let dirs = run_blocking(
-            &self.proc,
-            "find",
-            &[
-                path_arg("find", &root),
-                "-mindepth".into(),
-                "1".into(),
-                "-maxdepth".into(),
-                "1".into(),
-                "-type".into(),
-                "d".into(),
-                "-print0".into(),
-            ],
-        )?;
-        dirs.ok("find -type d")?;
-        let files = run_blocking(
-            &self.proc,
-            "find",
-            &[
-                path_arg("find", &root),
-                "-mindepth".into(),
-                "1".into(),
-                "-maxdepth".into(),
-                "1".into(),
-                "-type".into(),
-                "f".into(),
-                "-print0".into(),
-            ],
-        )?;
-        files.ok("find -type f")?;
-        Ok(merge_find_entries(&root, &dirs.stdout, &files.stdout))
+        list_dir_sync(&self.proc, path)
     }
 }
 

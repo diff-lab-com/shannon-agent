@@ -98,6 +98,7 @@ lsp-types = "0.95"
 
 # Plugin manifest parsing
 toml = "0.8"
+ignore = "0.4"
 
 # Plugin archive extraction (.dxt / .mcpb Desktop Extensions)
 zip = { workspace = true }

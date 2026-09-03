@@ -183,6 +183,20 @@ impl FileSystemProvider for SandboxedFs {
         }
         self.inner.list_dir_blocking(path)
     }
+
+    fn walk_blocking(
+        &self,
+        root: &Path,
+        cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+    ) -> io::Result<()> {
+        // Policy-gate the traversal root, then delegate: per-entry rules are
+        // re-checked by the inner world's own consumers (Read/Grep validate
+        // each path they touch).
+        if !self.policy.allows_read(root) {
+            return Err(self.deny("list", root));
+        }
+        self.inner.walk_blocking(root, cb)
+    }
 }
 
 // ---------------------------------------------------------------------------

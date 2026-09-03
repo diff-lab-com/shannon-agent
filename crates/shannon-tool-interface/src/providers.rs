@@ -110,6 +110,20 @@ pub trait FileSystemProvider: Send + Sync + 'static {
     fn exists_blocking(&self, path: &Path) -> bool {
         self.metadata_blocking(path).is_ok()
     }
+
+    /// Depth-first recursive walk used by Grep/Glob (and any future
+    /// traversal consumer). Invokes `cb` for the root and every entry;
+    /// returning `false` prunes a directory's subtree.
+    ///
+    /// Implementations whose store has no native walker use
+    /// [`crate::walk::provider_walk`] with their three blocking primitives;
+    /// `LocalFs` overrides it with an `ignore::WalkBuilder`-backed version
+    /// that preserves native local traversal semantics.
+    fn walk_blocking(
+        &self,
+        root: &Path,
+        cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+    ) -> io::Result<()>;
 }
 
 // ---------------------------------------------------------------------------
