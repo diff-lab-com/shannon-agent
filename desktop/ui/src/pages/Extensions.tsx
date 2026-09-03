@@ -34,7 +34,7 @@ export default function Extensions() {
           On narrow widths the tabs row and the search/CTA row stack
           vertically so neither squeezes the other. The shared search input
           is owned here and piped to the active tab via outlet context. */}
-      <div className="flex flex-col gap-sm w-full px-lg py-sm border-b border-outline-variant/20 bg-surface/80 backdrop-blur-md sticky top-0 z-30">
+      <div className="flex flex-col gap-sm w-full px-lg py-sm border-b border-outline-variant/20 bg-surface/80 backdrop-blur-md sticky top-0 z-subheader">
         <nav aria-label={t('extensions.tabs.aria')} className="flex items-center gap-xs flex-wrap">
           {subTabs.map(tab => (
             <NavLink

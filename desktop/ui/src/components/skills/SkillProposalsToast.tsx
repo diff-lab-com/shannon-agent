@@ -38,7 +38,7 @@ export default function SkillProposalsToast({ onOpenReview }: SkillProposalsToas
   }
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 animate-slide-in-from-bottom">
+    <div className="fixed bottom-4 right-4 z-modal animate-slide-in-from-bottom">
       <div className="bg-surface-container-lowest rounded-lg shadow-lg border border-outline-variant p-4 max-w-md">
         <div className="flex items-start gap-3">
           <span className="material-symbols-outlined icon-lg text-primary">lightbulb</span>

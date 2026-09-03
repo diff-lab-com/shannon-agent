@@ -19,7 +19,7 @@ export default function EfficiencyCard({ percentage, variant = 'full' }: Efficie
   if (variant === 'compact') {
     return (
       <div className="bg-primary overflow-hidden rounded-2xl relative p-lg text-on-primary">
-        <div className="relative z-10">
+        <div className="relative z-raised">
           <h4 className="font-label-md text-on-primary/80 uppercase tracking-widest mb-md">{t('tasks.efficiencyCard.title')}</h4>
           <div className="text-display-lg text-[40px] mb-xs">{percentage}%</div>
           <div className="mt-lg h-2 bg-surface-container-lowest/20 rounded-full overflow-hidden">
@@ -32,7 +32,7 @@ export default function EfficiencyCard({ percentage, variant = 'full' }: Efficie
 
   return (
     <div className="bg-primary overflow-hidden rounded-2xl relative p-lg text-on-primary">
-      <div className="relative z-10">
+      <div className="relative z-raised">
         <h4 className="font-label-md text-on-primary/80 uppercase tracking-widest mb-md">{t('tasks.efficiencyCard.title')}</h4>
         <div className="text-display-lg text-[40px] mb-xs">{percentage}%</div>
         <p className="font-body-sm text-on-primary/70">{t('tasks.efficiencyCard.description')}</p>

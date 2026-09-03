@@ -2385,5 +2385,15 @@
   "usage.stat.cache": "缓存 Token",
   "usage.stat.cacheHint": "写入 + 读取",
   "usage.stat.cost": "估算费用",
-  "usage.stat.requests": "请求数"
+  "usage.stat.requests": "请求数",
+  "chat.message.rewind.button": "回溯到这里",
+  "chat.message.rewind.aria": "回溯对话到此条消息",
+  "chat.message.rewind.confirm.title": "确认回溯？",
+  "chat.message.rewind.confirm.message": "此条消息及其后的所有内容将从对话中移除，这些轮次对文件的修改将被回滚。",
+  "chat.message.rewind.confirm.confirm": "回溯",
+  "chat.message.rewind.confirm.cancel": "取消",
+  "chat.message.rewind.success": "已回溯",
+  "chat.message.rewind.failed": "回溯失败",
+  "chat.message.dislike.aria": "点踩该回复",
+  "chat.message.feedback.failed": "保存反馈失败"
 }

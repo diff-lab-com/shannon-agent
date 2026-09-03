@@ -178,7 +178,7 @@ export function MemoryEditor({ initial, onCancel, onSave }: MemoryEditorProps) {
           <div
             role="alertdialog"
             aria-label={t('memory.editor.discard.title')}
-            className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center p-md"
+            className="absolute inset-0 z-raised bg-black/40 flex items-center justify-center p-md"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full">

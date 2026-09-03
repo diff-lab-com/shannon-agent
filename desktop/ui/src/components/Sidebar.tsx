@@ -234,7 +234,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   return (
     <aside data-sidebar className={cn(
       "fixed left-0 top-0 h-full bg-surface-container-lowest/70 backdrop-blur-[20px] border-r border-outline-variant/30 flex flex-col py-lg px-md shadow-[4px_0_24px_-12px_color-mix(in_srgb,var(--color-inverse-surface)_15%,transparent)] transition-transform duration-300",
-      mobile ? "z-[70] w-[280px]" : "z-50",
+      mobile ? "z-drawer w-[280px]" : "z-modal",
     )} style={mobile ? undefined : { width }}>
       {/* Drag handle — 8px hot zone with a 4px visual bar (U5/P3-1: the old
           4px zone was nearly un-hittable). Focusable separator: ←/→ resize,
@@ -246,7 +246,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         aria-valuenow={width}
         aria-valuemin={MIN_W}
         aria-valuemax={MAX_W}
-        className="group absolute right-0 top-0 bottom-0 w-2 cursor-col-resize z-10"
+        className="group absolute right-0 top-0 bottom-0 w-2 cursor-col-resize z-raised"
         aria-label={intl.formatMessage({ id: 'nav.resize.aria' })}
         title={intl.formatMessage({ id: 'nav.resize.title' })}
         onMouseDown={handleMouseDown}

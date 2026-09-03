@@ -2385,5 +2385,15 @@
   "usage.stat.cache": "Cache tokens",
   "usage.stat.cacheHint": "Creation + read",
   "usage.stat.cost": "Estimated cost",
-  "usage.stat.requests": "Requests"
+  "usage.stat.requests": "Requests",
+  "chat.message.rewind.button": "Rewind to here",
+  "chat.message.rewind.aria": "Rewind conversation to this message",
+  "chat.message.rewind.confirm.title": "Rewind to here?",
+  "chat.message.rewind.confirm.message": "This message and everything after it will be removed from the conversation, and file changes made by those turns will be reverted.",
+  "chat.message.rewind.confirm.confirm": "Rewind",
+  "chat.message.rewind.confirm.cancel": "Cancel",
+  "chat.message.rewind.success": "Conversation rewound",
+  "chat.message.rewind.failed": "Couldn't rewind",
+  "chat.message.dislike.aria": "Dislike response",
+  "chat.message.feedback.failed": "Couldn't save your feedback"
 }

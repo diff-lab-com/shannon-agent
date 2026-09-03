@@ -231,7 +231,7 @@ export default function ChatInput({
       aria-label={t('chat.input.ariaLabel')}
     >
       {isDragging && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm pointer-events-none">
+        <div className="absolute inset-0 z-raised flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm pointer-events-none">
           <div className="flex flex-col items-center gap-sm text-primary">
             <span className="material-symbols-outlined icon-xl">cloud_upload</span>
             <p className="font-label-md">{t('chat.input.attach.dropHint')}</p>

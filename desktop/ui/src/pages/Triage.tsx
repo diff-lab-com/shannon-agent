@@ -346,7 +346,7 @@ export default function Triage() {
           <div
             role="region"
             aria-label={t('triage.bulk.title')}
-            className="sticky top-0 z-10 mb-md flex items-center gap-md px-md py-sm rounded-xl bg-primary/10 border border-primary/30 backdrop-blur-md"
+            className="sticky top-0 z-raised mb-md flex items-center gap-md px-md py-sm rounded-xl bg-primary/10 border border-primary/30 backdrop-blur-md"
           >
             <span className="font-label-md text-primary font-bold">
               {intl.formatMessage({ id: 'triage.bulk.selected' }, { count: effectiveSelected.size })}

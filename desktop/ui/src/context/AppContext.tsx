@@ -12,6 +12,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import * as api from '@/lib/tauri-api'
+import type { CheckpointInfo, FeedbackRating } from '@/lib/tauri-api'
 import {
   EVENT_NAMES,
   type ChatMessage,
@@ -59,6 +60,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [config, setConfig] = useState<DesktopConfig | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null)
+  // /rewind: checkpoints for the current session (turn indices + previews).
+  const [checkpoints, setCheckpoints] = useState<CheckpointInfo[]>([])
+  // PM-12: persisted 👍/👎 for the current session's messages.
+  const [feedback, setFeedback] = useState<Record<string, FeedbackRating>>({})
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskInfo[]>([])
   const [tasks, setTasks] = useState<TaskItem[]>([])
   const [agents, setAgents] = useState<AgentInfo[]>([])
@@ -213,6 +218,68 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e) { setError(String(e)) }
   }, [])
 
+  const refreshCheckpoints = useCallback(async () => {
+    if (!currentSessionId) {
+      setCheckpoints([])
+      return
+    }
+    try {
+      setCheckpoints(await api.listCheckpoints(currentSessionId))
+    } catch (e) { console.warn('refreshCheckpoints failed:', e) }
+  }, [currentSessionId])
+
+  // Checkpoints are recorded when a query completes — refresh when the
+  // querying flag settles and when the session changes.
+  useEffect(() => {
+    if (!isQuerying) void refreshCheckpoints()
+  }, [isQuerying, refreshCheckpoints])
+
+  const refreshFeedback = useCallback(async () => {
+    if (!currentSessionId) {
+      setFeedback({})
+      return
+    }
+    try {
+      setFeedback(await api.listMessageFeedback(currentSessionId))
+    } catch (e) { console.warn('refreshFeedback failed:', e) }
+  }, [currentSessionId])
+
+  useEffect(() => {
+    void refreshFeedback()
+  }, [refreshFeedback])
+
+  const recordFeedbackAction = useCallback(async (key: string, rating: FeedbackRating | null) => {
+    if (!currentSessionId) return
+    setFeedback(prev => {
+      const next = { ...prev }
+      if (rating == null) delete next[key]
+      else next[key] = rating
+      return next
+    })
+    try {
+      await api.recordMessageFeedback(currentSessionId, key, rating)
+    } catch (e) {
+      console.warn('recordMessageFeedback failed:', e)
+      void refreshFeedback()
+    }
+  }, [currentSessionId, refreshFeedback])
+
+  const rewindSessionAction = useCallback(async (turnIndex: number) => {
+    if (!currentSessionId) return
+    try {
+      const msgs = await api.rewindSession(currentSessionId, turnIndex)
+      setMessages(msgs)
+      setStreamingText('')
+      setThinkingText('')
+      setActiveToolCalls([])
+      await refreshSessions()
+      await refreshCheckpoints()
+    } catch (e) {
+      setError(String(e))
+      throw e
+    }
+  }, [currentSessionId, refreshSessions, refreshCheckpoints])
+
   // Register Tauri event listeners
   useEffect(() => {
     const unlisteners: UnlistenFn[] = []
@@ -338,7 +405,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const chatValue = useMemo<ChatContextValue>(() => ({
     messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage,
     sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel,
-  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel])
+    checkpoints, rewindSession: rewindSessionAction,
+    feedback, recordFeedback: recordFeedbackAction,
+  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel, checkpoints, rewindSessionAction, feedback, recordFeedbackAction])
 
   const sessionValue = useMemo<SessionContextValue>(() => ({
     sessions, currentSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,

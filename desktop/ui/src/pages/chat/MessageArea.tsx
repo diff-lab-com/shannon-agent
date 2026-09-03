@@ -8,6 +8,7 @@ import StreamingResponse from '@/components/chat/StreamingResponse'
 import { useChat } from '@/context/ChatContext'
 import { useCatalog } from '@/context/CatalogContext'
 import { useComposer } from './ComposerContext'
+import { useMemo } from 'react'
 
 // Virtualization only kicks in past the threshold. Below it, the overhead
 // of measuring/positioning outweighs the win from fewer DOM nodes — and
@@ -25,6 +26,19 @@ interface MessageAreaProps {
 // Virtualized + non-virtualized message list. Below the threshold (30
 // messages) we render everything in a flat log so jsdom tests still see the
 // bubbles — virtualization's measureElement needs a real DOM with height.
+// Per-message rewind affordance: a user message at chat index `msgIndex`
+// owns conversation turn `count(user messages before it)`. It is rewindable
+// when a recorded checkpoint sits at or after that turn — no checkpoints
+// (e.g. fresh session, demo mode) means nothing to undo and no button.
+function rewindInfoFor(messages: { role: string }[], msgIndex: number, checkpointTurns: number[]): { turnIndex: number; rewindable: boolean } {
+  let turnIndex = 0
+  for (let i = 0; i < msgIndex; i++) {
+    if (messages[i]?.role === 'user') turnIndex++
+  }
+  const rewindable = checkpointTurns.some(t => t >= turnIndex)
+  return { turnIndex, rewindable }
+}
+
 export default function MessageArea({
   scrollParentRef,
   messagesEndRef,
@@ -32,7 +46,14 @@ export default function MessageArea({
   setDiffPath,
   setDiffPaths,
 }: MessageAreaProps) {
-  const { messages, streamingText, thinkingText, activeToolCalls } = useChat()
+  const { messages, streamingText, thinkingText, activeToolCalls, checkpoints, rewindSession } = useChat()
+  const checkpointTurns = useMemo(() => checkpoints.map(c => c.turn_index), [checkpoints])
+  const rewind = useMemo(() => {
+    return (msgIndex: number) => {
+      const { turnIndex, rewindable } = rewindInfoFor(messages, msgIndex, checkpointTurns)
+      return rewindable ? turnIndex : null
+    }
+  }, [messages, checkpointTurns])
   const { error } = useCatalog()
   const t = useT()
   const shouldVirtualize = messages.length > VIRTUALIZE_THRESHOLD
@@ -58,7 +79,7 @@ export default function MessageArea({
                 className="pb-lg"
                 style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vItem.start}px)` }}
               >
-                <MessageBubble message={msg} messageIndex={vItem.index} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} />
+                <MessageBubble message={msg} messageIndex={vItem.index} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} rewindTurnIndex={rewind(vItem.index)} onRewind={rewindSession} />
               </div>
             )
           })}
@@ -69,7 +90,7 @@ export default function MessageArea({
         <div role="log" aria-live="polite" aria-label={t('chat.history.aria')}>
           {messages.map((msg, i) => (
             <div key={`${msg.timestamp}-${i}`} className="pb-lg">
-              <MessageBubble message={msg} messageIndex={i} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} />
+              <MessageBubble message={msg} messageIndex={i} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} rewindTurnIndex={rewind(i)} onRewind={rewindSession} />
             </div>
           ))}
         </div>
