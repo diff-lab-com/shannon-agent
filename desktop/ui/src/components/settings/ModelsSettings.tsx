@@ -203,7 +203,7 @@ export default function ModelsSettings() {
                       {m.dynamic ? (
                         <span
                           className="px-xs py-[2px] bg-tertiary-container text-on-tertiary-container rounded text-[10px] font-bold uppercase tracking-wider"
-                          title="From models.dev (live)"
+                          title={t('models.modelsDev.title')}
                         >
                           {t('settings.models.dynamicBadge')}
                         </span>
