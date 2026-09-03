@@ -19,8 +19,7 @@
 //! emitted · 1 run completed with failures (or UNSTABLE diff) · 2
 //! configuration/load error or refused aggregation.
 
-use std::path::PathBuf;
-
+use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use shannon_core::testing::eval_aggregate::{
@@ -279,7 +278,7 @@ fn cmd_run(args: RunArgs) -> i32 {
     }
 }
 
-fn cmd_diff(report_a: &PathBuf, report_b: &PathBuf) -> i32 {
+fn cmd_diff(report_a: &Path, report_b: &Path) -> i32 {
     let (Ok(a), Ok(b)) = (load_report(report_a), load_report(report_b)) else {
         eprintln!("error: could not load one of the reports");
         return 2;
