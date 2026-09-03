@@ -160,6 +160,7 @@ fn main() {
             commands_rewind::rewind_session,
             commands_feedback::record_message_feedback,
             commands_feedback::list_message_feedback,
+            commands_feedback::list_feedback_sessions,
             commands_files::get_file_diff,
             commands_files::apply_diff,
             commands_files::save_text_file,
