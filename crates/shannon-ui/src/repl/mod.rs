@@ -176,6 +176,10 @@ pub struct Repl {
     pub(crate) update_check_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     /// Shared plan-mode flag (clone of the one in QueryEngine)
     pub(crate) plan_mode_flag: std::sync::Arc<std::sync::RwLock<bool>>,
+    /// Provider-wired file history shared with the file tools, so `/rewind`
+    /// reads and restores the same snapshots (and the same execution world).
+    pub(crate) file_history:
+        Option<std::sync::Arc<std::sync::Mutex<shannon_tools::FileHistoryManager>>>,
 }
 
 /// State for tab completion cycling
@@ -383,6 +387,7 @@ impl Repl {
             diagnostic_rx: None,
             update_check_rx: None,
             plan_mode_flag: std::sync::Arc::new(std::sync::RwLock::new(false)),
+            file_history: None,
         };
 
         // Wire provider/model/tier into chat welcome StatusCard via the single
@@ -1458,6 +1463,7 @@ impl Repl {
             diagnostic_rx: None,
             update_check_rx: None,
             plan_mode_flag: plan_mode_flag.clone(),
+            file_history: reg_result.file_history.clone(),
         };
 
         // Wire provider/model/tier into chat welcome StatusCard via the single

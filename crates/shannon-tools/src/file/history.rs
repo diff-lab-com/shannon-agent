@@ -682,6 +682,18 @@ impl FileHistoryManager {
         Ok(snapshot.content.clone())
     }
 
+    /// Roll back a file and persist the restored content **through the
+    /// manager's filesystem world**. REPL-side `/rewind` must use this (with
+    /// the provider-wired manager from `ToolRegistrationResult`) or a remote
+    /// session would restore the file onto the wrong machine.
+    pub fn restore(&mut self, file_path: &Path, id: &str) -> Result<String, FileHistoryError> {
+        let content = self.rollback(file_path, id)?;
+        self.fs
+            .write_bytes_blocking(file_path, content.as_bytes())
+            .map_err(FileHistoryError::Io)?;
+        Ok(content)
+    }
+
     /// Record a turn-boundary snapshot capturing the file's content at the end of a
     /// conversation turn (W6-2 B.2). Tagged with `turn_index` so [`rewind_file_to_turn`]
     /// can locate it. Content-deduplicated like ordinary snapshots.

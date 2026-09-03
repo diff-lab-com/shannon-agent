@@ -441,26 +441,61 @@ fn restore_file_snapshot(
     path: &Path,
     id: &str,
 ) -> std::result::Result<String, String> {
-    let content = mgr.rollback(path, id).map_err(|e| e.to_string())?;
-    std::fs::write(path, &content).map_err(|e| format!("failed to write {path:?}: {e}"))?;
-    Ok(content)
+    // `restore` writes through the manager's filesystem world, so a remote
+    // session restores the file on the target, not on the local disk.
+    mgr.restore(path, id).map_err(|e| e.to_string())
 }
 
 /// Per-file rewind used by both the `--yes` fast path and the confirm-dialog
-/// handler. Builds a manager from the file-history env config (the same source
-/// the file tools use) so it reads the same on-disk store.
-pub(crate) fn apply_file_rewind(path: &Path, id: &str) -> std::result::Result<String, String> {
-    let cfg = FileHistoryConfig::from_env().unwrap_or_default();
-    let mut mgr = FileHistoryManager::new(cfg);
-    restore_file_snapshot(&mut mgr, path, id)
+/// handler. Prefers the registry's provider-wired manager (same snapshots the
+/// file tools recorded, same execution world); falls back to building one
+/// from the file-history env config.
+pub(crate) fn apply_file_rewind(
+    history: Option<&std::sync::Arc<std::sync::Mutex<FileHistoryManager>>>,
+    path: &Path,
+    id: &str,
+) -> std::result::Result<String, String> {
+    match history {
+        Some(shared) => {
+            let mut mgr = shared.lock().map_err(|p| format!("history lock: {p}"))?;
+            restore_file_snapshot(&mut mgr, path, id)
+        }
+        None => {
+            let cfg = FileHistoryConfig::from_env().unwrap_or_default();
+            let mut mgr = FileHistoryManager::new(cfg);
+            restore_file_snapshot(&mut mgr, path, id)
+        }
+    }
 }
 
 /// Drive a per-file rewind: resolve the path, pick the snapshot, and either
 /// restore immediately (`skip_confirm`) or raise a confirm dialog. Failures are
 /// reported as system chat messages; this always returns `Ok(())`.
 fn run_file_rewind(repl: &mut Repl, raw_path: &str, skip_confirm: bool) -> Result<()> {
-    let cfg = FileHistoryConfig::from_env().unwrap_or_default();
-    let mut mgr = FileHistoryManager::new(cfg);
+    // Reuse the registry's provider-wired manager when available so listing
+    // and restoring see exactly what the file tools recorded.
+    let mut owned: Option<FileHistoryManager> = None;
+    let mut shared_guard: Option<std::sync::MutexGuard<'_, FileHistoryManager>> = None;
+    let mgr: &mut FileHistoryManager = match repl.file_history.as_ref() {
+        Some(shared) => match shared.lock() {
+            Ok(g) => {
+                shared_guard = Some(g);
+                shared_guard.as_mut().expect("just stored")
+            }
+            Err(p) => {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("File rewind unavailable: history lock ({p})."),
+                );
+                return Ok(());
+            }
+        },
+        None => {
+            let cfg = FileHistoryConfig::from_env().unwrap_or_default();
+            owned = Some(FileHistoryManager::new(cfg));
+            owned.as_mut().expect("just built")
+        }
+    };
 
     let tracked = match mgr.list_tracked_files() {
         Ok(t) => t,
@@ -520,7 +555,7 @@ fn run_file_rewind(repl: &mut Repl, raw_path: &str, skip_confirm: bool) -> Resul
     let short_id = &id[..id.len().min(8)];
 
     if skip_confirm {
-        match apply_file_rewind(&path, &id) {
+        match apply_file_rewind(repl.file_history.as_ref(), &path, &id) {
             Ok(_) => {
                 repl.chat.add_message(
                     ChatRole::System,

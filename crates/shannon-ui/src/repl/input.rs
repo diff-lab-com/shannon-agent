@@ -1476,7 +1476,9 @@ fn handle_active_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                         let path = repl.state.rewind_file_path.take();
                         let id = repl.state.rewind_file_snapshot_id.take();
                         if let (Some(path), Some(id)) = (path, id) {
-                            match super::commands::apply_file_rewind(&path, &id) {
+                            let history = repl.file_history.clone();
+                            match super::commands::apply_file_rewind(history.as_ref(), &path, &id)
+                            {
                                 Ok(content) => {
                                     let lines = content.lines().count();
                                     repl.chat.add_message(
