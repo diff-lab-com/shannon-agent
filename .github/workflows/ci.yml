@@ -93,6 +93,13 @@ jobs:
         # (dry-run stub executor over the full tests/eval/tasks suite;
         # exits non-zero when any rehearsal fails).
         run: just eval
+      - name: Eval CLI entry
+        # The user-facing `shannon eval` subcommand (crates/shannon-cli) must
+        # stay in sync with the suite: list parses every task, and a single
+        # dry-run task rehearses the full CLI run path.
+        run: |
+          cargo run -q -p shannon-cli -- eval run --list
+          cargo run -q -p shannon-cli -- eval run --task read_01
       - name: Eval harness tests
         run: cargo nextest run -p shannon-core -E 'test(eval)'
 
@@ -139,6 +146,41 @@ jobs:
           CI: "1"
         run: pnpm exec playwright test
 
+  desktop-visual-audit:
+    name: Desktop Visual Audit (walkthrough)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
+        with:
+          version: 10
+      - name: Install UI deps
+        working-directory: desktop/ui
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright browsers
+        working-directory: desktop/ui
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Build UI (mock mode)
+        working-directory: desktop/ui
+        env:
+          VITE_MOCK_MODE: "1"
+        run: pnpm build
+      - name: Full-page axe walkthrough (13 routes x 2 themes)
+        # e2e/walkthrough.spec.ts screenshots every main route under
+        # material + tokyo-night and fails on any critical/serious axe
+        # violation. Serves the production build via `vite preview`
+        # (playwright.walkthrough.config.ts) — no dev server needed.
+        working-directory: desktop/ui
+        env:
+          WALKTHROUGH: "1"
+          VITE_MOCK_MODE: "1"
+          CI: "1"
+        run: pnpm exec playwright test -c playwright.walkthrough.config.ts
+
   desktop-unit:
     name: Desktop Unit Tests
     runs-on: ubuntu-latest
@@ -168,6 +210,12 @@ jobs:
         # see desktop/ui/scripts/check-overlays.sh for the whitelist.
         working-directory: desktop/ui
         run: bash scripts/check-overlays.sh
+      - name: Theme contrast audit
+        # WCAG 2.x AA check over every [data-theme] token block in
+        # src/index.css (scripts/contrast-audit.mjs) — fails on any pair
+        # below 4.5:1 (text) / 3:1 (UI).
+        working-directory: desktop/ui
+        run: node scripts/contrast-audit.mjs
       - name: Run unit tests
         # `pnpm test` is vitest in watch mode; `vitest run` is the one-shot
         # form. CI=1 keeps workers deterministic. --coverage enforces the
