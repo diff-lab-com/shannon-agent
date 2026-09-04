@@ -333,6 +333,31 @@ fn walk_blocking(&self, root: &Path, skip_gitignore: bool, cb: &mut dyn FnMut(&D
 
 ### Task 18: 全量验证
 
+#### 集成测试环境变量（追加于实现期）
+
+`#[ignore]` 集成测试通过环境变量指向任意可达 sshd（默认 localhost:22）：
+
+| 变量 | 含义 | 示例（容器化 sshd） |
+|---|---|---|
+| `SHANNON_TEST_SSH_HOST` | 目标主机 | `localhost` |
+| `SHANNON_TEST_SSH_PORT` | 端口 | `2222` |
+| `SHANNON_TEST_SSH_USER` | 用户 | `ed` |
+| `SHANNON_TEST_SSH_WORKSPACE` | 远程工作区 | `/config` |
+
+运行方式：`cargo test -p shannon-remote --lib -- --ignored`（需 ssh-agent 已加载密钥）。
+Docker 集成测试需要本地守护进程与名为 `shannon-it` 的运行中容器（alpine 即可）。
+
+#### 真实环境测试结论（2026-09-04 追加）
+
+对本机容器化 sshd + alpine 容器执行全部集成测试：**4/4 通过**。执行前发现并修复 4 个单测无法暴露的真实缺陷：
+
+1. **SshRuntime 缺失驱动线程**——`current_thread` Runtime 无人 block_on，所有 spawn 的任务（含第一次 connect）永不执行，整个远程功能上线即挂死；
+2. **target.port 未传入 SessionBuilder**——自定义端口的主机全部拨向 22；
+3. **DockerExecProcess 的 argv 重写丢弃 stdin_data**——容器内所有文件写入均为 0 字节；
+4. **健康探针字段错位**——`uname` 尾部换行挤乱 NUL 分隔字段，platform/home 解析出错。
+
+另含 SFTP 握手 15s 超时 + 子进程 stderr 诊断（防呆化：配置错误报错而非挂起）。
+
 - [ ] `cargo fmt --check && cargo clippy --workspace -- -D warnings`
 - [ ] `just test`（全绿；`#[ignore]` 集成测试若本机有 sshd/docker 则手动跑一轮并在 PR 描述记录结果）
 - [ ] `pnpm -C desktop/ui test && pnpm -C desktop/ui build`
