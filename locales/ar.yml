@@ -47,6 +47,7 @@ commands:
     current: "الهدف (%{status}، الجولة %{iterations}/%{max}): %{objective}"
     current_none: "لا هدف مضبوط. الاستخدام: /goal <الهدف> | /goal pause | /goal resume | /goal clear"
     cleared: "✓ تمت إزالة الهدف."
+    paused_no_progress: "⏸ الهدف في وضع الإيقاف المؤقت — لم يُكتشف تقدم: %{reason}\nالضربات: %{strikes}/%{max_strikes}. تحقق ثم /goal resume أو /goal clear."
     paused_blocked: "⏸ تم إيقاف الهدف مؤقتًا — يبلّغ الوكيل عن عائق: %{reason}\nعالجه ثم شغّل /goal resume، أو /goal clear للإزالة."
     paused_max: "⏸ تم إيقاف الهدف مؤقتًا بعد %{max} جولة دون إكمال. قيّم التقدم ثم /goal resume أو /goal clear."
     resumed: "▶ تمت استئناف الهدف (إعادة تعيين عداد الجولات)."

@@ -70,6 +70,7 @@ commands:
     current: "Goal (%{status}, iteration %{iterations}/%{max}): %{objective}"
     current_none: "No goal set. Usage: /goal <objective> | /goal pause | /goal resume | /goal clear"
     cleared: "✓ Goal cleared."
+    paused_no_progress: "⏸ Goal paused — no progress detected: %{reason}\nCurrent strikes: %{strikes}/%{max_strikes}. Inspect, then /goal resume (re-arms the budget) or /goal clear."
     paused_blocked: "⏸ Goal paused — agent reports a blocker: %{reason}\nResolve it and run /goal resume, or /goal clear to remove."
     paused_max: "⏸ Goal paused after %{max} iteration(s) without completion. Assess progress, then /goal resume or /goal clear."
     resumed: "▶ Goal resumed (iteration budget reset)."

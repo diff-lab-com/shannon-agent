@@ -384,7 +384,18 @@ pub struct GoalState {
     pub iterations: usize,
     /// Continuation cap; 0 = unlimited. Default [`GOAL_DEFAULT_MAX_ITERATIONS`].
     pub max_iterations: usize,
+    /// P2.1/P2.2 — active guard rails for progress detection.
+    /// `consecutive_no_tool_turns` counts turns that produced zero tool
+    /// calls since the last user input (anti-spin). `stall_strikes` is the
+    /// shared budget for both deterministic anti-spin and model-reported
+    /// `Progress: none` (stall strikes).
+    pub consecutive_no_tool_turns: usize,
+    pub stall_strikes: usize,
 }
+
+/// Default cap on `stall_strikes` before the goal pauses (Magentic-One +
+/// auto_test::no_progress_strikes both use 3 as the default).
+pub const GOAL_DEFAULT_MAX_STALL_STRIKES: usize = 3;
 
 /// Default continuation cap.
 ///
@@ -405,6 +416,8 @@ impl GoalState {
             status: GoalStatus::Active,
             iterations: 0,
             max_iterations: GOAL_DEFAULT_MAX_ITERATIONS,
+            consecutive_no_tool_turns: 0,
+            stall_strikes: 0,
         }
     }
 
@@ -453,6 +466,11 @@ impl GoalState {
             status,
             iterations: stored.iterations,
             max_iterations: stored.max_iterations,
+            // Progress counters are not persisted: resuming a long-running
+            // goal starts with a fresh budget (otherwise pre-/post-resume
+            // counts double-count and the user can never escape the loop).
+            consecutive_no_tool_turns: 0,
+            stall_strikes: 0,
         }
     }
 }

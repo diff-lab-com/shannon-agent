@@ -70,6 +70,7 @@ commands:
     current: "目标（%{status}，第 %{iterations}/%{max} 轮）：%{objective}"
     current_none: "尚未设定目标。用法：/goal <目标> | /goal pause | /goal resume | /goal clear"
     cleared: "✓ 目标已清除。"
+    paused_no_progress: "⏸ 目标已暂停——未检测到进展：%{reason}\n当前打击：%{strikes}/%{max_strikes}。检查后 /goal resume（重置预算）或 /goal clear。"
     paused_blocked: "⏸ 目标已暂停——agent 报告阻塞：%{reason}\n解决后运行 /goal resume 继续，或 /goal clear 清除。"
     paused_max: "⏸ 已达 %{max} 轮上限仍未完成，目标已暂停。评估进度后 /goal resume 或 /goal clear。"
     resumed: "▶ 目标已恢复（迭代预算已重置）。"
