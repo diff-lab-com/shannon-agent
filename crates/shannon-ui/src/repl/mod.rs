@@ -1884,6 +1884,13 @@ impl Repl {
                 }
             }
 
+            // P2.4 — fire a due blocked-goal check-in (idle-time hook; we
+            // are NOT inside handle_query here, so submitting is safe).
+            if commands::maybe_fire_check_in(self) {
+                // The check-in submitted a query — fall through to the event
+                // loop; handle_query drives it to completion.
+            }
+
             render::draw_frame(&mut terminal, self)?;
 
             // Handle events

@@ -406,6 +406,18 @@ pub struct GoalState {
     /// than the whole billing period. In-memory only: a resumed goal gets a
     /// fresh baseline, so its cap applies to post-resume spend.
     pub cost_baseline_usd: f64,
+    /// Consecutive turns reporting the SAME blocker (Codex's 3-turn audit:
+    /// the goal pauses only after the same blocking condition persists 3
+    /// goal turns). Reset by any non-blocked turn, /goal resume, or set.
+    pub blocked_streak: usize,
+    /// Normalized reason of the last blocked claim (for streak comparison).
+    pub last_block_reason: Option<String>,
+    /// Fired check-ins for the current paused stretch (max 3, Claude-Code
+    /// style). Persisted so a restart cannot reset the cap.
+    pub checkins: usize,
+    /// When the next blocked check-in should fire (in-memory; a restart
+    /// deliberately does not re-arm check-ins).
+    pub next_check_in_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Default cap on `stall_strikes` before the goal pauses (Magentic-One +
@@ -436,6 +448,10 @@ impl GoalState {
             stall_strikes: 0,
             max_budget_usd: None,
             cost_baseline_usd: 0.0,
+            blocked_streak: 0,
+            last_block_reason: None,
+            checkins: 0,
+            next_check_in_at: None,
         }
     }
 
@@ -467,6 +483,7 @@ impl GoalState {
             .to_string(),
             iterations: self.iterations,
             max_iterations: self.max_iterations,
+            checkins: self.checkins,
         }
     }
 
@@ -493,6 +510,10 @@ impl GoalState {
             stall_strikes: 0,
             max_budget_usd: None,
             cost_baseline_usd: 0.0,
+            blocked_streak: 0,
+            last_block_reason: None,
+            checkins: stored.checkins,
+            next_check_in_at: None,
         }
     }
 }
@@ -847,6 +868,7 @@ mod tests {
             status: "bogus".into(),
             iterations: 2,
             max_iterations: 25,
+            checkins: 0,
         };
         let g = GoalState::from_stored(stored);
         assert_eq!(g.status, GoalStatus::Paused);
