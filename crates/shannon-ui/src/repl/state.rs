@@ -943,3 +943,149 @@ mod tests {
         assert!(s.search_query.is_empty());
     }
 }
+
+/// Shared, live handle to the session goal (P2.5 wiring).
+///
+/// The `goal_get` / `goal_update` tools execute inside the engine's agent
+/// loop, on a different task than the REPL — but `ReplState.goal` is plain
+/// data the REPL owns. This handle is registered with the tools and synced
+/// at two boundaries:
+///
+/// * query entry: `sync_from(&repl.state.goal)` snapshots the current goal
+///   so the tools observe it;
+/// * query completion: `take_transition()` returns the goal (possibly
+///   mutated by `goal_update`) plus the transition, which the REPL replays
+///   onto `ReplState.goal`, persists to the sidecar, and surfaces to the
+///   user. Between the boundaries the handle is authoritative.
+#[derive(Clone)]
+pub struct GoalShared {
+    inner: std::sync::Arc<std::sync::Mutex<Option<GoalState>>>,
+    transition: std::sync::Arc<std::sync::Mutex<Option<shannon_tools::goal::GoalUpdateOutcome>>>,
+}
+
+impl Default for GoalShared {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GoalShared {
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            transition: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    /// Query-entry sync: mirror the REPL-owned goal and forget any stale
+    /// transition from a previous turn.
+    pub fn sync_from(&self, goal: &Option<GoalState>) {
+        if let Ok(mut inner) = self.inner.lock() {
+            *inner = goal.clone();
+        }
+        if let Ok(mut t) = self.transition.lock() {
+            *t = None;
+        }
+    }
+
+    /// Current snapshot (what the tools observe).
+    pub fn current(&self) -> Option<GoalState> {
+        self.inner.lock().ok().and_then(|g| g.clone())
+    }
+
+    /// Query-completion pull: returns the (possibly tool-mutated) goal and
+    /// the transition only when a `goal_update` actually fired this turn.
+    pub fn take_transition(&self) -> Option<(GoalState, shannon_tools::goal::GoalUpdateOutcome)> {
+        let mut guard = self.transition.lock().ok()?;
+        let t = guard.take()?;
+        drop(guard);
+        let g = self.inner.lock().ok()?.clone()?;
+        Some((g, t))
+    }
+
+    /// Apply a `goal_update` outcome to the live goal. Rejected outcomes
+    /// leave the state untouched. Returns `None` when no goal is set.
+    pub(crate) fn apply(&self, outcome: shannon_tools::goal::GoalUpdateOutcome) -> Option<()> {
+        let mut inner = self.inner.lock().ok()?;
+        let g = inner.as_mut()?;
+        match outcome {
+            shannon_tools::goal::GoalUpdateOutcome::Completed => {
+                g.status = GoalStatus::Complete;
+            }
+            shannon_tools::goal::GoalUpdateOutcome::Paused(_) => {
+                g.status = GoalStatus::Paused;
+            }
+            shannon_tools::goal::GoalUpdateOutcome::Rejected(_) => return Some(()),
+        }
+        if let Ok(mut t) = self.transition.lock() {
+            *t = Some(outcome);
+        }
+        Some(())
+    }
+}
+
+#[cfg(test)]
+mod goal_shared_tests {
+    use super::*;
+
+    #[test]
+    fn goal_shared_roundtrip_and_transition() {
+        let shared = GoalShared::new();
+        assert!(shared.current().is_none());
+        assert!(shared.take_transition().is_none(), "no transition yet");
+
+        shared.sync_from(&Some(GoalState::new("ship it")));
+        let g = shared.current().expect("synced");
+        assert_eq!(g.objective, "ship it");
+        assert!(
+            shared.take_transition().is_none(),
+            "sync is not a transition"
+        );
+
+        shared.apply(shannon_tools::goal::GoalUpdateOutcome::Paused(
+            "no creds".into(),
+        ));
+        let (g, t) = shared.take_transition().expect("transition recorded");
+        assert_eq!(g.status, GoalStatus::Paused);
+        assert!(matches!(
+            t,
+            shannon_tools::goal::GoalUpdateOutcome::Paused(_)
+        ));
+        // Transition is consumed.
+        assert!(shared.take_transition().is_none());
+    }
+
+    #[test]
+    fn goal_shared_complete_transition() {
+        let shared = GoalShared::new();
+        shared.sync_from(&Some(GoalState::new("ship it")));
+        shared.apply(shannon_tools::goal::GoalUpdateOutcome::Completed);
+        let (g, t) = shared.take_transition().expect("transition recorded");
+        assert_eq!(g.status, GoalStatus::Complete);
+        assert!(matches!(
+            t,
+            shannon_tools::goal::GoalUpdateOutcome::Completed
+        ));
+    }
+
+    #[test]
+    fn goal_shared_apply_without_goal_is_noop() {
+        let shared = GoalShared::new();
+        assert!(
+            shared
+                .apply(shannon_tools::goal::GoalUpdateOutcome::Completed)
+                .is_none()
+        );
+        assert!(shared.take_transition().is_none());
+    }
+
+    #[test]
+    fn goal_shared_sync_clears_stale_transition() {
+        let shared = GoalShared::new();
+        shared.sync_from(&Some(GoalState::new("ship it")));
+        shared.apply(shannon_tools::goal::GoalUpdateOutcome::Completed);
+        // A new turn syncs from REPL state — stale transition must be dropped.
+        shared.sync_from(&Some(GoalState::new("ship it")));
+        assert!(shared.take_transition().is_none());
+    }
+}
