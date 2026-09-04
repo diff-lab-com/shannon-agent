@@ -119,6 +119,12 @@ pub struct AppState {
     pub(crate) scheduled_runs_store: Arc<shannon_core::scheduled_runs::ScheduledRunsStore>,
     /// Triage items needing user attention.
     pub(crate) triage_store: Arc<crate::scheduled_commands::TriageStore>,
+    /// SQLite inbox store (`~/.shannon/inbox.db`, P0-3). Lazily opened on
+    /// first use so a failing on-disk open degrades to an in-memory store
+    /// (with a warning) instead of poisoning every inbox command.
+    pub(crate) inbox_store: std::sync::OnceLock<
+        Arc<shannon_core::inbox_store::InboxStore>,
+    >,
     /// Usage ledger (`~/.shannon/usage.jsonl`) — append-only token/cache/cost.
     pub(crate) usage_store: Arc<crate::commands_usage::UsageStore>,
     /// Triggered-routine enabled/disabled overrides.
@@ -345,6 +351,7 @@ impl AppState {
             ),
             scheduled_runs_store: Arc::new(shannon_core::scheduled_runs::ScheduledRunsStore::new()),
             triage_store: Arc::new(crate::scheduled_commands::TriageStore::new()),
+            inbox_store: std::sync::OnceLock::new(),
             usage_store: Arc::new(crate::commands_usage::UsageStore::new()),
             routine_overrides: Arc::new(crate::scheduled_commands::RoutineOverrideStore::new()),
             triggered_registry: Arc::new(tokio::sync::RwLock::new(

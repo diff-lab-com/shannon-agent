@@ -51,7 +51,11 @@ toml = "0.8"
 lsp-types = "0.95"
 url = "2"
 async-trait = "0.1"
+# HTTP client for provider probes / downloads
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "multipart"] }
+# Loopback engine API server routes (P0-3 trigger endpoint merges into
+# shannon_core::api_server::ShannonApiServer's router).
+axum = { workspace = true }
 dashmap = "6.1"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 sha2 = "0.10"
@@ -83,6 +87,8 @@ tokio-test = "0.4"
 tempfile = "3"
 criterion = { version = "0.5", features = ["async_tokio"] }
 mockito = "1"
+# `ServiceExt::oneshot` for direct axum router tests (loopback trigger).
+tower = { version = "0.5", features = ["util"] }
 # Enables `tauri::test::mock_app()` for the supervisor E2E test (cfg(test) alone
 # doesn't reach the tauri dependency crate). `test` is an empty gate feature.
 tauri = { version = "2", features = ["test"] }

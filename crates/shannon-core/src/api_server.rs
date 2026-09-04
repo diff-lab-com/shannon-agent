@@ -124,6 +124,11 @@ pub struct ShannonApiServer {
     /// Explicit opt-in to bind on a non-loopback interface. Defaults to
     /// `false`; when `true`, `serve()` additionally requires `auth_token`.
     allow_nonloopback: bool,
+    /// Extra routes merged into the router (P0-3). Must already be
+    /// state-applied (`Router<()>`) — e.g. the desktop's
+    /// `POST /api/routines/:id/trigger` handler with its own state.
+    /// They sit under the same auth/CORS middleware as the core routes.
+    extra_routes: Vec<axum::Router<()>>,
 }
 
 impl ShannonApiServer {
@@ -138,6 +143,7 @@ impl ShannonApiServer {
             auth_token: None,
             allowed_origins: Vec::new(),
             allow_nonloopback: false,
+            extra_routes: Vec::new(),
         }
     }
 
@@ -182,18 +188,35 @@ impl ShannonApiServer {
         self
     }
 
+    /// Merge additional routes into the router (P0-3).
+    ///
+    /// The routes must be state-applied (`axum::Router<()>`, i.e.
+    /// `Router::with_state(deps)` has been called by the embedder). They are
+    /// merged *before* the auth/CORS middleware layers are applied, so they
+    /// inherit the same middleware policy as the built-in routes.
+    pub fn with_extra_routes(mut self, extra: axum::Router<()>) -> Self {
+        self.extra_routes.push(extra);
+        self
+    }
+
     /// Build the `axum::Router` with all routes and middleware.
     fn build_router(&self) -> axum::Router<()> {
         let cors = build_cors_layer(&self.allowed_origins);
 
-        axum::Router::new()
+        let mut router = axum::Router::new()
             .route("/api/health", get(health_handler))
             .route("/api/models", get(models_handler))
             .route("/api/query", post(query_handler))
             .route("/api/query/stream", get(query_stream_handler))
             .route("/api/tools/list", post(tools_list_handler))
             .route("/api/ws", get(ws_handler))
-            .route("/api/approval/respond", post(approval_respond_handler))
+            .route("/api/approval/respond", post(approval_respond_handler));
+        for extra in &self.extra_routes {
+            // `with_state(())` re-types an already state-applied router so it
+            // can merge with the (not yet state-applied) core router.
+            router = router.merge(extra.clone().with_state(()));
+        }
+        router
             .layer(axum::middleware::from_fn_with_state(
                 self.auth_token.clone(),
                 auth_middleware,

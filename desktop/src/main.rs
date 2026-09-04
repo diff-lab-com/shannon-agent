@@ -270,6 +270,12 @@ fn main() {
             shannon_desktop::scheduled_commands::toggle_triggered_routine,
             shannon_desktop::scheduled_commands::create_triggered_routine,
             shannon_desktop::scheduled_commands::get_opc_metrics,
+            // P0-3 — SQLite inbox (items + automation run history)
+            shannon_desktop::inbox_commands::list_inbox_items,
+            shannon_desktop::inbox_commands::update_inbox_item_status,
+            shannon_desktop::inbox_commands::get_inbox_stats,
+            shannon_desktop::inbox_commands::rerun_inbox_item,
+            shannon_desktop::inbox_commands::continue_inbox_item_session,
             // Automation: hook-event catalog + custom permission profiles
             shannon_desktop::automation_commands::list_hook_events,
             shannon_desktop::automation_commands::list_permission_profiles,
@@ -338,7 +344,9 @@ fn main() {
                     // is reachable when the supervised gateway boots. The
                     // brief sleep lets the listener bind first; serve() then
                     // runs for the lifetime of the process on a detached task.
-                    loopback_api::spawn(state_ref.inner()).await;
+                    // P0-3 — the same listener also serves the HMAC-gated
+                    // POST /api/routines/:id/trigger endpoint.
+                    loopback_api::spawn(state_ref.inner(), app_handle.clone()).await;
                     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                 } else {
                     tracing::info!(

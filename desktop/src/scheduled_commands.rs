@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -457,6 +458,29 @@ impl AppState {
     /// Borrow the shared triage store.
     pub fn triage_store(&self) -> &TriageStore {
         &self.triage_store
+    }
+
+    /// Borrow the shared SQLite inbox store (P0-3), opening it on first use.
+    ///
+    /// Falls back to an in-memory database when the on-disk open fails
+    /// (permissions, corrupt file) so inbox features degrade gracefully
+    /// instead of failing on every command.
+    pub fn inbox_store(&self) -> Arc<shannon_core::inbox_store::InboxStore> {
+        self.inbox_store
+            .get_or_init(|| match shannon_core::inbox_store::InboxStore::open_default() {
+                Ok(store) => Arc::new(store),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "inbox store: on-disk open failed, using in-memory fallback"
+                    );
+                    Arc::new(
+                        shannon_core::inbox_store::InboxStore::open_in_memory()
+                            .expect("in-memory SQLite must always open"),
+                    )
+                }
+            })
+            .clone()
     }
 
     /// Borrow the shared routine-override store.

@@ -177,6 +177,10 @@ pub mod commands_voice_models;
 #[cfg(feature = "tauri")]
 pub mod scheduled_commands;
 
+/// P0-3 — SQLite inbox commands + shared routine-run executor.
+#[cfg(feature = "tauri")]
+pub mod inbox_commands;
+
 #[cfg(feature = "tauri")]
 pub mod commands_routine_templates;
 
