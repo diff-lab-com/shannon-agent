@@ -18,12 +18,14 @@
 // legacy background-task / agent data still comes from useCatalog().
 
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { toastError } from '@/lib/errorToast'
 import { useIntl } from 'react-intl'
 import { useCatalog } from '@/context/CatalogContext'
+import { useSessions } from '@/context/SessionContext'
 import * as api from '@/lib/tauri-api'
 import { useScheduledTasks } from '@/hooks/scheduled-tasks'
 import type { CreateTaskPayload } from '@/types'
@@ -46,6 +48,7 @@ import EfficiencyCard from '@/components/tasks/EfficiencyCard'
 import AgentAllocation from '@/components/tasks/AgentAllocation'
 import HistoryView from '@/components/tasks/HistoryView'
 import WorktreePanel from '@/components/tasks/WorktreePanel'
+import GoalRunPanel from '@/components/tasks/GoalRunPanel'
 import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
 import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
 
@@ -57,6 +60,8 @@ type Tab = 'active' | 'routines' | 'pipelines' | 'history' | 'worktrees'
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useCatalog()
+  const { switchSession } = useSessions()
+  const navigate = useNavigate()
   const { tasks: scheduledTasks, create: createScheduled, refresh: refreshScheduled } = useScheduledTasks()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -167,6 +172,17 @@ export default function Tasks() {
     setTimeout(() => setRunning(null), 1500)
   }
 
+  // P0-2: open the session a goal run is driving in the chat page.
+  const handleViewGoalSession = async (sessionId: string) => {
+    try {
+      await switchSession(sessionId)
+    } catch (e) {
+      toastError(t('goal.toast.failed.viewSession'), e)
+      return
+    }
+    navigate('/chat')
+  }
+
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
       <div className="max-w-[1200px] mx-auto px-lg py-xl">
@@ -222,6 +238,9 @@ export default function Tasks() {
           </div>
         ) : (
           <>
+        {/* P0-2: live goal-run cards sit above the regular task list. */}
+        <GoalRunPanel onViewSession={handleViewGoalSession} />
+
         {errorMsg && (
           <Banner
             variant="card"

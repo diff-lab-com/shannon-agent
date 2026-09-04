@@ -37,6 +37,39 @@ const state = {
 // ids for inbox items created at runtime (rerun simulation).
 let nextInboxId = Math.max(...MOCK_INBOX_ITEMS.map(i => i.id)) + 1
 
+// P0-2: demo goal runs. One live (so the Tasks page shows a run card) and
+// one finished; start_goal_run appends new running rows with live feel.
+const goalRuns = [
+  {
+    sessionId: '0196aaaa-0000-7000-8000-000000000001',
+    title: 'Harden the upload pipeline',
+    objective: 'Add retry + tests to the upload pipeline so flaky network errors cannot lose files',
+    status: 'running',
+    iterations: 3,
+    maxTurns: 12,
+    spentUsd: 0.42,
+    budgetUsd: 5,
+    stallStrikes: 0,
+    lastError: null,
+    startedAtMs: Date.now() - 26 * 60_000,
+    updatedAtMs: Date.now() - 2 * 60_000,
+  },
+  {
+    sessionId: '0196aaaa-0000-7000-8000-000000000002',
+    title: 'Changelog digest',
+    objective: 'Summarize the last two weeks of commits into a release-notes draft',
+    status: 'completed',
+    iterations: 4,
+    maxTurns: null,
+    spentUsd: 0.18,
+    budgetUsd: null,
+    stallStrikes: 0,
+    lastError: null,
+    startedAtMs: Date.now() - 27 * 60 * 60_000,
+    updatedAtMs: Date.now() - 26.5 * 60 * 60_000,
+  },
+] as Array<Record<string, unknown> & { sessionId: string; status: string }>
+
 // Snapshot the managed-providers roster as a cloned ProvidersFile.
 function providersFile() {
   return clone(state.providers)
@@ -477,6 +510,68 @@ export const handlers: Record<string, MockHandler> = {
     if (!item) throw new Error(`inbox item not found: ${args.id}`)
     if (!item.sessionId) throw new Error(`inbox item ${args.id} has no linked session`)
     return item.sessionId
+  },
+
+  // --- Goal runs (P0-2 desktop goal runner) ---
+  async list_goal_runs() {
+    await delay()
+    return clone(goalRuns).sort((a, b) => (b.startedAtMs as number) - (a.startedAtMs as number))
+  },
+  async get_goal_run(args: { sessionId: string }) {
+    await delay()
+    return clone(goalRuns.find(r => r.sessionId === args.sessionId) ?? null)
+  },
+  async start_goal_run(args: { sessionId?: string | null; title: string; objective: string; maxTurns?: number | null; budgetUsd?: number | null }) {
+    await delay(120)
+    const sessionId = args.sessionId ?? `0196goal-0000-7000-8000-${String(goalRuns.length + 1).padStart(12, '0')}`
+    if (goalRuns.some(r => r.sessionId === sessionId && (r.status === 'running' || r.status === 'paused'))) {
+      throw new Error('a goal run is already active on this session')
+    }
+    goalRuns.unshift({
+      sessionId,
+      title: args.title,
+      objective: args.objective,
+      status: 'running',
+      iterations: 0,
+      maxTurns: args.maxTurns ?? null,
+      spentUsd: 0,
+      budgetUsd: args.budgetUsd ?? null,
+      stallStrikes: 0,
+      lastError: null,
+      startedAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+    })
+    return { sessionId }
+  },
+  async stop_goal_run(args: { sessionId: string }) {
+    await delay(60)
+    const run = goalRuns.find(r => r.sessionId === args.sessionId)
+    if (run) { run.status = 'stopped'; run.updatedAtMs = Date.now() }
+    return undefined
+  },
+  async pause_goal_run(args: { sessionId: string }) {
+    await delay(60)
+    const run = goalRuns.find(r => r.sessionId === args.sessionId)
+    if (!run || run.status !== 'running') throw new Error('no running goal run for this session')
+    run.status = 'paused'
+    run.updatedAtMs = Date.now()
+    return undefined
+  },
+  async resume_goal_run(args: { sessionId: string }) {
+    await delay(60)
+    const run = goalRuns.find(r => r.sessionId === args.sessionId)
+    if (!run || run.status !== 'paused') throw new Error('no paused goal run for this session')
+    run.status = 'running'
+    run.updatedAtMs = Date.now()
+    return undefined
+  },
+  async update_goal_objective(args: { sessionId: string; objective: string }) {
+    await delay(60)
+    const run = goalRuns.find(r => r.sessionId === args.sessionId)
+    if (!run) throw new Error('no goal found for this session')
+    run.objective = args.objective
+    run.updatedAtMs = Date.now()
+    return undefined
   },
 
   // --- History ---

@@ -10,6 +10,7 @@
 // high-frequency chat streaming to chat consumers only.
 
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
+import { messageFor } from '@/i18n'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
@@ -81,6 +82,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([])
   const [error, setError] = useState<string | null>(null)
+  // P0-2: sessions currently owned by a desktop goal run (running/paused).
+  // Manual sends to these are blocked — goal and manual input are mutually
+  // exclusive; the backend `send_message` guard is the backstop.
+  const [goalOwnedSessionIds, setGoalOwnedSessionIds] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   // First paint of the app depends on these loads succeeding; a silent
   // failure here used to leave the user on an empty UI with only a generic
@@ -134,6 +139,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const sendMessage = useCallback(async (message: string, filePaths?: string[]) => {
+    if (currentSessionId && goalOwnedSessionIds.includes(currentSessionId)) {
+      setError(messageFor('goal.composer.blocked'))
+      setIsQuerying(false)
+      return
+    }
     setError(null)
     setStreamingText('')
     setThinkingText('')
@@ -147,7 +157,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setError(String(e))
       setIsQuerying(false)
     }
-  }, [])
+  }, [currentSessionId, goalOwnedSessionIds])
 
   const cancelQuery = useCallback(async () => {
     try { await api.cancelQuery() } catch (e) { toastError('Failed to cancel query', e) }
@@ -381,6 +391,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         listen(EVENT_NAMES.SESSIONS_UPDATED, () => { refreshSessions() }),
         listen(EVENT_NAMES.CONFIG_UPDATED, () => { refreshConfig() }),
         listen(EVENT_NAMES.BACKGROUND_TASKS_UPDATED, () => { refreshBackgroundTasks() }),
+        // P0-2: track which sessions a goal run owns, so the composer can
+        // block manual sends while a run is driving the conversation.
+        listen(EVENT_NAMES.GOAL_UPDATED, () => {
+          void api.listGoalRuns()
+            .then(runs => {
+              if (cancelled) return
+              setGoalOwnedSessionIds(runs.filter(r => r.status === 'running' || r.status === 'paused').map(r => r.sessionId))
+            })
+            .catch((e) => { logSoftFailure('refresh goal runs', e) })
+        }),
       ]
 
       const results = await Promise.all(handlers)
@@ -420,6 +440,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       record('refreshMcpServers', refreshMcpServers()),
       record('refreshBackgroundTasks', refreshBackgroundTasks()),
       record('getConversation', api.getConversation().then(setMessages)),
+      record('goalOwnedSessions', api.listGoalRuns().then(runs =>
+        setGoalOwnedSessionIds(runs.filter(r => r.status === 'running' || r.status === 'paused').map(r => r.sessionId))
+      )),
     ])
     if (failures.length > 0) setInitError(failures[0])
     setLoading(false)

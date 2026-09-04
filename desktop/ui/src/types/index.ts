@@ -933,6 +933,36 @@ export type ApprovalMode =
   | 'dont_ask'
   | 'confirm'
 
+// --- Goal runs (P0-2 desktop goal runner; serde contract is camelCase) ---
+
+/// Lifecycle of a desktop goal run. `interrupted` marks a sidecar goal the
+/// app restarted under (resumable); `paused` covers max/budget/anti-spin
+/// pauses and engine failures.
+export type GoalRunStatus =
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'blocked'
+  | 'stopped'
+  | 'interrupted'
+
+/// One goal run as rendered by the Tasks-page run card (payload of
+/// `goal:updated`).
+export interface GoalRunDto {
+  sessionId: string
+  title: string
+  objective: string
+  status: GoalRunStatus
+  iterations: number
+  maxTurns: number | null
+  spentUsd: number
+  budgetUsd: number | null
+  stallStrikes: number
+  lastError: string | null
+  startedAtMs: number
+  updatedAtMs: number
+}
+
 // --- Event Names ---
 
 export const EVENT_NAMES = {
@@ -955,6 +985,7 @@ export const EVENT_NAMES = {
   AGENT_MESSAGES_UPDATED: 'agent-messages-updated',
   TRIAGE_UPDATED: 'triage-updated',
   INBOX_UPDATED: 'inbox-updated',
+  GOAL_UPDATED: 'goal:updated',
 } as const
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]

@@ -30,6 +30,7 @@ export type SlashResult =
   | { kind: 'cost'; usage: api.SessionUsageSummary }
   | { kind: 'diff'; diff: api.GitDiffSummary; workingDir: string }
   | { kind: 'compact'; summary: api.CompactSessionSummary }
+  | { kind: 'goalForm'; sessionId: string | null }
   | { kind: 'error'; messageKey: string; values?: Record<string, string | number> }
 
 export interface SlashCommandContext {
@@ -157,6 +158,17 @@ export const SLASH_COMMANDS: SlashCommand[] = [
       } catch (e) {
         ctx.toastError(ctx.t('slash.card.error.title'), e)
       }
+    },
+  },
+  {
+    name: 'goal',
+    icon: 'flag',
+    labelKey: 'slash.command.goal.label',
+    descriptionKey: 'slash.command.goal.description',
+    // Optional session: without one the backend creates a dedicated goal
+    // session, so /goal works from a fresh window too.
+    run: (ctx) => {
+      ctx.showResult({ kind: 'goalForm', sessionId: ctx.sessionId })
     },
   },
   { name: 'tasks', icon: 'task_alt', labelKey: 'nav.scheduled', descriptionKey: 'slash.command.tasks.description', run: (ctx) => ctx.navigate('/tasks') },

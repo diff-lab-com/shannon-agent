@@ -49,6 +49,7 @@ import type {
   TriageItem,
   TriageFilter,
   TriageStats,
+  GoalRunDto,
   InboxItem,
   InboxListFilter,
   InboxItemStatus,
@@ -1276,6 +1277,53 @@ export async function rerunInboxItem(id: number): Promise<string> {
 
 export async function continueInboxItemSession(id: number): Promise<string> {
   return invoke('continue_inbox_item_session', { id })
+}
+
+// Goal runs (P0-2 desktop goal runner)
+
+export interface GoalRunStartInput {
+  title: string
+  objective: string
+  maxTurns?: number
+  budgetUsd?: number
+}
+
+/// Start an unattended goal run on `sessionId` (a new session is created
+/// when omitted). Resolves once the run is registered (status `running`).
+export async function startGoalRun(
+  input: GoalRunStartInput & { sessionId?: string | null },
+): Promise<{ sessionId: string }> {
+  return invoke('start_goal_run', {
+    sessionId: input.sessionId ?? null,
+    title: input.title,
+    objective: input.objective,
+    maxTurns: input.maxTurns ?? null,
+    budgetUsd: input.budgetUsd ?? null,
+  })
+}
+
+export async function listGoalRuns(): Promise<GoalRunDto[]> {
+  return invoke('list_goal_runs')
+}
+
+export async function getGoalRun(sessionId: string): Promise<GoalRunDto | null> {
+  return invoke('get_goal_run', { sessionId })
+}
+
+export async function stopGoalRun(sessionId: string): Promise<void> {
+  await invoke('stop_goal_run', { sessionId })
+}
+
+export async function pauseGoalRun(sessionId: string): Promise<void> {
+  await invoke('pause_goal_run', { sessionId })
+}
+
+export async function resumeGoalRun(sessionId: string): Promise<void> {
+  await invoke('resume_goal_run', { sessionId })
+}
+
+export async function updateGoalObjective(sessionId: string, objective: string): Promise<void> {
+  await invoke('update_goal_objective', { sessionId, objective })
 }
 
 // History

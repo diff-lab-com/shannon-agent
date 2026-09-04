@@ -319,6 +319,15 @@ vi.mock('@/lib/tauri-api', () => ({
   getInboxStats: vi.fn().mockResolvedValue({ pending: 0, today: 0 }),
   rerunInboxItem: vi.fn().mockResolvedValue('run-1'),
   continueInboxItemSession: vi.fn().mockResolvedValue('sess-1'),
+  // P0-2 goal runs — default empty so AppProvider's bootstrap and the
+  // Tasks-page panel render sanely without per-test mocking.
+  listGoalRuns: vi.fn().mockResolvedValue([]),
+  getGoalRun: vi.fn().mockResolvedValue(null),
+  startGoalRun: vi.fn().mockResolvedValue({ sessionId: 'sess-goal' }),
+  stopGoalRun: vi.fn().mockResolvedValue(undefined),
+  pauseGoalRun: vi.fn().mockResolvedValue(undefined),
+  resumeGoalRun: vi.fn().mockResolvedValue(undefined),
+  updateGoalObjective: vi.fn().mockResolvedValue(undefined),
   transcribeAudio: vi.fn().mockResolvedValue({ text: 'mock transcript' }),
   // P2-5e — local voice (whisper-rs). Default: returns the same
   // mock transcript as the cloud path so existing tests don't
