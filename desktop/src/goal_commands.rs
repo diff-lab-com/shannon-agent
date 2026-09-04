@@ -1091,22 +1091,16 @@ async fn drive_goal_turns<R: tauri::Runtime>(
         )
         .await;
 
-        // Update the loop counters from the observation.
-        iterations += 1;
+        // Spend accumulates every turn; the iteration/guard counters do NOT
+        // advance here — the TUI passes pre-turn counters into the decision
+        // and the decision arms apply the advancement exactly once (see
+        // check_goal_continuation). Cancels/failures leave counters
+        // untouched, mirroring the TUI where an errored/cancelled query
+        // simply stops the loop.
         spent_usd += observation.cost_usd;
-        if observation.had_tool_calls {
-            consecutive_no_tool_turns = 0;
-            stall_strikes = stall_strikes.saturating_sub(1);
-        } else {
-            consecutive_no_tool_turns += 1;
-            stall_strikes += 1;
-        }
         {
             let mut s = handle.state.lock().await;
-            s.iterations = iterations;
             s.spent_usd = spent_usd;
-            s.consecutive_no_tool_turns = consecutive_no_tool_turns;
-            s.stall_strikes = stall_strikes;
             s.updated_at_ms = now_ms();
             if let Some(err) = &observation.failure {
                 s.last_error = Some(err.clone());
@@ -1159,7 +1153,10 @@ async fn drive_goal_turns<R: tauri::Runtime>(
             None => {}
         }
 
-        // Pure decision (shared with the TUI).
+        // Pure decision (shared with the TUI). The input carries the
+        // counters as of *before* this turn's advancement — the core
+        // advances them internally for its verdicts, and the arms below
+        // persist the advanced values exactly like the TUI does.
         let input = shannon_core::goal_loop::GoalDecisionInput {
             objective: handle.state.lock().await.objective.clone(),
             iterations,
@@ -1176,7 +1173,7 @@ async fn drive_goal_turns<R: tauri::Runtime>(
                 prompt,
             } => {
                 iterations = next;
-                // Re-derive the guard counters exactly like the TUI's
+                // Advance the guard counters exactly like the TUI's
                 // check_goal_continuation Continue arm.
                 if observation.had_tool_calls {
                     consecutive_no_tool_turns = 0;
@@ -1185,9 +1182,18 @@ async fn drive_goal_turns<R: tauri::Runtime>(
                     consecutive_no_tool_turns += 1;
                     stall_strikes += 1;
                 }
+                {
+                    let mut s = handle.state.lock().await;
+                    s.iterations = iterations;
+                    s.consecutive_no_tool_turns = consecutive_no_tool_turns;
+                    s.stall_strikes = stall_strikes;
+                }
+                persist_turn_progress(&deps, &handle).await;
                 pending_prompt = Some(prompt);
             }
             shannon_core::goal_loop::GoalContinuation::MaxReached => {
+                // TUI parity: the MaxReached arm pauses without persisting
+                // the decision's internal +1.
                 engine.set_goal(None);
                 return GoalTerminal::Paused { reason: None };
             }
@@ -1198,6 +1204,24 @@ async fn drive_goal_turns<R: tauri::Runtime>(
                 };
             }
             shannon_core::goal_loop::GoalContinuation::PausedNoProgress(reason) => {
+                // TUI parity: the no-progress pause persists the advanced
+                // counters and the decision's +1 so the user can see the
+                // strike counts that tripped it.
+                iterations += 1;
+                if observation.had_tool_calls {
+                    consecutive_no_tool_turns = 0;
+                    stall_strikes = stall_strikes.saturating_sub(1);
+                } else {
+                    consecutive_no_tool_turns += 1;
+                    stall_strikes += 1;
+                }
+                {
+                    let mut s = handle.state.lock().await;
+                    s.iterations = iterations;
+                    s.consecutive_no_tool_turns = consecutive_no_tool_turns;
+                    s.stall_strikes = stall_strikes;
+                }
+                persist_turn_progress(&deps, &handle).await;
                 engine.set_goal(None);
                 return GoalTerminal::Paused {
                     reason: Some(reason),
