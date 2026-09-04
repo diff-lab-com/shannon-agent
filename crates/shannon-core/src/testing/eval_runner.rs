@@ -166,6 +166,9 @@ pub enum EvalTier {
     MultiStep,
     /// Deliberate snag followed by course correction.
     Recovery,
+    /// Goal-anchored runs: the prompt carries a session-goal block with the
+    /// strict completion-marker contract (P2.5/#5 eval track).
+    Goal,
 }
 
 impl EvalTier {
@@ -177,6 +180,7 @@ impl EvalTier {
             EvalTier::Search => "search",
             EvalTier::MultiStep => "multi_step",
             EvalTier::Recovery => "recovery",
+            EvalTier::Goal => "goal",
         }
     }
 }
@@ -470,6 +474,12 @@ pub struct EvalTask {
     pub description: String,
     /// The prompt handed to the agent verbatim.
     pub prompt: String,
+    /// Optional session goal (`#5` goal eval track). When set, the goal
+    /// block — objective plus the strict completion-marker contract — is
+    /// appended to the prompt so headless runs exercise the same anchoring
+    /// the REPL injects via the system prompt.
+    #[serde(default)]
+    pub goal: Option<String>,
     /// Sandbox seeding.
     #[serde(default)]
     pub setup: TaskSetup,
@@ -497,6 +507,7 @@ impl EvalTask {
     pub fn effective_horizon(&self) -> Horizon {
         self.horizon.unwrap_or(match self.tier {
             EvalTier::Read | EvalTier::Search | EvalTier::Edit => Horizon::Short,
+            EvalTier::Goal => Horizon::Mid,
             EvalTier::MultiStep | EvalTier::Recovery => Horizon::Mid,
         })
     }
@@ -1966,10 +1977,14 @@ fn spawn_engine(
 ) -> ProducedStream {
     // The directive rides at the END of the user prompt, clearly fenced, so
     // the task text itself stays byte-stable across arms.
-    let prompt = match directive {
+    let mut prompt = match directive {
         Some(d) => format!("{}\n\n【实验指令】{}", task.prompt, d),
         None => task.prompt.clone(),
     };
+    if let Some(goal) = &task.goal {
+        prompt.push_str("\n\n");
+        prompt.push_str(&crate::goal::goal_prompt_block(goal));
+    }
     let mut command = Command::new(bin);
     command
         .arg("--prompt")

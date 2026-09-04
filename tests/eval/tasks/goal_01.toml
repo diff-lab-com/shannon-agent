@@ -1,0 +1,49 @@
+id = "goal_01"
+tier = "goal"
+description = "Goal-anchored multi-file edit: objective phrased as a completion condition."
+prompt = "Bring this mini workspace to a clean state."
+
+goal = "src/config.rs exposes MAX_RETRIES = 5 and src/client.rs uses crate::config::MAX_RETRIES"
+
+[setup]
+[[setup.files]]
+path = "src/config.rs"
+content = "pub const MAX_RETRIES: u32 = 3;\n"
+
+[[setup.files]]
+path = "src/client.rs"
+content = "use crate::config::MAX_RETRIES;\n\npub fn attempts() -> u32 { MAX_RETRIES }\n"
+
+[verify]
+script = "grep -q 'MAX_RETRIES: u32 = 5' src/config.rs && grep -q 'crate::config::MAX_RETRIES' src/client.rs"
+
+[[verify.rules]]
+rule = "exit_code"
+value = "success"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/config.rs"
+contains = "MAX_RETRIES: u32 = 5"
+
+[expectations]
+forbidden_tools = ["Bash"]
+
+[[expectations.trajectory]]
+tools = ["Edit", "MultiEdit", "Write"]
+
+[limits]
+max_turns = 50
+max_tokens = 1000000
+timeout_secs = 600
+
+[dry_run]
+final_text = "Updated MAX_RETRIES to 5 in src/config.rs; client.rs already references crate::config::MAX_RETRIES."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/config.rs" }
+
+[[dry_run.steps]]
+tool = "Edit"
+input = { file_path = "src/config.rs", old_string = "pub const MAX_RETRIES: u32 = 3;", new_string = "pub const MAX_RETRIES: u32 = 5;" }

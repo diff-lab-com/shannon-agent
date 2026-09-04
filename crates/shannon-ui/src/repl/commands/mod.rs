@@ -17,6 +17,7 @@ mod web;
 
 pub(crate) use goal::ReplGoalAccess;
 pub(crate) use goal::check_goal_continuation;
+pub(crate) use goal::maybe_fire_check_in;
 
 // Re-export the single switch-path helper so the REPL init/resume paths
 // (repl/mod.rs) can refresh the first-screen StatusCard through the same
