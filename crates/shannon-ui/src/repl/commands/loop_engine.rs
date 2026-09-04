@@ -1,6 +1,7 @@
 //! Loop engine command handlers: /loop, /ralph, /routine, /bind, /project, /agent, /stats,
 //! /sandbox, /notify, and related helpers.
 
+use crate::repl::loop_guard;
 use crate::repl::state::GoalStatus;
 use crate::{Result, widgets::ChatRole};
 use shannon_tools::Tool;
@@ -126,6 +127,7 @@ pub(crate) fn handle_loop(repl: &mut Repl, args: &str) -> Result<()> {
         max_iterations: max_iter,
         iteration: 0,
         active: true,
+        guard: loop_guard::GuardCounters::default(),
     });
 
     repl.chat.add_message(
@@ -173,6 +175,26 @@ pub(crate) fn check_loop_iteration(repl: &mut Repl) -> bool {
             format!("Loop completed: reached max {iter} iteration(s)."),
         );
         repl.state.loop_state = None;
+        return false;
+    }
+
+    // P2.1/P2.2 — progress guards before re-queuing (R15: /loop has no
+    // termination criterion of its own, so these are its primary drift
+    // protection). The finished turn is judged by whether it produced any
+    // tool activity.
+    let had_tools = loop_guard::turn_had_tool_calls(&repl.chat);
+    loop_guard::advance(&mut ls.guard, had_tools);
+    if loop_guard::tripped(&ls.guard) {
+        let reason = loop_guard::pause_reason(&ls.guard);
+        let iter = ls.iteration;
+        repl.chat.add_message(
+            ChatRole::System,
+            format!(
+                "Loop paused after {iter} iteration(s): {reason}. Inspect progress, then /loop <task> to restart."
+            ),
+        );
+        repl.state.loop_state = None;
+        persist_state(repl);
         return false;
     }
 
@@ -305,6 +327,7 @@ pub(crate) fn handle_ralph(repl: &mut Repl, args: &str) -> Result<()> {
         max_iterations: max_iter,
         iteration: 0,
         active: true,
+        guard: loop_guard::GuardCounters::default(),
     });
 
     repl.chat.add_message(ChatRole::System, format!(
@@ -393,8 +416,28 @@ pub(crate) fn check_ralph_iteration(repl: &mut Repl) -> bool {
          Summarize what was done and what remains.",
         keywords.join(", ")
     );
+    // P2.1/P2.2 — progress guards before re-queuing (same rationale as
+    // check_loop_iteration). Keyword completion above stays the primary
+    // stop signal; guards catch silent drift.
+    let had_tools = loop_guard::turn_had_tool_calls(&repl.chat);
+    loop_guard::advance(&mut rs.guard, had_tools);
+    if loop_guard::tripped(&rs.guard) {
+        let reason = loop_guard::pause_reason(&rs.guard);
+        let iter = rs.iteration;
+        repl.chat.add_message(
+            ChatRole::System,
+            format!(
+                "Ralph paused after {iter} iteration(s): {reason}. Inspect progress, then /ralph <task> to restart."
+            ),
+        );
+        repl.state.ralph_state = None;
+        persist_state(repl);
+        return false;
+    }
+
     // Queue next ralph iteration — see check_loop_iteration for rationale.
     repl.state.queued_messages.push(prompt);
+    persist_state(repl);
 
     true
 }
@@ -2367,6 +2410,7 @@ mod p20_recursion {
             max_iterations: 5,
             iteration: 1,
             active: true,
+            guard: Default::default(),
         });
         let continued = check_loop_iteration(&mut repl);
         assert!(continued);
@@ -2384,6 +2428,7 @@ mod p20_recursion {
             max_iterations: 2,
             iteration: 2,
             active: true,
+            guard: Default::default(),
         });
         let continued = check_loop_iteration(&mut repl);
         assert!(!continued);
@@ -2414,6 +2459,7 @@ mod p20_recursion {
             max_iterations: 4,
             iteration: 1,
             active: true,
+            guard: Default::default(),
         });
         let continued = check_ralph_iteration(&mut repl);
         assert!(continued);
@@ -2431,6 +2477,7 @@ mod p20_recursion {
             max_iterations: 5,
             iteration: 2,
             active: true,
+            guard: Default::default(),
         });
         repl.chat.add_message(
             ChatRole::Assistant,
@@ -2451,6 +2498,7 @@ DONE"
             max_iterations: 7,
             iteration: 3,
             active: true,
+            guard: Default::default(),
         };
         let back = LoopState::from_stored(ls.to_stored());
         assert_eq!(back.task, "ship it");
@@ -2467,6 +2515,7 @@ DONE"
             max_iterations: 5,
             iteration: 2,
             active: true,
+            guard: Default::default(),
         };
         let back = RalphState::from_stored(rs.to_stored());
         assert_eq!(back.completion_keywords, vec!["DONE", "FIXED"]);
@@ -2483,6 +2532,8 @@ DONE"
             max_iterations: 10,
             iteration: 9,
             active: false,
+            no_tool_turns: 0,
+            stall_strikes: 0,
         };
         let s = serde_json::to_string(&stored).unwrap();
         let sidecar: shannon_core::session_log::SessionSidecar =
@@ -2523,6 +2574,7 @@ DONE"
             max_iterations: 5,
             iteration: 0,
             active: true,
+            guard: Default::default(),
         });
         // "DONE" appears mid-message and again at the very last line;
         // previous behavior matched, new behavior only matches the last
@@ -2545,6 +2597,7 @@ DONE"
             max_iterations: 5,
             iteration: 0,
             active: true,
+            guard: Default::default(),
         });
         repl.chat.add_message(
             ChatRole::Assistant,

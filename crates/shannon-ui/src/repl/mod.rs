@@ -10,6 +10,7 @@ mod custom_commands;
 mod diagnostic_watcher;
 mod helpers;
 mod input;
+mod loop_guard;
 mod mcp_completion;
 pub(crate) mod preferences;
 mod query;

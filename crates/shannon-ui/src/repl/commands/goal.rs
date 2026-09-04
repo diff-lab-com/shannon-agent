@@ -807,6 +807,7 @@ mod handler_tests {
             max_iterations: 3,
             iteration: 0,
             active: true,
+            guard: Default::default(),
         });
 
         handle_goal(&mut repl, "my goal").unwrap();
