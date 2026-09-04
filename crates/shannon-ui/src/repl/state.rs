@@ -365,159 +365,6 @@ pub struct RalphState {
     pub guard: crate::repl::loop_guard::GuardCounters,
 }
 
-/// Lifecycle of a session goal (`/goal`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GoalStatus {
-    Active,
-    Paused,
-    Complete,
-}
-
-/// Session goal set via `/goal`: a persistent objective the agent keeps
-/// working toward across turns until a strict completion marker is met.
-///
-/// Auto-continuations count in [`GoalState::iterations`]; the loop pauses
-/// when `max_iterations` is reached (0 = unlimited).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct GoalState {
-    /// The user's objective / completion condition (verbatim user words)
-    pub objective: String,
-    pub status: GoalStatus,
-    /// Auto-continuations performed so far
-    pub iterations: usize,
-    /// Continuation cap; 0 = unlimited. Default [`GOAL_DEFAULT_MAX_ITERATIONS`].
-    pub max_iterations: usize,
-    /// P2.1/P2.2 — active guard rails for progress detection.
-    /// `consecutive_no_tool_turns` counts turns that produced zero tool
-    /// calls since the last user input (anti-spin). `stall_strikes` is the
-    /// shared budget for both deterministic anti-spin and model-reported
-    /// `Progress: none` (stall strikes).
-    pub consecutive_no_tool_turns: usize,
-    pub stall_strikes: usize,
-    /// P2.3 — budget cap (USD). `None` = no budget cap; only billing-alert
-    /// notifications fire at the global `monthly_budget` threshold. This
-    /// defaults to None to avoid implicit termination (design R4: only
-    /// explicit `--budget` should terminate the goal).
-    pub max_budget_usd: Option<f64>,
-    /// P2.3 — billing total (USD) captured when the goal was set/resumed.
-    /// Turn facts feed `current_total - cost_baseline_usd` into the budget
-    /// verdict, so the cap measures spend attributable to this goal rather
-    /// than the whole billing period. In-memory only: a resumed goal gets a
-    /// fresh baseline, so its cap applies to post-resume spend.
-    pub cost_baseline_usd: f64,
-    /// Consecutive turns reporting the SAME blocker (Codex's 3-turn audit:
-    /// the goal pauses only after the same blocking condition persists 3
-    /// goal turns). Reset by any non-blocked turn, /goal resume, or set.
-    pub blocked_streak: usize,
-    /// Normalized reason of the last blocked claim (for streak comparison).
-    pub last_block_reason: Option<String>,
-    /// Fired check-ins for the current paused stretch (max 3, Claude-Code
-    /// style). Persisted so a restart cannot reset the cap.
-    pub checkins: usize,
-    /// When the next blocked check-in should fire (in-memory; a restart
-    /// deliberately does not re-arm check-ins).
-    pub next_check_in_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-/// Default cap on `stall_strikes` before the goal pauses (Magentic-One +
-/// auto_test::no_progress_strikes both use 3 as the default).
-pub const GOAL_DEFAULT_MAX_STALL_STRIKES: usize = 3;
-
-/// Default continuation cap — **unlimited** (0).
-///
-/// R15 (revisiting R13): the active guard rails landed in Phase 2 are the
-/// real stop signals — strict completion contract (goal_update tool /
-/// GOAL_COMPLETE marker), anti-spin (2 consecutive no-tool turns),
-/// stall strikes (3), GOAL_BLOCKED pause, and the optional `--budget` cap.
-/// A total-turn cap is a blunt unit mismatch (a turn is neither a unit of
-/// progress nor of cost) and defaults to off, matching Claude Code and
-/// Codex, which ship no turn cap at all. `--max N` re-introduces an
-/// explicit fallback cap when the user wants one; hitting it pauses the
-/// goal (recoverable via `/goal resume`).
-pub const GOAL_DEFAULT_MAX_ITERATIONS: usize = 0;
-
-impl GoalState {
-    pub fn new(objective: impl Into<String>) -> Self {
-        Self {
-            objective: objective.into(),
-            status: GoalStatus::Active,
-            iterations: 0,
-            max_iterations: GOAL_DEFAULT_MAX_ITERATIONS,
-            consecutive_no_tool_turns: 0,
-            stall_strikes: 0,
-            max_budget_usd: None,
-            cost_baseline_usd: 0.0,
-            blocked_streak: 0,
-            last_block_reason: None,
-            checkins: 0,
-            next_check_in_at: None,
-        }
-    }
-
-    /// Engine injection mapping: Active and Paused goals are injected
-    /// (paused with marker output suppressed); completed goals are not
-    /// injected at all.
-    pub fn to_spec(&self) -> Option<shannon_core::query_engine::GoalSpec> {
-        match self.status {
-            GoalStatus::Complete => None,
-            GoalStatus::Active => Some(shannon_core::query_engine::GoalSpec {
-                objective: self.objective.clone(),
-                paused: false,
-            }),
-            GoalStatus::Paused => Some(shannon_core::query_engine::GoalSpec {
-                objective: self.objective.clone(),
-                paused: true,
-            }),
-        }
-    }
-
-    pub fn to_stored(&self) -> shannon_core::session_log::StoredGoal {
-        shannon_core::session_log::StoredGoal {
-            objective: self.objective.clone(),
-            status: match self.status {
-                GoalStatus::Active => "active",
-                GoalStatus::Paused => "paused",
-                GoalStatus::Complete => "complete",
-            }
-            .to_string(),
-            iterations: self.iterations,
-            max_iterations: self.max_iterations,
-            checkins: self.checkins,
-        }
-    }
-
-    /// Restore from persisted sidecar data. Unknown status strings degrade
-    /// to Paused — the safe state that keeps the objective visible without
-    /// auto-continuing.
-    pub fn from_stored(stored: shannon_core::session_log::StoredGoal) -> Self {
-        let status = match stored.status.as_str() {
-            "active" => GoalStatus::Active,
-            "complete" => GoalStatus::Complete,
-            _ => GoalStatus::Paused,
-        };
-        Self {
-            objective: stored.objective,
-            status,
-            iterations: stored.iterations,
-            max_iterations: stored.max_iterations,
-            // Progress counters and budget cap are not persisted: resuming a
-            // long-running goal starts with a fresh budget (otherwise
-            // pre-/post-resume counts double-count and the user can never
-            // escape the loop). Budget cap must be re-set by the user via
-            // `/goal <obj> --budget $5`.
-            consecutive_no_tool_turns: 0,
-            stall_strikes: 0,
-            max_budget_usd: None,
-            cost_baseline_usd: 0.0,
-            blocked_streak: 0,
-            last_block_reason: None,
-            checkins: stored.checkins,
-            next_check_in_at: None,
-        }
-    }
-}
-
 impl LoopState {
     pub fn to_stored(&self) -> shannon_core::session_log::StoredLoop {
         shannon_core::session_log::StoredLoop {
@@ -569,6 +416,7 @@ impl RalphState {
         }
     }
 }
+
 
 /// Persisted UI state saved across sessions for restore.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -990,6 +838,13 @@ mod tests {
         assert!(s.search_query.is_empty());
     }
 }
+
+// The goal state machine moved to `shannon_core::goal` (P2.5/#4) so
+// server/desktop clients can drive it; re-exported here to keep the
+// established `crate::repl::state::*` paths working.
+pub use shannon_core::goal::{
+    GoalState, GoalStatus, GOAL_DEFAULT_MAX_ITERATIONS, GOAL_DEFAULT_MAX_STALL_STRIKES,
+};
 
 /// Shared, live handle to the session goal (P2.5 wiring).
 ///
