@@ -312,8 +312,13 @@ vi.mock('@/lib/tauri-api', () => ({
   getMemoryStats: vi.fn().mockResolvedValue({
     total: 0, by_category: {}, by_project: {}, most_recent_at: null,
   }),
-  markTriageRead: vi.fn().mockResolvedValue(undefined),
-  archiveTriageItem: vi.fn().mockResolvedValue(undefined),
+  // P0-3 inbox — defaults so components consuming useInboxStats (e.g. the
+  // sidebar badge) render sanely without per-test mocking.
+  listInboxItems: vi.fn().mockResolvedValue([]),
+  updateInboxItemStatus: vi.fn().mockResolvedValue(undefined),
+  getInboxStats: vi.fn().mockResolvedValue({ pending: 0, today: 0 }),
+  rerunInboxItem: vi.fn().mockResolvedValue('run-1'),
+  continueInboxItemSession: vi.fn().mockResolvedValue('sess-1'),
   transcribeAudio: vi.fn().mockResolvedValue({ text: 'mock transcript' }),
   // P2-5e — local voice (whisper-rs). Default: returns the same
   // mock transcript as the cloud path so existing tests don't

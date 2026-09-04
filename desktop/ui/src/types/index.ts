@@ -804,6 +804,43 @@ export interface TriageStats {
   by_kind: Record<string, number>
 }
 
+// --- Inbox (P0-3 SQLite inbox; serde contract is camelCase) ---
+
+/// Where an inbox item came from. `routine`/`scheduled_task` are produced by
+/// scheduled-task runs (and are the only rerunnable sources); `goal` and
+/// `trigger` come from goal events / the external trigger endpoint.
+export type InboxSource = 'routine' | 'scheduled_task' | 'goal' | 'trigger'
+
+/// Lifecycle status of an inbox item (`pending` → `read` → `archived`).
+export type InboxItemStatus = 'pending' | 'read' | 'archived'
+
+/// A single inbox row as returned by `list_inbox_items`.
+export interface InboxItem {
+  id: number
+  source: InboxSource
+  sourceId: string | null
+  sessionId: string | null
+  title: string
+  summary: string
+  error: string | null
+  status: InboxItemStatus
+  createdAtMs: number
+  updatedAtMs: number
+}
+
+/// Optional filters for `list_inbox_items`. All fields optional.
+export interface InboxListFilter {
+  status?: InboxItemStatus
+  source?: InboxSource
+  limit?: number
+}
+
+/// Badge counts from `get_inbox_stats`.
+export interface InboxStats {
+  pending: number
+  today: number
+}
+
 /// Lightweight execution record for the history list.
 export interface TaskExecution {
   run_id: string
@@ -917,6 +954,7 @@ export const EVENT_NAMES = {
   BACKGROUND_TASKS_UPDATED: 'background-tasks-updated',
   AGENT_MESSAGES_UPDATED: 'agent-messages-updated',
   TRIAGE_UPDATED: 'triage-updated',
+  INBOX_UPDATED: 'inbox-updated',
 } as const
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]

@@ -49,6 +49,10 @@ import type {
   TriageItem,
   TriageFilter,
   TriageStats,
+  InboxItem,
+  InboxListFilter,
+  InboxItemStatus,
+  InboxStats,
   TaskExecution,
   TaskExecutionDetail,
   TriggeredRoutineDto,
@@ -1246,6 +1250,32 @@ export async function archiveTriageItem(id: string): Promise<boolean> {
 
 export async function getTriageStats(): Promise<TriageStats> {
   return invoke('get_triage_stats')
+}
+
+// Inbox (P0-3 SQLite inbox)
+
+export async function listInboxItems(filter?: InboxListFilter): Promise<InboxItem[]> {
+  return invoke('list_inbox_items', {
+    status: filter?.status ?? null,
+    source: filter?.source ?? null,
+    limit: filter?.limit ?? null,
+  })
+}
+
+export async function updateInboxItemStatus(id: number, status: InboxItemStatus): Promise<void> {
+  return invoke('update_inbox_item_status', { id, status })
+}
+
+export async function getInboxStats(): Promise<InboxStats> {
+  return invoke('get_inbox_stats')
+}
+
+export async function rerunInboxItem(id: number): Promise<string> {
+  return invoke('rerun_inbox_item', { id })
+}
+
+export async function continueInboxItemSession(id: number): Promise<string> {
+  return invoke('continue_inbox_item_session', { id })
 }
 
 // History
