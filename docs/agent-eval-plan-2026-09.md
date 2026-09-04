@@ -3,7 +3,7 @@
 - 日期：2026-09-05
 - 分支：`feat/agent-eval-bench`（基于 dev @ 7b8f6fb8，worktree `shannon-eval`）
 - 默认被测模型：**glm-5.3-flash @ zhipu-coding-plan**（与 v1 冻结基线同 anchor）
-- 状态：**待审核**（审核通过前不执行 P0 之后的任何真实跑分）
+- 状态：**已批准**（2026-09-05 评审通过，D1-D4 决策结论见 §六；P3 开工前另需通过 backlog 评审闸）
 
 ---
 
@@ -18,7 +18,7 @@
 | **T1 必跑** | SWE-bench Verified（repo 已 pin 50 题） | 真实 repo 修 bug，官方 docker 判分 | ✅ predictions.jsonl 与 agent 解耦 | ~$0.1-0.7/题（Flash 价位更低） | 最成熟的外部 held-out 探针，工程生态最全 |
 | **T1 必跑** | Terminal-Bench（repo 已 pin 9 题；官方 2.x 全量 89 题） | 容器内真实终端任务，task-native `run-tests.sh` 判分 | ✅ | $0.1-2/题 | 与 shannon 形态完全一致；GLM 官方有参照分 |
 | **T1 必跑** | 内部 L1 套件（20 题）+ regression 池（10 题） | 自有任务 TOML，eval_runner 判分 | ✅ | 极低 | 回归护栏（**不得用于调 prompt**，held-out 规则） |
-| T2 选跑 | Terminal-Bench 2.x 全量（harbor） | 同上，89 题 | ✅ | $10-50 | 可与 GLM-5.3-Flash 官方 TB2.1=69.2 直接对标 |
+| **T1 已批准追加** | Terminal-Bench 2.x 全量（harbor） | 同上，89 题 | ✅ | $10-50 | 与 GLM-5.3-Flash 官方 TB2.1=69.2 同版本直接对标（P1d，目标 `terminal-bench@2.1`） |
 | T2 选跑 | Aider Polyglot | 225 题编辑精确性，无 Docker | ✅ | $5-15 | 最便宜的编辑能力冒烟 |
 | T2 选跑 | SWE-bench-Live / DeepSWE v1.1 | 抗污染 repo 基准 | ✅ | 同 SWE50 | Verified 的"真实信号"续作 |
 | T2 选跑 | τ²-bench / GAIA val 子集 | 通用 agent / 工具多轮 | ✅ | 中 | 非 coding 维度补充 |
@@ -53,8 +53,8 @@ GLM 侧参照系（官方公开口径，z.ai blog 2026-08-14）：
 ## 二、总体思路
 
 ```
-P0 准备 → P1 glm 外部基线（SWE50+TB9+regression, n=3）
-        → P2 失败分析（跨模型消融 + 归因三分法）→ backlog
+P0 准备 → P1 glm 外部基线（SWE50 + TB9 + regression，n=3；P1d TB 2.x 全量 89 题 via harbor，n=1）
+        → P2 失败分析（跨模型消融 + 归因三分法）→ backlog（先审再做，D4）
         → P3 实施改进（证据驱动，逐项验证）
         → P4 复测结题（失败题复放 + 无回归护栏）
 ```
@@ -75,6 +75,7 @@ P0 准备 → P1 glm 外部基线（SWE50+TB9+regression, n=3）
 | 轮次 | SWE50/TB9 n=3 串行；regression n=3 | 引用最低门槛 |
 | 预算硬闸 | `run-batch.sh --budget-tokens`（值见 §五） | 退出码 3=预算停，可原位续跑 |
 | 二进制 | 复用主 checkout 已构建 `--bin`，worktree 不重编译 | 仓库既定 bypass 约定 |
+| harbor 运行（P1d 专用） | `terminal-bench@2.1`，n=1；adapter 内固定 `--max-turns` / 超时 / `--output-format json-stream` | 与 GLM 官方 TB2.1=69.2 参照同版本（2.1 修复了 2.0 的 28 道缺陷题）；`@2.1` 不可得时降级 `@2.0` 并在报告显著标注 |
 | thinking/effort | GLM-5.3 系列 thinking 默认开启且 effort 默认 max——固定默认档位并记录进 anchor | effort 档位是成本最大变量 |
 
 ## 四、实施阶段
@@ -87,14 +88,24 @@ P0 准备 → P1 glm 外部基线（SWE50+TB9+regression, n=3）
 
 **验收**：wrapper smoke 通过；TB 1 题真实 verdict.json 产生。
 
-### P1 glm-5.3-flash 外部基线（2-4 天）
+### P1 glm-5.3-flash 外部基线（3-5 天，含 P1d）
 | 顺序 | 套件 | 规模 | 目的 |
 |---|---|---|---|
 | 1a | regression 池 × n=3 | 10 题×3 | 当前 HEAD 回归状态；回答 reg_01 是否已被 LoopGuard 修复 |
 | 1b | SWE-bench Verified 50-pin × n=3 | 50×3 | glm 外部主榜；与 minimax batch11 33/50 直接对照 |
 | 1c | TB 9-pin × n=3 | 9×3 | 首个可引用 TB 分数 |
+| 1d | TB 2.x 全量（harbor，`@2.1`） | 89×n=1 | 与 GLM 官方 TB2.1=69.2 同版本精确对标（含 adapter 开发） |
 
-产物：`~/.shannon/eval/v2-glm-*/` 三份 aggregate（stable/flaky 分桶 + pass-rate 区间）+ **跨模型对照表**（glm vs minimax-m3 逐题 resolved 矩阵）。
+产物：`~/.shannon/eval/v2-glm-*/` 三份 aggregate（stable/flaky 分桶 + pass-rate 区间）+ **跨模型对照表**（glm vs minimax-m3 逐题 resolved 矩阵）+ P1d harbor 对标报告。
+
+#### P1d Terminal-Bench 2.x 全量（harbor harness，89 题 × n=1）
+
+1. **adapter 开发**（约 1 天）：按 harbor 自定义 agent adapter 规范实现 `shannon-adapter`——在任务容器内收到指令后调用 `shannon -p <instruction> --output-format json-stream --max-turns <N>`；需解决：shannon 二进制进容器（bind-mount 或镜像注入）、容器内 GLM API 出网、env 注入（`SHANNON_API_KEY` / `SHANNON_PROVIDER` / `SHANNON_MODEL`，沿用 wrapper-glm 的 key 注入规则）。
+2. **安装与数据集**：`pip install harbor`；`harbor datasets` 拉取 `terminal-bench@2.1`（不可得则 `@2.0`，报告显著标注版本差异）。
+3. **试跑闸门**：先 2-3 题端到端（含 task-native 判分）通过，才放全量。
+4. **全量 89 题 × n=1**：输出 resolved rate + cost + tokens；与 GLM 官方 TB2.1=69.2（Claude Code harness）对标，差额记为 scaffolding tax 估计。
+
+产物：harbor job 结果目录 + `docs/` 下 TB2.x 对标报告。**n=3 不在本期预算内**（已批准 envelope 为 $10-50 / +1 天的单轮口径），如需加轮次另行审批。
 
 ### P2 失败分析与归因（1-2 天）
 方法：
@@ -105,9 +116,10 @@ P0 准备 → P1 glm 外部基线（SWE50+TB9+regression, n=3）
    - b) 模型能力（glm-5.3-flash 本身）
    - c) 任务/判分 artifact（corpus 漂移、镜像、超时）
 
-产物：`docs/eval-findings-2026-09-glm.md` + 改进 backlog（P0/P1/P2，每项含证据→假设→修复方案→验证方式）。
+产物：`docs/eval-findings-2026-09-glm.md` + 改进 backlog（P0/P1/P2，每项含证据→假设→修复方案→验证方式）。**backlog 提交用户评审（D4 闸），通过前不进入 P3。**
 
 ### P3 实施改进（1-2 周，规模以 backlog 为准）
+- **评审闸（D4）**：backlog 经用户评审通过后才开工；评审意见直接修订 backlog 条目。
 - 只实施 P2 有证据支撑的改进项；走正常 TDD 开发流。
 - 每项验证 = **失败题复放转绿** + regression 池无回归。
 - 禁止用 L1 20 题调 prompt（held-out 规则）。
@@ -127,6 +139,7 @@ P0 准备 → P1 glm 外部基线（SWE50+TB9+regression, n=3）
 | P1a regression n=3 | 30M | 参照 batch-1 |
 | P1b SWE50 n=3 | 250M | 3×(59M+开销) |
 | P1c TB9 n=3 | 15M | 9 题×3 |
+| P1d TB2.x 全量 n=1 | 120M | 对应已批准 $10-50 envelope；n=3 需另行审批 |
 | P3 复放 | 按题计 | 单题 ≤ SWE50 单题均值 2 倍 |
 
 | 风险 | 对策 |
@@ -134,15 +147,19 @@ P0 准备 → P1 glm 外部基线（SWE50+TB9+regression, n=3）
 | coding-plan 限流（batch-6 前科：76% 拒绝） | 30s pacing + run-batch 429 自愈 + 必要时降并发/暂停续跑 |
 | 模型 id 陷阱（batch-5 RCA：错误 id → 48%→4%） | wrapper 硬编码 `glm-5.3-flash`，smoke 验证后才放量 |
 | TB corpus 漂移 | P0-3 专项修复 + pin_validation 必须确认后才进 P1c |
+| harbor adapter 容器化（二进制注入 / 容器出网 / env） | P1d 试跑 2-3 题先行，端到端通过才放全量；失败则回退 bind-mount 注入方案 |
+| TB2.x 版本口径（官方参照为 @2.1） | 数据集版本写入报告 anchor；`@2.1` 不可得时降级 `@2.0` 并显著标注，不与 69.2 直接相减 |
 | 改进引入回归 | 每项改动跑 regression 池 + 失败题复放；引用只认 stable 分桶 |
 | 订阅额度不足 | 预算闸提前硬停；决策点 D1 可切换按量端点（换 anchor） |
 
-## 六、决策点（请审核拍板）
+## 六、评审结论（2026-09-05，已批准）
 
-- **D1 端点**：`zhipu-coding-plan`（推荐：与 v1 基线/regression batch-1 同 anchor，历史数据可比；缺点订阅限流+成本列为参考价） vs 按量 `open.bigmodel.cn/api/paas/v4`（成本精确、限流宽，但 anchor 变更需冻结新基线）。
-- **D2 范围**：默认三件套 = regression n=3 + SWE50 n=3 + TB9 n=3。是否追加 **Terminal-Bench 2.x 全量 89 题（harbor harness，需写 shannon adapter，+$10-50 / 约 1 天）**？追加可与 GLM 官方 69.2 精确对标，不追加则 TB9 为小样本参照。
-- **D3 预算**：§五的 token 预算闸数值是否认可（尤其 SWE50 n=3 = 250M）。
-- **D4 授权方式**：P2 产出 backlog 后**先审再做**（推荐） vs 授权直接实施 P0 级改进项。
+| 决策点 | 结论 |
+|---|---|
+| **D1 端点** | **zhipu-coding-plan**（与 v1 基线 / regression batch-1 同 anchor，历史数据可比） |
+| **D2 范围** | **批准追加 Terminal-Bench 2.x 全量 89 题**：harbor harness + shannon adapter，+1 天 / $10-50，列入 P1d |
+| **D3 预算** | **认可 SWE50 n=3 = 250M tokens 预算闸**；其余阶段闸值按 §五 执行 |
+| **D4 授权** | **P2 backlog 产出后先审再做**：P3 开工前，backlog 必须提交用户评审通过 |
 
 ---
 
