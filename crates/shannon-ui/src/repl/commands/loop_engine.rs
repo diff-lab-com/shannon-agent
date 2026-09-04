@@ -236,8 +236,12 @@ pub(crate) fn handle_ralph(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Parse flags
-    let mut max_iter: usize = 10;
+    // P2.6 — default iteration cap raised from 10 → 25. Matches goal's
+    // GOAL_DEFAULT_MAX_ITERATIONS: with anti-spin + stall strikes (P2.1/P2.2)
+    // as active guards, the loop has real progress signals so the total cap
+    // can be a less-restrictive fallback. Old default of 10 was both too
+    // tight for legitimate long iterations and too loose for drift.
+    let mut max_iter: usize = 25;
     let mut keywords: Vec<String> = vec![
         "DONE".into(),
         "FIXED".into(),
@@ -326,23 +330,33 @@ pub(crate) fn check_ralph_iteration(repl: &mut Repl) -> bool {
     };
     rs.iteration += 1;
 
-    // Get last assistant message to check for completion keywords
+    // Get last assistant message to check for completion keywords.
+    // P2.6 — restrict the keyword search to the **final** non-empty line so
+    // that mentions in code blocks / earlier prose ("I will be DONE after
+    // the test") no longer prematurely end the loop. Substring-on-whole-
+    // message was the original ralph heuristic; this keeps an OR compat
+    // path for users on the keyword contract while eliminating the
+    // substring-in-body false-positive that made ralph unreliable.
     let last_msg = repl.chat.last_message().map(|m| m.content.to_uppercase());
+    let last_line = last_msg
+        .as_deref()
+        .and_then(|m| m.lines().rev().find(|l| !l.trim().is_empty()));
     let keywords = rs.completion_keywords.clone();
 
-    if let Some(ref msg) = last_msg {
-        let found = keywords.iter().any(|kw| msg.contains(&kw.to_uppercase()));
+    if let Some(line) = last_line {
+        let found = keywords.iter().any(|kw| line.contains(&kw.to_uppercase()));
         if found {
             let iter = rs.iteration;
             let matched_kw = keywords
                 .iter()
-                .find(|kw| msg.contains(&kw.to_uppercase()))
+                .find(|kw| line.contains(&kw.to_uppercase()))
                 .unwrap_or(&keywords[0]);
             repl.chat.add_message(
                 ChatRole::System,
                 format!("Ralph complete: detected \"{matched_kw}\" after {iter} iteration(s)."),
             );
             repl.state.ralph_state = None;
+            persist_state(repl);
             return false;
         }
     }
@@ -2465,5 +2479,62 @@ DONE"
         // merge path: a None caller row + an inactive disk row → inactive dropped
         let merged = sidecar.loop_state.filter(|l| l.active);
         assert!(merged.is_none(), "inactive stored loop must be dropped");
+    }
+
+    #[test]
+    fn ralph_default_max_iterations_relaxed_to_25() {
+        // P2.6 — the default cap went from 10 → 25 now that P2.1/P2.2's
+        // progress guards (anti-spin, stall strikes) are in place. This
+        // test pins the new default so accidental regressions are caught.
+        let mut repl = active_repl();
+        handle_ralph(&mut repl, "ship it").unwrap();
+        let rs = repl.state.ralph_state.as_ref().expect("ralph state");
+        assert_eq!(rs.max_iterations, 25, "default cap must be 25");
+    }
+
+    #[test]
+    fn ralph_keyword_only_matches_final_line() {
+        // P2.6 — substring-in-body no longer triggers. The keyword must
+        // be the final non-empty line of the assistant reply.
+        let _home = HomeGuard::new();
+        let mut repl = active_repl();
+        repl.state.ralph_state = Some(RalphState {
+            task: "x".into(),
+            completion_keywords: vec!["DONE".into()],
+            max_iterations: 5,
+            iteration: 0,
+            active: true,
+        });
+        // "DONE" appears mid-message and again at the very last line;
+        // previous behavior matched, new behavior only matches the last
+        // line — still passes, demonstrating the migration is transparent.
+        repl.chat.add_message(
+            ChatRole::Assistant,
+            "I will be DONE after the next test runs.\n\nDONE".to_string(),
+        );
+        let _continued = check_ralph_iteration(&mut repl);
+        assert!(
+            repl.state.ralph_state.is_none(),
+            "keyword on final line must still complete the loop"
+        );
+
+        // Negative case: keyword only in body, NOT on the final line.
+        let mut repl = active_repl();
+        repl.state.ralph_state = Some(RalphState {
+            task: "x".into(),
+            completion_keywords: vec!["DONE".into()],
+            max_iterations: 5,
+            iteration: 0,
+            active: true,
+        });
+        repl.chat.add_message(
+            ChatRole::Assistant,
+            "I'll be DONE soon.\nStill working on it.".to_string(),
+        );
+        let _continued = check_ralph_iteration(&mut repl);
+        assert!(
+            repl.state.ralph_state.is_some(),
+            "keyword only in body must NOT end the loop (P2.6 OR-compat fix)"
+        );
     }
 }

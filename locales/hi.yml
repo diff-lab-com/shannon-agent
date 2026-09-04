@@ -49,6 +49,7 @@ commands:
     cleared: "✓ लक्ष्य हटा दिया गया।"
     paused_no_progress: "⏸ लक्ष्य रुका — कोई प्रगति नहीं: %{reason}\nस्ट्राइक: %{strikes}/%{max_strikes}. जाँचें, फिर /goal resume या /goal clear।"
     paused_blocked: "⏸ लक्ष्य रुक गया — एजेंट अवरोध बताता है: %{reason}\nहल करने के बाद /goal resume चलाएँ, या /goal clear से हटाएँ।"
+    paused_budget: "⏸ लक्ष्य रुका — बजट सीमा पूरी: %{reason}\nसीमा बढ़ाएँ: /goal <obj> --budget $N, या /goal clear।"
     paused_max: "⏸ %{max} राउंड बिना पूर्णता के पूरे होने के बाद लक्ष्य रुक गया। प्रगति आँकें, फिर /goal resume या /goal clear।"
     resumed: "▶ लक्ष्य फिर से शुरू (राउंड काउंट रीसेट)।"
     complete: "✓ लक्ष्य %{iterations} राउंड में पूरा: %{objective}"

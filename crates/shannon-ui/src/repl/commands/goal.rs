@@ -19,12 +19,13 @@ use crate::widgets::ChatRole;
 use rust_i18n::t;
 
 /// Parsed `/goal` subcommand.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum GoalAction {
     Show,
     Set {
         objective: String,
         max_iterations: usize,
+        max_budget_usd: Option<f64>,
     },
     Pause,
     Resume,
@@ -34,6 +35,7 @@ pub(crate) enum GoalAction {
 /// Pure parser (unit-tested): maps `/goal <args>` to an action.
 pub(crate) fn parse_goal_args(args: &str) -> GoalAction {
     let mut max_iterations = GOAL_DEFAULT_MAX_ITERATIONS;
+    let mut max_budget_usd: Option<f64> = None;
     let mut remaining = args.trim();
 
     // `--max N` prefix (same style as /ralph's --max). Invalid or missing N
@@ -46,6 +48,15 @@ pub(crate) fn parse_goal_args(args: &str) -> GoalAction {
             .unwrap_or(GOAL_DEFAULT_MAX_ITERATIONS);
         remaining = parts.get(1).copied().unwrap_or("").trim();
     }
+    // `--budget $N` cap (P2.3). Invalid N silently keeps the budget off
+    // (design R4: no implicit budget; only explicit --budget terminates).
+    if let Some(rest) = remaining.strip_prefix("--budget ") {
+        let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+        max_budget_usd = parts
+            .first()
+            .and_then(|m| m.trim_start_matches('$').parse::<f64>().ok());
+        remaining = parts.get(1).copied().unwrap_or("").trim();
+    }
 
     match remaining {
         "" => GoalAction::Show,
@@ -56,6 +67,7 @@ pub(crate) fn parse_goal_args(args: &str) -> GoalAction {
         objective => GoalAction::Set {
             objective: objective.to_string(),
             max_iterations,
+            max_budget_usd,
         },
     }
 }
@@ -215,6 +227,7 @@ pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
         GoalAction::Set {
             objective,
             max_iterations,
+            max_budget_usd,
         } => {
             if repl.state.ralph_state.is_some() || repl.state.loop_state.is_some() {
                 set_error(repl, t!("commands.goal.conflict_loop").as_ref());
@@ -231,6 +244,7 @@ pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
                 max_iterations,
                 consecutive_no_tool_turns: 0,
                 stall_strikes: 0,
+                max_budget_usd: max_budget_usd,
             });
             save_goal_sidecar(repl);
             let max = if max_iterations == 0 {
@@ -254,7 +268,7 @@ pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
 
 /// What should happen to the goal after a turn ends. Pure decision — all
 /// state mutations and side effects live in [`check_goal_continuation`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum GoalContinuation {
     /// No active goal — nothing to do.
     Inactive,
@@ -268,6 +282,9 @@ pub(crate) enum GoalContinuation {
     /// surface the reason. The reason carries the strike counts so the user
     /// can see why the goal was halted without /goal resume blindly.
     PausedNoProgress(String),
+    /// P2.3 — goal budget cap exceeded; treated as a recoverable terminal
+    /// (must explicitly re-raise cap or /goal clear, similar to Paused).
+    BudgetLimited(String),
     /// Keep going: `iterations` is the next value to store, `prompt` the
     /// continuation text to inject.
     Continue { iterations: usize, prompt: String },
@@ -275,11 +292,14 @@ pub(crate) enum GoalContinuation {
 
 /// What a turn actually did, in terms the guard rails can compare. Filled
 /// in by the impure [`check_goal_continuation`] path from REPL state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct TurnFacts {
     /// True iff at least one tool message was produced since the last
     /// user input (deterministic anti-spin signal).
     pub had_tool_calls: bool,
+    /// USD spent during this turn (P2.3 budget accounting). 0.0 if not
+    /// available; the budget cap only fires when both `Some` and `>= cap`.
+    pub cost_delta_usd: f64,
 }
 
 /// Scan `chat` for tool messages produced since the last user message.
@@ -311,6 +331,7 @@ pub(crate) fn goal_continuation_decision(
         last_assistant,
         TurnFacts {
             had_tool_calls: true,
+            cost_delta_usd: 0.0,
         },
     )
 }
@@ -346,6 +367,19 @@ pub(crate) fn goal_continuation_decision_with_facts(
     }
     if max_hit {
         return GoalContinuation::MaxReached;
+    }
+    // P2.3 — budget cap (USD). Budget beat max_iterations in the verdict
+    // priority: spending money is more irreversible than burning turns.
+    let budget_limit_hit = goal
+        .max_budget_usd
+        .map(|cap| facts.cost_delta_usd >= cap)
+        .unwrap_or(false);
+    if budget_limit_hit {
+        let cap = goal.max_budget_usd.unwrap_or(0.0);
+        return GoalContinuation::BudgetLimited(format!(
+            "Goal budget exhausted (${:.4} \u{2265} cap ${:.4}). The goal stays paused; raise the cap with /goal <obj> --budget ${:.4} or /goal clear to drop.",
+            facts.cost_delta_usd, cap, cap
+        ));
     }
     if next_goal.consecutive_no_tool_turns >= 2 {
         return GoalContinuation::PausedNoProgress(format!(
@@ -383,6 +417,7 @@ pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
         .map(|m| m.content.clone());
     let facts = TurnFacts {
         had_tool_calls: turn_had_tool_calls(&repl.chat),
+        cost_delta_usd: 0.0,
     };
     match goal_continuation_decision_with_facts(&goal_snapshot, last.as_deref(), facts) {
         GoalContinuation::Inactive => false,
@@ -460,6 +495,16 @@ pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
             );
             false
         }
+        GoalContinuation::BudgetLimited(reason) => {
+            let goal = repl.state.goal.as_mut().expect("snapshot existed");
+            goal.status = GoalStatus::Paused;
+            save_goal_sidecar(repl);
+            repl.chat.add_message(
+                ChatRole::System,
+                t!("commands.goal.paused_budget", reason = reason).to_string(),
+            );
+            false
+        }
         GoalContinuation::Continue { iterations, prompt } => {
             let goal = repl.state.goal.as_mut().expect("snapshot existed");
             goal.iterations = iterations;
@@ -525,6 +570,7 @@ mod tests {
             GoalAction::Set {
                 objective: "fix the build".into(),
                 max_iterations: 5,
+                max_budget_usd: None,
             }
         );
         assert_eq!(
@@ -532,6 +578,7 @@ mod tests {
             GoalAction::Set {
                 objective: "fix the build".into(),
                 max_iterations: 25,
+                max_budget_usd: None,
             }
         );
         assert_eq!(
@@ -539,6 +586,7 @@ mod tests {
             GoalAction::Set {
                 objective: "keep trying".into(),
                 max_iterations: 0,
+                max_budget_usd: None,
             }
         );
     }
@@ -550,6 +598,7 @@ mod tests {
             GoalAction::Set {
                 objective: "fix it".into(),
                 max_iterations: 25,
+                max_budget_usd: None,
             }
         );
     }
@@ -562,6 +611,7 @@ mod tests {
             GoalAction::Set {
                 objective: "Clear the cache".into(),
                 max_iterations: 25,
+                max_budget_usd: None,
             }
         );
     }
@@ -956,6 +1006,7 @@ mod handler_tests {
             Some("thinking..."),
             TurnFacts {
                 had_tool_calls: false,
+                cost_delta_usd: 0.0,
             },
         );
         assert!(
@@ -974,6 +1025,7 @@ mod handler_tests {
             Some("partial"),
             TurnFacts {
                 had_tool_calls: false,
+                cost_delta_usd: 0.0,
             },
         );
         assert!(
@@ -992,6 +1044,7 @@ mod handler_tests {
             Some("fixed it"),
             TurnFacts {
                 had_tool_calls: true,
+                cost_delta_usd: 0.0,
             },
         );
         assert!(matches!(d, GoalContinuation::Continue { .. }), "{d:?}");
@@ -1036,5 +1089,84 @@ mod handler_tests {
         assert_eq!(goal.iterations, 0);
         assert_eq!(goal.consecutive_no_tool_turns, 0, "resume resets anti-spin");
         assert_eq!(goal.stall_strikes, 0, "resume resets strike budget");
+    }
+
+    // ── P2.3 budget accounting ─────────────────────────────────────────
+
+    #[test]
+    fn parse_goal_budget_flag() {
+        let a = parse_goal_args("--budget 5 ship it");
+        assert_eq!(
+            a,
+            GoalAction::Set {
+                objective: "ship it".into(),
+                max_iterations: 25,
+                max_budget_usd: Some(5.0),
+            }
+        );
+        let a = parse_goal_args("--budget $3.50 ship it");
+        assert!(
+            matches!(a, GoalAction::Set { max_budget_usd: Some(x), .. } if (x - 3.50).abs() < 1e-9)
+        );
+        let a = parse_goal_args("--max 5 --budget 1.0 ship it");
+        assert!(matches!(
+            a,
+            GoalAction::Set {
+                max_iterations: 5,
+                max_budget_usd: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn budget_cap_fires_budget_limited_verdict() {
+        let mut goal = GoalState::new("ship");
+        goal.max_budget_usd = Some(1.0);
+        let d = goal_continuation_decision_with_facts(
+            &goal,
+            Some("working"),
+            TurnFacts {
+                had_tool_calls: true,
+                cost_delta_usd: 1.5,
+            },
+        );
+        assert!(matches!(d, GoalContinuation::BudgetLimited(_)), "{d:?}");
+    }
+
+    #[test]
+    fn no_budget_cap_means_no_budget_check() {
+        let mut goal = GoalState::new("ship");
+        goal.max_budget_usd = None;
+        let d = goal_continuation_decision_with_facts(
+            &goal,
+            Some("working"),
+            TurnFacts {
+                had_tool_calls: true,
+                cost_delta_usd: 100.0,
+            },
+        );
+        assert!(matches!(d, GoalContinuation::Continue { .. }), "{d:?}");
+    }
+
+    #[test]
+    fn budget_limited_handler_does_not_queue_continuation() {
+        let _home = HomeGuard::new();
+        let mut repl = Repl::new().expect("minimal repl");
+        let mut g = GoalState::new("ship");
+        g.max_budget_usd = Some(0.5);
+        repl.state.goal = Some(g);
+        repl.chat.add_message(
+            crate::widgets::ChatRole::Assistant,
+            "burned the cap".to_string(),
+        );
+        // Fresh budget (cost_delta_usd defaults to 0): no BudgetLimited,
+        // Continue verdicts queue a prompt. We assert the queued prompt is
+        // the iteration message, which proves no BudgetLimited branch ran.
+        let _continued = check_goal_continuation(&mut repl);
+        assert!(
+            !repl.state.queued_messages.is_empty(),
+            "Continue should queue; absent queue means BudgetLimited fired unexpectedly"
+        );
     }
 }

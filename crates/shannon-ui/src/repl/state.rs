@@ -362,7 +362,7 @@ pub struct RalphState {
 }
 
 /// Lifecycle of a session goal (`/goal`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GoalStatus {
     Active,
@@ -375,7 +375,7 @@ pub enum GoalStatus {
 ///
 /// Auto-continuations count in [`GoalState::iterations`]; the loop pauses
 /// when `max_iterations` is reached (0 = unlimited).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GoalState {
     /// The user's objective / completion condition (verbatim user words)
     pub objective: String,
@@ -391,6 +391,11 @@ pub struct GoalState {
     /// `Progress: none` (stall strikes).
     pub consecutive_no_tool_turns: usize,
     pub stall_strikes: usize,
+    /// P2.3 — budget cap (USD). `None` = no budget cap; only billing-alert
+    /// notifications fire at the global `monthly_budget` threshold. This
+    /// defaults to None to avoid implicit termination (design R4: only
+    /// explicit `--budget` should terminate the goal).
+    pub max_budget_usd: Option<f64>,
 }
 
 /// Default cap on `stall_strikes` before the goal pauses (Magentic-One +
@@ -418,6 +423,7 @@ impl GoalState {
             max_iterations: GOAL_DEFAULT_MAX_ITERATIONS,
             consecutive_no_tool_turns: 0,
             stall_strikes: 0,
+            max_budget_usd: None,
         }
     }
 
@@ -466,11 +472,14 @@ impl GoalState {
             status,
             iterations: stored.iterations,
             max_iterations: stored.max_iterations,
-            // Progress counters are not persisted: resuming a long-running
-            // goal starts with a fresh budget (otherwise pre-/post-resume
-            // counts double-count and the user can never escape the loop).
+            // Progress counters and budget cap are not persisted: resuming a
+            // long-running goal starts with a fresh budget (otherwise
+            // pre-/post-resume counts double-count and the user can never
+            // escape the loop). Budget cap must be re-set by the user via
+            // `/goal <obj> --budget $5`.
             consecutive_no_tool_turns: 0,
             stall_strikes: 0,
+            max_budget_usd: None,
         }
     }
 }
