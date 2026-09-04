@@ -577,7 +577,7 @@ mod tests {
             parse_goal_args("fix the build"),
             GoalAction::Set {
                 objective: "fix the build".into(),
-                max_iterations: 25,
+                max_iterations: 0,
                 max_budget_usd: None,
             }
         );
@@ -597,7 +597,7 @@ mod tests {
             parse_goal_args("--max abc fix it"),
             GoalAction::Set {
                 objective: "fix it".into(),
-                max_iterations: 25,
+                max_iterations: 0,
                 max_budget_usd: None,
             }
         );
@@ -610,7 +610,7 @@ mod tests {
             parse_goal_args("Clear the cache"),
             GoalAction::Set {
                 objective: "Clear the cache".into(),
-                max_iterations: 25,
+                max_iterations: 0,
                 max_budget_usd: None,
             }
         );
@@ -708,7 +708,7 @@ mod handler_tests {
         let goal = repl.state.goal.as_ref().expect("goal set");
         assert_eq!(goal.objective, "all tests passing");
         assert_eq!(goal.status, GoalStatus::Active);
-        assert_eq!(goal.max_iterations, 25);
+        assert_eq!(goal.max_iterations, 0, "R15: default is unlimited");
         assert!(last_message(&repl).contains("all tests passing"));
 
         // Show reports the active goal.
@@ -787,7 +787,7 @@ mod handler_tests {
         match d {
             GoalContinuation::Continue { iterations, prompt } => {
                 assert_eq!(iterations, 1);
-                assert!(prompt.contains("[Goal iteration 1/25]"));
+                assert!(prompt.contains("[Goal iteration 1/∞]"));
                 assert!(prompt.contains("fix lint"));
                 assert!(prompt.contains(GOAL_BLOCKED_MARKER));
                 assert!(prompt.contains(GOAL_COMPLETE_MARKER));
@@ -810,6 +810,9 @@ mod handler_tests {
     #[test]
     fn decision_max_reached_pauses() {
         let mut goal = GoalState::new("endless");
+        // With the R15 default (unlimited), an explicit --max is required
+        // for the fallback cap to exist at all.
+        goal.max_iterations = 10;
         goal.iterations = goal.max_iterations; // budget exhausted
         assert_eq!(
             goal_continuation_decision(&goal, Some("still working")),
@@ -896,7 +899,7 @@ mod handler_tests {
         let mut goal = GoalState::new("fix lint");
         goal.iterations = 1;
         let prompt = continuation_prompt(&goal);
-        assert!(prompt.contains("[Goal iteration 1/25]"));
+        assert!(prompt.contains("[Goal iteration 1/∞]"));
         assert!(prompt.contains("fix lint"));
         assert!(prompt.contains(GOAL_BLOCKED_MARKER));
         assert!(prompt.contains(GOAL_COMPLETE_MARKER));
@@ -934,7 +937,7 @@ mod handler_tests {
             .last()
             .cloned()
             .unwrap_or_default();
-        assert!(queued.contains("[Goal iteration 1/25]"));
+        assert!(queued.contains("[Goal iteration 1/∞]"));
         assert!(queued.contains("fix lint"));
     }
 
@@ -952,7 +955,7 @@ mod handler_tests {
         check_goal_continuation(&mut repl);
         // FIFO: the user's message goes before the goal continuation.
         assert_eq!(repl.state.queued_messages[0], "user typed this first");
-        assert!(repl.state.queued_messages[1].contains("[Goal iteration 1/25]"));
+        assert!(repl.state.queued_messages[1].contains("[Goal iteration 1/∞]"));
     }
 
     #[test]
@@ -960,6 +963,9 @@ mod handler_tests {
         let _home = HomeGuard::new();
         let mut repl = Repl::new().expect("minimal repl");
         let mut goal = GoalState::new("endless");
+        // Explicit --max: the R15 default is unlimited, so the fallback cap
+        // only exists when the user asks for one.
+        goal.max_iterations = 10;
         goal.iterations = goal.max_iterations; // budget exhausted
         repl.state.goal = Some(goal);
         repl.chat.add_message(
@@ -1100,7 +1106,7 @@ mod handler_tests {
             a,
             GoalAction::Set {
                 objective: "ship it".into(),
-                max_iterations: 25,
+                max_iterations: 0,
                 max_budget_usd: Some(5.0),
             }
         );
