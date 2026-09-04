@@ -457,6 +457,46 @@ impl GoalState {
     }
 }
 
+impl LoopState {
+    pub fn to_stored(&self) -> shannon_core::session_log::StoredLoop {
+        shannon_core::session_log::StoredLoop {
+            task: self.task.clone(),
+            max_iterations: self.max_iterations,
+            iteration: self.iteration,
+            active: self.active,
+        }
+    }
+    pub fn from_stored(stored: shannon_core::session_log::StoredLoop) -> Self {
+        Self {
+            task: stored.task,
+            max_iterations: stored.max_iterations,
+            iteration: stored.iteration,
+            active: stored.active,
+        }
+    }
+}
+
+impl RalphState {
+    pub fn to_stored(&self) -> shannon_core::session_log::StoredRalph {
+        shannon_core::session_log::StoredRalph {
+            task: self.task.clone(),
+            completion_keywords: self.completion_keywords.clone(),
+            max_iterations: self.max_iterations,
+            iteration: self.iteration,
+            active: self.active,
+        }
+    }
+    pub fn from_stored(stored: shannon_core::session_log::StoredRalph) -> Self {
+        Self {
+            task: stored.task,
+            completion_keywords: stored.completion_keywords,
+            max_iterations: stored.max_iterations,
+            iteration: stored.iteration,
+            active: stored.active,
+        }
+    }
+}
+
 /// Persisted UI state saved across sessions for restore.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersistedUiState {

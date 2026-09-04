@@ -68,6 +68,43 @@ pub struct SessionSidecar {
     /// Session goal (set via `/goal`), restored on resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<StoredGoal>,
+    /// Active `/loop` state at sidecar-save time, restored on resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_state: Option<StoredLoop>,
+    /// Active `/ralph` state at sidecar-save time, restored on resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ralph_state: Option<StoredRalph>,
+}
+
+/// Persistence DTO for an active `/loop`. The kind discriminates "task
+/// iteration loop" (`Loop`) vs. "completion-keyword loop" (`Ralph`) — both
+/// ride the same flat-drain-loop scheduler but have different continuation
+/// prompts. `active=false` rows are dropped on load to avoid stale
+/// restorations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoredLoop {
+    pub task: String,
+    pub max_iterations: usize,
+    pub iteration: usize,
+    #[serde(default = "default_true")]
+    pub active: bool,
+}
+
+/// Persistence DTO for an active `/ralph`. Same shape as `StoredLoop`
+/// plus the completion keywords used by the legacy keyword matcher (will
+/// be deprecated by the strict-marker contract in P2.6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoredRalph {
+    pub task: String,
+    pub completion_keywords: Vec<String>,
+    pub max_iterations: usize,
+    pub iteration: usize,
+    #[serde(default = "default_true")]
+    pub active: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Persistence DTO for a session goal. Kept dependency-free from the UI
@@ -123,7 +160,17 @@ impl SessionSidecar {
         self.branch_point_message_index = self
             .branch_point_message_index
             .or(existing.branch_point_message_index);
+        // Loop/goal/ralph all share the same contract: the writer always
+        // supplies a complete value (Some to upsert, None to clear). Filter
+        // the on-disk row by `active` so stopped loops do not get resurrected
+        // by a fresh session restore before the user can /loop again.
         self.goal = self.goal.or(existing.goal);
+        if self.loop_state.is_none() {
+            self.loop_state = existing.loop_state.filter(|l| l.active);
+        }
+        if self.ralph_state.is_none() {
+            self.ralph_state = existing.ralph_state.filter(|r| r.active);
+        }
         self
     }
 }
@@ -369,6 +416,21 @@ impl SessionStore {
         sidecar.clone().merge_from_disk(&path).store(&path)
     }
 
+    /// Persist a complete sidecar, replacing whatever is on disk. Unlike
+    /// [`SessionStore::save_sidecar`] this does not merge against the
+    /// existing on-disk values — the caller is treated as authoritative.
+    /// Used by writers that have already loaded the full sidecar (e.g.
+    /// `/goal clear`, `/loop stop`, `/ralph stop`) and want explicit `None`
+    /// to actually clear a row.
+    pub fn save_sidecar_replace(
+        &self,
+        session_id: &Uuid,
+        sidecar: &SessionSidecar,
+    ) -> Result<(), SessionStoreError> {
+        let path = self.meta_path(session_id);
+        sidecar.clone().store(&path)
+    }
+
     /// Read the sidecar as-is.
     pub fn sidecar(&self, session_id: &Uuid) -> SessionSidecar {
         SessionSidecar::load(&self.meta_path(session_id))
@@ -426,6 +488,8 @@ impl SessionStore {
                 parent_session_id: Some(*parent_id),
                 branch_point_message_index: Some(branch_point),
                 goal: None,
+                loop_state: None,
+                ralph_state: None,
             },
         )?;
 
@@ -862,6 +926,8 @@ mod tests {
                     parent_session_id: None,
                     branch_point_message_index: None,
                     goal: None,
+                    loop_state: None,
+                    ralph_state: None,
                 },
             )
             .unwrap();
@@ -935,6 +1001,77 @@ mod tests {
             r#"{"goal":{"objective":"x","status":"bogus","iterations":0,"max_iterations":25}}"#;
         let sidecar: SessionSidecar = serde_json::from_str(json).unwrap();
         assert_eq!(sidecar.goal.unwrap().status, "bogus");
+    }
+
+    #[test]
+    fn stored_loop_serde_roundtrip() {
+        let lp = StoredLoop {
+            task: "ship it".into(),
+            max_iterations: 5,
+            iteration: 3,
+            active: true,
+        };
+        let back: StoredLoop = serde_json::from_str(&serde_json::to_string(&lp).unwrap()).unwrap();
+        assert_eq!(back, lp);
+    }
+
+    #[test]
+    fn stored_ralph_serde_roundtrip() {
+        let rp = StoredRalph {
+            task: "make it green".into(),
+            completion_keywords: vec!["DONE".into(), "FIXED".into()],
+            max_iterations: 4,
+            iteration: 2,
+            active: true,
+        };
+        let back: StoredRalph = serde_json::from_str(&serde_json::to_string(&rp).unwrap()).unwrap();
+        assert_eq!(back, rp);
+    }
+
+    #[test]
+    fn sidecar_loop_state_roundtrip_through_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session(&store, &id);
+
+        store
+            .save_sidecar_replace(
+                &id,
+                &SessionSidecar {
+                    loop_state: Some(StoredLoop {
+                        task: "ship it".into(),
+                        max_iterations: 7,
+                        iteration: 3,
+                        active: true,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(store.sidecar(&id).loop_state.unwrap().task, "ship it",);
+        // Clearing the loop on a second save must remove the row entirely.
+        // save_sidecar (merge variant) would resurrect the old row from
+        // disk, so use save_sidecar_replace for the explicit-clear path.
+        store
+            .save_sidecar_replace(
+                &id,
+                &SessionSidecar {
+                    loop_state: None,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(store.sidecar(&id).loop_state.is_none());
+    }
+
+    #[test]
+    fn sidecar_without_loop_or_ralph_omits_fields() {
+        let sidecar = SessionSidecar::default();
+        let json = serde_json::to_string(&sidecar).unwrap();
+        assert!(!json.contains("loop_state"), "loop_state leaked: {json}");
+        assert!(!json.contains("ralph_state"), "ralph_state leaked: {json}");
     }
 
     #[test]

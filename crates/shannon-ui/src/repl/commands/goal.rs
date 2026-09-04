@@ -121,7 +121,10 @@ pub(crate) fn save_goal_sidecar(repl: &Repl) {
     let store = repl.l0_store();
     let mut sidecar = store.sidecar(&session_id);
     sidecar.goal = repl.state.goal.as_ref().map(|g| g.to_stored());
-    if let Err(e) = store.save_sidecar(&session_id, &sidecar) {
+    // Use the non-merging variant: we loaded the full sidecar above, so an
+    // explicit `None` here means "clear", not "merge with whatever's on disk"
+    // (which would resurrect a previously cleared goal via merge_from_disk).
+    if let Err(e) = store.save_sidecar_replace(&session_id, &sidecar) {
         tracing::debug!("goal sidecar save error: {e}");
     }
 }
