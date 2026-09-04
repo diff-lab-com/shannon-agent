@@ -1067,15 +1067,15 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Set a session goal the agent keeps working toward until met".to_string(),
                 HelpCategory::System,
             )
-            .with_arg_hint("[<objective>|show|pause|resume|clear] [--max N]")
+            .with_arg_hint("[<objective>|show|pause|resume|clear] [--max N] [--budget $N]")
             .with_examples(vec![
                 "/goal all tests passing in CI",
-                "/goal",
+                "/goal --max 50 refactor the auth module",
+                "/goal --budget $5 migrate the database",
                 "/goal pause",
-                "/goal resume",
                 "/goal clear",
             ])
-            .with_when_to_use("Use to set a persistent objective: Shannon re-anchors it every turn and auto-continues after each reply until the model proves the goal is met")
+            .with_when_to_use("Use to set a persistent objective: Shannon re-anchors it every turn and auto-continues until the model proves the goal is met. Stops come from progress guards (no-tool turns, stall strikes), blockers, or the optional --budget/--max caps — turn count is unlimited by default")
             .with_related(vec!["focus", "plan", "ralph"])
         ),
         "watch" => Some(

@@ -362,7 +362,7 @@ pub struct RalphState {
 }
 
 /// Lifecycle of a session goal (`/goal`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GoalStatus {
     Active,
@@ -375,7 +375,7 @@ pub enum GoalStatus {
 ///
 /// Auto-continuations count in [`GoalState::iterations`]; the loop pauses
 /// when `max_iterations` is reached (0 = unlimited).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GoalState {
     /// The user's objective / completion condition (verbatim user words)
     pub objective: String,
@@ -384,19 +384,36 @@ pub struct GoalState {
     pub iterations: usize,
     /// Continuation cap; 0 = unlimited. Default [`GOAL_DEFAULT_MAX_ITERATIONS`].
     pub max_iterations: usize,
+    /// P2.1/P2.2 — active guard rails for progress detection.
+    /// `consecutive_no_tool_turns` counts turns that produced zero tool
+    /// calls since the last user input (anti-spin). `stall_strikes` is the
+    /// shared budget for both deterministic anti-spin and model-reported
+    /// `Progress: none` (stall strikes).
+    pub consecutive_no_tool_turns: usize,
+    pub stall_strikes: usize,
+    /// P2.3 — budget cap (USD). `None` = no budget cap; only billing-alert
+    /// notifications fire at the global `monthly_budget` threshold. This
+    /// defaults to None to avoid implicit termination (design R4: only
+    /// explicit `--budget` should terminate the goal).
+    pub max_budget_usd: Option<f64>,
 }
 
-/// Default continuation cap.
+/// Default cap on `stall_strikes` before the goal pauses (Magentic-One +
+/// auto_test::no_progress_strikes both use 3 as the default).
+pub const GOAL_DEFAULT_MAX_STALL_STRIKES: usize = 3;
+
+/// Default continuation cap — **unlimited** (0).
 ///
-/// Calibration (see `docs/plans/2026-09-04-goal-design.md` §11 R13): each
-/// iteration is a full agentic turn, so this is a cost bound, not a progress
-/// measure. 25 matches LangGraph's `recursion_limit` default, sits 2.5×
-/// above Shannon's own `/ralph`/`/loop` (10 — smaller task-iteration scope),
-/// and well below OpenHands' `max_iterations` (100), which is paired with a
-/// stuck detector the goal MVP lacks. Hitting the cap is recoverable: the
-/// goal pauses and `/goal resume` re-arms a fresh budget. Revisit once
-/// budget accounting / anti-spin land (Phase 2).
-pub const GOAL_DEFAULT_MAX_ITERATIONS: usize = 25;
+/// R15 (revisiting R13): the active guard rails landed in Phase 2 are the
+/// real stop signals — strict completion contract (goal_update tool /
+/// GOAL_COMPLETE marker), anti-spin (2 consecutive no-tool turns),
+/// stall strikes (3), GOAL_BLOCKED pause, and the optional `--budget` cap.
+/// A total-turn cap is a blunt unit mismatch (a turn is neither a unit of
+/// progress nor of cost) and defaults to off, matching Claude Code and
+/// Codex, which ship no turn cap at all. `--max N` re-introduces an
+/// explicit fallback cap when the user wants one; hitting it pauses the
+/// goal (recoverable via `/goal resume`).
+pub const GOAL_DEFAULT_MAX_ITERATIONS: usize = 0;
 
 impl GoalState {
     pub fn new(objective: impl Into<String>) -> Self {
@@ -405,6 +422,9 @@ impl GoalState {
             status: GoalStatus::Active,
             iterations: 0,
             max_iterations: GOAL_DEFAULT_MAX_ITERATIONS,
+            consecutive_no_tool_turns: 0,
+            stall_strikes: 0,
+            max_budget_usd: None,
         }
     }
 
@@ -453,6 +473,54 @@ impl GoalState {
             status,
             iterations: stored.iterations,
             max_iterations: stored.max_iterations,
+            // Progress counters and budget cap are not persisted: resuming a
+            // long-running goal starts with a fresh budget (otherwise
+            // pre-/post-resume counts double-count and the user can never
+            // escape the loop). Budget cap must be re-set by the user via
+            // `/goal <obj> --budget $5`.
+            consecutive_no_tool_turns: 0,
+            stall_strikes: 0,
+            max_budget_usd: None,
+        }
+    }
+}
+
+impl LoopState {
+    pub fn to_stored(&self) -> shannon_core::session_log::StoredLoop {
+        shannon_core::session_log::StoredLoop {
+            task: self.task.clone(),
+            max_iterations: self.max_iterations,
+            iteration: self.iteration,
+            active: self.active,
+        }
+    }
+    pub fn from_stored(stored: shannon_core::session_log::StoredLoop) -> Self {
+        Self {
+            task: stored.task,
+            max_iterations: stored.max_iterations,
+            iteration: stored.iteration,
+            active: stored.active,
+        }
+    }
+}
+
+impl RalphState {
+    pub fn to_stored(&self) -> shannon_core::session_log::StoredRalph {
+        shannon_core::session_log::StoredRalph {
+            task: self.task.clone(),
+            completion_keywords: self.completion_keywords.clone(),
+            max_iterations: self.max_iterations,
+            iteration: self.iteration,
+            active: self.active,
+        }
+    }
+    pub fn from_stored(stored: shannon_core::session_log::StoredRalph) -> Self {
+        Self {
+            task: stored.task,
+            completion_keywords: stored.completion_keywords,
+            max_iterations: stored.max_iterations,
+            iteration: stored.iteration,
+            active: stored.active,
         }
     }
 }
@@ -718,10 +786,10 @@ mod tests {
     }
 
     #[test]
-    fn goal_state_default_max_is_25() {
+    fn goal_state_default_max_is_unlimited() {
         let g = GoalState::new("ship it");
         assert_eq!(g.max_iterations, GOAL_DEFAULT_MAX_ITERATIONS);
-        assert_eq!(g.max_iterations, 25);
+        assert_eq!(g.max_iterations, 0, "R15: default is unlimited");
         assert_eq!(g.status, GoalStatus::Active);
         assert_eq!(g.iterations, 0);
     }
