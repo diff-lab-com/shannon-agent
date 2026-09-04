@@ -265,6 +265,131 @@ pub async fn execute_with(
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    /// Remote-semantics test: the base directory lives only in the injected
+    /// world (fake fs), so traversal, existence probe and metadata all come
+    /// from the provider — never from the local disk.
+    #[tokio::test]
+    async fn glob_traverses_through_injected_world() {
+        use shannon_tool_interface::{DirEntryInfo, FileMeta, FileSystemProvider};
+        use std::io;
+        use std::path::{Path, PathBuf};
+
+        use async_trait::async_trait;
+
+        struct RemoteFakeFs;
+
+        impl RemoteFakeFs {
+            fn entries(root: &Path) -> Vec<DirEntryInfo> {
+                vec![
+                    DirEntryInfo {
+                        path: root.to_path_buf(),
+                        len: 0,
+                        is_dir: true,
+                    },
+                    DirEntryInfo {
+                        path: root.join("lib.rs"),
+                        len: 32,
+                        is_dir: false,
+                    },
+                    DirEntryInfo {
+                        path: root.join("notes.txt"),
+                        len: 8,
+                        is_dir: false,
+                    },
+                ]
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl FileSystemProvider for RemoteFakeFs {
+            async fn read_text(&self, _p: &Path) -> io::Result<String> {
+                unimplemented!()
+            }
+            async fn read_bytes(&self, _p: &Path) -> io::Result<Vec<u8>> {
+                unimplemented!()
+            }
+            async fn metadata(&self, p: &Path) -> io::Result<FileMeta> {
+                Ok(self.metadata_blocking(p).unwrap())
+            }
+            async fn create_dir_all(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn write_bytes(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn rename(&self, _f: &Path, _t: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn read_text_blocking(&self, _p: &Path) -> io::Result<String> {
+                unimplemented!()
+            }
+            fn write_bytes_blocking(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn create_dir_all_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn remove_file_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn canonicalize_blocking(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn metadata_blocking(&self, p: &Path) -> io::Result<FileMeta> {
+                Ok(FileMeta {
+                    len: if p.extension().is_some_and(|e| e == "rs") {
+                        32
+                    } else {
+                        8
+                    },
+                    is_dir: p.extension().is_none(),
+                    modified: None,
+                })
+            }
+            fn read_prefix_blocking(&self, _p: &Path, _m: usize) -> io::Result<Vec<u8>> {
+                unimplemented!()
+            }
+            fn list_dir_blocking(&self, _p: &Path) -> io::Result<Vec<DirEntryInfo>> {
+                Ok(Vec::new())
+            }
+            fn exists_blocking(&self, _p: &Path) -> bool {
+                true
+            }
+            fn walk_blocking(
+                &self,
+                root: &Path,
+                cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+            ) -> io::Result<()> {
+                for entry in Self::entries(root) {
+                    cb(&entry);
+                }
+                Ok(())
+            }
+        }
+
+        let output = execute_with(
+            GlobInput {
+                pattern: "*.rs".into(),
+                path: Some("/remote-host/proj".into()),
+                exclude_pattern: None,
+            },
+            &RemoteFakeFs,
+        )
+        .await
+        .unwrap();
+
+        assert!(!output.is_error);
+        assert!(
+            output.content.contains("/remote-host/proj/lib.rs"),
+            "results must come from the injected world, got: {}",
+            output.content
+        );
+        assert!(!output.content.contains("notes.txt"));
+    }
+
     use super::*;
     use std::fs;
     use tempfile::TempDir;

@@ -541,6 +541,129 @@ fn path_matches_glob(path: &Path, pattern: &str) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    /// Remote-semantics test: paths that do NOT exist on the local disk are
+    /// searched through the injected world (fake fs), proving traversal and
+    /// content reads follow the provider rather than the local disk.
+    #[tokio::test]
+    async fn grep_traverses_through_injected_world() {
+        use shannon_tool_interface::{DirEntryInfo, FileMeta, FileSystemProvider};
+        use std::io;
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+
+        struct RemoteFakeFs;
+
+        #[async_trait]
+        impl FileSystemProvider for RemoteFakeFs {
+            async fn read_text(&self, _path: &Path) -> io::Result<String> {
+                unimplemented!()
+            }
+            async fn read_bytes(&self, _p: &Path) -> io::Result<Vec<u8>> {
+                unimplemented!()
+            }
+            async fn metadata(&self, _p: &Path) -> io::Result<FileMeta> {
+                unimplemented!()
+            }
+            async fn create_dir_all(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn write_bytes(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn rename(&self, _f: &Path, _t: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn read_text_blocking(&self, _p: &Path) -> io::Result<String> {
+                Ok("alpha needle beta\nnothing here\nthird needle line".to_string())
+            }
+            fn write_bytes_blocking(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn create_dir_all_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn remove_file_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn canonicalize_blocking(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn metadata_blocking(&self, _p: &Path) -> io::Result<FileMeta> {
+                Ok(FileMeta {
+                    len: 64,
+                    is_dir: false,
+                    modified: None,
+                })
+            }
+            fn read_prefix_blocking(&self, _p: &Path, _m: usize) -> io::Result<Vec<u8>> {
+                Ok(b"alpha needle beta\nnothing here\nthird needle line".to_vec())
+            }
+            fn list_dir_blocking(&self, _p: &Path) -> io::Result<Vec<DirEntryInfo>> {
+                Ok(Vec::new())
+            }
+            fn exists_blocking(&self, _p: &Path) -> bool {
+                true
+            }
+            fn walk_blocking(
+                &self,
+                root: &Path,
+                cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+            ) -> io::Result<()> {
+                // Serve two non-local files under the remote root.
+                cb(&DirEntryInfo {
+                    path: root.to_path_buf(),
+                    len: 0,
+                    is_dir: true,
+                });
+                cb(&DirEntryInfo {
+                    path: root.join("a.rs"),
+                    len: 64,
+                    is_dir: false,
+                });
+                cb(&DirEntryInfo {
+                    path: root.join("b.rs"),
+                    len: 64,
+                    is_dir: false,
+                });
+                Ok(())
+            }
+        }
+
+        let fs: Arc<dyn FileSystemProvider> = Arc::new(RemoteFakeFs);
+        // Wire the SAME world into the sandbox's TOCTOU canonicalization,
+        // exactly as register_all_tools does for remote assemblies.
+        let sandbox =
+            crate::file::sandbox::PathSandbox::with_config(crate::file::sandbox::SandboxConfig {
+                allowed_roots: vec![PathBuf::from("/remote-host/proj")],
+                denied_patterns: crate::file::sandbox::SandboxConfig::default_denied_patterns(),
+                strict_mode: true,
+            })
+            .with_fs_provider(fs.clone());
+        let tool = GrepTool::with_sandbox(sandbox).with_fs(fs);
+
+        let output = Tool::execute(
+            &tool,
+            serde_json::json!({ "pattern": "needle", "path": "/remote-host/proj" }),
+        )
+        .await
+        .unwrap();
+
+        assert!(!output.is_error);
+        assert!(
+            output.content.contains("/remote-host/proj/a.rs"),
+            "matches must come from the injected world, got: {}",
+            output.content
+        );
+        assert!(output.content.contains("/remote-host/proj/b.rs"));
+        assert_eq!(
+            output.metadata.get("total_matches"),
+            Some(&serde_json::json!(4))
+        );
+    }
+
     use super::*;
     use std::fs;
     use tempfile::TempDir;

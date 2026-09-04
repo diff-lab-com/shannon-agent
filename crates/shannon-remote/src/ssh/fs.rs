@@ -9,6 +9,7 @@ use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use openssh_sftp_client::{Sftp, SftpOptions};
@@ -30,22 +31,35 @@ pub struct SshFs {
 impl SshFs {
     /// Attach an SFTP session to `rt`'s existing ssh connection.
     pub async fn connect(rt: Arc<SshRuntime>) -> io::Result<Arc<Self>> {
-        // Spawn the subsystem child on the dedicated runtime so its IO is
-        // registered with (and pumped by) that runtime only.
-        let (stdin, stdout, child) = rt
+        // The subsystem child is spawned AND the handshake driven entirely on
+        // the dedicated runtime: Sftp::new spawns internal pump tasks bound
+        // to whatever runtime creates the IO objects — mixing runtimes here
+        // deadlocks the handshake (the pump tasks would wait on IO that only
+        // the driver runtime pumps).
+        //
+        // Hard cap on the handshake: a dead or rejected child must surface as
+        // an error (with its stderr), never as an indefinite hang.
+        const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+        let (sftp, child) = rt
             .run({
                 let dest = rt.dest().to_string();
+                let port = rt.port();
                 let ctl = rt.control_socket().map(|p| p.to_path_buf());
                 async move {
                     let mut cmd = tokio::process::Command::new("ssh");
                     cmd.arg("-o").arg("BatchMode=yes");
+                    // The mux master carries the port; a plain (non-mux)
+                    // child needs it spelled out or it dials port 22.
+                    if let Some(port) = port {
+                        cmd.arg("-p").arg(port.to_string());
+                    }
                     if let Some(ctl) = ctl {
                         cmd.arg("-o").arg(format!("ControlPath={}", ctl.display()));
                     }
                     cmd.arg(&dest).arg("-s").arg("sftp");
                     cmd.stdin(std::process::Stdio::piped());
                     cmd.stdout(std::process::Stdio::piped());
-                    cmd.stderr(std::process::Stdio::null());
+                    cmd.stderr(std::process::Stdio::piped());
                     cmd.kill_on_drop(true);
                     let mut child = cmd
                         .spawn()
@@ -58,14 +72,46 @@ impl SshFs {
                         .stdout
                         .take()
                         .ok_or_else(|| io::Error::other("sftp child stdout missing"))?;
-                    io::Result::Ok((stdin, stdout, child))
+                    let mut stderr = child
+                        .stderr
+                        .take()
+                        .ok_or_else(|| io::Error::other("sftp child stderr missing"))?;
+
+                    let handshake = Sftp::new(stdin, stdout, SftpOptions::default());
+                    match tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake).await {
+                        Ok(r) => match r {
+                            Ok(sftp) => io::Result::Ok((sftp, child)),
+                            Err(e) => Err(to_io(e)),
+                        },
+                        Err(_) => {
+                            let status = match child.try_wait() {
+                                Ok(Some(status)) => format!("exited: {status}"),
+                                Ok(None) => "still running".to_string(),
+                                Err(e) => format!("wait error: {e}"),
+                            };
+                            // Drain whatever the child complained about.
+                            use tokio::io::AsyncReadExt;
+                            let mut buf = Vec::with_capacity(512);
+                            let _ = tokio::time::timeout(
+                                Duration::from_millis(250),
+                                stderr.read_to_end(&mut buf),
+                            )
+                            .await;
+                            let stderr_text = String::from_utf8_lossy(&buf).trim().to_string();
+                            Err(io::Error::other(format!(
+                                "sftp handshake timed out after {}s (child status: {status}){}",
+                                HANDSHAKE_TIMEOUT.as_secs(),
+                                if stderr_text.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(", stderr: {stderr_text}")
+                                }
+                            )))
+                        }
+                    }
                 }
             })
             .await?;
-
-        let sftp = Sftp::new(stdin, stdout, SftpOptions::default())
-            .await
-            .map_err(to_io)?;
         let posix_rename = sftp.support_posix_rename();
         tracing::debug!(posix_rename, "sftp session established");
 
@@ -119,6 +165,7 @@ impl SshFs {
     }
 }
 
+/// Drain whatever the child wrote to stderr (capped) for error reporting.
 fn ignore_missing(e: openssh_sftp_client::Error) -> Result<(), openssh_sftp_client::Error> {
     // Missing target is success for our purposes; anything else propagates.
     if let openssh_sftp_client::Error::IOError(io) = &e {
@@ -237,7 +284,7 @@ impl FileSystemProvider for SshFs {
     fn read_text_blocking(&self, path: &Path) -> io::Result<String> {
         let sftp = self.sftp.clone();
         let path = path.to_path_buf();
-        let bytes = block_on_anywhere(self.rt.runtime(), async move {
+        let bytes = block_on_anywhere(self.rt.handle(), async move {
             let guard = sftp.lock().await;
             let mut fs = guard.fs();
             fs.read(path).await.map(|b| b.to_vec()).map_err(to_io)
@@ -249,7 +296,7 @@ impl FileSystemProvider for SshFs {
         let sftp = self.sftp.clone();
         let path = path.to_path_buf();
         let contents = contents.to_vec();
-        block_on_anywhere(self.rt.runtime(), async move {
+        block_on_anywhere(self.rt.handle(), async move {
             let guard = sftp.lock().await;
             let mut fs = guard.fs();
             fs.write(path, contents).await.map_err(to_io)
@@ -259,7 +306,7 @@ impl FileSystemProvider for SshFs {
     fn create_dir_all_blocking(&self, path: &Path) -> io::Result<()> {
         let sftp = self.sftp.clone();
         let path = path.to_path_buf();
-        block_on_anywhere(self.rt.runtime(), async move {
+        block_on_anywhere(self.rt.handle(), async move {
             create_dir_all_body(&sftp, path).await
         })
     }
@@ -267,7 +314,7 @@ impl FileSystemProvider for SshFs {
     fn remove_file_blocking(&self, path: &Path) -> io::Result<()> {
         let sftp = self.sftp.clone();
         let path = path.to_path_buf();
-        block_on_anywhere(self.rt.runtime(), async move {
+        block_on_anywhere(self.rt.handle(), async move {
             let guard = sftp.lock().await;
             let mut fs = guard.fs();
             fs.remove_file(path).await.map_err(to_io)
@@ -277,7 +324,7 @@ impl FileSystemProvider for SshFs {
     fn canonicalize_blocking(&self, path: &Path) -> io::Result<PathBuf> {
         let sftp = self.sftp.clone();
         let path = path.to_path_buf();
-        block_on_anywhere(self.rt.runtime(), async move {
+        block_on_anywhere(self.rt.handle(), async move {
             let guard = sftp.lock().await;
             let mut fs = guard.fs();
             fs.canonicalize(path).await.map_err(to_io)
@@ -287,7 +334,7 @@ impl FileSystemProvider for SshFs {
     fn metadata_blocking(&self, path: &Path) -> io::Result<FileMeta> {
         let sftp = self.sftp.clone();
         let path = path.to_path_buf();
-        block_on_anywhere(self.rt.runtime(), async move {
+        block_on_anywhere(self.rt.handle(), async move {
             let guard = sftp.lock().await;
             let mut fs = guard.fs();
             fs.metadata(path)
@@ -300,7 +347,7 @@ impl FileSystemProvider for SshFs {
     fn read_prefix_blocking(&self, path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
         let sftp = self.sftp.clone();
         let path = path.to_path_buf();
-        block_on_anywhere(self.rt.runtime(), async move {
+        block_on_anywhere(self.rt.handle(), async move {
             let guard = sftp.lock().await;
             let mut file = guard.open(path).await.map_err(to_io)?;
             let mut out = Vec::with_capacity(max_bytes);
@@ -326,7 +373,7 @@ impl FileSystemProvider for SshFs {
         root: &Path,
         cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
     ) -> io::Result<()> {
-        let runtime = self.rt.runtime();
+        let runtime = self.rt.handle();
         let stat_sftp = self.sftp.clone();
         let stat = move |p: &Path| {
             let sftp = stat_sftp.clone();
@@ -340,7 +387,7 @@ impl FileSystemProvider for SshFs {
                     .map_err(to_io)
             })
         };
-        let text_runtime = self.rt.runtime();
+        let text_runtime = self.rt.handle();
         let text_sftp = self.sftp.clone();
         let read_text = move |p: &Path| {
             let sftp = text_sftp.clone();
@@ -354,7 +401,7 @@ impl FileSystemProvider for SshFs {
                     .map_err(to_io)
             })
         };
-        let list_runtime = self.rt.runtime();
+        let list_runtime = self.rt.handle();
         let list_sftp = self.sftp.clone();
         let list_dir = move |p: &Path| {
             let sftp = list_sftp.clone();
@@ -384,7 +431,7 @@ impl FileSystemProvider for SshFs {
     fn list_dir_blocking(&self, path: &Path) -> io::Result<Vec<DirEntryInfo>> {
         let sftp = self.sftp.clone();
         let root = path.to_path_buf();
-        block_on_anywhere(self.rt.runtime(), async move {
+        block_on_anywhere(self.rt.handle(), async move {
             let guard = sftp.lock().await;
             let mut fs = guard.fs();
             let dir = fs.open_dir(&root).await.map_err(to_io)?;
@@ -432,25 +479,20 @@ mod tests {
         assert!(ignore_missing(fatal).is_err());
     }
 
-    // Ignored integration test: requires a local sshd.
+    // Ignored integration test: requires a reachable sshd (see
+    // session::tests::test_ssh_target for the env knobs).
     #[tokio::test]
-    #[ignore = "requires local sshd: ssh localhost must work non-interactively"]
+    #[ignore = "requires a reachable sshd (SHANNON_TEST_SSH_HOST/PORT/USER)"]
     async fn sftp_full_roundtrip_on_localhost() {
-        let target = crate::target::RemoteTarget {
-            name: "it".into(),
-            kind: crate::target::TargetKind::Ssh,
-            host: Some("localhost".into()),
-            port: None,
-            user: None,
-            container: None,
-            shell: None,
-            ssh_target: None,
-            workspace_dir: std::env::temp_dir(),
-        };
+        let target = crate::ssh::test_ssh_target();
         let rt = SshRuntime::connect(&target).await.unwrap();
         let fs = SshFs::connect(rt).await.unwrap();
-        let tmp = tempfile::TempDir::new().unwrap();
-        let file = tmp.path().join("roundtrip.txt");
+        // The workspace lives on the REMOTE: create a unique subdir there
+        // (local tempdir paths do not exist on the target).
+        let base = target.workspace_dir.clone();
+        let dir = base.join(format!("shannon-it-{}", std::process::id()));
+        fs.create_dir_all(&dir).await.unwrap();
+        let file = dir.join("roundtrip.txt");
 
         fs.write_bytes(&file, b"hello shannon").await.unwrap();
         assert_eq!(fs.read_text(&file).await.unwrap(), "hello shannon");
@@ -459,26 +501,23 @@ mod tests {
         assert_eq!(md.len, 13);
         assert!(!md.is_dir);
 
-        let entries = fs.list_dir_blocking(tmp.path()).unwrap();
+        let entries = fs.list_dir_blocking(&dir).unwrap();
         assert!(entries.iter().any(|e| e.path == file));
 
         // Overwriting rename (posix-rename or fallback).
-        let tmp2 = tempfile::TempDir::new().unwrap();
-        fs.write_bytes(&tmp2.path().join("dst"), b"old")
-            .await
-            .unwrap();
-        fs.write_bytes(&tmp.path().join("src"), b"new")
-            .await
-            .unwrap();
-        fs.rename(&tmp.path().join("src"), &tmp2.path().join("dst"))
-            .await
-            .unwrap();
-        assert_eq!(fs.read_text(&tmp2.path().join("dst")).await.unwrap(), "new");
+        let dst = dir.join("dst.txt");
+        fs.write_bytes(&dst, b"old").await.unwrap();
+        let src = dir.join("src.txt");
+        fs.write_bytes(&src, b"new").await.unwrap();
+        fs.rename(&src, &dst).await.unwrap();
+        assert_eq!(fs.read_text(&dst).await.unwrap(), "new");
 
         let prefix = fs.read_prefix_blocking(&file, 5).unwrap();
         assert_eq!(prefix, b"hello");
 
         fs.canonicalize(&file).await.unwrap();
         fs.remove_file_blocking(&file).unwrap();
+        // Best-effort cleanup of the unique workspace subdir.
+        let _ = fs.remove_file_blocking(&dst);
     }
 }
