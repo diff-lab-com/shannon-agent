@@ -3922,6 +3922,75 @@ impl QueryEngine {
                                                     phase = StreamingPhase::Finalized;
                                                     break;
                                                 }
+                                                // Think-only nudge (A1, eval-findings
+                                                // 2026-09-glm): a response with no tool
+                                                // calls and no substantive user-facing
+                                                // answer (empty text, or reasoning-
+                                                // dominated `<think>` output) used to
+                                                // end the query as a silent no-op —
+                                                // headless runs completed with an empty
+                                                // patch. Re-prompt instead; bounded, and
+                                                // the original end-of-query path below
+                                                // still runs once the budget is used up.
+                                                // Excluded: output-limit truncations —
+                                                // the truncation continuation above owns
+                                                // those (a `length`-cut unclosed
+                                                // `<think>` looks think-only, but
+                                                // nudging it would defeat the
+                                                // truncation bound).
+                                                if think_only_nudges < max_think_only_nudges
+                                                    && turn + 1 < config.max_turns
+                                                    && !is_truncation_stop(
+                                                        assistant_stop_reason.as_deref(),
+                                                    )
+                                                    && is_think_only_response(
+                                                        &assistant_text,
+                                                        assistant_tool_uses.len(),
+                                                        think_only_min_chars,
+                                                    )
+                                                {
+                                                    think_only_nudges += 1;
+                                                    // Persist the reasoning-dominated text
+                                                    // so the next request keeps the
+                                                    // assistant → user sequence for the
+                                                    // nudge round.
+                                                    if !assistant_text.is_empty() {
+                                                        conversation.messages.push(Message {
+                                                            role: "assistant".to_string(),
+                                                            content: MessageContent::Text(
+                                                                std::mem::take(&mut assistant_text),
+                                                            ),
+                                                        });
+                                                    }
+                                                    conversation.messages.push(Message {
+                                                        role: "user".to_string(),
+                                                        content: MessageContent::Text(
+                                                            THINK_ONLY_NUDGE_PROMPT.to_string(),
+                                                        ),
+                                                    });
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Warning {
+                                                            query_id,
+                                                            message: format!(
+                                                                "Model returned no tool call \
+                                                                 and no final answer — \
+                                                                 re-prompting \
+                                                                 ({think_only_nudges}/{max_think_only_nudges})"
+                                                            ),
+                                                        }
+                                                    );
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::ConversationUpdate {
+                                                            query_id,
+                                                            messages: conversation.messages.clone(),
+                                                        }
+                                                    );
+                                                    turn += 1;
+                                                    phase = StreamingPhase::Finalized;
+                                                    break;
+                                                }
                                                 if !assistant_text.is_empty() {
                                                     conversation.messages.push(Message {
                                                         role: "assistant".to_string(),
@@ -3949,6 +4018,7 @@ impl QueryEngine {
                                                         query_id,
                                                         messages: conversation.messages.clone(),
                                                     }));
+
                                                 let _ =
                                                     tx.send(Ok(QueryEvent::Completed { query_id }));
 
@@ -4225,6 +4295,50 @@ impl QueryEngine {
                             continue;
                         }
 
+                        // Think-only nudge (A1): the stream produced no tool
+                        // calls and no text at all — e.g. reasoning arrived
+                        // only via thinking deltas, or the completion was
+                        // empty (including the zero-usage deferred
+                        // MessageDelta case). Re-prompt instead of ending the
+                        // query as a silent no-op; when the budget is
+                        // exhausted the bail-out below fires unchanged.
+                        // Output-limit truncations stay with the truncation
+                        // machinery and are never nudged.
+                        if !has_content
+                            && tool_inputs.is_empty()
+                            && assistant_tool_uses.is_empty()
+                            && phase != StreamingPhase::Finalized
+                            && !is_truncation_stop(assistant_stop_reason.as_deref())
+                            && think_only_nudges < max_think_only_nudges
+                            && turn + 1 < config.max_turns
+                        {
+                            think_only_nudges += 1;
+                            conversation.messages.push(Message {
+                                role: "user".to_string(),
+                                content: MessageContent::Text(THINK_ONLY_NUDGE_PROMPT.to_string()),
+                            });
+                            send_event!(
+                                tx,
+                                QueryEvent::Warning {
+                                    query_id,
+                                    message: format!(
+                                        "Model returned no tool call and no final \
+                                         answer — re-prompting \
+                                         ({think_only_nudges}/{max_think_only_nudges})"
+                                    ),
+                                }
+                            );
+                            send_event!(
+                                tx,
+                                QueryEvent::ConversationUpdate {
+                                    query_id,
+                                    messages: conversation.messages.clone(),
+                                }
+                            );
+                            turn += 1;
+                            continue;
+                        }
+
                         // Bail out only when the model produced NOTHING usable
                         // (no text content, no tool_uses, no parsed tool inputs).
                         // The parse-error recovery block above handles the case
@@ -4266,6 +4380,13 @@ impl QueryEngine {
                         if phase == StreamingPhase::Receiving && has_content {
                             let has_text = !assistant_text.is_empty();
                             let has_tool_uses = !assistant_tool_uses.is_empty();
+                            // Decide the think-only nudge (A1) before the save
+                            // block below moves `assistant_text`.
+                            let think_only_hit = is_think_only_response(
+                                &assistant_text,
+                                assistant_tool_uses.len(),
+                                think_only_min_chars,
+                            );
                             if has_text || has_tool_uses {
                                 // Check if the last message is already this assistant response
                                 let already_saved = conversation.messages.last().is_some_and(|m| {
@@ -4317,6 +4438,46 @@ impl QueryEngine {
                                         TRUNCATION_CONTINUATION_PROMPT.to_string(),
                                     ),
                                 });
+                                send_event!(
+                                    tx,
+                                    QueryEvent::ConversationUpdate {
+                                        query_id,
+                                        messages: conversation.messages.clone(),
+                                    }
+                                );
+                                turn += 1;
+                                continue;
+                            }
+                            // Think-only nudge (A1): a reasoning-only response
+                            // finalized by this safety net (stream closed
+                            // without a usable MessageDelta). The assistant
+                            // text was already persisted above; append the
+                            // nudge. Same bounded budget as the finalize
+                            // path; output-limit truncations (handled just
+                            // above) are never nudged.
+                            if think_only_hit
+                                && !is_truncation_stop(assistant_stop_reason.as_deref())
+                                && think_only_nudges < max_think_only_nudges
+                                && turn + 1 < config.max_turns
+                            {
+                                think_only_nudges += 1;
+                                conversation.messages.push(Message {
+                                    role: "user".to_string(),
+                                    content: MessageContent::Text(
+                                        THINK_ONLY_NUDGE_PROMPT.to_string(),
+                                    ),
+                                });
+                                send_event!(
+                                    tx,
+                                    QueryEvent::Warning {
+                                        query_id,
+                                        message: format!(
+                                            "Model returned no tool call and no \
+                                             final answer — re-prompting \
+                                             ({think_only_nudges}/{max_think_only_nudges})"
+                                        ),
+                                    }
+                                );
                                 send_event!(
                                     tx,
                                     QueryEvent::ConversationUpdate {
@@ -4860,6 +5021,144 @@ mod tests {
         assert!(!is_truncation_stop(Some("stop")));
         assert!(!is_truncation_stop(Some("tool_use")));
         assert!(!is_truncation_stop(None));
+    }
+
+    #[test]
+    fn split_think_content_extracts_visible_answer() {
+        // Closed reasoning block: only the residue is visible.
+        let (saw, visible) = split_think_content("<think>plan the fix</think>\n\nDone.");
+        assert!(saw);
+        assert_eq!(visible.trim(), "Done.");
+
+        // Unclosed block (stream finished mid-reasoning): everything after
+        // `<think>` is reasoning — no visible answer.
+        let (saw, visible) = split_think_content("<think>still planning the fix");
+        assert!(saw);
+        assert!(visible.trim().is_empty());
+
+        // Multiple blocks keep both the surrounding text.
+        let (saw, visible) = split_think_content("a<think>x</think>b<think>y</think>c");
+        assert!(saw);
+        assert_eq!(visible, "abc");
+
+        // No reasoning markup: text passes through untouched.
+        let (saw, visible) = split_think_content("plain answer");
+        assert!(!saw);
+        assert_eq!(visible, "plain answer");
+    }
+
+    #[test]
+    fn think_only_detection_matrix() {
+        const THRESHOLD: usize = 200;
+
+        // Empty text (incl. thinking-delta-only responses) → nudge.
+        assert!(is_think_only_response("", 0, THRESHOLD));
+        assert!(is_think_only_response("   \n  ", 0, THRESHOLD));
+
+        // All-reasoning text → nudge.
+        assert!(is_think_only_response(
+            "<think>I should look at the failing test first.</think>",
+            0,
+            THRESHOLD
+        ));
+
+        // Reasoning-dominated with a tiny residue → nudge (the minimax
+        // think-only shape).
+        assert!(is_think_only_response(
+            "<think>long reasoning about the repo layout and the failing
+             test, plenty of deliberation that burns the turn</think>ok",
+            0,
+            THRESHOLD
+        ));
+
+        // Any tool call → never a nudge, whatever the text.
+        assert!(!is_think_only_response("", 1, THRESHOLD));
+        assert!(!is_think_only_response("<think>x</think>", 2, THRESHOLD));
+
+        // Reasoning + a substantive visible answer → normal completion.
+        let answer = "I fixed the failing test by correcting the assertion in \
+                      src/lib.rs: the expected value was inverted after the \
+                      refactor. The helper now normalizes line endings before \
+                      comparison, which is what the spec requires. All 14 tests \
+                      in the suite pass, including the two previously flaky \
+                      ones, and I re-ran the full build to confirm no \
+                      regressions elsewhere.";
+        assert!(
+            answer.chars().count() > 200,
+            "sample must clear the default threshold"
+        );
+        assert!(!is_think_only_response(
+            &format!("<think>deliberation</think>{answer}"),
+            0,
+            THRESHOLD
+        ));
+
+        // Plain short text WITHOUT reasoning markup is a deliberate terse
+        // answer — never nudged (behavior completely unchanged for it).
+        assert!(!is_think_only_response("Done.", 0, THRESHOLD));
+        assert!(!is_think_only_response("ok", 0, THRESHOLD));
+    }
+
+    #[test]
+    fn think_only_env_overrides_parse() {
+        // Non-env tests below rely on defaults; this group locks the parsing
+        // contract (unset/empty/garbage → defaults) behind the module env
+        // lock so parallel tests can't race the process-global table.
+        use std::sync::{Mutex, OnceLock};
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env-var test mutex poisoned");
+
+        let saved_max = env::var("SHANNON_THINK_ONLY_NUDGE_MAX").ok();
+        let saved_min = env::var("SHANNON_THINK_ONLY_MIN_ANSWER_CHARS").ok();
+
+        // Defaults when unset.
+        unsafe {
+            env::remove_var("SHANNON_THINK_ONLY_NUDGE_MAX");
+        };
+        unsafe {
+            env::remove_var("SHANNON_THINK_ONLY_MIN_ANSWER_CHARS");
+        };
+        assert_eq!(think_only_nudge_max(), 2);
+        assert_eq!(think_only_min_answer_chars(), 200);
+
+        // Explicit overrides.
+        unsafe {
+            env::set_var("SHANNON_THINK_ONLY_NUDGE_MAX", "5");
+        };
+        unsafe {
+            env::set_var("SHANNON_THINK_ONLY_MIN_ANSWER_CHARS", "40");
+        };
+        assert_eq!(think_only_nudge_max(), 5);
+        assert_eq!(think_only_min_answer_chars(), 40);
+
+        // 0 disables nudging entirely (budget always exhausted).
+        unsafe {
+            env::set_var("SHANNON_THINK_ONLY_NUDGE_MAX", "0");
+        };
+        assert_eq!(think_only_nudge_max(), 0);
+
+        // Empty / garbage → defaults, no panic.
+        unsafe {
+            env::set_var("SHANNON_THINK_ONLY_NUDGE_MAX", "");
+        };
+        unsafe {
+            env::set_var("SHANNON_THINK_ONLY_MIN_ANSWER_CHARS", "bogus");
+        };
+        assert_eq!(think_only_nudge_max(), 2);
+        assert_eq!(think_only_min_answer_chars(), 200);
+
+        // Restore the prior process state for other tests.
+        match saved_max {
+            Some(v) => unsafe { env::set_var("SHANNON_THINK_ONLY_NUDGE_MAX", v) },
+            None => unsafe { env::remove_var("SHANNON_THINK_ONLY_NUDGE_MAX") },
+        }
+        match saved_min {
+            Some(v) => unsafe { env::set_var("SHANNON_THINK_ONLY_MIN_ANSWER_CHARS", v) },
+            None => unsafe { env::remove_var("SHANNON_THINK_ONLY_MIN_ANSWER_CHARS") },
+        }
     }
 
     #[tokio::test]

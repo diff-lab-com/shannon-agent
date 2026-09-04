@@ -1197,4 +1197,300 @@ data: {\"type\":\"message_stop\"}\n\
              engine.rs:3793 fires before the synthetic tool_result is pushed."
         );
     }
+
+    // ── Think-only continuation nudge (A1, eval-findings-2026-09-glm) ──
+    //
+    // Regression tests for the minimax b11 failure mode: a response with no
+    // tool_use and no user-facing answer (reasoning-only / empty) ended the
+    // query as a silent no-op — headless runs completed with an empty patch
+    // (3/50 SWE tasks). The engine must re-prompt instead, at most
+    // `SHANNON_THINK_ONLY_NUDGE_MAX` consecutive times (default 2).
+
+    /// SSE body for a completed response whose only text is inline
+    /// `<think>` reasoning (the OpenAI-compatible reasoning shape). Set
+    /// `visible` to model a residue the model emitted after `</think>`.
+    fn think_only_stream_body(visible: &str) -> String {
+        let think = "<think>I need to figure out where the failing test \
+                     lives and how the harness builds the project before I \
+                     touch anything.</think>";
+        let escaped = format!("{think}{visible}");
+        format!(
+            "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_think\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-20250514\",\"stop_reason\":null,\"usage\":{{\"input_tokens\":10,\"output_tokens\":0}}}}}}\n\n\
+             event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n\
+             event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{escaped}\"}}}}\n\n\
+             event: content_block_stop\ndata: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n\
+             event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"input_tokens\":10,\"output_tokens\":5}}}}\n\n\
+             event: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n"
+        )
+    }
+
+    fn setup_think_only_mock(server: &mut ServerGuard) -> mockito::Mock {
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(think_only_stream_body(""))
+            .expect(1)
+            .create()
+    }
+
+    /// Clean end_turn response carrying a normal final answer.
+    fn setup_answer_mock(server: &mut ServerGuard, answer: &str) -> mockito::Mock {
+        let body = format!(
+            "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_ans\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-20250514\",\"stop_reason\":null,\"usage\":{{\"input_tokens\":10,\"output_tokens\":0}}}}}}\n\n\
+             event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n\
+             event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{answer}\"}}}}\n\n\
+             event: content_block_stop\ndata: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n\
+             event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"input_tokens\":10,\"output_tokens\":5}}}}\n\n\
+             event: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n"
+        );
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .expect(1)
+            .create()
+    }
+
+    /// SSE body for an EMPTY completion whose MessageDelta carries the
+    /// sentinel zero-usage frame: the finalize defers, the stream ends
+    /// unfinalized, and the post-loop bail-out region runs. Exercises the
+    /// empty-text nudge there (thinking-delta-only providers land on the
+    /// same state: no text, no tool calls).
+    fn setup_empty_completion_mock(server: &mut ServerGuard) -> mockito::Mock {
+        let body = "\
+event: message_start\n\
+data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_empty\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-20250514\",\"stop_reason\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\
+\n\
+event: content_block_start\n\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\
+\n\
+event: content_block_stop\n\
+data: {\"type\":\"content_block_stop\",\"index\":0}\n\
+\n\
+event: message_delta\n\
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}\n\
+\n\
+event: message_stop\n\
+data: {\"type\":\"message_stop\"}\n\
+\n";
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .expect(1)
+            .create()
+    }
+
+    fn collect_events(
+        engine: &QueryEngine,
+    ) -> Vec<Result<shannon_core::query_engine::QueryEvent, shannon_core::query_engine::QueryError>>
+    {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = make_query_context();
+        rt.block_on(async {
+            use futures::StreamExt;
+            let stream = engine.process_query(ctx, None).await;
+            Box::pin(stream).collect::<Vec<_>>().await
+        })
+    }
+
+    fn nudge_warning_count(
+        events: &[Result<
+            shannon_core::query_engine::QueryEvent,
+            shannon_core::query_engine::QueryError,
+        >],
+    ) -> usize {
+        events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Ok(shannon_core::query_engine::QueryEvent::Warning { message, .. })
+                        if message.contains("re-prompting")
+                )
+            })
+            .count()
+    }
+
+    fn saw_nudge_user_message(
+        events: &[Result<
+            shannon_core::query_engine::QueryEvent,
+            shannon_core::query_engine::QueryError,
+        >],
+    ) -> bool {
+        events.iter().any(|e| {
+            matches!(
+                e,
+                Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { messages, .. })
+                    if messages.iter().any(|m| {
+                        m.role == "user"
+                            && matches!(&m.content,
+                                shannon_engine::api::MessageContent::Text(t)
+                                    if t.contains("no tool calls and no final answer"))
+                    })
+            )
+        })
+    }
+
+    fn saw_completed(
+        events: &[Result<
+            shannon_core::query_engine::QueryEvent,
+            shannon_core::query_engine::QueryError,
+        >],
+    ) -> bool {
+        events.iter().any(|e| {
+            matches!(
+                e,
+                Ok(shannon_core::query_engine::QueryEvent::Completed { .. })
+            )
+        })
+    }
+
+    #[test]
+    fn test_engine_nudges_on_think_only_response() {
+        // Turn 0: think-only response (reasoning markup, no visible answer,
+        // no tool call) must NOT end the query — the engine synthesizes the
+        // nudge and makes a second API call, which returns the real answer.
+        let mut server = Server::new();
+        let m1 = setup_think_only_mock(&mut server);
+        let m2 = setup_answer_mock(&mut server, "Found and fixed the failing assertion.");
+
+        let engine = create_engine(&server.url());
+        let events = collect_events(&engine);
+
+        // Both mocks consumed: session continued past the think-only turn.
+        m1.assert();
+        m2.assert();
+
+        assert!(
+            saw_nudge_user_message(&events),
+            "a user-side nudge message \
+            ('no tool calls and no final answer') must appear in the conversation"
+        );
+        assert_eq!(nudge_warning_count(&events), 1);
+        assert!(
+            saw_completed(&events),
+            "query completes with the real answer"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, Ok(shannon_core::query_engine::QueryEvent::Failed { .. })))
+        );
+    }
+
+    #[test]
+    fn test_engine_no_nudge_on_normal_answer() {
+        // A plain text answer — deliberately short, without any reasoning
+        // markup — is a valid final response. The engine must complete on
+        // the first turn: exactly one API call, no nudge injected.
+        let mut server = Server::new();
+        let m1 = setup_answer_mock(&mut server, "Fixed it — the test passes now.");
+
+        let engine = create_engine(&server.url());
+        let events = collect_events(&engine);
+
+        m1.assert(); // .expect(1): a second request would fail the test
+        assert!(
+            !saw_nudge_user_message(&events),
+            "a normal answer must never trigger the think-only nudge"
+        );
+        assert_eq!(nudge_warning_count(&events), 0);
+        assert!(saw_completed(&events));
+    }
+
+    #[test]
+    fn test_engine_no_nudge_on_substantive_answer() {
+        // Same contract for a substantial answer (>= the 200-char default
+        // threshold): behavior fully unchanged.
+        let answer = "I traced the failure to a stale cache key in the config \
+                      loader: the key did not include the profile name, so \
+                      switching profiles returned the previous profile's \
+                      settings. I added the profile to the key and migrated \
+                      the existing entries; all config tests pass now.";
+        let mut server = Server::new();
+        let m1 = setup_answer_mock(&mut server, answer);
+
+        let engine = create_engine(&server.url());
+        let events = collect_events(&engine);
+
+        m1.assert();
+        assert!(!saw_nudge_user_message(&events));
+        assert_eq!(nudge_warning_count(&events), 0);
+        assert!(saw_completed(&events));
+    }
+
+    #[test]
+    fn test_engine_nudges_on_empty_completion() {
+        // Empty completion (zero-usage sentinel path): the MessageDelta
+        // defers, the stream ends unfinalized, and the post-loop recovery
+        // region must re-prompt instead of ending the query silently.
+        let mut server = Server::new();
+        let m1 = setup_empty_completion_mock(&mut server);
+        let m2 = setup_answer_mock(&mut server, "Recovered with the actual answer.");
+
+        let engine = create_engine(&server.url());
+        let events = collect_events(&engine);
+
+        m1.assert();
+        m2.assert(); // second API call proves the session continued
+        assert!(saw_nudge_user_message(&events));
+        assert_eq!(nudge_warning_count(&events), 1);
+        assert!(saw_completed(&events));
+    }
+
+    #[test]
+    fn test_engine_stops_nudging_after_consecutive_think_only_limit() {
+        // Three consecutive think-only responses: the first two are nudged
+        // (budget 2), the third ends the query exactly as before the
+        // feature — Completed, no fourth API call. Env is pinned to the
+        // default so an ambient override can't skew the budget.
+        use std::sync::{Mutex, OnceLock};
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env-var test mutex poisoned");
+        let saved = std::env::var("SHANNON_THINK_ONLY_NUDGE_MAX").ok();
+        // edition 2024: set_var/remove_var are unsafe.
+        unsafe {
+            std::env::set_var("SHANNON_THINK_ONLY_NUDGE_MAX", "2");
+        };
+
+        let mut server = Server::new();
+        let m1 = setup_think_only_mock(&mut server);
+        let m2 = setup_think_only_mock(&mut server);
+        let m3 = setup_think_only_mock(&mut server);
+
+        let engine = create_engine(&server.url());
+        let events = collect_events(&engine);
+
+        unsafe {
+            match saved.as_deref() {
+                Some(v) => std::env::set_var("SHANNON_THINK_ONLY_NUDGE_MAX", v),
+                None => std::env::remove_var("SHANNON_THINK_ONLY_NUDGE_MAX"),
+            }
+        }
+
+        // Exactly three API calls: two nudged retries + the final think-only
+        // response that exhausts the budget and completes the query. A fourth
+        // request would find no mock and fail the query instead.
+        m1.assert();
+        m2.assert();
+        m3.assert();
+
+        assert_eq!(
+            nudge_warning_count(&events),
+            2,
+            "exactly two nudges before the budget is exhausted"
+        );
+        assert!(saw_nudge_user_message(&events));
+        assert!(
+            saw_completed(&events),
+            "after the budget is exhausted the query ends via the original completion path"
+        );
+    }
 }

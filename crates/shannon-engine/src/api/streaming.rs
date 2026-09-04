@@ -177,12 +177,10 @@ impl SseStream {
         let Some(timeout) = self.idle_timeout else {
             return;
         };
-        let timer = self.idle_timer.get_or_insert_with(|| {
-            Box::pin(tokio::time::sleep(timeout))
-        });
-        timer
-            .as_mut()
-            .reset(tokio::time::Instant::now() + timeout);
+        let timer = self
+            .idle_timer
+            .get_or_insert_with(|| Box::pin(tokio::time::sleep(timeout)));
+        timer.as_mut().reset(tokio::time::Instant::now() + timeout);
     }
 
     /// Parse all complete SSE lines from the buffer, queuing parsed events.
@@ -258,10 +256,7 @@ impl Stream for SseStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // Return any pending events first
         if !self.pending_events.is_empty() {
-            let event = self
-                .pending_events
-                .pop_front()
-                .expect("checked non-empty");
+            let event = self.pending_events.pop_front().expect("checked non-empty");
             if let Ok(event) = &event {
                 self.note_content(event);
             }
@@ -281,10 +276,7 @@ impl Stream for SseStream {
                     self.drain_buffer();
 
                     if !self.pending_events.is_empty() {
-                        let event = self
-                            .pending_events
-                            .pop_front()
-                            .expect("checked non-empty");
+                        let event = self.pending_events.pop_front().expect("checked non-empty");
                         if let Ok(event) = &event {
                             self.note_content(event);
                         }
@@ -303,10 +295,7 @@ impl Stream for SseStream {
                         let events = self.parse_sse_line(&remaining);
                         self.pending_events.extend(events);
                         if !self.pending_events.is_empty() {
-                            let event = self
-                                .pending_events
-                                .pop_front()
-                                .expect("checked non-empty");
+                            let event = self.pending_events.pop_front().expect("checked non-empty");
                             if let Ok(event) = &event {
                                 self.note_content(event);
                             }
@@ -1276,11 +1265,7 @@ mod tests {
         use futures::StreamExt;
         use std::time::Instant;
 
-        let chunks = fake_chunks(
-            vec![keepalive_line()],
-            Duration::from_millis(100),
-            true,
-        );
+        let chunks = fake_chunks(vec![keepalive_line()], Duration::from_millis(100), true);
         let mut sse = SseStream::for_test_with_chunks(
             chunks,
             LlmProvider::Anthropic,
@@ -1361,8 +1346,7 @@ mod tests {
             done_line(),
         ];
         let chunks = fake_chunks(pieces, Duration::from_millis(150), false);
-        let mut sse =
-            SseStream::for_test_with_chunks(chunks, LlmProvider::Anthropic, None);
+        let mut sse = SseStream::for_test_with_chunks(chunks, LlmProvider::Anthropic, None);
 
         let mut text = String::new();
         let mut saw_stop = false;
