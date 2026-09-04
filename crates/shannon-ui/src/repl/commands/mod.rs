@@ -15,6 +15,7 @@ mod remote;
 mod session;
 mod web;
 
+pub(crate) use goal::ReplGoalAccess;
 pub(crate) use goal::check_goal_continuation;
 
 // Re-export the single switch-path helper so the REPL init/resume paths

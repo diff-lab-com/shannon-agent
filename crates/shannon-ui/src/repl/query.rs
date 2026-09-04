@@ -299,6 +299,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     query_engine.set_focus_area(repl.state.focus_area.clone());
     // Sync the session goal (/goal) so its system block is injected this query
     query_engine.set_goal(repl.state.goal.as_ref().and_then(|g| g.to_spec()));
+    // P2.5 wiring — mirror the goal into the tool-facing live handle so
+    // goal_get / goal_update observe (and can transition) this turn's goal.
+    repl.goal_shared.sync_from(&repl.state.goal);
 
     let query_id = Uuid::new_v4();
     let session_id = Uuid::new_v4();
@@ -1507,6 +1510,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 &repl.state.status,
             );
 
+            // P2.5 wiring — pull mid-turn goal_update transitions into the
+            // REPL-owned state before the continuation check replays them.
+            if let Some((pulled, _)) = repl.goal_shared.take_transition() {
+                repl.state.goal = Some(pulled);
+            }
             // Check if the session goal auto-continues; if it did, skip the
             // ralph/loop checks so only one auto-continuation loop runs.
             let goal_continued = super::commands::check_goal_continuation(repl);
