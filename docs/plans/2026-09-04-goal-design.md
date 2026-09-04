@@ -2,7 +2,7 @@
 
 - 日期：2026-09-04
 - 依据：[竞品调研与差距分析](../research/2026-09-04-goal-competitive-research.md)
-- 状态：v3（v2 + 复检修订 R13/R14，见 §11）
+- 状态：v4（v3 + R15 默认轮数哲学修正，见 §11）
 - 关联：对标 Claude Code `/goal`（2.1.139+）与 Codex CLI Goals（0.128+）
 
 ---
@@ -58,7 +58,7 @@ pub struct GoalState {
     pub status: GoalStatus,
     /// 已发生的自主续跑次数
     pub iterations: usize,
-    /// 续跑上限；0 = 不限（默认 25）
+    /// 续跑上限；0 = 不限（R15 后的默认——停止由完成审计/预算/进展信号决定）
     pub max_iterations: usize,
 }
 // ReplState 新增：pub goal: Option<GoalState>
@@ -343,5 +343,6 @@ pub(crate) enum GoalMarker { Complete, Blocked(String) }
 | R10 | PM | 设置 goal 后若无消息则无任何事发生，用户困惑 | §5.1 确认文案显式写"发送一条消息即可开始"；StartIfIdle 列为 Phase 2（§6.2） |
 | R11 | 架构 | 查询错误/中断路径的 goal 语义未定义（会否无限重试烧 token？） | §6.2 明确：Err 分支不执行续跑判定，goal 保持 Active 仅锚定、不自动重试 |
 | R12 | 架构 | goal 续跑与 queued_messages 排队语义的交互未定义 | §6.2 作为已知限制记录：沿用 /ralph 既有行为，不新造排队语义 |
+| R15 | PM+架构 | **默认轮数哲学修正（用户拍板）**：R13 的"默认 25"前提（无预算护栏兜底）在 P2.3/P2.5 落地后失效。真正决定停止的是完成审计/预算/进展信号；轮数上限仅作显式可选兜底 | `GOAL_DEFAULT_MAX_ITERATIONS` 25 → **0（不限）**；`--max N` 显式启用兜底。竞品对照：Claude Code/Codex 均无轮数上限。/ralph 默认 → **100**（对齐 OpenHands `max_iterations`，任务迭代粒度小、合法轮数多）；/loop 维持默认不限（修正：方案 §3 曾误记 loop 默认 10，实际一直为 0）。⚠️ loop = 无终止判据 + 无主动护栏 + 默认不限，三重叠加为三循环中最危险——anti-spin/stall 向 loop/ralph 的移植（统一 LoopGuard）从可选升级为**必要跟进项** |
 | R13 | 架构 | `--max` 默认 25 缺依据；竞品默认是多少？ | 深度对标后维持 25：LangGraph `recursion_limit` 默认即 25（唯一有文档默认步数上限的主流框架）；高于 Shannon `/ralph`/`/loop` 的 10（goal 作用域更大）；低于 OpenHands `max_iterations` 100（其配套 stuck detector，goal MVP 没有）。竞品两端（Claude Code/Codex 无轮数上限）靠预算记账/anti-spin/check-in 兜底——恰是 Phase 2 项，落地后再重估默认值。触顶可恢复（Paused + resume 重置预算），错配代价不对称：偏低仅多一次 resume，偏高烧 token。 |
 | R14 | 架构 | **缺陷修正**：续跑经 `submit_input` 从 `handle_query` 框架内递归——测试栈溢出实证，`--max 0` 时无界 | §6.4 修正：改走 `queued_messages` + 扁平排水循环，栈深 O(1)；新增递归回归测试与 FIFO 顺序测试。`/ralph`/`/loop` 同构隐患如实报告，列为跟进项（错误语义耦合，零破坏约束内不动） |

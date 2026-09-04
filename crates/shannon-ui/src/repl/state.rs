@@ -402,17 +402,18 @@ pub struct GoalState {
 /// auto_test::no_progress_strikes both use 3 as the default).
 pub const GOAL_DEFAULT_MAX_STALL_STRIKES: usize = 3;
 
-/// Default continuation cap.
+/// Default continuation cap — **unlimited** (0).
 ///
-/// Calibration (see `docs/plans/2026-09-04-goal-design.md` §11 R13): each
-/// iteration is a full agentic turn, so this is a cost bound, not a progress
-/// measure. 25 matches LangGraph's `recursion_limit` default, sits 2.5×
-/// above Shannon's own `/ralph`/`/loop` (10 — smaller task-iteration scope),
-/// and well below OpenHands' `max_iterations` (100), which is paired with a
-/// stuck detector the goal MVP lacks. Hitting the cap is recoverable: the
-/// goal pauses and `/goal resume` re-arms a fresh budget. Revisit once
-/// budget accounting / anti-spin land (Phase 2).
-pub const GOAL_DEFAULT_MAX_ITERATIONS: usize = 25;
+/// R15 (revisiting R13): the active guard rails landed in Phase 2 are the
+/// real stop signals — strict completion contract (goal_update tool /
+/// GOAL_COMPLETE marker), anti-spin (2 consecutive no-tool turns),
+/// stall strikes (3), GOAL_BLOCKED pause, and the optional `--budget` cap.
+/// A total-turn cap is a blunt unit mismatch (a turn is neither a unit of
+/// progress nor of cost) and defaults to off, matching Claude Code and
+/// Codex, which ship no turn cap at all. `--max N` re-introduces an
+/// explicit fallback cap when the user wants one; hitting it pauses the
+/// goal (recoverable via `/goal resume`).
+pub const GOAL_DEFAULT_MAX_ITERATIONS: usize = 0;
 
 impl GoalState {
     pub fn new(objective: impl Into<String>) -> Self {
@@ -785,10 +786,10 @@ mod tests {
     }
 
     #[test]
-    fn goal_state_default_max_is_25() {
+    fn goal_state_default_max_is_unlimited() {
         let g = GoalState::new("ship it");
         assert_eq!(g.max_iterations, GOAL_DEFAULT_MAX_ITERATIONS);
-        assert_eq!(g.max_iterations, 25);
+        assert_eq!(g.max_iterations, 0, "R15: default is unlimited");
         assert_eq!(g.status, GoalStatus::Active);
         assert_eq!(g.iterations, 0);
     }

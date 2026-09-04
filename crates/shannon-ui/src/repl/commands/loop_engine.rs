@@ -6,6 +6,15 @@ use crate::{Result, widgets::ChatRole};
 use shannon_tools::Tool;
 
 use super::super::Repl;
+
+/// P2.6/R15 — default iteration cap for `/ralph`. Task-iteration loops run
+/// smaller-grained turns than goals and legitimately need many passes
+/// (refactor-until-green style tasks); 100 aligns with OpenHands'
+/// `max_iterations` default, the only mainstream agent with a documented
+/// turn cap of this scale. `--max N` overrides; the cap is a fallback —
+/// ralph stops on its completion keyword (final-line match) first.
+pub(crate) const RALPH_DEFAULT_MAX_ITERATIONS: usize = 100;
+
 /// Persist the current loop/ralph state via the same read-modify-write
 /// path used by `/goal` — drop on `None` so a stoppable save wins over
 /// the merge.
@@ -236,12 +245,10 @@ pub(crate) fn handle_ralph(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     }
 
-    // P2.6 — default iteration cap raised from 10 → 25. Matches goal's
-    // GOAL_DEFAULT_MAX_ITERATIONS: with anti-spin + stall strikes (P2.1/P2.2)
-    // as active guards, the loop has real progress signals so the total cap
-    // can be a less-restrictive fallback. Old default of 10 was both too
-    // tight for legitimate long iterations and too loose for drift.
-    let mut max_iter: usize = 25;
+    // P2.6/R15 — default cap 100 (RALPH_DEFAULT_MAX_ITERATIONS); `--max N`
+    // overrides. Task-iteration loops legitimately need many passes; 100
+    // aligns with OpenHands' max_iterations default.
+    let mut max_iter: usize = RALPH_DEFAULT_MAX_ITERATIONS;
     let mut keywords: Vec<String> = vec![
         "DONE".into(),
         "FIXED".into(),
@@ -254,7 +261,11 @@ pub(crate) fn handle_ralph(repl: &mut Repl, args: &str) -> Result<()> {
     // Parse --max N
     if let Some(rest) = remaining.strip_prefix("--max ") {
         let parts: Vec<&str> = rest.splitn(2, ' ').collect();
-        max_iter = parts.first().unwrap_or(&"10").parse().unwrap_or(10);
+        max_iter = parts
+            .first()
+            .unwrap_or(&"100")
+            .parse()
+            .unwrap_or(RALPH_DEFAULT_MAX_ITERATIONS);
         remaining = parts.get(1).copied().unwrap_or("").trim();
     }
 
@@ -2482,14 +2493,22 @@ DONE"
     }
 
     #[test]
-    fn ralph_default_max_iterations_relaxed_to_25() {
-        // P2.6 — the default cap went from 10 → 25 now that P2.1/P2.2's
-        // progress guards (anti-spin, stall strikes) are in place. This
-        // test pins the new default so accidental regressions are caught.
+    fn ralph_default_max_iterations_is_100() {
+        // P2.6/R15 — task-iteration loops need many passes; 100 aligns with
+        // OpenHands' max_iterations default. Pins the constant so accidental
+        // regressions are caught, and checks the --max fallback uses it too
+        // (the old code fell back to a hardcoded 10 on parse failure).
         let mut repl = active_repl();
         handle_ralph(&mut repl, "ship it").unwrap();
         let rs = repl.state.ralph_state.as_ref().expect("ralph state");
-        assert_eq!(rs.max_iterations, 25, "default cap must be 25");
+        assert_eq!(rs.max_iterations, 100, "default cap must be 100");
+        assert_eq!(rs.max_iterations, RALPH_DEFAULT_MAX_ITERATIONS);
+
+        // Invalid --max falls back to the same constant, not a stray 10.
+        let mut repl = active_repl();
+        handle_ralph(&mut repl, "--max abc ship it").unwrap();
+        let rs = repl.state.ralph_state.as_ref().expect("ralph state");
+        assert_eq!(rs.max_iterations, RALPH_DEFAULT_MAX_ITERATIONS);
     }
 
     #[test]
