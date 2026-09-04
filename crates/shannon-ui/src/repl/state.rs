@@ -417,7 +417,6 @@ impl RalphState {
     }
 }
 
-
 /// Persisted UI state saved across sessions for restore.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersistedUiState {
@@ -843,7 +842,7 @@ mod tests {
 // server/desktop clients can drive it; re-exported here to keep the
 // established `crate::repl::state::*` paths working.
 pub use shannon_core::goal::{
-    GoalState, GoalStatus, GOAL_DEFAULT_MAX_ITERATIONS, GOAL_DEFAULT_MAX_STALL_STRIKES,
+    GOAL_DEFAULT_MAX_ITERATIONS, GOAL_DEFAULT_MAX_STALL_STRIKES, GoalState, GoalStatus,
 };
 
 /// Shared, live handle to the session goal (P2.5 wiring).

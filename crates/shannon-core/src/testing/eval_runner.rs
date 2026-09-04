@@ -166,6 +166,9 @@ pub enum EvalTier {
     MultiStep,
     /// Deliberate snag followed by course correction.
     Recovery,
+    /// Goal-anchored runs: the prompt carries a session-goal block with the
+    /// strict completion-marker contract (P2.5/#5 eval track).
+    Goal,
 }
 
 impl EvalTier {
@@ -177,6 +180,7 @@ impl EvalTier {
             EvalTier::Search => "search",
             EvalTier::MultiStep => "multi_step",
             EvalTier::Recovery => "recovery",
+            EvalTier::Goal => "goal",
         }
     }
 }
@@ -503,6 +507,7 @@ impl EvalTask {
     pub fn effective_horizon(&self) -> Horizon {
         self.horizon.unwrap_or(match self.tier {
             EvalTier::Read | EvalTier::Search | EvalTier::Edit => Horizon::Short,
+            EvalTier::Goal => Horizon::Mid,
             EvalTier::MultiStep | EvalTier::Recovery => Horizon::Mid,
         })
     }

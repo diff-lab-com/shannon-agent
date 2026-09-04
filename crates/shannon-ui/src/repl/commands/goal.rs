@@ -29,33 +29,32 @@ pub(crate) struct ReplGoalAccess {
 
 impl shannon_tools::goal::GoalStateAccess for ReplGoalAccess {
     fn snapshot(&self) -> Option<shannon_tools::goal::GoalSnapshot> {
-        self.shared.current().map(|g| shannon_tools::goal::GoalSnapshot {
-            objective: g.objective,
-            status: match g.status {
-                GoalStatus::Active => "active",
-                GoalStatus::Paused => "paused",
-                GoalStatus::Complete => "complete",
-            }
-            .to_string(),
-            iterations: g.iterations,
-            max_iterations: g.max_iterations,
-            max_budget_usd: g.max_budget_usd,
-        })
+        self.shared
+            .current()
+            .map(|g| shannon_tools::goal::GoalSnapshot {
+                objective: g.objective,
+                status: match g.status {
+                    GoalStatus::Active => "active",
+                    GoalStatus::Paused => "paused",
+                    GoalStatus::Complete => "complete",
+                }
+                .to_string(),
+                iterations: g.iterations,
+                max_iterations: g.max_iterations,
+                max_budget_usd: g.max_budget_usd,
+            })
     }
 
-    fn apply_update(
-        &self,
-        outcome: shannon_tools::goal::GoalUpdateOutcome,
-    ) -> Option<()> {
+    fn apply_update(&self, outcome: shannon_tools::goal::GoalUpdateOutcome) -> Option<()> {
         self.shared.apply(outcome)
     }
 }
 
 pub(crate) use crate::repl::loop_guard::turn_had_tool_calls;
 pub(crate) use shannon_core::goal::{
+    BLOCKED_AUDIT_TURNS, GoalContinuation, GoalMarker, ProgressReport, TurnFacts,
     continuation_prompt, goal_completion_marker, goal_continuation_decision,
-    goal_continuation_decision_with_facts, parse_progress_report, GoalContinuation,
-    GoalMarker, ProgressReport, TurnFacts, BLOCKED_AUDIT_TURNS,
+    goal_continuation_decision_with_facts, parse_progress_report,
 };
 
 /// Parsed `/goal` subcommand.
