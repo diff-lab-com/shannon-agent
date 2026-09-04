@@ -765,7 +765,8 @@ impl Default for QueryEngineConfig {
                      - Use Read/Grep/Glob to understand code before editing.\n\
                      - Prefer Edit over Write for existing files.\n\
                      - Use Bash for system commands, builds, and tests.\n\
-                     - After writing code, run relevant tests to verify.\n\
+                     - After writing code, run tests or builds only if a toolchain is available: probe first (e.g. `command -v cargo`); when it is missing, verify by re-reading your changes instead of hunting for missing tools.\n\
+                     - When the requested changes are complete, give your final answer promptly; do not spend remaining turns on extra confirmation.\n\
                      - When editing, include enough context for unique matches.\n\
                      \n\
                      ## Code Editing Rules\n\
@@ -1374,5 +1375,35 @@ mod tests {
         let cost = CostTracker::calculate_cost("gpt-4.1", 1_000_000, 500_000);
         // 1M * 2.0/1M + 500K * 8.0/1M = 2.0 + 4.0 = 6.0
         assert!((cost - 6.0).abs() < 0.001);
+    }
+
+    // -- Default system prompt verification guidance (A2) --
+
+    #[test]
+    fn test_default_system_prompt_verification_guidance_is_availability_aware() {
+        let prompt = QueryEngineConfig::default()
+            .system_prompt
+            .expect("default system prompt is configured");
+
+        // Eval finding A2 (docs/eval-findings-2026-09-glm.md): the blanket
+        // "run relevant tests to verify" instruction made agents burn every
+        // remaining turn hunting for a toolchain in sandboxes without
+        // rustc/cargo/python3, ending in turn_limit failures.
+        assert!(
+            !prompt.contains("After writing code, run relevant tests to verify"),
+            "blanket verify-by-running-tests instruction must be gone"
+        );
+        assert!(
+            prompt.contains("command -v"),
+            "prompt must suggest probing toolchain availability (e.g. command -v)"
+        );
+        assert!(
+            prompt.contains("toolchain"),
+            "prompt must frame verification as availability-aware"
+        );
+        assert!(
+            prompt.contains("final answer"),
+            "prompt must tell the agent to wrap up once the goal is met"
+        );
     }
 }
