@@ -18,6 +18,45 @@ use crate::repl::state::{GOAL_DEFAULT_MAX_ITERATIONS, GoalState, GoalStatus};
 use crate::widgets::ChatRole;
 use rust_i18n::t;
 
+// Decision machine re-exports (moved to `shannon_core::goal`, P2.5/#4).
+/// REPL-side [`shannon_tools::goal::GoalStateAccess`] implementation: the
+/// tools read and mutate the live [`GoalShared`] handle; the REPL replays
+/// transitions onto `ReplState.goal` at query completion (see
+/// `check_goal_continuation`).
+pub(crate) struct ReplGoalAccess {
+    pub shared: crate::repl::state::GoalShared,
+}
+
+impl shannon_tools::goal::GoalStateAccess for ReplGoalAccess {
+    fn snapshot(&self) -> Option<shannon_tools::goal::GoalSnapshot> {
+        self.shared
+            .current()
+            .map(|g| shannon_tools::goal::GoalSnapshot {
+                objective: g.objective,
+                status: match g.status {
+                    GoalStatus::Active => "active",
+                    GoalStatus::Paused => "paused",
+                    GoalStatus::Complete => "complete",
+                }
+                .to_string(),
+                iterations: g.iterations,
+                max_iterations: g.max_iterations,
+                max_budget_usd: g.max_budget_usd,
+            })
+    }
+
+    fn apply_update(&self, outcome: shannon_tools::goal::GoalUpdateOutcome) -> Option<()> {
+        self.shared.apply(outcome)
+    }
+}
+
+pub(crate) use crate::repl::loop_guard::turn_had_tool_calls;
+pub(crate) use shannon_core::goal::{
+    BLOCKED_AUDIT_TURNS, GoalContinuation, GoalMarker, ProgressReport, TurnFacts,
+    continuation_prompt, goal_completion_marker, goal_continuation_decision,
+    goal_continuation_decision_with_facts, parse_progress_report,
+};
+
 /// Parsed `/goal` subcommand.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum GoalAction {
@@ -72,54 +111,6 @@ pub(crate) fn parse_goal_args(args: &str) -> GoalAction {
     }
 }
 
-/// Completion marker contract: the marker must be the reply's final
-/// non-empty line. `GOAL_COMPLETE` must match exactly (case-insensitive);
-/// `GOAL_BLOCKED` may carry a `: reason` suffix. A marker anywhere else —
-/// mid-text, in a code block, or as a hyphenated word — does not count.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum GoalMarker {
-    Complete,
-    Blocked(String),
-}
-
-pub(crate) fn goal_completion_marker(msg: &str) -> Option<GoalMarker> {
-    let last = msg.lines().rev().find(|l| !l.trim().is_empty())?;
-    let trimmed = last.trim();
-    if trimmed.eq_ignore_ascii_case(GOAL_COMPLETE_MARKER) {
-        return Some(GoalMarker::Complete);
-    }
-    if trimmed.to_uppercase().starts_with(GOAL_BLOCKED_MARKER) {
-        let reason = trimmed
-            .get(GOAL_BLOCKED_MARKER.len()..)
-            .unwrap_or("")
-            .trim_start_matches([':', ' '])
-            .trim()
-            .to_string();
-        return Some(GoalMarker::Blocked(reason));
-    }
-    None
-}
-
-/// Prompt injected when the goal is not yet complete and the loop
-/// auto-continues. Surfaces in the input box like `/ralph` iterations —
-/// transparent to the user and logged as a normal turn.
-pub(crate) fn continuation_prompt(goal: &GoalState) -> String {
-    let max = if goal.max_iterations == 0 {
-        "∞".to_string()
-    } else {
-        goal.max_iterations.to_string()
-    };
-    format!(
-        "[Goal iteration {}/{max}] Continue working toward the goal: {}\n\n\
-         The goal is NOT yet complete — no completion marker was detected in your last reply.\n\
-         Before continuing:\n\
-         1. Progress check: what concrete progress did the last iteration make? If none was made and none is possible, explain why and end your reply with \"{}: <reason>\".\n\
-         2. Re-verify what remains. Do not redo completed work.\n\
-         3. When the goal is fully met and you have audited completion with evidence, end your final line with exactly: {}",
-        goal.iterations, goal.objective, GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER
-    )
-}
-
 /// Persist the current goal via read-modify-write on the sidecar.
 ///
 /// Read-modify-write matters: the per-turn sidecar saves elsewhere only set
@@ -139,6 +130,78 @@ pub(crate) fn save_goal_sidecar(repl: &Repl) {
     if let Err(e) = store.save_sidecar_replace(&session_id, &sidecar) {
         tracing::debug!("goal sidecar save error: {e}");
     }
+}
+
+/// Backoff schedule for blocked check-ins (minutes): 30m → 1h → 2h,
+/// capped at [`MAX_GOAL_CHECKINS`] fires — Claude Code's contract.
+pub(crate) const CHECK_IN_BACKOFF_MINUTES: [i64; 3] = [30, 60, 120];
+pub(crate) const MAX_GOAL_CHECKINS: usize = 3;
+
+/// First-delay override; `0` disables check-ins entirely (mirrors
+/// Claude Code's CLAUDE_CODE_GOAL_CHECKIN_MINUTES=0).
+fn check_in_disabled() -> bool {
+    std::env::var("SHANNON_GOAL_CHECKIN_MINUTES")
+        .ok()
+        .map(|v| v.trim() == "0")
+        .unwrap_or(false)
+}
+
+/// Compute when the next blocked check-in should fire, or `None` when the
+/// budget is exhausted / check-ins are disabled.
+pub(crate) fn schedule_check_in(goal: &GoalState) -> Option<chrono::DateTime<chrono::Utc>> {
+    if check_in_disabled() || goal.checkins >= MAX_GOAL_CHECKINS {
+        return None;
+    }
+    let idx = goal.checkins.min(CHECK_IN_BACKOFF_MINUTES.len() - 1);
+    Some(chrono::Utc::now() + chrono::Duration::minutes(CHECK_IN_BACKOFF_MINUTES[idx]))
+}
+
+/// Run-loop hook: fire a due blocked check-in. Returns true when a check-in
+/// query was staged (the caller should let the query pipeline run it).
+pub(crate) fn maybe_fire_check_in(repl: &mut Repl) -> bool {
+    let due = {
+        let Some(goal) = repl.state.goal.as_ref() else {
+            return false;
+        };
+        if goal.status != GoalStatus::Paused {
+            return false;
+        }
+        goal.next_check_in_at
+            .is_some_and(|at| chrono::Utc::now() >= at)
+    };
+    if !due {
+        return false;
+    }
+
+    // Re-arm as an Active goal for one check-in turn; the counter persists
+    // so the backoff escalates and the 3-fire cap holds.
+    let (checkins, objective) = {
+        let goal = repl.state.goal.as_mut().expect("checked above");
+        goal.status = GoalStatus::Active;
+        goal.checkins += 1;
+        goal.next_check_in_at = schedule_check_in(goal);
+        (goal.checkins, goal.objective.clone())
+    };
+    save_goal_sidecar(repl);
+    repl.chat.add_message(
+        ChatRole::System,
+        format!(
+            "Goal check-in {checkins}/{}: re-testing the blocker.",
+            MAX_GOAL_CHECKINS
+        ),
+    );
+    // We are called from the run loop (not inside handle_query), so
+    // submitting here is recursion-safe.
+    let prompt = format!(
+        "[Goal check-in {checkins}] The goal \"{objective}\" was paused because of a blocker.\n\
+         Check whether the blocker is now resolved. If it is, continue working toward the goal.\n\
+         If it still holds, end your reply with GOAL_BLOCKED: <reason>."
+    );
+    repl.prompt.set_input(prompt);
+    if super::submit_input(repl, None).is_err() {
+        return false;
+    }
+    true
 }
 
 /// Handle `/goal ...`.
@@ -217,6 +280,10 @@ pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
                 // would resume one strike closer to the cap.
                 goal.consecutive_no_tool_turns = 0;
                 goal.stall_strikes = 0;
+                // Explicit user action: the check-in budget restarts and any
+                // pending check-in is cancelled.
+                goal.checkins = 0;
+                goal.next_check_in_at = None;
                 // Re-baseline the cost budget: the resumed goal's --budget
                 // applies to post-resume spend only.
                 goal.cost_baseline_usd = repl.state.billing_manager.get_period_summary().total_cost;
@@ -256,6 +323,10 @@ pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
                 stall_strikes: 0,
                 max_budget_usd: max_budget_usd,
                 cost_baseline_usd,
+                blocked_streak: 0,
+                last_block_reason: None,
+                checkins: 0,
+                next_check_in_at: None,
             });
             save_goal_sidecar(repl);
             let max = if max_iterations == 0 {
@@ -277,171 +348,12 @@ pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
-/// What should happen to the goal after a turn ends. Pure decision — all
-/// state mutations and side effects live in [`check_goal_continuation`].
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum GoalContinuation {
-    /// No active goal — nothing to do.
-    Inactive,
-    /// Completion marker seen: mark the goal Complete.
-    Completed,
-    /// Blocker marker seen: pause the goal and surface the reason.
-    Blocked(String),
-    /// Budget exhausted: pause the goal.
-    MaxReached,
-    /// P2.1/P2.2 — anti-spin or stall-strike threshold tripped; pause and
-    /// surface the reason. The reason carries the strike counts so the user
-    /// can see why the goal was halted without /goal resume blindly.
-    PausedNoProgress(String),
-    /// P2.3 — goal budget cap exceeded; treated as a recoverable terminal
-    /// (must explicitly re-raise cap or /goal clear, similar to Paused).
-    BudgetLimited(String),
-    /// Keep going: `iterations` is the next value to store, `prompt` the
-    /// continuation text to inject.
-    Continue { iterations: usize, prompt: String },
-}
-
-/// What a turn actually did, in terms the guard rails can compare. Filled
-/// in by the impure [`check_goal_continuation`] path from REPL state.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct TurnFacts {
-    /// True iff at least one tool message was produced since the last
-    /// user input (deterministic anti-spin signal).
-    pub had_tool_calls: bool,
-    /// USD spent during this turn (P2.3 budget accounting). 0.0 if not
-    /// available; the budget cap only fires when both `Some` and `>= cap`.
-    pub cost_delta_usd: f64,
-}
-
-/// Scan `chat` for tool messages produced since the last user message.
-/// Cheap O(n) scan over the bounded chat deque.
-fn turn_had_tool_calls(chat: &crate::widgets::ChatWidget) -> bool {
-    use crate::widgets::ChatRole;
-    for msg in chat.messages().iter().rev() {
-        match msg.role {
-            ChatRole::User => return false,
-            ChatRole::Tool => return true,
-            _ => {}
-        }
-    }
-    false
-}
-
-/// REPL-side [`shannon_tools::goal::GoalStateAccess`] implementation: the
-/// tools read and mutate the live [`GoalShared`] handle; the REPL replays
-/// transitions onto `ReplState.goal` at query completion (see
-/// `check_goal_continuation`).
-pub(crate) struct ReplGoalAccess {
-    pub shared: crate::repl::state::GoalShared,
-}
-
-impl shannon_tools::goal::GoalStateAccess for ReplGoalAccess {
-    fn snapshot(&self) -> Option<shannon_tools::goal::GoalSnapshot> {
-        self.shared
-            .current()
-            .map(|g| shannon_tools::goal::GoalSnapshot {
-                objective: g.objective,
-                status: match g.status {
-                    GoalStatus::Active => "active",
-                    GoalStatus::Paused => "paused",
-                    GoalStatus::Complete => "complete",
-                }
-                .to_string(),
-                iterations: g.iterations,
-                max_iterations: g.max_iterations,
-                max_budget_usd: g.max_budget_usd,
-            })
-    }
-
-    fn apply_update(&self, outcome: shannon_tools::goal::GoalUpdateOutcome) -> Option<()> {
-        self.shared.apply(outcome)
-    }
-}
-
-/// Pure continuation decision (unit-tested): inspects the goal state and the
-/// last assistant reply and decides the next lifecycle step.
+/// Called after a query completes (before the ralph/loop checks). Applies the
+/// [`goal_continuation_decision`] for the current goal: finish it, pause it,
+/// or inject the next continuation turn.
 ///
-/// Assumes `had_tool_calls=true` (the optimistic default kept for callers
-/// that don't observe the chat widget); see
-/// [`goal_continuation_decision_with_facts`] for the realistic path.
-pub(crate) fn goal_continuation_decision(
-    goal: &GoalState,
-    last_assistant: Option<&str>,
-) -> GoalContinuation {
-    goal_continuation_decision_with_facts(
-        goal,
-        last_assistant,
-        TurnFacts {
-            had_tool_calls: true,
-            cost_delta_usd: 0.0,
-        },
-    )
-}
-
-/// Decision with explicit turn facts. `had_tool_calls=false` triggers the
-/// anti-spin / stall-strike countdown; `true` resets it. Both signals share
-/// a single strike budget so a turn that merely "tries again" cannot
-/// indefinitely extend itself.
-pub(crate) fn goal_continuation_decision_with_facts(
-    goal: &GoalState,
-    last_assistant: Option<&str>,
-    facts: TurnFacts,
-) -> GoalContinuation {
-    if goal.status != GoalStatus::Active {
-        return GoalContinuation::Inactive;
-    }
-    // Termination markers short-circuit the progress guards.
-    match last_assistant.and_then(goal_completion_marker) {
-        Some(GoalMarker::Complete) => return GoalContinuation::Completed,
-        Some(GoalMarker::Blocked(reason)) => return GoalContinuation::Blocked(reason),
-        None => {}
-    }
-    let next = goal.iterations + 1;
-    let max_hit = goal.max_iterations > 0 && next > goal.max_iterations;
-    let mut next_goal = goal.clone();
-    next_goal.iterations = next;
-    if facts.had_tool_calls {
-        next_goal.consecutive_no_tool_turns = 0;
-        next_goal.stall_strikes = next_goal.stall_strikes.saturating_sub(1);
-    } else {
-        next_goal.consecutive_no_tool_turns += 1;
-        next_goal.stall_strikes += 1;
-    }
-    if max_hit {
-        return GoalContinuation::MaxReached;
-    }
-    // P2.3 — budget cap (USD). Budget beat max_iterations in the verdict
-    // priority: spending money is more irreversible than burning turns.
-    let budget_limit_hit = goal
-        .max_budget_usd
-        .map(|cap| facts.cost_delta_usd >= cap)
-        .unwrap_or(false);
-    if budget_limit_hit {
-        let cap = goal.max_budget_usd.unwrap_or(0.0);
-        return GoalContinuation::BudgetLimited(format!(
-            "Goal budget exhausted (${:.4} \u{2265} cap ${:.4}). The goal stays paused; raise the cap with /goal <obj> --budget ${:.4} or /goal clear to drop.",
-            facts.cost_delta_usd, cap, cap
-        ));
-    }
-    if next_goal.consecutive_no_tool_turns >= 2 {
-        return GoalContinuation::PausedNoProgress(format!(
-            "Two consecutive turns with no tool calls. Pause and decide whether to /goal resume or /goal clear (strike {}/{})",
-            next_goal.stall_strikes,
-            crate::repl::state::GOAL_DEFAULT_MAX_STALL_STRIKES
-        ));
-    }
-    if next_goal.stall_strikes >= crate::repl::state::GOAL_DEFAULT_MAX_STALL_STRIKES {
-        return GoalContinuation::PausedNoProgress(format!(
-            "Reached stall-strike budget ({}/{}). Pause to inspect; /goal resume re-arms the budget, /goal clear drops the goal",
-            next_goal.stall_strikes,
-            crate::repl::state::GOAL_DEFAULT_MAX_STALL_STRIKES
-        ));
-    }
-    GoalContinuation::Continue {
-        iterations: next,
-        prompt: continuation_prompt(&next_goal),
-    }
-}
+/// Returns true if a new goal iteration was started (callers must then skip
+/// the ralph/loop checks so only one auto-continuation loop runs).
 
 /// Called after a query completes (before the ralph/loop checks). Applies the
 /// [`goal_continuation_decision`] for the current goal: finish it, pause it,
@@ -499,6 +411,7 @@ pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
     let facts = TurnFacts {
         had_tool_calls: turn_had_tool_calls(&repl.chat),
         cost_delta_usd,
+        progress: last.as_deref().and_then(parse_progress_report),
     };
     match goal_continuation_decision_with_facts(&goal_snapshot, last.as_deref(), facts) {
         GoalContinuation::Inactive => false,
@@ -519,9 +432,11 @@ pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
             repl.chat.add_message(ChatRole::System, msg);
             false
         }
-        GoalContinuation::Blocked(reason) => {
+        GoalContinuation::Blocked { next, reason } => {
             let goal = repl.state.goal.as_mut().expect("snapshot existed");
+            *goal = next;
             goal.status = GoalStatus::Paused;
+            goal.next_check_in_at = schedule_check_in(goal);
             save_goal_sidecar(repl);
             repl.chat.add_message(
                 ChatRole::System,
@@ -529,9 +444,10 @@ pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
             );
             false
         }
-        GoalContinuation::MaxReached => {
+        GoalContinuation::MaxReached { next } => {
             let max = {
                 let goal = repl.state.goal.as_mut().expect("snapshot existed");
+                *goal = next;
                 goal.status = GoalStatus::Paused;
                 goal.max_iterations
             };
@@ -542,26 +458,12 @@ pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
             );
             false
         }
-        GoalContinuation::PausedNoProgress(reason) => {
-            // Snapshot the decision's counters and persist them on the real
-            // goal — the decision is pure and we trust its numbers. Mirrors
-            // the strike-budget math in goal_continuation_decision_with_facts.
-            let next_strikes = {
-                let mut snapshot_next = goal_snapshot.clone();
-                snapshot_next.iterations += 1;
-                if facts.had_tool_calls {
-                    snapshot_next.consecutive_no_tool_turns = 0;
-                    snapshot_next.stall_strikes = snapshot_next.stall_strikes.saturating_sub(1);
-                } else {
-                    snapshot_next.consecutive_no_tool_turns += 1;
-                    snapshot_next.stall_strikes += 1;
-                }
+        GoalContinuation::PausedNoProgress { next, reason } => {
+            let strikes = {
                 let goal = repl.state.goal.as_mut().expect("snapshot existed");
+                *goal = next;
                 goal.status = GoalStatus::Paused;
-                goal.iterations = snapshot_next.iterations;
-                goal.consecutive_no_tool_turns = snapshot_next.consecutive_no_tool_turns;
-                goal.stall_strikes = snapshot_next.stall_strikes;
-                snapshot_next.stall_strikes
+                goal.stall_strikes
             };
             save_goal_sidecar(repl);
             repl.chat.add_message(
@@ -569,15 +471,16 @@ pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
                 t!(
                     "commands.goal.paused_no_progress",
                     reason = reason,
-                    strikes = next_strikes,
+                    strikes = strikes,
                     max_strikes = crate::repl::state::GOAL_DEFAULT_MAX_STALL_STRIKES
                 )
                 .to_string(),
             );
             false
         }
-        GoalContinuation::BudgetLimited(reason) => {
+        GoalContinuation::BudgetLimited { next, reason } => {
             let goal = repl.state.goal.as_mut().expect("snapshot existed");
+            *goal = next;
             goal.status = GoalStatus::Paused;
             save_goal_sidecar(repl);
             repl.chat.add_message(
@@ -586,20 +489,9 @@ pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
             );
             false
         }
-        GoalContinuation::Continue { iterations, prompt } => {
+        GoalContinuation::Continue { next, prompt } => {
             let goal = repl.state.goal.as_mut().expect("snapshot existed");
-            goal.iterations = iterations;
-            // Persist the guard counters advanced by the decision.
-            goal.consecutive_no_tool_turns = if facts.had_tool_calls {
-                0
-            } else {
-                goal.consecutive_no_tool_turns + 1
-            };
-            goal.stall_strikes = if facts.had_tool_calls {
-                goal.stall_strikes.saturating_sub(1)
-            } else {
-                goal.stall_strikes + 1
-            };
+            *goal = next;
             save_goal_sidecar(repl);
             // Queue the continuation instead of calling submit_input here:
             // this hook runs inside handle_query's stack frame, and a direct
@@ -867,8 +759,8 @@ mod handler_tests {
         let goal = GoalState::new("fix lint");
         let d = goal_continuation_decision(&goal, Some("I looked at the code."));
         match d {
-            GoalContinuation::Continue { iterations, prompt } => {
-                assert_eq!(iterations, 1);
+            GoalContinuation::Continue { next, prompt } => {
+                assert_eq!(next.iterations, 1);
                 assert!(prompt.contains("[Goal iteration 1/∞]"));
                 assert!(prompt.contains("fix lint"));
                 assert!(prompt.contains(GOAL_BLOCKED_MARKER));
@@ -896,10 +788,10 @@ mod handler_tests {
         // for the fallback cap to exist at all.
         goal.max_iterations = 10;
         goal.iterations = goal.max_iterations; // budget exhausted
-        assert_eq!(
+        assert!(matches!(
             goal_continuation_decision(&goal, Some("still working")),
-            GoalContinuation::MaxReached
-        );
+            GoalContinuation::MaxReached { .. }
+        ));
     }
 
     #[test]
@@ -909,13 +801,19 @@ mod handler_tests {
             goal_continuation_decision(&goal, Some("All good.\nGOAL_COMPLETE")),
             GoalContinuation::Completed
         );
-        assert_eq!(
-            goal_continuation_decision(
-                &goal,
-                Some("Cannot access cluster.\nGOAL_BLOCKED: no kubeconfig")
-            ),
-            GoalContinuation::Blocked("no kubeconfig".into())
-        );
+        // The first blocked claim only starts the audit (1/3) — the goal
+        // keeps going with an audit warning in the continuation prompt.
+        match goal_continuation_decision(
+            &goal,
+            Some("Cannot access cluster.\nGOAL_BLOCKED: no kubeconfig"),
+        ) {
+            GoalContinuation::Continue { next, prompt } => {
+                assert_eq!(next.blocked_streak, 1);
+                assert_eq!(next.last_block_reason.as_deref(), Some("no kubeconfig"));
+                assert!(prompt.contains("blocked audit"), "audit warning expected");
+            }
+            other => panic!("first claim must continue, got {other:?}"),
+        }
     }
 
     #[test]
@@ -958,20 +856,73 @@ mod handler_tests {
     }
 
     #[test]
-    fn continuation_blocked_marker_pauses() {
+    fn continuation_blocked_audit_pauses_on_third_consecutive_claim() {
+        // Codex-style 3-turn audit: the SAME blocker must persist 3 goal
+        // turns before the pause is accepted.
         let _home = HomeGuard::new();
         let mut repl = Repl::new().expect("minimal repl");
         repl.state.goal = Some(GoalState::new("deploy"));
+
+        // Turn 1: claim recorded (audit 1/3) — the model is sent back to
+        // try alternatives, so the loop continues with the audit warning.
         repl.chat.add_message(
             crate::widgets::ChatRole::Assistant,
             "Cannot access cluster.\nGOAL_BLOCKED: no kubeconfig".to_string(),
         );
+        assert!(check_goal_continuation(&mut repl));
+        assert_eq!(repl.state.goal.as_ref().unwrap().status, GoalStatus::Active);
+        assert_eq!(repl.state.goal.as_ref().unwrap().blocked_streak, 1);
+        let queued = repl.state.queued_messages.last().unwrap();
+        assert!(queued.contains("blocked audit"));
 
-        let continued = check_goal_continuation(&mut repl);
-        assert!(!continued);
+        // Between turns: the audit continuation was queued by the decision
+        // path only via Continue — simulate the model claiming again on the
+        // next turn (2/3), still continuing.
+        repl.state.goal.as_mut().unwrap().iterations = 1;
+        repl.chat.add_message(
+            crate::widgets::ChatRole::Assistant,
+            "Still cannot access cluster.\nGOAL_BLOCKED: no kubeconfig".to_string(),
+        );
+        assert!(check_goal_continuation(&mut repl), "audit 2/3 keeps going");
+        assert_eq!(repl.state.goal.as_ref().unwrap().blocked_streak, 2);
+
+        // Turn 3: audit satisfied → paused with the reason surfaced.
+        repl.state.goal.as_mut().unwrap().iterations = 2;
+        repl.chat.add_message(
+            crate::widgets::ChatRole::Assistant,
+            "No way around it.\nGOAL_BLOCKED: no kubeconfig".to_string(),
+        );
+        assert!(!check_goal_continuation(&mut repl));
         let goal = repl.state.goal.as_ref().unwrap();
         assert_eq!(goal.status, GoalStatus::Paused);
         assert!(last_message(&repl).contains("no kubeconfig"));
+    }
+
+    #[test]
+    fn blocked_audit_streak_resets_on_different_reason() {
+        let _home = HomeGuard::new();
+        let mut repl = Repl::new().expect("minimal repl");
+        repl.state.goal = Some(GoalState::new("deploy"));
+
+        for reason in ["no kubeconfig", "no kubeconfig", "flaky tests"] {
+            repl.chat.add_message(
+                crate::widgets::ChatRole::Assistant,
+                format!("Blocked.\nGOAL_BLOCKED: {reason}"),
+            );
+            // Audit continuation — each claim goes back to work.
+            assert!(check_goal_continuation(&mut repl));
+        }
+        // "flaky tests" differs from "no kubeconfig" → streak restarted at 1.
+        assert_eq!(repl.state.goal.as_ref().unwrap().blocked_streak, 1);
+        assert_eq!(
+            repl.state
+                .goal
+                .as_ref()
+                .unwrap()
+                .last_block_reason
+                .as_deref(),
+            Some("flaky tests")
+        );
     }
 
     #[test]
@@ -1095,10 +1046,11 @@ mod handler_tests {
             TurnFacts {
                 had_tool_calls: false,
                 cost_delta_usd: 0.0,
+                progress: None,
             },
         );
         assert!(
-            matches!(d, GoalContinuation::PausedNoProgress(_)),
+            matches!(d, GoalContinuation::PausedNoProgress { .. }),
             "two consecutive no-tool turns must pause: {d:?}"
         );
     }
@@ -1114,10 +1066,11 @@ mod handler_tests {
             TurnFacts {
                 had_tool_calls: false,
                 cost_delta_usd: 0.0,
+                progress: None,
             },
         );
         assert!(
-            matches!(d, GoalContinuation::PausedNoProgress(_)),
+            matches!(d, GoalContinuation::PausedNoProgress { .. }),
             "stall-strike budget must trip: {d:?}"
         );
     }
@@ -1133,6 +1086,7 @@ mod handler_tests {
             TurnFacts {
                 had_tool_calls: true,
                 cost_delta_usd: 0.0,
+                progress: None,
             },
         );
         assert!(matches!(d, GoalContinuation::Continue { .. }), "{d:?}");
@@ -1217,9 +1171,10 @@ mod handler_tests {
             TurnFacts {
                 had_tool_calls: true,
                 cost_delta_usd: 1.5,
+                progress: None,
             },
         );
-        assert!(matches!(d, GoalContinuation::BudgetLimited(_)), "{d:?}");
+        assert!(matches!(d, GoalContinuation::BudgetLimited { .. }), "{d:?}");
     }
 
     #[test]
@@ -1232,6 +1187,7 @@ mod handler_tests {
             TurnFacts {
                 had_tool_calls: true,
                 cost_delta_usd: 100.0,
+                progress: None,
             },
         );
         assert!(matches!(d, GoalContinuation::Continue { .. }), "{d:?}");
@@ -1338,5 +1294,142 @@ mod handler_tests {
         // Baseline re-captured at resume: current total (4.0) becomes the
         // new zero point, so the $5 cap applies to post-resume spend.
         assert!((goal.cost_baseline_usd - 4.0).abs() < 1e-9);
+    }
+
+    // ── P2.2 verified-wait self-report ──────────────────────────────────
+
+    #[test]
+    fn parse_progress_report_lines() {
+        assert_eq!(
+            parse_progress_report("GOAL_PROGRESS: progress\nrest"),
+            Some(ProgressReport::Progress)
+        );
+        assert_eq!(
+            parse_progress_report("goal_progress: verified_wait"),
+            Some(ProgressReport::VerifiedWait)
+        );
+        assert_eq!(
+            parse_progress_report("GOAL_PROGRESS: no-progress"),
+            Some(ProgressReport::NoProgress)
+        );
+        assert_eq!(parse_progress_report("no marker here"), None);
+        assert_eq!(parse_progress_report("GOAL_PROGRESS: nonsense"), None);
+    }
+
+    #[test]
+    fn verified_wait_with_evidence_holds_strikes() {
+        let mut goal = GoalState::new("ship");
+        goal.stall_strikes = 2;
+        let d = goal_continuation_decision_with_facts(
+            &goal,
+            Some("GOAL_PROGRESS: verified_wait\ntest suite running"),
+            TurnFacts {
+                had_tool_calls: true,
+                cost_delta_usd: 0.0,
+                progress: Some(ProgressReport::VerifiedWait),
+            },
+        );
+        match d {
+            GoalContinuation::Continue { next, .. } => {
+                assert_eq!(next.stall_strikes, 2, "verified wait holds the budget");
+            }
+            other => panic!("expected Continue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_progress_selfreport_counts_even_with_tools() {
+        let mut goal = GoalState::new("ship");
+        goal.stall_strikes = 2;
+        let d = goal_continuation_decision_with_facts(
+            &goal,
+            Some("GOAL_PROGRESS: no_progress"),
+            TurnFacts {
+                had_tool_calls: true,
+                cost_delta_usd: 0.0,
+                progress: Some(ProgressReport::NoProgress),
+            },
+        );
+        match d {
+            GoalContinuation::Continue { next, .. } => {
+                assert_eq!(next.stall_strikes, 3, "no-progress claim increments");
+            }
+            GoalContinuation::PausedNoProgress { .. } => {
+                // 2+1 = 3 → trip on this very turn is also acceptable.
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn selfreport_without_evidence_is_no_progress() {
+        let goal = GoalState::new("ship");
+        let d = goal_continuation_decision_with_facts(
+            &goal,
+            Some("GOAL_PROGRESS: progress"),
+            TurnFacts {
+                had_tool_calls: false,
+                cost_delta_usd: 0.0,
+                progress: Some(ProgressReport::Progress),
+            },
+        );
+        // Claimed progress without tool activity counts as a strike.
+        match d {
+            GoalContinuation::Continue { next, .. } => assert_eq!(next.stall_strikes, 1),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    // ── P2.4 check-in backoff ───────────────────────────────────────────
+
+    #[test]
+    fn checkin_backoff_escalates_and_caps() {
+        let mut goal = GoalState::new("deploy");
+        goal.checkins = 0;
+        let t0 = schedule_check_in(&goal);
+        assert!(t0.is_some());
+
+        goal.checkins = 1;
+        let t1 = schedule_check_in(&goal);
+        assert!(t1 > t0, "backoff escalates 30m → 1h");
+
+        goal.checkins = 3;
+        assert!(schedule_check_in(&goal).is_none(), "3-fire cap");
+    }
+
+    #[test]
+    fn maybe_fire_check_in_rearms_and_counts() {
+        let _home = HomeGuard::new();
+        let mut repl = Repl::new().expect("minimal repl");
+        let mut goal = GoalState::new("deploy");
+        goal.status = GoalStatus::Paused;
+        goal.next_check_in_at = Some(chrono::Utc::now() - chrono::Duration::minutes(1)); // due
+        repl.state.goal = Some(goal);
+
+        // We are the run loop (not inside handle_query) — submit fails in
+        // the minimal REPL after staging, but the counters must advance.
+        let _ = maybe_fire_check_in(&mut repl);
+        let goal = repl.state.goal.as_ref().unwrap();
+        assert_eq!(goal.checkins, 1, "check-in counted");
+        assert!(
+            goal.next_check_in_at.is_some(),
+            "next backoff scheduled (the in-REPL submit may additionally run              the completion hook and pause — that is its own contract)"
+        );
+    }
+
+    #[test]
+    fn maybe_fire_check_in_ignores_active_or_unscheduled() {
+        let _home = HomeGuard::new();
+        let mut repl = Repl::new().expect("minimal repl");
+        assert!(!maybe_fire_check_in(&mut repl), "no goal");
+
+        let mut goal = GoalState::new("active goal");
+        repl.state.goal = Some(goal.clone());
+        assert!(!maybe_fire_check_in(&mut repl), "active goal");
+
+        goal.status = GoalStatus::Paused;
+        goal.next_check_in_at = None;
+        repl.state.goal = Some(goal);
+        assert!(!maybe_fire_check_in(&mut repl), "no schedule");
     }
 }

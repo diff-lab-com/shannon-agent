@@ -95,6 +95,7 @@ pub mod credential_manager;
 pub mod doctor;
 pub mod enhanced_suggestions;
 pub mod feature_flags;
+pub mod goal;
 pub mod housekeeping;
 pub mod lsp;
 pub mod mcp_server_approval;

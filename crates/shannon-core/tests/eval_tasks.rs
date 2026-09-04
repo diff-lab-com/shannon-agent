@@ -19,12 +19,12 @@ fn tasks_dir() -> PathBuf {
         .join("tasks")
 }
 
-/// ① The shipped suite is exactly 20 well-formed tasks.
+/// ① The shipped suite is well-formed; #5 added the goal track (22 tasks).
 #[test]
-fn suite_has_twenty_wellformed_tasks() {
+fn suite_is_wellformed_and_complete() {
     let dir = tasks_dir();
     let tasks = parse_tasks_dir(&dir).expect("suite parses");
-    assert_eq!(tasks.len(), 20, "expected 20 tasks in {}", dir.display());
+    assert_eq!(tasks.len(), 22, "expected 22 tasks in {}", dir.display());
 
     let ids: Vec<_> = tasks.iter().map(|t| t.id.as_str()).collect();
     let mut sorted = ids.clone();
@@ -34,7 +34,7 @@ fn suite_has_twenty_wellformed_tasks() {
         .iter()
         .collect::<std::collections::HashSet<_>>()
         .len();
-    assert_eq!(unique, 20, "task ids must be unique");
+    assert_eq!(unique, 22, "task ids must be unique");
 
     for task in &tasks {
         assert!(
@@ -75,6 +75,7 @@ fn tier_distribution_matches_plan() {
     assert_eq!(counts.get("search"), Some(&3));
     assert_eq!(counts.get("multi_step"), Some(&6));
     assert_eq!(counts.get("recovery"), Some(&3));
+    assert_eq!(counts.get("goal"), Some(&2), "#5 goal eval track");
 
     // File naming mirrors tier labels for easy eyeballing.
     for task in &tasks {
@@ -84,6 +85,7 @@ fn tier_distribution_matches_plan() {
             EvalTier::Search => "search_",
             EvalTier::MultiStep => "multi_",
             EvalTier::Recovery => "rec_",
+            EvalTier::Goal => "goal_",
         };
         assert!(
             task.id.starts_with(prefix),
@@ -147,14 +149,14 @@ fn consecutive_runs_stay_digest_stable() {
     let (report_a, run_dir_a) = run_suite(&tasks, &options_a).expect("suite A");
     let (report_b, _) = run_suite(&tasks, &options_b).expect("suite B");
 
-    assert_eq!(report_a.tasks_total, 20);
+    assert_eq!(report_a.tasks_total, 22);
     assert_eq!(
         report_a
             .records
             .iter()
             .filter(|r| r.status == RunStatus::Passed)
             .count(),
-        20,
+        22,
         "full rehearsal must be green"
     );
 
@@ -181,7 +183,7 @@ fn consecutive_runs_stay_digest_stable() {
 
 // ── §4.7 W2-M2: metrics, failure classification, version comparison ────
 
-/// ① 20 题全跑指标字段完整: every dry-run rehearsal row carries a complete
+/// ① 全部 22 题指标字段完整: every dry-run rehearsal row carries a complete
 /// metrics blob (zero-missing field contract), stamped `derived_stream`, with
 /// provenance + per-task metrics.json persisted beside each workspace.
 #[test]
@@ -206,7 +208,7 @@ fn full_suite_metrics_are_complete_for_every_task() {
         "rule fingerprint anchors the report to a rule-table version"
     );
 
-    assert_eq!(report.records.len(), 20);
+    assert_eq!(report.records.len(), 22);
     for record in &report.records {
         let metrics = record.metrics.as_ref().unwrap_or_else(|| {
             panic!(

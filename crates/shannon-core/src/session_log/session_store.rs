@@ -128,6 +128,9 @@ pub struct StoredGoal {
     pub iterations: usize,
     #[serde(default)]
     pub max_iterations: usize,
+    /// Fired blocked check-ins (caps at 3 across restarts).
+    #[serde(default)]
+    pub checkins: usize,
 }
 
 impl SessionSidecar {
@@ -955,6 +958,7 @@ mod tests {
             status: "active".into(),
             iterations: 3,
             max_iterations: 25,
+            checkins: 0,
         };
         let json = serde_json::to_string(&goal).unwrap();
         let back: StoredGoal = serde_json::from_str(&json).unwrap();
@@ -984,6 +988,7 @@ mod tests {
                         status: "active".into(),
                         iterations: 1,
                         max_iterations: 25,
+                        checkins: 0,
                     }),
                     ..Default::default()
                 },
@@ -998,6 +1003,7 @@ mod tests {
                 status: "active".into(),
                 iterations: 1,
                 max_iterations: 25,
+                checkins: 0,
             })
         );
         // A goal-less save must not wipe the stored goal.
