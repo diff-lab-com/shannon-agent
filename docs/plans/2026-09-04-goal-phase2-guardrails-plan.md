@@ -2,7 +2,7 @@
 
 - 日期：2026-09-04
 - 分支：`feat/goal-phase2`（基于 dev @ 5ed493d9）
-- 状态：**决策已批准，4 批实施中**（见 §9 决策记录）
+- 状态：**4 批实施完成**（commits b414314b / 5a09506e / df4beb32 / 38c07272，均在 `feat/goal-phase2` 分支）
 - 前置：[goal 竞品调研](../research/2026-09-04-goal-competitive-research.md)、[goal 设计 v3](2026-09-04-goal-design.md)（§11 R13/R14）
 
 ---
@@ -103,7 +103,7 @@ pub enum GuardVerdict { Continue, WarnNoProgress, PauseBlocked(String), BudgetLi
 | **P2.1** | **anti-spin（零工具调用检测）** | 数据源：REPL 侧扫描本轮（最后一条 user 消息之后）的 tool 消息（`ChatMessage.tool_name` 已有）；判定并入续跑决策纯函数。第 1 次零工具 → 注入警告（"没有可验证动作"）；**连续 2 次 → 自动暂停**（Codex 是抑制一次，我们取更强的一档，因为 Shannon 无预算护栏兜底） | 单元：连续零工具轮计数与暂停判定；集成：构造零工具回复触发暂停 | S |
 | **P2.2** | **stall strikes（无进展打击）** | 续跑 prompt 增加自报分类（progress / verified wait / no progress——Codex continuation 模板原样移植），与 P2.1 的确定性检测**取或**（模型自报 no progress 或检测器判零工具都算 strike，好进展减一、下限 0）；`stall_strikes ≥ 3` → 暂停 + 输出根因重规划提示（Magentic-One 式："解释上次失败的根因，新计划须避免重复同样的错误"） | 单元：strike 加减与阈值；注入文案含重规划指令 | M |
 | **P2.3** | **预算记账（token/成本/时长）** | `LoopGuard` 启动时从 `BillingManager` 取快照（`get_period_summary` 已有 per-model 汇总）；`/goal <obj> --budget $5` / `--tokens 500k` 设限；每次续跑评估 `cost_delta ≥ max_budget_usd` → **BudgetLimited 终态**（区别于 Paused：需要用户显式 `/goal resume` 或提高预算）；pill 扩展显示已耗预算（对标 Codex Summary 面板：Status/Objective/Tokens/预算） | 单元：快照差值、终态判定；UI：pill/面板显示用量 | M |
-| **P2.4** | **check-in 退避（阻塞回访）** | goal 因 GOAL_BLOCKED 暂停后，经 `RoutineManager`（ReplState 已有）注册一次性回访任务：30m→1h→2h，最多 3 次；回访时注入 check-in 提示（"阻塞是否已解除？"），用户任何消息重置额度；`/goal` 状态面板显示下次回访时间 | 回访任务注册/触发/重置的单元测试；环境变量关闭开关（对标 `CLAUDE_CODE_GOAL_CHECKIN_MINUTES=0`） | M-L |
+| **P2.4** | **check-in 退避（阻塞回访）** | **实施推迟至独立 PR**：RoutineManager 当前只有 cron/interval 调度，无原生一次性 at-time 调度；需要新增 `RoutineManager::schedule_once(at: Instant, payload)` 与主循环驱动，整体工程量大于单批容量。在 `feat/goal-phase2` 分支的设计文档中保留为待办项。 | — | — |
 | **P2.5** | **goal 工具契约（get_goal/update_goal）** | Codex spec 移植：模型只能标 complete/blocked（blocked 需连续 3 轮同一阻塞）；marker 契约保留为**兜底**（工具缺失/未调用时）；headless 同样可用 | 工具注册、状态回传、与 marker 判定的优先级合并逻辑；全分支测试 | L |
 | **P2.6** | **ralph/loop 判据与默认值升级** | ① ralph 关键词 grep → goal 同款**严格末行 marker 契约**（详见 §6 兼容策略）；② `/ralph`/`/loop` 默认 10 → **25**（与 goal 对齐）；③ 状态注入块复用 goal 的防漂移纪律（fidelity/no-progress）；④ loop 增加"建议退出"提示（连续 stall 时建议用户确认是否继续） | marker 契约测试套件（goal 已有，复制适配）；关键词兼容路径测试 | M |
 
