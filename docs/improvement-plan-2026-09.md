@@ -1,7 +1,7 @@
 # Shannon 改进实施方案（2026-09，待评审）
 
 **日期**: 2026-09-05 ｜ **依据**: [docs/competitive-research-2026-09.md](./competitive-research-2026-09.md)（竞品调研与 Gap 分析）
-**状态**: 📝 待评审 —— 文末「§8 待评审决策点」需要拍板后进入排期
+**状态**: ✅ 已评审通过（2026-09-05），进入实施 —— 决议见文末「§8 决策记录」
 **与 2026-08 计划的关系**: 本计划接替 [improvement-plan-2026-08.md](./improvement-plan-2026-08.md) 中尚未完成的桌面任务块；8 月计划的 Wave 4 候选项中已被本计划吸收/取代的条目在 §9 对照表中标注。
 
 ---
@@ -26,7 +26,7 @@
 |---|---|---|---|---|---|
 | **P0-1** | README/文档事实一致性速赢 | 工程 | I-1/I-2 | 1d | A |
 | **P0-2** | Goal/Ralph/Loop 桌面入口 + 运行看板 | 自主任务 | G1 | 6-8d | A |
-| **P0-3** | 自动化收件箱：Triage 闭环 + API endpoint/GitHub 触发器 | 自动化 | G2 | 8-10d | A/B |
+| **P0-3** | 自动化收件箱：Triage 闭环 + API endpoint 触发器 + SQLite 存储 | 自动化 | G2 | 7-9d | A/B |
 | **P0-4** | 成本可观测：上下文拆解 + 缓存命中 + session 预算上限 | 成本 | G3 | 6-8d | A/B |
 | **P1-1** | Session/任务多窗口 | 工作区 | G4 | 5-7d | B |
 | **P1-2** | /batch + best-of-N worktree 并行桌面 UI（并排 diff 择优） | 编排 | G1/G4 | 8-10d | B |
@@ -36,12 +36,15 @@
 | **P1-6** | 迁移向导（Claude Code / ZCode → Shannon，全量） | 生态 | G7 | 5-6d | C |
 | **P2-1** | 移动派发 MVP（pairing → 审批+派发+进度推送） | 渠道 | G5 | 8-10d | D |
 | **P2-2** | Profile/人格整包导出导入 | 资产 | G8 | 4-5d | D |
-| **P2-3** | 交付物视图 + 办公 skills（docx/xlsx/pptx） | 办公线 | G9 | 8-10d | D |
+| **P2-3** | 办公 skills 试水（docx/xlsx，2-3 个社区级） | 办公线 | G9 | 4-6d | D |
 | **P2-4** | 记忆溯源与图谱 | 资产 | G8 | 5-6d | D+ |
 | **P2-5** | Idle-time 低峰任务队列（借鉴 ZCode，BYOK 场景=低峰低价模型跑批） | 自动化 | ZCode | 4-6d | D+ |
-| **P2-6** | VS Code 扩展重启（8 月 P2-8 遗留） | 编码线 | I-6 | 10-15d | 评审后 |
+| **P2-7** | GitHub 事件触发器（依赖公网网关方案，随渠道/网关工作评估） | 自动化 | G2 | 4-6d | D+ |
+| ~~P2-6~~ | ~~VS Code 扩展重启~~ | — | — | **已否决（2026-09-05 评审）** | — |
 
-**总量**：P0 ≈ 3 周（1-2 人）；P0+P1 ≈ 2.5-3 人月；P2 视评审取舍。
+**总量**：P0 ≈ 3 周（1-2 人）；P0+P1 ≈ 2.5-3 人月；P2 已取舍（P2-6 否决，其余保留）。
+
+> **评审决议（2026-09-05）**：VS Code 扩展永久放弃；IM 渠道 5 个（Telegram/Discord/Slack/飞书/钉钉）一次性全做、不拆小批；其余按调研建议执行（GitHub 触发器拆出 P0-3 → P2-7；工作区分期顺序为多窗口→预览自检→面板化→集成终端；billing Demo 隐藏不做真计费；SQLite 仅收件箱/automation 运行记录）。
 
 ---
 
@@ -65,16 +68,17 @@
 - **涉及**：`desktop/ui/src/pages/Tasks.tsx`、composer（`lib/slash/`）、新 `goal_commands.rs`（Tauri）、引擎侧零改动（Phase 2 刚合入）。
 - **验收**：桌面创建 goal 任务→自动续跑→完成/阻塞可观测→阻塞项出现在 Triage；预算耗尽时按 R15 语义正确停止；vitest+playwright 覆盖创建/中断/恢复路径。
 
-### P0-3 · 自动化收件箱：Triage 闭环 + 触发器矩阵（8-10d，可与 P0-2 并行）
+### P0-3 · 自动化收件箱：Triage 闭环 + API endpoint 触发器（7-9d，可与 P0-2 并行）
 
 - **问题/依据**：G2。Codex 的 Automations→review queue+原 thread 续跑是编排灵魂；Claude Routines 支持 cron/API endpoint/GitHub 三类触发，Shannon 只有 cron+webhook 出站通知。
 - **方案**：
   1. **收件箱**：routine/goal 产出一律进 `/triage`（已存在该页），条目带来源（哪个 routine/触发器）、产物链接、操作组：「在原会话续跑」（复用 thread 语义）/「重跑」/「归档」。
   2. **API endpoint 触发器**：`shannon serve`（127.0.0.1:33420）为每个 routine 暴露 `POST /routines/:id/trigger`，校验复用现有 HMAC-SHA256 webhook 签名体系；Claude 的「把 Slack 告警指向专属端点」场景即可成立。
-  3. **GitHub 触发器**：routine 可订阅 repo webhook 事件（issue_opened/pr_failed 等），第一批 4 个事件映射。
+  3. **SQLite 存储**（决议 D6，+2-3d）：收件箱条目与 automation 运行历史落地 SQLite（rusqlite bundled，仅此存储）；会话保持 events.jsonl 事件溯源不动。
   4. 执行历史已有（scheduled_commands），补「失败自动进收件箱并带错误摘要」。
+  5. GitHub 触发器**拆出**→ P2-7（本地端接收 GitHub webhook 需公网网关/tunnel，属网关架构决策，不阻塞 Wave A）。
 - **涉及**：`shannon-server`（routes/auth）、`shannon-core/scheduled_routines.rs`、desktop `/triage` 页、`scheduled_commands.rs`。
-- **验收**：curl 带 HMAC 触发 routine→结果 30s 内出现在收件箱→一键在原会话续跑且上下文保留；GitHub issue 触发 demo（用 shannon 仓库自身做 dogfood）；触发器文档覆盖三类。
+- **验收**：curl 带 HMAC 触发 routine→结果 30s 内出现在收件箱→一键在原会话续跑且上下文保留；收件箱支持按来源/状态过滤（SQLite 查询）；触发器文档覆盖 cron+API endpoint 两类。
 
 ### P0-4 · 成本可观测：上下文拆解 + 缓存命中 + session 预算（6-8d）
 
@@ -118,6 +122,7 @@
 ### P1-4 · 消息渠道入站第一批（10-12d）
 
 - **依据**：G5。Hermes ~20 渠道、WorkBuddy 微信直连+IM 入口验证「任务从 IM 进来」的需求；Shannon 只有出站通知。
+- **决议（2026-09-05）**：5 个渠道一次性全做，不拆「2+3」小批；微信个人号仍明确不做。
 - **方案**：第一批只做 5 个，全部走既有 webhook/HMAC/remote_trigger 底座：
   - **Telegram/Discord/Slack**：Bot 长连接或 Events API → 入站消息 → 创建会话/goal 任务 → 进度回推（复用出站模板）。
   - **飞书/钉钉**：开放平台事件订阅（国内企业场景，与 WorkBuddy 正面交锋点）。
@@ -128,6 +133,7 @@
 ### P1-5 · 可拖拽面板工作区 + 预览自检 + 集成终端（15-20d，可跨 Wave C/D 分期）
 
 - **依据**：G4。Claude Code 拖拽面板（按 repo 保存布局）+ 预览 DOM 自检是 2026 桌面标配；Shannon 单窗口固定布局。
+- **决议（2026-09-05）**：确认分期且顺序为——多窗口（P1-1，Wave B）→ 预览自检（C-1）→ 面板化（C-2）→ 集成终端（D）；面板化排在最后。
 - **分期**：
   1. **C-1 预览自检**（5d）：ArtifactPanel 升级——检测项目 dev server（`package.json`/`launch.json` 约定）、内嵌 webview、截图回传给模型自检（复用图像分析工具）。
   2. **C-2 面板化**（8-10d）：chat/diff/preview/terminal 四类面板自由拖拽布局，按 project 持久化。
@@ -148,10 +154,11 @@
 |---|---|---|---|
 | P2-1 | 移动派发 MVP | 基于 7 条 mobile pairing 命令做产品化：扫码配对→手机看任务/审批/派发；先做 PWA/本地 web（shannon serve 已有 HTTP+SSE），不急原生 App | 8-10d |
 | P2-2 | Profile 整包导出导入 | 对标 Hermes tar.gz（技能+记忆+persona+routines，密钥剥离）；也是团队分发 agent 的雏形 | 4-5d |
-| P2-3 | 交付物视图+办公 skills | 会话产物聚合页（对标 Hermes Artifacts 画廊+来源回跳）；docx/xlsx/pptx 生成 skills（办公线敲门砖，对标 WorkBuddy 交付物） | 8-10d |
+| P2-3 | 办公 skills 试水 | 2-3 个社区级 docx/xlsx 生成 skills 试水办公线（不做交付物大屏；若 traction 好，交付物视图下季度再评估） | 4-6d |
 | P2-4 | 记忆溯源+图谱 | 记忆条目→来源会话跳转；关系可视化（对标 Memory Graph） | 5-6d |
 | P2-5 | 低峰任务队列 | 对标 ZCode Idle-time Task：BYOK 场景下低峰把排队 routine 跑在更便宜模型/时段；与 P0-3 触发器共用队列 | 4-6d |
-| P2-6 | VS Code 扩展重启 | 8 月 P2-8 spike 已完成；建议以「桌面 companion」定位重启（会话列表+diff 审批），避免重造 IDE | 10-15d |
+| P2-7 | GitHub 事件触发器 | routine 订阅 repo webhook（issue_opened/pr_failed 等）；前置依赖：公网网关/tunnel 方案，随 P1-4 渠道与网关工作一并评估 | 4-6d |
+| ~~P2-6~~ | ~~VS Code 扩展重启~~ | **已否决（2026-09-05 评审）：放弃成为 VS Code 扩展**；编码线入口让位给 CLI+桌面双形态 | — |
 
 ---
 
@@ -167,14 +174,16 @@
 
 ---
 
-## 8. 待评审决策点
+## 8. 决策记录（2026-09-05 评审结论）
 
-1. **P0 范围确认**：P0-2/P0-3/P0-4 是否同意为 Wave A 全部内容？（P0-3 的 GitHub 触发器可后置到 Wave B 若资源紧张）
-2. **P1-5 拆分确认**：可拖拽工作区投入 15-20d，是否接受分期（先预览自检，后面板化）？或者接受固定布局 + 多窗口（P1-1）作为 Wave B/C 的替代？
-3. **渠道第一批名单**：P1-4 的 Telegram/Discord/Slack/飞书/钉钉 五个是否合适？微信个人号明确不做（合规）是否同意？
-4. **P2 取舍**：P2-6 VS Code 扩展（10-15d）与 P2-3 办公 skills 二选一还是都要？这决定编码线/办公线的资源倾斜。
-5. **billing Demo 页处理**：P0-4 提议隐藏/降级（I-5），还是排期做真计费（涉及商业化路线，超出本计划范围）？
-6. **SQLite 化（TD-3）**：建议随 P0-3 收件箱的数据需求一并做（收件箱需要结构化查询），确认是否纳入 Wave A。
+| # | 决策点 | 结论 |
+|---|---|---|
+| 1 | P0 范围 | ✅ 三项全进 Wave A；GitHub 触发器拆出 P0-3 → P2-7，P0-3 缩至 7-9d（含 SQLite） |
+| 2 | P1-5 工作区分期 | ✅ 接受分期，顺序：多窗口 → 预览自检 → 面板化 → 集成终端；面板化排最后 |
+| 3 | 渠道名单 | ✅ 5 个渠道（Telegram/Discord/Slack/飞书/钉钉）一次性全做，不拆小批；微信个人号不做 |
+| 4 | P2 取舍 | ✅ **放弃 VS Code 扩展（P2-6 否决）**；办公线按瘦身方案保留（P2-3 降为 2-3 个社区级 docx/xlsx skills） |
+| 5 | billing Demo 页 | ✅ 隐藏/降级（I-5），不做真计费；真计费待商业化路线立项 |
+| 6 | SQLite 化 | ✅ 窄范围纳入 Wave A：仅收件箱/automation 运行记录迁 SQLite；会话保持 events.jsonl，全量迁移不做 |
 
 ---
 
@@ -184,7 +193,7 @@
 |---|---|
 | P1-3c/3d Notion/Linear MCP | 未吸收——降级为「走 MCP 目录自然解决」，不再自研 adapter |
 | P2-2 ADR-0005 Phase 2 收尾 | 沿用 8 月计划排期，不重复列 |
-| P2-8 VS Code 扩展 | → 本计划 P2-6（需评审拍板） |
+| P2-8 VS Code 扩展 | 已否决（2026-09-05 评审：放弃成为 VS Code 扩展），从两期计划中移除 |
 | Wave 4 候选未列项（goal 桌面化/收件箱/成本面板/多窗口） | 本计划新增（调研结论驱动） |
 
 ---
