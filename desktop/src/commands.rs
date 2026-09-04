@@ -447,6 +447,7 @@ pub async fn send_message(
     app_handle: tauri::AppHandle,
     message: String,
     file_paths: Option<Vec<String>>,
+    budget_bypass: Option<bool>,
 ) -> Result<SendMessageResponse, String> {
     // P0-4: resolve the active session lazily. Falls through to creating
     // one if the registry is empty (the "first call ever" case).
@@ -462,6 +463,33 @@ pub async fn send_message(
             "A goal run is active on this session — pause or stop it from the Tasks page before sending messages"
                 .into(),
         );
+    }
+
+    // P0-4: session-budget pre-turn guard. Cumulative ledger spend for this
+    // session at/over the cap rejects the send and fires `budget:exceeded`
+    // (the frontend offers continue-once / raise-budget / stop).
+    // `budget_bypass` is the "continue once" choice: it exempts *exactly
+    // this send's* pre-turn check — the mid-turn streaming guard still
+    // enforces the cap.
+    let budget_cap_usd = crate::cost_commands::session_budget_usd(&state, session_id);
+    if let Some(cap) = budget_cap_usd {
+        if !budget_bypass.unwrap_or(false) {
+            let spent = crate::cost_commands::session_spent_usd(&state, &session_id.to_string());
+            if crate::cost_commands::budget_verdict(spent, cap)
+                == crate::cost_commands::BudgetVerdict::Exceeded
+            {
+                crate::cost_commands::emit_budget_status(
+                    &app_handle,
+                    false,
+                    &session_id.to_string(),
+                    spent,
+                    cap,
+                );
+                return Err(format!(
+                    "Session budget exceeded: spent ${spent:.4} of ${cap:.4} — continue (ignore once), raise the budget, or stop"
+                ));
+            }
+        }
     }
 
     // Prevent concurrent queries — check and set in a single lock scope to avoid TOCTOU race
@@ -651,6 +679,15 @@ pub async fn send_message(
     let usage_store_arc = state.usage_store.clone();
     let notifier_arc = state.notifier.clone();
     let session_for_task = active_session.clone();
+    // P0-4 mid-turn budget guard basis: spend already on the ledger before
+    // this turn started. The streaming Usage handler adds this turn's cost
+    // on top and enforces the cap (>=100% cancel + `budget:exceeded`,
+    // >=80% one-shot `budget:warning`). `None` cap = no accounting.
+    let budget_spent_basis = if budget_cap_usd.is_some() {
+        crate::cost_commands::session_spent_usd(&state, &session_id.to_string())
+    } else {
+        0.0
+    };
 
     // P2-5b: per-session in-process fan-out. Every event the loop
     // emits to the Tauri wire is also pushed onto `session_for_task`'s
@@ -716,6 +753,10 @@ pub async fn send_message(
         // Consume the stream using futures::StreamExt
         use futures::StreamExt;
         let mut pin_stream = std::pin::pin!(stream);
+
+        // P0-4 mid-turn budget accounting (see budget_spent_basis above).
+        let mut turn_cost_usd: f64 = 0.0;
+        let mut budget_warned = false;
 
         while let Some(event_result) = pin_stream.next().await {
             // Check for cancellation
@@ -853,6 +894,41 @@ pub async fn send_message(
                             payload.clone(),
                         ));
                         let _ = app.emit(event_names::QUERY_USAGE, payload);
+
+                        // P0-4 mid-turn budget enforcement: the first Usage
+                        // event at/over the cap cancels the turn (the loop
+                        // top emits `query:cancelled` and breaks) after
+                        // firing `budget:exceeded`; crossing 80% fires a
+                        // one-shot `budget:warning`. A single event large
+                        // enough to jump straight past 100% emits exceeded
+                        // only — no stray warning.
+                        if let Some(cap) = budget_cap_usd {
+                            turn_cost_usd += cost_usd;
+                            let spent = budget_spent_basis + turn_cost_usd;
+                            match crate::cost_commands::budget_verdict(spent, cap) {
+                                crate::cost_commands::BudgetVerdict::Exceeded => {
+                                    crate::cost_commands::emit_budget_status(
+                                        &app,
+                                        false,
+                                        &session_id.to_string(),
+                                        spent,
+                                        cap,
+                                    );
+                                    cancel_token_clone.cancel();
+                                }
+                                crate::cost_commands::BudgetVerdict::Warning if !budget_warned => {
+                                    budget_warned = true;
+                                    crate::cost_commands::emit_budget_status(
+                                        &app,
+                                        true,
+                                        &session_id.to_string(),
+                                        spent,
+                                        cap,
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                     QueryEvent::Completed { .. } => {
                         // Save final assistant message into the per-session buffer.

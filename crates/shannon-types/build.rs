@@ -113,6 +113,12 @@ fn main() {
         schemars::schema_for!(TaskRetryPayload),
     );
 
+    // P0-4 session-budget status events (budget:warning / budget:exceeded)
+    schemas.insert(
+        "BudgetStatusPayload".to_string(),
+        schemars::schema_for!(BudgetStatusPayload),
+    );
+
     // EventEnvelope (generic, using serde_json::Value as concrete type)
     schemas.insert(
         "EventEnvelope".to_string(),
@@ -278,6 +284,16 @@ pub struct ChatMessage {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct QueryCancelledPayload {
     pub query_id: String,
+}
+
+/// P0-4 session-budget status payload (must match src/events.rs exactly).
+/// Serde emits camelCase field names on the wire.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetStatusPayload {
+    pub session_id: String,
+    pub spent_usd: f64,
+    pub budget_usd: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

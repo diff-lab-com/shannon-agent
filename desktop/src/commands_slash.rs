@@ -38,7 +38,10 @@ pub struct SessionContextStats {
 /// already carries the resolved system prompt / context-window overrides);
 /// otherwise constructs a minimal one — the client is never contacted, the
 /// engine is only consulted for its local estimators.
-async fn restored_engine(state: &AppState, session_id: uuid::Uuid) -> Result<QueryEngine, String> {
+pub(crate) async fn restored_engine(
+    state: &AppState,
+    session_id: uuid::Uuid,
+) -> Result<QueryEngine, String> {
     let session = state
         .registry
         .get(crate::session_registry::SessionKey(session_id))

@@ -184,6 +184,20 @@ pub struct QueryCancelledPayload {
     pub query_id: String,
 }
 
+/// P0-4 session-budget status payload, shared by the `budget:warning`
+/// (>= 80% of the cap, fired once per turn) and `budget:exceeded` (cap
+/// reached — pre-turn reject or mid-turn cancel) events. Field names are a
+/// frozen contract (camelCase on the wire).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetStatusPayload {
+    pub session_id: String,
+    /// Cumulative session spend in USD at the time of the event.
+    pub spent_usd: f64,
+    /// The configured cap in USD.
+    pub budget_usd: f64,
+}
+
 /// Config updated event payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigUpdatedPayload {
@@ -319,6 +333,14 @@ pub mod event_names {
     /// `desktop/src/goal_commands.rs`). Frontend: Tasks-page goal run cards
     /// refresh on this instead of polling.
     pub const GOAL_UPDATED: &str = "goal:updated";
+    /// P0-4: the session's cumulative spend crossed 80% of its budget cap.
+    /// Payload: [`BudgetStatusPayload`]. Frontend: yellow advisory bar.
+    pub const BUDGET_WARNING: &str = "budget:warning";
+    /// P0-4: the session's budget cap was reached — a send was rejected
+    /// pre-turn or a running turn was cancelled mid-stream. Payload:
+    /// [`BudgetStatusPayload`]. Frontend: red choice bar (continue once with
+    /// bypass / raise the budget / stop).
+    pub const BUDGET_EXCEEDED: &str = "budget:exceeded";
     pub const UPDATE_AVAILABLE: &str = "update-available";
     pub const UPDATE_PROGRESS: &str = "update-progress";
     pub const UPDATE_COMPLETED: &str = "update-completed";
@@ -341,6 +363,24 @@ mod tests {
         assert!(event_names::QUERY_TEXT.contains(':'));
         assert!(event_names::TASK_STEP.contains(':'));
         assert!(event_names::TASK_RETRY.contains(':'));
+        assert!(event_names::BUDGET_WARNING.contains(':'));
+        assert!(event_names::BUDGET_EXCEEDED.contains(':'));
+    }
+
+    #[test]
+    fn budget_status_payload_is_frozen_camel_case() {
+        let p = BudgetStatusPayload {
+            session_id: "s1".into(),
+            spent_usd: 1.25,
+            budget_usd: 5.0,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"sessionId\""), "{json}");
+        assert!(json.contains("\"spentUsd\""), "{json}");
+        assert!(json.contains("\"budgetUsd\""), "{json}");
+        let back: BudgetStatusPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.session_id, "s1");
+        assert!((back.spent_usd - 1.25).abs() < 1e-9);
     }
 
     #[test]

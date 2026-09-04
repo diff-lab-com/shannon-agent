@@ -284,6 +284,12 @@ fn main() {
             shannon_desktop::goal_commands::pause_goal_run,
             shannon_desktop::goal_commands::resume_goal_run,
             shannon_desktop::goal_commands::update_goal_objective,
+            // P0-4 — cost observability: session budget + context
+            // breakdown + per-session usage aggregation
+            shannon_desktop::cost_commands::set_session_budget,
+            shannon_desktop::cost_commands::get_session_budget,
+            shannon_desktop::cost_commands::get_session_context_breakdown,
+            shannon_desktop::cost_commands::get_usage_by_session,
             // Automation: hook-event catalog + custom permission profiles
             shannon_desktop::automation_commands::list_hook_events,
             shannon_desktop::automation_commands::list_permission_profiles,

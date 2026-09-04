@@ -74,6 +74,12 @@ pub struct SessionSidecar {
     /// Active `/ralph` state at sidecar-save time, restored on resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ralph_state: Option<StoredRalph>,
+    /// P0-4: optional per-session spend cap in USD. Enforced by the desktop
+    /// shell (pre-turn reject / mid-turn cancel); `None` = no cap. Serde
+    /// default keeps older `meta.json` files (and `events.jsonl`, which this
+    /// sidecar never touches) fully backward-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_usd: Option<f64>,
 }
 
 /// Persistence DTO for an active `/loop`. The kind discriminates "task
@@ -490,6 +496,7 @@ impl SessionStore {
                 goal: None,
                 loop_state: None,
                 ralph_state: None,
+                budget_usd: None,
             },
         )?;
 
@@ -928,6 +935,7 @@ mod tests {
                     goal: None,
                     loop_state: None,
                     ralph_state: None,
+                    budget_usd: None,
                 },
             )
             .unwrap();

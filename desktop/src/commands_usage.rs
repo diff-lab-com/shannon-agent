@@ -109,6 +109,18 @@ impl UsageStore {
             .collect()
     }
 
+    /// Cumulative cost the ledger attributes to `session_id` (P0-4 budget
+    /// enforcement). Pre-attribution ledger lines (no `session_id`) count
+    /// toward no session's budget. Best-effort by nature: an unreadable
+    /// ledger reports zero spend.
+    pub fn spent_for_session(&self, session_id: &str) -> f64 {
+        self.load()
+            .iter()
+            .filter(|r| r.session_id.as_deref() == Some(session_id))
+            .map(|r| r.cost_usd)
+            .sum()
+    }
+
     /// Trim the ledger to the most recent `KEEP_RECORDS` entries once it
     /// exceeds `ROTATE_AT_BYTES`. Idempotent and a no-op below the
     /// threshold. Best-effort by contract: callers (append) ignore the

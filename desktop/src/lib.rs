@@ -185,6 +185,11 @@ pub mod inbox_commands;
 #[cfg(feature = "tauri")]
 pub mod goal_commands;
 
+/// P0-4 — cost observability: session budget, context breakdown and
+/// per-session usage aggregation commands.
+#[cfg(feature = "tauri")]
+pub mod cost_commands;
+
 #[cfg(feature = "tauri")]
 pub mod commands_routine_templates;
 

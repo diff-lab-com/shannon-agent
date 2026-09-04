@@ -5193,7 +5193,8 @@ mod tests {
         use crate::memory::{MemoryCategory, MemoryEntry, MemoryStore};
 
         // A minimal registry: one built-in, one MCP-prefixed, one skill.
-        let mut registry = ToolRegistry::new();
+        // (`ToolRegistry::register` takes `&self` — interior mutability.)
+        let registry = ToolRegistry::new();
         struct SchemaTool {
             name: String,
         }

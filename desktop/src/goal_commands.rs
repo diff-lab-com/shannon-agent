@@ -1497,6 +1497,35 @@ async fn run_turn_loop<R: tauri::Runtime, T: GoalTurnRunner + ?Sized>(
             None => {}
         }
 
+        // P0-4: session-budget guard — first-limit-wins with the goal's own
+        // budget. The goal cap is enforced inside the decision below; the
+        // session cap (sidecar `budget_usd`) is checked here against the
+        // usage ledger's cumulative session spend (goal turns write the same
+        // ledger as manual sends). Completion/block verdicts above win: the
+        // turn that actually finished (or hard-blocked) the goal is not
+        // retroactively aborted, but the run never continues past the cap.
+        {
+            let session_id = handle.state.lock().await.session_id;
+            let cap = deps.session_store().sidecar(&session_id).budget_usd;
+            if let Some(cap) = cap {
+                let spent = deps.usage_store.spent_for_session(&session_id.to_string());
+                if crate::cost_commands::budget_verdict(spent, cap)
+                    == crate::cost_commands::BudgetVerdict::Exceeded
+                {
+                    crate::cost_commands::emit_budget_status(
+                        app,
+                        false,
+                        &session_id.to_string(),
+                        spent,
+                        cap,
+                    );
+                    return GoalTerminal::Paused {
+                        reason: Some(format!("session budget reached: ${spent:.4} of ${cap:.4}")),
+                    };
+                }
+            }
+        }
+
         // Pure decision (shared with the TUI). The input carries the
         // counters as of *before* this turn's advancement — the core
         // advances them internally for its verdicts, and the arms below
@@ -2287,6 +2316,116 @@ mod tests {
             3,
             "2 emits on the continuing turn + 1 on the terminal turn"
         );
+    }
+
+    /// ⑤b P0-4: the session budget co-exists with the goal's own budget —
+    /// first-limit-wins. The session cap lives in the sidecar
+    /// (`budget_usd`); the ledger already holds spend at the cap, so after
+    /// the first turn the loop pauses with a session-budget reason and
+    /// emits `budget:exceeded` instead of queueing a continuation.
+    #[tokio::test]
+    async fn turn_loop_pauses_when_session_budget_exceeded() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tauri::Listener;
+
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = temp_deps(tmp.path());
+        let session = Uuid::new_v4();
+        let handle = fresh_handle(session);
+
+        // Session cap in the sidecar + cumulative session spend at the cap.
+        deps.session_store()
+            .save_sidecar_replace(
+                &session,
+                &shannon_core::session_log::SessionSidecar {
+                    budget_usd: Some(1.0),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        deps.usage_store
+            .append(&crate::commands_usage::record_event(
+                "test-model",
+                "anthropic",
+                crate::commands_usage::UsageTotals {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                    cost_usd: 1.0,
+                },
+                Some(&session.to_string()),
+            ))
+            .unwrap();
+
+        let exceeded = Arc::new(AtomicUsize::new(0));
+        let counter = exceeded.clone();
+        app.listen_any(event_names::BUDGET_EXCEEDED, move |_event| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let mut stub = StubTurnRunner::new(vec![
+            obs("Turn one done.", true),
+            obs("Turn two must never run.", true),
+        ]);
+
+        let terminal = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            run_turn_loop(&deps, &app, &handle, &mut stub),
+        )
+        .await
+        .expect("loop must not hang");
+        match terminal {
+            GoalTerminal::Paused { reason } => {
+                let reason = reason.expect("session-budget pause carries a reason");
+                assert!(
+                    reason.contains("session budget"),
+                    "reason must name the session budget: {reason}"
+                );
+            }
+            other => panic!("expected session-budget Paused, got {other:?}"),
+        }
+        assert_eq!(
+            exceeded.load(Ordering::SeqCst),
+            1,
+            "budget:exceeded fires once"
+        );
+        assert_eq!(
+            stub.messages().len(),
+            1,
+            "no continuation turn may start past the session cap"
+        );
+    }
+
+    /// ⑤c P0-4: under the session cap the guard is a no-op — the run
+    /// completes normally even with a sidecar cap present.
+    #[tokio::test]
+    async fn turn_loop_ignores_session_budget_below_the_cap() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = temp_deps(tmp.path());
+        let session = Uuid::new_v4();
+        let handle = fresh_handle(session);
+
+        deps.session_store()
+            .save_sidecar_replace(
+                &session,
+                &shannon_core::session_log::SessionSidecar {
+                    budget_usd: Some(10.0),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let mut stub = StubTurnRunner::new(vec![obs("Done.\nGOAL_COMPLETE", true)]);
+        let terminal = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            run_turn_loop(&deps, &app, &handle, &mut stub),
+        )
+        .await
+        .expect("loop must not hang");
+        assert!(matches!(terminal, GoalTerminal::Completed), "{terminal:?}");
     }
 
     /// ⑥ Fix round 1, Important 2 regression: a resume that lands *before*

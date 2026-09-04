@@ -73,6 +73,30 @@
     "title": "BackgroundTaskUpdate",
     "type": "object"
   },
+  "BudgetStatusPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "P0-4 session-budget status payload (must match src/events.rs exactly). Serde emits camelCase field names on the wire.",
+    "properties": {
+      "budgetUsd": {
+        "format": "double",
+        "type": "number"
+      },
+      "sessionId": {
+        "type": "string"
+      },
+      "spentUsd": {
+        "format": "double",
+        "type": "number"
+      }
+    },
+    "required": [
+      "budgetUsd",
+      "sessionId",
+      "spentUsd"
+    ],
+    "title": "BudgetStatusPayload",
+    "type": "object"
+  },
   "ChatMessage": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "properties": {
