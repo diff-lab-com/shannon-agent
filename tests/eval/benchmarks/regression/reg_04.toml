@@ -80,7 +80,10 @@ forbidden_tools = ["Write", "Bash"]
 [limits]
 max_turns = 8
 max_tokens = 300000
-timeout_secs = 180
+# RCA 2026-09-05 (F1.4): 180s killed three runs that had already written the
+# correct fix — glm-5.3-flash thinking-mode latency measured at 30-110s per
+# LLM turn on this (most algorithmic) task. 600s fits the agent, not the cap.
+timeout_secs = 600
 
 [dry_run]
 final_text = "Substitution is now single-pass; values can no longer inject placeholders."
