@@ -81,7 +81,28 @@
 
 ## 四、P4 验证计划（改进后复测）
 
-1. 回归池 n=3（改判分后先冻结 v2 规则基线，再跑改进后二进制对比）
-2. SWE50 n=1（P1b 同 anchor，仅换改进后二进制）→ 逐题对照 P1b
-3. 失败题复放：A1 靶题（minimax 3 个 think-only 题）、A2-A4 靶题（reg_01/05/07/09）
-4. 引用规范不变：n / date / anchor 三元组；改进前后以 app_version + 规则指纹区分
+### 4.1 快速验证结果（2026-09-05，n=1，改进后二进制 + v2 规则 + STREAM_IDLE_SECS=360）
+
+运行：`~/.shannon/eval/v3-glm-regression-postfix/20260904225307-ee60175e`。
+**回归池 3/10 → 6/10**；三个被救回的任务正是靶向任务：
+
+| 任务 | P1a | postfix | 机制 |
+|---|---|---|---|
+| reg_01 | turn_limit×3 | **pass**（4t） | 判分修正 + A2 收工指引 |
+| reg_03 | 0/3 | **pass**（2t） | MultiEdit 硬规则移除 |
+| reg_09 | turn_limit×3 | **pass**（3t） | A4 安全器放行 + A3 路径别名 |
+| reg_04 | timeout×3 | turn_limit（8t 用尽） | 不再超时；生成效率仍不足 |
+| reg_05 | 0/3 | failed | recovery 禁令仍被 Bash 验证冲动违反 ×2 |
+| reg_06 | flaky | failed（本轮） | 与 flaky 分桶一致 |
+
+n=1 数字仅内部参考（引用规范不变）。剩余问题（进入下一轮 backlog）：
+- **reg_04**：turn 效率——模型在该任务上轮数内未收工（思考延迟 + 全文件重写倾向）。
+- **reg_05**：recovery 契约遵循——A2 提示的「探测工具链」措辞可能反向鼓励了 Bash 调用；
+  需要「recovery/受限层完全不调用被禁工具」的显式分层指引（或 eval 提示注入声明约束）。
+
+### 4.2 正式 P4 复测（P1b/P1c/P1d 完成后）
+1. 回归池 n=3（改进二进制 + v2 规则）→ stable 分桶 vs v2 规则 + 旧二进制的对照
+   （需补一次旧二进制 × v2 规则的 n=3，隔离判分修正贡献）
+2. SWE50 n=1（改进二进制，STREAM_IDLE_SECS=360）→ 逐题对照 P1b
+3. 靶题复放：think-only 三题（minimax b11：astropy-14508 / matplotlib-20676 / django-11066）
+4. 引用规范不变：n / date / anchor（app_version + 规则指纹区分改进前后）
