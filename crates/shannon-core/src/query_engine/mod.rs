@@ -19,9 +19,9 @@ pub use engine::{ProviderHealth, ProviderHealthStatus, QueryEngine};
 pub use repo_map_injector::RepoMapInjector;
 pub use team_prompt::teammate_instructions;
 pub use types::{
-    CompressionStrategy, ConversationStats, CostEstimate, CostTracker, PermissionRequest,
-    QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryMetadata, QueryStream,
-    pricing_for_model_opt,
+    CompressionStrategy, ConversationStats, CostEstimate, CostTracker, GOAL_BLOCKED_MARKER,
+    GOAL_COMPLETE_MARKER, GoalSpec, PermissionRequest, QueryContext, QueryEngineConfig, QueryError,
+    QueryEvent, QueryMetadata, QueryStream, pricing_for_model_opt,
 };
 
 #[cfg(test)]
@@ -926,6 +926,7 @@ mod tests {
             auto_commit: false,
             effort_level: None,
             focus_area: None,
+            goal: None,
             fast_model: None,
             plan_model: None,
             max_parallel_tools: 10,
@@ -1343,6 +1344,7 @@ mod tests {
             auto_commit: false,
             effort_level: None,
             focus_area: None,
+            goal: None,
             fast_model: None,
             plan_model: None,
             max_parallel_tools: 10,

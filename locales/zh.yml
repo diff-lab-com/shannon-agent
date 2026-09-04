@@ -65,6 +65,16 @@ commands:
     added: "✓ 已保存 %{kind} 目标 '%{name}'。使用 `/remote use %{name}` 连接。"
     bash_missing: "⚠ 目标上未找到 bash — Bash 工具依赖 bash。"
     already_connected: "已连接到 %{name}。"
+  goal:
+    set: "◎ 目标已设定（最多 %{max} 轮）：%{objective}\n发送一条消息即可开始——Shannon 会在每轮后自动继续工作，直到目标达成。/goal pause 暂停，/goal clear 清除。"
+    current: "目标（%{status}，第 %{iterations}/%{max} 轮）：%{objective}"
+    current_none: "尚未设定目标。用法：/goal <目标> | /goal pause | /goal resume | /goal clear"
+    cleared: "✓ 目标已清除。"
+    paused_blocked: "⏸ 目标已暂停——agent 报告阻塞：%{reason}\n解决后运行 /goal resume 继续，或 /goal clear 清除。"
+    paused_max: "⏸ 已达 %{max} 轮上限仍未完成，目标已暂停。评估进度后 /goal resume 或 /goal clear。"
+    resumed: "▶ 目标已恢复（迭代预算已重置）。"
+    complete: "✓ 目标达成（共 %{iterations} 轮）：%{objective}"
+    conflict_loop: "存在活跃的 /ralph 或 /loop——请先停止它们（自主续跑归其所有），再设置 /goal。"
   connect:
     success: "✓ 已连接到 %{provider}"
     choose_model: "请在下方选择模型 (Enter = 默认, ↑↓ = 选择, Esc = 使用默认)。"

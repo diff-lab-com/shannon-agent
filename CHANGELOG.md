@@ -6,6 +6,28 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ### Added
 
+- **`/goal` — session goal: a persistent objective with auto-continuation**
+  (parity with Claude Code `/goal` and Codex CLI Goals; design + competitive
+  research in `docs/plans/2026-09-04-goal-design.md` and
+  `docs/research/2026-09-04-goal-competitive-research.md`): `/goal
+  <objective>` sets a session-scoped goal that is injected as a non-cached
+  system block on every query (survives compaction), auto-continues the
+  agent across turns until the model ends a reply with a strict final-line
+  completion marker (`GOAL_COMPLETE` / `GOAL_BLOCKED: <reason>`), and
+  persists in the session sidecar so `--resume` / `/resume` restore it.
+  Anti-runaway guards: iteration cap (`--max N`, default 25, `0` =
+  unlimited) flipping the goal to paused, mutual exclusion with `/ralph`
+  and `/loop`, and interruption stopping the loop (goal stays anchored).
+  Status pill in the status bar (active ◎ / paused ⏸ / complete ✓), desktop
+  notification on completion, `--goal` injection for headless `-p` runs,
+  help overlay entry, and i18n across all 10 locales. Engine side:
+  `QueryEngineConfig::goal` + `GoalSpec` + `set_goal` mirror the existing
+  `/focus` pipeline; completion-marker constants
+  (`GOAL_COMPLETE_MARKER`/`GOAL_BLOCKED_MARKER`) are shared from
+  `shannon-core`. Deliberately deferred (Phase 2): Codex-style
+  `get_goal`/`update_goal` tool contract, token/time budget accounting,
+  check-in backoff scheduling, anti-spin (no-tool-call detection).
+
 - **`write_files` plugin permission enforcement — "declaration IS sandbox"**
   (closes the last §4.9 scaffolding seam): a plugin manifest that declares
   `write_files` now gets its stdio server processes spawned **inside a

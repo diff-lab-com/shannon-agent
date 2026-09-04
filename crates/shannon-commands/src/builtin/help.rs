@@ -1061,6 +1061,23 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to tell the model to prioritize a specific area like frontend, backend, security, or performance")
             .with_related(vec!["effort", "mode"])
         ),
+        "goal" => Some(
+            CommandHelpEntry::new(
+                "goal".to_string(),
+                "Set a session goal the agent keeps working toward until met".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[<objective>|show|pause|resume|clear] [--max N]")
+            .with_examples(vec![
+                "/goal all tests passing in CI",
+                "/goal",
+                "/goal pause",
+                "/goal resume",
+                "/goal clear",
+            ])
+            .with_when_to_use("Use to set a persistent objective: Shannon re-anchors it every turn and auto-continues after each reply until the model proves the goal is met")
+            .with_related(vec!["focus", "plan", "ralph"])
+        ),
         "watch" => Some(
             CommandHelpEntry::new(
                 "watch".to_string(),
@@ -1160,6 +1177,7 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         "recap",
         "effort",
         "focus",
+        "goal",
     ]
     .iter()
     .filter_map(|name| get_command_help(name))

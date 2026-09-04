@@ -297,6 +297,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     // Sync effort_level and focus_area from REPL state into the query engine
     query_engine.set_effort_level(repl.state.effort_level.clone());
     query_engine.set_focus_area(repl.state.focus_area.clone());
+    // Sync the session goal (/goal) so its system block is injected this query
+    query_engine.set_goal(repl.state.goal.as_ref().and_then(|g| g.to_spec()));
 
     let query_id = Uuid::new_v4();
     let session_id = Uuid::new_v4();
@@ -1505,8 +1507,10 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 &repl.state.status,
             );
 
-            // Check if loop/ralph iteration should continue
-            let loop_continued = super::commands::check_loop_iteration(repl);
+            // Check if the session goal auto-continues; if it did, skip the
+            // ralph/loop checks so only one auto-continuation loop runs.
+            let goal_continued = super::commands::check_goal_continuation(repl);
+            let loop_continued = goal_continued || super::commands::check_loop_iteration(repl);
             if !loop_continued {
                 super::commands::check_ralph_iteration(repl);
             }

@@ -82,6 +82,12 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
             repl.state.tokens_used =
                 data.metadata.total_input_tokens + data.metadata.total_output_tokens;
 
+            // Restore the session goal (/goal) so it re-anchors after resume.
+            let sidecar_goal = repl.l0_store().sidecar(&session_id).goal;
+            if let Some(stored_goal) = sidecar_goal {
+                repl.state.goal = Some(crate::repl::state::GoalState::from_stored(stored_goal));
+            }
+
             if let Some(ref mut engine) = repl.query_engine {
                 match engine.restore_session(session_id) {
                     Ok(true) => {

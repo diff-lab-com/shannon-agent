@@ -462,6 +462,11 @@ struct Cli {
     #[arg(short = 'c', long, alias = "cont")]
     r#continue: bool,
 
+    /// Session goal injected into the system prompt (headless: injection only).
+    /// Example: shannon -p "make CI green" --goal "all tests passing"
+    #[arg(long = "goal", value_name = "OBJECTIVE")]
+    goal: Option<String>,
+
     /// CI/CD headless mode: non-interactive prompt (pipe-friendly).
     /// Skips TUI entirely. Use with --output-format, --allowed-tools, --max-turns.
     /// Example: shannon -p "fix the bug" --allowed-tools Read,Edit,Bash --output-format json
@@ -1221,6 +1226,7 @@ fn load_resume_session(
 /// `config` holds explicit CLI configuration.
 /// `bypass_all` when true, skips all permission checks (BypassPermissions mode).
 /// `resume_session` when provided, injects prior conversation history into the engine.
+#[allow(clippy::too_many_arguments)]
 fn run_noninteractive_query(
     query: &str,
     stream: bool,
@@ -1228,6 +1234,7 @@ fn run_noninteractive_query(
     bypass_all: bool,
     resume_session: Option<shannon_core::session_log::StoredSession>,
     disallowed_tools: Vec<String>,
+    goal: Option<String>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
 
@@ -1465,6 +1472,14 @@ fn run_noninteractive_query(
             engine.append_system_prompt(&instructions.content);
         }
 
+        // Inject the session goal (--goal) — injection only in headless mode
+        if let Some(objective) = goal {
+            engine.set_goal(Some(shannon_core::query_engine::GoalSpec {
+                objective,
+                paused: false,
+            }));
+        }
+
         // Restore prior conversation history if --resume was specified
         if let Some(session_data) = resume_session {
             let count = session_data.messages.len();
@@ -1656,6 +1671,7 @@ fn load_schema(input: &str) -> Result<shannon_core::StructuredOutputConfig> {
 /// reached, 3 timeout (reserved, currently unused), 4 rate limited,
 /// 5 context overflow, 6 permission denied.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn run_headless_query(
     prompt: &str,
     config: &CliConfig,
@@ -1669,6 +1685,7 @@ fn run_headless_query(
     resume_session: Option<shannon_core::session_log::StoredSession>,
     schema_config: Option<&shannon_core::StructuredOutputConfig>,
     notify: bool,
+    goal: Option<String>,
 ) -> Result<()> {
     // Arm structured crash capture when the dogfood loop (or any CI harness)
     // points SHANNON_CRASH_DIR at a scratch directory; no-op otherwise.
@@ -1829,6 +1846,14 @@ fn run_headless_query(
         // Append structured output schema instructions
         if let Some(schema) = schema_config {
             engine.append_system_prompt(&schema.system_prompt_suffix());
+        }
+
+        // Inject the session goal (--goal) — injection only in headless mode
+        if let Some(objective) = goal {
+            engine.set_goal(Some(shannon_core::query_engine::GoalSpec {
+                objective,
+                paused: false,
+            }));
         }
 
         // Restore prior conversation history if --resume was specified
@@ -4211,6 +4236,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             resume_data,
             schema_config.as_ref(),
             cli.notify,
+            cli.goal.clone(),
         );
     }
 
@@ -4242,6 +4268,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.yes,
             None,
             cli.disallowed_tools.clone(),
+            cli.goal.clone(),
         );
     }
 
@@ -4268,6 +4295,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.yes,
             resume_data,
             cli.disallowed_tools.clone(),
+            cli.goal.clone(),
         );
     }
 
@@ -4295,6 +4323,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.yes,
             resume_data,
             cli.disallowed_tools.clone(),
+            cli.goal.clone(),
         );
     }
 
@@ -4503,6 +4532,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 cli.yes,
                 resume_data,
                 cli.disallowed_tools.clone(),
+                cli.goal.clone(),
             )?;
         }
         Some(Commands::Serve {
@@ -5404,6 +5434,23 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             }
             _ => panic!("Expected Repl command"),
         }
+    }
+
+    // ── Goal flag tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn goal_flag_parses() {
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "-p",
+            "make CI green",
+            "--goal",
+            "all tests passing",
+        ])
+        .unwrap();
+        assert_eq!(cli.goal.as_deref(), Some("all tests passing"));
+        let cli = Cli::try_parse_from(["shannon", "-p", "x"]).unwrap();
+        assert!(cli.goal.is_none());
     }
 
     // ── Resume flag tests ────────────────────────────────────────────────

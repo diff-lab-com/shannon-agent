@@ -134,6 +134,8 @@ pub struct RenderContext<'a> {
     pub provider: Option<&'a str>,
     /// Tier label for the active model: "fast" / "standard" / "pro" / "unknown".
     pub tier_label: Option<&'a str>,
+    /// Session goal set via `/goal`, rendered as a status-bar pill.
+    pub goal: Option<&'a crate::repl::state::GoalState>,
 }
 
 impl<'a> RenderContext<'a> {
@@ -180,6 +182,7 @@ impl<'a> RenderContext<'a> {
             thinking_chars: 0,
             provider: None,
             tier_label: None,
+            goal: None,
         }
     }
 }

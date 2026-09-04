@@ -117,6 +117,7 @@ impl StatusBarWidget {
             frame,
             area,
             &status,
+            ctx.goal,
             ctx.model,
             ctx.provider,
             ctx.effort_level,
@@ -152,6 +153,7 @@ impl StatusBarWidget {
         frame: &mut Frame,
         area: Rect,
         status: &str,
+        goal: Option<&crate::repl::state::GoalState>,
         model: Option<&str>,
         provider: Option<&str>,
         effort_level: Option<&str>,
@@ -246,6 +248,26 @@ impl StatusBarWidget {
             };
             left.push(Span::styled(
                 format!("[{icon} {target}]"),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        // Goal pill (session objective set via /goal)
+        if let Some(goal) = goal {
+            left.push(Span::raw(" "));
+            let (icon, color) = match goal.status {
+                crate::repl::state::GoalStatus::Active => ("\u{25ce}", theme.primary),
+                crate::repl::state::GoalStatus::Paused => ("\u{23f8}", theme.warning),
+                crate::repl::state::GoalStatus::Complete => ("\u{2713}", theme.success),
+            };
+            let progress = if goal.max_iterations == 0 {
+                String::new()
+            } else {
+                format!(" {}/{}", goal.iterations, goal.max_iterations)
+            };
+            let objective = crate::repl::render::truncate_visual(&goal.objective, 24);
+            left.push(Span::styled(
+                format!("[{icon} {objective}{progress}]"),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ));
         }
