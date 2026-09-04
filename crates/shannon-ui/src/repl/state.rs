@@ -396,6 +396,12 @@ pub struct GoalState {
     /// defaults to None to avoid implicit termination (design R4: only
     /// explicit `--budget` should terminate the goal).
     pub max_budget_usd: Option<f64>,
+    /// P2.3 — billing total (USD) captured when the goal was set/resumed.
+    /// Turn facts feed `current_total - cost_baseline_usd` into the budget
+    /// verdict, so the cap measures spend attributable to this goal rather
+    /// than the whole billing period. In-memory only: a resumed goal gets a
+    /// fresh baseline, so its cap applies to post-resume spend.
+    pub cost_baseline_usd: f64,
 }
 
 /// Default cap on `stall_strikes` before the goal pauses (Magentic-One +
@@ -425,6 +431,7 @@ impl GoalState {
             consecutive_no_tool_turns: 0,
             stall_strikes: 0,
             max_budget_usd: None,
+            cost_baseline_usd: 0.0,
         }
     }
 
@@ -481,6 +488,7 @@ impl GoalState {
             consecutive_no_tool_turns: 0,
             stall_strikes: 0,
             max_budget_usd: None,
+            cost_baseline_usd: 0.0,
         }
     }
 }
