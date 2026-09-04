@@ -179,7 +179,9 @@ const READ_ONLY_PATTERNS: &[&str] = &[
     "du", // File info
     "echo",
     "pwd",
-    "whoami", // System info
+    "whoami",     // System info
+    "which",      // Toolchain availability probes
+    "command -v", // Toolchain availability probes
     "git status",
     "git log",  // Git read ops
     "git diff", // Git diff
@@ -230,6 +232,28 @@ const SHELL_EXPANSION_PATTERNS: &[&str] = &[
     "$[",  // Legacy arithmetic expansion
 ];
 
+/// Dangerous verb patterns (A4): when shell expansion syntax appears in a
+/// command that also matches one of these, the expansion is treated as a
+/// genuine bypass attempt and the command stays critical. Expansion syntax
+/// alone (read-only probes such as `$(command -v shasum)`) is downgraded to
+/// a warning instead of a rejection.
+const DANGEROUS_VERB_PATTERNS: &[&str] = &[
+    "rm -rf /",    // Recursive force delete of absolute paths
+    "rm -fr /",    // Same, flag order swapped
+    "mkfs",        // Format filesystem
+    "fdisk",       // Partition table manipulation
+    "dd of=/dev/", // Raw write to a device node
+    "chmod 777 /", // World-writable root
+    "chown -r",    // Recursive ownership change
+    "sudo",        // Privilege escalation
+    "| sh",        // Pipe into shell
+    "|sh",         // Pipe into shell (no space)
+    "| bash",      // Pipe into bash
+    "|bash",       // Pipe into bash (no space)
+    "-delete",     // find(1) bulk deletion
+    "-exec rm",    // find(1) delegated deletion
+];
+
 /// Sensitive system paths that should never be accessed
 const SENSITIVE_PATHS: &[&str] = &[
     "/etc/passwd",  // Password database
@@ -252,36 +276,58 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
 
     let lower_command = command.to_lowercase();
 
-    // FIRST: Check for shell expansion bypass attempts
-    // These patterns indicate attempts to hide dangerous commands
-    for pattern in SHELL_EXPANSION_PATTERNS {
-        if command.contains(pattern) {
+    // FIRST: classify shell expansion syntax (eval finding A4: every command
+    // containing `$(`, `${}` or backticks used to be rejected as a critical
+    // "bypass", which stranded read-only probes such as
+    // `$(command -v shasum)`). Now:
+    //   - ANSI-C quoting (`$'...'`) stays critical: hex escapes can encode
+    //     payloads that the textual checks below cannot see.
+    //   - Plain expansion escalates only when a dangerous verb rides along
+    //     (see `DANGEROUS_VERB_PATTERNS`); the dedicated checks below
+    //     (sensitive paths, destructive patterns, pipe-to-shell, ...) still
+    //     escalate on their own. Otherwise the command runs with warnings.
+    let has_ansi_c_quoting = command.contains("$'");
+    let has_command_substitution = command.contains("$(") || command.contains('`');
+    let has_param_expansion = command.contains("${");
+    let has_arith_expansion = command.contains("$[") || command.contains("$((");
+    let has_expansion = SHELL_EXPANSION_PATTERNS.iter().any(|p| command.contains(p));
+
+    if has_ansi_c_quoting {
+        risk_level = SecurityLevel::Critical;
+        warnings.push(
+            "ANSI-C quoting detected: Can encode dangerous commands as hex escapes".to_string(),
+        );
+        is_destructive = true;
+    }
+
+    if has_expansion {
+        // Informational: expansion syntax alone is no longer a rejection
+        // reason, but the surface stays visible in the analysis output.
+        if has_command_substitution {
+            warnings
+                .push("Command substitution detected: Can execute arbitrary commands".to_string());
+        }
+
+        if has_param_expansion {
+            warnings.push("Parameter expansion detected: Can be used for obfuscation".to_string());
+        }
+
+        if has_arith_expansion {
+            warnings
+                .push("Arithmetic expansion detected: Review the computed expression".to_string());
+        }
+
+        // Escalate only when the expansion hides a genuinely dangerous verb.
+        if DANGEROUS_VERB_PATTERNS
+            .iter()
+            .any(|p| lower_command.contains(p))
+        {
             risk_level = SecurityLevel::Critical;
-            warnings.push(format!("Shell expansion bypass detected: {pattern} - variable expansion or command substitution can hide dangerous commands"));
-
-            // Check if it contains ANSI-C quoting (common bypass technique)
-            if command.contains("$'") {
-                warnings.push(
-                    "ANSI-C quoting detected: Can encode dangerous commands as hex escapes"
-                        .to_string(),
-                );
-            }
-
-            // Check for command substitution
-            if command.contains("$(") || command.contains('`') {
-                warnings.push(
-                    "Command substitution detected: Can execute arbitrary commands".to_string(),
-                );
-            }
-
-            // Check for parameter expansion
-            if command.contains("${") {
-                warnings
-                    .push("Parameter expansion detected: Can be used for obfuscation".to_string());
-            }
-
+            warnings.push(
+                "Dangerous verb combined with shell expansion: rewrite without expansion for review"
+                    .to_string(),
+            );
             is_destructive = true;
-            break;
         }
     }
 
@@ -440,6 +486,41 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
         is_read_only,
         contains_path_traversal,
         requires_confirmation,
+    }
+}
+
+/// One-line, executable remediation advice for a rejected command (A4).
+/// Without it, a headless agent retries a near-identical command instead of
+/// rewriting the approach.
+fn security_rejection_hint(command: &str) -> &'static str {
+    if SHELL_EXPANSION_PATTERNS.iter().any(|p| command.contains(p)) {
+        "Suggestion: avoid command substitution/expansion - split the command into two steps (run the inner command first and use its output) or use absolute paths."
+    } else {
+        "Suggestion: rewrite with a safer equivalent - scope destructive operations to specific files, drop elevated privileges, or use read-only flags."
+    }
+}
+
+/// Build the structured rejection output for a critical-risk command,
+/// including the remediation hint (A4). Shared by the blocking and the
+/// streaming Bash paths so both rejections carry the same contract.
+fn security_rejected_output(command: &str, analysis: &SecurityAnalysis) -> ToolOutput {
+    let error_msg = format!(
+        "Command rejected due to critical security risk:\n{}\n\nRisk Level: {}\n\nWarnings:\n  - {}\n\n{}",
+        command,
+        describe_risk_level(analysis.risk_level),
+        analysis.warnings.join("\n  - "),
+        security_rejection_hint(command),
+    );
+    ToolOutput {
+        content: error_msg,
+        is_error: true,
+        metadata: {
+            let mut map = HashMap::new();
+            map.insert("security_rejected".to_string(), json!(true));
+            map.insert("risk_level".to_string(), json!(analysis.risk_level as i32));
+            map.insert("warnings".to_string(), json!(analysis.warnings));
+            map
+        },
     }
 }
 
@@ -1004,23 +1085,7 @@ impl Tool for BashTool {
 
         // Reject critical risk commands
         if analysis.risk_level >= SecurityLevel::Critical {
-            let error_msg = format!(
-                "Command rejected due to critical security risk:\n{}\n\nRisk Level: {}\n\nWarnings:\n  - {}",
-                bash_input.command,
-                describe_risk_level(analysis.risk_level),
-                analysis.warnings.join("\n  - ")
-            );
-            return Ok(ToolOutput {
-                content: error_msg,
-                is_error: true,
-                metadata: {
-                    let mut map = HashMap::new();
-                    map.insert("security_rejected".to_string(), json!(true));
-                    map.insert("risk_level".to_string(), json!(analysis.risk_level as i32));
-                    map.insert("warnings".to_string(), json!(analysis.warnings));
-                    map
-                },
-            });
+            return Ok(security_rejected_output(&bash_input.command, &analysis));
         }
 
         // For medium/high risk commands, add security warnings to the output
@@ -1199,23 +1264,7 @@ impl BashTool {
         let analysis = analyze_command_security(&bash_input.command);
 
         if analysis.risk_level >= SecurityLevel::Critical {
-            let error_msg = format!(
-                "Command rejected due to critical security risk:\n{}\n\nRisk Level: {}\n\nWarnings:\n  - {}",
-                bash_input.command,
-                describe_risk_level(analysis.risk_level),
-                analysis.warnings.join("\n  - ")
-            );
-            return Ok(ToolOutput {
-                content: error_msg,
-                is_error: true,
-                metadata: {
-                    let mut map = HashMap::new();
-                    map.insert("security_rejected".to_string(), json!(true));
-                    map.insert("risk_level".to_string(), json!(analysis.risk_level as i32));
-                    map.insert("warnings".to_string(), json!(analysis.warnings));
-                    map
-                },
-            });
+            return Ok(security_rejected_output(&bash_input.command, &analysis));
         }
 
         let command_description = if analysis.risk_level >= SecurityLevel::Medium {
@@ -1977,6 +2026,114 @@ fn test_shell_expansion_bypass_detection() {
             .warnings
             .iter()
             .any(|w| w.contains("Parameter expansion"))
+    );
+}
+
+// ── A4: shell expansion risk grading ─────────────────────────────────────
+//
+// Eval finding A4 (docs/eval-findings-2026-09-glm.md): the analyzer used to
+// reject every command containing `$(`, `${}` or backticks as a critical
+// security risk, stranding read-only probes such as `$(command -v shasum)`
+// and making headless agents retry near-identical commands.
+
+#[test]
+fn test_read_only_expansion_downgraded_from_critical() {
+    // Expansion syntax in an otherwise read-only/harmless command must not
+    // be rejected anymore.
+    for cmd in [
+        "$(command -v shasum)",
+        "echo $(pwd)",
+        "ls $(pwd)",
+        "echo ${HOME}",
+        "cat `pwd`/README.md",
+        "grep foo $(pwd)/bar.txt",
+        "which $(echo cargo)",
+    ] {
+        let analysis = analyze_command_security(cmd);
+        assert!(
+            analysis.risk_level < SecurityLevel::Critical,
+            "read-only expansion must be allowed to execute: {cmd} -> {:?}",
+            analysis.risk_level
+        );
+    }
+}
+
+#[test]
+fn test_expansion_with_dangerous_verb_still_critical() {
+    // Expansion combined with a genuinely dangerous verb keeps the critical
+    // rating and is rejected.
+    for cmd in [
+        "echo $(rm -rf /)",
+        "`rm -rf /`",
+        "echo $(sudo ls /root)",
+        "echo $(dd if=/dev/zero of=/dev/sda)",
+        "echo $(chmod 777 /)",
+        "echo $(mkfs.ext4 /dev/sda1)",
+        "find $(pwd) -name '*.tmp' -delete",
+        "find $(pwd) -exec rm {} \\;",
+        "echo $(pwd) | bash",
+    ] {
+        let analysis = analyze_command_security(cmd);
+        assert_eq!(
+            analysis.risk_level,
+            SecurityLevel::Critical,
+            "expansion combined with a dangerous verb must stay critical: {cmd}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_read_only_expansion_command_executes_end_to_end() {
+    let tool = BashTool::new();
+    let output = Tool::execute(&tool, json!({"command": "echo $(pwd)"}))
+        .await
+        .unwrap();
+    assert!(
+        !output.is_error,
+        "read-only expansion must execute, got: {}",
+        output.content
+    );
+    assert!(
+        !output.content.contains("security risk"),
+        "allowed expansion must not look like a rejection, got: {}",
+        output.content
+    );
+}
+
+#[tokio::test]
+async fn test_security_rejection_includes_remediation_hint() {
+    let tool = BashTool::new();
+    let output = Tool::execute(&tool, json!({"command": "$(rm -rf /)"}))
+        .await
+        .unwrap();
+    assert!(output.is_error);
+    assert!(
+        output.content.contains("Suggestion:"),
+        "rejection must carry an actionable remediation hint, got: {}",
+        output.content
+    );
+    assert!(
+        output.content.contains("absolute paths"),
+        "expansion rejection must suggest the two-step/absolute-path rewrite, got: {}",
+        output.content
+    );
+}
+
+#[tokio::test]
+async fn test_streaming_security_rejection_includes_remediation_hint() {
+    let tool = BashTool::new();
+    let sender = std::sync::Arc::new(CollectSender {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    let result = tool
+        .execute_streaming(json!({"command": "rm -rf /"}), sender)
+        .await
+        .unwrap();
+    assert!(result.is_error);
+    assert!(
+        result.content.contains("Suggestion:"),
+        "streaming rejection must carry a remediation hint, got: {}",
+        result.content
     );
 }
 

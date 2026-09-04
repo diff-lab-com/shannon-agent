@@ -336,6 +336,122 @@ const TRUNCATION_CONTINUATION_PROMPT: &str = "Your previous response was cut off
      output token limit before you finished. Continue exactly where you left off and \
      complete the task. Do not repeat what you already wrote.";
 
+// ── Think-only continuation nudge (A1) ───────────────────────────────
+//
+// eval-findings-2026-09-glm.md A1: models occasionally return a
+// "think-only" response — reasoning content only, no tool_use, no
+// user-facing answer. The engine treated that as a normal completion,
+// ended the session headless, and produced an empty patch (minimax b11
+// lost 3/50 SWE tasks — 4-8pp — to exactly this pattern). When the final
+// response carries no tool call and no substantive answer, the engine now
+// synthesizes a user-side re-prompt instead of completing.
+
+/// Re-prompt sent when a response has no tool calls and no usable final
+/// answer (see [`is_think_only_response`]).
+const THINK_ONLY_NUDGE_PROMPT: &str = "Your previous response contained no tool calls \
+     and no final answer. Either invoke the appropriate tool to continue the task, or \
+     reply with your final answer to the user.";
+
+/// Default cap on consecutive think-only nudges per query. Override with
+/// `SHANNON_THINK_ONLY_NUDGE_MAX`. When exhausted the query ends exactly as
+/// it did before this feature existed.
+const DEFAULT_THINK_ONLY_NUDGE_MAX: u32 = 2;
+
+/// Default minimum length (chars) of the visible — i.e. non-reasoning —
+/// answer for a response to count as substantive. Override with
+/// `SHANNON_THINK_ONLY_MIN_ANSWER_CHARS`.
+const DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS: usize = 200;
+
+/// Read a non-negative integer env override, falling back to `default` when
+/// unset, empty, or unparseable (same conventions as
+/// [`QueryEngine::apply_env_overrides`]: only non-empty values are
+/// intentional overrides; garbage is silently ignored).
+fn env_num_override(name: &str, default: u32) -> u32 {
+    match std::env::var(name) {
+        Ok(v) if !v.trim().is_empty() => v.trim().parse::<u32>().unwrap_or_else(|_| {
+            tracing::warn!("Invalid {name}={v:?} — using default {default}");
+            default
+        }),
+        _ => default,
+    }
+}
+
+/// Max consecutive think-only nudges for this query
+/// (`SHANNON_THINK_ONLY_NUDGE_MAX`, default
+/// [`DEFAULT_THINK_ONLY_NUDGE_MAX`]).
+fn think_only_nudge_max() -> u32 {
+    env_num_override("SHANNON_THINK_ONLY_NUDGE_MAX", DEFAULT_THINK_ONLY_NUDGE_MAX)
+}
+
+/// Visible-answer threshold in chars for the think-only classifier
+/// (`SHANNON_THINK_ONLY_MIN_ANSWER_CHARS`, default
+/// [`DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS`]).
+fn think_only_min_answer_chars() -> usize {
+    env_num_override(
+        "SHANNON_THINK_ONLY_MIN_ANSWER_CHARS",
+        DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS as u32,
+    ) as usize
+}
+
+/// Split inline `<think>...</think>` reasoning out of assistant text.
+///
+/// Returns `(saw_reasoning, visible_text)` where `visible_text` is the text
+/// outside reasoning blocks (reasoning-family providers — MiniMax M-series,
+/// GLM — stream `<think>` inline in the content deltas). An unclosed
+/// `<think>` swallows the rest of the text: a response cut mid-reasoning
+/// has no visible answer by definition.
+fn split_think_content(text: &str) -> (bool, String) {
+    const OPEN: &str = "<think>";
+    const CLOSE: &str = "</think>";
+    let mut visible = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut saw_think = false;
+    loop {
+        match rest.find(OPEN) {
+            Some(start) => {
+                saw_think = true;
+                visible.push_str(&rest[..start]);
+                let after_open = &rest[start + OPEN.len()..];
+                match after_open.find(CLOSE) {
+                    Some(close) => rest = &after_open[close + CLOSE.len()..],
+                    // Unclosed reasoning block — nothing visible after it.
+                    None => return (true, visible),
+                }
+            }
+            None => {
+                visible.push_str(rest);
+                return (saw_think, visible);
+            }
+        }
+    }
+}
+
+/// True when the response carries no tool calls and no substantive
+/// user-facing answer:
+///
+/// - empty text (covers reasoning that arrived only via thinking deltas), or
+/// - reasoning markup present and the visible residue is shorter than
+///   `min_answer_chars` — a think-only response.
+///
+/// Text *without* any reasoning markup is treated as a deliberate (possibly
+/// terse) answer and never nudged: nudging every short "Done." would wreck
+/// normal sessions for no eval benefit — the measured failure mode is always
+/// reasoning-dominated.
+fn is_think_only_response(text: &str, tool_use_count: usize, min_answer_chars: usize) -> bool {
+    if tool_use_count > 0 {
+        return false;
+    }
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let (saw_think, visible) = split_think_content(trimmed);
+    if !saw_think {
+        return false;
+    }
+    visible.trim().chars().count() < min_answer_chars
+}
+
 // ── Query complexity classification ──────────────────────────────────
 
 /// Query complexity level for model routing.
@@ -1670,6 +1786,17 @@ impl QueryEngine {
             // its output budget cannot monopolize the loop.
             let mut truncation_continuations: u32 = 0;
             const MAX_TRUNCATION_CONTINUATIONS: u32 = 5;
+
+            // Think-only continuation nudge (A1, see the constants near
+            // `THINK_ONLY_NUDGE_PROMPT`): a response with no tool calls and
+            // no substantive answer is re-prompted instead of ending the
+            // query as a silent no-op. Bounded per query — the counter
+            // increments on every nudge and resets whenever a real tool turn
+            // completes, so only *consecutive* think-only responses exhaust
+            // the budget.
+            let mut think_only_nudges: u32 = 0;
+            let max_think_only_nudges = think_only_nudge_max();
+            let think_only_min_chars = think_only_min_answer_chars();
 
             // Auto-test loop state (P1-5). Initialized lazily inside the loop body
             // because `AutoLoopState` is only needed when `config.auto_test` is `Some`.
@@ -3652,6 +3779,11 @@ impl QueryEngine {
                                                 // Mark finalized so the post-loop safety net
                                                 // doesn't short-circuit the next turn's API call.
                                                 phase = StreamingPhase::Finalized;
+                                                // A real tool turn happened — the model is
+                                                // productively working. Reset the think-only
+                                                // nudge budget so only *consecutive* think-only
+                                                // responses exhaust it.
+                                                think_only_nudges = 0;
                                                 // Break from the streaming while-let loop so
                                                 // tool results are processed on the next turn
                                                 // iteration instead of consuming more events

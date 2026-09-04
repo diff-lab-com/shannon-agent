@@ -11,6 +11,7 @@ use futures::{
 };
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use super::adapter::OpenaiStreamState;
 use super::error::ApiError;
@@ -21,6 +22,41 @@ pub type MessageStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, ApiError>
 
 /// Internal byte-chunk stream type from reqwest
 type ByteChunkStream = Pin<Box<dyn Stream<Item = Result<Vec<u8>, reqwest::Error>> + Send>>;
+
+/// Content-level stream idle watchdog budget, from `SHANNON_STREAM_IDLE_SECS`.
+///
+/// The HTTP `read_timeout` (see `LlmClient::build_client`) is computed per
+/// byte read: a server that keeps the connection open with SSE keepalive
+/// bytes (comment lines, empty lines, `ping` frames) never trips it, so a
+/// response that silently produces no content for minutes — observed as a
+/// single 312s gap on glm-5.3-flash (P1b event log) — used to hang until the
+/// caller's outer budget was consumed. This watchdog measures the gap
+/// between *content* events instead: anything except keepalives resets it.
+///
+/// Default `0` = disabled, preserving current behavior for interactive
+/// sessions where very long thinking gaps are legitimate. Eval runners opt
+/// in explicitly (e.g. 360). When the budget is exceeded the request is
+/// aborted with [`ApiError::Timeout`], which the existing machinery already
+/// treats as retryable (`RetryConfig::is_retryable`) and reconnectable
+/// (`ResumableSseStream`).
+pub(crate) fn stream_idle_timeout_from_env() -> Option<Duration> {
+    let raw = std::env::var("SHANNON_STREAM_IDLE_SECS").ok()?;
+    if raw.trim().is_empty() {
+        return None;
+    }
+    let secs = raw.trim().parse::<u64>().unwrap_or_else(|_| {
+        tracing::warn!("Invalid SHANNON_STREAM_IDLE_SECS={raw:?} — ignoring (expected seconds)");
+        0
+    });
+    (secs > 0).then(|| Duration::from_secs(secs))
+}
+
+/// True for events that carry no response content and must not reset the
+/// idle watchdog: provider keepalive pings. SSE comment lines and empty
+/// lines never even become events (dropped in `parse_sse_line`).
+fn is_keepalive_event(event: &StreamEvent) -> bool {
+    matches!(event, StreamEvent::Ping)
+}
 
 /// Shared last-event-id tracker for reconnection support.
 ///
@@ -78,6 +114,14 @@ pub struct SseStream {
     openai_state: OpenaiStreamState,
     /// Tracks the last SSE event ID seen for reconnection.
     last_event_id: LastEventId,
+    /// Content-level idle watchdog budget (A5). `None` = disabled (default,
+    /// `SHANNON_STREAM_IDLE_SECS` unset/0) — zero behavior change.
+    idle_timeout: Option<Duration>,
+    /// Armed when the watchdog is enabled and reset by every non-keepalive
+    /// event; firing it aborts the request (see `poll_next`). Created lazily
+    /// inside `poll_next` so `SseStream` can be built outside a Tokio
+    /// runtime.
+    idle_timer: Option<Pin<Box<tokio::time::Sleep>>>,
 }
 
 impl SseStream {
@@ -91,6 +135,23 @@ impl SseStream {
         provider: LlmProvider,
         last_event_id: LastEventId,
     ) -> Self {
+        Self::with_idle_timeout(
+            response,
+            provider,
+            last_event_id,
+            stream_idle_timeout_from_env(),
+        )
+    }
+
+    /// Like [`Self::new`] with an explicit idle-watchdog budget (tests pass
+    /// one directly; production goes through [`Self::new`] and reads
+    /// `SHANNON_STREAM_IDLE_SECS`).
+    fn with_idle_timeout(
+        response: reqwest::Response,
+        provider: LlmProvider,
+        last_event_id: LastEventId,
+        idle_timeout: Option<Duration>,
+    ) -> Self {
         let byte_stream = response.bytes_stream();
         // Convert Bytes to Vec<u8> to avoid direct dependency on bytes crate
         let mapped = Box::pin(byte_stream.map(|result| result.map(|b| b.to_vec())));
@@ -102,7 +163,26 @@ impl SseStream {
             provider,
             openai_state: OpenaiStreamState::new(),
             last_event_id,
+            idle_timeout,
+            idle_timer: None,
         }
+    }
+
+    /// Reset the idle watchdog after a content event was observed. A no-op
+    /// when the watchdog is disabled or the event is a keepalive.
+    fn note_content(&mut self, event: &StreamEvent) {
+        if is_keepalive_event(event) {
+            return;
+        }
+        let Some(timeout) = self.idle_timeout else {
+            return;
+        };
+        let timer = self.idle_timer.get_or_insert_with(|| {
+            Box::pin(tokio::time::sleep(timeout))
+        });
+        timer
+            .as_mut()
+            .reset(tokio::time::Instant::now() + timeout);
     }
 
     /// Parse all complete SSE lines from the buffer, queuing parsed events.
@@ -178,9 +258,14 @@ impl Stream for SseStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // Return any pending events first
         if !self.pending_events.is_empty() {
-            return Poll::Ready(Some(
-                self.pending_events.pop_front().expect("checked non-empty"),
-            ));
+            let event = self
+                .pending_events
+                .pop_front()
+                .expect("checked non-empty");
+            if let Ok(event) = &event {
+                self.note_content(event);
+            }
+            return Poll::Ready(Some(event));
         }
 
         if self.done {
@@ -196,9 +281,14 @@ impl Stream for SseStream {
                     self.drain_buffer();
 
                     if !self.pending_events.is_empty() {
-                        return Poll::Ready(Some(
-                            self.pending_events.pop_front().expect("checked non-empty"),
-                        ));
+                        let event = self
+                            .pending_events
+                            .pop_front()
+                            .expect("checked non-empty");
+                        if let Ok(event) = &event {
+                            self.note_content(event);
+                        }
+                        return Poll::Ready(Some(event));
                     }
                     // No complete events yet — continue reading
                 }
@@ -213,16 +303,48 @@ impl Stream for SseStream {
                         let events = self.parse_sse_line(&remaining);
                         self.pending_events.extend(events);
                         if !self.pending_events.is_empty() {
+                            let event = self
+                                .pending_events
+                                .pop_front()
+                                .expect("checked non-empty");
+                            if let Ok(event) = &event {
+                                self.note_content(event);
+                            }
                             self.done = true;
-                            return Poll::Ready(Some(
-                                self.pending_events.pop_front().expect("checked non-empty"),
-                            ));
+                            return Poll::Ready(Some(event));
                         }
                     }
                     self.done = true;
                     return Poll::Ready(None);
                 }
                 Poll::Pending => {
+                    // Awaiting more bytes from the wire. If the content-level
+                    // idle watchdog is enabled, its timer owns the wakeup for
+                    // the deadline: when it fires, no non-keepalive event has
+                    // arrived for `idle_timeout` — abort the request into the
+                    // existing retry/reconnect path (ApiError::Timeout is
+                    // classified retryable/reconnectable). The byte-level
+                    // keepalives that would keep `read_timeout` happy never
+                    // reach this point as events, so they cannot postpone the
+                    // deadline.
+                    if let Some(timeout) = self.idle_timeout {
+                        // Arm on first pending poll so the wait for the very
+                        // first content event is covered too.
+                        let timer = self
+                            .idle_timer
+                            .get_or_insert_with(|| Box::pin(tokio::time::sleep(timeout)));
+                        match timer.as_mut().poll(cx) {
+                            Poll::Ready(()) => {
+                                self.done = true;
+                                tracing::warn!(
+                                    "Stream idle watchdog: no content event for {timeout:?} — \
+                                     aborting request for retry"
+                                );
+                                return Poll::Ready(Some(Err(ApiError::Timeout)));
+                            }
+                            Poll::Pending => return Poll::Pending,
+                        }
+                    }
                     return Poll::Pending;
                 }
             }
@@ -1079,7 +1201,241 @@ mod tests {
                 provider: LlmProvider::Anthropic,
                 openai_state: OpenaiStreamState::new(),
                 last_event_id,
+                idle_timeout: None,
+                idle_timer: None,
             }
+        }
+
+        /// Test-only constructor with an injected byte-chunk stream and an
+        /// explicit idle-watchdog budget (bypasses the env knob).
+        fn for_test_with_chunks(
+            chunks: ByteChunkStream,
+            provider: LlmProvider,
+            idle_timeout: Option<Duration>,
+        ) -> Self {
+            Self {
+                chunks,
+                buffer: String::new(),
+                pending_events: std::collections::VecDeque::new(),
+                done: false,
+                provider,
+                openai_state: OpenaiStreamState::new(),
+                last_event_id: Arc::new(Mutex::new(None)),
+                idle_timeout,
+                idle_timer: None,
+            }
+        }
+    }
+
+    // ── Content-level stream idle watchdog (A5) ─────────────────────────
+    //
+    // The byte-level `read_timeout` cannot see content stalls: keepalive
+    // bytes reset it forever. These tests drive `SseStream` with injected
+    // fake byte streams (reqwest::Error is unconstructible here, and the
+    // fakes model healthy-but-idle connections, so they never error).
+
+    /// Fake byte-chunk stream emitting `pieces` with `gap` between chunks.
+    /// `cycle = true` repeats the pieces forever (a server holding the
+    /// connection open); `cycle = false` ends the stream after the last one.
+    fn fake_chunks(pieces: Vec<Vec<u8>>, gap: Duration, cycle: bool) -> ByteChunkStream {
+        let stream = futures::stream::unfold(
+            (pieces, 0usize),
+            move |(pieces, i): (Vec<Vec<u8>>, usize)| async move {
+                tokio::time::sleep(gap).await;
+                let piece = if cycle {
+                    pieces.get(i % pieces.len())?
+                } else {
+                    pieces.get(i)?
+                };
+                Some((Ok(piece.clone()), (pieces, i + 1)))
+            },
+        );
+        Box::pin(stream)
+    }
+
+    fn data_line(text: &str) -> Vec<u8> {
+        format!(
+            "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{text}\"}}}}\n\n"
+        )
+        .into_bytes()
+    }
+
+    fn keepalive_line() -> Vec<u8> {
+        b": keepalive\n\n".to_vec()
+    }
+
+    fn done_line() -> Vec<u8> {
+        b"data: [DONE]\n\n".to_vec()
+    }
+
+    /// Keepalive bytes keep flowing but no content event ever arrives: the
+    /// byte-level read_timeout would never fire, the content-level watchdog
+    /// must abort the request once the idle budget is exhausted.
+    #[tokio::test]
+    async fn idle_watchdog_aborts_keepalive_only_stream() {
+        use futures::StreamExt;
+        use std::time::Instant;
+
+        let chunks = fake_chunks(
+            vec![keepalive_line()],
+            Duration::from_millis(100),
+            true,
+        );
+        let mut sse = SseStream::for_test_with_chunks(
+            chunks,
+            LlmProvider::Anthropic,
+            Some(Duration::from_millis(400)),
+        );
+
+        let started = Instant::now();
+        let mut saw_err = None;
+        while let Some(event) = sse.next().await {
+            if let Err(e) = event {
+                saw_err = Some(e);
+                break;
+            }
+        }
+        let elapsed = started.elapsed();
+
+        let err = saw_err.expect("watchdog must abort a stream that never produces content");
+        assert!(
+            matches!(err, ApiError::Timeout),
+            "expected Timeout from the idle watchdog, got {err:?}"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(350),
+            "fired at {elapsed:?} — must not fire before the idle budget"
+        );
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "fired at {elapsed:?} — the watchdog, not the endless keepalive stream, must end it"
+        );
+    }
+
+    /// Content arrives at intervals below the idle budget: every event
+    /// resets the watchdog and the stream runs to completion even though
+    /// the total transfer exceeds the budget.
+    #[tokio::test]
+    async fn idle_watchdog_tolerates_slow_but_flowing_content() {
+        use futures::StreamExt;
+
+        let mut pieces = vec![data_line("x"); 8];
+        pieces.push(done_line());
+        let chunks = fake_chunks(pieces, Duration::from_millis(150), false);
+        let mut sse = SseStream::for_test_with_chunks(
+            chunks,
+            LlmProvider::Anthropic,
+            Some(Duration::from_millis(400)),
+        );
+
+        let mut texts = 0;
+        let mut saw_stop = false;
+        while let Some(event) = sse.next().await {
+            match event {
+                Ok(StreamEvent::ContentBlockDelta { .. }) => texts += 1,
+                Ok(StreamEvent::MessageStop) => saw_stop = true,
+                Ok(_) => {}
+                Err(e) => panic!("flowing content must never trip the watchdog: {e:?}"),
+            }
+        }
+        assert_eq!(texts, 8, "every content delta must be delivered");
+        assert!(saw_stop, "stream must end normally");
+    }
+
+    /// Watchdog disabled (the default: `SHANNON_STREAM_IDLE_SECS` unset or 0)
+    /// adds no behavior — a stream with a long content gap between keepalives
+    /// is delivered untouched. Armed at the same budget this stream would be
+    /// aborted mid-gap.
+    #[tokio::test]
+    async fn idle_watchdog_disabled_keeps_current_behavior() {
+        use futures::StreamExt;
+
+        let pieces = vec![
+            data_line("before"),
+            keepalive_line(),
+            keepalive_line(),
+            keepalive_line(),
+            keepalive_line(),
+            keepalive_line(),
+            data_line("after"),
+            done_line(),
+        ];
+        let chunks = fake_chunks(pieces, Duration::from_millis(150), false);
+        let mut sse =
+            SseStream::for_test_with_chunks(chunks, LlmProvider::Anthropic, None);
+
+        let mut text = String::new();
+        let mut saw_stop = false;
+        while let Some(event) = sse.next().await {
+            match event {
+                Ok(StreamEvent::ContentBlockDelta {
+                    delta: ContentDelta::TextDelta { text: t },
+                    ..
+                }) => text.push_str(&t),
+                Ok(StreamEvent::MessageStop) => saw_stop = true,
+                Ok(_) => {}
+                Err(e) => panic!("disabled watchdog must never abort: {e:?}"),
+            }
+        }
+        assert_eq!(text, "beforeafter", "all content delivered across the gap");
+        assert!(saw_stop, "stream must end normally");
+    }
+
+    /// `SHANNON_STREAM_IDLE_SECS` parsing: unset/empty/0/garbage → disabled;
+    /// a positive value → that budget. Env mutation is process-global, so
+    /// the case group holds the module env lock and restores prior values.
+    #[test]
+    fn stream_idle_timeout_env_parsing() {
+        use std::sync::{Mutex, OnceLock};
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env-var test mutex poisoned");
+
+        let saved = std::env::var("SHANNON_STREAM_IDLE_SECS").ok();
+
+        // Unset → disabled.
+        unsafe {
+            std::env::remove_var("SHANNON_STREAM_IDLE_SECS");
+        };
+        assert_eq!(stream_idle_timeout_from_env(), None);
+
+        // 0 → explicitly disabled (eval default; keeps current behavior).
+        unsafe {
+            std::env::set_var("SHANNON_STREAM_IDLE_SECS", "0");
+        };
+        assert_eq!(stream_idle_timeout_from_env(), None);
+
+        // Empty → no-op (matches the `${VAR-default}` wrapper convention).
+        unsafe {
+            std::env::set_var("SHANNON_STREAM_IDLE_SECS", "");
+        };
+        assert_eq!(stream_idle_timeout_from_env(), None);
+
+        // Garbage → disabled with a warning, not a panic.
+        unsafe {
+            std::env::set_var("SHANNON_STREAM_IDLE_SECS", "soon");
+        };
+        assert_eq!(stream_idle_timeout_from_env(), None);
+
+        // Positive value → that budget.
+        unsafe {
+            std::env::set_var("SHANNON_STREAM_IDLE_SECS", "360");
+        };
+        assert_eq!(
+            stream_idle_timeout_from_env(),
+            Some(Duration::from_secs(360))
+        );
+
+        // Restore the prior process state for other tests.
+        match saved.as_deref() {
+            Some(v) => unsafe {
+                std::env::set_var("SHANNON_STREAM_IDLE_SECS", v);
+            },
+            None => unsafe {
+                std::env::remove_var("SHANNON_STREAM_IDLE_SECS");
+            },
         }
     }
 }
