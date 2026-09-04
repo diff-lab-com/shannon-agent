@@ -146,12 +146,44 @@ pub async fn continue_inbox_item_session(
 
 // ── Shared execution path ────────────────────────────────────────────────
 
+/// The legacy JSONL mirror seam. Object-safe on purpose: tests inject a
+/// failing implementation to prove a mirror outage can never wedge the
+/// SQLite `routine_runs` row (review fix round 1, Important 1).
+pub(crate) trait RunMirror: Send + Sync {
+    /// Append the initial `Running` record.
+    fn record_start(&self, run: &ScheduledRun) -> Result<(), String>;
+    /// Append the finish revision for `run_id`.
+    fn record_finish(
+        &self,
+        run_id: &str,
+        status: RunStatus,
+        error: Option<String>,
+    ) -> Result<(), String>;
+}
+
+impl RunMirror for shannon_core::scheduled_runs::ScheduledRunsStore {
+    fn record_start(&self, run: &ScheduledRun) -> Result<(), String> {
+        self.record(run).map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    fn record_finish(
+        &self,
+        run_id: &str,
+        status: RunStatus,
+        error: Option<String>,
+    ) -> Result<(), String> {
+        self.update(run_id, |r| r.finish(status, error))
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// The state slices [`spawn_routine_run`] needs, Arc-cloned so the spawned
 /// task owns its inputs. Constructed from [`AppState`] (Tauri commands) or
 /// from the loopback trigger endpoint's state.
 pub(crate) struct RoutineRunDeps {
     pub(crate) inbox: std::sync::Arc<shannon_core::inbox_store::InboxStore>,
-    pub(crate) runs_store: std::sync::Arc<shannon_core::scheduled_runs::ScheduledRunsStore>,
+    /// Legacy JSONL history mirror (best-effort — see [`spawn_routine_run`]).
+    pub(crate) runs_store: std::sync::Arc<dyn RunMirror>,
     pub(crate) usage_store: std::sync::Arc<crate::commands_usage::UsageStore>,
     pub(crate) client_config: std::sync::Arc<RwLock<shannon_engine::api::types::LlmClientConfig>>,
     pub(crate) desktop_config: std::sync::Arc<RwLock<DesktopConfig>>,
@@ -171,14 +203,67 @@ impl RoutineRunDeps {
     }
 }
 
+/// Everything [`finalize_run`] needs to close out a run.
+pub(crate) struct RunFinishContext {
+    pub(crate) run_id: String,
+    pub(crate) task_id: String,
+    pub(crate) task_name: String,
+    pub(crate) source: String,
+    pub(crate) note: Option<String>,
+    pub(crate) started_ms: i64,
+}
+
+/// What the engine phase of a run produced. `session_id` is `None` when the
+/// engine phase never got far enough to open a session (e.g. panic).
+pub(crate) struct RunOutcome {
+    pub(crate) failed: bool,
+    pub(crate) error: Option<String>,
+    pub(crate) output: String,
+    pub(crate) session_id: Option<String>,
+}
+
+impl RunOutcome {
+    /// Outcome for a task whose future panicked before returning.
+    fn panicked(join_error: String) -> Self {
+        Self {
+            failed: true,
+            error: Some(format!("routine task panicked: {join_error}")),
+            output: String::new(),
+            session_id: None,
+        }
+    }
+}
+
+/// Await the engine future, converting a panic in the unattended task into a
+/// failed [`RunOutcome`] instead of silently leaving the run `running`
+/// forever (review fix round 1, Important 1 — panic half).
+async fn run_with_panic_guard<F>(engine_future: F) -> RunOutcome
+where
+    F: std::future::Future<Output = RunOutcome> + Send + 'static,
+{
+    match tokio::spawn(engine_future).await {
+        Ok(outcome) => outcome,
+        Err(join_error) => RunOutcome::panicked(join_error.to_string()),
+    }
+}
+
 /// Kick off an unattended routine execution and return its run id.
 ///
 /// Mirrors `commands::start_background_task`: fresh engine, configured
 /// approval mode (unattended → persisted deny/allow rules honoured, prompts
 /// auto-allowed), usage written to the ledger. On completion the run is
-/// finished in both the SQLite `routine_runs` table and the legacy JSONL
-/// history (same run id), and an inbox item is appended. Generic over the
-/// Tauri runtime so tests can drive it with `mock_app`.
+/// finished in the SQLite `routine_runs` table (authoritative, decision D6)
+/// and mirrored into the legacy JSONL history, and an inbox item is appended.
+/// Generic over the Tauri runtime so tests can drive it with `mock_app`.
+///
+/// ## Failure ordering guarantees
+///
+/// - The JSONL mirror is **best-effort**: if it cannot be written (start or
+///   finish), we log a warning and continue. SQLite is the system of record,
+///   so a mirror outage must neither abort the run nor leave the SQLite row
+///   stuck in `running`.
+/// - The engine phase runs under [`run_with_panic_guard`]; a panic still
+///   reaches [`finalize_run`], which marks the run failed.
 pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     deps: &RoutineRunDeps,
     app: tauri::AppHandle<R>,
@@ -190,34 +275,48 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
         .inbox
         .record_run_start(&routine.id, &routine.name)
         .map_err(|e| e.to_string())?;
-    let run_id_for_task = run_id.clone();
 
-    // Mirror the run into the legacy JSONL history under the SAME run id so
-    // the existing History view (which reads ScheduledRunsStore) keeps
-    // working until the UI task switches it to the SQLite store.
+    // Best-effort mirror of the run start into the legacy JSONL history
+    // (same run id) so the existing History view keeps working until the UI
+    // task switches it to the SQLite store. A failure here must NOT abort —
+    // otherwise the SQLite row we just created would never get a finish.
     let mut jsonl_run = ScheduledRun::start(&routine.id, &routine.name);
     jsonl_run.run_id = run_id.clone();
-    deps.runs_store
-        .record(&jsonl_run)
-        .map_err(|e| e.to_string())?;
+    if let Err(e) = deps.runs_store.record_start(&jsonl_run) {
+        tracing::warn!(
+            run_id = %run_id,
+            error = %e,
+            "inbox: legacy JSONL run mirror unavailable; continuing with SQLite only"
+        );
+    }
 
     let client_config = deps.client_config.read().await.clone();
     let approval_mode_str = deps.desktop_config.read().await.approval_mode.clone();
-    let tools = deps.tools.clone();
-    let inbox = deps.inbox.clone();
-    let runs_store = deps.runs_store.clone();
-    let usage_store = deps.usage_store.clone();
-    let app_for_task = app.clone();
     let model = client_config.model.clone();
     let model_for_usage = model.clone();
     let provider = client_config.provider.to_string();
     let prompt = routine.prompt.clone();
-    let task_id = routine.id.clone();
-    let task_name = routine.name.clone();
-    let inbox_source = inbox_source.to_string();
-    let started_ms = chrono::Utc::now().timestamp_millis();
+    let usage_store = deps.usage_store.clone();
+    let tools = deps.tools.clone();
 
-    tokio::spawn(async move {
+    let finish_deps = RoutineRunDeps {
+        inbox: deps.inbox.clone(),
+        runs_store: deps.runs_store.clone(),
+        usage_store: deps.usage_store.clone(),
+        client_config: deps.client_config.clone(),
+        desktop_config: deps.desktop_config.clone(),
+        tools: deps.tools.clone(),
+    };
+    let ctx = RunFinishContext {
+        run_id: run_id.clone(),
+        task_id: routine.id.clone(),
+        task_name: routine.name.clone(),
+        source: inbox_source.to_string(),
+        note,
+        started_ms: chrono::Utc::now().timestamp_millis(),
+    };
+
+    let engine_future = async move {
         let client = LlmClient::new(client_config);
 
         // Same policy as background tasks: run unattended under the
@@ -308,61 +407,95 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
             }
         }
 
-        let finished_ms = chrono::Utc::now().timestamp_millis();
-        let duration_secs = (finished_ms - started_ms).max(0) / 1000;
-
-        let (status, run_error): (&str, Option<String>) = match &failure {
-            Some(err) => ("failed", Some(truncate_chars(err, SUMMARY_MAX_CHARS))),
-            None => ("succeeded", None),
-        };
-
-        // 1. Legacy JSONL history (best-effort — never blocks the inbox).
-        let jsonl_status = if failure.is_some() {
-            RunStatus::Failed
-        } else {
-            RunStatus::Succeeded
-        };
-        if let Err(e) = runs_store.update(&run_id_for_task, |r| {
-            r.finish(jsonl_status, run_error.clone())
-        }) {
-            tracing::warn!(run_id = %run_id_for_task, error = %e, "inbox: legacy run history update failed");
+        RunOutcome {
+            failed: failure.is_some(),
+            error: failure,
+            output: final_output,
+            session_id: Some(session_id.to_string()),
         }
+    };
 
-        // 2. Inbox item + 3. run back-link.
-        let summary = build_summary(
-            note.as_deref(),
-            duration_secs,
-            &final_output,
-            run_error.is_some(),
-        );
-        let item = inbox
-            .append_item(InboxItemNew {
-                source: inbox_source,
-                source_id: Some(task_id),
-                session_id: Some(session_id.to_string()),
-                title: task_name,
-                summary,
-                error: run_error.clone(),
-            })
-            .map_err(|e| e.to_string());
-        let item_id = match item {
-            Ok(saved) => Some(saved.id),
-            Err(e) => {
-                tracing::warn!(run_id = %run_id_for_task, error = %e, "inbox: failed to append run item");
-                None
-            }
-        };
-        if let Err(e) =
-            inbox.record_run_finish(&run_id_for_task, status, run_error.as_deref(), item_id)
-        {
-            tracing::warn!(run_id = %run_id_for_task, error = %e, "inbox: failed to finish run record");
-        }
-
-        // 4. Refresh signal.
-        let _ = app_for_task.emit(event_names::INBOX_UPDATED, run_id_for_task);
+    tokio::spawn(async move {
+        let outcome = run_with_panic_guard(engine_future).await;
+        finalize_run(&finish_deps, &app, ctx, outcome);
     });
 
     Ok(run_id)
+}
+
+/// Close out a run: legacy JSONL finish (best-effort), inbox item, SQLite
+/// `routine_runs` finish (with `inbox_item_id` back-link), and the refresh
+/// event. Every path through here terminates the SQLite run — this is the
+/// single choke point that prevents `running` rows from wedging.
+fn finalize_run<R: tauri::Runtime>(
+    deps: &RoutineRunDeps,
+    app: &tauri::AppHandle<R>,
+    ctx: RunFinishContext,
+    outcome: RunOutcome,
+) {
+    let finished_ms = chrono::Utc::now().timestamp_millis();
+    let duration_secs = (finished_ms - ctx.started_ms).max(0) / 1000;
+    let status = if outcome.failed {
+        "failed"
+    } else {
+        "succeeded"
+    };
+    let run_error = outcome
+        .error
+        .as_deref()
+        .map(|e| truncate_chars(e, SUMMARY_MAX_CHARS));
+
+    // 1. Legacy JSONL history (best-effort — never blocks the inbox).
+    let jsonl_status = if outcome.failed {
+        RunStatus::Failed
+    } else {
+        RunStatus::Succeeded
+    };
+    if let Err(e) = deps
+        .runs_store
+        .record_finish(&ctx.run_id, jsonl_status, run_error.clone())
+    {
+        tracing::warn!(
+            run_id = %ctx.run_id,
+            error = %e,
+            "inbox: legacy JSONL run mirror finish failed; SQLite run record is authoritative"
+        );
+    }
+
+    // 2. Inbox item + 3. SQLite run back-link.
+    let summary = build_summary(
+        ctx.note.as_deref(),
+        duration_secs,
+        &outcome.output,
+        run_error.is_some(),
+    );
+    let item = deps
+        .inbox
+        .append_item(InboxItemNew {
+            source: ctx.source,
+            source_id: Some(ctx.task_id),
+            session_id: outcome.session_id,
+            title: ctx.task_name,
+            summary,
+            error: run_error.clone(),
+        })
+        .map_err(|e| e.to_string());
+    let item_id = match item {
+        Ok(saved) => Some(saved.id),
+        Err(e) => {
+            tracing::warn!(run_id = %ctx.run_id, error = %e, "inbox: failed to append run item");
+            None
+        }
+    };
+    if let Err(e) = deps
+        .inbox
+        .record_run_finish(&ctx.run_id, status, run_error.as_deref(), item_id)
+    {
+        tracing::warn!(run_id = %ctx.run_id, error = %e, "inbox: failed to finish run record");
+    }
+
+    // 4. Refresh signal.
+    let _ = app.emit(event_names::INBOX_UPDATED, ctx.run_id);
 }
 
 /// Truncate to at most `max` chars without splitting a UTF-8 codepoint, and
@@ -503,5 +636,167 @@ mod tests {
         );
         let missing = store.get_item(without.id).unwrap().unwrap();
         assert!(missing.session_id.is_none());
+    }
+
+    // ── review fix round 1 (Important 1): failure-path guarantees ───────
+
+    /// JSONL mirror that always fails — stands in for an unwritable
+    /// `~/.shannon/scheduled-runs/` (disk full, permissions, ...).
+    struct FailingRunMirror {
+        record_start_calls: std::sync::atomic::AtomicUsize,
+        record_finish_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FailingRunMirror {
+        fn new() -> Self {
+            Self {
+                record_start_calls: std::sync::atomic::AtomicUsize::new(0),
+                record_finish_calls: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl RunMirror for FailingRunMirror {
+        fn record_start(&self, _run: &ScheduledRun) -> Result<(), String> {
+            self.record_start_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("simulated JSONL mirror outage (start)".into())
+        }
+
+        fn record_finish(
+            &self,
+            _run_id: &str,
+            _status: RunStatus,
+            _error: Option<String>,
+        ) -> Result<(), String> {
+            self.record_finish_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("simulated JSONL mirror outage (finish)".into())
+        }
+    }
+
+    fn failing_mirror_deps(
+        tmp: &std::path::Path,
+    ) -> (
+        RoutineRunDeps,
+        std::sync::Arc<shannon_core::inbox_store::InboxStore>,
+    ) {
+        let inbox: std::sync::Arc<shannon_core::inbox_store::InboxStore> = std::sync::Arc::new(
+            shannon_core::inbox_store::InboxStore::open_with_legacy(&tmp.join("inbox.db"), None)
+                .unwrap(),
+        );
+        let deps = RoutineRunDeps {
+            inbox: inbox.clone(),
+            runs_store: std::sync::Arc::new(FailingRunMirror::new()),
+            usage_store: std::sync::Arc::new(crate::commands_usage::UsageStore::with_path(
+                tmp.join("usage.jsonl"),
+            )),
+            client_config: std::sync::Arc::new(RwLock::new(
+                shannon_engine::api::types::LlmClientConfig::default(),
+            )),
+            desktop_config: std::sync::Arc::new(RwLock::new(DesktopConfig::default())),
+            tools: std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+        };
+        (deps, inbox)
+    }
+
+    fn finish_ctx(run_id: &str, started_ms: i64) -> RunFinishContext {
+        RunFinishContext {
+            run_id: run_id.to_string(),
+            task_id: "task-1".into(),
+            task_name: "Task One".into(),
+            source: shannon_core::inbox_store::SOURCE_ROUTINE.into(),
+            note: None,
+            started_ms,
+        }
+    }
+
+    #[test]
+    fn sqlite_run_finishes_even_when_jsonl_mirror_fails() {
+        // Important 1 (fix round 1): the legacy JSONL mirror being broken
+        // must not leave the SQLite `routine_runs` row stuck in `running`.
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, inbox) = failing_mirror_deps(tmp.path());
+
+        let run_id = deps.inbox.record_run_start("task-1", "Task One").unwrap();
+
+        finalize_run(
+            &deps,
+            app.handle(),
+            finish_ctx(&run_id, chrono::Utc::now().timestamp_millis() - 4_000),
+            RunOutcome {
+                failed: false,
+                error: None,
+                output: "run finished fine".into(),
+                session_id: Some("0195abcd-0000-7000-8000-000000000000".into()),
+            },
+        );
+
+        let runs = inbox.list_runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_ne!(runs[0].status, "running", "run must not stay running");
+        assert_eq!(runs[0].status, "succeeded");
+        assert!(runs[0].finished_at_ms.is_some());
+        assert!(runs[0].duration_ms.is_some());
+        // The inbox item still lands and is back-linked despite the mirror.
+        assert!(runs[0].inbox_item_id.is_some());
+        let items = inbox.list(None, None, 10).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "Task One");
+    }
+
+    #[test]
+    fn sqlite_run_marks_failed_when_engine_failed_and_mirror_fails() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, inbox) = failing_mirror_deps(tmp.path());
+
+        let run_id = deps.inbox.record_run_start("task-1", "Task One").unwrap();
+
+        finalize_run(
+            &deps,
+            app.handle(),
+            finish_ctx(&run_id, chrono::Utc::now().timestamp_millis() - 1_000),
+            RunOutcome {
+                failed: true,
+                error: Some("provider unreachable".into()),
+                output: String::new(),
+                session_id: Some("0195abcd-0000-7000-8000-000000000001".into()),
+            },
+        );
+
+        let runs = inbox.list_runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, "failed", "terminal state must be failed");
+        assert!(runs[0].finished_at_ms.is_some());
+        let items = inbox.list(None, None, 10).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].status, "pending");
+        assert_eq!(items[0].error.as_deref(), Some("provider unreachable"));
+    }
+
+    /// A stand-in for the engine future that panics instead of returning.
+    fn panicking_engine_outcome() -> RunOutcome {
+        panic!("boom");
+    }
+
+    #[tokio::test]
+    async fn panicked_engine_task_is_recorded_as_failed() {
+        // Keep the test output clean: silence the default panic hook while
+        // the guarded future intentionally panics.
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+
+        let outcome = run_with_panic_guard(async { panicking_engine_outcome() }).await;
+
+        std::panic::set_hook(prev_hook);
+
+        assert!(outcome.failed, "panic must map to a failed outcome");
+        assert!(
+            outcome.error.unwrap().contains("panicked"),
+            "error should mention the panic"
+        );
+        assert!(outcome.session_id.is_none(), "no session was opened");
     }
 }
