@@ -2,7 +2,7 @@
 
 - 日期：2026-09-04
 - 依据：[竞品调研与差距分析](../research/2026-09-04-goal-competitive-research.md)
-- 状态：v2（已按评审意见修订，见 §11）
+- 状态：v3（v2 + 复检修订 R13/R14，见 §11）
 - 关联：对标 Claude Code `/goal`（2.1.139+）与 Codex CLI Goals（0.128+）
 
 ---
@@ -219,7 +219,16 @@ Rules:
 
 Paused 态在块首加一行：`The goal is currently PAUSED — the user will direct work manually; do not output goal markers.`
 
-### 6.4 续跑提示（Active 且未完成时，经 `set_input`+`submit_input`，与 ralph 同款透明模式）
+### 6.4 续跑提示（Active 且未完成时，经 `queued_messages` 队列注入）
+
+> **评审 R14 修正**：v1 曾写"经 `set_input`+`submit_input`（与 ralph 同款）"。复核发现该路径从 `handle_query`
+> 完成挂钩内部直接递归调 `submit_input`——每层续跑嵌套一层重型 `handle_query` 栈帧，测试中已实际栈溢出，
+> `--max 0` 时深度无界。修正为：续跑 prompt 压入 `queued_messages`，由 `submit_input` 末尾的**扁平排水循环**
+> （commands/mod.rs，其注释明确写着"避免递归 handle_query 调用"正是此意）接续执行——任意轮数的 goal 运行
+> 栈深度 O(1)。队列 FIFO，故用户在轮内输入的消息仍先于续跑执行；查询错误/取消清空队列即停（goal 保持
+> Active 仅锚定）。UX 差异：续跑 prompt 经 "Sending queued message…" toast 呈现并以用户消息入账，
+> 透明度等同。`/ralph`、`/loop` 存在同构递归（缺陷与本修正同理），因其错误语义与 submit 错误返回耦合，
+> 按零破坏约束未在本轮改动，列为跟进项。
 
 ```text
 [Goal iteration {n}/{max}] Continue working toward the goal: {objective}
@@ -334,3 +343,5 @@ pub(crate) enum GoalMarker { Complete, Blocked(String) }
 | R10 | PM | 设置 goal 后若无消息则无任何事发生，用户困惑 | §5.1 确认文案显式写"发送一条消息即可开始"；StartIfIdle 列为 Phase 2（§6.2） |
 | R11 | 架构 | 查询错误/中断路径的 goal 语义未定义（会否无限重试烧 token？） | §6.2 明确：Err 分支不执行续跑判定，goal 保持 Active 仅锚定、不自动重试 |
 | R12 | 架构 | goal 续跑与 queued_messages 排队语义的交互未定义 | §6.2 作为已知限制记录：沿用 /ralph 既有行为，不新造排队语义 |
+| R13 | 架构 | `--max` 默认 25 缺依据；竞品默认是多少？ | 深度对标后维持 25：LangGraph `recursion_limit` 默认即 25（唯一有文档默认步数上限的主流框架）；高于 Shannon `/ralph`/`/loop` 的 10（goal 作用域更大）；低于 OpenHands `max_iterations` 100（其配套 stuck detector，goal MVP 没有）。竞品两端（Claude Code/Codex 无轮数上限）靠预算记账/anti-spin/check-in 兜底——恰是 Phase 2 项，落地后再重估默认值。触顶可恢复（Paused + resume 重置预算），错配代价不对称：偏低仅多一次 resume，偏高烧 token。 |
+| R14 | 架构 | **缺陷修正**：续跑经 `submit_input` 从 `handle_query` 框架内递归——测试栈溢出实证，`--max 0` 时无界 | §6.4 修正：改走 `queued_messages` + 扁平排水循环，栈深 O(1)；新增递归回归测试与 FIFO 顺序测试。`/ralph`/`/loop` 同构隐患如实报告，列为跟进项（错误语义耦合，零破坏约束内不动） |

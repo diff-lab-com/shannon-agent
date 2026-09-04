@@ -386,8 +386,16 @@ pub struct GoalState {
     pub max_iterations: usize,
 }
 
-/// Default continuation cap — high enough for real tasks, low enough to
-/// stop a runaway loop before it burns serious tokens.
+/// Default continuation cap.
+///
+/// Calibration (see `docs/plans/2026-09-04-goal-design.md` §11 R13): each
+/// iteration is a full agentic turn, so this is a cost bound, not a progress
+/// measure. 25 matches LangGraph's `recursion_limit` default, sits 2.5×
+/// above Shannon's own `/ralph`/`/loop` (10 — smaller task-iteration scope),
+/// and well below OpenHands' `max_iterations` (100), which is paired with a
+/// stuck detector the goal MVP lacks. Hitting the cap is recoverable: the
+/// goal pauses and `/goal resume` re-arms a fresh budget. Revisit once
+/// budget accounting / anti-spin land (Phase 2).
 pub const GOAL_DEFAULT_MAX_ITERATIONS: usize = 25;
 
 impl GoalState {
