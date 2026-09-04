@@ -6,10 +6,10 @@ import { I18nProvider } from '@/i18n'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { Sidebar, SIDEBAR_MODE_KEY } from '@/components/Sidebar'
 
-// Mock useTriageStats hook
-vi.mock('@/hooks/scheduled-tasks', () => ({
-  useTriageStats: () => ({
-    stats: { unread: 3, total: 5 },
+// Mock the inbox stats hook backing the /triage nav badge (P0-3).
+vi.mock('@/hooks/inbox', () => ({
+  useInboxStats: () => ({
+    stats: { pending: 3, today: 5 },
     refresh: vi.fn(),
   }),
 }))
