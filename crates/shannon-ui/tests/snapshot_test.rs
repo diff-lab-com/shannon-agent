@@ -97,7 +97,7 @@ fn test_status_bar_shows_no_model_configured() {
         .draw(|f| {
             let area = Rect::new(0, 0, 80, 2);
             StatusBarWidget::render_with_spinner(
-                f, area, "Ready", None, // No model configured
+                f, area, "Ready", None, None, // No goal, no model configured
                 None, // No provider
                 None, // No effort level
                 None, None, None, None, None, None, &theme, None, None, None, None, None, None,
@@ -127,6 +127,7 @@ fn test_status_bar_shows_model_name() {
                 f,
                 area,
                 "Ready",
+                None, // No goal
                 Some("gpt-4"),
                 None, // No provider
                 None, // No effort level
@@ -178,6 +179,7 @@ fn test_status_bar_shows_effort_level() {
                 f,
                 area,
                 "Ready",
+                None, // No goal
                 Some("claude-sonnet-4"),
                 None, // No provider
                 Some("high"),
@@ -223,6 +225,7 @@ fn test_status_bar_shows_thinking_indicator() {
                 f,
                 area,
                 "Thinking...",
+                None, // No goal
                 Some("claude-sonnet-4"),
                 None, // No provider
                 None,

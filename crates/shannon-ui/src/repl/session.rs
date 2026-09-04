@@ -34,6 +34,15 @@ impl super::Repl {
             }
         }
 
+        // Restore the session goal (/goal) from the sidecar so an active
+        // goal re-anchors on the next message after a resume. Restoring only
+        // re-arms the anchor — auto-continuation resumes after the next
+        // query completes, keeping the user in control.
+        let sidecar = self.l0_store().sidecar(&session_data.session_id);
+        if let Some(stored_goal) = sidecar.goal {
+            self.state.goal = Some(crate::repl::state::GoalState::from_stored(stored_goal));
+        }
+
         if let Some(ref mut engine) = self.query_engine {
             let preview = session_data.metadata.title.clone();
             engine.replace_conversation(session_data.messages);

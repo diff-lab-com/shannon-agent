@@ -35,6 +35,7 @@ const AdvancedSettings = lazy(() => import('./components/settings/AdvancedSettin
 const BillingSettings = lazy(() => import('./components/settings/BillingSettings'));
 const NotificationsSettings = lazy(() => import('./components/settings/NotificationsSettings'));
 const ConnectionsSettings = lazy(() => import('./components/settings/ConnectionsSettings'));
+const RemotesSettings = lazy(() => import('./components/settings/RemotesSettings'));
 
 // P2-5a spike: dev-only test page for the assistant-ui runtime adapter.
 // Loaded here so `Chat.tsx` (production) and its component tree stay untouched.
@@ -105,6 +106,7 @@ export default function App() {
                   <Route path="advanced" element={<AdvancedSettings />} />
                   <Route path="notifications" element={<NotificationsSettings />} />
                   <Route path="connections" element={<ConnectionsSettings />} />
+                  <Route path="remotes" element={<RemotesSettings />} />
                 </Route>
                 <Route path="*" element={<Navigate to="/chat" replace />} />
               </Route>

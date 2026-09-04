@@ -131,6 +131,7 @@ fn test_progress_indicator_snapshot() {
                 f,
                 area,
                 "Thinking...",
+                None, // no goal
                 Some("claude-sonnet-4"),
                 None, // provider
                 None, // effort_level
@@ -185,6 +186,7 @@ fn test_cache_hit_rate_snapshot() {
                 f,
                 area,
                 "Responding",
+                None, // no goal
                 Some("claude-sonnet-4"),
                 None,         // provider
                 None,         // effort_level
@@ -236,6 +238,7 @@ fn test_cache_zero_tokens_snapshot() {
                 f,
                 area,
                 "Responding",
+                None, // no goal
                 Some("claude-sonnet-4"),
                 None, // provider
                 None, // effort_level

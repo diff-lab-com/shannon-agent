@@ -65,6 +65,22 @@ pub struct SessionSidecar {
     /// Index in the parent's message list where the branch diverged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_point_message_index: Option<usize>,
+    /// Session goal (set via `/goal`), restored on resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<StoredGoal>,
+}
+
+/// Persistence DTO for a session goal. Kept dependency-free from the UI
+/// crate: `status` is one of `"active" | "paused" | "complete"`; unknown
+/// values degrade to paused on load rather than failing the session.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct StoredGoal {
+    pub objective: String,
+    pub status: String,
+    #[serde(default)]
+    pub iterations: usize,
+    #[serde(default)]
+    pub max_iterations: usize,
 }
 
 impl SessionSidecar {
@@ -107,6 +123,7 @@ impl SessionSidecar {
         self.branch_point_message_index = self
             .branch_point_message_index
             .or(existing.branch_point_message_index);
+        self.goal = self.goal.or(existing.goal);
         self
     }
 }
@@ -408,6 +425,7 @@ impl SessionStore {
                 title,
                 parent_session_id: Some(*parent_id),
                 branch_point_message_index: Some(branch_point),
+                goal: None,
             },
         )?;
 
@@ -843,6 +861,7 @@ mod tests {
                     title: Some("My Title".into()),
                     parent_session_id: None,
                     branch_point_message_index: None,
+                    goal: None,
                 },
             )
             .unwrap();
@@ -851,6 +870,71 @@ mod tests {
 
         let loaded = store.load(&id).unwrap().unwrap();
         assert_eq!(loaded.metadata.title.as_deref(), Some("My Title"));
+    }
+
+    #[test]
+    fn stored_goal_serde_roundtrip() {
+        let goal = StoredGoal {
+            objective: "all tests pass".into(),
+            status: "active".into(),
+            iterations: 3,
+            max_iterations: 25,
+        };
+        let json = serde_json::to_string(&goal).unwrap();
+        let back: StoredGoal = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, goal);
+    }
+
+    #[test]
+    fn sidecar_without_goal_omits_field() {
+        let sidecar = SessionSidecar::default();
+        let json = serde_json::to_string(&sidecar).unwrap();
+        assert!(!json.contains("goal"), "skip_serializing_if leaked: {json}");
+    }
+
+    #[test]
+    fn sidecar_goal_roundtrip_through_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session(&store, &id);
+
+        store
+            .save_sidecar(
+                &id,
+                &SessionSidecar {
+                    goal: Some(StoredGoal {
+                        objective: "ship it".into(),
+                        status: "active".into(),
+                        iterations: 1,
+                        max_iterations: 25,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let loaded = store.sidecar(&id);
+        assert_eq!(
+            loaded.goal,
+            Some(StoredGoal {
+                objective: "ship it".into(),
+                status: "active".into(),
+                iterations: 1,
+                max_iterations: 25,
+            })
+        );
+        // A goal-less save must not wipe the stored goal.
+        store.save_sidecar(&id, &SessionSidecar::default()).unwrap();
+        assert!(store.sidecar(&id).goal.is_some());
+    }
+
+    #[test]
+    fn sidecar_unknown_status_string_loads() {
+        let json =
+            r#"{"goal":{"objective":"x","status":"bogus","iterations":0,"max_iterations":25}}"#;
+        let sidecar: SessionSidecar = serde_json::from_str(json).unwrap();
+        assert_eq!(sidecar.goal.unwrap().status, "bogus");
     }
 
     #[test]

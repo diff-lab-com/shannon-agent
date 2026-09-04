@@ -133,6 +133,39 @@ impl FileSystemProvider for LocalFs {
         }
         Ok(entries)
     }
+
+    fn walk_blocking(
+        &self,
+        root: &Path,
+        cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+    ) -> io::Result<()> {
+        // Same walker configuration Grep/Glob have always used locally
+        // (skip hidden, respect gitignore), so local traversal stays
+        // byte-for-byte identical now that the tools route through this
+        // provider seam.
+        let mut builder = ignore::WalkBuilder::new(root);
+        builder.hidden(true);
+        builder.git_ignore(true);
+        builder.git_global(true);
+        builder.git_exclude(true);
+        for entry in builder.build() {
+            let entry = match entry {
+                Ok(e) => e,
+                // Skip unreadable entries, mirroring the tools' old loops.
+                Err(_) => continue,
+            };
+            let path = entry.path().to_path_buf();
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            cb(&DirEntryInfo {
+                path,
+                len: meta.len(),
+                is_dir: meta.is_dir(),
+            });
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

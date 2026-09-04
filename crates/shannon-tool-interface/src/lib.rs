@@ -26,16 +26,18 @@ use thiserror::Error;
 
 pub mod providers;
 pub mod sandbox;
+pub mod walk;
 
 pub use providers::{
-    CapturedOutput, ChainedSpawnRewrite, DirEntryInfo, FileMeta, FileSystemProvider, PipedChild,
-    PipedSpawn, ProcessExit, ProcessProvider, ProcessRequest, SpawnRewrite,
+    CapturedOutput, ChainedSpawnRewrite, DirEntryInfo, ExecCaps, FileMeta, FileSystemProvider,
+    PipedChild, PipedSpawn, ProcessExit, ProcessProvider, ProcessRequest, SpawnRewrite,
 };
 pub use sandbox::{
     ChildWorldInit, DegradeNotice, ForkInitHost, SANDBOX_DENIED_CLASSIFICATION,
     SANDBOX_DENIED_PREFIX, SandboxDenialInfo, SandboxError, SandboxMode, SandboxPolicy,
     SandboxProvider, path_within,
 };
+pub use walk::{BUILTIN_EXCLUDES, GitignoreMatcher};
 
 /// Sender for streaming tool progress updates.
 /// Tools call `send(line)` to emit partial output during execution.

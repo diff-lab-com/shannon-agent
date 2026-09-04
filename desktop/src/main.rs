@@ -21,6 +21,7 @@ fn main() {
     use shannon_desktop::commands_onboarding;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
+    use shannon_desktop::commands_remote;
     use shannon_desktop::commands_rewind;
     use shannon_desktop::commands_routine_templates;
     use shannon_desktop::commands_sessions;
@@ -94,6 +95,13 @@ fn main() {
             commands_connections::gateway_get_secret,
             commands_connections::gateway_has_secret,
             commands_connections::gateway_delete_secret,
+            commands_remote::remote_list_targets,
+            commands_remote::remote_discover_ssh_hosts,
+            commands_remote::remote_list_docker_containers,
+            commands_remote::remote_add_target,
+            commands_remote::remote_remove_target,
+            commands_remote::remote_set_default_target,
+            commands_remote::remote_test_target,
             commands_connections::gateway_read_config,
             commands_connections::gateway_write_config,
             commands_connections::gateway_supervisor_start,
