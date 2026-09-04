@@ -30,7 +30,9 @@
 //! can resume.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
@@ -170,11 +172,29 @@ pub(crate) struct GoalRunHandle {
     pub(crate) state: tokio::sync::Mutex<GoalRunState>,
     /// Stop: cancels the in-flight turn and terminates the loop.
     pub(crate) cancel: CancellationToken,
-    /// Resume signal for a parked (paused) loop.
-    pub(crate) resume_notify: tokio::sync::Notify,
+    /// Lossless resume signal. `watch::changed()` compares against the
+    /// last-seen generation rather than "a send that happens while someone
+    /// is awaiting", so a resume that fires *before* the parked loop
+    /// registers its wakeup still wakes it — the exact window where
+    /// `Notify::notify_waiters` loses the notification (fix round 1,
+    /// Important 2). The receiver must be marked (`borrow_and_update`)
+    /// BEFORE the first paused check; `wait_while_paused` owns that order.
+    pub(crate) resume_tx: tokio::sync::watch::Sender<u64>,
+    resume_rx: tokio::sync::watch::Receiver<u64>,
 }
 
 impl GoalRunHandle {
+    /// Constructor pairing the watch channel (generation 0).
+    pub(crate) fn new(state: GoalRunState) -> Self {
+        let (resume_tx, resume_rx) = tokio::sync::watch::channel(0u64);
+        Self {
+            state: tokio::sync::Mutex::new(state),
+            cancel: CancellationToken::new(),
+            resume_tx,
+            resume_rx,
+        }
+    }
+
     async fn dto(&self) -> GoalRunDto {
         self.state.lock().await.dto()
     }
@@ -211,7 +231,10 @@ impl GoalRunHandle {
             }
             s.reset_for_resume();
         }
-        self.resume_notify.notify_waiters();
+        // Bump the generation last: a waiter that already read `Paused`
+        // will either see the new status on re-check or wake on the
+        // changed generation — never both miss.
+        self.resume_tx.send_modify(|generation| *generation += 1);
         Ok(())
     }
 
@@ -219,6 +242,36 @@ impl GoalRunHandle {
     /// run as `stopped` (no inbox item).
     pub(crate) fn stop(&self) {
         self.cancel.cancel();
+    }
+
+    /// Park until the run leaves `Paused` (or is stopped). Returns `true`
+    /// if at least one paused state was observed — callers use this to
+    /// re-arm the continuation prompt after a resume.
+    ///
+    /// Lossless by construction: the watch receiver is marked *before* the
+    /// first status read, so a resume landing anywhere between "read
+    /// Paused" and "await changed()" either already flipped the status
+    /// (loop re-check exits) or bumps the generation past the seen one
+    /// (`changed()` resolves immediately).
+    pub(crate) async fn wait_while_paused(&self) -> bool {
+        let mut resume_rx = self.resume_rx.clone();
+        resume_rx.borrow_and_update();
+        let mut parked = false;
+        while self.state.lock().await.status == GoalRunStatus::Paused {
+            parked = true;
+            tokio::select! {
+                _ = self.cancel.cancelled() => return parked,
+                changed = resume_rx.changed() => {
+                    if changed.is_err() {
+                        // Sender dropped: impossible while the handle lives;
+                        // treat as a wake to avoid hanging on a re-check.
+                        return parked;
+                    }
+                    drop(resume_rx.borrow_and_update());
+                }
+            }
+        }
+        parked
     }
 }
 
@@ -385,11 +438,7 @@ pub async fn start_goal_run(
         started_at_ms: started,
         updated_at_ms: started,
     };
-    let handle = Arc::new(GoalRunHandle {
-        state: tokio::sync::Mutex::new(run_state),
-        cancel: CancellationToken::new(),
-        resume_notify: tokio::sync::Notify::new(),
-    });
+    let handle = Arc::new(GoalRunHandle::new(run_state));
     state
         .goal_runs
         .start(session_uuid, handle.clone())
@@ -583,11 +632,7 @@ pub async fn resume_goal_run(
         started_at_ms: started,
         updated_at_ms: started,
     };
-    let handle = Arc::new(GoalRunHandle {
-        state: tokio::sync::Mutex::new(run_state),
-        cancel: CancellationToken::new(),
-        resume_notify: tokio::sync::Notify::new(),
-    });
+    let handle = Arc::new(GoalRunHandle::new(run_state));
     state
         .goal_runs
         .start(uuid, handle.clone())
@@ -868,17 +913,26 @@ impl shannon_tools::goal::GoalStateAccess for RunnerGoalAccess {
 
 // ── The turn loop ────────────────────────────────────────────────────────
 
-/// What one engine turn produced.
-struct TurnObservation {
+/// What one turn produced. The engine runner folds the `goal_get` /
+/// `goal_update` tool verdicts (read from the run's shared core after the
+/// stream ends) into `tool_completed` / `tool_blocked`; the loop scans
+/// `assistant_text` for the end-of-reply marker and consults
+/// `tool_*` first — explicit structured statements beat the marker scan.
+pub(crate) struct TurnObservation {
     /// Full assistant text of the turn (concatenated text events).
     assistant_text: String,
     had_tool_calls: bool,
     cost_usd: f64,
     failure: Option<String>,
     cancelled: bool,
+    /// `goal_update` reported `complete` mid-turn.
+    tool_completed: bool,
+    /// `goal_update` reported `blocked` mid-turn, with its reason.
+    tool_blocked: Option<String>,
 }
 
 /// Terminal outcomes the loop hands to [`finalize_goal_run`].
+#[derive(Debug)]
 pub(crate) enum GoalTerminal {
     Completed,
     Blocked(String),
@@ -890,20 +944,412 @@ pub(crate) enum GoalTerminal {
     Stopped,
 }
 
-/// Drive the goal run to a terminal state. Owns one engine for the whole
-/// run (`set_goal` once, `set_goal(None)` at the end) and streams every
-/// turn's `QueryEvent`s to the Tauri wire so the chat page renders the run.
-///
-/// Final-state discipline: every exit — decision terminal, stop, engine
-/// failure, panic — flows through [`finalize_goal_run`]; the run can never
-/// be left `running`. Generic over the Tauri runtime so tests can drive it
-/// with `mock_app`.
+/// Per-turn request. `iterations_done` is the completed-continuation count
+/// *before* this turn — the `goal_get` snapshot shows exactly what the TUI
+/// would show at the same point.
+pub(crate) struct GoalTurnRequest {
+    pub(crate) user_message: String,
+    pub(crate) iterations_done: u32,
+}
+
+/// Single-turn execution, abstracted so the decision loop is testable
+/// without an LLM: production wires [`EngineGoalTurnRunner`]; tests inject
+/// a stub returning scripted [`TurnObservation`]s.
+pub(crate) trait GoalTurnRunner: Send {
+    /// Execute one turn and report what it produced.
+    fn run_turn(
+        &mut self,
+        turn: GoalTurnRequest,
+    ) -> Pin<Box<dyn Future<Output = TurnObservation> + Send + '_>>;
+
+    /// Called once when the loop reaches a terminal state. The engine
+    /// runner clears the injected `GoalSpec` here (`set_goal(None)`).
+    fn finish(&mut self) {}
+}
+
+/// Production turn runner: owns the run's engine (built once —
+/// `set_goal` once, restored from the L0 log) and streams every turn's
+/// `QueryEvent`s to the Tauri wire so the chat page renders the run live.
+struct EngineGoalTurnRunner<R: tauri::Runtime> {
+    engine: QueryEngine,
+    app: tauri::AppHandle<R>,
+    handle: Arc<GoalRunHandle>,
+    deps: GoalRunDeps,
+    session_id: Uuid,
+    model: String,
+    model_for_usage: String,
+    provider: String,
+    /// goal_get/goal_update bridge, shared with the registered tools.
+    shared: Arc<Mutex<GoalSharedCore>>,
+}
+
+impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
+    /// Build the engine + per-run tool registry. Mirrors
+    /// `spawn_routine_run`: unattended → configured approval mode honoured,
+    /// persisted rules applied, FullAuto default.
+    async fn new(
+        deps: &GoalRunDeps,
+        app: tauri::AppHandle<R>,
+        handle: &Arc<GoalRunHandle>,
+    ) -> Result<Self, String> {
+        let client_config = deps.client_config.read().await.clone();
+        let approval_mode_str = deps.desktop_config.read().await.approval_mode.clone();
+        let model = client_config.model.clone();
+        let provider = client_config.provider.to_string();
+
+        let mut permissions = PermissionManager::new();
+        let mode = approval_mode_str
+            .as_deref()
+            .and_then(|s| match s {
+                "full_auto" => Some(ApprovalMode::FullAuto),
+                "auto_edit" => Some(ApprovalMode::AutoEdit),
+                "auto" => Some(ApprovalMode::Auto),
+                "plan" => Some(ApprovalMode::Plan),
+                _ => None,
+            })
+            .unwrap_or(ApprovalMode::FullAuto);
+        permissions.set_approval_mode(mode);
+        let mut settings = shannon_core::settings::SettingsManager::new();
+        if settings.load_from_files().is_ok() {
+            let rules = &settings.settings_mut().permissions;
+            permissions.set_rule_checker(PermissionRuleChecker::from_rule_strings(
+                &rules.deny,
+                &rules.ask,
+                &rules.allow,
+            ));
+        }
+
+        let (session_id, objective, max_turns, budget_usd) = {
+            let s = handle.state.lock().await;
+            (s.session_id, s.objective.clone(), s.max_turns, s.budget_usd)
+        };
+        let shared = Arc::new(Mutex::new(GoalSharedCore {
+            objective: objective.clone(),
+            status: "active".into(),
+            iterations: 0,
+            max_iterations: max_turns.unwrap_or(0),
+            max_budget_usd: budget_usd,
+            tool_completed: false,
+            tool_blocked: None,
+        }));
+
+        // Per-run tool registry: default tools + goal_get/goal_update bound
+        // to this run's shared core (never the global registry — goal tools
+        // must not leak into other sessions).
+        let mut tools = shannon_core::tools::ToolRegistry::new();
+        let assembly = shannon_remote::assembly::assemble_dynamic();
+        register_default_tools_with_providers(&mut tools, &assembly.providers)
+            .map_err(|e| format!("goal tool registry init failed: {e}"))?;
+        shannon_tools::goal::register_goal_tools(
+            &mut tools,
+            Arc::new(RunnerGoalAccess {
+                core: shared.clone(),
+            }),
+        )
+        .map_err(|e| format!("registering goal tools failed: {e}"))?;
+
+        let mut engine = QueryEngine::with_defaults_arc(
+            LlmClient::new(client_config),
+            Arc::new(tools),
+            permissions,
+            StateManager::new(),
+        );
+        engine.set_session_id(session_id);
+        match engine.restore_session(session_id) {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(session = %session_id, error = %e, "goal: history restore failed")
+            }
+        }
+        // Goal injection: non-cached system block on every turn (brief:
+        // engine.set_goal(GoalSpec{objective, paused:false})).
+        engine.set_goal(Some(GoalSpec {
+            objective,
+            paused: false,
+        }));
+
+        Ok(Self {
+            engine,
+            app,
+            handle: handle.clone(),
+            deps: deps.clone(),
+            session_id,
+            model_for_usage: model.clone(),
+            model,
+            provider,
+            shared,
+        })
+    }
+
+    /// Drive one engine turn to completion, streaming events to the wire.
+    async fn stream_turn(&mut self, turn: GoalTurnRequest) -> TurnObservation {
+        // Sync the tools' view + engine goal for this turn (objective edits
+        // via `update_goal_objective` take effect here — next turn).
+        {
+            let objective_now = self.handle.state.lock().await.objective.clone();
+            let mut core = self.shared.lock().expect("goal shared core poisoned");
+            core.objective = objective_now.clone();
+            core.iterations = turn.iterations_done;
+            core.tool_completed = false;
+            core.tool_blocked = None;
+            self.engine.set_goal(Some(GoalSpec {
+                objective: objective_now,
+                paused: false,
+            }));
+        }
+        let user_message = turn.user_message;
+        let query_id = Uuid::new_v4();
+        let qid = query_id.to_string();
+        let context = QueryContext {
+            query_id,
+            session_id: self.session_id,
+            user_message,
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: None,
+                model: self.model.clone(),
+                temperature: None,
+                top_p: None,
+            },
+        };
+
+        let mut observation = TurnObservation {
+            assistant_text: String::new(),
+            had_tool_calls: false,
+            cost_usd: 0.0,
+            failure: None,
+            cancelled: false,
+            tool_completed: false,
+            tool_blocked: None,
+        };
+        let mut completed = false;
+
+        let stream = self.engine.process_query(context, None).await;
+        use futures::StreamExt;
+        let mut pin_stream = std::pin::pin!(stream);
+        while let Some(event_result) = pin_stream.next().await {
+            if self.handle.cancel.is_cancelled() {
+                observation.cancelled = true;
+                let _ = self.app.emit(
+                    event_names::QUERY_CANCELLED,
+                    crate::events::QueryCancelledPayload {
+                        query_id: qid.clone(),
+                    },
+                );
+                break;
+            }
+            match event_result {
+                Ok(event) => match event {
+                    QueryEvent::Text { content, .. } => {
+                        observation.assistant_text.push_str(&content);
+                        let _ = self.app.emit(
+                            event_names::QUERY_TEXT,
+                            crate::events::QueryTextPayload {
+                                query_id: qid.clone(),
+                                content,
+                            },
+                        );
+                    }
+                    QueryEvent::ToolUseRequest {
+                        tool_use_id,
+                        tool_name,
+                        tool_input,
+                        ..
+                    } => {
+                        observation.had_tool_calls = true;
+                        let _ = self.app.emit(
+                            event_names::QUERY_TOOL_START,
+                            crate::events::ToolStartPayload {
+                                query_id: qid.clone(),
+                                tool_use_id,
+                                tool_name,
+                                tool_input,
+                            },
+                        );
+                    }
+                    QueryEvent::ToolUseResult {
+                        tool_use_id,
+                        tool_name,
+                        result,
+                        is_error,
+                        ..
+                    } => {
+                        let _ = self.app.emit(
+                            event_names::QUERY_TOOL_RESULT,
+                            crate::events::ToolResultPayload {
+                                query_id: qid.clone(),
+                                tool_use_id,
+                                tool_name,
+                                result,
+                                is_error,
+                            },
+                        );
+                    }
+                    QueryEvent::ToolProgress {
+                        tool_use_id,
+                        tool_name,
+                        progress,
+                        message,
+                        ..
+                    } => {
+                        let _ = self.app.emit(
+                            event_names::QUERY_TOOL_PROGRESS,
+                            crate::events::ToolProgressPayload {
+                                query_id: qid.clone(),
+                                tool_use_id,
+                                tool_name,
+                                progress,
+                                message,
+                            },
+                        );
+                    }
+                    QueryEvent::Thinking { content, .. } => {
+                        let _ = self.app.emit(
+                            event_names::QUERY_THINKING,
+                            crate::events::ThinkingPayload {
+                                query_id: qid.clone(),
+                                content,
+                            },
+                        );
+                    }
+                    QueryEvent::Usage {
+                        input_tokens,
+                        output_tokens,
+                        cost_usd: event_cost,
+                        cache_creation_tokens,
+                        cache_read_tokens,
+                        ..
+                    } => {
+                        observation.cost_usd += event_cost;
+                        // Best-effort ledger write, mirroring send_message.
+                        let _ = self
+                            .deps
+                            .usage_store
+                            .append(&crate::commands_usage::record_event(
+                                &self.model_for_usage,
+                                &self.provider,
+                                crate::commands_usage::UsageTotals {
+                                    input_tokens,
+                                    output_tokens,
+                                    cache_creation_tokens,
+                                    cache_read_tokens,
+                                    cost_usd: event_cost,
+                                },
+                                Some(&self.session_id.to_string()),
+                            ));
+                        let _ = self.app.emit(
+                            event_names::QUERY_USAGE,
+                            crate::events::UsagePayload {
+                                query_id: qid.clone(),
+                                input_tokens,
+                                output_tokens,
+                                cost_usd: event_cost,
+                            },
+                        );
+                    }
+                    QueryEvent::Completed { .. } => {
+                        completed = true;
+                        break;
+                    }
+                    QueryEvent::Failed { error, .. } => {
+                        let _ = self.app.emit(
+                            event_names::QUERY_FAILED,
+                            crate::events::QueryFailedPayload {
+                                query_id: qid.clone(),
+                                error: error.clone(),
+                            },
+                        );
+                        observation.failure = Some(error);
+                        break;
+                    }
+                    _ => {}
+                },
+                Err(e) => {
+                    let err = e.to_string();
+                    let _ = self.app.emit(
+                        event_names::QUERY_FAILED,
+                        crate::events::QueryFailedPayload {
+                            query_id: qid.clone(),
+                            error: err.clone(),
+                        },
+                    );
+                    observation.failure = Some(err);
+                    break;
+                }
+            }
+        }
+        if completed && !observation.cancelled {
+            let _ = self.app.emit(
+                event_names::QUERY_COMPLETED,
+                crate::events::QueryCompletedPayload {
+                    query_id: qid.clone(),
+                },
+            );
+        }
+
+        // Fold the tools' mid-turn verdicts into the observation (and reset
+        // them so the next turn starts clean).
+        {
+            let mut core = self.shared.lock().expect("goal shared core poisoned");
+            observation.tool_completed = core.tool_completed;
+            observation.tool_blocked = core.tool_blocked.take();
+            core.tool_completed = false;
+        }
+        observation
+    }
+}
+
+impl<R: tauri::Runtime> GoalTurnRunner for EngineGoalTurnRunner<R> {
+    fn run_turn(
+        &mut self,
+        turn: GoalTurnRequest,
+    ) -> Pin<Box<dyn Future<Output = TurnObservation> + Send + '_>> {
+        Box::pin(self.stream_turn(turn))
+    }
+
+    fn finish(&mut self) {
+        // Terminal: drop the injected goal (brief: engine.set_goal(None)).
+        self.engine.set_goal(None);
+    }
+}
+
+/// Drive the goal run to a terminal state. Production wiring: build the
+/// engine runner, wrap the loop in the panic guard, finalize. Final-state
+/// discipline: every exit — decision terminal, stop, engine failure, panic
+/// — flows through [`finalize_goal_run`]; the run can never be left
+/// `running`. Generic over the Tauri runtime so tests can drive it with
+/// `mock_app`.
 async fn run_goal_loop<R: tauri::Runtime>(
     deps: GoalRunDeps,
     app: tauri::AppHandle<R>,
     handle: Arc<GoalRunHandle>,
 ) {
-    let engine_future = drive_goal_turns(deps.clone(), app.clone(), handle.clone());
+    let deps_for_runner = deps.clone();
+    let app_for_runner = app.clone();
+    let handle_for_runner = handle.clone();
+    let engine_future = async move {
+        let mut runner = match EngineGoalTurnRunner::new(
+            &deps_for_runner,
+            app_for_runner.clone(),
+            &handle_for_runner,
+        )
+        .await
+        {
+            Ok(runner) => runner,
+            Err(e) => return GoalTerminal::Paused { reason: Some(e) },
+        };
+        let terminal = run_turn_loop(
+            &deps_for_runner,
+            &app_for_runner,
+            &handle_for_runner,
+            &mut runner,
+        )
+        .await;
+        // Terminal: drop the injected goal (brief: engine.set_goal(None)).
+        runner.finish();
+        terminal
+    };
     let terminal = match tokio::spawn(engine_future).await {
         Ok(terminal) => terminal,
         Err(join_error) => GoalTerminal::Paused {
@@ -913,183 +1359,86 @@ async fn run_goal_loop<R: tauri::Runtime>(
     finalize_goal_run(&deps, &app, &handle, terminal).await;
 }
 
-/// The engine phase, split out so `run_goal_loop` can wrap it in the panic
-/// guard. Returns the terminal verdict (or keeps running until stop).
-async fn drive_goal_turns<R: tauri::Runtime>(
-    deps: GoalRunDeps,
-    app: tauri::AppHandle<R>,
-    handle: Arc<GoalRunHandle>,
+/// Push the current DTO snapshot to the Tasks page (turn progress, terminal
+/// state, pause/resume — the run cards never poll).
+async fn emit_goal_update<R: tauri::Runtime>(app: &tauri::AppHandle<R>, handle: &GoalRunHandle) {
+    let dto = handle.dto().await;
+    let _ = app.emit(event_names::GOAL_UPDATED, dto);
+}
+
+/// The decision loop, generic over the turn executor. Counters live here
+/// and mirror `check_goal_continuation` exactly (see the decision arms);
+/// marker scanning, tool-verdict precedence and prompt injection are all
+/// covered by stub-driven tests.
+async fn run_turn_loop<R: tauri::Runtime, T: GoalTurnRunner + ?Sized>(
+    deps: &GoalRunDeps,
+    app: &tauri::AppHandle<R>,
+    handle: &Arc<GoalRunHandle>,
+    turns: &mut T,
 ) -> GoalTerminal {
-    // Engine + config (mirrors spawn_routine_run: unattended → configured
-    // approval mode honoured, persisted rules applied, FullAuto default).
-    let client_config = deps.client_config.read().await.clone();
-    let approval_mode_str = deps.desktop_config.read().await.approval_mode.clone();
-    let model = client_config.model.clone();
-    let model_for_usage = model.clone();
-    let provider = client_config.provider.to_string();
-
-    let mut permissions = PermissionManager::new();
-    let mode = approval_mode_str
-        .as_deref()
-        .and_then(|s| match s {
-            "full_auto" => Some(ApprovalMode::FullAuto),
-            "auto_edit" => Some(ApprovalMode::AutoEdit),
-            "auto" => Some(ApprovalMode::Auto),
-            "plan" => Some(ApprovalMode::Plan),
-            _ => None,
-        })
-        .unwrap_or(ApprovalMode::FullAuto);
-    permissions.set_approval_mode(mode);
-    let mut settings = shannon_core::settings::SettingsManager::new();
-    if settings.load_from_files().is_ok() {
-        let rules = &settings.settings_mut().permissions;
-        permissions.set_rule_checker(PermissionRuleChecker::from_rule_strings(
-            &rules.deny,
-            &rules.ask,
-            &rules.allow,
-        ));
-    }
-
-    // Per-run tool registry: default tools + goal_get/goal_update bound to
-    // this run's shared core (never the global registry — goal tools must
-    // not leak into other sessions).
-    let (session_uuid, objective, max_turns, budget_usd) = {
-        let s = handle.state.lock().await;
-        (s.session_id, s.objective.clone(), s.max_turns, s.budget_usd)
-    };
-    let shared = Arc::new(Mutex::new(GoalSharedCore {
-        objective: objective.clone(),
-        status: "active".into(),
-        iterations: 0,
-        max_iterations: max_turns.unwrap_or(0),
-        max_budget_usd: budget_usd,
-        tool_completed: false,
-        tool_blocked: None,
-    }));
-    let mut tools = shannon_core::tools::ToolRegistry::new();
-    let assembly = shannon_remote::assembly::assemble_dynamic();
-    if let Err(e) = register_default_tools_with_providers(&mut tools, &assembly.providers) {
-        return GoalTerminal::Paused {
-            reason: Some(format!("goal tool registry init failed: {e}")),
-        };
-    }
-    if let Err(e) = shannon_tools::goal::register_goal_tools(
-        &mut tools,
-        Arc::new(RunnerGoalAccess {
-            core: shared.clone(),
-        }),
-    ) {
-        return GoalTerminal::Paused {
-            reason: Some(format!("registering goal tools failed: {e}")),
-        };
-    }
-
-    let mut engine = QueryEngine::with_defaults_arc(
-        LlmClient::new(client_config),
-        Arc::new(tools),
-        permissions,
-        StateManager::new(),
-    );
-    engine.set_session_id(session_uuid);
-    match engine.restore_session(session_uuid) {
-        Ok(_) => {}
-        Err(e) => {
-            tracing::warn!(session = %session_uuid, error = %e, "goal: history restore failed")
-        }
-    }
-    // Goal injection: non-cached system block on every turn (brief:
-    // engine.set_goal(GoalSpec{objective, paused:false})).
-    engine.set_goal(Some(GoalSpec {
-        objective: objective.clone(),
-        paused: false,
-    }));
-
     // Track the runner's own copy of the counters for the decision input.
+    let (max_turns, budget_usd) = {
+        let s = handle.state.lock().await;
+        (s.max_turns, s.budget_usd)
+    };
     let mut iterations: u32 = 0;
     let mut spent_usd: f64 = 0.0;
     let mut consecutive_no_tool_turns: u32 = 0;
     let mut stall_strikes: u32 = 0;
+    // Whether at least one turn completed — distinguishes "parked before
+    // turn 1" (resume still injects the objective) from a mid-run resume
+    // (TUI re-arm: the next prompt is a fresh continuation prompt).
+    let mut ran_any_turn = false;
     // The next user message: the objective for turn 1, the exact TUI
     // continuation prompt for subsequent turns.
-    let mut pending_prompt = Some(objective.clone());
+    let mut pending_prompt = Some(handle.state.lock().await.objective.clone());
 
     loop {
-        // Stop wins over everything.
+        // Park while paused (pause takes effect at turn boundaries); stop
+        // wins over everything.
+        let parked = handle.wait_while_paused().await;
         if handle.cancel.is_cancelled() {
-            engine.set_goal(None);
             return GoalTerminal::Stopped;
         }
-        // Park while paused (pause takes effect at turn boundaries). The
-        // status re-check inside the loop closes the wakeup race where
-        // `resume` fires between the outer check and the select.
-        let mut parked = false;
-        while handle.status().await == GoalRunStatus::Paused {
-            parked = true;
-            tokio::select! {
-                _ = handle.cancel.cancelled() => {
-                    engine.set_goal(None);
-                    return GoalTerminal::Stopped;
-                }
-                _ = handle.resume_notify.notified() => {}
-            }
-        }
         if handle.status().await != GoalRunStatus::Running {
-            continue; // cancelled/something changed — re-check at the top
+            continue; // something else changed — re-check at the top
         }
         if parked {
-            // Resume re-armed the budget (TUI parity): recompute the next
-            // prompt from the reset counters.
+            // Resume re-armed the budget (TUI parity): adopt the reset
+            // counters. After any completed turn the next prompt is a fresh
+            // continuation prompt; a resume before turn 1 keeps the
+            // objective pending.
             let s = handle.state.lock().await;
             iterations = s.iterations;
             spent_usd = s.spent_usd;
             consecutive_no_tool_turns = s.consecutive_no_tool_turns;
             stall_strikes = s.stall_strikes;
-            pending_prompt = Some(shannon_core::goal_loop::continuation_prompt(
-                iterations + 1,
-                s.max_turns.unwrap_or(0),
-                &s.objective,
-            ));
-            shared.lock().expect("poisoned").objective = s.objective.clone();
+            if ran_any_turn {
+                pending_prompt = Some(shannon_core::goal_loop::continuation_prompt(
+                    iterations + 1,
+                    s.max_turns.unwrap_or(0),
+                    &s.objective,
+                ));
+            } else {
+                pending_prompt.get_or_insert_with(|| s.objective.clone());
+            }
         }
 
         let Some(user_message) = pending_prompt.take() else {
             // Unreachable: pending_prompt is always set before the loop and
             // re-armed on every Continue/resume. Treat as a safety stop.
-            engine.set_goal(None);
             return GoalTerminal::Paused {
                 reason: Some("internal: continuation queue ran dry".into()),
             };
         };
 
-        // Sync the tools' view + engine goal for this turn (objective edits
-        // via `update_goal_objective` take effect here — next turn).
-        {
-            let objective_now = handle.state.lock().await.objective.clone();
-            let mut core = shared.lock().expect("goal shared core poisoned");
-            core.objective = objective_now.clone();
-            core.iterations = iterations;
-            core.tool_completed = false;
-            core.tool_blocked = None;
-            engine.set_goal(Some(GoalSpec {
-                objective: objective_now,
-                paused: false,
-            }));
-        }
-
-        let query_id = Uuid::new_v4();
-        let observation = run_single_turn(
-            &mut engine,
-            &app,
-            &handle,
-            query_id,
-            session_uuid,
-            user_message,
-            model.clone(),
-            &deps,
-            &model_for_usage,
-            &provider,
-        )
-        .await;
+        let observation = turns
+            .run_turn(GoalTurnRequest {
+                user_message,
+                iterations_done: iterations,
+            })
+            .await;
+        ran_any_turn = true;
 
         // Spend accumulates every turn; the iteration/guard counters do NOT
         // advance here — the TUI passes pre-turn counters into the decision
@@ -1106,32 +1455,29 @@ async fn drive_goal_turns<R: tauri::Runtime>(
                 s.last_error = Some(err.clone());
             }
         }
-        persist_turn_progress(&deps, &handle).await;
+        persist_turn_progress(deps, handle).await;
+        // Fix round 1, Important 1: the run cards subscribe to
+        // `goal:updated`; emit once per completed turn so iterations/spend
+        // move live instead of only at control actions and finalize.
+        emit_goal_update(app, handle).await;
 
         // Cancelled mid-turn → stopped (no inbox, no decision).
         if observation.cancelled {
-            engine.set_goal(None);
             return GoalTerminal::Stopped;
         }
 
         // Engine failure → recoverable pause with the error preserved.
         if let Some(err) = observation.failure {
-            engine.set_goal(None);
             return GoalTerminal::Paused { reason: Some(err) };
         }
 
         // Structured tool verdicts (goal_update) beat the marker scan —
         // they are explicit model statements made mid-turn.
-        {
-            let core = shared.lock().expect("goal shared core poisoned");
-            if core.tool_completed {
-                engine.set_goal(None);
-                return GoalTerminal::Completed;
-            }
-            if let Some(reason) = core.tool_blocked.clone() {
-                engine.set_goal(None);
-                return GoalTerminal::Blocked(reason);
-            }
+        if observation.tool_completed {
+            return GoalTerminal::Completed;
+        }
+        if let Some(reason) = observation.tool_blocked {
+            return GoalTerminal::Blocked(reason);
         }
 
         // Marker on the final non-empty line (TUI contract).
@@ -1143,11 +1489,9 @@ async fn drive_goal_turns<R: tauri::Runtime>(
             .and_then(shannon_core::goal_loop::detect_goal_marker);
         match marker {
             Some(GoalMarker::Complete) => {
-                engine.set_goal(None);
                 return GoalTerminal::Completed;
             }
             Some(GoalMarker::Blocked(reason)) => {
-                engine.set_goal(None);
                 return GoalTerminal::Blocked(reason);
             }
             None => {}
@@ -1188,17 +1532,16 @@ async fn drive_goal_turns<R: tauri::Runtime>(
                     s.consecutive_no_tool_turns = consecutive_no_tool_turns;
                     s.stall_strikes = stall_strikes;
                 }
-                persist_turn_progress(&deps, &handle).await;
+                persist_turn_progress(deps, handle).await;
+                emit_goal_update(app, handle).await;
                 pending_prompt = Some(prompt);
             }
             shannon_core::goal_loop::GoalContinuation::MaxReached => {
                 // TUI parity: the MaxReached arm pauses without persisting
                 // the decision's internal +1.
-                engine.set_goal(None);
                 return GoalTerminal::Paused { reason: None };
             }
             shannon_core::goal_loop::GoalContinuation::BudgetLimited(reason) => {
-                engine.set_goal(None);
                 return GoalTerminal::Paused {
                     reason: Some(reason),
                 };
@@ -1221,8 +1564,7 @@ async fn drive_goal_turns<R: tauri::Runtime>(
                     s.consecutive_no_tool_turns = consecutive_no_tool_turns;
                     s.stall_strikes = stall_strikes;
                 }
-                persist_turn_progress(&deps, &handle).await;
-                engine.set_goal(None);
+                persist_turn_progress(deps, handle).await;
                 return GoalTerminal::Paused {
                     reason: Some(reason),
                 };
@@ -1231,7 +1573,6 @@ async fn drive_goal_turns<R: tauri::Runtime>(
             shannon_core::goal_loop::GoalContinuation::Inactive
             | shannon_core::goal_loop::GoalContinuation::Completed
             | shannon_core::goal_loop::GoalContinuation::Blocked(_) => {
-                engine.set_goal(None);
                 return GoalTerminal::Paused {
                     reason: Some("internal: unexpected decision verdict".into()),
                 };
@@ -1239,213 +1580,6 @@ async fn drive_goal_turns<R: tauri::Runtime>(
         }
     }
 }
-
-/// Drive one engine turn to completion, streaming events to the wire.
-#[allow(clippy::too_many_arguments)]
-async fn run_single_turn<R: tauri::Runtime>(
-    engine: &mut QueryEngine,
-    app: &tauri::AppHandle<R>,
-    handle: &Arc<GoalRunHandle>,
-    query_id: Uuid,
-    session_id: Uuid,
-    user_message: String,
-    model: String,
-    deps: &GoalRunDeps,
-    model_for_usage: &str,
-    provider: &str,
-) -> TurnObservation {
-    let qid = query_id.to_string();
-    let context = QueryContext {
-        query_id,
-        session_id,
-        user_message,
-        metadata: QueryMetadata {
-            timestamp: chrono::Utc::now(),
-            tools_allowed: true,
-            max_tokens: None,
-            model,
-            temperature: None,
-            top_p: None,
-        },
-    };
-
-    let mut assistant_text = String::new();
-    let mut had_tool_calls = false;
-    let mut cost_usd = 0.0;
-    let mut failure: Option<String> = None;
-    let mut cancelled = false;
-    let mut completed = false;
-
-    let stream = engine.process_query(context, None).await;
-    use futures::StreamExt;
-    let mut pin_stream = std::pin::pin!(stream);
-    while let Some(event_result) = pin_stream.next().await {
-        if handle.cancel.is_cancelled() {
-            cancelled = true;
-            let _ = app.emit(
-                event_names::QUERY_CANCELLED,
-                crate::events::QueryCancelledPayload {
-                    query_id: qid.clone(),
-                },
-            );
-            break;
-        }
-        match event_result {
-            Ok(event) => match event {
-                QueryEvent::Text { content, .. } => {
-                    assistant_text.push_str(&content);
-                    let _ = app.emit(
-                        event_names::QUERY_TEXT,
-                        crate::events::QueryTextPayload {
-                            query_id: qid.clone(),
-                            content,
-                        },
-                    );
-                }
-                QueryEvent::ToolUseRequest {
-                    tool_use_id,
-                    tool_name,
-                    tool_input,
-                    ..
-                } => {
-                    had_tool_calls = true;
-                    let _ = app.emit(
-                        event_names::QUERY_TOOL_START,
-                        crate::events::ToolStartPayload {
-                            query_id: qid.clone(),
-                            tool_use_id,
-                            tool_name,
-                            tool_input,
-                        },
-                    );
-                }
-                QueryEvent::ToolUseResult {
-                    tool_use_id,
-                    tool_name,
-                    result,
-                    is_error,
-                    ..
-                } => {
-                    let _ = app.emit(
-                        event_names::QUERY_TOOL_RESULT,
-                        crate::events::ToolResultPayload {
-                            query_id: qid.clone(),
-                            tool_use_id,
-                            tool_name,
-                            result,
-                            is_error,
-                        },
-                    );
-                }
-                QueryEvent::ToolProgress {
-                    tool_use_id,
-                    tool_name,
-                    progress,
-                    message,
-                    ..
-                } => {
-                    let _ = app.emit(
-                        event_names::QUERY_TOOL_PROGRESS,
-                        crate::events::ToolProgressPayload {
-                            query_id: qid.clone(),
-                            tool_use_id,
-                            tool_name,
-                            progress,
-                            message,
-                        },
-                    );
-                }
-                QueryEvent::Thinking { content, .. } => {
-                    let _ = app.emit(
-                        event_names::QUERY_THINKING,
-                        crate::events::ThinkingPayload {
-                            query_id: qid.clone(),
-                            content,
-                        },
-                    );
-                }
-                QueryEvent::Usage {
-                    input_tokens,
-                    output_tokens,
-                    cost_usd: event_cost,
-                    cache_creation_tokens,
-                    cache_read_tokens,
-                    ..
-                } => {
-                    cost_usd += event_cost;
-                    // Best-effort ledger write, mirroring send_message.
-                    let _ = deps
-                        .usage_store
-                        .append(&crate::commands_usage::record_event(
-                            model_for_usage,
-                            provider,
-                            crate::commands_usage::UsageTotals {
-                                input_tokens,
-                                output_tokens,
-                                cache_creation_tokens,
-                                cache_read_tokens,
-                                cost_usd: event_cost,
-                            },
-                            Some(&session_id.to_string()),
-                        ));
-                    let _ = app.emit(
-                        event_names::QUERY_USAGE,
-                        crate::events::UsagePayload {
-                            query_id: qid.clone(),
-                            input_tokens,
-                            output_tokens,
-                            cost_usd: event_cost,
-                        },
-                    );
-                }
-                QueryEvent::Completed { .. } => {
-                    completed = true;
-                    break;
-                }
-                QueryEvent::Failed { error, .. } => {
-                    let _ = app.emit(
-                        event_names::QUERY_FAILED,
-                        crate::events::QueryFailedPayload {
-                            query_id: qid.clone(),
-                            error: error.clone(),
-                        },
-                    );
-                    failure = Some(error);
-                    break;
-                }
-                _ => {}
-            },
-            Err(e) => {
-                let err = e.to_string();
-                let _ = app.emit(
-                    event_names::QUERY_FAILED,
-                    crate::events::QueryFailedPayload {
-                        query_id: qid.clone(),
-                        error: err.clone(),
-                    },
-                );
-                failure = Some(err);
-                break;
-            }
-        }
-    }
-    if completed && !cancelled {
-        let _ = app.emit(
-            event_names::QUERY_COMPLETED,
-            crate::events::QueryCompletedPayload {
-                query_id: qid.clone(),
-            },
-        );
-    }
-    TurnObservation {
-        assistant_text,
-        had_tool_calls,
-        cost_usd,
-        failure,
-        cancelled,
-    }
-}
-
 /// Best-effort per-turn sidecar refresh (iterations/status) so a crash
 /// never loses more than one turn of progress.
 async fn persist_turn_progress(deps: &GoalRunDeps, handle: &Arc<GoalRunHandle>) {
@@ -1587,25 +1721,21 @@ mod tests {
     }
 
     fn handle_for(session: Uuid, status: GoalRunStatus) -> Arc<GoalRunHandle> {
-        Arc::new(GoalRunHandle {
-            state: tokio::sync::Mutex::new(GoalRunState {
-                session_id: session,
-                title: "Ship the thing".into(),
-                objective: "make CI green".into(),
-                status,
-                iterations: 3,
-                max_turns: Some(10),
-                spent_usd: 0.75,
-                budget_usd: Some(5.0),
-                stall_strikes: 1,
-                consecutive_no_tool_turns: 0,
-                last_error: None,
-                started_at_ms: 1_000,
-                updated_at_ms: 2_000,
-            }),
-            cancel: CancellationToken::new(),
-            resume_notify: tokio::sync::Notify::new(),
-        })
+        Arc::new(GoalRunHandle::new(GoalRunState {
+            session_id: session,
+            title: "Ship the thing".into(),
+            objective: "make CI green".into(),
+            status,
+            iterations: 3,
+            max_turns: Some(10),
+            spent_usd: 0.75,
+            budget_usd: Some(5.0),
+            stall_strikes: 1,
+            consecutive_no_tool_turns: 0,
+            last_error: None,
+            started_at_ms: 1_000,
+            updated_at_ms: 2_000,
+        }))
     }
 
     fn mock_app() -> tauri::AppHandle<tauri::test::MockRuntime> {
@@ -1905,5 +2035,314 @@ mod tests {
         let cut = truncate_chars("héllo wörld", 5);
         assert!(cut.starts_with("héllo"));
         assert!(cut.ends_with('…'));
+    }
+
+    // ── turn loop (fix round 1, Important 3): stub-driven coverage ─────
+
+    /// Scripted single-turn executor: pops one observation per call and
+    /// records the injected user messages for prompt assertions.
+    struct StubTurnRunner {
+        script: Mutex<Vec<TurnObservation>>,
+        messages: Mutex<Vec<String>>,
+    }
+
+    impl StubTurnRunner {
+        fn new(script: Vec<TurnObservation>) -> Self {
+            Self {
+                script: Mutex::new(script),
+                messages: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn messages(&self) -> Vec<String> {
+            self.messages.lock().unwrap().clone()
+        }
+    }
+
+    impl GoalTurnRunner for StubTurnRunner {
+        fn run_turn(
+            &mut self,
+            turn: GoalTurnRequest,
+        ) -> Pin<Box<dyn Future<Output = TurnObservation> + Send + '_>> {
+            Box::pin(async move {
+                self.messages.lock().unwrap().push(turn.user_message);
+                // Vec::remove panics on an exhausted script — loud failure
+                // beats a silent hang if the loop runs past the script.
+                self.script.lock().unwrap().remove(0)
+            })
+        }
+    }
+
+    fn obs(text: &str, had_tools: bool) -> TurnObservation {
+        TurnObservation {
+            assistant_text: text.into(),
+            had_tool_calls: had_tools,
+            cost_usd: 0.0,
+            failure: None,
+            cancelled: false,
+            tool_completed: false,
+            tool_blocked: None,
+        }
+    }
+
+    /// Fresh running handle (counters at zero) for loop tests.
+    fn fresh_handle(session: Uuid) -> Arc<GoalRunHandle> {
+        Arc::new(GoalRunHandle::new(GoalRunState {
+            session_id: session,
+            title: "Ship the thing".into(),
+            objective: "make CI green".into(),
+            status: GoalRunStatus::Running,
+            iterations: 0,
+            max_turns: None,
+            spent_usd: 0.0,
+            budget_usd: None,
+            stall_strikes: 0,
+            consecutive_no_tool_turns: 0,
+            last_error: None,
+            started_at_ms: 1_000,
+            updated_at_ms: 2_000,
+        }))
+    }
+
+    /// ① Counter bookkeeping matches check_goal_continuation field by
+    /// field (the scenario fixed in 2c5e72b9): a tool turn resets strikes,
+    /// two consecutive no-tool turns trip anti-spin on the SECOND one, and
+    /// the PausedNoProgress arm persists the advanced counters with +1.
+    #[tokio::test]
+    async fn turn_loop_counters_match_tui_bookkeeping() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = temp_deps(tmp.path());
+        let handle = fresh_handle(Uuid::new_v4());
+        let mut stub = StubTurnRunner::new(vec![
+            obs("Partial progress.", true), // Continue {1}, strikes reset
+            obs("Still working.", false),   // Continue {2}, strikes 0→1
+            obs("Just thinking.", false),   // anti-spin: cons 1→2 ⇒ PausedNoProgress
+        ]);
+
+        let terminal = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            run_turn_loop(&deps, &app, &handle, &mut stub),
+        )
+        .await
+        .expect("loop must not hang");
+
+        // The reason rides the terminal verdict; finalize persists it into
+        // `last_error` (covered by finalize_paused_writes_inbox_with_reason).
+        match &terminal {
+            GoalTerminal::Paused { reason: Some(r) } => {
+                assert!(r.contains("Two consecutive"), "{r}")
+            }
+            other => panic!("two no-tool turns must pause: {other:?}"),
+        }
+        let s = handle.state.lock().await;
+        assert_eq!(
+            s.iterations, 3,
+            "decision +1 per Continue/PausedNoProgress arm"
+        );
+        assert_eq!(s.consecutive_no_tool_turns, 2);
+        assert_eq!(
+            s.stall_strikes, 2,
+            "one no-tool turn before the trip (0→1→2)"
+        );
+        // run_turn_loop returns the verdict without finalizing — flipping
+        // the stored status / last_error is finalize_goal_run's job.
+        assert_eq!(s.status, GoalRunStatus::Running);
+        // Prompt injection ③: turn 1 carries the objective verbatim, later
+        // turns carry the exact TUI continuation contract.
+        let msgs = stub.messages();
+        assert_eq!(msgs[0], "make CI green");
+        assert!(msgs[1].contains("[Goal iteration 1/∞]"), "{}", msgs[1]);
+        assert!(msgs[1].contains("make CI green"));
+        assert!(msgs[1].contains("GOAL_COMPLETE") && msgs[1].contains("GOAL_BLOCKED"));
+        assert!(msgs[2].contains("[Goal iteration 2/∞]"), "{}", msgs[2]);
+    }
+
+    /// ② Verdict precedence: goal_update's structured `complete` beats a
+    /// GOAL_BLOCKED marker on the same reply; a plain blocked marker (no
+    /// tool verdict) maps to Blocked(reason); mid-text markers never count.
+    #[tokio::test]
+    async fn turn_loop_tool_verdict_beats_marker_scan() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = temp_deps(tmp.path());
+        let handle = fresh_handle(Uuid::new_v4());
+        let mut tool_done = obs("Cannot access cluster.\nGOAL_BLOCKED: no kubeconfig", true);
+        tool_done.tool_completed = true;
+        let mut stub = StubTurnRunner::new(vec![tool_done]);
+
+        let terminal = run_turn_loop(&deps, &app, &handle, &mut stub).await;
+        assert!(matches!(terminal, GoalTerminal::Completed), "{terminal:?}");
+    }
+
+    #[tokio::test]
+    async fn turn_loop_blocked_marker_carries_reason() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = temp_deps(tmp.path());
+        let handle = fresh_handle(Uuid::new_v4());
+        let mut stub = StubTurnRunner::new(vec![obs(
+            "Cannot proceed.\nGOAL_BLOCKED: need prod credentials",
+            true,
+        )]);
+
+        let terminal = run_turn_loop(&deps, &app, &handle, &mut stub).await;
+        match terminal {
+            GoalTerminal::Blocked(reason) => assert_eq!(reason, "need prod credentials"),
+            other => panic!("expected Blocked, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn turn_loop_mid_text_marker_does_not_stop_the_run() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = temp_deps(tmp.path());
+        let handle = fresh_handle(Uuid::new_v4());
+        let mut stub = StubTurnRunner::new(vec![
+            obs("GOAL_COMPLETE is near — one more step.", true),
+            obs("Done.\nGOAL_COMPLETE", true),
+        ]);
+
+        let terminal = run_turn_loop(&deps, &app, &handle, &mut stub).await;
+        assert!(matches!(terminal, GoalTerminal::Completed), "{terminal:?}");
+        assert_eq!(stub.messages().len(), 2, "first turn must continue");
+    }
+
+    /// ④ Park → resume → continue: a paused loop wakes on resume (TUI
+    /// re-arm: counters reset, fresh continuation prompt) and runs to the
+    /// completion marker. Timeout guards against a lost wakeup.
+    #[tokio::test]
+    async fn turn_loop_park_resume_then_continue() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = temp_deps(tmp.path());
+        let handle = fresh_handle(Uuid::new_v4());
+        handle.pause().await.unwrap();
+
+        let handle_for_task = handle.clone();
+        let deps_for_task = deps.clone();
+        let app_for_task = app.clone();
+        let task = tokio::spawn(async move {
+            let mut stub = StubTurnRunner::new(vec![
+                obs("Working…", true),
+                obs("All green.\nGOAL_COMPLETE", true),
+            ]);
+            run_turn_loop(&deps_for_task, &app_for_task, &handle_for_task, &mut stub).await
+        });
+
+        // Give the loop a beat to park, then resume and let it finish.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        handle.resume().await.unwrap();
+
+        let terminal = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .expect("parked loop must wake on resume")
+            .unwrap();
+        assert!(matches!(terminal, GoalTerminal::Completed), "{terminal:?}");
+        let s = handle.state.lock().await;
+        // TUI counting: the marker-completing turn is not a continuation,
+        // so exactly one Continue (after the objective turn) is counted.
+        assert_eq!(s.iterations, 1, "resume re-armed: counted from 0");
+        assert_eq!(
+            s.status,
+            GoalRunStatus::Running,
+            "run_turn_loop does not finalize"
+        );
+    }
+
+    /// ⑤ Fix round 1, Important 1: every completed turn emits
+    /// `goal:updated` — one emit after the per-turn spend sync plus one on
+    /// the Continue branch (terminal turns emit via finalize, absent here).
+    #[tokio::test]
+    async fn turn_loop_emits_goal_updated_every_turn() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tauri::Listener;
+
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = temp_deps(tmp.path());
+        let handle = fresh_handle(Uuid::new_v4());
+
+        let emissions = Arc::new(AtomicUsize::new(0));
+        let counter = emissions.clone();
+        app.listen_any(event_names::GOAL_UPDATED, move |_event| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let mut stub = StubTurnRunner::new(vec![
+            obs("Working…", true),             // Continue → post-turn emit + Continue emit
+            obs("Done.\nGOAL_COMPLETE", true), // terminal → post-turn emit only
+        ]);
+
+        let terminal = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            run_turn_loop(&deps, &app, &handle, &mut stub),
+        )
+        .await
+        .expect("loop must not hang");
+        assert!(matches!(terminal, GoalTerminal::Completed), "{terminal:?}");
+        assert_eq!(
+            emissions.load(Ordering::SeqCst),
+            3,
+            "2 emits on the continuing turn + 1 on the terminal turn"
+        );
+    }
+
+    /// ⑥ Fix round 1, Important 2 regression: a resume that lands *before*
+    /// the loop registers its wakeup must not be lost. The loop starts
+    /// parked; resume is issued from another task while the loop is in its
+    /// pre-park window; the watch generation (marked before the status
+    /// check) guarantees the wake. Timeout guards the old Notify race.
+    #[tokio::test]
+    async fn resume_before_park_registration_still_wakes_the_loop() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = temp_deps(tmp.path());
+        let handle = fresh_handle(Uuid::new_v4());
+        handle.pause().await.unwrap();
+
+        let handle_for_task = handle.clone();
+        let deps_for_task = deps.clone();
+        let app_for_task = app.clone();
+        let task = tokio::spawn(async move {
+            let mut stub = StubTurnRunner::new(vec![obs("Recovered.\nGOAL_COMPLETE", true)]);
+            run_turn_loop(&deps_for_task, &app_for_task, &handle_for_task, &mut stub).await
+        });
+
+        // Resume immediately — races with the loop's park entry. Under the
+        // previous Notify::notify_waiters scheme this could be lost.
+        handle.resume().await.unwrap();
+
+        let terminal = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .expect("resume must wake the loop even when it races the park")
+            .unwrap();
+        assert!(matches!(terminal, GoalTerminal::Completed), "{terminal:?}");
+    }
+
+    /// `wait_while_paused` is lossless by construction: mark-before-check.
+    /// A resume that already fired (status Running, generation bumped)
+    /// exits immediately without parking; a resume while parked wakes.
+    #[tokio::test]
+    async fn wait_while_paused_wakes_on_resume_and_reports_parked() {
+        let handle = fresh_handle(Uuid::new_v4());
+
+        // Not paused: returns immediately, parked == false.
+        let parked = handle.wait_while_paused().await;
+        assert!(!parked);
+
+        handle.pause().await.unwrap();
+        let waiter = tokio::spawn({
+            let handle = handle.clone();
+            async move { handle.wait_while_paused().await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        handle.resume().await.unwrap();
+        let parked = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("waiter must wake on resume")
+            .unwrap();
+        assert!(parked, "observing a paused state must report parked=true");
     }
 }
