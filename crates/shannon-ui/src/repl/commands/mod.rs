@@ -6,6 +6,7 @@ mod debug;
 mod extensions;
 mod file_ops;
 mod git;
+mod goal;
 mod hooks;
 mod loop_engine;
 mod media;
@@ -13,6 +14,8 @@ mod memory;
 mod remote;
 mod session;
 mod web;
+
+pub(crate) use goal::check_goal_continuation;
 
 // Re-export the single switch-path helper so the REPL init/resume paths
 // (repl/mod.rs) can refresh the first-screen StatusCard through the same
@@ -442,6 +445,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         "recap",
         "effort",
         "focus",
+        "goal",
         "accessibility",
         "a11y",
         "color",
@@ -547,6 +551,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "recap" => session::handle_recap(repl, args)?,
             "effort" => session::handle_effort(repl, args)?,
             "focus" => session::handle_focus(repl, args)?,
+            "goal" => goal::handle_goal(repl, args)?,
             "accessibility" | "a11y" => config::handle_accessibility(repl, args)?,
             "color" => config::handle_color(repl, args)?,
             "diag" => debug::handle_diag(repl, args)?,

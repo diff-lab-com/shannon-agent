@@ -42,6 +42,16 @@ commands:
     added: "✓ Сохранена %{kind} цель '%{name}'. Подключитесь: `/remote use %{name}`."
     bash_missing: "⚠ bash не найден на цели — инструменту Bash требуется bash."
     already_connected: "Уже подключено к %{name}."
+  goal:
+    set: "◎ Цель установлена (макс %{max} итераций): %{objective}\nОтправьте сообщение, чтобы начать — Shannon продолжит работу между ходами, пока цель не будет достигнута. /goal pause — пауза, /goal clear — убрать."
+    current: "Цель (%{status}, итерация %{iterations}/%{max}): %{objective}"
+    current_none: "Цель не задана. Использование: /goal <цель> | /goal pause | /goal resume | /goal clear"
+    cleared: "✓ Цель убрана."
+    paused_blocked: "⏸ Цель приостановлена — агент сообщает о блокировке: %{reason}\nУстраните её и выполните /goal resume, или /goal clear, чтобы убрать."
+    paused_max: "⏸ Цель приостановлена после %{max} итераций без завершения. Оцените прогресс, затем /goal resume или /goal clear."
+    resumed: "▶ Цель возобновлена (счётчик итераций сброшен)."
+    complete: "✓ Цель достигнута за %{iterations} итерации(й): %{objective}"
+    conflict_loop: "Активен /ralph или /loop — сначала остановите их, затем задайте /goal."
   help:
     title: "Доступные команды"
     no_help_found: "Справка не найдена для: %{topic}"

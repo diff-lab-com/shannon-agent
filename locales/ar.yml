@@ -42,6 +42,16 @@ commands:
     added: "✓ تم حفظ هدف %{kind} '%{name}'. اتصل عبر `/remote use %{name}`."
     bash_missing: "⚠ لم يتم العثور على bash على الهدف — أداة Bash تتطلب bash."
     already_connected: "متصل بالفعل بـ %{name}."
+  goal:
+    set: "◎ تم تعيين الهدف (بحد أقصى %{max} جولة): %{objective}\nأرسل رسالة للبدء — سيواصل Shannon العمل عبر الأدوار حتى تحقق الهدف. /goal pause للإيقاف المؤقت، /goal clear للإزالة."
+    current: "الهدف (%{status}، الجولة %{iterations}/%{max}): %{objective}"
+    current_none: "لا هدف مضبوط. الاستخدام: /goal <الهدف> | /goal pause | /goal resume | /goal clear"
+    cleared: "✓ تمت إزالة الهدف."
+    paused_blocked: "⏸ تم إيقاف الهدف مؤقتًا — يبلّغ الوكيل عن عائق: %{reason}\nعالجه ثم شغّل /goal resume، أو /goal clear للإزالة."
+    paused_max: "⏸ تم إيقاف الهدف مؤقتًا بعد %{max} جولة دون إكمال. قيّم التقدم ثم /goal resume أو /goal clear."
+    resumed: "▶ تمت استئناف الهدف (إعادة تعيين عداد الجولات)."
+    complete: "✓ تحقق الهدف بعد %{iterations} جولة: %{objective}"
+    conflict_loop: "هناك /ralph أو /loop نشط — أوقفه أولًا ثم عيّن /goal."
   help:
     title: "الأوامر المتاحة"
     no_help_found: "لم يتم العثور على مساعدة لـ: %{topic}"

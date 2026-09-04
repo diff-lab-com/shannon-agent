@@ -65,6 +65,16 @@ commands:
     added: "✓ Saved %{kind} target '%{name}'. Connect with `/remote use %{name}`."
     bash_missing: "⚠ bash was not found on the target — the Bash tool requires bash."
     already_connected: "Already connected to %{name}."
+  goal:
+    set: "◎ Goal set (max %{max} iterations): %{objective}\nSend a message to begin — Shannon keeps working across turns until the goal is met. /goal pause to pause, /goal clear to remove."
+    current: "Goal (%{status}, iteration %{iterations}/%{max}): %{objective}"
+    current_none: "No goal set. Usage: /goal <objective> | /goal pause | /goal resume | /goal clear"
+    cleared: "✓ Goal cleared."
+    paused_blocked: "⏸ Goal paused — agent reports a blocker: %{reason}\nResolve it and run /goal resume, or /goal clear to remove."
+    paused_max: "⏸ Goal paused after %{max} iteration(s) without completion. Assess progress, then /goal resume or /goal clear."
+    resumed: "▶ Goal resumed (iteration budget reset)."
+    complete: "✓ Goal complete after %{iterations} iteration(s): %{objective}"
+    conflict_loop: "A /ralph or /loop is active — stop it first (they own auto-continuation), then set /goal."
   connect:
     success: "✓ Connected to %{provider}"
     choose_model: "Pick a model below (Enter = default, ↑↓ = select, Esc = use default)."

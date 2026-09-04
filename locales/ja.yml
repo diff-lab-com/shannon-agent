@@ -42,6 +42,16 @@ commands:
     added: "✓ %{kind} ターゲット '%{name}' を保存しました。`/remote use %{name}` で接続します。"
     bash_missing: "⚠ ターゲットに bash が見つかりません — Bash ツールには bash が必要です。"
     already_connected: "既に %{name} に接続しています。"
+  goal:
+    set: "◎ 目標を設定しました（最大 %{max} ラウンド）：%{objective}\nメッセージを送ると開始します——Shannon は目標達成まで各ターン後に自動で作業を続けます。/goal pause で一時停止、/goal clear で解除。"
+    current: "目標（%{status}、%{iterations}/%{max} ラウンド）：%{objective}"
+    current_none: "目標が未設定です。使い方：/goal <目標> | /goal pause | /goal resume | /goal clear"
+    cleared: "✓ 目標を解除しました。"
+    paused_blocked: "⏸ 目標を一時停止——エージェントがブロックを報告：%{reason}\n解決後に /goal resume で再開、または /goal clear で解除。"
+    paused_max: "⏸ %{max} ラウンドに達しても完了しなかったため、目標を一時停止しました。/goal resume または /goal clear で続行できます。"
+    resumed: "▶ 目標を再開しました（反復回数をリセット）。"
+    complete: "✓ 目標達成（%{iterations} ラウンド）：%{objective}"
+    conflict_loop: "/ralph または /loop が有効です——先に停止してから /goal を設定してください。"
   help:
     title: "使用可能なコマンド"
     no_help_found: "ヘルプが見つかりません: %{topic}"

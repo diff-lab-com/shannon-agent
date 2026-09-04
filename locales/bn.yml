@@ -42,6 +42,16 @@ commands:
     added: "✓ %{kind} টার্গেট '%{name}' সংরক্ষিত। `/remote use %{name}` দিয়ে সংযোগ করুন।"
     bash_missing: "⚠ টার্গেটে bash পাওয়া যায়নি — Bash টুলের জন্য bash প্রয়োজন।"
     already_connected: "ইতিমধ্যে %{name}-এ সংযুক্ত।"
+  goal:
+    set: "◎ লক্ষ্য নির্ধারিত হয়েছে (সর্বোচ্চ %{max} রাউন্ড): %{objective}\nশুরু করতে একটি বার্তা পাঠান — লক্ষ্য পূরণ না হওয়া পর্যন্ত Shannon প্রতি রাউন্ড শেষে স্বয়ংক্রিয়ভাবে কাজ চালিয়ে যাবে। /goal pause দিয়ে থামান, /goal clear দিয়ে সরান।"
+    current: "লক্ষ্য (%{status}, রাউন্ড %{iterations}/%{max}): %{objective}"
+    current_none: "কোনো লক্ষ্য নেই। ব্যবহার: /goal <লক্ষ্য> | /goal pause | /goal resume | /goal clear"
+    cleared: "✓ লক্ষ্য সরানো হয়েছে।"
+    paused_blocked: "⏸ লক্ষ্য বিরতি — এজেন্ট প্রতিবন্ধক জানায়: %{reason}\nসমাধান করে /goal resume চালান, বা /goal clear দিয়ে সরান।"
+    paused_max: "⏸ %{max} রাউন্ডেও সম্পূর্ণ না হওয়ায় লক্ষ্য বিরতিতে রয়েছে। অগ্রগতি মূল্যায়ন করে /goal resume বা /goal clear দিন।"
+    resumed: "▶ লক্ষ্য পুনরায় শুরু (রাউন্ড গণনা রিসেট)।"
+    complete: "✓ %{iterations} রাউন্ডে লক্ষ্য পূর্ণ: %{objective}"
+    conflict_loop: "/ralph বা /loop সক্রিয় আছে — আগে সেগুলো বন্ধ করে তারপর /goal সেট করুন।"
   help:
     title: "উপলব্ধ কমান্ড"
     no_help_found: "এর জন্য সহায়তা পাওয়া যায়নি: %{topic}"

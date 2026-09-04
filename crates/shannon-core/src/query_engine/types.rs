@@ -645,6 +645,23 @@ pub enum CompressionStrategy {
     TruncateOldest,
 }
 
+/// Completion markers a model may emit as the final line of a reply when a
+/// goal is active. Parsing lives in the REPL layer; both sides share the
+/// constants so the contract cannot drift.
+pub const GOAL_COMPLETE_MARKER: &str = "GOAL_COMPLETE";
+pub const GOAL_BLOCKED_MARKER: &str = "GOAL_BLOCKED";
+
+/// Session goal to inject into the system prompt (set via `/goal`).
+///
+/// `paused` goals are still injected (so the model keeps the objective in
+/// view) but the block tells the model not to emit completion markers.
+/// Completed goals are not injected at all — the caller maps them to `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalSpec {
+    pub objective: String,
+    pub paused: bool,
+}
+
 /// Configuration for the query engine
 #[derive(Debug, Clone)]
 pub struct QueryEngineConfig {
@@ -671,6 +688,9 @@ pub struct QueryEngineConfig {
     pub effort_level: Option<String>,
     /// Focus area for the LLM (e.g. "security", "performance")
     pub focus_area: Option<String>,
+    /// Session goal (set via `/goal`). Injected as a non-cached system block
+    /// on every query so it survives compaction.
+    pub goal: Option<GoalSpec>,
     /// Fast/cheap model for quick tasks (e.g. haiku). If set, the engine can
     /// route simple queries (token counting, short responses) to this model
     /// instead of the primary model, reducing cost and latency.
@@ -756,6 +776,7 @@ impl Default for QueryEngineConfig {
             max_parallel_tools: 10,
             effort_level: None,
             focus_area: None,
+            goal: None,
             fast_model: None,
             plan_model: None,
             repo_map_enabled: true,

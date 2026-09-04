@@ -42,6 +42,16 @@ commands:
     added: "✓ Cible %{kind} '%{name}' enregistrée. Connectez-vous avec `/remote use %{name}`."
     bash_missing: "⚠ bash introuvable sur la cible — l'outil Bash requiert bash."
     already_connected: "Déjà connecté à %{name}."
+  goal:
+    set: "◎ Objectif défini (max %{max} itérations) : %{objective}\nEnvoyez un message pour commencer — Shannon continue de travailler entre les tours jusqu'à atteindre l'objectif. /goal pause pour suspendre, /goal clear pour supprimer."
+    current: "Objectif (%{status}, itération %{iterations}/%{max}) : %{objective}"
+    current_none: "Aucun objectif. Usage : /goal <objectif> | /goal pause | /goal resume | /goal clear"
+    cleared: "✓ Objectif supprimé."
+    paused_blocked: "⏸ Objectif suspendu — l'agent signale un blocage : %{reason}\nRésolvez-le puis /goal resume, ou /goal clear pour supprimer."
+    paused_max: "⏸ Objectif suspendu après %{max} itérations sans achèvement. Évaluez puis /goal resume ou /goal clear."
+    resumed: "▶ Objectif repris (compteur d'itérations réinitialisé)."
+    complete: "✓ Objectif atteint après %{iterations} itération(s) : %{objective}"
+    conflict_loop: "Un /ralph ou /loop est actif — arrêtez-le d'abord, puis définissez /goal."
   help:
     title: "Commandes disponibles"
     no_help_found: "Aucune aide trouvée pour : %{topic}"
