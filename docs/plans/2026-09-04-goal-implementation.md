@@ -72,6 +72,8 @@ pub(crate) fn goal_completion_marker(msg: &str) -> Option<GoalMarker>  // 纯函
 pub(crate) enum GoalMarker { Complete, Blocked(String) }
 pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()>
 pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool
+// R14 修正：Continue 路径压入 queued_messages（扁平排水，栈深 O(1)），
+// 不得在 handle_query 框架内直接 submit_input（递归 → 栈溢出）
 pub(crate) fn continuation_prompt(goal: &GoalState) -> String     // 纯函数，设计 §6.4 文案
 pub(crate) fn save_goal_sidecar(repl: &Repl)                      // l0_store().save_sidecar，merge 语义
 ```
@@ -82,7 +84,7 @@ pub(crate) fn save_goal_sidecar(repl: &Repl)                      // l0_store().
 - Set 守卫：`ralph_state.is_some() || loop_state.is_some()` → `set_error` + `t!("commands.goal.conflict_loop")`
 - Set/Pause/Resume/Clear 后立即 `save_goal_sidecar`
 - Show 显示 status/iteration/max/objective；Complete 态标注 "completed"
-- `check_goal_continuation`：仅 `Active` 响应；marker 判定 → Complete（通知 + sidecar）/ Blocked(String)（Paused + 原因通知 + sidecar）；未完成 → `iterations += 1`，`max>0 && iterations>=max` → Paused + 通知，否则 `set_input(continuation_prompt) + submit_input` → true
+- `check_goal_continuation`：仅 `Active` 响应；marker 判定 → Complete（通知 + sidecar）/ Blocked(String)（Paused + 原因通知 + sidecar）；未完成 → `iterations += 1`，`max>0 && iterations>=max` → Paused + 通知，否则 `iterations += 1` 并把 `continuation_prompt` 压入 `queued_messages`（R14：由 submit_input 扁平排水接续，禁止框架内递归 submit）→ true
 
 ```rust
 #[test] fn parse_goal_empty_is_show() { /* */ }

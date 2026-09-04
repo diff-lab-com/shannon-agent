@@ -347,10 +347,17 @@ pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
             let goal = repl.state.goal.as_mut().expect("snapshot existed");
             goal.iterations = iterations;
             save_goal_sidecar(repl);
-            repl.prompt.set_input(prompt);
-            if super::submit_input(repl, None).is_err() {
-                return false;
-            }
+            // Queue the continuation instead of calling submit_input here:
+            // this hook runs inside handle_query's stack frame, and a direct
+            // submit would nest one heavy handle_query frame per iteration
+            // (stack overflow at depth — proven in tests; unbounded with
+            // --max 0). submit_input's flat drain loop (commands/mod.rs)
+            // picks the queued prompt up after handle_query returns, keeping
+            // O(1) stack depth for arbitrarily long goal runs. The queue is
+            // FIFO, so user-typed messages sent during the turn still go
+            // first; a query error/cancel clears the queue, which stops the
+            // loop (goal stays Active as a pure anchor).
+            repl.state.queued_messages.push(prompt);
             true
         }
     }
@@ -726,15 +733,48 @@ mod handler_tests {
     }
 
     #[test]
-    fn continuation_incomplete_does_not_recurse_without_submit() {
-        // The Continue decision itself is covered by the pure tests above;
-        // executing it calls submit_input, which re-enters the query loop
-        // (same shape as /ralph) and must not be exercised in-process here.
-        let goal = GoalState::new("fix lint");
-        assert!(matches!(
-            goal_continuation_decision(&goal, Some("partial progress")),
-            GoalContinuation::Continue { .. }
-        ));
+    fn continuation_incomplete_queues_prompt_without_recursion() {
+        let _home = HomeGuard::new();
+        let mut repl = Repl::new().expect("minimal repl");
+        repl.state.goal = Some(GoalState::new("fix lint"));
+        repl.chat.add_message(
+            crate::widgets::ChatRole::Assistant,
+            "I looked at the code.".to_string(),
+        );
+
+        // The Continue path queues the next prompt instead of submitting it
+        // from inside handle_query's frame — O(1) stack depth regardless of
+        // iteration count (submit_input's flat drain loop does the rest).
+        let continued = check_goal_continuation(&mut repl);
+        assert!(continued);
+        let goal = repl.state.goal.as_ref().unwrap();
+        assert_eq!(goal.status, GoalStatus::Active);
+        assert_eq!(goal.iterations, 1);
+        let queued = repl
+            .state
+            .queued_messages
+            .last()
+            .cloned()
+            .unwrap_or_default();
+        assert!(queued.contains("[Goal iteration 1/25]"));
+        assert!(queued.contains("fix lint"));
+    }
+
+    #[test]
+    fn continuation_queues_behind_user_messages() {
+        let _home = HomeGuard::new();
+        let mut repl = Repl::new().expect("minimal repl");
+        repl.state.goal = Some(GoalState::new("fix lint"));
+        repl.state
+            .queued_messages
+            .push("user typed this first".to_string());
+        repl.chat
+            .add_message(crate::widgets::ChatRole::Assistant, "working".to_string());
+
+        check_goal_continuation(&mut repl);
+        // FIFO: the user's message goes before the goal continuation.
+        assert_eq!(repl.state.queued_messages[0], "user typed this first");
+        assert!(repl.state.queued_messages[1].contains("[Goal iteration 1/25]"));
     }
 
     #[test]
