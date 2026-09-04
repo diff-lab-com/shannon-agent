@@ -1026,6 +1026,38 @@ impl QueryEngine {
             .estimate_tokens_with_system_prompt(self.config.system_prompt.as_deref())
     }
 
+    /// Six-category context breakdown of the current session state (P0-4).
+    ///
+    /// Instant estimate — deliberately off the request-assembly path: it
+    /// snapshots the engine's *current* system prompt, tool pool, injected
+    /// memory text and conversation history and runs the shared estimators
+    /// over them (see `shannon_engine::context_breakdown`). Categories with
+    /// no content (no memory store, no MCP/skill tools) report `0`; the
+    /// ambient assembly-time blocks (smart context, project instructions,
+    /// repo map, goal block) are host-dependent reads and are **not**
+    /// approximated, so `system` is a lower bound for the fully-assembled
+    /// prompt.
+    pub fn context_breakdown(&self) -> shannon_engine::context_breakdown::ContextBreakdown {
+        use shannon_engine::context_breakdown::ContextBreakdownInput;
+
+        let memory_text = self.memory.as_ref().and_then(|mem| {
+            mem.read().ok().and_then(|store| {
+                let project = std::env::current_dir()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "default".to_string());
+                store.format_for_injection(&project)
+            })
+        });
+        let input = ContextBreakdownInput {
+            system_prompt: self.config.system_prompt.clone(),
+            tool_definitions: self.tools.to_tool_definitions(),
+            memory_text,
+            messages: self.conversation.messages.clone(),
+            context_window: self.resolved_context_window_opt().map(|v| v as u64),
+        };
+        shannon_engine::context_breakdown::compute_breakdown(&input)
+    }
+
     /// Get the current conversation messages (for session persistence).
     pub fn conversation_messages(&self) -> &[shannon_engine::api::Message] {
         &self.conversation.messages
@@ -5103,6 +5135,154 @@ mod tests {
         let permissions = PermissionManager::new();
         let config = QueryEngineConfig::default();
         QueryEngine::new(client, tools, permissions, state, config)
+    }
+
+    // ── context_breakdown (P0-4) ────────────────────────────────────────
+
+    #[test]
+    fn context_breakdown_empty_session_reports_zero_categories_without_panicking() {
+        // Strip the default system prompt so the session is genuinely empty:
+        // no prompt, no tools, no memory, no history.
+        let client = create_test_client();
+        let config = QueryEngineConfig {
+            system_prompt: None,
+            ..Default::default()
+        };
+        let engine = QueryEngine::new(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+            config,
+        );
+        let breakdown = engine.context_breakdown();
+        assert_eq!(breakdown.total_tokens, 0);
+        assert!(breakdown.categories.iter().all(|c| c.tokens == 0));
+        let keys: Vec<&str> = breakdown
+            .categories
+            .iter()
+            .map(|c| c.key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["system", "tools", "skills", "memory", "mcp", "conversation"]
+        );
+    }
+
+    #[test]
+    fn context_breakdown_with_only_system_prompt_counts_it() {
+        // Default config ships a base system prompt: the empty session's
+        // breakdown is exactly that prompt, and the window mirrors
+        // resolved_context_window_opt (None for a model absent from the
+        // catalog — no fabricated fallback).
+        let engine = create_test_engine();
+        let breakdown = engine.context_breakdown();
+        assert!(breakdown.tokens_for("system") > 0);
+        assert_eq!(breakdown.total_tokens, breakdown.tokens_for("system"));
+        for key in ["tools", "skills", "memory", "mcp", "conversation"] {
+            assert_eq!(breakdown.tokens_for(key), 0, "{key} must be 0");
+        }
+        assert_eq!(
+            breakdown.context_window.map(|v| v as usize),
+            engine.resolved_context_window_opt()
+        );
+    }
+
+    #[test]
+    fn context_breakdown_counts_registry_skills_memory_and_history() {
+        use crate::memory::{MemoryCategory, MemoryEntry, MemoryStore};
+
+        // A minimal registry: one built-in, one MCP-prefixed, one skill.
+        let mut registry = ToolRegistry::new();
+        struct SchemaTool {
+            name: String,
+        }
+        #[async_trait::async_trait]
+        impl crate::tools::Tool for SchemaTool {
+            fn name(&self) -> &str {
+                &self.name
+            }
+            fn description(&self) -> &str {
+                "A tool whose schema is counted in the breakdown"
+            }
+            fn input_schema(&self) -> serde_json::Value {
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {"x": {"type": "string"}}
+                })
+            }
+            async fn execute(
+                &self,
+                _input: serde_json::Value,
+            ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+                Ok(crate::tools::ToolOutput::success("ok".into()))
+            }
+        }
+        for name in ["Bash", "mcp__gh__search", "skill_commit"] {
+            registry
+                .register(Box::new(SchemaTool {
+                    name: name.to_string(),
+                }))
+                .expect("register test tool");
+        }
+
+        let temp_dir = env::temp_dir()
+            .join("shannon-context-breakdown-test")
+            .join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&temp_dir).expect("temp dir");
+        let mut store = MemoryStore::new(temp_dir.clone());
+        let entry = MemoryEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            project: std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "default".to_string()),
+            category: MemoryCategory::Preference,
+            content: "The user prefers concise answers.".to_string(),
+            tags: vec![],
+            confidence: 1.0,
+            created_at: chrono::Utc::now(),
+            accessed_at: chrono::Utc::now(),
+            access_count: 0,
+        };
+        store.add(entry).expect("add memory");
+
+        let client = create_test_client();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+        let engine = QueryEngine::new(
+            client,
+            registry,
+            permissions,
+            state,
+            QueryEngineConfig::default(),
+        )
+        .with_memory(store);
+        let mut engine = engine;
+        engine.conversation.messages = vec![
+            shannon_engine::api::Message {
+                role: "user".into(),
+                content: MessageContent::Text("Hello there, Shannon.".into()),
+            },
+            shannon_engine::api::Message {
+                role: "assistant".into(),
+                content: MessageContent::Text("Hi! How can I help today?".into()),
+            },
+        ];
+
+        let breakdown = engine.context_breakdown();
+        for key in ["system", "tools", "skills", "memory", "mcp", "conversation"] {
+            assert!(
+                breakdown.tokens_for(key) > 0,
+                "category {key} must be > 0 with a populated engine"
+            );
+        }
+        let sum: u64 = breakdown.categories.iter().map(|c| c.tokens).sum();
+        assert_eq!(breakdown.total_tokens, sum);
+        // test-model is absent from the model catalog and the client is not
+        // an Ollama probe — the window must stay None (no fabricated 200K).
+        assert_eq!(breakdown.context_window, None);
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
