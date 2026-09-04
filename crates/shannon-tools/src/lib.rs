@@ -45,6 +45,7 @@ pub mod docs_query;
 pub mod file;
 pub mod git;
 pub mod github;
+pub mod goal;
 pub mod grep;
 pub mod image_analysis;
 pub mod lsp;
