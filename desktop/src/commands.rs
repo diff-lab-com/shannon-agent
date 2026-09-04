@@ -119,12 +119,15 @@ pub struct AppState {
     pub(crate) scheduled_runs_store: Arc<shannon_core::scheduled_runs::ScheduledRunsStore>,
     /// Triage items needing user attention.
     pub(crate) triage_store: Arc<crate::scheduled_commands::TriageStore>,
+    /// Live desktop goal runners, keyed by session id (P0-2). One active
+    /// runner per session; while one exists, manual sends to that session
+    /// are rejected (see `send_message`) — goal and manual input are
+    /// mutually exclusive.
+    pub(crate) goal_runs: Arc<crate::goal_commands::GoalRunRegistry>,
     /// SQLite inbox store (`~/.shannon/inbox.db`, P0-3). Lazily opened on
     /// first use so a failing on-disk open degrades to an in-memory store
     /// (with a warning) instead of poisoning every inbox command.
-    pub(crate) inbox_store: std::sync::OnceLock<
-        Arc<shannon_core::inbox_store::InboxStore>,
-    >,
+    pub(crate) inbox_store: std::sync::OnceLock<Arc<shannon_core::inbox_store::InboxStore>>,
     /// Usage ledger (`~/.shannon/usage.jsonl`) — append-only token/cache/cost.
     pub(crate) usage_store: Arc<crate::commands_usage::UsageStore>,
     /// Triggered-routine enabled/disabled overrides.
@@ -351,6 +354,7 @@ impl AppState {
             ),
             scheduled_runs_store: Arc::new(shannon_core::scheduled_runs::ScheduledRunsStore::new()),
             triage_store: Arc::new(crate::scheduled_commands::TriageStore::new()),
+            goal_runs: Arc::new(crate::goal_commands::GoalRunRegistry::new()),
             inbox_store: std::sync::OnceLock::new(),
             usage_store: Arc::new(crate::commands_usage::UsageStore::new()),
             routine_overrides: Arc::new(crate::scheduled_commands::RoutineOverrideStore::new()),
@@ -448,6 +452,17 @@ pub async fn send_message(
     // one if the registry is empty (the "first call ever" case).
     let active_session = state.registry.get_or_create_active();
     let session_id = active_session.session_id;
+
+    // P0-2: a desktop goal run owns this session while active — a manual
+    // send would interleave with the unattended turn loop. The composer
+    // gates on the same condition via `get_goal_run`; this is the backend
+    // backstop. (Defence in depth; not a drive-by change.)
+    if state.goal_runs.blocks_session(&session_id) {
+        return Err(
+            "A goal run is active on this session — pause or stop it from the Tasks page before sending messages"
+                .into(),
+        );
+    }
 
     // Prevent concurrent queries — check and set in a single lock scope to avoid TOCTOU race
     {

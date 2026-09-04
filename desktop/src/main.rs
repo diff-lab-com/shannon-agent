@@ -276,6 +276,14 @@ fn main() {
             shannon_desktop::inbox_commands::get_inbox_stats,
             shannon_desktop::inbox_commands::rerun_inbox_item,
             shannon_desktop::inbox_commands::continue_inbox_item_session,
+            // P0-2 — desktop goal runner (run cards on the Tasks page)
+            shannon_desktop::goal_commands::start_goal_run,
+            shannon_desktop::goal_commands::list_goal_runs,
+            shannon_desktop::goal_commands::get_goal_run,
+            shannon_desktop::goal_commands::stop_goal_run,
+            shannon_desktop::goal_commands::pause_goal_run,
+            shannon_desktop::goal_commands::resume_goal_run,
+            shannon_desktop::goal_commands::update_goal_objective,
             // Automation: hook-event catalog + custom permission profiles
             shannon_desktop::automation_commands::list_hook_events,
             shannon_desktop::automation_commands::list_permission_profiles,

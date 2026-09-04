@@ -181,6 +181,10 @@ pub mod scheduled_commands;
 #[cfg(feature = "tauri")]
 pub mod inbox_commands;
 
+/// P0-2 — desktop goal runner + Tasks-page run-card commands.
+#[cfg(feature = "tauri")]
+pub mod goal_commands;
+
 #[cfg(feature = "tauri")]
 pub mod commands_routine_templates;
 

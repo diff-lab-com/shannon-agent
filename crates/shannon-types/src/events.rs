@@ -313,6 +313,12 @@ pub mod event_names {
     /// recorded a run. Frontend: inbox badge/list refreshes on this instead
     /// of polling.
     pub const INBOX_UPDATED: &str = "inbox-updated";
+    /// P0-2: emitted whenever a desktop goal run changes — started, a turn
+    /// completed, paused/resumed/stopped, or a restart reconciled an
+    /// interrupted run. Payload: `GoalRunDto` (see
+    /// `desktop/src/goal_commands.rs`). Frontend: Tasks-page goal run cards
+    /// refresh on this instead of polling.
+    pub const GOAL_UPDATED: &str = "goal:updated";
     pub const UPDATE_AVAILABLE: &str = "update-available";
     pub const UPDATE_PROGRESS: &str = "update-progress";
     pub const UPDATE_COMPLETED: &str = "update-completed";
