@@ -143,6 +143,10 @@ pub(crate) fn save_goal_sidecar(repl: &Repl) {
 
 /// Handle `/goal ...`.
 pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
+    // Keep the tool-facing live handle in sync no matter which branch runs —
+    // the tools only fire mid-query, but the entry sync in handle_query
+    // covers that; this covers direct inspection between queries.
+    repl.goal_shared.sync_from(&repl.state.goal);
     match parse_goal_args(args) {
         GoalAction::Show => match repl.state.goal.as_ref() {
             Some(goal) => {
@@ -213,6 +217,9 @@ pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
                 // would resume one strike closer to the cap.
                 goal.consecutive_no_tool_turns = 0;
                 goal.stall_strikes = 0;
+                // Re-baseline the cost budget: the resumed goal's --budget
+                // applies to post-resume spend only.
+                goal.cost_baseline_usd = repl.state.billing_manager.get_period_summary().total_cost;
                 save_goal_sidecar(repl);
                 repl.chat
                     .add_message(ChatRole::System, t!("commands.goal.resumed").to_string());
@@ -237,6 +244,9 @@ pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
                 set_error(repl, t!("commands.goal.current_none").as_ref());
                 return Ok(());
             }
+            // P2.3 — capture the billing total as the goal's cost baseline
+            // so `--budget` measures spend attributable to this goal.
+            let cost_baseline_usd = repl.state.billing_manager.get_period_summary().total_cost;
             repl.state.goal = Some(GoalState {
                 objective,
                 status: GoalStatus::Active,
@@ -245,6 +255,7 @@ pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
                 consecutive_no_tool_turns: 0,
                 stall_strikes: 0,
                 max_budget_usd: max_budget_usd,
+                cost_baseline_usd,
             });
             save_goal_sidecar(repl);
             let max = if max_iterations == 0 {
@@ -314,6 +325,37 @@ fn turn_had_tool_calls(chat: &crate::widgets::ChatWidget) -> bool {
         }
     }
     false
+}
+
+/// REPL-side [`shannon_tools::goal::GoalStateAccess`] implementation: the
+/// tools read and mutate the live [`GoalShared`] handle; the REPL replays
+/// transitions onto `ReplState.goal` at query completion (see
+/// `check_goal_continuation`).
+pub(crate) struct ReplGoalAccess {
+    pub shared: crate::repl::state::GoalShared,
+}
+
+impl shannon_tools::goal::GoalStateAccess for ReplGoalAccess {
+    fn snapshot(&self) -> Option<shannon_tools::goal::GoalSnapshot> {
+        self.shared
+            .current()
+            .map(|g| shannon_tools::goal::GoalSnapshot {
+                objective: g.objective,
+                status: match g.status {
+                    GoalStatus::Active => "active",
+                    GoalStatus::Paused => "paused",
+                    GoalStatus::Complete => "complete",
+                }
+                .to_string(),
+                iterations: g.iterations,
+                max_iterations: g.max_iterations,
+                max_budget_usd: g.max_budget_usd,
+            })
+    }
+
+    fn apply_update(&self, outcome: shannon_tools::goal::GoalUpdateOutcome) -> Option<()> {
+        self.shared.apply(outcome)
+    }
 }
 
 /// Pure continuation decision (unit-tested): inspects the goal state and the
@@ -408,6 +450,39 @@ pub(crate) fn goal_continuation_decision_with_facts(
 /// Returns true if a new goal iteration was started (callers must then skip
 /// the ralph/loop checks so only one auto-continuation loop runs).
 pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
+    // P2.5 wiring — replay mid-turn `goal_update` transitions onto the
+    // REPL-owned state, persist them, and surface them to the user. The
+    // transitioned goal never auto-continues (Complete/Paused are terminal
+    // for the loop), so we return right after notifying.
+    if let Some((pulled, transition)) = repl.goal_shared.take_transition() {
+        let message = match (&transition, &pulled.status) {
+            (shannon_tools::goal::GoalUpdateOutcome::Completed, _) => Some(
+                t!(
+                    "commands.goal.complete",
+                    iterations = pulled.iterations,
+                    objective = pulled.objective.clone()
+                )
+                .to_string(),
+            ),
+            (shannon_tools::goal::GoalUpdateOutcome::Paused(reason), _) => {
+                Some(t!("commands.goal.paused_blocked", reason = reason).to_string())
+            }
+            _ => None,
+        };
+        repl.state.goal = Some(pulled);
+        save_goal_sidecar(repl);
+        if let Some(message) = message {
+            if matches!(
+                transition,
+                shannon_tools::goal::GoalUpdateOutcome::Completed
+            ) {
+                let msg_copy = message.clone();
+                super::notify_query_complete(&repl.notifier, repl.notifications_enabled, &msg_copy);
+            }
+            repl.chat.add_message(ChatRole::System, message);
+        }
+        return false;
+    }
     let Some(goal_snapshot) = repl.state.goal.clone() else {
         return false;
     };
@@ -415,9 +490,15 @@ pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
         .chat
         .last_assistant_message()
         .map(|m| m.content.clone());
+    // P2.3 — spend attributable to this goal = billing total now minus the
+    // baseline captured at set/resume. Clamped at 0 (billing can only
+    // grow within a period; month rollover can make the delta negative).
+    let cost_delta_usd = (repl.state.billing_manager.get_period_summary().total_cost
+        - goal_snapshot.cost_baseline_usd)
+        .max(0.0);
     let facts = TurnFacts {
         had_tool_calls: turn_had_tool_calls(&repl.chat),
-        cost_delta_usd: 0.0,
+        cost_delta_usd,
     };
     match goal_continuation_decision_with_facts(&goal_snapshot, last.as_deref(), facts) {
         GoalContinuation::Inactive => false,
@@ -726,6 +807,7 @@ mod handler_tests {
             max_iterations: 3,
             iteration: 0,
             active: true,
+            guard: Default::default(),
         });
 
         handle_goal(&mut repl, "my goal").unwrap();
@@ -1174,5 +1256,87 @@ mod handler_tests {
             !repl.state.queued_messages.is_empty(),
             "Continue should queue; absent queue means BudgetLimited fired unexpectedly"
         );
+    }
+
+    // ── P2.3 live budget signal ─────────────────────────────────────────
+
+    #[test]
+    fn budget_signal_from_billing_pauses_goal() {
+        let _home = HomeGuard::new();
+        let mut repl = Repl::new().expect("minimal repl");
+        // Baseline is captured at set-time (0.0 in a fresh billing store).
+        handle_goal(&mut repl, "--budget 0.5 ship it").unwrap();
+        assert_eq!(repl.state.goal.as_ref().unwrap().cost_baseline_usd, 0.0);
+
+        // Simulate spend during the turn.
+        repl.state
+            .billing_manager
+            .record_usage(shannon_core::billing::UsageRecord::new(
+                "test-model",
+                1_000,
+                100,
+                1.0, // $1 spent > $0.5 cap
+            ))
+            .unwrap();
+        repl.chat
+            .add_message(crate::widgets::ChatRole::Assistant, "working".to_string());
+
+        let continued = check_goal_continuation(&mut repl);
+        assert!(!continued, "budget-limited goal must not continue");
+        let goal = repl.state.goal.as_ref().unwrap();
+        assert_eq!(goal.status, GoalStatus::Paused);
+        assert!(repl.state.queued_messages.is_empty());
+        let last = repl.chat.messages().back().unwrap().content.clone();
+        assert!(
+            last.contains("budget") || last.contains("Budget") || last.contains('$'),
+            "pause message should surface the budget reason: {last}"
+        );
+    }
+
+    #[test]
+    fn spend_under_cap_continues_normally() {
+        let _home = HomeGuard::new();
+        let mut repl = Repl::new().expect("minimal repl");
+        handle_goal(&mut repl, "--budget 5.0 ship it").unwrap();
+        repl.state
+            .billing_manager
+            .record_usage(shannon_core::billing::UsageRecord::new(
+                "test-model",
+                1_000,
+                100,
+                0.25, // under cap
+            ))
+            .unwrap();
+        repl.chat
+            .add_message(crate::widgets::ChatRole::Assistant, "working".to_string());
+
+        let continued = check_goal_continuation(&mut repl);
+        // No tool messages → anti-spin strike, but under thresholds → queued.
+        let goal = repl.state.goal.as_ref().unwrap();
+        assert_eq!(
+            goal.status,
+            GoalStatus::Active,
+            "under-cap goal stays active"
+        );
+        let _ = continued; // queued continuation (or submit failure in minimal REPL)
+    }
+
+    #[test]
+    fn resume_rebaselines_cost() {
+        let _home = HomeGuard::new();
+        let mut repl = Repl::new().expect("minimal repl");
+        handle_goal(&mut repl, "--budget 5.0 ship it").unwrap();
+        repl.state
+            .billing_manager
+            .record_usage(shannon_core::billing::UsageRecord::new("m", 1, 1, 4.0))
+            .unwrap();
+        // Simulate a budget-limited pause.
+        repl.state.goal.as_mut().unwrap().status = GoalStatus::Paused;
+
+        handle_goal(&mut repl, "resume").unwrap();
+        let goal = repl.state.goal.as_ref().unwrap();
+        // Baseline re-captured at resume: current total (4.0) becomes the
+        // new zero point, so the $5 cap applies to post-resume spend.
+        assert!((goal.cost_baseline_usd - 4.0).abs() < 1e-9);
     }
 }
