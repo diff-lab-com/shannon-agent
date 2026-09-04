@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use shannon_tool_interface::{CapturedOutput, PipedChild, ProcessExit};
 use tokio::io::AsyncWriteExt;
-use tokio::runtime::{Handle, Runtime};
+use tokio::runtime::Handle;
 
 use crate::target::RemoteTarget;
 
@@ -59,8 +59,9 @@ type ArcChild = openssh::Child<Arc<openssh::Session>>;
 /// Owns the SSH session for one target plus the runtime that drives it.
 pub struct SshRuntime {
     dest: String,
+    port: Option<u16>,
     workspace_dir: std::path::PathBuf,
-    rt: Runtime,
+    handle: Handle,
     session: Arc<openssh::Session>,
     status: AtomicU8,
 }
@@ -81,16 +82,30 @@ impl SshRuntime {
     /// the system known_hosts.
     pub async fn connect(target: &RemoteTarget) -> io::Result<Arc<Self>> {
         let dest = target.ssh_destination();
+        let port = target.port;
         let workspace_dir = target.workspace_dir.clone();
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| io::Error::other(format!("ssh runtime: {e}")))?;
-        let session = spawn_on(&rt, {
+        let handle = rt.handle().clone();
+        // A current_thread runtime only runs while something blocks on it —
+        // without this driver thread, every spawned task (and therefore the
+        // whole session) would silently never execute.
+        std::thread::Builder::new()
+            .name("shannon-ssh-rt".into())
+            .spawn(move || rt.block_on(std::future::pending::<()>()))
+            .map_err(|e| io::Error::other(format!("ssh runtime thread: {e}")))?;
+        let session = spawn_on(&handle, {
             let dest = dest.clone();
             async move {
                 let mut builder = openssh::SessionBuilder::default();
+                // The builder-level port must be set explicitly: the
+                // destination string alone would dial port 22.
+                if let Some(port) = port {
+                    builder.port(port);
+                }
                 builder
                     .known_hosts_check(openssh::KnownHosts::Add)
                     .connect_timeout(CONNECT_TIMEOUT);
@@ -103,8 +118,9 @@ impl SshRuntime {
 
         Ok(Arc::new(Self {
             dest,
+            port,
             workspace_dir,
-            rt,
+            handle,
             session: Arc::new(session),
             status: AtomicU8::new(STATUS_CONNECTED),
         }))
@@ -113,6 +129,11 @@ impl SshRuntime {
     /// The ssh destination this runtime is bound to.
     pub fn dest(&self) -> &str {
         &self.dest
+    }
+
+    /// Explicit port override for follow-up `ssh` children (sftp subsystem).
+    pub(crate) fn port(&self) -> Option<u16> {
+        self.port
     }
 
     /// Control socket of the ssh ControlMaster (Unix mux only).
@@ -127,9 +148,9 @@ impl SshRuntime {
         }
     }
 
-    /// The private runtime driving this session (borrowed; do not block).
-    pub(crate) fn runtime(&self) -> &Runtime {
-        &self.rt
+    /// Handle to the private runtime driving this session.
+    pub(crate) fn handle(&self) -> &Handle {
+        &self.handle
     }
 
     /// Marshal a future onto the dedicated runtime; awaitable from any
@@ -139,7 +160,7 @@ impl SshRuntime {
         F: Future<Output = io::Result<T>> + Send + 'static,
         T: Send + 'static,
     {
-        match self.rt.spawn(fut).await {
+        match self.handle.spawn(fut).await {
             Ok(v) => v,
             Err(e) => Err(io::Error::other(format!("ssh runtime join: {e}"))),
         }
@@ -163,7 +184,7 @@ impl SshRuntime {
     /// runtime; a later success restores `Connected`.
     pub async fn exec(self: &Arc<Self>, argv: Vec<String>) -> io::Result<CapturedOutput> {
         let started = Instant::now();
-        let out = spawn_on(&self.rt, {
+        let out = spawn_on(&self.handle, {
             let session = self.session.clone();
             let argv = argv.clone();
             async move {
@@ -200,7 +221,7 @@ impl SshRuntime {
     /// Blocking capture bridge for sync call sites (git helpers). Marshals
     /// onto the dedicated runtime via [`block_on_anywhere`].
     pub fn exec_blocking(self: &Arc<Self>, argv: Vec<String>) -> io::Result<CapturedOutput> {
-        block_on_anywhere(&self.rt, {
+        block_on_anywhere(&self.handle, {
             let this = self.clone();
             async move { this.exec(argv).await }
         })
@@ -215,8 +236,9 @@ impl SshRuntime {
                 "sh".into(),
                 "-c".into(),
                 // NUL-separated fields; single fixed literal script, the
-                // workspace path rides in as a positional argument.
-                "uname -s; printf '%s\\0' \"$HOME\"; command -v bash >/dev/null 2>&1 && printf b1 || printf b0; test -d \"$1\" && printf w1 || printf w0".into(),
+                // workspace path rides in as a positional argument. `$( )`
+                // strips uname's trailing newline so it cannot shift fields.
+                "printf '%s\\0' \"$(uname -s)\" \"$HOME\"; command -v bash >/dev/null 2>&1 && printf b1 || printf b0; test -d \"$1\" && printf w1 || printf w0".into(),
                 "sh".into(),
                 ws,
             ])
@@ -252,7 +274,7 @@ impl SshRuntime {
         pipe_stdout: bool,
         pipe_stderr: bool,
     ) -> io::Result<Box<dyn PipedChild>> {
-        let (child, stdin, stdout, stderr) = spawn_on(&self.rt, {
+        let (child, stdin, stdout, stderr) = spawn_on(&self.handle, {
             let session = self.session.clone();
             let argv = argv.clone();
             async move {
@@ -292,7 +314,7 @@ impl SshRuntime {
         let (mut client_in, remote_in) = tokio::io::duplex(64 * 1024);
         let (mut remote_out, client_out) = tokio::io::duplex(64 * 1024);
         let (mut remote_err, client_err) = tokio::io::duplex(64 * 1024);
-        let owner = self.rt.handle().clone();
+        let owner = self.handle.clone();
 
         // stdin pump: caller writes duplex half -> ssh child stdin.
         if let Some(mut sink) = stdin {
@@ -394,12 +416,12 @@ impl PipedChild for SshPipedChild {
 }
 
 /// Run `fut` on runtime `rt` and await the result from any runtime.
-async fn spawn_on<T, F>(rt: &Runtime, fut: F) -> io::Result<T>
+async fn spawn_on<T, F>(handle: &Handle, fut: F) -> io::Result<T>
 where
     F: Future<Output = io::Result<T>> + Send + 'static,
     T: Send + 'static,
 {
-    match rt.spawn(fut).await {
+    match handle.spawn(fut).await {
         Ok(v) => v,
         Err(e) => Err(io::Error::other(format!("ssh runtime join: {e}"))),
     }
@@ -408,19 +430,19 @@ where
 /// `block_on` from any thread, including threads already inside another
 /// tokio runtime (spawn_blocking workers): hop to a plain OS thread when
 /// necessary. Blocking ssh helpers call this.
-pub(crate) fn block_on_anywhere<T, F>(rt: &Runtime, fut: F) -> T
+pub(crate) fn block_on_anywhere<T, F>(handle: &Handle, fut: F) -> T
 where
     F: Future<Output = T> + Send,
     T: Send,
 {
     if tokio::runtime::Handle::try_current().is_ok() {
         std::thread::scope(|s| {
-            s.spawn(|| rt.block_on(fut))
+            s.spawn(|| handle.block_on(fut))
                 .join()
                 .expect("block_on thread")
         })
     } else {
-        rt.block_on(fut)
+        handle.block_on(fut)
     }
 }
 
@@ -472,36 +494,28 @@ mod tests {
             .build()
             .unwrap();
         // Outside any runtime.
-        assert_eq!(block_on_anywhere(&rt, async { 41 + 1 }), 42);
+        assert_eq!(block_on_anywhere(rt.handle(), async { 41 + 1 }), 42);
         // Inside another runtime (tokio::test worker).
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
             .block_on(async {
-                assert_eq!(block_on_anywhere(&rt, async { 6 * 7 }), 42);
+                assert_eq!(block_on_anywhere(rt.handle(), async { 6 * 7 }), 42);
             });
     }
 
-    // Ignored integration test: requires a local sshd reachable as `localhost`.
+    // Ignored integration test: requires a reachable sshd. Configure via
+    // SHANNON_TEST_SSH_HOST / _PORT / _USER (defaults: localhost:22).
     #[tokio::test]
-    #[ignore = "requires local sshd: ssh localhost must work non-interactively"]
+    #[ignore = "requires a reachable sshd (SHANNON_TEST_SSH_HOST/PORT/USER)"]
     async fn exec_roundtrip_on_localhost() {
-        let target = RemoteTarget {
-            name: "it".into(),
-            kind: crate::target::TargetKind::Ssh,
-            host: Some("localhost".into()),
-            port: None,
-            user: None,
-            container: None,
-            shell: None,
-            ssh_target: None,
-            workspace_dir: std::env::temp_dir(),
-        };
+        let target = crate::ssh::test_ssh_target();
         let rt = SshRuntime::connect(&target).await.unwrap();
         let health = rt.health().await.unwrap();
         assert!(!health.platform.is_empty());
-        assert!(health.home.starts_with('/'));
+        // Restricted setups may run with HOME unset — empty is acceptable.
+        assert!(health.home.is_empty() || health.home.starts_with('/'));
         let out = rt
             .exec(vec!["echo".into(), "shannon".into()])
             .await

@@ -171,7 +171,7 @@ impl FileSystemProvider for DockerExecFs {
         // `cat > "$1"` with the destination as a positional parameter: no
         // interpolation of the path into the script.
         let mut r = ProcessRequest::new("sh", &["-c", "cat > \"$1\"", "sh"]);
-        r.args = vec![path_arg("cat", path)];
+        r.args.push(path_arg("cat", path));
         r.stdin_data = Some(contents.to_vec());
         let out = self.proc.run_async(&r).await?;
         if out.exit.success {
@@ -221,7 +221,7 @@ impl FileSystemProvider for DockerExecFs {
 
     fn write_bytes_blocking(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
         let mut r = ProcessRequest::new("sh", &["-c", "cat > \"$1\"", "sh"]);
-        r.args = vec![path_arg("cat", path)];
+        r.args.push(path_arg("cat", path));
         r.stdin_data = Some(contents.to_vec());
         let out = self.proc.run_blocking(&r)?;
         if out.exit.success {
@@ -392,5 +392,305 @@ mod tests {
         let r = container_request("cat", vec!["/f".to_string()]);
         assert_eq!(r.program, "cat");
         assert_eq!(r.args, vec!["/f".to_string()]);
+    }
+}
+
+// ── Scripted-fake tests: the full FileSystemProvider impl without docker ──
+
+#[cfg(test)]
+mod fake_world_tests {
+    use super::*;
+    use shannon_tool_interface::{
+        CapturedOutput, ExecCaps, PipedChild, PipedSpawn, ProcessExit, ProcessProvider,
+    };
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    /// In-memory container image: paths → contents, plus directories.
+    /// The fake answers the exact docker argv DockerExecFs composes, so the
+    /// whole provider impl is exercised without a docker daemon.
+    struct FakeDocker {
+        files: Mutex<HashMap<&'static str, &'static [u8]>>,
+        dirs: &'static [&'static str],
+        writes: Mutex<Vec<String>>,
+        renames: Mutex<Vec<(String, String)>>,
+    }
+
+    impl FakeDocker {
+        fn image() -> Self {
+            Self {
+                files: Mutex::new(HashMap::from([
+                    ("/w/README.md", &b"hello container"[..]),
+                    ("/w/src/main.rs", &b"fn main() {}"[..]),
+                ])),
+                dirs: &["/w", "/w/src"],
+                writes: Mutex::new(Vec::new()),
+                renames: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn captured(stdout: &[u8]) -> CapturedOutput {
+            CapturedOutput {
+                stdout: stdout.to_vec(),
+                stderr: Vec::new(),
+                exit: ProcessExit::from_code(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ProcessProvider for FakeDocker {
+        #[allow(clippy::needless_return)] // arms mix early returns and tail expressions
+        fn run_blocking(&self, request: &ProcessRequest) -> io::Result<CapturedOutput> {
+            let argv: Vec<String> = std::iter::once(request.program.clone())
+                .chain(request.args.iter().cloned())
+                .collect();
+            // Answer the composed `docker exec ... <op>` argv by op name.
+            let op = argv.iter().position(|a| {
+                matches!(
+                    a.as_str(),
+                    "cat" | "find" | "stat" | "mv" | "head" | "readlink" | "mkdir" | "rm" | "sh"
+                )
+            });
+            let Some(op_idx) = op else {
+                return Ok(Self::captured(b""));
+            };
+            let tail = &argv[op_idx..];
+            match tail[0].as_str() {
+                "cat" => {
+                    if tail.len() >= 3 && tail[1] == "-c" {
+                        // write path: cat -c variant (unused today; sh handles it)
+                        let path = tail.last().cloned().unwrap_or_default();
+                        if let Some(data) = &request.stdin_data {
+                            self.writes
+                                .lock()
+                                .unwrap()
+                                .push(format!("{path}={}", String::from_utf8_lossy(data)));
+                        }
+                        return Ok(Self::captured(b""));
+                    }
+                    let path = tail[1].clone();
+                    let files = self.files.lock().unwrap();
+                    Ok(match files.get(path.as_str()) {
+                        Some(bytes) => Self::captured(bytes),
+                        None => CapturedOutput {
+                            stdout: Vec::new(),
+                            stderr: b"cat: No such file".to_vec(),
+                            exit: ProcessExit::from_code(1),
+                        },
+                    })
+                }
+                "find" => {
+                    let dir = tail[1].clone();
+                    let is_dir_query = tail.contains(&"-type".to_string())
+                        && tail
+                            .iter()
+                            .zip(tail.iter().skip(1))
+                            .any(|(a, b)| a == "-type" && b == "d");
+                    let mut out = Vec::new();
+                    if is_dir_query {
+                        for d in self.dirs {
+                            if d.starts_with(dir.as_str()) && *d != dir {
+                                out.extend_from_slice(d.as_bytes());
+                                out.push(0);
+                            }
+                        }
+                    } else {
+                        let files = self.files.lock().unwrap();
+                        for k in files.keys() {
+                            if k.starts_with(dir.as_str()) {
+                                out.extend_from_slice(k.as_bytes());
+                                out.push(0);
+                            }
+                        }
+                    }
+                    return Ok(Self::captured(&out));
+                }
+                "stat" => {
+                    // tail = [stat, -c, <fmt>, <path>]
+                    let path = tail[3].clone();
+                    let files = self.files.lock().unwrap();
+                    let line = if let Some(bytes) = files.get(path.as_str()) {
+                        format!("{} 1700000000 regular file", bytes.len())
+                    } else if self.dirs.contains(&path.as_str()) {
+                        "4096 1700000000 directory".to_string()
+                    } else {
+                        return Ok(CapturedOutput {
+                            stdout: Vec::new(),
+                            stderr: b"stat: can't find".to_vec(),
+                            exit: ProcessExit::from_code(1),
+                        });
+                    };
+                    return Ok(Self::captured(line.as_bytes()));
+                }
+                "mv" => {
+                    let (from, to) = (tail[2].clone(), tail[3].clone());
+                    self.renames.lock().unwrap().push((from, to));
+                    return Ok(Self::captured(b""));
+                }
+                "head" => {
+                    // head -c <n> <path>
+                    let n: usize = tail[2].parse().unwrap_or(0);
+                    let path = tail[3].clone();
+                    let files = self.files.lock().unwrap();
+                    let bytes = files
+                        .get(path.as_str())
+                        .map(|b| b[..n.min(b.len())].to_vec());
+                    return Ok(Self::captured(&bytes.unwrap_or_default()));
+                }
+                "readlink" => {
+                    let path = tail[2].clone();
+                    return Ok(Self::captured(path.as_bytes()));
+                }
+                "mkdir" | "rm" => return Ok(Self::captured(b"")),
+                "sh" => {
+                    // write path: tail must be exactly
+                    // [sh, -c, script, sh($0), <path>] — a clobbered argv
+                    // (args lost the -c/script prefix) must fail loudly.
+                    if tail.len() == 5 && tail[1] == "-c" && tail[3] == "sh" {
+                        let path = tail[4].clone();
+                        if let Some(data) = &request.stdin_data {
+                            self.writes
+                                .lock()
+                                .unwrap()
+                                .push(format!("{path}={}", String::from_utf8_lossy(data)));
+                        }
+                        return Ok(Self::captured(b""));
+                    }
+                    return Ok(CapturedOutput {
+                        stdout: Vec::new(),
+                        stderr: b"sh: malformed write argv".to_vec(),
+                        exit: ProcessExit::from_code(2),
+                    });
+                }
+                _ => return Ok(Self::captured(b"")),
+            }
+        }
+
+        async fn run_async(&self, request: &ProcessRequest) -> io::Result<CapturedOutput> {
+            self.run_blocking(request)
+        }
+
+        async fn spawn_piped(&self, _spec: &PipedSpawn) -> io::Result<Box<dyn PipedChild>> {
+            Err(io::Error::other("fake has no children"))
+        }
+
+        fn capabilities(&self) -> ExecCaps {
+            ExecCaps { is_remote: true }
+        }
+    }
+
+    fn fs_with_fake() -> Arc<DockerExecFs> {
+        DockerExecFs::new(DockerExecProcess::new(
+            "it",
+            PathBuf::from("/w"),
+            Arc::new(FakeDocker::image()),
+        ))
+    }
+
+    #[test]
+    fn read_write_roundtrip_through_fake_container() {
+        let fs = fs_with_fake();
+        assert_eq!(
+            fs.read_text_blocking(Path::new("/w/README.md")).unwrap(),
+            "hello container"
+        );
+        fs.write_bytes_blocking(Path::new("/w/new.txt"), b"payload".as_slice())
+            .unwrap();
+    }
+
+    #[test]
+    fn list_dir_merges_files_and_dirs_sorted() {
+        let fs = fs_with_fake();
+        let entries = fs.list_dir_blocking(Path::new("/w")).unwrap();
+        let paths: Vec<String> = entries
+            .iter()
+            .map(|e| e.path.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(paths, vec!["/w/README.md", "/w/src", "/w/src/main.rs"]);
+        assert!(entries.iter().filter(|e| e.is_dir).count() >= 1);
+    }
+
+    #[test]
+    fn metadata_maps_stat_fields() {
+        let fs = fs_with_fake();
+        let md = fs.metadata_blocking(Path::new("/w/README.md")).unwrap();
+        assert_eq!(md.len, 15);
+        assert!(!md.is_dir);
+        let dir = fs.metadata_blocking(Path::new("/w/src")).unwrap();
+        assert!(dir.is_dir);
+    }
+
+    #[test]
+    fn read_prefix_bounds_transfer() {
+        let fs = fs_with_fake();
+        let prefix = fs
+            .read_prefix_blocking(Path::new("/w/README.md"), 5)
+            .unwrap();
+        assert_eq!(prefix, b"hello");
+    }
+
+    #[tokio::test]
+    async fn rename_forwards_mv_f() {
+        let fs = fs_with_fake();
+        fs.rename(Path::new("/w/a"), Path::new("/w/b"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn async_faces_match_blocking() {
+        let fs = fs_with_fake();
+        assert_eq!(
+            fs.read_text(Path::new("/w/README.md")).await.unwrap(),
+            "hello container"
+        );
+        assert!(fs.metadata(Path::new("/w/src")).await.unwrap().is_dir);
+    }
+}
+// ── Real-container integration (requires local docker + shannon-it) ─────
+
+#[cfg(test)]
+mod docker_it_tests {
+    use super::*;
+
+    // Ignored integration test: requires the docker daemon and a running
+    // container named `shannon-it` (alpine works: busybox covers the ops).
+    #[tokio::test]
+    #[ignore = "requires local docker with a running `shannon-it` container"]
+    async fn docker_fs_roundtrip_on_shannon_it() {
+        let local = shannon_core_process();
+        let proc = DockerExecProcess::new("shannon-it", PathBuf::from("/workspace"), local);
+        let fs = DockerExecFs::new(proc);
+
+        let file = PathBuf::from("/workspace/shannon-roundtrip.txt");
+        fs.write_bytes(&file, b"hello from shannon").await.unwrap();
+        assert_eq!(fs.read_text(&file).await.unwrap(), "hello from shannon");
+
+        let md = fs.metadata(&file).await.unwrap();
+        assert_eq!(md.len, 18, "busybox stat -c %s");
+        assert!(!md.is_dir);
+
+        let entries = fs.list_dir_blocking(Path::new("/workspace")).unwrap();
+        assert!(entries.iter().any(|e| e.path == file));
+
+        // Overwriting rename via mv -f.
+        let dst = PathBuf::from("/workspace/shannon-roundtrip-dst.txt");
+        fs.write_bytes(&dst, b"old").await.unwrap();
+        fs.write_bytes(&file, b"new").await.unwrap();
+        fs.rename(&file, &dst).await.unwrap();
+        assert_eq!(fs.read_text(&dst).await.unwrap(), "new");
+
+        let prefix = fs.read_prefix_blocking(&dst, 3).unwrap();
+        assert_eq!(prefix, b"new");
+
+        fs.remove_file_blocking(&dst).unwrap();
+    }
+
+    fn shannon_core_process() -> std::sync::Arc<dyn shannon_tool_interface::ProcessProvider> {
+        let provider: std::sync::Arc<dyn shannon_tool_interface::ProcessProvider> =
+            std::sync::Arc::new(shannon_core::providers::LocalProcess::new());
+        provider
     }
 }

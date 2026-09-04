@@ -234,7 +234,10 @@ pub async fn remote_test_target(
                 .await
                 .map(|list| {
                     list.iter().any(|c| {
-                        target.container.as_deref().is_some_and(|want| c.names.contains(want))
+                        target
+                            .container
+                            .as_deref()
+                            .is_some_and(|want| c.names.contains(want))
                     })
                 })
                 .unwrap_or(false);

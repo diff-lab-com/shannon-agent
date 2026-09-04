@@ -18,8 +18,13 @@ pub mod target;
 
 #[cfg(test)]
 mod smoke {
+    /// The public surface the rest of the workspace relies on must stay
+    /// importable; this also keeps the crate meaningful when modules change.
     #[test]
-    fn crate_links() {
-        assert!(true);
+    fn public_surface_links() {
+        use shannon_tool_interface::{FileSystemProvider, ProcessProvider};
+        fn assert_providers<F: FileSystemProvider, P: ProcessProvider>() {}
+        assert_providers::<crate::ssh::SshFs, crate::ssh::SshProcess>();
+        let _ = std::mem::size_of::<crate::target::RemotesFile>;
     }
 }

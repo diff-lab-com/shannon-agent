@@ -102,7 +102,11 @@ impl DockerExecProcess {
 #[async_trait]
 impl ProcessProvider for DockerExecProcess {
     fn run_blocking(&self, request: &ProcessRequest) -> io::Result<CapturedOutput> {
-        let req = self.argv_to_request(self.compose(request));
+        let mut req = self.argv_to_request(self.compose(request));
+        // cwd/env are folded into the composed argv (-w/-e); stdin must be
+        // carried through unchanged or `cat > file` writes see an empty
+        // stream.
+        req.stdin_data = request.stdin_data.clone();
         match &self.ssh {
             Some(ssh) => ssh.run_blocking(&req),
             None => self.local.run_blocking(&req),
@@ -110,7 +114,8 @@ impl ProcessProvider for DockerExecProcess {
     }
 
     async fn run_async(&self, request: &ProcessRequest) -> io::Result<CapturedOutput> {
-        let req = self.argv_to_request(self.compose(request));
+        let mut req = self.argv_to_request(self.compose(request));
+        req.stdin_data = request.stdin_data.clone();
         match &self.ssh {
             Some(ssh) => ssh.run_async(&req).await,
             None => self.local.run_async(&req).await,

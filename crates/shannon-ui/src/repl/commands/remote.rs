@@ -457,3 +457,146 @@ mod tests {
         );
     }
 }
+
+// ── Handler tests (Repl::new() runs in minimal init under cfg(test)) ────
+
+#[cfg(test)]
+mod handler_tests {
+    use super::*;
+    use crate::repl::Repl;
+    use shannon_remote::assembly::assemble_dynamic;
+    use shannon_remote::target::RemotesFile;
+
+    /// Point HOME at a scratch dir so remotes.toml never touches the real
+    /// one. nextest runs each test in its own process, so the env swap is
+    /// process-local and race-free.
+    struct HomeGuard(std::path::PathBuf);
+    impl HomeGuard {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            // SAFETY: single-threaded test process (nextest isolation); no
+            // other thread reads HOME during this test.
+            unsafe { std::env::set_var("HOME", dir.path()) };
+            Self(dir.path().to_path_buf())
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: see new()
+            unsafe { std::env::set_var("HOME", "/") };
+        }
+    }
+
+    fn repl_with_world() -> Repl {
+        let mut repl = Repl::new().expect("minimal repl");
+        repl.remote_assembly = Some(std::sync::Arc::new(assemble_dynamic()));
+        repl
+    }
+
+    fn last_message(repl: &Repl) -> String {
+        repl.chat
+            .messages()
+            .back()
+            .map(|m| m.content.clone())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn add_ssh_target_persists_and_dashboard_lists_it() {
+        let _home = HomeGuard::new();
+        let mut repl = repl_with_world();
+
+        handle_remote(&mut repl, "add ssh ed@build-box build /home/ed/proj").unwrap();
+        assert!(last_message(&repl).contains("build"), "add confirmation");
+
+        let file = RemotesFile::load_default();
+        let saved = file.resolve("build").expect("target persisted");
+        assert_eq!(saved.ssh_destination(), "ed@build-box");
+        assert_eq!(saved.workspace_dir.display().to_string(), "/home/ed/proj");
+
+        // Dashboard renders the saved target.
+        handle_remote(&mut repl, "").unwrap();
+        let all: String = repl
+            .chat
+            .messages()
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(all.contains("build (ssh)"), "dashboard lists target: {all}");
+    }
+
+    #[test]
+    fn add_docker_target_validates_workspace() {
+        let _home = HomeGuard::new();
+        let mut repl = repl_with_world();
+
+        // Relative workspace_dir must be rejected via the validate path.
+        handle_remote(&mut repl, "add docker ci ci-run relative/path").unwrap();
+        assert!(
+            last_message(&repl).starts_with("Error:"),
+            "relative workspace rejected: {}",
+            last_message(&repl)
+        );
+
+        // Absolute path persists (arg order: <container> <name> <workspace>).
+        handle_remote(&mut repl, "add docker ci ci-run /workspace").unwrap();
+        let file = RemotesFile::load_default();
+        let saved = file.resolve("ci-run").expect("docker target persisted");
+        assert_eq!(saved.container.as_deref(), Some("ci"));
+    }
+
+    #[test]
+    fn remove_requires_confirmation_then_deletes() {
+        let _home = HomeGuard::new();
+        let mut repl = repl_with_world();
+        handle_remote(&mut repl, "add ssh host-x x /x").unwrap();
+
+        // First call asks for confirmation and keeps the target.
+        handle_remote(&mut repl, "remove x").unwrap();
+        assert!(RemotesFile::load_default().resolve("x").is_some());
+        assert!(last_message(&repl).contains("/remote remove x --yes"));
+
+        // --yes deletes it.
+        handle_remote(&mut repl, "remove x --yes").unwrap();
+        assert!(RemotesFile::load_default().resolve("x").is_none());
+    }
+
+    #[test]
+    fn use_unknown_target_reports_error_and_stays_local() {
+        let _home = HomeGuard::new();
+        let mut repl = repl_with_world();
+        handle_remote(&mut repl, "use nope").unwrap();
+        assert!(last_message(&repl).starts_with("Error:"));
+        let assembly = repl.remote_assembly.as_ref().unwrap();
+        assert!(!assembly.world.is_remote(), "local world stays installed");
+    }
+
+    #[test]
+    fn disconnect_restores_local_status() {
+        let _home = HomeGuard::new();
+        let mut repl = repl_with_world();
+        handle_remote(&mut repl, "disconnect").unwrap();
+        assert!(
+            last_message(&repl).contains("local"),
+            "msg: {}",
+            last_message(&repl)
+        );
+        let assembly = repl.remote_assembly.as_ref().unwrap();
+        assert_eq!(
+            assembly.state.status(),
+            shannon_remote::ssh::WorldStatus::Local
+        );
+    }
+
+    #[test]
+    fn test_unknown_target_errors_without_connecting() {
+        let _home = HomeGuard::new();
+        let mut repl = repl_with_world();
+        handle_remote(&mut repl, "test ghost").unwrap();
+        assert!(last_message(&repl).starts_with("Error:"));
+    }
+}

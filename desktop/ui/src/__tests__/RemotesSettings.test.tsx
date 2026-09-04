@@ -58,6 +58,28 @@ describe('RemotesSettings', () => {
     )
   })
 
+  it('shows the unreachable state when the probe fails', async () => {
+    vi.spyOn(api, 'remoteTestTarget').mockResolvedValueOnce({
+      ok: false,
+      platform: '',
+      home: '',
+      bashAvailable: false,
+      workspaceExists: false,
+      latencyMs: 0,
+      error: 'connection refused',
+    })
+    render(<RemotesSettings />)
+    await waitFor(() =>
+      expect(screen.getByTestId('remotes-test-build-box')).toBeInTheDocument(),
+    )
+    fireEvent_click(screen.getByTestId('remotes-test-build-box'))
+    await waitFor(() =>
+      expect(screen.getByTestId('remotes-health-build-box')).toHaveTextContent(
+        'Unreachable',
+      ),
+    )
+  })
+
   it('submits the add dialog through remoteAddTarget', async () => {
     const spy = vi.spyOn(api, 'remoteAddTarget').mockResolvedValue(undefined)
     render(<RemotesSettings />)
