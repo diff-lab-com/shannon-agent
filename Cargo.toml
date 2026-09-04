@@ -109,6 +109,12 @@ tree-sitter-typescript = "0.23"
 tree-sitter-python = "0.23"
 tree-sitter-go = "0.23"
 
+# ---- Embedded SQL store (P0-3) ----
+# Inbox items + automation run history (`~/.shannon/inbox.db`). `bundled`
+# compiles the SQLite C sources — expected on first build, then cached.
+# Only this store uses SQLite; session events.jsonl stays append-only JSONL.
+rusqlite = { version = "0.37", features = ["bundled"] }
+
 # ---- File walking ----
 walkdir = "2.5"
 

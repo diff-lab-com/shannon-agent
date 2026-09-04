@@ -552,26 +552,33 @@ fn parse_github_review(payload: &serde_json::Value) -> Option<WebhookEvent> {
     })
 }
 
-/// Verify HMAC-SHA256 signature for GitHub webhooks.
-fn verify_hmac(payload: &serde_json::Value, secret: &str, signature: &str) -> bool {
+/// Sign raw bytes with HMAC-SHA256 and return the wire-format signature,
+/// `sha256=<hex>`. Same header value format the notifier sends in
+/// `X-Shannon-Signature` and GitHub sends in `X-Hub-Signature-256`.
+///
+/// Single source of truth for both the sending side (tests, tooling) and the
+/// receiving side ([`verify_signature`]) so the two can never drift.
+pub fn sign_signature(secret: &str, body: &[u8]) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
 
     type HmacSha256 = Hmac<Sha256>;
 
-    let body = match serde_json::to_vec(payload) {
-        Ok(b) => b,
-        Err(_) => return false,
-    };
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(body);
+    format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+}
 
-    let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
-        Ok(m) => m,
-        Err(_) => return false,
-    };
-    mac.update(&body);
-    let result = mac.finalize();
-    let code_bytes = result.into_bytes();
-    let expected = format!("sha256={}", hex::encode(code_bytes));
+/// Verify an HMAC-SHA256 signature over **raw** request bytes.
+///
+/// `signature` must be the full header value including the `sha256=` prefix
+/// (matching `X-Shannon-Signature` / `X-Hub-Signature-256`). Comparison is
+/// constant-time. Shared by the GitHub webhook receiver below and the
+/// routine-trigger endpoints (desktop loopback + shannon-server) so the
+/// verification logic exists exactly once.
+pub fn verify_signature(secret: &str, body: &[u8], signature: &str) -> bool {
+    let expected = sign_signature(secret, body);
 
     // Constant-time comparison.
     let expected_bytes = expected.as_bytes();
@@ -586,6 +593,16 @@ fn verify_hmac(payload: &serde_json::Value, secret: &str, signature: &str) -> bo
         diff |= a ^ b;
     }
     diff == 0
+}
+
+/// Verify HMAC-SHA256 signature for GitHub webhooks (JSON-payload flavour of
+/// [`verify_signature`]).
+fn verify_hmac(payload: &serde_json::Value, secret: &str, signature: &str) -> bool {
+    let body = match serde_json::to_vec(payload) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    verify_signature(secret, &body, signature)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -603,6 +620,50 @@ mod tests {
             "custom:ci"
         );
         assert_eq!(WebhookSource::Slack.to_string(), "slack");
+    }
+
+    // ── Shared HMAC sign/verify (P0-3 trigger endpoints) ────────────────
+
+    #[test]
+    fn signature_roundtrip_is_valid() {
+        let sig = sign_signature("s3cret", b"{\"note\":\"hi\"}");
+        assert!(sig.starts_with("sha256="));
+        assert!(verify_signature("s3cret", b"{\"note\":\"hi\"}", &sig));
+    }
+
+    #[test]
+    fn signature_detects_tampering() {
+        let sig = sign_signature("s3cret", b"body");
+        assert!(!verify_signature("s3cret", b"body!", &sig), "body tampered");
+        assert!(!verify_signature("other", b"body", &sig), "wrong secret");
+        // Flipped hex char, same length.
+        let mut tampered = sig.clone();
+        let last = tampered.len() - 1;
+        tampered.replace_range(last.., if sig.ends_with('0') { "1" } else { "0" });
+        assert!(!verify_signature("s3cret", b"body", &tampered));
+    }
+
+    #[test]
+    fn signature_missing_prefix_is_rejected() {
+        let sig = sign_signature("s3cret", b"body");
+        let bare_hex = sig.trim_start_matches("sha256=");
+        assert!(!verify_signature("s3cret", b"body", bare_hex));
+        assert!(!verify_signature("s3cret", b"body", ""));
+    }
+
+    #[test]
+    fn signature_malformed_hex_is_rejected() {
+        assert!(!verify_signature("s3cret", b"body", "sha256=zzzz"));
+        assert!(!verify_signature("s3cret", b"body", "not-a-signature"));
+    }
+
+    #[test]
+    fn verify_hmac_uses_shared_logic() {
+        let payload = serde_json::json!({"action": "opened"});
+        let body = serde_json::to_vec(&payload).unwrap();
+        let sig = sign_signature("gh-secret", &body);
+        assert!(verify_hmac(&payload, "gh-secret", &sig));
+        assert!(!verify_hmac(&payload, "gh-secret", "sha256=deadbeef"));
     }
 
     #[test]

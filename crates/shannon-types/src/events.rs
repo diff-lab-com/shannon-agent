@@ -308,6 +308,11 @@ pub mod event_names {
     /// Emitted whenever triage items change (new item, read, archive).
     /// Frontend: sidebar triage badge refreshes on this instead of polling.
     pub const TRIAGE_UPDATED: &str = "triage-updated";
+    /// P0-3: emitted whenever the SQLite inbox changes — a run finished and
+    /// appended an item, an item status changed, or a trigger endpoint
+    /// recorded a run. Frontend: inbox badge/list refreshes on this instead
+    /// of polling.
+    pub const INBOX_UPDATED: &str = "inbox-updated";
     pub const UPDATE_AVAILABLE: &str = "update-available";
     pub const UPDATE_PROGRESS: &str = "update-progress";
     pub const UPDATE_COMPLETED: &str = "update-completed";

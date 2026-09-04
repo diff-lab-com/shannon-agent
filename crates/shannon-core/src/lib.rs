@@ -96,6 +96,8 @@ pub mod doctor;
 pub mod enhanced_suggestions;
 pub mod feature_flags;
 pub mod housekeeping;
+/// SQLite inbox + automation-run store (P0-3).
+pub mod inbox_store;
 pub mod lsp;
 pub mod mcp_server_approval;
 pub mod plugin;
