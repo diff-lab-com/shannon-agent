@@ -47,6 +47,7 @@ commands:
     current: "Objectif (%{status}, itération %{iterations}/%{max}) : %{objective}"
     current_none: "Aucun objectif. Usage : /goal <objectif> | /goal pause | /goal resume | /goal clear"
     cleared: "✓ Objectif supprimé."
+    paused_no_progress: "⏸ Objectif suspendu — aucun progrès détecté : %{reason}\nStrikes : %{strikes}/%{max_strikes}. Inspectez puis /goal resume ou /goal clear."
     paused_blocked: "⏸ Objectif suspendu — l'agent signale un blocage : %{reason}\nRésolvez-le puis /goal resume, ou /goal clear pour supprimer."
     paused_max: "⏸ Objectif suspendu après %{max} itérations sans achèvement. Évaluez puis /goal resume ou /goal clear."
     resumed: "▶ Objectif repris (compteur d'itérations réinitialisé)."

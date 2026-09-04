@@ -47,6 +47,7 @@ commands:
     current: "लक्ष्य (%{status}, राउंड %{iterations}/%{max}): %{objective}"
     current_none: "कोई लक्ष्य सेट नहीं है। उपयोग: /goal <लक्ष्य> | /goal pause | /goal resume | /goal clear"
     cleared: "✓ लक्ष्य हटा दिया गया।"
+    paused_no_progress: "⏸ लक्ष्य रुका — कोई प्रगति नहीं: %{reason}\nस्ट्राइक: %{strikes}/%{max_strikes}. जाँचें, फिर /goal resume या /goal clear।"
     paused_blocked: "⏸ लक्ष्य रुक गया — एजेंट अवरोध बताता है: %{reason}\nहल करने के बाद /goal resume चलाएँ, या /goal clear से हटाएँ।"
     paused_max: "⏸ %{max} राउंड बिना पूर्णता के पूरे होने के बाद लक्ष्य रुक गया। प्रगति आँकें, फिर /goal resume या /goal clear।"
     resumed: "▶ लक्ष्य फिर से शुरू (राउंड काउंट रीसेट)।"
