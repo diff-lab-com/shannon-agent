@@ -9,6 +9,10 @@
 //! as the final non-empty line). Completion is mutually exclusive with
 //! `/ralph` and `/loop`, which own their own auto-continuation loops.
 
+// Marker constants are re-exported by `shannon_core::goal_loop`; the TUI
+// only needs the raw strings for test assertions now that decision logic
+// (and prompt formatting) lives in core.
+#[cfg(test)]
 use shannon_core::query_engine::{GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER};
 
 use super::set_error;
@@ -76,48 +80,13 @@ pub(crate) fn parse_goal_args(args: &str) -> GoalAction {
 /// non-empty line. `GOAL_COMPLETE` must match exactly (case-insensitive);
 /// `GOAL_BLOCKED` may carry a `: reason` suffix. A marker anywhere else —
 /// mid-text, in a code block, or as a hyphenated word — does not count.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum GoalMarker {
-    Complete,
-    Blocked(String),
-}
+pub(crate) use shannon_core::goal_loop::GoalMarker;
 
 pub(crate) fn goal_completion_marker(msg: &str) -> Option<GoalMarker> {
     let last = msg.lines().rev().find(|l| !l.trim().is_empty())?;
-    let trimmed = last.trim();
-    if trimmed.eq_ignore_ascii_case(GOAL_COMPLETE_MARKER) {
-        return Some(GoalMarker::Complete);
-    }
-    if trimmed.to_uppercase().starts_with(GOAL_BLOCKED_MARKER) {
-        let reason = trimmed
-            .get(GOAL_BLOCKED_MARKER.len()..)
-            .unwrap_or("")
-            .trim_start_matches([':', ' '])
-            .trim()
-            .to_string();
-        return Some(GoalMarker::Blocked(reason));
-    }
-    None
-}
-
-/// Prompt injected when the goal is not yet complete and the loop
-/// auto-continues. Surfaces in the input box like `/ralph` iterations —
-/// transparent to the user and logged as a normal turn.
-pub(crate) fn continuation_prompt(goal: &GoalState) -> String {
-    let max = if goal.max_iterations == 0 {
-        "∞".to_string()
-    } else {
-        goal.max_iterations.to_string()
-    };
-    format!(
-        "[Goal iteration {}/{max}] Continue working toward the goal: {}\n\n\
-         The goal is NOT yet complete — no completion marker was detected in your last reply.\n\
-         Before continuing:\n\
-         1. Progress check: what concrete progress did the last iteration make? If none was made and none is possible, explain why and end your reply with \"{}: <reason>\".\n\
-         2. Re-verify what remains. Do not redo completed work.\n\
-         3. When the goal is fully met and you have audited completion with evidence, end your final line with exactly: {}",
-        goal.iterations, goal.objective, GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER
-    )
+    // The whole-line marker contract lives in core (shared with the
+    // desktop goal runner) — extract the last non-empty line, delegate.
+    shannon_core::goal_loop::detect_goal_marker(last)
 }
 
 /// Persist the current goal via read-modify-write on the sidecar.
@@ -268,27 +237,9 @@ pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
 
 /// What should happen to the goal after a turn ends. Pure decision — all
 /// state mutations and side effects live in [`check_goal_continuation`].
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum GoalContinuation {
-    /// No active goal — nothing to do.
-    Inactive,
-    /// Completion marker seen: mark the goal Complete.
-    Completed,
-    /// Blocker marker seen: pause the goal and surface the reason.
-    Blocked(String),
-    /// Budget exhausted: pause the goal.
-    MaxReached,
-    /// P2.1/P2.2 — anti-spin or stall-strike threshold tripped; pause and
-    /// surface the reason. The reason carries the strike counts so the user
-    /// can see why the goal was halted without /goal resume blindly.
-    PausedNoProgress(String),
-    /// P2.3 — goal budget cap exceeded; treated as a recoverable terminal
-    /// (must explicitly re-raise cap or /goal clear, similar to Paused).
-    BudgetLimited(String),
-    /// Keep going: `iterations` is the next value to store, `prompt` the
-    /// continuation text to inject.
-    Continue { iterations: usize, prompt: String },
-}
+/// The decision itself lives in `shannon_core::goal_loop` (shared with the
+/// desktop goal runner); the TUI re-uses its types verbatim.
+pub(crate) use shannon_core::goal_loop::GoalContinuation;
 
 /// What a turn actually did, in terms the guard rails can compare. Filled
 /// in by the impure [`check_goal_continuation`] path from REPL state.
@@ -340,6 +291,11 @@ pub(crate) fn goal_continuation_decision(
 /// anti-spin / stall-strike countdown; `true` resets it. Both signals share
 /// a single strike budget so a turn that merely "tries again" cannot
 /// indefinitely extend itself.
+///
+/// Thin adapter over [`shannon_core::goal_loop::decide_goal_continuation`]:
+/// the non-Active gate stays here (core's input carries no lifecycle
+/// status) and the counters are widened to `u32` — goal iteration counts
+/// are far below that ceiling, and saturation keeps the mapping total.
 pub(crate) fn goal_continuation_decision_with_facts(
     goal: &GoalState,
     last_assistant: Option<&str>,
@@ -348,57 +304,21 @@ pub(crate) fn goal_continuation_decision_with_facts(
     if goal.status != GoalStatus::Active {
         return GoalContinuation::Inactive;
     }
-    // Termination markers short-circuit the progress guards.
-    match last_assistant.and_then(goal_completion_marker) {
-        Some(GoalMarker::Complete) => return GoalContinuation::Completed,
-        Some(GoalMarker::Blocked(reason)) => return GoalContinuation::Blocked(reason),
-        None => {}
+    fn widen(v: usize) -> u32 {
+        u32::try_from(v).unwrap_or(u32::MAX)
     }
-    let next = goal.iterations + 1;
-    let max_hit = goal.max_iterations > 0 && next > goal.max_iterations;
-    let mut next_goal = goal.clone();
-    next_goal.iterations = next;
-    if facts.had_tool_calls {
-        next_goal.consecutive_no_tool_turns = 0;
-        next_goal.stall_strikes = next_goal.stall_strikes.saturating_sub(1);
-    } else {
-        next_goal.consecutive_no_tool_turns += 1;
-        next_goal.stall_strikes += 1;
-    }
-    if max_hit {
-        return GoalContinuation::MaxReached;
-    }
-    // P2.3 — budget cap (USD). Budget beat max_iterations in the verdict
-    // priority: spending money is more irreversible than burning turns.
-    let budget_limit_hit = goal
-        .max_budget_usd
-        .map(|cap| facts.cost_delta_usd >= cap)
-        .unwrap_or(false);
-    if budget_limit_hit {
-        let cap = goal.max_budget_usd.unwrap_or(0.0);
-        return GoalContinuation::BudgetLimited(format!(
-            "Goal budget exhausted (${:.4} \u{2265} cap ${:.4}). The goal stays paused; raise the cap with /goal <obj> --budget ${:.4} or /goal clear to drop.",
-            facts.cost_delta_usd, cap, cap
-        ));
-    }
-    if next_goal.consecutive_no_tool_turns >= 2 {
-        return GoalContinuation::PausedNoProgress(format!(
-            "Two consecutive turns with no tool calls. Pause and decide whether to /goal resume or /goal clear (strike {}/{})",
-            next_goal.stall_strikes,
-            crate::repl::state::GOAL_DEFAULT_MAX_STALL_STRIKES
-        ));
-    }
-    if next_goal.stall_strikes >= crate::repl::state::GOAL_DEFAULT_MAX_STALL_STRIKES {
-        return GoalContinuation::PausedNoProgress(format!(
-            "Reached stall-strike budget ({}/{}). Pause to inspect; /goal resume re-arms the budget, /goal clear drops the goal",
-            next_goal.stall_strikes,
-            crate::repl::state::GOAL_DEFAULT_MAX_STALL_STRIKES
-        ));
-    }
-    GoalContinuation::Continue {
-        iterations: next,
-        prompt: continuation_prompt(&next_goal),
-    }
+    let marker = last_assistant.and_then(goal_completion_marker);
+    let input = shannon_core::goal_loop::GoalDecisionInput {
+        objective: goal.objective.clone(),
+        iterations: widen(goal.iterations),
+        max_iterations: widen(goal.max_iterations),
+        consecutive_no_tool_turns: widen(goal.consecutive_no_tool_turns),
+        stall_strikes: widen(goal.stall_strikes),
+        max_budget_usd: goal.max_budget_usd,
+        spent_usd: facts.cost_delta_usd,
+        had_tool_calls: facts.had_tool_calls,
+    };
+    shannon_core::goal_loop::decide_goal_continuation(&input, marker)
 }
 
 /// Called after a query completes (before the ralph/loop checks). Applies the
@@ -507,7 +427,7 @@ pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
         }
         GoalContinuation::Continue { iterations, prompt } => {
             let goal = repl.state.goal.as_mut().expect("snapshot existed");
-            goal.iterations = iterations;
+            goal.iterations = usize::try_from(iterations).unwrap_or(usize::MAX);
             // Persist the guard counters advanced by the decision.
             goal.consecutive_no_tool_turns = if facts.had_tool_calls {
                 0
@@ -892,26 +812,9 @@ mod handler_tests {
         assert!(last_message(&repl).contains("no kubeconfig"));
     }
 
-    #[test]
-    fn continuation_prompt_contains_contract() {
-        // check_goal_continuation increments before staging, so the prompt
-        // renders the iteration about to run.
-        let mut goal = GoalState::new("fix lint");
-        goal.iterations = 1;
-        let prompt = continuation_prompt(&goal);
-        assert!(prompt.contains("[Goal iteration 1/∞]"));
-        assert!(prompt.contains("fix lint"));
-        assert!(prompt.contains(GOAL_BLOCKED_MARKER));
-        assert!(prompt.contains(GOAL_COMPLETE_MARKER));
-
-        // Unlimited budget renders without a cap.
-        let unlimited = GoalState {
-            iterations: 1,
-            max_iterations: 0,
-            ..GoalState::new("keep going")
-        };
-        assert!(continuation_prompt(&unlimited).contains("[Goal iteration 1/∞]"));
-    }
+    // NOTE: the continuation-prompt wording contract is unit-tested in
+    // `shannon_core::goal_loop` (continuation_prompt_is_verbatim_tui_contract);
+    // the Continue verdict surfaces it through check_goal_continuation below.
 
     #[test]
     fn continuation_incomplete_queues_prompt_without_recursion() {

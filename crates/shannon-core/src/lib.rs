@@ -49,6 +49,9 @@ pub mod config_watcher;
 pub mod diagnostics;
 pub mod extract_memories;
 pub mod git_operation_tracking;
+/// Session-goal continuation decision (P0-2) — pure goal loop logic shared
+/// by the TUI and the desktop goal runner.
+pub mod goal_loop;
 pub mod internal_logging;
 pub mod magic_docs;
 pub mod mcp_advanced;
