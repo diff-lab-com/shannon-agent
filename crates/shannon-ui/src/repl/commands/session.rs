@@ -87,6 +87,14 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
             if let Some(stored_goal) = sidecar_goal {
                 repl.state.goal = Some(crate::repl::state::GoalState::from_stored(stored_goal));
             }
+            // Restore any active loop/ralph state from the sidecar (P2.0).
+            let restored_sidecar = repl.l0_store().sidecar(&session_id);
+            if let Some(ls) = restored_sidecar.loop_state {
+                repl.state.loop_state = Some(crate::repl::state::LoopState::from_stored(ls));
+            }
+            if let Some(rs) = restored_sidecar.ralph_state {
+                repl.state.ralph_state = Some(crate::repl::state::RalphState::from_stored(rs));
+            }
 
             if let Some(ref mut engine) = repl.query_engine {
                 match engine.restore_session(session_id) {

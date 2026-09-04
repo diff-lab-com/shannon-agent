@@ -34,8 +34,8 @@ pub use projections::{
 pub use reader::{SessionEventIter, SessionLogReader};
 pub use redaction::{REDACTED, RedactionPolicy};
 pub use session_store::{
-    SessionSidecar, SessionStore, SessionStoreError, StoredGoal, StoredSession, StoredSessionInfo,
-    StoredSessionMeta, default_store,
+    SessionSidecar, SessionStore, SessionStoreError, StoredGoal, StoredLoop, StoredRalph,
+    StoredSession, StoredSessionInfo, StoredSessionMeta, default_store,
 };
 pub use tee::{SessionTee, TeeHandle};
 pub use writer::{FlushPolicy, SessionLogWriter};

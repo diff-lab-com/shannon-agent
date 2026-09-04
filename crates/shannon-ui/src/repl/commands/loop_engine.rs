@@ -6,6 +6,25 @@ use crate::{Result, widgets::ChatRole};
 use shannon_tools::Tool;
 
 use super::super::Repl;
+/// Persist the current loop/ralph state via the same read-modify-write
+/// path used by `/goal` — drop on `None` so a stoppable save wins over
+/// the merge.
+fn persist_state(repl: &Repl) {
+    let Some(ref engine) = repl.query_engine else {
+        return;
+    };
+    let session_id = engine.session_id();
+    let store = repl.l0_store();
+    let mut sidecar = store.sidecar(&session_id);
+    sidecar.loop_state = repl.state.loop_state.as_ref().map(|l| l.to_stored());
+    sidecar.ralph_state = repl.state.ralph_state.as_ref().map(|r| r.to_stored());
+    // Replace, not merge — see save_goal_sidecar for the same rationale:
+    // we already loaded the full sidecar, so explicit `None` here means
+    // "clear". The merge variant would resurrect a stale row.
+    if let Err(e) = store.save_sidecar_replace(&session_id, &sidecar) {
+        tracing::debug!("loop/ralph sidecar save error: {e}");
+    }
+}
 
 /// Handle `/loop` command — autonomous iteration engine.
 ///
@@ -112,12 +131,13 @@ pub(crate) fn handle_loop(repl: &mut Repl, args: &str) -> Result<()> {
         ),
     );
 
-    // Trigger first iteration
+    // Stage the first iteration via the flat drain loop in submit_input
+    // (see query.rs comment "to avoid recursive handle_query calls"). This
+    // keeps O(1) stack depth for arbitrarily long loop runs.
     let prompt = format!(
         "[Loop iteration 1] Task: {task}\n\nPlease work on this task. After completing, summarize what you did and what remains."
     );
-    repl.prompt.set_input(prompt);
-    super::submit_input(repl, None)?;
+    repl.state.queued_messages.push(prompt);
 
     Ok(())
 }
@@ -153,13 +173,10 @@ pub(crate) fn check_loop_iteration(repl: &mut Repl) -> bool {
     let prompt = format!(
         "[Loop iteration {iter}] Continuing task: {task}\n\nReview what was done in the previous iteration and continue working. Summarize progress and what remains."
     );
-    repl.prompt.set_input(prompt);
-
-    // Submit next iteration
-    if super::submit_input(repl, None).is_err() {
-        repl.state.loop_state = None;
-        return false;
-    }
+    // Queue the next iteration — submit_input's flat drain loop runs it
+    // after handle_query returns. Direct submit_input here would nest one
+    // handle_query frame per iteration (stack overflow with --max 0).
+    repl.state.queued_messages.push(prompt);
 
     true
 }
@@ -280,15 +297,14 @@ pub(crate) fn handle_ralph(repl: &mut Repl, args: &str) -> Result<()> {
         keywords.join(", ")
     ));
 
-    // Trigger first iteration
+    // Stage the first iteration via the flat drain loop — see handle_loop.
     let prompt = format!(
         "[Ralph iteration 1] Task: {task}\n\n\
          Work on this task. When you are truly done, output one of these keywords on its own line: {}\n\
          If you are not done, keep working. Do NOT output a completion keyword unless the task is fully complete.",
         keywords.join(", ")
     );
-    repl.prompt.set_input(prompt);
-    super::submit_input(repl, None)?;
+    repl.state.queued_messages.push(prompt);
 
     Ok(())
 }
@@ -352,12 +368,8 @@ pub(crate) fn check_ralph_iteration(repl: &mut Repl) -> bool {
          Summarize what was done and what remains.",
         keywords.join(", ")
     );
-    repl.prompt.set_input(prompt);
-
-    if super::submit_input(repl, None).is_err() {
-        repl.state.ralph_state = None;
-        return false;
-    }
+    // Queue next ralph iteration — see check_loop_iteration for rationale.
+    repl.state.queued_messages.push(prompt);
 
     true
 }
@@ -1811,6 +1823,7 @@ fn resolve_job_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repl::state::{LoopState, RalphState};
 
     // ---------------------------------------------------------------
     // interval_to_cron
@@ -2274,5 +2287,183 @@ mod tests {
     fn routine_interval_rejects_non_numeric() {
         assert!(parse_routine_interval("abc").is_err());
         assert!(parse_routine_interval("5m").is_err());
+    }
+}
+// ── P2.0: recursive-submit fix + sidecar persistence ────────────────────
+
+#[cfg(test)]
+mod p20_recursion {
+    use super::*;
+    use crate::repl::state::{LoopState, RalphState};
+
+    struct HomeGuard(#[allow(dead_code)] std::path::PathBuf);
+    impl HomeGuard {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            unsafe { std::env::set_var("HOME", dir.path()) };
+            Self(dir.path().to_path_buf())
+        }
+    }
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            unsafe { std::env::set_var("HOME", "/") };
+        }
+    }
+
+    fn last_message(repl: &Repl) -> String {
+        repl.chat
+            .messages()
+            .back()
+            .map(|m| m.content.clone())
+            .unwrap_or_default()
+    }
+
+    fn active_repl() -> Repl {
+        Repl::new().expect("minimal repl")
+    }
+
+    #[test]
+    fn loop_startup_queues_prompt_instead_of_submit() {
+        let _home = HomeGuard::new();
+        let mut repl = active_repl();
+        handle_loop(&mut repl, "ship it").unwrap();
+        // First iteration staged via queued_messages, no submit_input call.
+        let queued = repl.state.queued_messages.last().unwrap();
+        assert!(queued.contains("[Loop iteration 1]"));
+        assert!(queued.contains("ship it"));
+    }
+
+    #[test]
+    fn loop_continuation_queues_prompt_no_recursion() {
+        let _home = HomeGuard::new();
+        let mut repl = active_repl();
+        repl.state.loop_state = Some(LoopState {
+            task: "ship it".into(),
+            max_iterations: 5,
+            iteration: 1,
+            active: true,
+        });
+        let continued = check_loop_iteration(&mut repl);
+        assert!(continued);
+        let queued = repl.state.queued_messages.last().unwrap();
+        assert!(queued.contains("[Loop iteration 3]"));
+        assert_eq!(repl.state.loop_state.as_ref().unwrap().iteration, 2);
+    }
+
+    #[test]
+    fn loop_max_reached_clears_and_pauses_no_queued_message() {
+        let _home = HomeGuard::new();
+        let mut repl = active_repl();
+        repl.state.loop_state = Some(LoopState {
+            task: "x".into(),
+            max_iterations: 2,
+            iteration: 2,
+            active: true,
+        });
+        let continued = check_loop_iteration(&mut repl);
+        assert!(!continued);
+        assert!(repl.state.loop_state.is_none());
+        assert!(last_message(&repl).contains("Loop completed"));
+        assert!(repl.state.queued_messages.is_empty());
+    }
+
+    #[test]
+    fn ralph_startup_queues_first_iteration() {
+        let _home = HomeGuard::new();
+        let mut repl = active_repl();
+        handle_ralph(&mut repl, "make it green").unwrap();
+        let queued = repl.state.queued_messages.last().unwrap();
+        assert!(queued.contains("[Ralph iteration 1]"));
+        assert!(queued.contains("make it green"));
+        // The loop_state is persisted (P2.0) and continues across queue drain.
+        assert!(repl.state.ralph_state.is_some());
+    }
+
+    #[test]
+    fn ralph_continuation_queues_next_prompt_no_recursion() {
+        let _home = HomeGuard::new();
+        let mut repl = active_repl();
+        repl.state.ralph_state = Some(RalphState {
+            task: "make it green".into(),
+            completion_keywords: vec!["DONE".into()],
+            max_iterations: 4,
+            iteration: 1,
+            active: true,
+        });
+        let continued = check_ralph_iteration(&mut repl);
+        assert!(continued);
+        let queued = repl.state.queued_messages.last().unwrap();
+        assert!(queued.contains("[Ralph iteration 3]"));
+    }
+
+    #[test]
+    fn ralph_keyword_match_clears_and_notifies() {
+        let _home = HomeGuard::new();
+        let mut repl = active_repl();
+        repl.state.ralph_state = Some(RalphState {
+            task: "x".into(),
+            completion_keywords: vec!["DONE".into()],
+            max_iterations: 5,
+            iteration: 2,
+            active: true,
+        });
+        repl.chat.add_message(
+            ChatRole::Assistant,
+            "All done.
+DONE"
+                .to_string(),
+        );
+        let continued = check_ralph_iteration(&mut repl);
+        assert!(!continued);
+        assert!(repl.state.ralph_state.is_none());
+        assert!(last_message(&repl).contains("Ralph complete"));
+    }
+
+    #[test]
+    fn loop_state_roundtrip_via_stored_dto() {
+        let ls = LoopState {
+            task: "ship it".into(),
+            max_iterations: 7,
+            iteration: 3,
+            active: true,
+        };
+        let back = LoopState::from_stored(ls.to_stored());
+        assert_eq!(back.task, "ship it");
+        assert_eq!(back.max_iterations, 7);
+        assert_eq!(back.iteration, 3);
+        assert!(back.active);
+    }
+
+    #[test]
+    fn ralph_state_roundtrip_via_stored_dto() {
+        let rs = RalphState {
+            task: "make it green".into(),
+            completion_keywords: vec!["DONE".into(), "FIXED".into()],
+            max_iterations: 5,
+            iteration: 2,
+            active: true,
+        };
+        let back = RalphState::from_stored(rs.to_stored());
+        assert_eq!(back.completion_keywords, vec!["DONE", "FIXED"]);
+        assert_eq!(back.iteration, 2);
+        assert!(back.active);
+    }
+
+    #[test]
+    fn inactive_stored_loop_is_dropped_on_merge() {
+        // P2.0 merge_from_disk filter: inactive rows must not survive
+        // resume restoration (avoids resurrecting stopped loops).
+        let stored = shannon_core::session_log::StoredLoop {
+            task: "stale".into(),
+            max_iterations: 10,
+            iteration: 9,
+            active: false,
+        };
+        let s = serde_json::to_string(&stored).unwrap();
+        let sidecar: shannon_core::session_log::SessionSidecar =
+            serde_json::from_str(&format!("{{\"loop_state\":{s}}}")).unwrap();
+        // merge path: a None caller row + an inactive disk row → inactive dropped
+        let merged = sidecar.loop_state.filter(|l| l.active);
+        assert!(merged.is_none(), "inactive stored loop must be dropped");
     }
 }

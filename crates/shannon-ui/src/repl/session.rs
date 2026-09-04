@@ -42,6 +42,16 @@ impl super::Repl {
         if let Some(stored_goal) = sidecar.goal {
             self.state.goal = Some(crate::repl::state::GoalState::from_stored(stored_goal));
         }
+        // Restore active loop/ralph state (P2.0) — same anchor-only policy
+        // as goal: re-arm on resume, do not auto-continue until the next
+        // query completes so the user keeps control.
+        if let Some(stored_loop) = sidecar.loop_state {
+            self.state.loop_state = Some(crate::repl::state::LoopState::from_stored(stored_loop));
+        }
+        if let Some(stored_ralph) = sidecar.ralph_state {
+            self.state.ralph_state =
+                Some(crate::repl::state::RalphState::from_stored(stored_ralph));
+        }
 
         if let Some(ref mut engine) = self.query_engine {
             let preview = session_data.metadata.title.clone();
