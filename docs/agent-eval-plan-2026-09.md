@@ -159,7 +159,7 @@ P0 准备 → P1 glm 外部基线（SWE50 + TB9 + regression，n=3；P1d TB 2.x 
 | **D1 端点** | **zhipu-coding-plan**（与 v1 基线 / regression batch-1 同 anchor，历史数据可比） |
 | **D2 范围** | **批准追加 Terminal-Bench 2.x 全量 89 题**：harbor harness + shannon adapter，+1 天 / $10-50，列入 P1d |
 | **D3 预算** | **认可 SWE50 n=3 = 250M tokens 预算闸**；其余阶段闸值按 §五 执行 |
-| **D4 授权** | **P2 backlog 产出后先审再做**：P3 开工前，backlog 必须提交用户评审通过 |
+| **D4 授权** | ~~P2 backlog 产出后先审再做~~ **2026-09-05 用户撤销该闸：后续所有任务（含 P3 改进实施）均无需再次批准，授权持续有效** |
 
 ---
 
