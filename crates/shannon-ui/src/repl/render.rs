@@ -235,6 +235,7 @@ pub fn draw_frame(
             effort_level: state.effort_level.as_deref(),
             thinking_phase: state.thinking_phase,
             thinking_chars: 0,
+            goal: state.goal.as_ref(),
             provider: state.selected_provider.as_ref().map(|p| provider_id(p)),
             tier_label: state
                 .model
@@ -1052,7 +1053,7 @@ fn render_pager_overlay(
 }
 
 /// Truncate a string to fit within a visual width, appending "…" if truncated.
-fn truncate_visual(s: &str, max_len: usize) -> String {
+pub(crate) fn truncate_visual(s: &str, max_len: usize) -> String {
     let w = unicode_width::UnicodeWidthStr::width(s);
     if w <= max_len {
         s.to_string()

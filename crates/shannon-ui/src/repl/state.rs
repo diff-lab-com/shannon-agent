@@ -260,6 +260,8 @@ pub struct ReplState {
     pub effort_level: Option<String>,
     /// Context focus area to limit model attention (set via /focus)
     pub focus_area: Option<String>,
+    /// Session goal to keep working toward (set via /goal)
+    pub goal: Option<GoalState>,
     /// Whether LLM tool calling is enabled (false = no tools sent to model)
     pub tools_enabled: bool,
     /// Custom statusline command (shell script receiving JSON via stdin)
@@ -357,6 +359,102 @@ pub struct RalphState {
     pub iteration: usize,
     /// Whether the loop is active
     pub active: bool,
+}
+
+/// Lifecycle of a session goal (`/goal`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GoalStatus {
+    Active,
+    Paused,
+    Complete,
+}
+
+/// Session goal set via `/goal`: a persistent objective the agent keeps
+/// working toward across turns until a strict completion marker is met.
+///
+/// Auto-continuations count in [`GoalState::iterations`]; the loop pauses
+/// when `max_iterations` is reached (0 = unlimited).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GoalState {
+    /// The user's objective / completion condition (verbatim user words)
+    pub objective: String,
+    pub status: GoalStatus,
+    /// Auto-continuations performed so far
+    pub iterations: usize,
+    /// Continuation cap; 0 = unlimited. Default [`GOAL_DEFAULT_MAX_ITERATIONS`].
+    pub max_iterations: usize,
+}
+
+/// Default continuation cap.
+///
+/// Calibration (see `docs/plans/2026-09-04-goal-design.md` §11 R13): each
+/// iteration is a full agentic turn, so this is a cost bound, not a progress
+/// measure. 25 matches LangGraph's `recursion_limit` default, sits 2.5×
+/// above Shannon's own `/ralph`/`/loop` (10 — smaller task-iteration scope),
+/// and well below OpenHands' `max_iterations` (100), which is paired with a
+/// stuck detector the goal MVP lacks. Hitting the cap is recoverable: the
+/// goal pauses and `/goal resume` re-arms a fresh budget. Revisit once
+/// budget accounting / anti-spin land (Phase 2).
+pub const GOAL_DEFAULT_MAX_ITERATIONS: usize = 25;
+
+impl GoalState {
+    pub fn new(objective: impl Into<String>) -> Self {
+        Self {
+            objective: objective.into(),
+            status: GoalStatus::Active,
+            iterations: 0,
+            max_iterations: GOAL_DEFAULT_MAX_ITERATIONS,
+        }
+    }
+
+    /// Engine injection mapping: Active and Paused goals are injected
+    /// (paused with marker output suppressed); completed goals are not
+    /// injected at all.
+    pub fn to_spec(&self) -> Option<shannon_core::query_engine::GoalSpec> {
+        match self.status {
+            GoalStatus::Complete => None,
+            GoalStatus::Active => Some(shannon_core::query_engine::GoalSpec {
+                objective: self.objective.clone(),
+                paused: false,
+            }),
+            GoalStatus::Paused => Some(shannon_core::query_engine::GoalSpec {
+                objective: self.objective.clone(),
+                paused: true,
+            }),
+        }
+    }
+
+    pub fn to_stored(&self) -> shannon_core::session_log::StoredGoal {
+        shannon_core::session_log::StoredGoal {
+            objective: self.objective.clone(),
+            status: match self.status {
+                GoalStatus::Active => "active",
+                GoalStatus::Paused => "paused",
+                GoalStatus::Complete => "complete",
+            }
+            .to_string(),
+            iterations: self.iterations,
+            max_iterations: self.max_iterations,
+        }
+    }
+
+    /// Restore from persisted sidecar data. Unknown status strings degrade
+    /// to Paused — the safe state that keeps the objective visible without
+    /// auto-continuing.
+    pub fn from_stored(stored: shannon_core::session_log::StoredGoal) -> Self {
+        let status = match stored.status.as_str() {
+            "active" => GoalStatus::Active,
+            "complete" => GoalStatus::Complete,
+            _ => GoalStatus::Paused,
+        };
+        Self {
+            objective: stored.objective,
+            status,
+            iterations: stored.iterations,
+            max_iterations: stored.max_iterations,
+        }
+    }
 }
 
 /// Persisted UI state saved across sessions for restore.
@@ -578,6 +676,7 @@ impl Default for ReplState {
             git_branch: None,
             effort_level: None,
             focus_area: None,
+            goal: None,
             tools_enabled: true,
             statusline_command: None,
             cached_statusline: None,
@@ -603,6 +702,72 @@ impl Default for ReplState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn goal_status_serde_roundtrip() {
+        for (status, tag) in [
+            (GoalStatus::Active, "\"active\""),
+            (GoalStatus::Paused, "\"paused\""),
+            (GoalStatus::Complete, "\"complete\""),
+        ] {
+            let json = serde_json::to_string(&status).unwrap();
+            assert_eq!(json, tag);
+            let back: GoalStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, status);
+        }
+    }
+
+    #[test]
+    fn goal_state_default_max_is_25() {
+        let g = GoalState::new("ship it");
+        assert_eq!(g.max_iterations, GOAL_DEFAULT_MAX_ITERATIONS);
+        assert_eq!(g.max_iterations, 25);
+        assert_eq!(g.status, GoalStatus::Active);
+        assert_eq!(g.iterations, 0);
+    }
+
+    #[test]
+    fn to_spec_maps_active_paused_complete() {
+        let mut g = GoalState::new("ship it");
+        assert_eq!(
+            g.to_spec(),
+            Some(shannon_core::query_engine::GoalSpec {
+                objective: "ship it".into(),
+                paused: false,
+            })
+        );
+        g.status = GoalStatus::Paused;
+        assert_eq!(
+            g.to_spec(),
+            Some(shannon_core::query_engine::GoalSpec {
+                objective: "ship it".into(),
+                paused: true,
+            })
+        );
+        g.status = GoalStatus::Complete;
+        assert_eq!(g.to_spec(), None, "completed goal must not be injected");
+    }
+
+    #[test]
+    fn from_stored_unknown_status_degrades_to_paused() {
+        let stored = shannon_core::session_log::StoredGoal {
+            objective: "x".into(),
+            status: "bogus".into(),
+            iterations: 2,
+            max_iterations: 25,
+        };
+        let g = GoalState::from_stored(stored);
+        assert_eq!(g.status, GoalStatus::Paused);
+        assert_eq!(g.objective, "x");
+        assert_eq!(g.iterations, 2);
+    }
+
+    #[test]
+    fn goal_state_stored_roundtrip() {
+        let g = GoalState::new("all green");
+        let back = GoalState::from_stored(g.to_stored());
+        assert_eq!(back, g);
+    }
 
     #[test]
     fn view_mode_cycle_default_to_verbose() {

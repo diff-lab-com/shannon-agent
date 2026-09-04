@@ -63,7 +63,7 @@ use crate::skill_bridge::register_skills_as_tools;
 use shannon_mcp::{
     HeaderSource, McpProcessPool, discover_pooled_remote_tools, discover_pooled_tools,
 };
-use shannon_tools::register_default_tools_with_project_dir_ex;
+use shannon_tools::register_default_tools_with_project_dir_ex_with_providers;
 
 // Re-export public types from state submodule
 pub use state::{
@@ -176,6 +176,12 @@ pub struct Repl {
     pub(crate) update_check_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     /// Shared plan-mode flag (clone of the one in QueryEngine)
     pub(crate) plan_mode_flag: std::sync::Arc<std::sync::RwLock<bool>>,
+    /// Provider-wired file history shared with the file tools, so `/rewind`
+    /// reads and restores the same snapshots (and the same execution world).
+    pub(crate) file_history:
+        Option<std::sync::Arc<std::sync::Mutex<shannon_tools::FileHistoryManager>>>,
+    /// Swappable execution world + shared sandbox handle (`/remote`).
+    pub(crate) remote_assembly: Option<std::sync::Arc<shannon_remote::assembly::DynamicAssembly>>,
 }
 
 /// State for tab completion cycling
@@ -383,6 +389,8 @@ impl Repl {
             diagnostic_rx: None,
             update_check_rx: None,
             plan_mode_flag: std::sync::Arc::new(std::sync::RwLock::new(false)),
+            file_history: None,
+            remote_assembly: None,
         };
 
         // Wire provider/model/tier into chat welcome StatusCard via the single
@@ -409,12 +417,19 @@ impl Repl {
             return Self::new_minimal(runtime);
         }
 
-        // Create tool registry and register all tools (sandboxed to project dir)
+        // Create tool registry and register all tools (sandboxed to project
+        // dir). The providers live behind a DynamicWorld decorator so
+        // `/remote use` can swap execution worlds at runtime without a
+        // registry rebuild.
+        let remote_assembly = shannon_remote::assembly::assemble_dynamic();
         let project_dir = std::env::current_dir().unwrap_or_default();
         let mut tool_registry = ToolRegistry::new();
-        let reg_result =
-            register_default_tools_with_project_dir_ex(&mut tool_registry, &project_dir)
-                .map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
+        let reg_result = register_default_tools_with_project_dir_ex_with_providers(
+            &mut tool_registry,
+            &project_dir,
+            &remote_assembly.providers,
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -1458,6 +1473,8 @@ impl Repl {
             diagnostic_rx: None,
             update_check_rx: None,
             plan_mode_flag: plan_mode_flag.clone(),
+            file_history: reg_result.file_history.clone(),
+            remote_assembly: Some(std::sync::Arc::new(remote_assembly)),
         };
 
         // Wire provider/model/tier into chat welcome StatusCard via the single

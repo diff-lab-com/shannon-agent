@@ -370,31 +370,20 @@ impl Tool for GrepTool {
             .await
             .map_err(|e| ToolError::InvalidInput(format!("Path sandbox: {e}")))?;
 
-        if !search_root.exists() {
+        // Existence is provider-checked: on a remote world the search root
+        // lives on the target, so `Path::exists` would probe the wrong disk.
+        if !self.fs.exists_blocking(&search_root) {
             return Err(ToolError::ExecutionFailed(format!(
                 "Path does not exist: {search_path}"
             )));
         }
 
-        // Build walker
-        let mut builder = ignore::WalkBuilder::new(&search_root);
-        builder.hidden(true);
-        builder.git_ignore(true);
-        builder.git_global(true);
-        builder.git_exclude(true);
-
-        // Apply include pattern via the ignore crate's OverrideBuilder
-        // Exclude is handled via manual filtering in the walk loop below,
-        // since the ignore crate's gitignore-style semantics don't map
-        // cleanly to "skip these files".
-        if let Some(include) = &grep_input.include {
-            let overrides = ignore::overrides::OverrideBuilder::new(&search_root)
-                .add(include.as_str())
-                .map_err(|e| ToolError::InvalidInput(format!("Invalid include pattern: {e}")))?
-                .build()
-                .map_err(|e| ToolError::InvalidInput(format!("Invalid include pattern: {e}")))?;
-            builder.overrides(overrides);
-        }
+        // Traversal, gitignore handling and content reads all follow the
+        // injected filesystem world (local by default, SSH/Docker under a
+        // remote target). Include/exclude filtering stays in the callback.
+        let mut all_matches: Vec<GrepFileMatch> = Vec::new();
+        let mut total_matches: usize = 0;
+        let mut quota_reached = false;
 
         let show_line_numbers = grep_input.line_number.unwrap_or(true);
         let context_before = grep_input
@@ -408,58 +397,55 @@ impl Tool for GrepTool {
             .min(MAX_ALLOWED_RESULTS);
         let output_mode = grep_input.output_mode.unwrap_or_default();
 
-        // Collect results (this runs in an async context but file I/O is synchronous)
-        let mut all_matches: Vec<GrepFileMatch> = Vec::new();
-        let mut total_matches: usize = 0;
-
-        for entry in builder.build() {
-            if total_matches >= max_results {
-                break;
-            }
-
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            let path = entry.path();
-
-            // Skip directories
-            if path.is_dir() {
-                continue;
-            }
-
-            // Skip files that don't match include pattern (for simple extension matching)
-            if let Some(include) = &grep_input.include {
-                if !path_matches_glob(path, include) {
-                    continue;
+        self.fs
+            .walk_blocking(&search_root, &mut |entry| {
+                if quota_reached {
+                    return false;
                 }
-            }
+                let path = &entry.path;
 
-            // Skip files that match exclude pattern
-            if let Some(exclude) = &grep_input.exclude {
-                if path_matches_glob(path, exclude) {
-                    continue;
+                // Skip directories
+                if entry.is_dir {
+                    return true;
                 }
-            }
 
-            if let Some(mut file_match) = self.search_file(
-                path,
-                &regex,
-                show_line_numbers,
-                context_before,
-                context_after,
-            ) {
-                // Truncate matches if we'd exceed max_results
-                let remaining = max_results - total_matches;
-                if file_match.matches.len() > remaining {
-                    file_match.matches.truncate(remaining);
-                    file_match.match_count = file_match.matches.len();
+                // Skip files that don't match include pattern (for simple extension matching)
+                if let Some(include) = &grep_input.include {
+                    if !path_matches_glob(path, include) {
+                        return true;
+                    }
                 }
-                total_matches += file_match.match_count;
-                all_matches.push(file_match);
-            }
-        }
+
+                // Skip files that match exclude pattern
+                if let Some(exclude) = &grep_input.exclude {
+                    if path_matches_glob(path, exclude) {
+                        return true;
+                    }
+                }
+
+                if let Some(mut file_match) = self.search_file(
+                    path,
+                    &regex,
+                    show_line_numbers,
+                    context_before,
+                    context_after,
+                ) {
+                    // Truncate matches if we'd exceed max_results
+                    let remaining = max_results - total_matches;
+                    if file_match.matches.len() > remaining {
+                        file_match.matches.truncate(remaining);
+                        file_match.match_count = file_match.matches.len();
+                    }
+                    total_matches += file_match.match_count;
+                    all_matches.push(file_match);
+                }
+                if total_matches >= max_results {
+                    quota_reached = true;
+                    return false; // prune the rest of the walk
+                }
+                true
+            })
+            .map_err(|e| ToolError::ExecutionFailed(format!("walk failed: {e}")))?;
 
         // Format output based on mode
         let content = match output_mode {
@@ -555,6 +541,129 @@ fn path_matches_glob(path: &Path, pattern: &str) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    /// Remote-semantics test: paths that do NOT exist on the local disk are
+    /// searched through the injected world (fake fs), proving traversal and
+    /// content reads follow the provider rather than the local disk.
+    #[tokio::test]
+    async fn grep_traverses_through_injected_world() {
+        use shannon_tool_interface::{DirEntryInfo, FileMeta, FileSystemProvider};
+        use std::io;
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+
+        struct RemoteFakeFs;
+
+        #[async_trait]
+        impl FileSystemProvider for RemoteFakeFs {
+            async fn read_text(&self, _path: &Path) -> io::Result<String> {
+                unimplemented!()
+            }
+            async fn read_bytes(&self, _p: &Path) -> io::Result<Vec<u8>> {
+                unimplemented!()
+            }
+            async fn metadata(&self, _p: &Path) -> io::Result<FileMeta> {
+                unimplemented!()
+            }
+            async fn create_dir_all(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn write_bytes(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn rename(&self, _f: &Path, _t: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn read_text_blocking(&self, _p: &Path) -> io::Result<String> {
+                Ok("alpha needle beta\nnothing here\nthird needle line".to_string())
+            }
+            fn write_bytes_blocking(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn create_dir_all_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn remove_file_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn canonicalize_blocking(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn metadata_blocking(&self, _p: &Path) -> io::Result<FileMeta> {
+                Ok(FileMeta {
+                    len: 64,
+                    is_dir: false,
+                    modified: None,
+                })
+            }
+            fn read_prefix_blocking(&self, _p: &Path, _m: usize) -> io::Result<Vec<u8>> {
+                Ok(b"alpha needle beta\nnothing here\nthird needle line".to_vec())
+            }
+            fn list_dir_blocking(&self, _p: &Path) -> io::Result<Vec<DirEntryInfo>> {
+                Ok(Vec::new())
+            }
+            fn exists_blocking(&self, _p: &Path) -> bool {
+                true
+            }
+            fn walk_blocking(
+                &self,
+                root: &Path,
+                cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+            ) -> io::Result<()> {
+                // Serve two non-local files under the remote root.
+                cb(&DirEntryInfo {
+                    path: root.to_path_buf(),
+                    len: 0,
+                    is_dir: true,
+                });
+                cb(&DirEntryInfo {
+                    path: root.join("a.rs"),
+                    len: 64,
+                    is_dir: false,
+                });
+                cb(&DirEntryInfo {
+                    path: root.join("b.rs"),
+                    len: 64,
+                    is_dir: false,
+                });
+                Ok(())
+            }
+        }
+
+        let fs: Arc<dyn FileSystemProvider> = Arc::new(RemoteFakeFs);
+        // Wire the SAME world into the sandbox's TOCTOU canonicalization,
+        // exactly as register_all_tools does for remote assemblies.
+        let sandbox =
+            crate::file::sandbox::PathSandbox::with_config(crate::file::sandbox::SandboxConfig {
+                allowed_roots: vec![PathBuf::from("/remote-host/proj")],
+                denied_patterns: crate::file::sandbox::SandboxConfig::default_denied_patterns(),
+                strict_mode: true,
+            })
+            .with_fs_provider(fs.clone());
+        let tool = GrepTool::with_sandbox(sandbox).with_fs(fs);
+
+        let output = Tool::execute(
+            &tool,
+            serde_json::json!({ "pattern": "needle", "path": "/remote-host/proj" }),
+        )
+        .await
+        .unwrap();
+
+        assert!(!output.is_error);
+        assert!(
+            output.content.contains("/remote-host/proj/a.rs"),
+            "matches must come from the injected world, got: {}",
+            output.content
+        );
+        assert!(output.content.contains("/remote-host/proj/b.rs"));
+        assert_eq!(
+            output.metadata.get("total_matches"),
+            Some(&serde_json::json!(4))
+        );
+    }
+
     use super::*;
     use std::fs;
     use tempfile::TempDir;

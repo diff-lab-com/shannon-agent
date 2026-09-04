@@ -203,6 +203,8 @@ fn render_full(
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),
         Span::styled("/profile", Style::default().fg(Color::Cyan)),
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled("/remote", Style::default().fg(Color::Cyan)),
+        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
         Span::styled("/help", Style::default().fg(Color::Cyan)),
     ]);
     f.render_widget(Paragraph::new(cmd_line), chunks[3]);

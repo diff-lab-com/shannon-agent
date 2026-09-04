@@ -183,6 +183,20 @@ impl FileSystemProvider for SandboxedFs {
         }
         self.inner.list_dir_blocking(path)
     }
+
+    fn walk_blocking(
+        &self,
+        root: &Path,
+        cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+    ) -> io::Result<()> {
+        // Policy-gate the traversal root, then delegate: per-entry rules are
+        // re-checked by the inner world's own consumers (Read/Grep validate
+        // each path they touch).
+        if !self.policy.allows_read(root) {
+            return Err(self.deny("list", root));
+        }
+        self.inner.walk_blocking(root, cb)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +510,7 @@ pub fn assemble(
                     fs,
                     process: proc_world,
                     denial_classifier: Some(kernel_denial_classifier()),
+                    world_sandbox: None,
                 },
                 kind: "landlock",
                 notices,
@@ -525,6 +540,7 @@ pub fn assemble_local(settings: &SandboxSettings, project_dir: &Path) -> Assembl
             )),
             process: Arc::new(SandboxedProcess::new(proc_inner, "local", Vec::new())),
             denial_classifier: None,
+            world_sandbox: None,
         },
         kind: "local",
         notices: vec![DegradeNotice::new(

@@ -1035,8 +1035,17 @@ impl Tool for BashTool {
             String::new()
         };
 
+        // World capability gate: the PTY path and the two local argv-sandbox
+        // branches hold *local* providers that would silently shadow an
+        // injected remote world (Bash would run locally while file tools run
+        // remotely). On remote worlds everything routes through the injected
+        // world; the local-only features degrade with an explicit note.
+        let remote_world = self.direct_process.capabilities().is_remote;
+        let local_only_requested =
+            bash_input.use_pty || self.sandbox.is_some() || self.process_sandbox.is_some();
+
         // Execute the command (PTY mode for interactive, otherwise sandboxed/direct)
-        let output_result = if bash_input.use_pty {
+        let output_result = if bash_input.use_pty && !remote_world {
             let cmd = bash_input.command.clone();
             let cwd = bash_input.cwd.clone();
             let env = bash_input.env.clone();
@@ -1054,7 +1063,7 @@ impl Tool for BashTool {
             })
             .await
             .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())))
-        } else if let Some(ref sandbox) = self.sandbox {
+        } else if let Some(sandbox) = self.sandbox.as_ref().filter(|_| !remote_world) {
             sandbox
                 .execute(
                     &bash_input.command,
@@ -1063,7 +1072,7 @@ impl Tool for BashTool {
                     bash_input.timeout,
                 )
                 .await
-        } else if let Some(ref ps) = self.process_sandbox {
+        } else if let Some(ps) = self.process_sandbox.as_ref().filter(|_| !remote_world) {
             Self::execute_command_sandboxed(
                 &bash_input.command,
                 bash_input.cwd.as_deref(),
@@ -1084,7 +1093,16 @@ impl Tool for BashTool {
         };
 
         let output = match output_result {
-            Ok(output) => output,
+            Ok(mut output) => {
+                if remote_world && local_only_requested {
+                    output.stdout = format!(
+                        "[remote target] PTY and local sandbox modes are unavailable; \
+                         executed as a piped command on the remote target.\n{}",
+                        output.stdout
+                    );
+                }
+                output
+            }
             Err(e) => {
                 return Ok(ToolOutput {
                     content: format!("Command execution failed: {e}"),
@@ -1211,10 +1229,12 @@ impl BashTool {
             String::new()
         };
 
-        // Only stream direct (non-PTY, non-sandbox) commands.
-        // PTY and sandbox modes fall back to blocking execute().
-        let use_streaming =
-            !bash_input.use_pty && self.sandbox.is_none() && self.process_sandbox.is_none();
+        // Only stream direct (non-PTY, non-sandbox) commands; a remote world
+        // has no local PTY/sandbox branches (capability-gated below), so it
+        // always streams.
+        let remote_world = self.direct_process.capabilities().is_remote;
+        let use_streaming = remote_world
+            || (!bash_input.use_pty && self.sandbox.is_none() && self.process_sandbox.is_none());
 
         if !use_streaming {
             // Delegate to blocking execute — wraps in a helper to reuse
@@ -1669,6 +1689,81 @@ impl Tool for SleepTool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    /// Remote-capable fake process world: records the last program it was
+    /// asked to run and reports `is_remote`.
+    #[derive(Default)]
+    struct RemoteProbeProcess {
+        last_program: std::sync::Mutex<Option<String>>,
+    }
+
+    #[async_trait]
+    impl shannon_tool_interface::ProcessProvider for RemoteProbeProcess {
+        fn run_blocking(
+            &self,
+            request: &ProcessRequest,
+        ) -> std::io::Result<shannon_tool_interface::CapturedOutput> {
+            *self.last_program.lock().unwrap() = Some(request.program.clone());
+            Ok(shannon_tool_interface::CapturedOutput {
+                stdout: format!("ran:{}", request.program).into_bytes(),
+                stderr: Vec::new(),
+                exit: shannon_tool_interface::ProcessExit::from_code(0),
+            })
+        }
+
+        async fn run_async(
+            &self,
+            request: &ProcessRequest,
+        ) -> std::io::Result<shannon_tool_interface::CapturedOutput> {
+            self.run_blocking(request)
+        }
+
+        async fn spawn_piped(
+            &self,
+            _spec: &shannon_tool_interface::PipedSpawn,
+        ) -> std::io::Result<Box<dyn shannon_tool_interface::PipedChild>> {
+            Err(std::io::Error::other("remote probe has no children"))
+        }
+
+        fn capabilities(&self) -> shannon_tool_interface::ExecCaps {
+            shannon_tool_interface::ExecCaps { is_remote: true }
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_world_bypasses_local_pty_and_sandbox_branches() {
+        let probe = Arc::new(RemoteProbeProcess::default());
+        // PTY requested + local argv sandbox installed: both local-only
+        // branches must be skipped on a remote world.
+        let tool = BashTool::with_process_sandbox("/tmp").with_worlds(probe.clone() as _);
+        let input = serde_json::json!({
+            "command": "echo hi",
+            "use_pty": true,
+        });
+        let output = Tool::execute(&tool, input).await.unwrap();
+        assert!(
+            output.content.contains("[remote target]"),
+            "remote fallback must be announced, got: {}",
+            output.content
+        );
+        assert!(
+            output.content.contains("ran:bash"),
+            "command must run through the injected remote world, got: {}",
+            output.content
+        );
+        let last = probe.last_program.lock().unwrap().clone();
+        assert_eq!(last.as_deref(), Some("bash"));
+    }
+
+    #[tokio::test]
+    async fn local_world_keeps_pty_and_sandbox_preference() {
+        // On the local world the sandbox description is preserved and no
+        // remote note is emitted.
+        let tool = BashTool::with_process_sandbox("/tmp");
+        let input = serde_json::json!({ "command": "echo hi" });
+        let output = Tool::execute(&tool, input).await.unwrap();
+        assert!(!output.content.contains("[remote target]"));
+    }
+
     use super::*;
 
     // ── SandboxMode tests ──────────────────────────────────────────────

@@ -156,6 +156,37 @@ vi.mock('@/lib/tauri-api', () => ({
     error: null,
   }),
   openReleasePage: vi.fn().mockResolvedValue(undefined),
+  // Remote targets (SSH hosts / Docker containers). Default: one saved
+  // ssh target so the Remotes settings page renders its list.
+  remoteListTargets: vi.fn().mockResolvedValue([
+    {
+      name: 'build-box',
+      kind: 'ssh',
+      host: 'build-box',
+      port: null,
+      user: null,
+      container: null,
+      shell: null,
+      sshTarget: null,
+      workspaceDir: '/home/ed/proj',
+    },
+  ]),
+  remoteDiscoverSshHosts: vi.fn().mockResolvedValue([
+    { alias: 'build-box', user: 'ed', hostname: '192.168.1.20', port: 22 },
+  ]),
+  remoteListDockerContainers: vi.fn().mockResolvedValue([]),
+  remoteAddTarget: vi.fn().mockResolvedValue(undefined),
+  remoteRemoveTarget: vi.fn().mockResolvedValue(undefined),
+  remoteSetDefaultTarget: vi.fn().mockResolvedValue(undefined),
+  remoteTestTarget: vi.fn().mockResolvedValue({
+    ok: true,
+    platform: 'Linux',
+    home: '/home/ed',
+    bashAvailable: true,
+    workspaceExists: true,
+    latencyMs: 12,
+    error: null,
+  }),
   gatewaySetSecret: vi.fn().mockResolvedValue(undefined),
   gatewayGetSecret: vi.fn().mockResolvedValue(null),
   gatewayHasSecret: vi.fn().mockResolvedValue(false),

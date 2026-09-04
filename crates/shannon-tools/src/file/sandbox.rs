@@ -66,6 +66,51 @@ impl SandboxConfig {
     }
 }
 
+/// Shared roots/home overrides for swappable execution worlds (§remote).
+///
+/// Clones of a [`PathSandbox`] hold `Arc` handles to the same override cell,
+/// so `crate::shannon_remote`-style assemblies can retarget every registered
+/// tool's sandbox when the execution world changes (`/remote use`) without
+/// rebuilding the registry. An unset (default) override is a passthrough:
+/// the sandbox keeps using its configured roots and local home.
+#[derive(Debug, Default)]
+pub struct WorldSandboxHandle {
+    inner: std::sync::RwLock<WorldRoots>,
+}
+
+/// Roots + home boundary currently in effect for the active world.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorldRoots {
+    /// Allowed roots for the active world (remote workspace dir).
+    pub allowed_roots: Vec<PathBuf>,
+    /// Home directory of the active world (remote `$HOME`).
+    pub home_dir: Option<PathBuf>,
+}
+
+impl WorldSandboxHandle {
+    /// New passthrough handle (no override installed).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Install (or clear with `WorldRoots::default()`) an override. Takes
+    /// effect immediately for every clone sharing this handle.
+    pub fn set(&self, roots: WorldRoots) {
+        if let Ok(mut guard) = self.inner.write() {
+            *guard = roots;
+        }
+    }
+
+    /// The installed override, or `None` when passthrough (empty).
+    pub fn current(&self) -> Option<WorldRoots> {
+        self.inner
+            .read()
+            .ok()
+            .map(|r| r.clone())
+            .filter(|r| !r.allowed_roots.is_empty() || r.home_dir.is_some())
+    }
+}
+
 /// A sandbox that validates file paths against security rules.
 ///
 /// Every file operation should pass through `PathSandbox::validate` before
@@ -82,6 +127,9 @@ pub struct PathSandbox {
     /// inject the matching provider so resolution follows the same world the
     /// tools will act in.
     fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+    /// Shared override for swappable worlds (remote targets). `None` or a
+    /// passthrough handle leaves config/home in charge.
+    world: Option<std::sync::Arc<WorldSandboxHandle>>,
 }
 
 impl std::fmt::Debug for PathSandbox {
@@ -89,6 +137,7 @@ impl std::fmt::Debug for PathSandbox {
         f.debug_struct("PathSandbox")
             .field("config", &self.config)
             .field("home_dir", &self.home_dir)
+            .field("world", &self.world.as_ref().map(|_| "<shared>"))
             .finish()
     }
 }
@@ -136,7 +185,39 @@ impl PathSandbox {
             config,
             home_dir,
             fs: crate::defaults::fs(),
+            world: None,
         }
+    }
+
+    /// Install a shared world-roots override (remote targets). Every clone
+    /// sharing the handle retargets together; see [`WorldSandboxHandle`].
+    pub fn with_world_sandbox(mut self, world: std::sync::Arc<WorldSandboxHandle>) -> Self {
+        self.world = Some(world);
+        self
+    }
+
+    /// Roots currently in effect: the world override when installed and
+    /// populated, otherwise the configured ones.
+    fn effective_roots(&self) -> Vec<PathBuf> {
+        if let Some(handle) = &self.world {
+            if let Some(roots) = handle.current() {
+                return roots.allowed_roots;
+            }
+        }
+        self.config.allowed_roots.clone()
+    }
+
+    /// Home boundary currently in effect: the world override's home when
+    /// installed and populated, otherwise the local home.
+    fn effective_home(&self) -> Option<PathBuf> {
+        if let Some(handle) = &self.world {
+            if let Some(roots) = handle.current() {
+                if roots.home_dir.is_some() {
+                    return roots.home_dir;
+                }
+            }
+        }
+        self.home_dir.clone()
     }
 
     /// Inject the filesystem world used for canonicalization (§4.11).
@@ -167,16 +248,11 @@ impl PathSandbox {
     fn remap_bind_alias(&self, path: &Path) -> Option<Vec<PathBuf>> {
         // Component-based, so "/workspacefoo" does not match.
         let rest = path.strip_prefix(SANDBOX_BIND_ALIAS).ok()?;
-        if self.config.allowed_roots.is_empty() {
+        let roots = self.effective_roots();
+        if roots.is_empty() {
             return None;
         }
-        Some(
-            self.config
-                .allowed_roots
-                .iter()
-                .map(|root| root.join(rest))
-                .collect(),
-        )
+        Some(roots.iter().map(|root| root.join(rest)).collect())
     }
 
     /// Async companion of `remap_bind_alias` that also canonicalizes the
@@ -435,7 +511,7 @@ impl PathSandbox {
     fn check_allowed_roots(&self, canonical: &Path) -> Result<(), SandboxError> {
         let canonical_str = canonical.to_string_lossy().to_string();
 
-        for root in &self.config.allowed_roots {
+        for root in &self.effective_roots() {
             // Canonicalize the root as well so comparison is consistent
             let resolved_root = match self.fs.canonicalize_blocking(root) {
                 Ok(r) => r,
@@ -489,7 +565,7 @@ impl PathSandbox {
 
     /// Check that the path doesn't cross into another user's home directory.
     fn check_home_boundary(&self, canonical: &Path) -> Result<(), SandboxError> {
-        if let Some(ref my_home) = self.home_dir {
+        if let Some(ref my_home) = self.effective_home() {
             let my_home_str = my_home.to_string_lossy().to_string();
 
             // Get the canonical form of /home or determine if this path is
@@ -1436,5 +1512,55 @@ mod tests {
             .validate_for_write(Path::new("/etc/new_file.txt"))
             .await;
         assert!(result.is_err(), "Should reject file in denied pattern area");
+    }
+
+    #[tokio::test]
+    async fn world_override_retargets_roots_and_home() {
+        use std::sync::Arc as StdArc;
+
+        let local = tempfile::tempdir().unwrap();
+        let remote = tempfile::tempdir().unwrap();
+        let local_file = local.path().join("x.txt");
+        let remote_file = remote.path().join("y.txt");
+        std::fs::write(&local_file, b"l").unwrap();
+        std::fs::write(&remote_file, b"r").unwrap();
+
+        let sandbox = PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![local.path().to_path_buf()],
+            denied_patterns: SandboxConfig::default_denied_patterns(),
+            strict_mode: true,
+        });
+        let handle = StdArc::new(WorldSandboxHandle::new());
+        let sandbox = sandbox.with_world_sandbox(handle.clone());
+
+        // Passthrough: configured roots still govern while override empty.
+        assert!(
+            sandbox.validate_sync(&local_file).is_ok(),
+            "configured root should validate while override is empty"
+        );
+        assert!(sandbox.validate_sync(&remote_file).is_err());
+
+        // Swap to the remote world: remote paths validate, local paths die
+        // with a proper outside-roots denial (both files exist).
+        handle.set(WorldRoots {
+            allowed_roots: vec![remote.path().to_path_buf()],
+            home_dir: Some(PathBuf::from("/home/remote-user")),
+        });
+        assert!(
+            sandbox.validate_sync(&remote_file).is_ok(),
+            "world override must retarget the allowed roots"
+        );
+        assert!(
+            matches!(
+                sandbox.validate_sync(&local_file),
+                Err(SandboxError::OutsideAllowedRoots(_))
+            ),
+            "local root must be rejected once the world swapped"
+        );
+
+        // Clearing the override restores the configured roots.
+        handle.set(WorldRoots::default());
+        assert!(sandbox.validate_sync(&local_file).is_ok());
+        assert!(sandbox.validate_sync(&remote_file).is_err());
     }
 }

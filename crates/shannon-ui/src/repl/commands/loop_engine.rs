@@ -1,6 +1,7 @@
 //! Loop engine command handlers: /loop, /ralph, /routine, /bind, /project, /agent, /stats,
 //! /sandbox, /notify, and related helpers.
 
+use crate::repl::state::GoalStatus;
 use crate::{Result, widgets::ChatRole};
 use shannon_tools::Tool;
 
@@ -74,6 +75,20 @@ pub(crate) fn handle_loop(repl: &mut Repl, args: &str) -> Result<()> {
 
     if task.is_empty() {
         super::set_error(repl, "no task description provided");
+        return Ok(());
+    }
+
+    // One auto-continuation loop at a time: an active /goal owns continuation.
+    if repl
+        .state
+        .goal
+        .as_ref()
+        .is_some_and(|g| g.status != GoalStatus::Complete)
+    {
+        super::set_error(
+            repl,
+            "a /goal is active — clear or pause it first (/goal clear | /goal pause)",
+        );
         return Ok(());
     }
 
@@ -234,6 +249,20 @@ pub(crate) fn handle_ralph(repl: &mut Repl, args: &str) -> Result<()> {
     let task = remaining.trim().to_string();
     if task.is_empty() {
         super::set_error(repl, "no task description provided");
+        return Ok(());
+    }
+
+    // One auto-continuation loop at a time: an active /goal owns continuation.
+    if repl
+        .state
+        .goal
+        .as_ref()
+        .is_some_and(|g| g.status != GoalStatus::Complete)
+    {
+        super::set_error(
+            repl,
+            "a /goal is active — clear or pause it first (/goal clear | /goal pause)",
+        );
         return Ok(());
     }
 

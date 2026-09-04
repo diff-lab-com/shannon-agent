@@ -110,6 +110,20 @@ pub trait FileSystemProvider: Send + Sync + 'static {
     fn exists_blocking(&self, path: &Path) -> bool {
         self.metadata_blocking(path).is_ok()
     }
+
+    /// Depth-first recursive walk used by Grep/Glob (and any future
+    /// traversal consumer). Invokes `cb` for the root and every entry;
+    /// returning `false` prunes a directory's subtree.
+    ///
+    /// Implementations whose store has no native walker use
+    /// [`crate::walk::provider_walk`] with their three blocking primitives;
+    /// `LocalFs` overrides it with an `ignore::WalkBuilder`-backed version
+    /// that preserves native local traversal semantics.
+    fn walk_blocking(
+        &self,
+        root: &Path,
+        cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+    ) -> io::Result<()>;
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +256,19 @@ impl SpawnRewrite for ChainedSpawnRewrite {
     }
 }
 
+/// Capability flags describing how a process world executes requests.
+///
+/// Worlds route through the same trait, but some call sites need to know
+/// whether execution leaves the local machine — the bash tool gates its
+/// local-PTY and argv-sandbox branches on [`ExecCaps::is_remote`] so remote
+/// sessions never fall back to local-only paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ExecCaps {
+    /// Commands run on a different host/container than the one Shannon
+    /// itself runs on.
+    pub is_remote: bool,
+}
+
 /// Pluggable process execution world.
 ///
 /// Consumers never build `std::process::Command` / `tokio::process::Command`
@@ -265,6 +292,11 @@ pub trait ProcessProvider: Send + Sync + 'static {
     /// decorators may additionally override this to make wrapping explicit.
     fn prepare_spawn(&self, request: ProcessRequest) -> Result<ProcessRequest, String> {
         Ok(request)
+    }
+
+    /// What this world can do (default: plain local execution).
+    fn capabilities(&self) -> ExecCaps {
+        ExecCaps { is_remote: false }
     }
 }
 

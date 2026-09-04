@@ -9,6 +9,7 @@ shannon-core = { path = "../shannon-core" }
 shannon-engine = { path = "../shannon-engine" }
 shannon-agents = { path = "../shannon-agents" }
 shannon-commands = { path = "../shannon-commands" }
+shannon-remote = { path = "../shannon-remote" }
 shannon-tools = { path = "../shannon-tools" }
 shannon-mcp = { path = "../shannon-mcp" }
 shannon-skills = { path = "../shannon-skills" }

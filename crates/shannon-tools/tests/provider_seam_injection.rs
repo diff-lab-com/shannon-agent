@@ -157,6 +157,14 @@ impl FileSystemProvider for MemoryFs {
         Ok(bytes[..bytes.len().min(max_bytes)].to_vec())
     }
 
+    fn walk_blocking(
+        &self,
+        _root: &Path,
+        _cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+    ) -> io::Result<()> {
+        Ok(())
+    }
+
     fn list_dir_blocking(&self, _path: &Path) -> io::Result<Vec<DirEntryInfo>> {
         Ok(Vec::new())
     }

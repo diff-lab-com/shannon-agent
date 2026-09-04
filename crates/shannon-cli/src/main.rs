@@ -22,7 +22,7 @@ use shannon_core::{
     unified_config::{ConfigBuilder, ShannonConfig},
 };
 use shannon_engine::{api::LlmClientConfig, state::StateManager};
-use shannon_tools::register_default_tools_with_project_dir_ex;
+use shannon_tools::register_default_tools_with_project_dir_ex_with_providers;
 use shannon_types::model_ref::ModelRef;
 use shannon_types::provider_config::ProviderModelConfig;
 use shannon_ui::Repl;
@@ -378,6 +378,12 @@ struct Cli {
     #[arg(long)]
     pipe: bool,
 
+    /// Run all tool execution on a remote target (SSH host or Docker
+    /// container) registered in ~/.shannon/remotes.toml or discovered from
+    /// ~/.ssh/config. Overrides SHANNON_TARGET.
+    #[arg(long, value_name = "NAME")]
+    target: Option<String>,
+
     /// LLM model to use (e.g., claude-sonnet-4, gpt-4o)
     #[arg(short, long)]
     model: Option<String>,
@@ -455,6 +461,11 @@ struct Cli {
     /// Continue the most recent session (alias for --resume).
     #[arg(short = 'c', long, alias = "cont")]
     r#continue: bool,
+
+    /// Session goal injected into the system prompt (headless: injection only).
+    /// Example: shannon -p "make CI green" --goal "all tests passing"
+    #[arg(long = "goal", value_name = "OBJECTIVE")]
+    goal: Option<String>,
 
     /// CI/CD headless mode: non-interactive prompt (pipe-friendly).
     /// Skips TUI entirely. Use with --output-format, --allowed-tools, --max-turns.
@@ -1215,6 +1226,7 @@ fn load_resume_session(
 /// `config` holds explicit CLI configuration.
 /// `bypass_all` when true, skips all permission checks (BypassPermissions mode).
 /// `resume_session` when provided, injects prior conversation history into the engine.
+#[allow(clippy::too_many_arguments)]
 fn run_noninteractive_query(
     query: &str,
     stream: bool,
@@ -1222,15 +1234,20 @@ fn run_noninteractive_query(
     bypass_all: bool,
     resume_session: Option<shannon_core::session_log::StoredSession>,
     disallowed_tools: Vec<String>,
+    goal: Option<String>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
 
     rt.block_on(async {
         // Build tool registry with all standard tools (sandboxed to project dir)
-        let project_dir = std::env::current_dir().unwrap_or_default();
+        let (project_dir, providers) =
+            shannon_remote::assembly::assemble_for_headless()
+                .await
+                .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
         let mut tools = ToolRegistry::new();
-        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
-            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let reg_result =
+            register_default_tools_with_project_dir_ex_with_providers(&mut tools, &project_dir, &providers)
+                .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -1455,6 +1472,14 @@ fn run_noninteractive_query(
             engine.append_system_prompt(&instructions.content);
         }
 
+        // Inject the session goal (--goal) — injection only in headless mode
+        if let Some(objective) = goal {
+            engine.set_goal(Some(shannon_core::query_engine::GoalSpec {
+                objective,
+                paused: false,
+            }));
+        }
+
         // Restore prior conversation history if --resume was specified
         if let Some(session_data) = resume_session {
             let count = session_data.messages.len();
@@ -1646,6 +1671,7 @@ fn load_schema(input: &str) -> Result<shannon_core::StructuredOutputConfig> {
 /// reached, 3 timeout (reserved, currently unused), 4 rate limited,
 /// 5 context overflow, 6 permission denied.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn run_headless_query(
     prompt: &str,
     config: &CliConfig,
@@ -1659,6 +1685,7 @@ fn run_headless_query(
     resume_session: Option<shannon_core::session_log::StoredSession>,
     schema_config: Option<&shannon_core::StructuredOutputConfig>,
     notify: bool,
+    goal: Option<String>,
 ) -> Result<()> {
     // Arm structured crash capture when the dogfood loop (or any CI harness)
     // points SHANNON_CRASH_DIR at a scratch directory; no-op otherwise.
@@ -1668,10 +1695,14 @@ fn run_headless_query(
         let start = Instant::now();
 
         // Build tool registry with all standard tools (sandboxed to project dir)
-        let project_dir = std::env::current_dir().unwrap_or_default();
+        let (project_dir, providers) =
+            shannon_remote::assembly::assemble_for_headless()
+                .await
+                .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
         let mut tools = ToolRegistry::new();
-        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
-            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let reg_result =
+            register_default_tools_with_project_dir_ex_with_providers(&mut tools, &project_dir, &providers)
+                .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -1815,6 +1846,14 @@ fn run_headless_query(
         // Append structured output schema instructions
         if let Some(schema) = schema_config {
             engine.append_system_prompt(&schema.system_prompt_suffix());
+        }
+
+        // Inject the session goal (--goal) — injection only in headless mode
+        if let Some(objective) = goal {
+            engine.set_goal(Some(shannon_core::query_engine::GoalSpec {
+                objective,
+                paused: false,
+            }));
         }
 
         // Restore prior conversation history if --resume was specified
@@ -2359,10 +2398,16 @@ fn run_serve_command(
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         // Build tool registry with default tools (sandboxed to project dir).
-        let project_dir = std::env::current_dir().unwrap_or_default();
+        let (project_dir, providers) = shannon_remote::assembly::assemble_for_headless()
+            .await
+            .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
         let mut tools = shannon_core::ToolRegistry::new();
-        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
-            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let reg_result = register_default_tools_with_project_dir_ex_with_providers(
+            &mut tools,
+            &project_dir,
+            &providers,
+        )
+        .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let _plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -2477,10 +2522,14 @@ fn run_team_agent_mode(
         let config = build_cli_config(model, provider, None, None, None, false, HashMap::new());
 
         // ── Build full tool registry (sandboxed to project dir) ──
-        let project_dir = std::env::current_dir().unwrap_or_default();
+        let (project_dir, providers) =
+            shannon_remote::assembly::assemble_for_headless()
+                .await
+                .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
         let mut tools = ToolRegistry::new();
-        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
-            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let reg_result =
+            register_default_tools_with_project_dir_ex_with_providers(&mut tools, &project_dir, &providers)
+                .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -4066,6 +4115,14 @@ fn main() -> Result<()> {
 /// Main CLI dispatch logic, factored out so it can be called from either the
 /// normal `clap::parse()` path or the deep-link transformation path.
 fn run_with_cli(cli: Cli) -> Result<()> {
+    // Promote an explicit --target into SHANNON_TARGET before any worker
+    // threads exist (single source of truth for every assembly site below;
+    // set_var is unsafe only because of concurrent readers, none of which
+    // exist at this point in main).
+    if let Some(target) = cli.target.as_deref().filter(|t| !t.is_empty()) {
+        unsafe { std::env::set_var("SHANNON_TARGET", target) };
+    }
+
     // Initialize i18n — auto-detect system language, allow --lang override
     if let Some(ref lang) = cli.lang {
         i18n::set_locale(lang);
@@ -4179,6 +4236,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             resume_data,
             schema_config.as_ref(),
             cli.notify,
+            cli.goal.clone(),
         );
     }
 
@@ -4210,6 +4268,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.yes,
             None,
             cli.disallowed_tools.clone(),
+            cli.goal.clone(),
         );
     }
 
@@ -4236,6 +4295,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.yes,
             resume_data,
             cli.disallowed_tools.clone(),
+            cli.goal.clone(),
         );
     }
 
@@ -4263,6 +4323,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.yes,
             resume_data,
             cli.disallowed_tools.clone(),
+            cli.goal.clone(),
         );
     }
 
@@ -4471,6 +4532,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 cli.yes,
                 resume_data,
                 cli.disallowed_tools.clone(),
+                cli.goal.clone(),
             )?;
         }
         Some(Commands::Serve {
@@ -5372,6 +5434,23 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             }
             _ => panic!("Expected Repl command"),
         }
+    }
+
+    // ── Goal flag tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn goal_flag_parses() {
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "-p",
+            "make CI green",
+            "--goal",
+            "all tests passing",
+        ])
+        .unwrap();
+        assert_eq!(cli.goal.as_deref(), Some("all tests passing"));
+        let cli = Cli::try_parse_from(["shannon", "-p", "x"]).unwrap();
+        assert!(cli.goal.is_none());
     }
 
     // ── Resume flag tests ────────────────────────────────────────────────
