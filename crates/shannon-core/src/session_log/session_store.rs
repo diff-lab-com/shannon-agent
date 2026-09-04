@@ -88,6 +88,11 @@ pub struct StoredLoop {
     pub iteration: usize,
     #[serde(default = "default_true")]
     pub active: bool,
+    /// Progress-guard counters (P2.1/P2.2), defaulted for older sidecars.
+    #[serde(default)]
+    pub no_tool_turns: usize,
+    #[serde(default)]
+    pub stall_strikes: usize,
 }
 
 /// Persistence DTO for an active `/ralph`. Same shape as `StoredLoop`
@@ -101,6 +106,11 @@ pub struct StoredRalph {
     pub iteration: usize,
     #[serde(default = "default_true")]
     pub active: bool,
+    /// Progress-guard counters (P2.1/P2.2), defaulted for older sidecars.
+    #[serde(default)]
+    pub no_tool_turns: usize,
+    #[serde(default)]
+    pub stall_strikes: usize,
 }
 
 fn default_true() -> bool {

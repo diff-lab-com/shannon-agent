@@ -340,6 +340,8 @@ pub struct LoopState {
     pub iteration: usize,
     /// Whether the loop is active
     pub active: bool,
+    /// P2.1/P2.2 progress guards (see `repl::loop_guard`).
+    pub guard: crate::repl::loop_guard::GuardCounters,
 }
 
 /// State for the Ralph Wiggum completion-based loop.
@@ -359,6 +361,8 @@ pub struct RalphState {
     pub iteration: usize,
     /// Whether the loop is active
     pub active: bool,
+    /// P2.1/P2.2 progress guards (see `repl::loop_guard`).
+    pub guard: crate::repl::loop_guard::GuardCounters,
 }
 
 /// Lifecycle of a session goal (`/goal`).
@@ -500,6 +504,8 @@ impl LoopState {
             max_iterations: self.max_iterations,
             iteration: self.iteration,
             active: self.active,
+            no_tool_turns: self.guard.no_tool_turns,
+            stall_strikes: self.guard.stall_strikes,
         }
     }
     pub fn from_stored(stored: shannon_core::session_log::StoredLoop) -> Self {
@@ -508,6 +514,10 @@ impl LoopState {
             max_iterations: stored.max_iterations,
             iteration: stored.iteration,
             active: stored.active,
+            guard: crate::repl::loop_guard::GuardCounters {
+                no_tool_turns: stored.no_tool_turns,
+                stall_strikes: stored.stall_strikes,
+            },
         }
     }
 }
@@ -520,6 +530,8 @@ impl RalphState {
             max_iterations: self.max_iterations,
             iteration: self.iteration,
             active: self.active,
+            no_tool_turns: self.guard.no_tool_turns,
+            stall_strikes: self.guard.stall_strikes,
         }
     }
     pub fn from_stored(stored: shannon_core::session_log::StoredRalph) -> Self {
@@ -529,6 +541,10 @@ impl RalphState {
             max_iterations: stored.max_iterations,
             iteration: stored.iteration,
             active: stored.active,
+            guard: crate::repl::loop_guard::GuardCounters {
+                no_tool_turns: stored.no_tool_turns,
+                stall_strikes: stored.stall_strikes,
+            },
         }
     }
 }
@@ -936,6 +952,7 @@ mod tests {
             max_iterations: 5,
             iteration: 2,
             active: true,
+            guard: Default::default(),
         };
         assert_eq!(ls.task, "fix bugs");
         assert!(ls.active);
