@@ -93,6 +93,10 @@ pub struct Repl {
     pub(crate) running: bool,
     /// Query engine for AI processing
     pub(crate) query_engine: Option<QueryEngine>,
+    /// Live goal handle shared with the `goal_get` / `goal_update` tools
+    /// (P2.5 wiring). Synced from `ReplState.goal` at query entry; tool
+    /// transitions are pulled back at query completion.
+    pub(crate) goal_shared: crate::repl::state::GoalShared,
     /// State manager (process-lifetime registry; its sessions dir anchors the L0 store)
     pub(crate) state_manager: StateManager,
     /// Command registry with all built-in commands
@@ -331,6 +335,7 @@ impl Repl {
         let client = shannon_engine::api::LlmClient::new_unauthenticated(client_config);
         let permission_manager = PermissionManager::new();
         let state_manager = StateManager::new();
+        let goal_shared = crate::repl::state::GoalShared::new();
         let query_engine = QueryEngine::with_defaults_arc(
             client,
             tool_registry.clone(),
@@ -347,6 +352,7 @@ impl Repl {
             running: false,
             query_engine: Some(query_engine),
             state_manager: StateManager::new(),
+            goal_shared: goal_shared.clone(),
             command_registry,
             command_parser: CommandParser::new(),
             shared_executor,
@@ -431,6 +437,20 @@ impl Repl {
         )
         .map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
+
+        // P2.5 wiring — register the `goal_get` / `goal_update` tools so the
+        // model can report completion/blockers through the structured tool
+        // contract. The handle is created here and stored on the Repl; the
+        // accessors proxy into ReplState.goal at the query boundaries.
+        let goal_shared = crate::repl::state::GoalShared::new();
+        if let Err(e) = shannon_tools::goal::register_goal_tools(
+            &mut tool_registry,
+            std::sync::Arc::new(crate::repl::commands::ReplGoalAccess {
+                shared: goal_shared.clone(),
+            }),
+        ) {
+            tracing::warn!("goal tools registration failed: {e}");
+        }
         let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
         // Load and register skills from shannon-skills as tools.
@@ -1412,6 +1432,7 @@ impl Repl {
             running: false,
             query_engine: Some(query_engine),
             state_manager: StateManager::new(),
+            goal_shared,
             command_registry,
             command_parser: CommandParser::new(),
             shared_executor,

@@ -143,6 +143,10 @@ pub(crate) fn save_goal_sidecar(repl: &Repl) {
 
 /// Handle `/goal ...`.
 pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
+    // Keep the tool-facing live handle in sync no matter which branch runs —
+    // the tools only fire mid-query, but the entry sync in handle_query
+    // covers that; this covers direct inspection between queries.
+    repl.goal_shared.sync_from(&repl.state.goal);
     match parse_goal_args(args) {
         GoalAction::Show => match repl.state.goal.as_ref() {
             Some(goal) => {
@@ -316,6 +320,37 @@ fn turn_had_tool_calls(chat: &crate::widgets::ChatWidget) -> bool {
     false
 }
 
+/// REPL-side [`shannon_tools::goal::GoalStateAccess`] implementation: the
+/// tools read and mutate the live [`GoalShared`] handle; the REPL replays
+/// transitions onto `ReplState.goal` at query completion (see
+/// `check_goal_continuation`).
+pub(crate) struct ReplGoalAccess {
+    pub shared: crate::repl::state::GoalShared,
+}
+
+impl shannon_tools::goal::GoalStateAccess for ReplGoalAccess {
+    fn snapshot(&self) -> Option<shannon_tools::goal::GoalSnapshot> {
+        self.shared
+            .current()
+            .map(|g| shannon_tools::goal::GoalSnapshot {
+                objective: g.objective,
+                status: match g.status {
+                    GoalStatus::Active => "active",
+                    GoalStatus::Paused => "paused",
+                    GoalStatus::Complete => "complete",
+                }
+                .to_string(),
+                iterations: g.iterations,
+                max_iterations: g.max_iterations,
+                max_budget_usd: g.max_budget_usd,
+            })
+    }
+
+    fn apply_update(&self, outcome: shannon_tools::goal::GoalUpdateOutcome) -> Option<()> {
+        self.shared.apply(outcome)
+    }
+}
+
 /// Pure continuation decision (unit-tested): inspects the goal state and the
 /// last assistant reply and decides the next lifecycle step.
 ///
@@ -408,6 +443,39 @@ pub(crate) fn goal_continuation_decision_with_facts(
 /// Returns true if a new goal iteration was started (callers must then skip
 /// the ralph/loop checks so only one auto-continuation loop runs).
 pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
+    // P2.5 wiring — replay mid-turn `goal_update` transitions onto the
+    // REPL-owned state, persist them, and surface them to the user. The
+    // transitioned goal never auto-continues (Complete/Paused are terminal
+    // for the loop), so we return right after notifying.
+    if let Some((pulled, transition)) = repl.goal_shared.take_transition() {
+        let message = match (&transition, &pulled.status) {
+            (shannon_tools::goal::GoalUpdateOutcome::Completed, _) => Some(
+                t!(
+                    "commands.goal.complete",
+                    iterations = pulled.iterations,
+                    objective = pulled.objective.clone()
+                )
+                .to_string(),
+            ),
+            (shannon_tools::goal::GoalUpdateOutcome::Paused(reason), _) => {
+                Some(t!("commands.goal.paused_blocked", reason = reason).to_string())
+            }
+            _ => None,
+        };
+        repl.state.goal = Some(pulled);
+        save_goal_sidecar(repl);
+        if let Some(message) = message {
+            if matches!(
+                transition,
+                shannon_tools::goal::GoalUpdateOutcome::Completed
+            ) {
+                let msg_copy = message.clone();
+                super::notify_query_complete(&repl.notifier, repl.notifications_enabled, &msg_copy);
+            }
+            repl.chat.add_message(ChatRole::System, message);
+        }
+        return false;
+    }
     let Some(goal_snapshot) = repl.state.goal.clone() else {
         return false;
     };
