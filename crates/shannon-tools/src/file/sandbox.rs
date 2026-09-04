@@ -1305,7 +1305,7 @@ mod tests {
         // /usr/lib exists on every Unix CI image, is not denied, and is not
         // under either root -> OutsideAllowedRoots.
         let result = sandbox.validate(Path::new("/usr/lib")).await;
-        let err = result.err().expect("/usr/lib must be rejected").to_string();
+        let err = result.unwrap_err().to_string();
         assert!(err.contains("not within any allowed root"), "got: {err}");
         assert!(
             err.contains("allowed: /workspace") && err.contains("/tmp"),
@@ -1323,7 +1323,7 @@ mod tests {
         let sandbox = alias_output_sandbox(td.path());
 
         let result = sandbox.validate(Path::new("/etc/hosts")).await;
-        let err = result.err().expect("/etc/hosts must be rejected").to_string();
+        let err = result.unwrap_err().to_string();
         assert!(err.contains("restricted"), "got: {err}");
         assert!(
             err.contains("allowed roots: /workspace") && err.contains("/tmp"),
