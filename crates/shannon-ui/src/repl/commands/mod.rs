@@ -1,7 +1,6 @@
 //! REPL command dispatch and handler implementations
 
 mod config;
-mod remote;
 mod cost;
 mod debug;
 mod extensions;
@@ -11,6 +10,7 @@ mod hooks;
 mod loop_engine;
 mod media;
 mod memory;
+mod remote;
 mod session;
 mod web;
 

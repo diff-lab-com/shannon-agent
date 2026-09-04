@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use shannon_tool_interface::{DirEntryInfo, FileMeta, FileSystemProvider, ProcessProvider, ProcessRequest};
+use shannon_tool_interface::{
+    DirEntryInfo, FileMeta, FileSystemProvider, ProcessProvider, ProcessRequest,
+};
 
 use crate::docker::process::DockerExecProcess;
 
@@ -41,7 +43,9 @@ fn container_request(program: &str, args: Vec<String>) -> ProcessRequest {
 
 /// Run one composed container command to completion through the world.
 async fn run(proc: &DockerExecProcess, program: &str, args: &[String]) -> io::Result<Captured> {
-    let out = proc.run_async(&container_request(program, args.to_vec())).await?;
+    let out = proc
+        .run_async(&container_request(program, args.to_vec()))
+        .await?;
     Ok(Captured {
         stdout: out.stdout,
         stderr: out.stderr,
@@ -102,11 +106,7 @@ fn list_dir_sync(proc: &DockerExecProcess, root: &Path) -> io::Result<Vec<DirEnt
 }
 
 /// Blocking twin of [`run`].
-fn run_blocking(
-    proc: &DockerExecProcess,
-    program: &str,
-    args: &[String],
-) -> io::Result<Captured> {
+fn run_blocking(proc: &DockerExecProcess, program: &str, args: &[String]) -> io::Result<Captured> {
     let out = proc.run_blocking(&container_request(program, args.to_vec()))?;
     Ok(Captured {
         stdout: out.stdout,
@@ -188,18 +188,19 @@ impl FileSystemProvider for DockerExecFs {
         run(
             &self.proc,
             "mv",
-            &[
-                "-f".into(),
-                path_arg("mv", from),
-                path_arg("mv", to),
-            ],
+            &["-f".into(), path_arg("mv", from), path_arg("mv", to)],
         )
         .await?
         .ok("mv")
     }
 
     async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        let cap = run(&self.proc, "readlink", &["-f".into(), path_arg("readlink", path)]).await?;
+        let cap = run(
+            &self.proc,
+            "readlink",
+            &["-f".into(), path_arg("readlink", path)],
+        )
+        .await?;
         cap.ok("readlink -f")?;
         let s = String::from_utf8_lossy(&cap.stdout).trim().to_string();
         if s.is_empty() {
@@ -234,17 +235,11 @@ impl FileSystemProvider for DockerExecFs {
     }
 
     fn create_dir_all_blocking(&self, path: &Path) -> io::Result<()> {
-        run_blocking(
-            &self.proc,
-            "mkdir",
-            &["-p".into(), path_arg("mkdir", path)],
-        )?
-        .ok("mkdir -p")
+        run_blocking(&self.proc, "mkdir", &["-p".into(), path_arg("mkdir", path)])?.ok("mkdir -p")
     }
 
     fn remove_file_blocking(&self, path: &Path) -> io::Result<()> {
-        run_blocking(&self.proc, "rm", &["-f".into(), path_arg("rm", path)])?
-            .ok("rm")
+        run_blocking(&self.proc, "rm", &["-f".into(), path_arg("rm", path)])?.ok("rm")
     }
 
     fn canonicalize_blocking(&self, path: &Path) -> io::Result<PathBuf> {
@@ -278,11 +273,7 @@ impl FileSystemProvider for DockerExecFs {
         let cap = run_blocking(
             &self.proc,
             "head",
-            &[
-                "-c".into(),
-                max_bytes.to_string(),
-                path_arg("head", path),
-            ],
+            &["-c".into(), max_bytes.to_string(), path_arg("head", path)],
         )?;
         cap.ok("head -c")?;
         Ok(cap.stdout)
@@ -321,17 +312,14 @@ fn parse_stat(out: &str) -> Option<FileMeta> {
     Some(FileMeta {
         len,
         is_dir,
-        modified: mtime.map(|s| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(s)),
+        modified: mtime
+            .map(|s| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(s)),
     })
 }
 
 /// Merge the two `-print0` find outputs into sorted [`DirEntryInfo`]s.
 /// Directory entries carry `len = 0` (documented limitation).
-fn merge_find_entries(
-    root: &Path,
-    dirs: &[u8],
-    files: &[u8],
-) -> Vec<DirEntryInfo> {
+fn merge_find_entries(root: &Path, dirs: &[u8], files: &[u8]) -> Vec<DirEntryInfo> {
     let mut out = Vec::new();
     for chunk in dirs.split(|b| *b == 0) {
         if chunk.is_empty() {
@@ -389,10 +377,7 @@ mod tests {
             .iter()
             .map(|e| e.path.to_string_lossy().to_string())
             .collect();
-        assert_eq!(
-            names,
-            vec!["/w/a\nnewline", "/w/b with space", "/w/sub"]
-        );
+        assert_eq!(names, vec!["/w/a\nnewline", "/w/b with space", "/w/sub"]);
         assert_eq!(entries.iter().filter(|e| e.is_dir).count(), 1);
     }
 

@@ -9,7 +9,7 @@ pub mod fs;
 pub mod process;
 pub mod session;
 
-pub use discover::{discover_ssh_hosts, SshHostCandidate};
+pub use discover::{SshHostCandidate, discover_ssh_hosts};
 pub use fs::SshFs;
-pub use process::{compose_command, SshProcess};
+pub use process::{SshProcess, compose_command};
 pub use session::{HealthReport, SshRuntime, WorldStatus};

@@ -236,11 +236,9 @@ fn register_all_tools(
     // world-roots handle lets remote assemblies retarget every tool's
     // sandbox at runtime (`/remote use`) without a registry rebuild.
     let sandbox = match world_sandbox {
-        Some(handle) => {
-            sandbox_base
-                .with_fs_provider(fs.clone())
-                .with_world_sandbox(handle.clone())
-        }
+        Some(handle) => sandbox_base
+            .with_fs_provider(fs.clone())
+            .with_world_sandbox(handle.clone()),
         None => sandbox_base.with_fs_provider(fs.clone()),
     };
 

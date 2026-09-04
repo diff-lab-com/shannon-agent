@@ -119,6 +119,24 @@ Extend Shannon with plugins and skills:
 - **Skill plugins** — Prompt templates triggered by slash commands
 - **Hook system** — 32+ events (tool execution, compaction, config changes, agent lifecycle)
 
+### Remote Targets (SSH / Docker)
+
+Run the entire toolchain on a remote machine or inside a container:
+
+- **SSH hosts** — reuse `~/.ssh/config` (aliases, agent, ProxyJump); files go
+  over SFTP, commands over the multiplexed ssh connection. First-connect
+  trust uses the standard known_hosts TOFU flow.
+- **Docker containers** — attach to a running container (`docker exec`);
+  optionally through an SSH hop (`ssh_target`) for remote daemons.
+- **Management** — `/remote` in the TUI, `--target <name>` headless, or
+  Settings → Remotes in the desktop app. Targets live in
+  `~/.shannon/remotes.toml` (no credentials stored; system ssh owns auth).
+
+```bash
+/remote use build-box          # TUI: switch this session to a target
+shannon --target build-box -p "run the test suite"   # headless
+```
+
 ### Internationalization
 
 - 10 languages: English, Chinese, Hindi, Spanish, French, Arabic, Bengali, Portuguese, Russian, Japanese
@@ -286,6 +304,7 @@ shannon --prompt "fix lint" --diff-only         # Only output diff
 | `/diff` | Show file diff viewer |
 | `/batch` | Parallel worktree-isolated PR creation |
 | `/team` | Manage agent teams |
+| `/remote` | Connect SSH hosts / Docker containers as execution targets |
 | `/cost` | Show token usage and cost |
 | `/search` | Search conversation history |
 | `/doctor` | Check Shannon installation health |

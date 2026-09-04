@@ -59,7 +59,15 @@ pub fn provider_walk(
     let use_gitignore = metadata(&root.join(".git")).is_ok();
 
     let mut levels: Vec<(PathBuf, Option<GitignoreMatcher>)> = Vec::new();
-    walk_dir(metadata, read_text, list_dir, root, use_gitignore, &mut levels, cb)
+    walk_dir(
+        metadata,
+        read_text,
+        list_dir,
+        root,
+        use_gitignore,
+        &mut levels,
+        cb,
+    )
 }
 
 fn walk_dir(
@@ -100,7 +108,15 @@ fn walk_dir(
         }
         let descend = cb(&entry);
         if entry.is_dir && descend {
-            walk_dir(_metadata, read_text, list_dir, &entry.path, use_gitignore, levels, cb)?;
+            walk_dir(
+                _metadata,
+                read_text,
+                list_dir,
+                &entry.path,
+                use_gitignore,
+                levels,
+                cb,
+            )?;
         }
     }
 
@@ -110,17 +126,15 @@ fn walk_dir(
 
 /// Deepest level with a matching rule decides (deeper files override
 /// shallower ones); within a file the last matching rule wins.
-fn is_ignored(
-    levels: &[(PathBuf, Option<GitignoreMatcher>)],
-    path: &Path,
-    is_dir: bool,
-) -> bool {
+fn is_ignored(levels: &[(PathBuf, Option<GitignoreMatcher>)], path: &Path, is_dir: bool) -> bool {
     for (dir, matcher) in levels.iter().rev() {
         let Some(matcher) = matcher else { continue };
         let Ok(rel) = path.strip_prefix(dir) else {
             continue;
         };
-        let rel = rel.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+        let rel = rel
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
         if let Some(decision) = matcher.decide(&rel, is_dir) {
             return decision;
         }
@@ -236,8 +250,9 @@ fn seg_rec(p: &[char], t: &[char]) -> bool {
 fn match_segments(pat: &[&str], txt: &[&str]) -> bool {
     match pat.first() {
         None => txt.is_empty(),
-        Some(&"**") => match_segments(&pat[1..], txt)
-            || (!txt.is_empty() && match_segments(pat, &txt[1..])),
+        Some(&"**") => {
+            match_segments(&pat[1..], txt) || (!txt.is_empty() && match_segments(pat, &txt[1..]))
+        }
         Some(p) => {
             !txt.is_empty() && match_segment(p, txt[0]) && match_segments(&pat[1..], &txt[1..])
         }

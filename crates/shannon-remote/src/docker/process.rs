@@ -26,10 +26,7 @@ pub fn compose_docker_exec(
     container: &str,
     default_cwd: &Path,
 ) -> Vec<String> {
-    let cwd = req
-        .cwd
-        .clone()
-        .unwrap_or_else(|| default_cwd.to_path_buf());
+    let cwd = req.cwd.clone().unwrap_or_else(|| default_cwd.to_path_buf());
     let mut argv: Vec<String> = Vec::with_capacity(req.args.len() + req.env.len() + 6);
     argv.push("docker".into());
     argv.push("exec".into());
@@ -206,7 +203,15 @@ mod tests {
         assert_eq!(
             argv,
             vec![
-                "docker", "exec", "-w", "/workspace", "-i", "ci-1", "rg", "-n", "x"
+                "docker",
+                "exec",
+                "-w",
+                "/workspace",
+                "-i",
+                "ci-1",
+                "rg",
+                "-n",
+                "x"
             ]
         );
     }

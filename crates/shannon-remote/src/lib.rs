@@ -10,11 +10,11 @@
 //! lives in `shannon-tool-interface` so all worlds inherit it; this crate
 //! deliberately has no walk module.
 
-pub mod target;
-pub mod ssh;
+pub mod assembly;
 pub mod docker;
 pub mod dynamic;
-pub mod assembly;
+pub mod ssh;
+pub mod target;
 
 #[cfg(test)]
 mod smoke {

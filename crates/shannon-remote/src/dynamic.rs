@@ -148,7 +148,10 @@ impl DynamicWorld {
 
     /// Connect to `target` and switch to it. The local world stays installed
     /// (and an error is returned) when the connection or health check fails.
-    pub async fn connect_target(self: &Arc<Self>, target: &RemoteTarget) -> io::Result<HealthReport> {
+    pub async fn connect_target(
+        self: &Arc<Self>,
+        target: &RemoteTarget,
+    ) -> io::Result<HealthReport> {
         match target.kind {
             TargetKind::Ssh => {
                 let runtime = SshRuntime::connect(target).await?;
@@ -343,27 +346,59 @@ mod tests {
             Ok(self.read_text(path).await?.into_bytes())
         }
         async fn metadata(&self, _path: &Path) -> io::Result<FileMeta> {
-            Ok(FileMeta { len: 0, is_dir: false, modified: None })
+            Ok(FileMeta {
+                len: 0,
+                is_dir: false,
+                modified: None,
+            })
         }
-        async fn create_dir_all(&self, _path: &Path) -> io::Result<()> { Ok(()) }
-        async fn write_bytes(&self, _path: &Path, _contents: &[u8]) -> io::Result<()> { Ok(()) }
-        async fn rename(&self, _from: &Path, _to: &Path) -> io::Result<()> { Ok(()) }
-        async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> { Ok(path.to_path_buf()) }
-        fn read_text_blocking(&self, _path: &Path) -> io::Result<String> { Ok("fake".into()) }
-        fn write_bytes_blocking(&self, _path: &Path, _c: &[u8]) -> io::Result<()> { Ok(()) }
-        fn create_dir_all_blocking(&self, _path: &Path) -> io::Result<()> { Ok(()) }
-        fn remove_file_blocking(&self, _path: &Path) -> io::Result<()> { Ok(()) }
-        fn canonicalize_blocking(&self, path: &Path) -> io::Result<PathBuf> { Ok(path.to_path_buf()) }
+        async fn create_dir_all(&self, _path: &Path) -> io::Result<()> {
+            Ok(())
+        }
+        async fn write_bytes(&self, _path: &Path, _contents: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+        async fn rename(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+            Ok(())
+        }
+        async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+            Ok(path.to_path_buf())
+        }
+        fn read_text_blocking(&self, _path: &Path) -> io::Result<String> {
+            Ok("fake".into())
+        }
+        fn write_bytes_blocking(&self, _path: &Path, _c: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+        fn create_dir_all_blocking(&self, _path: &Path) -> io::Result<()> {
+            Ok(())
+        }
+        fn remove_file_blocking(&self, _path: &Path) -> io::Result<()> {
+            Ok(())
+        }
+        fn canonicalize_blocking(&self, path: &Path) -> io::Result<PathBuf> {
+            Ok(path.to_path_buf())
+        }
         fn metadata_blocking(&self, _path: &Path) -> io::Result<FileMeta> {
-            Ok(FileMeta { len: 0, is_dir: false, modified: None })
+            Ok(FileMeta {
+                len: 0,
+                is_dir: false,
+                modified: None,
+            })
         }
-        fn read_prefix_blocking(&self, _p: &Path, _m: usize) -> io::Result<Vec<u8>> { Ok(Vec::new()) }
-        fn list_dir_blocking(&self, _p: &Path) -> io::Result<Vec<DirEntryInfo>> { Ok(Vec::new()) }
+        fn read_prefix_blocking(&self, _p: &Path, _m: usize) -> io::Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn list_dir_blocking(&self, _p: &Path) -> io::Result<Vec<DirEntryInfo>> {
+            Ok(Vec::new())
+        }
         fn walk_blocking(
             &self,
             _root: &Path,
             _cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
-        ) -> io::Result<()> { Ok(()) }
+        ) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     #[derive(Default)]
@@ -389,7 +424,9 @@ mod tests {
             Err(io::Error::other("fake has no children"))
         }
         fn capabilities(&self) -> ExecCaps {
-            ExecCaps { is_remote: self.remote }
+            ExecCaps {
+                is_remote: self.remote,
+            }
         }
     }
 
@@ -409,7 +446,10 @@ mod tests {
 
     #[tokio::test]
     async fn delegates_to_active_world_and_survives_swap() {
-        let (world, state) = DynamicWorld::new(Arc::new(FakeFs::default()), Arc::new(FakeProcess::default()));
+        let (world, state) = DynamicWorld::new(
+            Arc::new(FakeFs::default()),
+            Arc::new(FakeProcess::default()),
+        );
         assert!(!world.is_remote());
         assert_eq!(state.status(), WorldStatus::Local);
 
@@ -426,7 +466,10 @@ mod tests {
 
     #[tokio::test]
     async fn disconnect_restores_local_status() {
-        let (world, state) = DynamicWorld::new(Arc::new(FakeFs::default()), Arc::new(FakeProcess::default()));
+        let (world, state) = DynamicWorld::new(
+            Arc::new(FakeFs::default()),
+            Arc::new(FakeProcess::default()),
+        );
         let rx = state.subscribe();
         world.disconnect();
         // watch channel delivers the (unchanged) Local status.
@@ -436,13 +479,19 @@ mod tests {
 
     #[tokio::test]
     async fn reconnect_without_target_errors() {
-        let (world, _state) = DynamicWorld::new(Arc::new(FakeFs::default()), Arc::new(FakeProcess::default()));
+        let (world, _state) = DynamicWorld::new(
+            Arc::new(FakeFs::default()),
+            Arc::new(FakeProcess::default()),
+        );
         assert!(world.reconnect().await.is_err());
     }
 
     #[tokio::test]
     async fn docker_target_probe_failure_keeps_local_world() {
-        let (world, state) = DynamicWorld::new(Arc::new(FakeFs::default()), Arc::new(FakeProcess::default()));
+        let (world, state) = DynamicWorld::new(
+            Arc::new(FakeFs::default()),
+            Arc::new(FakeProcess::default()),
+        );
         // `docker` almost certainly missing/failed here: either way the
         // local world must stay installed.
         let _ = world.connect_target(&target()).await;

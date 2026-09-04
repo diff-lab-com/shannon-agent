@@ -17,6 +17,10 @@ import type {
   CliInstallResult,
   MobileDeviceEntry,
   MobilePairToken,
+  ContainerInfo,
+  RemoteHealth,
+  RemoteTargetListItem,
+  SshHostCandidate,
   SttConfig,
   TranscriptionResult,
   SendMessageResponse,
@@ -1674,3 +1678,40 @@ export async function transcribeAudioLocalBase64(
   })
 }
 
+
+// --- Remote targets (SSH hosts / Docker containers) ---
+
+/** List saved remote targets from ~/.shannon/remotes.toml. */
+export async function remoteListTargets(): Promise<RemoteTargetListItem[]> {
+  return invoke('remote_list_targets')
+}
+
+/** Discover SSH host candidates from ~/.ssh/config (read-only). */
+export async function remoteDiscoverSshHosts(): Promise<SshHostCandidate[]> {
+  return invoke('remote_discover_ssh_hosts')
+}
+
+/** List running Docker containers (best-effort). */
+export async function remoteListDockerContainers(): Promise<ContainerInfo[]> {
+  return invoke('remote_list_docker_containers')
+}
+
+/** Add or replace a remote target (validated server-side). */
+export async function remoteAddTarget(target: RemoteTargetListItem): Promise<void> {
+  await invoke('remote_add_target', { target })
+}
+
+/** Remove a remote target by name. */
+export async function remoteRemoveTarget(name: string): Promise<void> {
+  await invoke('remote_remove_target', { name })
+}
+
+/** Set (or clear with null) the default target for new sessions. */
+export async function remoteSetDefaultTarget(name: string | null): Promise<void> {
+  await invoke('remote_set_default_target', { name })
+}
+
+/** Probe a target's connectivity and platform facts. */
+export async function remoteTestTarget(name: string): Promise<RemoteHealth> {
+  return invoke('remote_test_target', { name })
+}

@@ -103,9 +103,11 @@ impl WorldSandboxHandle {
 
     /// The installed override, or `None` when passthrough (empty).
     pub fn current(&self) -> Option<WorldRoots> {
-        self.inner.read().ok().map(|r| r.clone()).filter(|r| {
-            !r.allowed_roots.is_empty() || r.home_dir.is_some()
-        })
+        self.inner
+            .read()
+            .ok()
+            .map(|r| r.clone())
+            .filter(|r| !r.allowed_roots.is_empty() || r.home_dir.is_some())
     }
 }
 
@@ -189,10 +191,7 @@ impl PathSandbox {
 
     /// Install a shared world-roots override (remote targets). Every clone
     /// sharing the handle retargets together; see [`WorldSandboxHandle`].
-    pub fn with_world_sandbox(
-        mut self,
-        world: std::sync::Arc<WorldSandboxHandle>,
-    ) -> Self {
+    pub fn with_world_sandbox(mut self, world: std::sync::Arc<WorldSandboxHandle>) -> Self {
         self.world = Some(world);
         self
     }

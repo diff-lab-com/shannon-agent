@@ -7,12 +7,12 @@
 //! authentication rides on the system ssh.
 
 use shannon_remote::assembly::DynamicAssembly;
-use shannon_remote::target::{RemotesFile, RemoteTarget, TargetKind};
+use shannon_remote::target::{RemoteTarget, RemotesFile, TargetKind};
 
 use super::set_error;
+use crate::Result;
 use crate::repl::Repl;
 use crate::widgets::ChatRole;
-use crate::Result;
 use rust_i18n::t;
 
 /// Parsed `/remote` subcommand.
@@ -23,9 +23,20 @@ pub(crate) enum RemoteAction {
     Test(String),
     Disconnect,
     Reconnect,
-    Remove { name: String, confirmed: bool },
-    AddSsh { destination: String, name: String, workspace_dir: String },
-    AddDocker { container: String, name: String, workspace_dir: String },
+    Remove {
+        name: String,
+        confirmed: bool,
+    },
+    AddSsh {
+        destination: String,
+        name: String,
+        workspace_dir: String,
+    },
+    AddDocker {
+        container: String,
+        name: String,
+        workspace_dir: String,
+    },
     Unknown(String),
 }
 
@@ -63,23 +74,19 @@ pub(crate) fn parse_remote_args(args: &str) -> RemoteAction {
             let mut parts = rest.split_whitespace();
             match parts.next() {
                 Some("ssh") => match (parts.next(), parts.next(), parts.next()) {
-                    (Some(destination), Some(name), Some(workspace_dir)) => {
-                        RemoteAction::AddSsh {
-                            destination: destination.to_string(),
-                            name: name.to_string(),
-                            workspace_dir: workspace_dir.to_string(),
-                        }
-                    }
+                    (Some(destination), Some(name), Some(workspace_dir)) => RemoteAction::AddSsh {
+                        destination: destination.to_string(),
+                        name: name.to_string(),
+                        workspace_dir: workspace_dir.to_string(),
+                    },
                     _ => RemoteAction::Unknown("add ssh".into()),
                 },
                 Some("docker") => match (parts.next(), parts.next(), parts.next()) {
-                    (Some(container), Some(name), Some(workspace_dir)) => {
-                        RemoteAction::AddDocker {
-                            container: container.to_string(),
-                            name: name.to_string(),
-                            workspace_dir: workspace_dir.to_string(),
-                        }
-                    }
+                    (Some(container), Some(name), Some(workspace_dir)) => RemoteAction::AddDocker {
+                        container: container.to_string(),
+                        name: name.to_string(),
+                        workspace_dir: workspace_dir.to_string(),
+                    },
                     _ => RemoteAction::Unknown("add docker".into()),
                 },
                 _ => RemoteAction::Unknown("add".into()),
@@ -106,15 +113,17 @@ pub(crate) fn handle_remote(repl: &mut Repl, args: &str) -> Result<()> {
             Ok(())
         }
         RemoteAction::Reconnect => reconnect(repl, &assembly),
-        RemoteAction::Remove { name, confirmed } => {
-            remove_target(repl, &name, confirmed)
-        }
-        RemoteAction::AddSsh { destination, name, workspace_dir } => {
-            add_target(repl, TargetKind::Ssh, destination, name, workspace_dir)
-        }
-        RemoteAction::AddDocker { container, name, workspace_dir } => {
-            add_target(repl, TargetKind::Docker, container, name, workspace_dir)
-        }
+        RemoteAction::Remove { name, confirmed } => remove_target(repl, &name, confirmed),
+        RemoteAction::AddSsh {
+            destination,
+            name,
+            workspace_dir,
+        } => add_target(repl, TargetKind::Ssh, destination, name, workspace_dir),
+        RemoteAction::AddDocker {
+            container,
+            name,
+            workspace_dir,
+        } => add_target(repl, TargetKind::Docker, container, name, workspace_dir),
         RemoteAction::Unknown(sub) => {
             set_error(repl, t!("commands.remote.usage").as_ref());
             let _ = sub;
@@ -137,14 +146,8 @@ fn show_dashboard(repl: &mut Repl, assembly: &DynamicAssembly) -> Result<()> {
                 " "
             };
             let detail = match target.kind {
-                TargetKind::Ssh => target
-                    .host
-                    .clone()
-                    .unwrap_or_default(),
-                TargetKind::Docker => target
-                    .container
-                    .clone()
-                    .unwrap_or_default(),
+                TargetKind::Ssh => target.host.clone().unwrap_or_default(),
+                TargetKind::Docker => target.container.clone().unwrap_or_default(),
             };
             lines.push(format!(
                 "{marker} {name} ({kind}) → {detail} · {ws}",
@@ -182,7 +185,15 @@ fn use_target(repl: &mut Repl, assembly: &DynamicAssembly, name: &str) -> Result
     {
         Ok(h) => h,
         Err(e) => {
-            set_error(repl, t!("commands.remote.test_failed", name = name, error = e.to_string()).as_ref());
+            set_error(
+                repl,
+                t!(
+                    "commands.remote.test_failed",
+                    name = name,
+                    error = e.to_string()
+                )
+                .as_ref(),
+            );
             return Ok(());
         }
     };
@@ -232,7 +243,12 @@ fn test_target(repl: &mut Repl, assembly: &DynamicAssembly, name: &str) -> Resul
             ws = if h.workspace_exists { "yes" } else { "no" }
         )
         .to_string(),
-        Err(e) => t!("commands.remote.test_failed", name = name, error = e.to_string()).into(),
+        Err(e) => t!(
+            "commands.remote.test_failed",
+            name = name,
+            error = e.to_string()
+        )
+        .into(),
     };
     repl.chat.add_message(ChatRole::System, message);
     let _ = assembly; // dashboard state untouched by test
@@ -343,7 +359,12 @@ fn add_target(
     }
     repl.chat.add_message(
         ChatRole::System,
-        t!("commands.remote.added", name = name, kind = kind.to_string()).into(),
+        t!(
+            "commands.remote.added",
+            name = name,
+            kind = kind.to_string()
+        )
+        .into(),
     );
     Ok(())
 }
@@ -361,9 +382,18 @@ mod tests {
 
     #[test]
     fn parses_use_test_disconnect_reconnect() {
-        assert_eq!(parse_remote_args("use build-box"), RemoteAction::Use("build-box".into()));
-        assert_eq!(parse_remote_args("use   "), RemoteAction::Unknown("use".into()));
-        assert_eq!(parse_remote_args("test ci"), RemoteAction::Test("ci".into()));
+        assert_eq!(
+            parse_remote_args("use build-box"),
+            RemoteAction::Use("build-box".into())
+        );
+        assert_eq!(
+            parse_remote_args("use   "),
+            RemoteAction::Unknown("use".into())
+        );
+        assert_eq!(
+            parse_remote_args("test ci"),
+            RemoteAction::Test("ci".into())
+        );
         assert_eq!(parse_remote_args("disconnect"), RemoteAction::Disconnect);
         assert_eq!(parse_remote_args("reconnect"), RemoteAction::Reconnect);
     }
@@ -372,13 +402,22 @@ mod tests {
     fn parses_remove_with_optional_confirmation() {
         assert_eq!(
             parse_remote_args("remove build-box"),
-            RemoteAction::Remove { name: "build-box".into(), confirmed: false }
+            RemoteAction::Remove {
+                name: "build-box".into(),
+                confirmed: false
+            }
         );
         assert_eq!(
             parse_remote_args("remove build-box --yes"),
-            RemoteAction::Remove { name: "build-box".into(), confirmed: true }
+            RemoteAction::Remove {
+                name: "build-box".into(),
+                confirmed: true
+            }
         );
-        assert_eq!(parse_remote_args("remove"), RemoteAction::Unknown("remove".into()));
+        assert_eq!(
+            parse_remote_args("remove"),
+            RemoteAction::Unknown("remove".into())
+        );
     }
 
     #[test]
@@ -412,6 +451,9 @@ mod tests {
 
     #[test]
     fn unknown_subcommand_surfaces_usage() {
-        assert_eq!(parse_remote_args("wat"), RemoteAction::Unknown("wat".into()));
+        assert_eq!(
+            parse_remote_args("wat"),
+            RemoteAction::Unknown("wat".into())
+        );
     }
 }
