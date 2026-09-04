@@ -9,7 +9,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-see%20metrics.md-brightgreen.svg)](./docs/metrics.md)
-[![Crates](https://img.shields.io/badge/crates-12-blue.svg)
+<!-- metrics:start:badge -->[![Crates](https://img.shields.io/badge/crates-20-blue.svg)](./docs/metrics.md)<!-- metrics:end:badge -->
 
 [English](#what-is-shannon-code) | [中文文档](./README.zh-CN.md) | [Documentation](https://shannon-agent.github.io/shannon-code/)
 
@@ -21,7 +21,7 @@
 
 Shannon Code is a fully open-source, Rust-based AI coding assistant that works with **any LLM provider** — Anthropic, OpenAI, Ollama, DeepSeek, or any OpenAI-compatible endpoint. It provides a rich terminal UI, powerful tool orchestration, multi-agent coordination, and the Model Context Protocol (MCP) for extensibility.
 
-Unlike closed-source alternatives, Shannon Code has **no hidden billing injections**, **no cache-destroying dynamic headers**, and **no vendor lock-in**. Every line of code is auditable, and every behavior is verified by nearly 8,000 tests.
+Unlike closed-source alternatives, Shannon Code has **no hidden billing injections**, **no cache-destroying dynamic headers**, and **no vendor lock-in**. <!-- metrics:start:intro -->Every line of code is auditable, and every behavior is verified by **11,752 automated tests**.<!-- metrics:end:intro -->
 
 **Key differentiators:**
 
@@ -29,7 +29,7 @@ Unlike closed-source alternatives, Shannon Code has **no hidden billing injectio
 |---------|-------------|---------------------------|
 | LLM providers | Anthropic, OpenAI, Ollama, any OpenAI-compatible | Single vendor |
 | Cost transparency | No hidden fees or cache manipulation | Dynamic billing headers inflate costs 10-20x |
-| Test coverage | ~7,900 tests, every file covered | Often zero tests |
+<!-- metrics:start:diffrow -->| Test coverage | **11,752** tests across 20 workspace members | Often zero tests |<!-- metrics:end:diffrow -->
 | Extensibility | MCP protocol, plugin system, skills framework | Limited or closed |
 | Agent orchestration | Multi-agent teams, worktree isolation, `/batch` PRs | Basic or none |
 | Code auditability | Every line visible in source code | Black box |
@@ -439,28 +439,43 @@ Artifacts go to `target/dist/` as `.tar.gz` (Linux/macOS) or `.zip` (Windows).
 
 ## Reliability & Test Coverage
 
+<!-- metrics:start:table -->
 | Metric | Value |
 |--------|-------|
-| Total Rust code | ~282,000 lines |
-| Source files | 355 |
-| Total tests | **7,889** |
-| Crates | 12 |
-| Files with zero tests | **0** (every `src/**/*.rs` has at least one `#[test]`) |
+| Total Rust code | 418,458 lines |
+| Source files | 624 |
+| Total tests (nextest, runnable) | **11,752** |
+| Crates (workspace members) | 20 (19 crates + desktop) |
+| Crates with zero tests | 2 (`shannon-server`, `shannon-stability-attr`) |
 | CI lint | `cargo clippy --workspace -- -D warnings` (zero warnings) |
+<!-- metrics:end:table -->
 
 Per-crate test counts:
 
+<!-- metrics:start:crates -->
 | Crate | Tests | Responsibility |
 |-------|-------|----------------|
-| `shannon-core` | ~3,370 | API client, query engine, permissions, tools, state |
-| `shannon-ui` | ~1,089 | Terminal UI, REPL, widgets, rendering |
-| `shannon-tools` | ~1,111 | Tool implementations |
-| `shannon-commands` | ~335 | Built-in commands |
-| `shannon-agents` | ~471 | Multi-agent orchestration |
-| `shannon-mcp` | ~373 | MCP server integration |
-| `shannon-cli` | ~191 | CLI entry point |
-| `shannon-skills` | ~171 | Skill system |
-| Other crates | ~1,051 | Codegen, types, tool interface, agent, desktop |
+| `shannon-core` | 3,766 | API client, query engine, permissions, tools, state |
+| `shannon-tools` | 1,630 | Tool implementations: file ops, git, search, notebook |
+| `shannon-ui` | 1,497 | Terminal UI, REPL, widgets, rendering |
+| `shannon-engine` | 1,113 | LLM API client, streaming, compaction/context budget, permissions |
+| `shannon-agents` | 897 | Multi-agent coordination: teams, worktree isolation |
+| `shannon-desktop` | 599 | Tauri desktop app shell and commands |
+| `shannon-mcp` | 578 | MCP protocol: transport, server, client, process pool |
+| `shannon-cli` | 486 | CLI entry point (`shannon` binary) |
+| `shannon-commands` | 416 | Built-in slash commands |
+| `shannon-mcp-saas` | 185 | SaaS MCP servers (GitHub, Slack, Jira, Notion, Linear) |
+| `shannon-skills` | 172 | Skills framework: discovery, loading, execution |
+| `shannon-codegen` | 100 | Code generation utilities |
+| `shannon-types` | 84 | Shared type definitions |
+| `shannon-agent` | 65 | Out-of-process agent (JSON-RPC over stdin/stdout) |
+| `shannon-remote` | 55 | Remote execution worlds (SSH hosts, Docker) |
+| `shannon-tool-interface` | 42 | Tool trait definitions |
+| `shannon-api-protocol` | 37 | Wire protocol (serde types + TS codegen) |
+| `shannon-repomap` | 30 | Repository symbol map for LLM context (tree-sitter) |
+| `shannon-server` | 0 | HTTP API server (`shannon serve`) |
+| `shannon-stability-attr` | 0 | Stability attribute macros |
+<!-- metrics:end:crates -->
 
 ---
 
