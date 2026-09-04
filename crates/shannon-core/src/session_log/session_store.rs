@@ -128,6 +128,9 @@ pub struct StoredGoal {
     pub iterations: usize,
     #[serde(default)]
     pub max_iterations: usize,
+    /// Fired blocked check-ins (caps at 3 across restarts).
+    #[serde(default)]
+    pub checkins: usize,
 }
 
 impl SessionSidecar {
