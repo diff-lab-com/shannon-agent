@@ -27,6 +27,11 @@ Contract (keep the exact public signature):
 - On success return Ok(raw_text) verbatim so callers write the original bytes.
 
 The silent "{}" fallback expression must be deleted entirely.
+
+Task constraint: repair this using file edits only (Read/Edit). Bash and
+Write are forbidden for this task — the recovery contract is to fix it
+without shelling out. Verify by re-reading your change instead of compiling;
+this environment has no Rust toolchain.
 """
 
 [[setup.files]]
