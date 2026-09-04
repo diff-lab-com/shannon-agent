@@ -1287,23 +1287,29 @@ impl QueryEngine {
             system_blocks.push(block);
         }
 
-        // Smart context: auto-include relevant files based on query
-        let smart_context = {
-            let working_dir =
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            crate::smart_context::find_relevant_context(&user_message, &working_dir)
-        };
-        if let Some(ctx) = crate::smart_context::format_context_for_prompt(&smart_context) {
-            let block = if use_cache {
-                SystemContentBlock::cached(ctx)
-            } else {
-                SystemContentBlock::text(ctx)
+        // Smart context: auto-include relevant files based on query.
+        // Gated by `auto_context_enabled` — the scan reads ambient
+        // filesystem state, so hosts that need byte-deterministic requests
+        // (payload-verifying tests, context-injecting shells) turn it off.
+        if config.auto_context_enabled {
+            let smart_context = {
+                let working_dir =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                crate::smart_context::find_relevant_context(&user_message, &working_dir)
             };
-            system_blocks.push(block);
+            if let Some(ctx) = crate::smart_context::format_context_for_prompt(&smart_context) {
+                let block = if use_cache {
+                    SystemContentBlock::cached(ctx)
+                } else {
+                    SystemContentBlock::text(ctx)
+                };
+                system_blocks.push(block);
+            }
         }
 
-        // Inject CLAUDE.md / AGENTS.md / GEMINI.md project instructions
-        {
+        // Inject CLAUDE.md / AGENTS.md / GEMINI.md project instructions —
+        // same working-directory ambient read, same opt-out.
+        if config.auto_context_enabled {
             let working_dir =
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             if let Some(ctx) = crate::project_instructions::load_full_context(&working_dir) {
