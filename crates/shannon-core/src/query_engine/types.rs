@@ -691,6 +691,14 @@ pub struct QueryEngineConfig {
     /// Optional override for the repo map root. Defaults to the current
     /// working directory when the engine is asked to inject.
     pub repo_map_root: Option<std::path::PathBuf>,
+    /// When `true` (default), the engine auto-injects working-directory
+    /// context into every request's system blocks: smart-context keyword
+    /// search results and project instruction files (CLAUDE.md /
+    /// AGENTS.md / GEMINI.md). Disable for byte-deterministic requests —
+    /// mock-server tests that verify request payloads, or hosts that
+    /// inject their own context — since the scans read ambient
+    /// filesystem state whose results change between queries under load.
+    pub auto_context_enabled: bool,
     /// Optional auto-test loop config (P1-5). When `Some`, after a successful
     /// file-modifying tool (`Edit`/`Write`) the engine runs the configured
     /// test command, parses the result, and — on failure — injects the
@@ -761,6 +769,7 @@ impl Default for QueryEngineConfig {
             repo_map_enabled: true,
             repo_map_budget_tokens: 2_000,
             repo_map_root: None,
+            auto_context_enabled: true,
             auto_test: None,
             turn_checkpoint_turn: None,
             token_budget_warning: true,

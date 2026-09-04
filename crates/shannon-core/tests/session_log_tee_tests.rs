@@ -133,7 +133,13 @@ mod session_log_tee {
             make_registry(),
             PermissionManager::new(),
             StateManager::new(),
-            QueryEngineConfig::default(),
+            QueryEngineConfig {
+                // Byte-exact envelope verification: no ambient CWD scans in
+                // the system prompt (the EmptyCwdGuard below is the
+                // second belt).
+                auto_context_enabled: false,
+                ..QueryEngineConfig::default()
+            },
             session_id,
         )
     }
@@ -206,14 +212,15 @@ mod session_log_tee {
     }
 
     /// Pins the test process to an empty tempdir CWD for its lifetime.
-    /// The engine auto-injects smart context — a keyword search over the
-    /// current directory (`QueryEngine` system-prompt assembly) — into
-    /// every request. Scanning the real package directory makes the
-    /// request bytes depend on ambient filesystem state, and under CI load
-    /// the two query phases of the byte-exact test below can see different
-    /// search results, so the rebuilt envelope no longer matches the live
-    /// request (mockito answers 501). An empty directory yields no
-    /// injected context in either phase, making the envelope deterministic.
+    /// Second belt behind `auto_context_enabled: false` in `make_engine`:
+    /// the engine's system-prompt assembly reads the working directory
+    /// (smart-context keyword search, project instruction files), so an
+    /// ambient directory would make request bytes depend on filesystem
+    /// state outside the test. Under CI load the two query phases of the
+    /// byte-exact test below have seen different scan results, and the
+    /// rebuilt envelope no longer matched the live request (mockito
+    /// answers 501). An empty directory keeps the envelope deterministic
+    /// even if another CWD read is ever added to the request path.
     struct EmptyCwdGuard {
         original: std::path::PathBuf,
         #[allow(dead_code)]
