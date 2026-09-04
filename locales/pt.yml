@@ -49,6 +49,7 @@ commands:
     cleared: "✓ Objetivo removido."
     paused_no_progress: "⏸ Objetivo pausado — sem progresso detectado: %{reason}\nStrikes: %{strikes}/%{max_strikes}. Inspecione e então /goal resume ou /goal clear."
     paused_blocked: "⏸ Objetivo pausado — o agente relatou um bloqueio: %{reason}\nResolva e execute /goal resume, ou /goal clear para remover."
+    paused_budget: "⏸ Objetivo pausado — limite de orçamento atingido: %{reason}\nAumente com /goal <obj> --budget $N, ou /goal clear."
     paused_max: "⏸ Objetivo pausado após %{max} iterações sem conclusão. Avalie e depois /goal resume ou /goal clear."
     resumed: "▶ Objetivo retomado (orçamento de iterações reiniciado)."
     complete: "✓ Objetivo concluído após %{iterations} iteração(ões): %{objective}"

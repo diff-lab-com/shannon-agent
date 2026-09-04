@@ -49,6 +49,7 @@ commands:
     cleared: "✓ 目標を解除しました。"
     paused_no_progress: "⏸ 目標を一時停止——進展なし：%{reason}\nストライク：%{strikes}/%{max_strikes}。確認の上 /goal resume（予算リセット）または /goal clear。"
     paused_blocked: "⏸ 目標を一時停止——エージェントがブロックを報告：%{reason}\n解決後に /goal resume で再開、または /goal clear で解除。"
+    paused_budget: "⏸ 目標を一時停止——予算上限到達：%{reason}\n/goal <obj> --budget $N で上限を引き上げるか /goal clear。"
     paused_max: "⏸ %{max} ラウンドに達しても完了しなかったため、目標を一時停止しました。/goal resume または /goal clear で続行できます。"
     resumed: "▶ 目標を再開しました（反復回数をリセット）。"
     complete: "✓ 目標達成（%{iterations} ラウンド）：%{objective}"

@@ -49,6 +49,7 @@ commands:
     cleared: "✓ تمت إزالة الهدف."
     paused_no_progress: "⏸ الهدف في وضع الإيقاف المؤقت — لم يُكتشف تقدم: %{reason}\nالضربات: %{strikes}/%{max_strikes}. تحقق ثم /goal resume أو /goal clear."
     paused_blocked: "⏸ تم إيقاف الهدف مؤقتًا — يبلّغ الوكيل عن عائق: %{reason}\nعالجه ثم شغّل /goal resume، أو /goal clear للإزالة."
+    paused_budget: "⏸ الهدف في وضع الإيقاف المؤقت — تم بلوغ سقف الميزانية: %{reason}\nارفع السقف بـ /goal <obj> --budget $N، أو /goal clear."
     paused_max: "⏸ تم إيقاف الهدف مؤقتًا بعد %{max} جولة دون إكمال. قيّم التقدم ثم /goal resume أو /goal clear."
     resumed: "▶ تمت استئناف الهدف (إعادة تعيين عداد الجولات)."
     complete: "✓ تحقق الهدف بعد %{iterations} جولة: %{objective}"

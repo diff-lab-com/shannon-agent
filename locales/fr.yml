@@ -49,6 +49,7 @@ commands:
     cleared: "✓ Objectif supprimé."
     paused_no_progress: "⏸ Objectif suspendu — aucun progrès détecté : %{reason}\nStrikes : %{strikes}/%{max_strikes}. Inspectez puis /goal resume ou /goal clear."
     paused_blocked: "⏸ Objectif suspendu — l'agent signale un blocage : %{reason}\nRésolvez-le puis /goal resume, ou /goal clear pour supprimer."
+    paused_budget: "⏸ Objectif suspendu — plafond budgétaire atteint : %{reason}\nAugmentez-le avec /goal <obj> --budget $N, ou /goal clear."
     paused_max: "⏸ Objectif suspendu après %{max} itérations sans achèvement. Évaluez puis /goal resume ou /goal clear."
     resumed: "▶ Objectif repris (compteur d'itérations réinitialisé)."
     complete: "✓ Objectif atteint après %{iterations} itération(s) : %{objective}"
