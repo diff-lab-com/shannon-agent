@@ -91,6 +91,7 @@ pub mod activity_manager;
 pub mod api_server;
 pub mod auto_dream_consolidation;
 pub mod billing;
+pub mod goal;
 pub mod credential_manager;
 pub mod doctor;
 pub mod enhanced_suggestions;
