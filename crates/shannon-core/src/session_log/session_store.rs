@@ -1020,6 +1020,8 @@ mod tests {
             max_iterations: 5,
             iteration: 3,
             active: true,
+            no_tool_turns: 0,
+            stall_strikes: 0,
         };
         let back: StoredLoop = serde_json::from_str(&serde_json::to_string(&lp).unwrap()).unwrap();
         assert_eq!(back, lp);
@@ -1033,6 +1035,8 @@ mod tests {
             max_iterations: 4,
             iteration: 2,
             active: true,
+            no_tool_turns: 0,
+            stall_strikes: 0,
         };
         let back: StoredRalph = serde_json::from_str(&serde_json::to_string(&rp).unwrap()).unwrap();
         assert_eq!(back, rp);
@@ -1054,6 +1058,8 @@ mod tests {
                         max_iterations: 7,
                         iteration: 3,
                         active: true,
+                        no_tool_turns: 0,
+                        stall_strikes: 0,
                     }),
                     ..Default::default()
                 },
