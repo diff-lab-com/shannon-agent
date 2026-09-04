@@ -1698,7 +1698,10 @@ mod tests {
 
     #[async_trait]
     impl shannon_tool_interface::ProcessProvider for RemoteProbeProcess {
-        fn run_blocking(&self, request: &ProcessRequest) -> std::io::Result<shannon_tool_interface::CapturedOutput> {
+        fn run_blocking(
+            &self,
+            request: &ProcessRequest,
+        ) -> std::io::Result<shannon_tool_interface::CapturedOutput> {
             *self.last_program.lock().unwrap() = Some(request.program.clone());
             Ok(shannon_tool_interface::CapturedOutput {
                 stdout: format!("ran:{}", request.program).into_bytes(),
@@ -1707,7 +1710,10 @@ mod tests {
             })
         }
 
-        async fn run_async(&self, request: &ProcessRequest) -> std::io::Result<shannon_tool_interface::CapturedOutput> {
+        async fn run_async(
+            &self,
+            request: &ProcessRequest,
+        ) -> std::io::Result<shannon_tool_interface::CapturedOutput> {
             self.run_blocking(request)
         }
 

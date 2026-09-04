@@ -2373,14 +2373,16 @@ fn run_serve_command(
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         // Build tool registry with default tools (sandboxed to project dir).
-        let (project_dir, providers) =
-            shannon_remote::assembly::assemble_for_headless()
-                .await
-                .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
+        let (project_dir, providers) = shannon_remote::assembly::assemble_for_headless()
+            .await
+            .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
         let mut tools = shannon_core::ToolRegistry::new();
-        let reg_result =
-            register_default_tools_with_project_dir_ex_with_providers(&mut tools, &project_dir, &providers)
-                .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let reg_result = register_default_tools_with_project_dir_ex_with_providers(
+            &mut tools,
+            &project_dir,
+            &providers,
+        )
+        .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let _plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 

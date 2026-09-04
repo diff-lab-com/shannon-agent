@@ -181,8 +181,7 @@ pub struct Repl {
     pub(crate) file_history:
         Option<std::sync::Arc<std::sync::Mutex<shannon_tools::FileHistoryManager>>>,
     /// Swappable execution world + shared sandbox handle (`/remote`).
-    pub(crate) remote_assembly:
-        Option<std::sync::Arc<shannon_remote::assembly::DynamicAssembly>>,
+    pub(crate) remote_assembly: Option<std::sync::Arc<shannon_remote::assembly::DynamicAssembly>>,
 }
 
 /// State for tab completion cycling

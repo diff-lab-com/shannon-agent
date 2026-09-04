@@ -80,7 +80,9 @@ pub fn parse_ssh_config(text: &str) -> Vec<SshHostCandidate> {
             }
             "include" => {
                 if !warned_include {
-                    tracing::warn!("ssh config `include` directives are not followed for discovery");
+                    tracing::warn!(
+                        "ssh config `include` directives are not followed for discovery"
+                    );
                     warned_include = true;
                 }
             }

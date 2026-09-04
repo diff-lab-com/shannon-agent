@@ -29,8 +29,7 @@ pub struct DynamicAssembly {
 pub fn assemble_dynamic() -> DynamicAssembly {
     let defaults = ToolProviders::default();
     let (world, state) = DynamicWorld::new(defaults.fs.clone(), defaults.process.clone());
-    let world_sandbox =
-        Arc::new(shannon_tools::file::sandbox::WorldSandboxHandle::new());
+    let world_sandbox = Arc::new(shannon_tools::file::sandbox::WorldSandboxHandle::new());
     let providers = ToolProviders {
         fs: world.clone(),
         process: world.clone(),
@@ -61,19 +60,20 @@ pub async fn connect_dynamic(
     target: &RemoteTarget,
 ) -> std::io::Result<ssh::HealthReport> {
     let health = assembly.world.connect_target(target).await?;
-    assembly.world_sandbox.set(
-        shannon_tools::file::sandbox::WorldRoots {
+    assembly
+        .world_sandbox
+        .set(shannon_tools::file::sandbox::WorldRoots {
             allowed_roots: vec![target.workspace_dir.clone()],
             home_dir: Some(std::path::PathBuf::from(&health.home)),
-        },
-    );
+        });
     Ok(health)
 }
 
 /// Return the dynamic world to the local machine (clears sandbox overrides).
 pub fn disconnect_dynamic(assembly: &DynamicAssembly) {
     assembly.world.disconnect();
-    assembly.world_sandbox
+    assembly
+        .world_sandbox
         .set(shannon_tools::file::sandbox::WorldRoots::default());
 }
 
@@ -96,9 +96,7 @@ pub async fn assemble_for_headless() -> std::io::Result<(std::path::PathBuf, Too
 
 /// Static assembly for headless runs: connect once, no runtime switching.
 /// The remote workspace becomes the (only) sandbox root.
-pub async fn assemble_static(
-    target: &RemoteTarget,
-) -> std::io::Result<ToolProviders> {
+pub async fn assemble_static(target: &RemoteTarget) -> std::io::Result<ToolProviders> {
     match target.kind {
         TargetKind::Ssh => {
             let runtime = ssh::SshRuntime::connect(target).await?;

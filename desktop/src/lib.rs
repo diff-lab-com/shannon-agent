@@ -107,9 +107,9 @@ pub mod commands_billing;
 pub mod commands_config;
 #[cfg(feature = "tauri")]
 pub mod commands_connections;
-pub mod commands_remote;
 #[cfg(feature = "tauri")]
 pub mod commands_mobile_pairing;
+pub mod commands_remote;
 #[cfg(feature = "tauri")]
 pub mod gateway_supervisor;
 

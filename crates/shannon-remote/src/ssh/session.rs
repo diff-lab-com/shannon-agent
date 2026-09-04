@@ -9,8 +9,8 @@
 use std::future::Future;
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use shannon_tool_interface::{CapturedOutput, PipedChild, ProcessExit};
@@ -414,7 +414,11 @@ where
     T: Send,
 {
     if tokio::runtime::Handle::try_current().is_ok() {
-        std::thread::scope(|s| s.spawn(|| rt.block_on(fut)).join().expect("block_on thread"))
+        std::thread::scope(|s| {
+            s.spawn(|| rt.block_on(fut))
+                .join()
+                .expect("block_on thread")
+        })
     } else {
         rt.block_on(fut)
     }
@@ -498,7 +502,10 @@ mod tests {
         let health = rt.health().await.unwrap();
         assert!(!health.platform.is_empty());
         assert!(health.home.starts_with('/'));
-        let out = rt.exec(vec!["echo".into(), "shannon".into()]).await.unwrap();
+        let out = rt
+            .exec(vec!["echo".into(), "shannon".into()])
+            .await
+            .unwrap();
         assert!(out.exit.success);
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "shannon");
 

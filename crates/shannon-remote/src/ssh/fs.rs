@@ -15,7 +15,7 @@ use openssh_sftp_client::{Sftp, SftpOptions};
 use shannon_tool_interface::{DirEntryInfo, FileMeta, FileSystemProvider};
 use tokio_stream::StreamExt;
 
-use super::session::{block_on_anywhere, SshRuntime};
+use super::session::{SshRuntime, block_on_anywhere};
 
 /// File world executing every operation over SFTP on the SSH target.
 pub struct SshFs {
@@ -464,15 +464,16 @@ mod tests {
 
         // Overwriting rename (posix-rename or fallback).
         let tmp2 = tempfile::TempDir::new().unwrap();
-        fs.write_bytes(&tmp2.path().join("dst"), b"old").await.unwrap();
-        fs.write_bytes(&tmp.path().join("src"), b"new").await.unwrap();
+        fs.write_bytes(&tmp2.path().join("dst"), b"old")
+            .await
+            .unwrap();
+        fs.write_bytes(&tmp.path().join("src"), b"new")
+            .await
+            .unwrap();
         fs.rename(&tmp.path().join("src"), &tmp2.path().join("dst"))
             .await
             .unwrap();
-        assert_eq!(
-            fs.read_text(&tmp2.path().join("dst")).await.unwrap(),
-            "new"
-        );
+        assert_eq!(fs.read_text(&tmp2.path().join("dst")).await.unwrap(), "new");
 
         let prefix = fs.read_prefix_blocking(&file, 5).unwrap();
         assert_eq!(prefix, b"hello");

@@ -29,10 +29,7 @@ pub const CWD_SCRIPT: &str = r#"cd "$1" && shift && exec "$@""#;
 /// data is interpolated into the script — everything rides as separately
 /// quoted argv elements.
 pub fn compose_command(req: &ProcessRequest, default_cwd: &Path) -> Vec<String> {
-    let cwd = req
-        .cwd
-        .clone()
-        .unwrap_or_else(|| default_cwd.to_path_buf());
+    let cwd = req.cwd.clone().unwrap_or_else(|| default_cwd.to_path_buf());
     let mut argv: Vec<String> = Vec::with_capacity(req.args.len() + 8);
     for (k, v) in &req.env {
         argv.push("env".into());
@@ -77,10 +74,7 @@ impl SshProcess {
             Some(data) => {
                 // Captured run with stdin: pipe the payload, then reap with
                 // output. All of it happens on the dedicated runtime.
-                let mut child = self
-                    .rt
-                    .spawn_piped_argv(argv, true, true, false)
-                    .await?;
+                let mut child = self.rt.spawn_piped_argv(argv, true, true, false).await?;
                 let mut stdin = child
                     .take_stdin()
                     .ok_or_else(|| io::Error::other("ssh child stdin unavailable"))?;
@@ -219,7 +213,10 @@ mod tests {
     #[test]
     fn compose_script_forwards_args_and_env() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut r = req("sh", &["-c", "printf '%s' \"$FIXED\"; printf '%s' \"$@\" x"]);
+        let mut r = req(
+            "sh",
+            &["-c", "printf '%s' \"$FIXED\"; printf '%s' \"$@\" x"],
+        );
         r.env = vec![("FIXED".into(), "E".into())];
         let argv = compose_command(&r, tmp.path());
         let out = run_locally(&argv);

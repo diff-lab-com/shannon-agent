@@ -47,6 +47,7 @@ Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` ha
 | `shannon-repomap` | Tree-sitter repo symbol map for LLM context (Rust + TS + Python + Go) — P1-4 Phase B | [metrics.md](./docs/metrics.md) |
 | `shannon-server` | axum-based HTTP API server exposing Shannon sessions (REST + SSE) | [metrics.md](./docs/metrics.md) |
 | `shannon-stability-attr` | Proc-macro `#[stable_api]` / `#[unstable_api]` attribute markers feeding `docs/STABILITY.md` | n/a |
+| `shannon-remote` | Remote execution worlds: SSH hosts (system ssh + SFTP) and Docker containers (`docker exec`) as `ProcessProvider`/`FileSystemProvider` implementations; `DynamicWorld` hot-swap; `/remote` TUI command, `--target` CLI flag, Settings→Remotes desktop page | [design](./docs/plans/2026-09-04-remote-connections-design.md) |
 
 ### First-Screen UX
 
@@ -150,6 +151,8 @@ just replay
 - **Plugin system**: `PluginRegistry` with manifest parsing. Tool plugins fully wired (MCP discovery). Command plugins register as `PromptCommand` in `CommandRegistry` (source: `Plugin`). Skill plugins register as `PromptCommand` with trigger as slash command name and entry file as template. Loading in both REPL (`new()`) and CLI headless mode.
 - **Notifications**: `Notifier` pipeline in `shannon-core::notifier` with `Cooldown` (DashMap-backed per-source dedup), `NotificationsConfig` (interactive/headless defaults), and pluggable `NotificationHandler` trait. Built-in handlers: `LogNotifier`, `FileNotifier`, `CallbackNotifier`, `DesktopNotifier`, `ShellNotifier` (CLI), `TauriNotificationHandler` (desktop), and `WebhookHandler` (six templates: Slack/Discord/Feishu/WeChat Work/custom/raw — optional HMAC-SHA256 signing). CLI `--notify` flag for headless mode; desktop auto-fires on query completion/error.
 - **Desktop app**: Substantial Tauri app (workspace member `desktop/`, crate `shannon-desktop`, ~25K Rust LOC) with command modules for chat/config/connections/billing/agents/mcp/memory. Provider/credential read+write paths are unified with the CLI via the engine `ProviderConfigService` (ADR-0005 Phase 2 ✅ done) + `ProviderReadSnapshot` (ADR-0009) + TD-4 `ProviderConnection` DTO alignment; `has_api_key` is derived from the shared credential store. Remaining tail: none — ADR-0005 G4 (per-tier/per-fallback editors), G5 (`SHANNON_*_PROVIDERS` allowlist surfaced as the ModelsSettings enabled-providers editor, not in the Add Provider modal — kind and slug are separate namespaces), and the legacy `providers.json` migration-code removal (PR #61) all shipped in v0.10.0.
+
+- **Remote targets (SSH / Docker)**: shipped (see `shannon-remote`). Tools (Bash, file ops, Grep/Glob) route to the active target through the provider seam. Known limitations: remote PTY interactive commands and git worktrees are local-only; LSP servers launch on the target (needs the binary there); remote targets need bash; remote Windows targets unsupported; REPL-layer conveniences (@-attachments, diff viewer git, status-card branch) still read the local machine. Design + review trail: [docs/plans/2026-09-04-remote-connections-design.md](./docs/plans/2026-09-04-remote-connections-design.md).
 
 ### MEDIUM — Quality-of-life gaps
 

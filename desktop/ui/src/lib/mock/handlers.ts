@@ -155,6 +155,72 @@ export const handlers: Record<string, MockHandler> = {
     return src ? { ...clone(src), id: `sess-${Date.now()}`, title: `${src.title} copy` } : null
   },
   async export_session() { await delay(120); return '# Exported session\n\n(mock content)' },
+  // ── Remote targets (SSH hosts / Docker containers) ──
+  async remote_list_targets() {
+    await delay()
+    return [
+      {
+        name: 'build-box',
+        kind: 'ssh',
+        host: 'build-box',
+        port: null,
+        user: null,
+        container: null,
+        shell: null,
+        sshTarget: null,
+        workspaceDir: '/home/ed/proj',
+      },
+      {
+        name: 'ci-runner',
+        kind: 'docker',
+        host: null,
+        port: null,
+        user: null,
+        container: 'shannon-ci',
+        shell: 'bash',
+        sshTarget: 'build-box',
+        workspaceDir: '/workspace',
+      },
+    ]
+  },
+  async remote_discover_ssh_hosts() {
+    await delay()
+    return [
+      { alias: 'build-box', user: 'ed', hostname: '192.168.1.20', port: 22 },
+      { alias: 'gpu-1', user: 'deploy', hostname: null, port: null },
+    ]
+  },
+  async remote_list_docker_containers() {
+    await delay(140)
+    return [
+      { id: 'a1b2c3', names: 'shannon-ci', image: 'ubuntu:22.04', status: 'Up 3 hours' },
+      { id: 'd4e5f6', names: 'dev-sandbox', image: 'node:20', status: 'Up 20 minutes' },
+    ]
+  },
+  async remote_add_target(_args: { target: unknown }) {
+    await delay(120)
+    return null
+  },
+  async remote_remove_target(_args: { name: string }) {
+    await delay(80)
+    return null
+  },
+  async remote_set_default_target(_args: { name: string | null }) {
+    await delay(60)
+    return null
+  },
+  async remote_test_target(_args: { name: string }) {
+    await delay(300)
+    return {
+      ok: true,
+      platform: 'Linux',
+      home: '/home/ed',
+      bashAvailable: true,
+      workspaceExists: true,
+      latencyMs: 24,
+      error: null,
+    }
+  },
   // /rewind: demo has no checkpoints (record_turn runs in the desktop Rust
   // process), so the rewind affordance stays hidden and these are safety nets.
   async list_checkpoints() { await delay(30); return [] },

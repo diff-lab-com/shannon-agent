@@ -6,4 +6,4 @@ pub mod fs;
 pub mod process;
 
 pub use fs::DockerExecFs;
-pub use process::{compose_docker_exec, ContainerInfo, DockerExecProcess, list_running_containers};
+pub use process::{ContainerInfo, DockerExecProcess, compose_docker_exec, list_running_containers};

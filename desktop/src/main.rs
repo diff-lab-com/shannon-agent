@@ -12,7 +12,6 @@ fn main() {
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_config;
     use shannon_desktop::commands_connections;
-    use shannon_desktop::commands_remote;
     use shannon_desktop::commands_feedback;
     use shannon_desktop::commands_files;
     use shannon_desktop::commands_mcp;
@@ -22,6 +21,7 @@ fn main() {
     use shannon_desktop::commands_onboarding;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
+    use shannon_desktop::commands_remote;
     use shannon_desktop::commands_rewind;
     use shannon_desktop::commands_routine_templates;
     use shannon_desktop::commands_sessions;

@@ -276,10 +276,7 @@ workspace_dir = "/workspace"
     fn resolve_active_priority_cli_over_env_over_default() {
         let file = RemotesFile::parse(FIXTURE).unwrap();
         // default_target wins with nothing else set
-        assert_eq!(
-            file.resolve_active(None).unwrap().name,
-            "build-box"
-        );
+        assert_eq!(file.resolve_active(None).unwrap().name, "build-box");
         // CLI beats default
         assert_eq!(
             file.resolve_active(Some("ci-runner")).unwrap().name,
@@ -316,7 +313,10 @@ workspace_dir = "/workspace"
     fn ssh_target_requires_host() {
         let mut t = ssh_target();
         t.host = None;
-        assert_eq!(t.validate(), Err(ValidationError("ssh target requires host")));
+        assert_eq!(
+            t.validate(),
+            Err(ValidationError("ssh target requires host"))
+        );
     }
 
     #[test]

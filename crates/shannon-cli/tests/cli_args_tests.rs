@@ -40,7 +40,9 @@ fn test_target_flag_requires_value() {
         .arg("--target")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("a value is required for '--target"));
+        .stderr(predicate::str::contains(
+            "a value is required for '--target",
+        ));
 }
 
 // ── Version Flag ────────────────────────────────────────────────────────
