@@ -4,11 +4,11 @@ import { MOCK_TASKS, MOCK_AGENTS, MOCK_AGENT_DEFINITIONS, MOCK_SESSIONS, MOCK_ME
   MOCK_SKILLS, MOCK_MCP_SERVERS, MOCK_PLUGINS, MOCK_BACKGROUND_TASKS,
   MOCK_TURN_TIMELINE } from './data/core'
 import { MOCK_SCHEDULED_ROUTINES, MOCK_TRIGGERED_ROUTINES, MOCK_HOOK_EVENTS, MOCK_PROFILES } from './data/automation'
-import { MOCK_TRIAGE_ITEMS, MOCK_TRIAGE_STATS, MOCK_OPC_METRICS, MOCK_BILLING_PLAN,
+import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_BILLING_PLAN,
   MOCK_COST_HISTORY, MOCK_BILLING_HISTORY, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
-import type { ProviderInput, SessionInfo } from '@/types'
+import type { InboxItem, ProviderInput, SessionInfo } from '@/types'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
 import {
   MOCK_SKILL_CATALOG,
@@ -31,7 +31,11 @@ const state = {
   scheduled: clone(MOCK_SCHEDULED_ROUTINES),
   background: clone(MOCK_BACKGROUND_TASKS),
   providers: clone(MOCK_PROVIDERS),
+  inbox: clone(MOCK_INBOX_ITEMS) as InboxItem[],
 }
+
+// ids for inbox items created at runtime (rerun simulation).
+let nextInboxId = Math.max(...MOCK_INBOX_ITEMS.map(i => i.id)) + 1
 
 // Snapshot the managed-providers roster as a cloned ProvidersFile.
 function providersFile() {
@@ -413,21 +417,67 @@ export const handlers: Record<string, MockHandler> = {
     }
   },
 
-  // --- Triage ---
-  async list_triage_items() { await delay(); return clone(MOCK_TRIAGE_ITEMS) },
-  async mark_triage_read(args: { id: string }) {
-    await delay(40)
-    const item = MOCK_TRIAGE_ITEMS.find(i => i.id === args.id)
-    if (item) (item as { read: boolean }).read = true
-    return true
+  // --- Inbox (P0-3 SQLite inbox) ---
+  async list_inbox_items(args: { status?: string | null; source?: string | null; limit?: number | null }) {
+    await delay()
+    return clone(
+      state.inbox
+        .filter(i => (args.status ? i.status === args.status : true))
+        .filter(i => (args.source ? i.source === args.source : true))
+        .sort((a, b) => b.createdAtMs - a.createdAtMs)
+        .slice(0, args.limit ?? 100),
+    )
   },
-  async archive_triage_item(args: { id: string }) {
+  async update_inbox_item_status(args: { id: number; status: InboxItem['status'] }) {
     await delay(40)
-    const item = MOCK_TRIAGE_ITEMS.find(i => i.id === args.id)
-    if (item) (item as { archived: boolean }).archived = true
-    return true
+    const item = state.inbox.find(i => i.id === args.id)
+    if (!item) throw new Error(`inbox item not found: ${args.id}`)
+    item.status = args.status
+    item.updatedAtMs = Date.now()
+    return undefined
   },
-  async get_triage_stats() { await delay(); return clone(MOCK_TRIAGE_STATS) },
+  async get_inbox_stats() {
+    await delay()
+    const startOfToday = new Date()
+    startOfToday.setHours(0, 0, 0, 0)
+    return {
+      pending: state.inbox.filter(i => i.status === 'pending').length,
+      today: state.inbox.filter(i => i.createdAtMs >= startOfToday.getTime()).length,
+    }
+  },
+  async rerun_inbox_item(args: { id: number }) {
+    await delay(200)
+    const item = state.inbox.find(i => i.id === args.id)
+    if (!item) throw new Error(`inbox item not found: ${args.id}`)
+    if (item.source === 'goal' || item.source === 'trigger') {
+      throw new Error(`inbox item source '${item.source}' cannot be rerun`)
+    }
+    // Simulate the unattended run: it completes a moment later and lands a
+    // fresh pending item in the demo inbox (the real backend emits
+    // `inbox-updated` when this happens).
+    setTimeout(() => {
+      state.inbox.unshift({
+        id: nextInboxId++,
+        source: item.source,
+        sourceId: item.sourceId,
+        sessionId: `sess-${String(nextInboxId).padStart(3, '0')}`,
+        title: `${item.title} (rerun)`,
+        summary: 'Rerun finished successfully.',
+        error: null,
+        status: 'pending',
+        createdAtMs: Date.now(),
+        updatedAtMs: Date.now(),
+      })
+    }, 1500)
+    return `run-${Date.now()}`
+  },
+  async continue_inbox_item_session(args: { id: number }) {
+    await delay(60)
+    const item = state.inbox.find(i => i.id === args.id)
+    if (!item) throw new Error(`inbox item not found: ${args.id}`)
+    if (!item.sessionId) throw new Error(`inbox item ${args.id} has no linked session`)
+    return item.sessionId
+  },
 
   // --- History ---
   async list_task_executions() {
