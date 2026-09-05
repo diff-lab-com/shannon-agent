@@ -104,6 +104,12 @@ pub struct CapturedImageDto {
     pub media_type: String,
     pub width: u32,
     pub height: u32,
+    /// Present when the app-window grab failed and the primary MONITOR was
+    /// captured instead (`"monitor"`): the image is the whole screen, not an
+    /// isolated preview capture. Incremental disclosure — absent on the
+    /// normal window path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
 }
 
 // ── Detection (pure, unit-tested) ────────────────────────────────────────
@@ -331,16 +337,26 @@ pub trait PreviewCaptureSource: Send + Sync {
     fn capture(&self) -> Result<CapturedImageDto, String>;
 }
 
-/// Production capture: xcap window/monitor grab → PNG → base64.
+/// Production capture: xcap window grab → PNG → base64, with a tagged
+/// whole-screen fallback.
 ///
 /// Path rationale (brief allows a self-chosen implementation): Tauri 2.11
 /// exposes no webview screenshot API, and a cross-origin iframe
 /// (`tauri://localhost` parent vs `http://127.0.0.1:port` dev server)
 /// cannot be canvas-captured from the frontend. The same `xcap` capture
-/// path the computer-use tool uses is therefore applied to the app's own
-/// window, which shows the preview panel. Only the app window is grabbed —
-/// never the whole desktop — bounding what leaves the machine to the
-/// content the user already sees inside Shannon.
+/// path the computer-use tool uses is applied, in this order:
+///
+/// 1. **The Shannon app window** (main or session windows) — matched by
+///    *application name* only. A window-title substring would also match
+///    an unrelated browser tab that happens to have "shannon" on the page;
+///    `app_name` cannot. On this path the image is the panel the user
+///    already sees inside Shannon.
+/// 2. **Fallback: the primary monitor.** That image IS the whole screen —
+///    the payload is therefore explicitly tagged `fallback: "monitor"`,
+///    a warning is logged, and the `preview_screenshot` engine tool tells
+///    the model it is looking at the entire screen, not the panel.
+///
+/// Other applications' windows are never captured on either path.
 pub struct AppWindowCapture;
 
 #[cfg(feature = "preview-capture")]
@@ -348,40 +364,40 @@ impl PreviewCaptureSource for AppWindowCapture {
     fn capture(&self) -> Result<CapturedImageDto, String> {
         use base64::Engine as _;
 
-        // Prefer one of our own windows (main or a session window) — that
-        // is where the preview panel renders. xcap 0.0.13 only exposes
-        // pid matching on Windows, so match the product/app name here.
-        // Fall back to the primary monitor when window enumeration yields
-        // nothing (e.g. Wayland compositors that hide window ids).
-        let image = xcap::Window::all()
+        fn encode(image: image::RgbaImage) -> Result<CapturedImageDto, String> {
+            let (width, height) = (image.width(), image.height());
+            let mut png = Vec::new();
+            image
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .map_err(|e| format!("PNG encoding failed: {e}"))?;
+            Ok(CapturedImageDto {
+                image_base64: base64::engine::general_purpose::STANDARD.encode(png),
+                media_type: "image/png".into(),
+                width,
+                height,
+                fallback: None,
+            })
+        }
+
+        let window = xcap::Window::all()
             .map_err(|e| format!("window enumeration failed: {e}"))?
             .into_iter()
-            .find(|w| {
-                w.title().to_lowercase().contains("shannon")
-                    || w.app_name().to_lowercase().contains("shannon")
-            })
-            .and_then(|w| w.capture_image().ok())
-            .or_else(|| {
-                xcap::Monitor::all()
-                    .ok()?
-                    .into_iter()
-                    .next()?
-                    .capture_image()
-                    .ok()
-            })
-            .ok_or_else(|| "no capturable window or monitor found".to_string())?;
+            .find(|w| w.app_name().to_lowercase().contains("shannon"));
+        if let Some(image) = window.and_then(|w| w.capture_image().ok()) {
+            return encode(image);
+        }
 
-        let (width, height) = (image.width(), image.height());
-        let mut png = Vec::new();
-        image
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .map_err(|e| format!("PNG encoding failed: {e}"))?;
-        Ok(CapturedImageDto {
-            image_base64: base64::engine::general_purpose::STANDARD.encode(png),
-            media_type: "image/png".into(),
-            width,
-            height,
-        })
+        let image = xcap::Monitor::all()
+            .ok()
+            .and_then(|monitors| monitors.into_iter().next())
+            .and_then(|monitor| monitor.capture_image().ok())
+            .ok_or_else(|| "no capturable Shannon window or monitor found".to_string())?;
+        tracing::warn!(
+            "preview capture: Shannon app window not found — falling back to the entire monitor"
+        );
+        let mut dto = encode(image)?;
+        dto.fallback = Some("monitor".into());
+        Ok(dto)
     }
 }
 
@@ -404,9 +420,20 @@ struct RunningPreview {
     started_at_ms: i64,
 }
 
+/// One ring-buffer entry. `seq` is a monotonically increasing cursor so
+/// consumers can scan "everything newer than X" rotation-safely — an index
+/// into the sliding window would silently skip lines once the ring wraps
+/// at [`MAX_LOG_LINES`].
+#[derive(Clone)]
+struct LogEntry {
+    seq: u64,
+    line: PreviewLogLine,
+}
+
 struct PreviewInner {
     running: Option<RunningPreview>,
-    logs: VecDeque<PreviewLogLine>,
+    logs: VecDeque<LogEntry>,
+    next_seq: u64,
 }
 
 /// State shared between the manager and its background pipe-drain /
@@ -415,6 +442,9 @@ struct PreviewInner {
 /// child and `kill_on_drop` fires even without the explicit hook.
 struct PreviewShared {
     inner: StdMutex<PreviewInner>,
+    /// Live exit-watcher task count (spawn → 1, every exit path → −1);
+    /// makes watcher leaks observable (stop() must retire the watcher).
+    live_watchers: std::sync::atomic::AtomicUsize,
 }
 
 impl PreviewShared {
@@ -423,7 +453,9 @@ impl PreviewShared {
             inner: StdMutex::new(PreviewInner {
                 running: None,
                 logs: VecDeque::new(),
+                next_seq: 0,
             }),
+            live_watchers: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -437,10 +469,15 @@ impl PreviewShared {
         if inner.logs.len() >= MAX_LOG_LINES {
             inner.logs.pop_front();
         }
-        inner.logs.push_back(PreviewLogLine {
-            ts_ms: now_ms(),
-            stream: stream.to_string(),
-            text: text.to_string(),
+        let seq = inner.next_seq;
+        inner.next_seq += 1;
+        inner.logs.push_back(LogEntry {
+            seq,
+            line: PreviewLogLine {
+                ts_ms: now_ms(),
+                stream: stream.to_string(),
+                text: text.to_string(),
+            },
         });
     }
 
@@ -451,7 +488,23 @@ impl PreviewShared {
             .logs
             .len()
             .saturating_sub(limit.unwrap_or(MAX_LOG_LINES).min(MAX_LOG_LINES));
-        inner.logs.iter().skip(skip).cloned().collect()
+        inner
+            .logs
+            .iter()
+            .skip(skip)
+            .map(|entry| entry.line.clone())
+            .collect()
+    }
+
+    /// Entries with `seq >= first_seq`, oldest first. The cursor passed by
+    /// callers is "next unseen seq" (`last seen + 1`), starting at 0.
+    fn lines_since(&self, first_seq: u64) -> Vec<LogEntry> {
+        self.lock()
+            .logs
+            .iter()
+            .filter(|entry| entry.seq >= first_seq)
+            .cloned()
+            .collect()
     }
 
     /// Current lifecycle status (frozen `preview_status` shape).
@@ -491,12 +544,46 @@ impl PreviewShared {
 
     /// Poll the child; when it has exited, clear the slot and return the
     /// terminal state (task-2 discipline: no phantom `running`).
-    fn poll_child_exit(&self) -> Option<(Option<i32>, bool)> {
+    fn poll_child_exit(&self) -> ChildPoll {
         let mut inner = self.lock();
-        let exited = inner.running.as_mut()?.child.try_wait().ok().flatten()?;
+        let Some(running) = inner.running.as_mut() else {
+            // Slot already taken (user stop / previous poll) — the watcher
+            // must retire instead of spinning on an empty slot forever.
+            return ChildPoll::NoChild;
+        };
+        let Some(exited) = running.child.try_wait().ok().flatten() else {
+            return ChildPoll::Running;
+        };
         inner.running = None;
-        Some((exited.code(), exited.success()))
+        ChildPoll::Exited {
+            code: exited.code(),
+            success: exited.success(),
+        }
     }
+}
+
+/// Decrements the shared watcher-liveness counter when the watcher task
+/// ends, on every exit path. No-op when the manager (and with it the
+/// counter) is already gone.
+struct WatcherGuard {
+    shared: std::sync::Weak<PreviewShared>,
+}
+
+impl Drop for WatcherGuard {
+    fn drop(&mut self) {
+        if let Some(shared) = self.shared.upgrade() {
+            shared
+                .live_watchers
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
+/// Result of one child-exit poll.
+enum ChildPoll {
+    Running,
+    Exited { code: Option<i32>, success: bool },
+    NoChild,
 }
 
 /// Single-preview-instance owner. Held on `AppState` as `Arc`.
@@ -687,14 +774,28 @@ impl PreviewManager {
             let reader = BufReader::new(pipe);
             let mut lines = reader.lines();
             loop {
-                let Some(shared) = shared.upgrade() else {
+                // No strong handle is held across the read await: if the
+                // manager is dropped (app teardown) the child drops and is
+                // killed immediately, and this task sees EOF. Liveness is
+                // observed via the Weak's strong count.
+                if shared.strong_count() == 0 {
                     break;
-                };
+                }
                 match tokio::time::timeout(Duration::from_millis(100), lines.next_line()).await {
-                    Ok(Ok(Some(line))) => shared.push_log(stream, &line),
+                    Ok(Ok(Some(line))) => {
+                        let Some(shared) = shared.upgrade() else {
+                            break;
+                        };
+                        shared.push_log(stream, &line);
+                    }
+                    // A quiet pipe is normal (vite/next go silent after
+                    // their banner): keep reading — stopping here would
+                    // freeze the ring buffer and eventually block the child
+                    // on a full stdout pipe. Only EOF or a read error ends
+                    // the drain.
+                    Err(_idle) => continue,
                     _ => break,
                 }
-                drop(shared);
             }
         });
     }
@@ -705,22 +806,38 @@ impl PreviewManager {
     fn spawn_exit_watcher(&self) {
         let shared = Arc::downgrade(&self.shared);
         let tick = self.tick;
+        if let Some(strong) = shared.upgrade() {
+            strong
+                .live_watchers
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        let guard = WatcherGuard {
+            shared: shared.clone(),
+        };
         tokio::spawn(async move {
+            let _guard = guard;
             loop {
                 tokio::time::sleep(tick).await;
                 let Some(shared) = shared.upgrade() else {
                     break;
                 };
-                if let Some((code, success)) = shared.poll_child_exit() {
-                    shared.push_log(
-                        "system",
-                        &format!(
-                            "dev server exited (code: {}, success: {success})",
-                            code.map(|c| c.to_string())
-                                .unwrap_or_else(|| "signal".into())
-                        ),
-                    );
-                    break;
+                match shared.poll_child_exit() {
+                    ChildPoll::Running => {}
+                    // Slot taken by stop() (or a prior poll): retire —
+                    // looping here would leak a ~4Hz polling task per
+                    // start/stop cycle.
+                    ChildPoll::NoChild => break,
+                    ChildPoll::Exited { code, success } => {
+                        shared.push_log(
+                            "system",
+                            &format!(
+                                "dev server exited (code: {}, success: {success})",
+                                code.map(|c| c.to_string())
+                                    .unwrap_or_else(|| "signal".into())
+                            ),
+                        );
+                        break;
+                    }
                 }
                 drop(shared);
             }
@@ -734,7 +851,10 @@ impl PreviewManager {
     async fn wait_ready(&self, configured: &str) -> String {
         let deadline = Instant::now() + self.ready_timeout;
         let mut url = configured.to_string();
-        let mut scanned = 0usize;
+        // Rotation-safe scan cursor: `skip(index)` over the sliding window
+        // would miss newly wrapped lines once the ring is at its 500-line
+        // cap, so scan strictly newer-than-last-seen instead.
+        let mut next_seq = 0u64;
         loop {
             if probe_url(&url, Duration::from_millis(200)) {
                 self.shared
@@ -742,9 +862,9 @@ impl PreviewManager {
                 return url;
             }
             // Adopt a printed URL when the configured one is still closed.
-            let lines = self.shared.logs(Some(MAX_LOG_LINES));
-            for line in lines.iter().skip(scanned) {
-                if let Some(printed) = extract_localhost_url(&line.text) {
+            for entry in self.shared.lines_since(next_seq) {
+                next_seq = entry.seq + 1;
+                if let Some(printed) = extract_localhost_url(&entry.line.text) {
                     if printed != url && probe_url(&printed, Duration::from_millis(200)) {
                         self.shared
                             .push_log("system", &format!("adopting dev server url {printed}"));
@@ -756,7 +876,6 @@ impl PreviewManager {
                     }
                 }
             }
-            scanned = lines.len();
             if Instant::now() >= deadline {
                 self.shared.push_log(
                     "system",
@@ -793,7 +912,22 @@ impl PreviewManager {
         if self.shared.running_url().is_none() {
             return Err("no preview running — start it from the Live tab first".into());
         }
-        self.capture_source().capture()
+        let dto = self.capture_source().capture()?;
+        if dto.fallback.is_some() {
+            self.shared.push_log(
+                "system",
+                "capture fell back to the entire monitor — payload tagged fallback=monitor",
+            );
+        }
+        Ok(dto)
+    }
+
+    /// Live exit-watcher task count (test seam for leak regressions).
+    #[cfg(test)]
+    fn live_watchers(&self) -> usize {
+        self.shared
+            .live_watchers
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     #[cfg(test)]
@@ -942,6 +1076,7 @@ impl shannon_tools::preview::PreviewAccess for ManagerPreviewAccess {
             media_type: shot.media_type,
             width: shot.width,
             height: shot.height,
+            fallback: shot.fallback,
         })
     }
 }
@@ -1216,6 +1351,23 @@ mod tests {
         cond()
     }
 
+    /// Variant that yields to the tokio runtime while waiting, so spawned
+    /// drain/watcher tasks can make progress on the current-thread test
+    /// runtime (the blocking variant starves them).
+    #[cfg(unix)]
+    async fn wait_until_yielding(deadline: Duration, mut cond: impl FnMut() -> bool) -> bool {
+        let start = Instant::now();
+        loop {
+            if cond() {
+                return true;
+            }
+            if start.elapsed() >= deadline {
+                return cond();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn start_is_idempotent_stop_kills_and_status_tracks() {
@@ -1272,6 +1424,10 @@ mod tests {
             "watcher must clear the slot after the child exits"
         );
         assert!(manager.logs(None).iter().any(|l| l.text.contains("exited")));
+        assert!(
+            wait_until_yielding(Duration::from_secs(5), || manager.live_watchers() == 0).await,
+            "watcher must retire after the natural-exit path too"
+        );
     }
 
     #[cfg(unix)]
@@ -1323,7 +1479,9 @@ mod tests {
 
     // ── Capture ──────────────────────────────────────────────────────────
 
-    struct MockCapture;
+    struct MockCapture {
+        fallback: Option<String>,
+    }
     impl PreviewCaptureSource for MockCapture {
         fn capture(&self) -> Result<CapturedImageDto, String> {
             Ok(CapturedImageDto {
@@ -1331,6 +1489,7 @@ mod tests {
                 media_type: "image/png".into(),
                 width: 1,
                 height: 1,
+                fallback: self.fallback.clone(),
             })
         }
     }
@@ -1345,7 +1504,7 @@ mod tests {
     #[tokio::test]
     async fn capture_returns_base64_png_with_dimensions_from_the_source() {
         let manager = test_manager();
-        manager.set_capture_source(Arc::new(MockCapture));
+        manager.set_capture_source(Arc::new(MockCapture { fallback: None }));
         let dir = tempfile::tempdir().expect("tempdir");
         Arc::clone(&manager)
             .start_raw(dir.path(), "sleep", &["5"], "http://127.0.0.1:41233")
@@ -1355,6 +1514,7 @@ mod tests {
         let shot = manager.capture().expect("captured");
         assert_eq!(shot.media_type, "image/png");
         assert_eq!((shot.width, shot.height), (1, 1));
+        assert!(shot.fallback.is_none());
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&shot.image_base64)
             .expect("valid base64");
@@ -1366,7 +1526,7 @@ mod tests {
     #[test]
     fn preview_access_bridge_maps_status_and_capture() {
         let manager = Arc::new(PreviewManager::new());
-        manager.set_capture_source(Arc::new(MockCapture));
+        manager.set_capture_source(Arc::new(MockCapture { fallback: None }));
         let bridge = ManagerPreviewAccess::new(Arc::clone(&manager));
         let idle = shannon_tools::preview::PreviewAccess::status(&bridge);
         assert!(!idle.running);
@@ -1382,6 +1542,125 @@ mod tests {
         let manager = PreviewManager::new();
         let empty = tempfile::tempdir().expect("tempdir");
         assert!(manager.detect(empty.path()).is_none());
+    }
+
+    // ── Fix round 1 regressions ──────────────────────────────────────────
+
+    /// A dev server that goes quiet after its banner must NOT kill the
+    /// drain task: the 100ms idle timeout must keep polling, or the pipe
+    /// stops being read (ring buffer freezes; the child eventually blocks
+    /// on a full stdout pipe).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn slow_dev_server_output_still_reaches_the_ring_buffer() {
+        let manager = test_manager();
+        let dir = tempfile::tempdir().expect("tempdir");
+        Arc::clone(&manager)
+            .start_raw(
+                dir.path(),
+                "sh",
+                &["-c", "echo drain-marker-1; sleep 0.4; echo drain-marker-2; sleep 0.4; echo drain-marker-3"],
+                "http://127.0.0.1:41235",
+            )
+            .await
+            .expect("start");
+        assert!(
+            wait_until_yielding(Duration::from_secs(5), || {
+                let logs = manager.logs(None);
+                let texts: Vec<&str> = logs.iter().map(|l| l.text.as_str()).collect();
+                texts.iter().any(|t| t.contains("drain-marker-1"))
+                    && texts.iter().any(|t| t.contains("drain-marker-2"))
+                    && texts.iter().any(|t| t.contains("drain-marker-3"))
+            })
+            .await,
+            "all post-idle lines must reach the ring buffer, got: {:?}",
+            manager
+                .logs(None)
+                .iter()
+                .map(|l| &l.text)
+                .collect::<Vec<_>>()
+        );
+        manager.stop();
+    }
+
+    /// The scan cursor must be sequence-based: a sliding-window index
+    /// would skip everything once the ring wraps at 500 lines.
+    #[test]
+    fn lines_since_tracks_buffer_rotation() {
+        let manager = PreviewManager::new();
+        for i in 0..600 {
+            manager.push_log("stdout", &format!("line-{i}"));
+        }
+        // Cursor after the first 500 pushes (next unseen = seq 500); the
+        // buffer now only holds seq 100..=599 — 100 lines must still be
+        // scannable, where a sliding-window index would return none.
+        let entries = manager.shared.lines_since(500);
+        assert_eq!(entries.len(), 100);
+        assert_eq!(entries[0].line.text, "line-500");
+        assert_eq!(entries.last().expect("non-empty").line.text, "line-599");
+        // A fresh cursor still sees the whole window.
+        assert_eq!(manager.shared.lines_since(0).len(), MAX_LOG_LINES);
+    }
+
+    /// stop() takes the running slot; the exit watcher must retire instead
+    /// of spinning on it — start/stop cycles must not leak watcher tasks.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_reaps_the_exit_watcher_task() {
+        let manager = test_manager();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let url = "http://127.0.0.1:41236";
+
+        Arc::clone(&manager)
+            .start_raw(dir.path(), "sleep", &["30"], url)
+            .await
+            .expect("start");
+        assert_eq!(manager.live_watchers(), 1);
+        manager.stop();
+        assert!(
+            wait_until_yielding(Duration::from_secs(5), || manager.live_watchers() == 0).await,
+            "watcher must retire after stop()"
+        );
+
+        // Repeated cycles stay at one concurrent watcher, zero afterwards.
+        Arc::clone(&manager)
+            .start_raw(dir.path(), "sleep", &["30"], url)
+            .await
+            .expect("restart");
+        assert_eq!(manager.live_watchers(), 1);
+        // Idempotent start must not spawn a second watcher.
+        Arc::clone(&manager)
+            .start_raw(dir.path(), "sleep", &["30"], url)
+            .await
+            .expect("idempotent start");
+        assert_eq!(manager.live_watchers(), 1);
+        manager.stop();
+        assert!(wait_until_yielding(Duration::from_secs(5), || manager.live_watchers() == 0).await);
+    }
+
+    /// Monitor-fallback captures must be tagged and logged.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn monitor_fallback_capture_is_tagged_and_logged() {
+        let manager = test_manager();
+        manager.set_capture_source(Arc::new(MockCapture {
+            fallback: Some("monitor".into()),
+        }));
+        let dir = tempfile::tempdir().expect("tempdir");
+        Arc::clone(&manager)
+            .start_raw(dir.path(), "sleep", &["5"], "http://127.0.0.1:41237")
+            .await
+            .expect("start");
+        let shot = manager.capture().expect("captured");
+        assert_eq!(shot.fallback.as_deref(), Some("monitor"));
+        assert!(
+            manager
+                .logs(None)
+                .iter()
+                .any(|l| l.text.contains("fallback=monitor")),
+            "fallback must be logged"
+        );
+        manager.stop();
     }
 
     /// stdout of the child must flow into the ring buffer (drain task).

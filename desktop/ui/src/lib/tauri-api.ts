@@ -1932,6 +1932,8 @@ export interface PreviewCaptureResponse {
   mediaType: string
   width: number
   height: number
+  /** Set when the whole monitor was captured instead of the app window. */
+  fallback?: string
 }
 
 export async function previewDetect(projectDir?: string | null): Promise<PreviewDetectResponse> {

@@ -32,6 +32,11 @@ pub struct PreviewScreenshot {
     pub width: u32,
     /// Image height in pixels.
     pub height: u32,
+    /// Present when the desktop could not grab the Shannon app window and
+    /// captured the primary monitor instead (`"monitor"`): the image is the
+    /// ENTIRE screen, not an isolated preview-panel crop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
 }
 
 /// Mirror of the desktop preview lifecycle state the model may observe.
@@ -89,9 +94,18 @@ impl Tool for PreviewScreenshotTool {
             Ok(s) => s,
             Err(e) => return Ok(ToolOutput::error(format!("Preview capture failed: {e}"))),
         };
+        // Honest disclosure: a monitor-fallback image is the whole screen,
+        // not the preview panel — the model must not treat it as isolated
+        // preview content.
+        let fallback_note = if shot.fallback.is_some() {
+            " Note: this image is the ENTIRE screen (the app window could not \
+             be isolated), so it contains more than the preview panel."
+        } else {
+            ""
+        };
         let content = format!(
-            "Captured preview screenshot of {url} ({}x{}, {}). Verify the \
-             rendered result against the change you just made.",
+            "Captured preview screenshot of {url} ({}x{}, {}).{fallback_note} \
+             Verify the rendered result against the change you just made.",
             shot.width, shot.height, shot.media_type
         );
         Ok(ToolOutput::success(content)
@@ -160,6 +174,7 @@ mod tests {
             media_type: "image/png".into(),
             width: 1,
             height: 1,
+            fallback: None,
         }
     }
 
@@ -201,6 +216,17 @@ mod tests {
         let out = futures::executor::block_on(tool.execute(json!({}))).unwrap();
         assert!(out.is_error);
         assert!(out.content.contains("No preview is running"));
+    }
+
+    #[test]
+    fn tool_discloses_monitor_fallback_in_content() {
+        let mut shot = png_shot();
+        shot.fallback = Some("monitor".into());
+        let access = std::sync::Arc::new(running_access(Ok(shot)));
+        let tool = PreviewScreenshotTool { access };
+        let out = futures::executor::block_on(tool.execute(json!({}))).unwrap();
+        assert!(!out.is_error);
+        assert!(out.content.contains("ENTIRE screen"), "{}", out.content);
     }
 
     #[test]
