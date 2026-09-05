@@ -6656,6 +6656,7 @@ dependencies = [
  "shannon-mcp",
  "shannon-remote",
  "shannon-skills",
+ "shannon-tool-interface",
  "shannon-tools",
  "shannon-types",
  "tauri",

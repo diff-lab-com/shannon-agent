@@ -121,6 +121,37 @@ pub struct DesktopConfig {
     /// backward compatibility.
     #[serde(default)]
     pub enabled_providers: Option<Vec<String>>,
+    /// P1-3: the persisted **active permission profile** (`strict` /
+    /// `balanced` / `permissive` / a custom profile name from
+    /// `.shannon/profiles/*.toml`). `None` = no profile — the plain
+    /// `approval_mode` above drives the engine, exactly as before this
+    /// field existed. Written by `activate_permission_profile`.
+    #[serde(default)]
+    pub active_permission_profile: Option<String>,
+    /// P1-3: command-sandbox configuration. `None` = the key was never set
+    /// (older configs) → engine default `off`. The frozen config key path
+    /// is `sandbox.mode`; see [`SandboxConfig`].
+    #[serde(default)]
+    pub sandbox: Option<SandboxConfig>,
+}
+
+/// P1-3: payload of the desktop `sandbox.mode` config key.
+///
+/// `mode` uses the same vocabulary as the engine's `[sandbox]` TOML table /
+/// `SHANNON_SANDBOX` env var (`off` | `local` | `landlock`, see
+/// `shannon_tool_interface::SandboxMode`) so there is exactly one tier
+/// naming across TUI and desktop:
+///
+/// | mode       | desktop UI tier      | enforcement                                        |
+/// |------------|----------------------|----------------------------------------------------|
+/// | `off`      | 关闭 (off)           | legacy passthrough, byte-identical                 |
+/// | `local`    | 只读文件系统 (readonly fs) | user-space policy mirror on the in-process fs tools |
+/// | `landlock` | 完全 (full, experimental) | kernel-enforced child world + user-space fs mirror |
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    /// `off` | `local` | `landlock`. `None` behaves like `off`.
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 /// Gateway process supervision config (E-1, 方案 C). Stored under
@@ -493,6 +524,8 @@ impl Default for DesktopConfig {
             gateway: GatewayDesktopConfig::default(),
             open_session_windows: Vec::new(),
             enabled_providers: None,
+            active_permission_profile: None,
+            sandbox: None,
         }
     }
 }
@@ -570,6 +603,33 @@ mod tests {
         assert!(config.working_dir.is_none());
         assert!(config.theme.is_none());
         assert_eq!(config.approval_mode, Some("confirm".into()));
+    }
+
+    #[test]
+    fn test_p1_3_profile_and_sandbox_defaults_and_round_trip() {
+        // P1-3: config files written before `active_permission_profile` /
+        // `sandbox` existed must keep loading (both default to "unset").
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(legacy.active_permission_profile.is_none());
+        assert!(legacy.sandbox.is_none());
+
+        let mut config = DesktopConfig::default();
+        config.active_permission_profile = Some("strict".into());
+        config.sandbox = Some(SandboxConfig {
+            mode: Some("local".into()),
+        });
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            json.contains("\"active_permission_profile\":\"strict\""),
+            "{json}"
+        );
+        assert!(json.contains("\"sandbox\":{\"mode\":\"local\"}"), "{json}");
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.active_permission_profile.as_deref(), Some("strict"));
+        assert_eq!(back.sandbox.and_then(|s| s.mode), Some("local".into()));
     }
 
     #[test]
