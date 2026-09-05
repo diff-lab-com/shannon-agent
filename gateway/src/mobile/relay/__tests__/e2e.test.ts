@@ -4,6 +4,8 @@ import {
   E2eChannel,
   FRAME_VERSION,
   deriveSessionKey,
+  hkdfExpand,
+  hkdfExtract,
 } from "../e2e.js";
 
 const TEST_KEY = Buffer.alloc(32, 0x42);
@@ -217,5 +219,34 @@ describe("deriveSessionKey", () => {
     const msg = Buffer.from("derived key works", "utf8");
     const frame = sender.seal(msg);
     expect(receiver.open(frame).equals(msg)).toBe(true);
+  });
+});
+
+describe("HKDF key derivation vectors", () => {
+  // RFC 5869 Appendix A, Test Case 1 (SHA-256): pins hkdfExtract/hkdfExpand
+  // against the official primitives so the production construction is proven
+  // RFC-correct, not just self-consistent.
+  it("matches RFC 5869 Test Case 1 (SHA-256)", () => {
+    const ikm = Buffer.alloc(22, 0x0b);
+    const salt = Buffer.from("000102030405060708090a0b0c", "hex");
+    const info = Buffer.from("f0f1f2f3f4f5f6f7f8f9", "hex");
+    const okm = hkdfExpand(hkdfExtract(ikm, salt), info, 42);
+    expect(okm.toString("hex")).toBe(
+      "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865",
+    );
+  });
+
+  // GOLDEN VECTOR — frozen 2026-09-06. Pins the PRODUCTION KDF
+  // (HKDF-SHA256, salt="shannon-relay", info="shannon-e2e-v1", ikm=UTF8(pairToken))
+  // to an exact output. The Dart twin in shannon-mobile must pin the same
+  // token→key mapping; changing either side's salt/info/encoding breaks this.
+  // Until the v0.3 X25519 handshake lands (e2e_channel D-1), this vector is
+  // the only machine-checkable contract for the production key schedule.
+  it("production KDF golden vector (cross-language pin)", () => {
+    const key = deriveSessionKey("shannon-e2e-golden-vector");
+    expect(key.length).toBe(32);
+    expect(key.toString("hex")).toBe(
+      "8fc2767fba0fe4c0a2d99331282c16e12ceaff9e7cdc7147db45320e3366bb1d",
+    );
   });
 });

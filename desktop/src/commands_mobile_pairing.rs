@@ -8,7 +8,11 @@
 //!
 //!   `generate_pair_token` — mints a one-time 75s-TTL token, **appends** it to
 //!     `mobile.tokensFile` (the gateway consumes it on `shannon/pair`), and
-//!     returns a QR (LAN endpoint + token) the phone scans.
+//!     returns a QR (LAN endpoint + token) the phone scans. The QR `host` is
+//!     the desktop's mDNS name (`<hostname>.local`), not a raw IP — iOS ATS
+//!     rejects raw-IP `ws://` endpoints at the OS level, while `.local` names
+//!     are covered by `NSAllowsLocalNetworking` (cross-repo-adaptation-spec
+//!     §A8/§A8b; the gateway advertises `_shannon._tcp` over mDNS alongside).
 //!   `list_paired_devices`  — reads `mobile.devicesFile` (the gateway writes it
 //!     on successful pair).
 //!   `revoke_device`        — atomically removes a device entry; the gateway's
@@ -76,11 +80,13 @@ fn now_ms() -> u64 {
 /// The default `mobile` block the desktop writes into the gateway config so the
 /// inbound `shannon/*` server starts on the next gateway launch. Paths are the
 /// canonical `~/.shannon/mobile-*` files these commands also use, so both sides
-/// agree by construction.
+/// agree by construction. Binds `0.0.0.0`: LAN direct-connect pairing is
+/// reachable only from a non-loopback bind (the gateway skips its mDNS
+/// advertisement on loopback binds), and access is gated by one-time tokens.
 pub fn default_mobile_config() -> GatewayMobileConfig {
     GatewayMobileConfig {
         enabled: true,
-        host: Some("127.0.0.1".into()),
+        host: Some("0.0.0.0".into()),
         port: Some(DEFAULT_MOBILE_PORT),
         tokens_file: tokens_path()
             .ok()
@@ -166,11 +172,18 @@ pub async fn mobile_generate_pair_token() -> Result<PairTokenResponse, String> {
     let (ip, port) = lan_endpoint()?;
     let lan_endpoint = format!("ws://{ip}:{port}");
 
+    // QR host: the desktop's mDNS name (`<hostname>.local`) — iOS ATS refuses
+    // raw-IP ws:// endpoints outright, while `.local` names are permitted
+    // (§A8b). Fall back to the raw IP only when no hostname can be determined
+    // (same behavior as before this existed; iOS will fail its preflight with
+    // `rawIpOnIos` instead of a mysterious OS-level refusal).
+    let qr_host = mdns_hostname().unwrap_or_else(|| ip.to_string());
+
     // QR payload — the contract the mobile app (P1.4) parses. v1 = LAN direct.
     let payload = serde_json::json!({
         "v": QR_VERSION,
         "scheme": "ws",
-        "host": ip.to_string(),
+        "host": qr_host,
         "port": port,
         "token": token,
         "exp": expires_at,
@@ -265,6 +278,21 @@ fn lan_ipv4() -> Option<Ipv4Addr> {
     }
 }
 
+/// The desktop's mDNS hostname, `<first-label>.local` (§A8b) — matches the
+/// name the gateway's `_shannon._tcp` advertisement resolves under (the OS
+/// built-in responder on macOS, Avahi or the gateway's own responder on
+/// Linux). Single label + lowercase keeps the name a legal mDNS host label.
+/// `None` only if the OS has no hostname, in which case the QR falls back to
+/// the raw LAN IP.
+fn mdns_hostname() -> Option<String> {
+    let raw = gethostname::gethostname().to_string_lossy().into_owned();
+    let label = raw.split('.').next()?.trim().to_ascii_lowercase();
+    if label.is_empty() {
+        return None;
+    }
+    Some(format!("{label}.local"))
+}
+
 /// The mobile WS port the desktop last wrote into the gateway config (or the
 /// default if the config can't be read). Kept best-effort — the port is
 /// desktop-controlled, so this is authoritative outside tests.
@@ -318,10 +346,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_mobile_config_targets_loopback_and_canonical_files() {
+    fn default_mobile_config_binds_wildcard_and_canonical_files() {
         let m = default_mobile_config();
         assert!(m.enabled);
-        assert_eq!(m.host.as_deref(), Some("127.0.0.1"));
+        // §A8b: LAN direct-connect needs a non-loopback bind; the gateway
+        // skips its mDNS advertisement on loopback-only servers.
+        assert_eq!(m.host.as_deref(), Some("0.0.0.0"));
         assert_eq!(m.port, Some(DEFAULT_MOBILE_PORT));
         assert!(
             m.tokens_file
@@ -335,6 +365,19 @@ mod tests {
                 .unwrap()
                 .ends_with("mobile-devices.json")
         );
+    }
+
+    #[test]
+    fn mdns_hostname_is_a_single_local_label() {
+        // Best-effort: must never panic. Wherever a hostname exists, the QR
+        // host form is `<single lowercase label>.local` (iOS ATS contract).
+        if let Some(name) = mdns_hostname() {
+            assert!(name.ends_with(".local"));
+            let label = name.strip_suffix(".local").unwrap();
+            assert!(!label.contains('.'), "single label only, got {label:?}");
+            assert!(label.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+            assert!(!label.is_empty());
+        }
     }
 
     #[test]

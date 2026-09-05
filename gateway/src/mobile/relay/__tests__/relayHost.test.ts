@@ -189,6 +189,25 @@ function nextDecodedMessage(ws: WebSocket, channel: E2eChannel): Promise<string>
   });
 }
 
+/** Capture the next binary frame from a WebSocket WITHOUT decrypting it. */
+function nextRawBinaryFrame(ws: WebSocket): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const handler = (data: unknown, isBinary: boolean): void => {
+      if (!isBinary) return;
+      ws.off("message", handler);
+      resolve(
+        Buffer.isBuffer(data)
+          ? data
+          : data instanceof ArrayBuffer
+            ? Buffer.from(data)
+            : Buffer.concat(data as Buffer[]),
+      );
+    };
+    ws.on("message", handler);
+    ws.on("error", reject);
+  });
+}
+
 // ── test handler: responds to shannon/health ──────────────────────────────────
 
 function healthHandlers(): MethodHandlers {
@@ -382,6 +401,69 @@ describe("startRelayHost", () => {
     const response = JSON.parse(responseText);
     expect(response.id).toBe(2);
     expect(response.result).toEqual({
+      gateway: "ok",
+      engine: "ok",
+      version: "test",
+    });
+    phoneWs2.close();
+  });
+
+  it("preserves host send counter across re-paired (§G-rev3)", async () => {
+    const relay = new MockRelay();
+    const relayPort = await relay.start(0);
+    const relayUrl = `ws://127.0.0.1:${relayPort}`;
+    const sid = "test-sid-006";
+    const sessionKey = deriveSessionKey("token-006");
+
+    hostHandle = startRelayHost({
+      relayUrl,
+      sid,
+      sessionKey,
+      handlers: healthHandlers(),
+      logger,
+      pairTimeout: 5000,
+    });
+
+    // First session: one full request/response round trip. The phone's recv
+    // channel accepts the host's first downstream frame (wire counter 1).
+    const { ws: phoneWs1 } = await connectPhone(relayUrl, sid);
+    await hostHandle.paired;
+
+    const phoneSend1 = new E2eChannel(sessionKey);
+    // This channel models the phone's recv side and is REUSED across the
+    // re-pair below — mirroring shannon-mobile's relay_transport.dart, where
+    // the phone role resets recv only on host_replaced, never on re-paired.
+    const phoneRecv = new E2eChannel(sessionKey);
+    phoneWs1.send(phoneSend1.seal(Buffer.from(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, method: "shannon/health" }), "utf8",
+    )));
+    const frame1 = await nextRawBinaryFrame(phoneWs1);
+    expect(frame1[0]).toBe(0x01);
+    expect(frame1.readBigUInt64BE(1)).toBe(1n); // host's first downstream frame
+    expect(JSON.parse(phoneRecv.open(frame1).toString("utf8")).id).toBe(1);
+
+    // Phone disconnects → host gets peer_gone → host waits for re-pair.
+    phoneWs1.close();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Phone reconnects. §G-rev3 (cross-repo-adaptation-spec): the host's
+    // socket never dropped, so its send counter must continue monotonically.
+    // The phone's recv sits at 1; a reset host send counter (back to 1) would
+    // be rejected by the phone as a replay and wedge the host→phone direction.
+    const { ws: phoneWs2 } = await connectPhone(relayUrl, sid);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const phoneSend2 = new E2eChannel(sessionKey);
+    phoneWs2.send(phoneSend2.seal(Buffer.from(
+      JSON.stringify({ jsonrpc: "2.0", id: 2, method: "shannon/health" }), "utf8",
+    )));
+    const frame2 = await nextRawBinaryFrame(phoneWs2);
+    expect(frame2[0]).toBe(0x01);
+    expect(frame2.readBigUInt64BE(1)).toBe(2n); // continued — NOT reset to 1
+    // The reused phone recv channel accepts counter 2 (would throw on 1).
+    const response2 = JSON.parse(phoneRecv.open(frame2).toString("utf8"));
+    expect(response2.id).toBe(2);
+    expect(response2.result).toEqual({
       gateway: "ok",
       engine: "ok",
       version: "test",
