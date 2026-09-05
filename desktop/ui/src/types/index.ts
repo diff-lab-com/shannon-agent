@@ -636,28 +636,45 @@ export interface AgentInfo {
   session_id?: string
 }
 
-// --- Billing Types ---
+// --- P0-4 Cost Observability Types ---
+//
+// Field names mirror the Rust DTOs in shannon-desktop/src/cost_commands.rs
+// exactly (serde camelCase on the wire).
 
-export interface BillingPlan {
-  name: string
-  price: number
-  token_limit: number
-  features: string[]
+/** One session's aggregated usage for the Usage page's per-session view. */
+export interface SessionUsageRow {
+  sessionId: string
+  /** Session title when the sidecar has one; UI falls back to a short id. */
+  title: string | null
+  inputTokens: number
+  outputTokens: number
+  cacheCreationTokens: number
+  cacheReadTokens: number
+  costUsd: number
+  requests: number
+  /** Epoch ms of the session's most recent ledger event. */
+  lastUsedAtMs: number
 }
 
-export interface CostRecord {
-  date: string
-  input_tokens: number
-  output_tokens: number
-  cost_usd: number
+/** One category row of the context breakdown (`key` is a stable string). */
+export interface ContextBreakdownCategory {
+  key: 'system' | 'tools' | 'skills' | 'memory' | 'mcp' | 'conversation'
+  tokens: number
 }
 
-export interface BillingHistory {
-  id: string
-  date: string
-  description: string
-  amount: number
-  status: 'paid' | 'pending' | 'failed'
+/** Six-category context estimate (frozen wire shape, camelCase). */
+export interface ContextBreakdown {
+  totalTokens: number
+  /** `null` when the model's window is genuinely unknown. */
+  contextWindow: number | null
+  categories: ContextBreakdownCategory[]
+}
+
+/** Payload of the `budget:warning` / `budget:exceeded` events (frozen). */
+export interface BudgetStatusPayload {
+  sessionId: string
+  spentUsd: number
+  budgetUsd: number
 }
 
 // --- Usage Stats Types ---
@@ -986,6 +1003,10 @@ export const EVENT_NAMES = {
   TRIAGE_UPDATED: 'triage-updated',
   INBOX_UPDATED: 'inbox-updated',
   GOAL_UPDATED: 'goal:updated',
+  /** P0-4: session spend crossed 80% of its budget (yellow advisory bar). */
+  BUDGET_WARNING: 'budget:warning',
+  /** P0-4: budget cap hit — send rejected pre-turn or turn cancelled. */
+  BUDGET_EXCEEDED: 'budget:exceeded',
 } as const
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]

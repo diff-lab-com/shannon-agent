@@ -4,8 +4,7 @@ import { MOCK_TASKS, MOCK_AGENTS, MOCK_AGENT_DEFINITIONS, MOCK_SESSIONS, MOCK_ME
   MOCK_SKILLS, MOCK_MCP_SERVERS, MOCK_PLUGINS, MOCK_BACKGROUND_TASKS,
   MOCK_TURN_TIMELINE } from './data/core'
 import { MOCK_SCHEDULED_ROUTINES, MOCK_TRIGGERED_ROUTINES, MOCK_HOOK_EVENTS, MOCK_PROFILES } from './data/automation'
-import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_BILLING_PLAN,
-  MOCK_COST_HISTORY, MOCK_BILLING_HISTORY, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
+import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
 import type { InboxItem, ProviderInput, SessionInfo } from '@/types'
@@ -36,6 +35,9 @@ const state = {
 
 // ids for inbox items created at runtime (rerun simulation).
 let nextInboxId = Math.max(...MOCK_INBOX_ITEMS.map(i => i.id)) + 1
+
+// P0-4: demo session budget — null = no cap; set via the budget control.
+let demoBudgetUsd: number | null = null
 
 // P0-2: demo goal runs. One live (so the Tasks page shows a run card) and
 // one finished; start_goal_run appends new running rows with live feel.
@@ -274,6 +276,39 @@ export const handlers: Record<string, MockHandler> = {
   async get_session_usage() {
     await delay(30)
     return { input_tokens: 12400, output_tokens: 3150, cache_creation_tokens: 0, cache_read_tokens: 9800, cost_usd: 0.0731, events: 6 }
+  },
+  // P0-4 cost observability: demo budget (mutable so the banner flow is
+  // explorable), a fixed six-category breakdown and two attributed
+  // sessions for the Usage page's per-session view.
+  async get_session_budget() { await delay(30); return demoBudgetUsd },
+  async set_session_budget(args: { budgetUsd: number | null }) {
+    await delay(30)
+    demoBudgetUsd = args.budgetUsd
+  },
+  async get_session_context_breakdown() {
+    await delay(30)
+    return {
+      totalTokens: 9480,
+      contextWindow: 200000,
+      categories: [
+        { key: 'system', tokens: 1820 },
+        { key: 'tools', tokens: 2640 },
+        { key: 'skills', tokens: 610 },
+        { key: 'memory', tokens: 340 },
+        { key: 'mcp', tokens: 0 },
+        { key: 'conversation', tokens: 4070 },
+      ],
+    }
+  },
+  async get_usage_by_session(args: { days: number }) {
+    await delay()
+    const cutoff = Date.now() - Math.min(args.days ?? 30, 365) * 86400_000
+    const rows = [
+      { sessionId: MOCK_SESSIONS[0]?.id ?? 'demo-session', title: MOCK_SESSIONS[0]?.title ?? null, inputTokens: 48210, outputTokens: 12640, cacheCreationTokens: 18300, cacheReadTokens: 156400, costUsd: 0.842, requests: 31, lastUsedAtMs: Date.now() - 3600_000 },
+      { sessionId: MOCK_SESSIONS[1]?.id ?? 'demo-session-2', title: MOCK_SESSIONS[1]?.title ?? null, inputTokens: 15400, outputTokens: 8210, cacheCreationTokens: 4200, cacheReadTokens: 38700, costUsd: 0.214, requests: 12, lastUsedAtMs: Date.now() - 26 * 3600_000 },
+      { sessionId: '8f2c1a9e-4b7d-4c3a-9f01-2d5e8b7a6c01', title: null, inputTokens: 6100, outputTokens: 2400, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0.038, requests: 4, lastUsedAtMs: Date.now() - 20 * 86400_000 },
+    ]
+    return rows.filter(r => r.lastUsedAtMs >= cutoff)
   },
   async get_session_git_diff() {
     await delay(30)
@@ -638,13 +673,6 @@ export const handlers: Record<string, MockHandler> = {
   // --- OPC analytics ---
   async get_opc_metrics() { await delay(); return clone(MOCK_OPC_METRICS) },
 
-  // --- Billing ---
-  async get_billing_plan() { await delay(); return clone(MOCK_BILLING_PLAN) },
-  async get_cost_history(args: { days: number }) {
-    await delay()
-    return clone(MOCK_COST_HISTORY.slice(-Math.min(args.days ?? 14, 14)))
-  },
-  async get_billing_history() { await delay(); return clone(MOCK_BILLING_HISTORY) },
 
   // --- File context ---
   async get_file_context() {

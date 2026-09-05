@@ -138,7 +138,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try { setBackgroundTasks(await api.getBackgroundTasks()) } catch (e) { logSoftFailure('refresh background tasks', e) }
   }, [])
 
-  const sendMessage = useCallback(async (message: string, filePaths?: string[]) => {
+  const sendMessage = useCallback(async (
+    message: string,
+    filePaths?: string[],
+    options?: { budgetBypass?: boolean },
+  ) => {
     if (currentSessionId && goalOwnedSessionIds.includes(currentSessionId)) {
       setError(messageFor('goal.composer.blocked'))
       setIsQuerying(false)
@@ -151,7 +155,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIsQuerying(true)
     setMessages(prev => [...prev, { role: 'user', content: message, timestamp: Date.now() }])
     try {
-      const resp = await api.sendMessage(message, filePaths)
+      const resp = await api.sendMessage(message, filePaths, options?.budgetBypass)
       setCurrentQueryId(resp.query_id)
     } catch (e) {
       setError(String(e))

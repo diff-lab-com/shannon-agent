@@ -11,6 +11,8 @@ import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
 import { parseSlashInput, type SlashCommand, type SlashResult } from '@/lib/slash/commands'
 import { toastError } from '@/lib/errorToast'
+import { useBudgetGuard } from '@/hooks/useBudgetGuard'
+import BudgetBanner from '@/components/chat/BudgetBanner'
 import {
   ApiKeyBanner,
   ComposerPanel,
@@ -64,6 +66,15 @@ export default function Chat() {
   }, [location.state, location.pathname, navigate])
 
   const [bannerDismissed, setBannerDismissed] = useState(false)
+
+  // P0-4: session-budget advisory/choice bars. "Continue once" resends the
+  // last user message with the budget-bypass flag (exempts exactly that
+  // send's pre-turn check backend-side).
+  const budgetGuard = useBudgetGuard(currentSessionId)
+  const continuePastBudget = useCallback(() => {
+    const lastUser = [...messages].reverse().find(m => m.role === 'user')
+    if (lastUser) void sendMessage(lastUser.content, undefined, { budgetBypass: true })
+  }, [messages, sendMessage])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollParentRef = useRef<HTMLDivElement>(null)
 
@@ -155,6 +166,15 @@ export default function Chat() {
               visible={showApiKeyBanner}
               onDismiss={() => setBannerDismissed(true)}
               onOpenSettings={() => navigate('/settings/models')}
+            />
+
+            <BudgetBanner
+              warning={budgetGuard.warning}
+              exceeded={budgetGuard.exceeded}
+              clearWarning={budgetGuard.clearWarning}
+              clearExceeded={budgetGuard.clearExceeded}
+              onContinueOnce={continuePastBudget}
+              sessionId={currentSessionId}
             />
 
             <MessageArea

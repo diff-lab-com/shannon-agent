@@ -60,10 +60,9 @@ import type {
   TriggerResponse,
   TaskWorktreeDto,
   AgentMessageEntry,
-  BillingPlan,
-  CostRecord,
-  BillingHistory,
   UsageStats,
+  SessionUsageRow,
+  ContextBreakdown,
   HookEventInfo,
   ProfilesList,
   CustomProfileInfo,
@@ -92,8 +91,16 @@ export interface AttachmentPayload {
 }
 
 
-export async function sendMessage(message: string, filePaths?: string[]): Promise<SendMessageResponse> {
-  return invoke('send_message', { message, filePaths: filePaths ?? null })
+export async function sendMessage(
+  message: string,
+  filePaths?: string[],
+  budgetBypass?: boolean,
+): Promise<SendMessageResponse> {
+  return invoke('send_message', {
+    message,
+    filePaths: filePaths ?? null,
+    budgetBypass: budgetBypass ?? null,
+  })
 }
 
 export async function getConversation(): Promise<ChatMessage[]> {
@@ -1181,22 +1188,33 @@ export async function updateTask(payload: UpdateTaskPayload): Promise<TaskItem> 
   return invoke('update_task', { payload })
 }
 
-// --- Billing ---
-
-export async function getBillingPlan(): Promise<BillingPlan> {
-  return invoke('get_billing_plan')
-}
-
-export async function getCostHistory(days: number): Promise<CostRecord[]> {
-  return invoke('get_cost_history', { days })
-}
-
-export async function getBillingHistory(): Promise<BillingHistory[]> {
-  return invoke('get_billing_history')
-}
-
 export async function getUsageStats(days: number): Promise<UsageStats> {
   return invoke('get_usage_stats', { days })
+}
+
+// --- P0-4 Cost observability ---
+//
+// Session budget + six-category context breakdown + per-session usage
+// aggregation (Rust: shannon-desktop/src/cost_commands.rs).
+
+/** Set (or clear with `null`) the session's USD spend cap. */
+export async function setSessionBudget(sessionId: string, budgetUsd: number | null): Promise<void> {
+  await invoke('set_session_budget', { sessionId, budgetUsd })
+}
+
+/** Read the session's budget cap (`null` when none is set). */
+export async function getSessionBudget(sessionId: string): Promise<number | null> {
+  return invoke('get_session_budget', { sessionId })
+}
+
+/** Six-category context estimate for the session's current state. */
+export async function getSessionContextBreakdown(sessionId: string): Promise<ContextBreakdown> {
+  return invoke('get_session_context_breakdown', { sessionId })
+}
+
+/** Per-session usage aggregation for the last `days` days (recency order). */
+export async function getUsageBySession(days: number): Promise<SessionUsageRow[]> {
+  return invoke('get_usage_by_session', { days })
 }
 
 // --- Scheduled Tasks (Sprint 2) ---

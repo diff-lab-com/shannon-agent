@@ -57,7 +57,6 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       { id: 'p-set', label: t('nav.settings'), icon: 'settings', category: t('palette.category.pages'), action: () => navigate('/settings') },
       { id: 'p-theme', label: t('palette.page.themeSettings'), icon: 'palette', category: t('palette.category.settings'), action: () => navigate('/settings/theme') },
       { id: 'p-models', label: t('palette.page.modelSettings'), icon: 'neurology', category: t('palette.category.settings'), action: () => navigate('/settings/models') },
-      { id: 'p-billing', label: t('nav.usageBilling'), icon: 'credit_card', category: t('palette.category.settings'), action: () => navigate('/settings/billing') },
     ]
     const taskItems: PaletteItem[] = tasks.slice(0, 8).map(task => ({
       id: `t-${task.id}`,

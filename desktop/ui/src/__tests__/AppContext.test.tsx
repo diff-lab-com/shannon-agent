@@ -54,7 +54,8 @@ describe('AppContext', () => {
       await result.current.sendMessage('Hello')
     })
 
-    expect(spy).toHaveBeenCalledWith('Hello', undefined)
+    // P0-4: the third arg carries the optional budget-bypass flag.
+    expect(spy).toHaveBeenCalledWith('Hello', undefined, undefined)
     expect(result.current.isQuerying).toBe(true)
     expect(result.current.streamingText).toBe('')
     spy.mockRestore()

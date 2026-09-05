@@ -73,7 +73,8 @@ describe('Sidebar', () => {
     expect(screen.getByText('Theme')).toBeInTheDocument()
     expect(screen.getByText('Models')).toBeInTheDocument()
     expect(screen.getByText('Notifications')).toBeInTheDocument()
-    // Billing + Advanced are dev-only (P3-2): hidden in the default Simple mode.
+    // Billing was removed entirely (P0-4 decision D5); Advanced is dev-only
+    // (P3-2): both hidden in the default Simple mode.
     expect(screen.queryByText('Usage & Billing')).not.toBeInTheDocument()
     expect(screen.queryByText('Advanced')).not.toBeInTheDocument()
   })
@@ -180,10 +181,11 @@ describe('Sidebar — Advanced mode', () => {
     expect(opc).toHaveAttribute('href', '/opc')
   })
 
-  it('shows dev-only Settings sub-links (Billing, Advanced) when expanded', () => {
+  it('shows dev-only Settings sub-links (Advanced) when expanded', () => {
     render(wrap(<Sidebar />))
     fireEvent.click(screen.getByText('Settings'))
-    expect(screen.getByText('Usage & Billing')).toBeInTheDocument()
+    // P0-4 (D5): the Billing tab no longer exists anywhere in the app.
+    expect(screen.queryByText('Usage & Billing')).not.toBeInTheDocument()
     expect(screen.getByText('Advanced')).toBeInTheDocument()
   })
 

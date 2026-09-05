@@ -6,13 +6,14 @@
 
 import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
+import { useT } from '@/i18n'
 import LoadingState from '@/components/ui/loading-state'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
 import { cn } from '@/lib/utils'
-import type { UsageStats, UsageBucket } from '@/types'
+import type { UsageStats, UsageBucket, SessionUsageRow } from '@/types'
 
 const RANGES = [7, 30, 90] as const
 
@@ -125,12 +126,79 @@ function BucketTable({
   )
 }
 
+function SessionTable({ rows, locale, emptyTitle, emptyLabel }: {
+  rows: SessionUsageRow[]
+  locale: string
+  emptyTitle: string
+  emptyLabel: string
+}) {
+  const t = useT()
+  const fmtDay = (ms: number) =>
+    new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(new Date(ms))
+  return (
+    <div className="bg-surface-container-low rounded-2xl border border-outline-variant/30 overflow-hidden">
+      <div className="flex items-center gap-xs px-lg py-md border-b border-outline-variant/20">
+        <span className="material-symbols-outlined icon-sm text-primary">forum</span>
+        <h2 className="font-label-md font-bold text-on-surface">{t('usage.section.bySession')}</h2>
+      </div>
+      {rows.length === 0 ? (
+        <EmptyState icon="bar_chart" title={emptyTitle} description={emptyLabel} />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="text-outline-variant">
+              <tr className="border-b border-outline-variant/20">
+                <th className="px-lg py-xs font-label-sm font-medium">{t('usage.col.session')}</th>
+                <th className="px-md py-xs font-label-sm font-medium text-right">Tokens</th>
+                <th className="px-md py-xs font-label-sm font-medium text-right">Cache</th>
+                <th className="px-md py-xs font-label-sm font-medium text-right">Cost</th>
+                <th className="px-md py-xs font-label-sm font-medium text-right">Reqs</th>
+                <th className="px-lg py-xs font-label-sm font-medium text-right">{t('usage.col.lastUsed')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr
+                  key={r.sessionId}
+                  className="border-b border-outline-variant/10 last:border-0 hover:bg-surface-container/40"
+                >
+                  <td className="px-lg py-sm font-label-md text-on-surface truncate max-w-[220px]">
+                    {r.title ?? `${r.sessionId.slice(0, 8)}…`}
+                  </td>
+                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
+                    {fmtTokens(locale, r.inputTokens + r.outputTokens)}
+                  </td>
+                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
+                    {fmtTokens(locale, r.cacheCreationTokens + r.cacheReadTokens)}
+                  </td>
+                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
+                    {fmtCost(locale, r.costUsd)}
+                  </td>
+                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
+                    {r.requests}
+                  </td>
+                  <td className="px-lg py-sm text-right font-mono text-label-sm text-on-surface-variant">
+                    {fmtDay(r.lastUsedAtMs)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Usage() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const [days, setDays] = useState<number>(30)
   const [stats, setStats] = useState<UsageStats | null>(null)
   const [loading, setLoading] = useState(true)
+  // P0-4: per-session view (tab toggle) + its rows.
+  const [view, setView] = useState<'overview' | 'sessions'>('overview')
+  const [sessionRows, setSessionRows] = useState<SessionUsageRow[] | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -150,7 +218,28 @@ export default function Usage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days])
 
-  const hasData = !!stats && stats.totals.requests > 0
+  useEffect(() => {
+    if (view !== 'sessions') return
+    let cancelled = false
+    setLoading(true)
+    api
+      .getUsageBySession(days)
+      .then(rows => {
+        if (!cancelled) setSessionRows(rows)
+      })
+      .catch(e => toastError(t('usage.load.failed'), e))
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, days])
+
+  const hasData = view === 'sessions'
+    ? !!sessionRows && sessionRows.length > 0
+    : !!stats && stats.totals.requests > 0
 
   return (
     <div className="p-lg max-w-6xl mx-auto">
@@ -162,7 +251,31 @@ export default function Usage() {
         <p className="text-on-surface-variant font-body-md mt-xs">{t('usage.subtitle')}</p>
       </div>
 
-      <div className="flex items-center gap-xs mb-lg">
+      <div className="flex items-center gap-xs mb-lg flex-wrap">
+        {/* P0-4: overview vs per-session segmented toggle */}
+        <div
+          role="tablist"
+          aria-label={t('usage.title')}
+          className="flex items-center gap-xs mr-md p-xs bg-surface-container-low/60 rounded-full border border-outline-variant/20"
+        >
+          {(['overview', 'sessions'] as const).map(v => (
+            <button
+              key={v}
+              type="button"
+              role="tab"
+              aria-selected={view === v}
+              onClick={() => setView(v)}
+              className={cn(
+                'px-md py-xs rounded-full font-label-md text-label-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
+                view === v
+                  ? 'bg-secondary-container text-on-secondary-container font-bold'
+                  : 'text-on-surface-variant hover:text-primary',
+              )}
+            >
+              {v === 'overview' ? t('usage.view.overview') : t('usage.view.bySession')}
+            </button>
+          ))}
+        </div>
         {RANGES.map((r) => (
           <Button
             key={r}
@@ -192,6 +305,13 @@ export default function Usage() {
             description={t('usage.empty')}
           />
         </div>
+      ) : view === 'sessions' ? (
+        <SessionTable
+          rows={sessionRows ?? []}
+          locale={intl.locale}
+          emptyTitle={t('usage.empty.title')}
+          emptyLabel={t('usage.empty')}
+        />
       ) : (
         <div className="space-y-lg">
           {/* Totals */}

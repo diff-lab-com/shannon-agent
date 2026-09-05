@@ -1,10 +1,7 @@
-// Analytics mock data: inbox items, OPC metrics, perf, billing.
+// Analytics mock data: inbox items, OPC metrics, perf.
 import type {
   InboxItem,
   OpcMetrics,
-  BillingPlan,
-  CostRecord,
-  BillingHistory,
 } from '@/types'
 
 const now = Date.now()
@@ -124,40 +121,6 @@ export const MOCK_OPC_METRICS: OpcMetrics = {
     { date: dayIso(0), created: 4, completed: 2 },
   ],
 } as unknown as OpcMetrics
-
-export const MOCK_BILLING_PLAN: BillingPlan = {
-  name: 'Pro',
-  price: 24,
-  token_limit: 2_000_000,
-  features: [
-    'Unlimited sessions',
-    '5 concurrent agents',
-    'Claude Sonnet + Opus access',
-    'MCP marketplace',
-    'Priority support',
-  ],
-}
-
-export const MOCK_COST_HISTORY: CostRecord[] = Array.from({ length: 14 }).map((_, i) => {
-  const base = 8 + Math.sin(i / 2) * 3
-  const noise = (Math.random() - 0.5) * 2
-  const cost = Math.max(2, base + noise)
-  return {
-    date: dayIso(13 - i),
-    input_tokens: Math.floor(cost * 25000 + Math.random() * 5000),
-    output_tokens: Math.floor(cost * 8000 + Math.random() * 2000),
-    cost_usd: Math.round(cost * 100) / 100,
-  }
-})
-
-export const MOCK_BILLING_HISTORY: BillingHistory[] = [
-  { id: 'inv-2026-06', date: dayIso(0), description: 'Pro plan — June 2026', amount: 24, status: 'paid' },
-  { id: 'inv-2026-05', date: dayIso(30), description: 'Pro plan — May 2026', amount: 24, status: 'paid' },
-  { id: 'inv-2026-04', date: dayIso(60), description: 'Pro plan — April 2026', amount: 24, status: 'paid' },
-  { id: 'inv-2026-03', date: dayIso(90), description: 'Pro plan — March 2026', amount: 24, status: 'paid' },
-  { id: 'inv-2026-02', date: dayIso(120), description: 'Pro plan — February 2026 + overage', amount: 38, status: 'paid' },
-  { id: 'inv-2026-01', date: dayIso(150), description: 'Pro plan — January 2026', amount: 24, status: 'paid' },
-]
 
 // Perf traces (for /perf page)
 export const MOCK_PERF_TRACES = [

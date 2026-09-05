@@ -13,6 +13,7 @@ import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal
 import { useSidebar } from './Layout';
 import * as api from '@/lib/tauri-api';
 import { toastError } from '@/lib/errorToast';
+import { useSessionBudget } from '@/hooks/useSessionBudget';
 
 const TITLE_MAP: [string, string][] = [
   ['/opc/task', 'header.title.opcTask'],
@@ -75,6 +76,10 @@ export function Header() {
   const title = isChat && chatSession?.title
     ? chatSession.title
     : t(getTitleKey(location.pathname));
+  // P0-4: spent/budget badge for the current chat session (rendered only
+  // while a budget cap is set on the session sidecar).
+  const chatSessionId = isChat ? chatSession?.id ?? null : null;
+  const { budget: sessionBudget, usage: sessionUsage } = useSessionBudget(chatSessionId);
   const isOpcTask = location.pathname.includes('/opc/task');
 
   // Click outside to close model selector
@@ -145,6 +150,31 @@ export function Header() {
                 {contextPanelOpen ? 'right_panel_close' : 'right_panel_open'}
               </span>
             </Button>
+          )}
+          {/* P0-4: spent/budget badge while the session has a budget cap */}
+          {isChat && sessionBudget != null && sessionBudget > 0 && (
+            <span
+              role="status"
+              aria-label={t('budget.badge.aria', {
+                spent: `$${(sessionUsage?.cost_usd ?? 0).toFixed(2)}`,
+                budget: `$${sessionBudget.toFixed(2)}`,
+              })}
+              title={t('budget.badge.title', {
+                spent: `$${(sessionUsage?.cost_usd ?? 0).toFixed(2)}`,
+                budget: `$${sessionBudget.toFixed(2)}`,
+              })}
+              className={cn(
+                'hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full font-mono font-label-sm text-[11px] border tabular-nums',
+                (sessionUsage?.cost_usd ?? 0) >= sessionBudget
+                  ? 'bg-error/10 text-error border-error/30'
+                  : (sessionUsage?.cost_usd ?? 0) >= sessionBudget * 0.8
+                    ? 'bg-warning/10 text-warning border-warning/30'
+                    : 'bg-surface-container-low text-on-surface-variant border-outline-variant/30'
+              )}
+            >
+              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">payments</span>
+              {(sessionUsage?.cost_usd ?? 0).toFixed(2)} / ${sessionBudget.toFixed(2)}
+            </span>
           )}
           {/* Model selector */}
           <div className="relative" ref={modelRef}>
