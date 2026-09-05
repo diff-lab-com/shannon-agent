@@ -226,11 +226,33 @@ fn register_all_tools(
     // Project-scoped sandbox when a project directory is given (same config
     // shape as the pre-provider `register_default_tools_with_project_dir`).
     let sandbox_base = match project_dir {
-        Some(dir) => PathSandbox::with_config(PathSandboxConfig {
-            allowed_roots: vec![dir.to_path_buf()],
-            denied_patterns: PathSandboxConfig::default_denied_patterns(),
-            strict_mode: true,
-        }),
+        Some(dir) => {
+            // B3 (docs/eval-findings-2026-09-glm.md): grant the file tools
+            // the same writable roots the command sandbox grants — the
+            // project dir plus the temp root. Without the temp root, Write
+            // refuses /tmp while sandboxed Bash happily writes it, and the
+            // model splits its writes across inconsistent tool worlds.
+            let allowed_roots =
+                crate::file::sandbox::SandboxConfig::command_aligned_roots(dir);
+            // A3: when the command sandbox backends relocate the project dir
+            // to /workspace (bwrap/Docker — see `SANDBOX_BIND_ALIAS`), echo
+            // output paths in that same view so `cd`/`ls` on an echoed path
+            // succeeds. Remote worlds swap roots through `world_sandbox` and
+            // address files by their real remote paths, so aliasing stays
+            // off there.
+            let bind_alias_outputs = world_sandbox.is_none()
+                && matches!(
+                    shannon_core::sandbox::SandboxExecutor::detect_sandboxer(),
+                    shannon_core::sandbox::SandboxType::Bubblewrap
+                        | shannon_core::sandbox::SandboxType::Docker
+                );
+            PathSandbox::with_config(PathSandboxConfig {
+                allowed_roots,
+                denied_patterns: PathSandboxConfig::default_denied_patterns(),
+                strict_mode: true,
+            })
+            .with_bind_alias_output(bind_alias_outputs)
+        }
         None => PathSandbox::new(),
     };
     // TOCTOU canonicalization follows the injected world too; a shared
@@ -674,5 +696,80 @@ mod tests {
         let tools = registry.list_tools_info();
         // Should have a substantial number of tools registered
         assert!(tools.len() > 30, "Expected >30 tools, got {}", tools.len());
+    }
+
+    // ── A3/B3: project registration aligns file tools with the command sandbox ──
+
+    /// B3 (docs/eval-findings-2026-09-glm.md): after a project-dir
+    /// registration the Write tool must accept the temp root — the same
+    /// writable root the sandboxed Bash tool grants. Before the alignment,
+    /// Write rejected /tmp with "outside allowed roots" while Bash wrote
+    /// there freely.
+    #[test]
+    fn project_registration_lets_write_use_tmp_root() {
+        let project = tempfile::tempdir().unwrap();
+        let mut registry = ToolRegistry::new();
+        register_default_tools_with_project_dir(&mut registry, project.path())
+            .expect("project registration");
+
+        let write = registry.get("Write").expect("Write tool registered");
+        let target = std::env::temp_dir().join(format!(
+            "shannon_b3_registration_{}.txt",
+            std::process::id()
+        ));
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(write.execute(serde_json::json!({
+                "file_path": target.to_string_lossy(),
+                "content": "scratch"
+            })));
+        assert!(
+            result.is_ok(),
+            "Write to the temp root must succeed after project registration: {result:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "scratch");
+        let _ = std::fs::remove_file(&target);
+    }
+
+    /// A3 (docs/eval-findings-2026-09-glm.md): when the command sandbox
+    /// backends bind the project dir at /workspace, Read output must echo
+    /// the /workspace spelling; otherwise (no relocating backend) the host
+    /// path is kept.
+    #[test]
+    fn project_registration_echo_matches_command_sandbox_view() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join("r.txt"), "content").unwrap();
+        let host_path = project.path().join("r.txt");
+        let host_str = host_path.to_string_lossy().to_string();
+
+        let mut registry = ToolRegistry::new();
+        register_default_tools_with_project_dir(&mut registry, project.path())
+            .expect("project registration");
+
+        let read = registry.get("Read").expect("Read tool registered");
+        let output = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(read.execute(serde_json::json!({
+                "file_path": host_str
+            })))
+            .expect("read should succeed");
+        let echoed = output.metadata["file_path"].as_str().unwrap().to_string();
+
+        let command_sandbox_relocates = matches!(
+            shannon_core::sandbox::SandboxExecutor::detect_sandboxer(),
+            shannon_core::sandbox::SandboxType::Bubblewrap
+                | shannon_core::sandbox::SandboxType::Docker
+        );
+        if command_sandbox_relocates {
+            assert_eq!(
+                echoed, "/workspace/r.txt",
+                "with a relocating backend the echo must be the sandbox view"
+            );
+        } else {
+            assert_eq!(
+                echoed, host_str,
+                "without a relocating backend the host path is the sandbox view"
+            );
+        }
     }
 }

@@ -21,6 +21,12 @@ use std::path::{Path, PathBuf};
 /// (bwrap/Docker bind `<project_dir>` here — see shannon-core sandbox.rs).
 const SANDBOX_BIND_ALIAS: &str = "/workspace";
 
+/// The command sandbox's scratch root. bwrap/Docker give the sandboxed shell
+/// a writable `/tmp`, so the file tools must accept the same literal path —
+/// it is already sandbox-visible spelling, unlike the project dir which the
+/// backends relocate to [`SANDBOX_BIND_ALIAS`].
+const SANDBOX_TMP_ROOT: &str = "/tmp";
+
 /// Configuration for the path sandbox
 #[derive(Debug, Clone)]
 pub struct SandboxConfig {
@@ -63,6 +69,22 @@ impl SandboxConfig {
             "/var/log/".to_string(),
             "/var/run/".to_string(),
         ]
+    }
+
+    /// The writable-root set the command sandbox grants (B3 alignment).
+    ///
+    /// shannon-core's `SandboxProfile` gives sandboxed commands the project
+    /// dir plus `/tmp`; the file tools must accept the same set or the
+    /// model hits "Write refuses /tmp while Bash writes it" splits
+    /// (docs/eval-findings-2026-09-glm.md B3). System paths stay excluded —
+    /// denied patterns and strict-mode checks are unchanged.
+    pub fn command_aligned_roots(project_dir: &Path) -> Vec<PathBuf> {
+        let mut roots = vec![project_dir.to_path_buf()];
+        let temp = std::env::temp_dir();
+        if !roots.contains(&temp) {
+            roots.push(temp);
+        }
+        roots
     }
 }
 
@@ -130,6 +152,11 @@ pub struct PathSandbox {
     /// Shared override for swappable worlds (remote targets). `None` or a
     /// passthrough handle leaves config/home in charge.
     world: Option<std::sync::Arc<WorldSandboxHandle>>,
+    /// When true, tool OUTPUT paths are re-rendered into the command
+    /// sandbox's view (`SANDBOX_BIND_ALIAS` reverse mapping) — see
+    /// [`PathSandbox::alias_display_path`]. Off by default: a sandbox with
+    /// the flag unset echoes canonical host paths unchanged.
+    bind_alias_output: bool,
 }
 
 impl std::fmt::Debug for PathSandbox {
@@ -138,6 +165,7 @@ impl std::fmt::Debug for PathSandbox {
             .field("config", &self.config)
             .field("home_dir", &self.home_dir)
             .field("world", &self.world.as_ref().map(|_| "<shared>"))
+            .field("bind_alias_output", &self.bind_alias_output)
             .finish()
     }
 }
@@ -186,6 +214,7 @@ impl PathSandbox {
             home_dir,
             fs: crate::defaults::fs(),
             world: None,
+            bind_alias_output: false,
         }
     }
 
@@ -227,6 +256,103 @@ impl PathSandbox {
     ) -> Self {
         self.fs = fs;
         self
+    }
+
+    /// Echo tool-output paths in the command sandbox's view (A3,
+    /// docs/eval-findings-2026-09-glm.md).
+    ///
+    /// When the command sandbox backends (bwrap/Docker in shannon-core's
+    /// sandbox.rs) bind the project dir at `/workspace`, the file tools run
+    /// on the host and canonicalize there — so every echoed path used to be
+    /// a host absolute path the model could not use in the sandboxed shell
+    /// (`cd /workspace/src` worked, `cd /home/.../workspace/src` did not).
+    /// With this flag set, output echo points run host paths back through
+    /// [`PathSandbox::alias_display_path`] so the model sees one consistent,
+    /// sandbox-visible path space. Internal reads/writes are unaffected:
+    /// the host-canonical path keeps flowing through the actual I/O.
+    pub fn with_bind_alias_output(mut self, on: bool) -> Self {
+        self.bind_alias_output = on;
+        self
+    }
+
+    /// Whether output-echo aliasing is enabled.
+    pub fn bind_alias_output(&self) -> bool {
+        self.bind_alias_output
+    }
+
+    /// Roots whose children are rendered under the bind alias in output.
+    ///
+    /// The temp root is excluded on purpose: the command sandbox exposes
+    /// `/tmp` at the same literal path (tmpfs mount), so a host `/tmp/...`
+    /// path is already sandbox-visible spelling and must not be rewritten
+    /// to `/workspace/...`.
+    fn alias_candidate_roots(&self) -> Vec<PathBuf> {
+        if !self.bind_alias_output {
+            return Vec::new();
+        }
+        self.effective_roots()
+            .into_iter()
+            .filter(|root| root.to_string_lossy() != SANDBOX_TMP_ROOT)
+            .map(|root| self.fs.canonicalize_blocking(&root).unwrap_or(root))
+            .collect()
+    }
+
+    /// Render a canonical host path the way the command sandbox sees it —
+    /// the reverse of [`PathSandbox::remap_bind_alias`] (A3).
+    ///
+    /// A path under the project root becomes `/workspace/<rest>`; anything
+    /// else (the temp root, paths outside every root) is returned unchanged.
+    /// When output aliasing is off ([`PathSandbox::with_bind_alias_output`])
+    /// this is the identity, so plain non-sandboxed assemblies keep echoing
+    /// host paths exactly as before.
+    pub fn alias_display_path(&self, path: &Path) -> String {
+        for root in self.alias_candidate_roots() {
+            if let Ok(rest) = path.strip_prefix(&root) {
+                return match rest.as_os_str().is_empty() {
+                    true => SANDBOX_BIND_ALIAS.to_string(),
+                    false => format!("{SANDBOX_BIND_ALIAS}/{}", rest.display()),
+                };
+            }
+        }
+        path.to_string_lossy().to_string()
+    }
+
+    /// Apply [`PathSandbox::alias_display_path`] to every workspace path
+    /// occurring in a blob of tool output text (A3).
+    ///
+    /// Used for tool-formatted echoes (Edit's success message, Glob/Grep
+    /// path listings) where rewriting the root prefix is the point. Pure
+    /// file *content* returned by Read is not pushed through this — only
+    /// tool-generated path echoes are.
+    pub fn alias_display_text(&self, text: &str) -> String {
+        let mut out = text.to_string();
+        for root in self.alias_candidate_roots() {
+            out = replace_path_prefix(&out, &root.to_string_lossy(), SANDBOX_BIND_ALIAS);
+        }
+        out
+    }
+
+    /// Rewrite an entire tool output in place: the content blob plus every
+    /// string buried in the metadata JSON (A3 echo points).
+    pub fn remap_tool_output(&self, output: &mut crate::ToolOutput) {
+        if !self.bind_alias_output {
+            return;
+        }
+        output.content = self.alias_display_text(&output.content);
+        for value in output.metadata.values_mut() {
+            remap_json_strings(value, self);
+        }
+    }
+
+    /// Comma-separated, sandbox-visible list of the roots currently in
+    /// effect (B3): rejection messages must tell the model where writes
+    /// WOULD be accepted, e.g. `allowed: /workspace, /tmp`.
+    fn allowed_roots_summary(&self) -> String {
+        self.effective_roots()
+            .iter()
+            .map(|root| self.alias_display_path(root))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     /// Remap a `/workspace/<rest>` path onto the allowed roots, in order,
@@ -499,8 +625,13 @@ impl PathSandbox {
             // Match as prefix. Both "/etc/passwd" and "/etc/" itself should match "/etc/"
             if canonical_str.starts_with(pattern) || canonical_str == pattern.trim_end_matches('/')
             {
+                // B3: even a denied-pattern hit should tell the model where
+                // writes ARE accepted, so a rejected Write is recoverable in
+                // one turn instead of three guesses.
                 return Err(SandboxError::Denied(format!(
-                    "Path '{canonical_str}' is in a restricted area (matches '{pattern}')"
+                    "Path '{canonical_str}' is in a restricted area (matches '{pattern}'); \
+                     allowed roots: {}",
+                    self.allowed_roots_summary()
                 )));
             }
         }
@@ -556,10 +687,11 @@ impl PathSandbox {
         }
 
         Err(SandboxError::OutsideAllowedRoots(format!(
-            "Path '{}' is not within any allowed root. Allowed roots: {:?}. \
+            "Path '{}' is not within any allowed root; allowed: {}. \
              Address files relative to the current working directory or under \
              an allowed root.",
-            canonical_str, self.config.allowed_roots
+            self.alias_display_path(canonical),
+            self.allowed_roots_summary()
         )))
     }
 
@@ -617,6 +749,70 @@ impl PathSandbox {
 impl Default for PathSandbox {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Replace `from` with `to` in `text`, but only at path boundaries.
+///
+/// An occurrence counts as a path prefix when the preceding character is not
+/// itself part of a longer path and the following character opens a path
+/// continuation (`/`), ends the token, or is punctuation — so
+/// `/tmp/eval/workspace/src` rewrites but `/tmp/eval/workspace-backup/x`
+/// and `/tmp/eval/workspacefoo` stay untouched.
+fn replace_path_prefix(text: &str, from: &str, to: &str) -> String {
+    if from.len() < 2 || from == to {
+        // Root "/" would rewrite every absolute path; skip degenerate cases.
+        return text.to_string();
+    }
+    let is_path_char =
+        |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '-');
+    let mut result = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find(from) {
+        let (before, after) = rest.split_at(pos);
+        let tail = &after[from.len()..];
+        // Embedded in a longer path (`.../workspace-backup`, `workspacefoo`)
+        // the match is not the root — keep it. A `/` tail is a CHILD path
+        // and is exactly the case being rewritten.
+        let preceded_by_path = before.ends_with(|c: char| is_path_char(c) || c == '/');
+        let tail_blocks =
+            matches!(tail.chars().next(), Some(c) if is_path_char(c));
+        if preceded_by_path || tail_blocks {
+            result.push_str(before);
+            result.push_str(from);
+        } else {
+            result.push_str(before);
+            result.push_str(to);
+        }
+        rest = tail;
+    }
+    result.push_str(rest);
+    result
+}
+
+/// Recursively rewrite every JSON string through the alias display mapping.
+fn remap_json_strings(
+    value: &mut serde_json::Value,
+    sandbox: &PathSandbox,
+) {
+    match value {
+        serde_json::Value::String(s) => {
+            let remapped = sandbox.alias_display_text(s);
+            if remapped != *s {
+                *s = remapped;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                remap_json_strings(item, sandbox);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for (_key, item) in map.iter_mut() {
+                remap_json_strings(item, sandbox);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1003,6 +1199,156 @@ mod tests {
         assert_eq!(
             result.expect("/workspace maps to the project root"),
             expected
+        );
+    }
+
+    // --- Output alias (bind-alias reverse map, A3) tests ---
+    //
+    // With `with_bind_alias_output(true)` the sandbox renders canonical host
+    // paths the way the command sandbox sees them, so a path echoed by a
+    // file tool works verbatim in a sandboxed Bash command.
+
+    /// Sandbox wired like the registration assembly: project root + the temp
+    /// root (B3 alignment), output aliasing enabled.
+    fn alias_output_sandbox(root: &Path) -> PathSandbox {
+        PathSandbox::with_config(SandboxConfig {
+            allowed_roots: SandboxConfig::command_aligned_roots(root),
+            denied_patterns: SandboxConfig::default_denied_patterns(),
+            strict_mode: true,
+        })
+        .with_bind_alias_output(true)
+    }
+
+    #[test]
+    fn command_aligned_roots_include_project_and_temp() {
+        let td = TestDir::new();
+        let roots = SandboxConfig::command_aligned_roots(td.path());
+        assert_eq!(roots.len(), 2, "project dir + temp root");
+        assert!(roots.contains(&td.path().to_path_buf()));
+        assert!(roots.contains(&std::env::temp_dir()));
+    }
+
+    #[test]
+    fn alias_display_path_maps_project_children() {
+        let td = TestDir::new();
+        let sandbox = alias_output_sandbox(td.path());
+        let root = fs::canonicalize(td.path()).expect("canonicalize root");
+        let file = fs::canonicalize(td.create_file("src/lib.rs", "x")).expect("fixture");
+
+        assert_eq!(sandbox.alias_display_path(&file), "/workspace/src/lib.rs");
+        assert_eq!(sandbox.alias_display_path(&root), "/workspace");
+    }
+
+    #[test]
+    fn alias_display_path_leaves_temp_and_outside_paths() {
+        let td = TestDir::new();
+        let sandbox = alias_output_sandbox(td.path());
+
+        // The temp root keeps its literal (sandbox-visible) spelling.
+        let tmp_file = std::env::temp_dir().join("alias_display_probe.txt");
+        assert_eq!(
+            sandbox.alias_display_path(&tmp_file),
+            tmp_file.to_string_lossy()
+        );
+        // Paths outside every root are echoed unchanged.
+        assert_eq!(sandbox.alias_display_path(Path::new("/etc/hosts")), "/etc/hosts");
+    }
+
+    #[test]
+    fn alias_display_path_identity_when_disabled() {
+        let td = TestDir::new();
+        let sandbox = alias_sandbox(td.path()); // flag off
+        assert!(!sandbox.bind_alias_output());
+        let file = fs::canonicalize(td.create_file("src/lib.rs", "x")).expect("fixture");
+        assert_eq!(
+            sandbox.alias_display_path(&file),
+            file.to_string_lossy(),
+            "no alias mount -> host path echoed unchanged"
+        );
+    }
+
+    #[test]
+    fn alias_display_text_rewrites_only_at_path_boundaries() {
+        let td = TestDir::new();
+        let sandbox = alias_output_sandbox(td.path());
+        let root = fs::canonicalize(td.path()).expect("canonicalize root");
+        let root_str = root.to_string_lossy().to_string();
+
+        // Child paths rewrite; multiple occurrences handled.
+        let text = format!("head {root_str}/src/a.rs mid {root_str}/src/b.rs tail");
+        assert_eq!(
+            sandbox.alias_display_text(&text),
+            "head /workspace/src/a.rs mid /workspace/src/b.rs tail"
+        );
+
+        // Sibling names sharing the prefix stay untouched.
+        for sibling in [format!("{root_str}-backup/x.rs"), format!("{root_str}foo")] {
+            assert_eq!(
+                sandbox.alias_display_text(&sibling),
+                sibling,
+                "boundary safety"
+            );
+        }
+
+        // The bare root inside prose rewrites too.
+        assert_eq!(
+            sandbox.alias_display_text(&format!("edited {root_str}")),
+            "edited /workspace"
+        );
+    }
+
+    #[tokio::test]
+    async fn outside_roots_error_lists_sandbox_view_roots() {
+        let td = TestDir::new();
+        let sandbox = alias_output_sandbox(td.path());
+
+        // /usr/lib exists on every Unix CI image, is not denied, and is not
+        // under either root -> OutsideAllowedRoots.
+        let result = sandbox.validate(Path::new("/usr/lib")).await;
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not within any allowed root"), "got: {err}");
+        assert!(
+            err.contains("allowed: /workspace") && err.contains("/tmp"),
+            "error must list sandbox-visible roots, got: {err}"
+        );
+        assert!(
+            !err.contains(&fs::canonicalize(td.path()).unwrap().to_string_lossy().to_string()),
+            "host workspace path must not leak into the error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn denied_pattern_error_lists_allowed_roots() {
+        let td = TestDir::new();
+        let sandbox = alias_output_sandbox(td.path());
+
+        let result = sandbox.validate(Path::new("/etc/hosts")).await;
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("restricted"), "got: {err}");
+        assert!(
+            err.contains("allowed roots: /workspace") && err.contains("/tmp"),
+            "denied error must list the allowed roots, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_for_write_allows_temp_root() {
+        // B3: the command sandbox can write /tmp; the file tools must too.
+        let td = TestDir::new();
+        let sandbox = alias_output_sandbox(td.path());
+
+        let target = std::env::temp_dir().join(format!(
+            "sandbox_b3_write_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let result = sandbox.validate_for_write(&target).await;
+        assert!(
+            result.is_ok(),
+            "write under the temp root must be allowed: {result:?}"
         );
     }
 
