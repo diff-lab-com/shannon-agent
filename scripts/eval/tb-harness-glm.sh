@@ -90,8 +90,18 @@ export T_BENCH_TEST_DIR="$TEST_DIR"
 export T_BENCH_TASK_LOGS_PATH="$LOGS" T_BENCH_CONTAINER_LOGS_PATH="/logs"
 export T_BENCH_TASK_AGENT_LOGS_PATH="$AGENT_LOGS" T_BENCH_CONTAINER_AGENT_LOGS_PATH="/agent-logs"
 
+# Compose flags: --no-build is mandatory when a prebaked image exists (a
+# build would silently erase the prebake layer), but when we have NO image
+# the build is the only way to materialize one (RCA 2026-09-06: after a
+# docker prune the cold path passed --no-build with a nonexistent image and
+# every case died at compose up).
+COMPOSE_UP=(up -d --no-build)
+if [ "$IMG_NOTE" = "cold-build" ]; then
+  COMPOSE_UP=(up -d --build)
+fi
+
 UP_START=$(date +%s)
-if ! docker compose -f "$TASK_DIR/docker-compose.yaml" up -d --no-build >/dev/null 2>&1; then
+if ! docker compose -f "$TASK_DIR/docker-compose.yaml" "${COMPOSE_UP[@]}" >/dev/null 2>&1; then
   printf '{"resolved": false, "notes": "compose up failed (image=%s)"}\n' "$IMG" > "$VERDICT_FILE"
   exit 0
 fi
