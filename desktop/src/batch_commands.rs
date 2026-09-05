@@ -1103,12 +1103,7 @@ pub async fn start_batch_run(
         &deps,
         &state.batch_runs.clone(),
         &app_handle,
-        BatchStartRequest {
-            title,
-            prompt,
-            count,
-            repo_hint,
-        },
+        BatchStartRequest::new(title, prompt, count, repo_hint),
         factory,
     )
     .await
@@ -1132,6 +1127,28 @@ async fn resolve_session_working_dir(
     Ok(Some(PathBuf::from(dir)))
 }
 
+/// One branch worktree creation, abstracted so the start-failure ROLLBACK
+/// path is testable: production wires
+/// [`shannon_core::scheduled_worktree::create_named`]; tests inject a stub
+/// that delegates then fails at a chosen call (review fix: the rollback used
+/// to be untestable because batch branch names embed the internal batch id).
+pub(crate) type WorktreeCreator = Arc<
+    dyn Fn(
+            &Path,
+            &Path,
+            &str,
+            &str,
+            &str,
+        ) -> Result<PathBuf, shannon_core::scheduled_worktree::WorktreeError>
+        + Send
+        + Sync,
+>;
+
+/// Production worktree creator.
+pub(crate) fn production_worktree_creator() -> WorktreeCreator {
+    Arc::new(shannon_core::scheduled_worktree::create_named)
+}
+
 /// Everything [`start_batch_run_inner`] needs beyond the shared state
 /// slices (bundled to keep the orchestration signature readable).
 pub(crate) struct BatchStartRequest {
@@ -1141,6 +1158,26 @@ pub(crate) struct BatchStartRequest {
     /// Working directory to run against — resolved from `baseSessionId`
     /// (the session's project) by the command, `None` = process CWD.
     pub(crate) repo_hint: Option<PathBuf>,
+    /// Per-branch worktree creation seam (production: `create_named`).
+    pub(crate) worktree_creator: WorktreeCreator,
+}
+
+impl BatchStartRequest {
+    /// Production request: real worktree creation.
+    pub(crate) fn new(
+        title: String,
+        prompt: String,
+        count: u32,
+        repo_hint: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            title,
+            prompt,
+            count,
+            repo_hint,
+            worktree_creator: production_worktree_creator(),
+        }
+    }
 }
 
 /// Batch orchestration entry point. Generic over the runner factory so
@@ -1157,6 +1194,7 @@ pub(crate) async fn start_batch_run_inner<R: tauri::Runtime, F: BranchRunnerFact
         prompt,
         count,
         repo_hint,
+        worktree_creator,
     } = request;
     if !(2..=4).contains(&count) {
         return Err(format!("count must be between 2 and 4, got {count}"));
@@ -1226,7 +1264,7 @@ pub(crate) async fn start_batch_run_inner<R: tauri::Runtime, F: BranchRunnerFact
             let mut out: Vec<(u32, String, String)> = Vec::new();
             for n in 0..count {
                 let name = format!("batch-{id8}-{n}");
-                let path = shannon_core::scheduled_worktree::create_named(
+                let path = (worktree_creator)(
                     Path::new(&repo_root),
                     &base_dir,
                     &name,
@@ -1234,13 +1272,17 @@ pub(crate) async fn start_batch_run_inner<R: tauri::Runtime, F: BranchRunnerFact
                     &base_commit,
                 )
                 .map_err(|e| {
-                    // Roll back earlier worktrees before surfacing.
-                    for (_, _, prev) in &out {
+                    // Roll back earlier worktrees AND their branches before
+                    // surfacing. `out` rows are (index, BRANCH NAME, path) —
+                    // the branch name is the second element (review fix:
+                    // passing the path here tripped the batch- prefix guard
+                    // and branch deletion silently no-op'd).
+                    for (_, prev_branch, prev_path) in &out {
                         let _ = shannon_core::scheduled_worktree::remove_in(
                             Path::new(&repo_root),
-                            Path::new(prev),
+                            Path::new(prev_path),
                         );
-                        let _ = delete_branch_sync(&repo_root, prev);
+                        let _ = delete_branch_sync(&repo_root, prev_branch);
                     }
                     format!("failed to create worktree for branch {n}: {e}")
                 })?;
@@ -2014,12 +2056,7 @@ mod tests {
                 &env.deps,
                 &env.registry,
                 &env.app,
-                BatchStartRequest {
-                    title: "t".into(),
-                    prompt: "p".into(),
-                    count: bad,
-                    repo_hint: Some(env.repo_root.clone()),
-                },
+                BatchStartRequest::new("t".into(), "p".into(), bad, Some(env.repo_root.clone())),
                 factory.clone(),
             )
             .await
@@ -2031,12 +2068,7 @@ mod tests {
             &env.deps,
             &env.registry,
             &env.app,
-            BatchStartRequest {
-                title: "t".into(),
-                prompt: "   ".into(),
-                count: 2,
-                repo_hint: Some(env.repo_root.clone()),
-            },
+            BatchStartRequest::new("t".into(), "   ".into(), 2, Some(env.repo_root.clone())),
             factory.clone(),
         )
         .await
@@ -2048,17 +2080,73 @@ mod tests {
             &env.deps,
             &env.registry,
             &env.app,
-            BatchStartRequest {
-                title: "t".into(),
-                prompt: "p".into(),
-                count: 2,
-                repo_hint: Some(plain.path().to_path_buf()),
-            },
+            BatchStartRequest::new("t".into(), "p".into(), 2, Some(plain.path().to_path_buf())),
             factory,
         )
         .await
         .unwrap_err();
         assert!(err.contains("not a git repository"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn start_rolls_back_created_worktrees_and_branches_on_failure() {
+        let env = env();
+        // Delegate to the real creator, then fail from the SECOND call on:
+        // branch 0's worktree+branch exist and MUST be rolled back.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let creator: WorktreeCreator = {
+            let calls = calls.clone();
+            Arc::new(move |repo, base, dir, branch, commit| {
+                if calls.fetch_add(1, Ordering::SeqCst) >= 1 {
+                    return Err(shannon_core::scheduled_worktree::WorktreeError::GitFailed {
+                        stderr: "injected: second creation fails".into(),
+                    });
+                }
+                shannon_core::scheduled_worktree::create_named(repo, base, dir, branch, commit)
+            })
+        };
+
+        let err = start_batch_run_inner(
+            &env.deps,
+            &env.registry,
+            &env.app,
+            BatchStartRequest {
+                title: "t".into(),
+                prompt: "p".into(),
+                count: 3,
+                repo_hint: Some(env.repo_root.clone()),
+                worktree_creator: creator,
+            },
+            Arc::new(StubFactory::new(HashMap::new())),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "creation stops at the failed call"
+        );
+        assert!(
+            err.contains("failed to create worktree for branch 1"),
+            "the failing branch is surfaced: {err}"
+        );
+
+        // Rollback removed branch 0's worktree AND its batch- branch. No
+        // scheduled-worktrees entries survive in `git worktree list`, and no
+        // batch-* refs survive (review fix: the deletion used to receive the
+        // worktree PATH instead of the branch name, tripping the batch-
+        // prefix guard and silently no-op'ing).
+        let worktrees = git(&env.repo_root, &["worktree", "list", "--porcelain"]);
+        assert!(
+            !worktrees.contains("scheduled-worktrees"),
+            "created worktrees must be rolled back: {worktrees}"
+        );
+        assert!(
+            git(&env.repo_root, &["branch", "--list", "batch-*"]).is_empty(),
+            "batch branches must be deleted on rollback"
+        );
+        // Nothing was registered or persisted — the failed start is invisible.
+        assert!(env.registry.list().await.is_empty());
     }
 
     #[tokio::test]
@@ -2087,12 +2175,12 @@ mod tests {
             &env.deps,
             &env.registry,
             &env.app,
-            BatchStartRequest {
-                title: "Fix the login bug".into(),
-                prompt: "Make login resilient".into(),
-                count: 2,
-                repo_hint: Some(env.repo_root.clone()),
-            },
+            BatchStartRequest::new(
+                "Fix the login bug".into(),
+                "Make login resilient".into(),
+                2,
+                Some(env.repo_root.clone()),
+            ),
             factory.clone(),
         )
         .await
@@ -2173,12 +2261,12 @@ mod tests {
             &env.deps,
             &env.registry,
             &env.app,
-            BatchStartRequest {
-                title: "Three ways".into(),
-                prompt: "do it".into(),
-                count: 3,
-                repo_hint: Some(env.repo_root.clone()),
-            },
+            BatchStartRequest::new(
+                "Three ways".into(),
+                "do it".into(),
+                3,
+                Some(env.repo_root.clone()),
+            ),
             factory,
         )
         .await
@@ -2221,12 +2309,12 @@ mod tests {
             &env.deps,
             &env.registry,
             &env.app,
-            BatchStartRequest {
-                title: "Doomed".into(),
-                prompt: "fail".into(),
-                count: 2,
-                repo_hint: Some(env.repo_root.clone()),
-            },
+            BatchStartRequest::new(
+                "Doomed".into(),
+                "fail".into(),
+                2,
+                Some(env.repo_root.clone()),
+            ),
             factory,
         )
         .await
