@@ -287,6 +287,18 @@ pub struct QueryFailedPayload {
     pub session_id: Option<String>,
 }
 
+/// P1-3 mirror of `src/events.rs::PermissionReason` — frozen camelCase wire
+/// shape `{ source, ruleName, confidence }`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionReason {
+    pub source: String,
+    #[serde(default)]
+    pub rule_name: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PermissionRequest {
     pub tool: String,
@@ -298,6 +310,11 @@ pub struct PermissionRequest {
     /// must mirror src/events.rs exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+
+    /// P1-3: why this prompt was raised. Additive — must mirror
+    /// src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<PermissionReason>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

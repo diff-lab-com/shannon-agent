@@ -717,6 +717,23 @@ pub async fn send_message(
     let session_id_for_permissions = session_id_str.clone();
     tokio::spawn(async move {
         use shannon_engine::permissions::PermissionChoice;
+        // P1-3: engine DecisionReason → wire PermissionReason (frozen
+        // camelCase shape) so the approval dialog can show why it fired.
+        fn wire_reason(
+            reason: &shannon_engine::permissions::DecisionReason,
+        ) -> shannon_types::events::PermissionReason {
+            use shannon_engine::permissions::ReasonSource;
+            shannon_types::events::PermissionReason {
+                source: match reason.source {
+                    ReasonSource::Rule => "rule",
+                    ReasonSource::Llm => "llm",
+                    ReasonSource::Default => "default",
+                }
+                .to_string(),
+                rule_name: reason.rule_name.clone(),
+                confidence: reason.confidence.map(f64::from),
+            }
+        }
         while let Some(request) = perm_rx.recv().await {
             let prompt = &request.prompt;
             let risk = match prompt.risk_level {
@@ -734,6 +751,7 @@ pub async fn send_message(
                 risk.to_string(),
                 300,
                 Some(session_id_for_permissions.clone()),
+                Some(wire_reason(&prompt.reason)),
             )
             .await;
             let choice = match decision {

@@ -32,6 +32,7 @@ pub(crate) enum PermissionDecision {
 /// Common body of the `request_permission` command and the engine-driven
 /// prompt forwarder in `send_message`: register a pending request, surface
 /// it on the wire, and wait for the user's (scoped) answer.
+#[allow(clippy::too_many_arguments)] // prompt fields are inherent (tool/input/risk + session + reason)
 pub(crate) async fn prompt_user(
     state: &AppState,
     app_handle: &tauri::AppHandle,
@@ -43,6 +44,9 @@ pub(crate) async fn prompt_user(
     // multi-window shells can ignore other sessions' prompts. `None` for
     // session-less callers (`request_permission` command).
     session_id: Option<String>,
+    // P1-3: why this prompt was raised (rule hit / LLM verdict / default),
+    // for the approval dialog's explanation line. `None` when unknown.
+    reason: Option<shannon_types::events::PermissionReason>,
 ) -> PermissionDecision {
     let request_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel();
@@ -68,6 +72,7 @@ pub(crate) async fn prompt_user(
             risk: risk.clone(),
             request_id: request_id.clone(),
             session_id,
+            reason,
         },
     );
 
@@ -97,7 +102,7 @@ pub async fn request_permission(
     input: serde_json::Value,
     risk: String,
 ) -> Result<bool, String> {
-    let decision = prompt_user(&state, &app_handle, tool, input, risk, 30, None).await;
+    let decision = prompt_user(&state, &app_handle, tool, input, risk, 30, None, None).await;
     Ok(decision != PermissionDecision::Deny)
 }
 
