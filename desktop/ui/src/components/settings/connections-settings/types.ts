@@ -85,6 +85,11 @@ export const ALL_SLOTS = PLATFORMS.flatMap((p) => SECRET_MODEL[p].map((s) => ({ 
 /// Stored under `GatewayAdapterConfig.options.trigger` (an opaque bag on both
 /// the Rust and TS sides, so it round-trips verbatim) and consumed by the
 /// gateway's router/trigger.ts at inbound time.
+///
+/// The UI only owns `groupMode` + `dmDirect`; hand-edited keys (`prefix`,
+/// `mentionNames`, anything else) must survive every toggle untouched —
+/// readTrigger passes them through and withTrigger only overwrites the two
+/// switches.
 export interface AdapterTriggerConfig {
   /// "mentionOrPrefix" (default): group chats need @mention or /shannon.
   groupMode?: 'mentionOrPrefix' | 'any'
@@ -92,25 +97,41 @@ export interface AdapterTriggerConfig {
   dmDirect?: boolean
   /// Prefix that arms a group message. Default "/shannon".
   prefix?: string
+  /// Extra @names that count as a bot mention. Default [].
+  mentionNames?: string[]
+  /// Any other key already present in options.trigger passes through as-is.
+  [extra: string]: unknown
 }
 
-/** Read `options.trigger`, tolerating missing/wrong shapes. */
+/** Read `options.trigger`, tolerating missing/wrong shapes. Normalizes the
+ *  two UI-owned switches and preserves every other key verbatim. */
 export function readTrigger(options?: Record<string, unknown>): AdapterTriggerConfig {
   const raw = options?.trigger
   if (typeof raw !== 'object' || raw === null) return {}
   const t = raw as Record<string, unknown>
   return {
+    ...t,
     groupMode: t.groupMode === 'any' ? 'any' : 'mentionOrPrefix',
     dmDirect: t.dmDirect === false ? false : true,
   }
 }
 
-/** Merge a trigger config back into an adapter options bag (immutably). */
+/** Merge a trigger change back into an adapter options bag. Only the two
+ *  UI-owned switches are authoritative; `prefix`, `mentionNames` and any
+ *  other hand-edited keys in options.trigger survive untouched. */
 export function withTrigger(
   options: Record<string, unknown> | undefined,
   trigger: AdapterTriggerConfig,
 ): Record<string, unknown> {
-  return { ...(options ?? {}), trigger }
+  const existing = (options?.trigger ?? {}) as Record<string, unknown>
+  return {
+    ...(options ?? {}),
+    trigger: {
+      ...existing,
+      groupMode: trigger.groupMode ?? existing.groupMode,
+      dmDirect: trigger.dmDirect ?? existing.dmDirect,
+    },
+  }
 }
 
 /// Four-state status dot per platform (P1-4): 未配置 / 已配置 / 运行中 / 错误.

@@ -36,8 +36,11 @@ Shannon 桌面端可以通过 **shannon-gateway** 把五个 IM 平台的消息�
   `{prompt, model, session_id}`（见 `crates/shannon-api-protocol`），
   goal 循环（`set_goal`）目前只有进程内入口，未上协议——因此 v1 以会话任务承载，
   消息前 30 字作为回推标题。
-- 执行 profile：引擎 api_server 侧的默认权限基线为
-  `ApprovalMode::AutoEdit`（≈ balanced：文件编辑自动批准，高风险操作需确认）。
+- 执行 profile：引擎 WS 查询协议没有 profile 字段，api_server 生效的是引擎默认
+  基线 `ApprovalMode::AutoEdit`——**它比 balanced 更宽松：文件写入会被自动批准**
+  （balanced 的定义是「读自动批准，写/bash/删除询问」，见
+  `shannon-engine/src/permission_profile.rs:93`）。真正的 Balanced profile 需要
+  引擎 WS 协议增加 profile 字段，已登记为后续项 **P1-4b**。
 - **敏感操作确认回 IM**：引擎的 `approval_request` 会渲染成平台卡片 /
   按钮（Telegram 内联键盘、Slack Block Kit、飞书交互卡、Discord 按钮行、
   钉钉文本「回复 allow/deny」）；300 秒无响应按拒绝处理。
@@ -57,6 +60,8 @@ Shannon 桌面端可以通过 **shannon-gateway** 把五个 IM 平台的消息�
 - Telegram / Discord 为**出站**连接（long polling / Gateway WebSocket），
   无需公网回调地址，也不存在 webhook 验签面。
 - 桌面表单 `type=password`，只回显「已设置」，不回读明文。
+- 默认执行基线比 balanced 宽松（文件写入自动批准，见 §3）：
+  **对不可信的群聊来源，建议先在桌面端收紧审批基线，再启用群聊触发。**
 
 ## 5. 各平台接入步骤
 
@@ -135,5 +140,6 @@ Shannon 桌面端可以通过 **shannon-gateway** 把五个 IM 平台的消息�
 
 - 「测试连接」按钮为占位（网关尚无控制面 API），可向 bot 发消息代替验证。
 - 任务为会话任务，不含 goal 循环；引擎协议提供 goal 注入后可升级。
+- 执行 profile 不可配置：引擎 WS 协议暂无 profile 字段（Balanced 落地为后续项 P1-4b）。
 - 群聊 trigger 配置目前不区分多个群；钉钉群聊投递即视为 @机器人（平台限制）。
 - 微信个人号、iMessage、语音入站不在支持范围。

@@ -340,6 +340,44 @@ describe('ConnectionsSettings', () => {
     })
   })
 
+  it('preserves hand-edited trigger keys (prefix, mentionNames) across toggle writes', async () => {
+    // The docs teach setting options.trigger.prefix by hand — the UI switches
+    // must only own groupMode/dmDirect and never wipe the rest (fix round 1).
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [
+        {
+          platform: 'telegram',
+          enabled: true,
+          secrets: { botToken: 'telegram/bot-token' },
+          options: { trigger: { prefix: '/sh', mentionNames: ['shannon-bot'] } },
+        },
+      ],
+    })
+    const writeSpy = vi
+      .spyOn(api, 'gatewayWriteConfig')
+      .mockImplementation((cfg) => Promise.resolve(cfg))
+    render(<ConnectionsSettings />)
+    const row = await screen.findByTestId('connection-telegram')
+    const dmSwitch = within(row).getByRole('switch', { name: 'Answer DMs directly' })
+    fireEvent.click(dmSwitch)
+    await waitFor(() => {
+      const last = writeSpy.mock.calls.at(-1)![0] as {
+        adapters: Array<{ platform: string; options?: { trigger?: Record<string, unknown> } }>
+      }
+      const tg = last.adapters.find((a) => a.platform === 'telegram')!
+      expect(tg.options?.trigger).toMatchObject({
+        // hand-edited keys survive…
+        prefix: '/sh',
+        mentionNames: ['shannon-bot'],
+        // …while the toggled switch is updated (groupMode normalized to the
+        // gateway default, which is semantically identical to its absence).
+        groupMode: 'mentionOrPrefix',
+        dmDirect: false,
+      })
+    })
+  })
+
   it('keeps the trigger toggles disabled until the platform has an adapter entry', async () => {
     // Spies leak across tests in this file (no beforeEach restore by convention),
     // so pin the state this test needs: no adapter entries, nothing configured.
