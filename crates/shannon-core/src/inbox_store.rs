@@ -49,6 +49,8 @@ pub const SOURCE_SCHEDULED_TASK: &str = "scheduled_task";
 pub const SOURCE_GOAL: &str = "goal";
 /// Inbox source: execution fired through an external endpoint trigger.
 pub const SOURCE_TRIGGER: &str = "trigger";
+/// Inbox source: desktop best-of-N batch run lifecycle (P1-2).
+pub const SOURCE_BATCH: &str = "batch";
 
 /// Status vocabulary for inbox items (validated at the write boundary).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -340,6 +342,32 @@ impl InboxStore {
             let changed = conn.execute(
                 "UPDATE inbox_items SET status = ?1, updated_at_ms = ?2 WHERE id = ?3",
                 params![status.as_str(), now_ms(), id],
+            )?;
+            if changed == 0 {
+                return Err(InboxStoreError::Sql(rusqlite::Error::QueryReturnedNoRows));
+            }
+        }
+        self.get_item(id)?
+            .ok_or(InboxStoreError::Sql(rusqlite::Error::QueryReturnedNoRows))
+    }
+
+    /// Update an item's summary/error text in place, leaving its status and
+    /// timestamps-aside content untouched (P1-2: the batch run's completion
+    /// item is refreshed when the user adopts or discards the batch, so the
+    /// inbox carries one item per batch instead of a noisy tail of
+    /// follow-up items). Returns the updated row; errors with
+    /// `QueryReturnedNoRows` when the id does not exist.
+    pub fn update_item_content(
+        &self,
+        id: i64,
+        summary: &str,
+        error: Option<&str>,
+    ) -> Result<InboxItem, InboxStoreError> {
+        {
+            let conn = self.lock_conn()?;
+            let changed = conn.execute(
+                "UPDATE inbox_items SET summary = ?1, error = ?2, updated_at_ms = ?3 WHERE id = ?4",
+                params![summary, error, now_ms(), id],
             )?;
             if changed == 0 {
                 return Err(InboxStoreError::Sql(rusqlite::Error::QueryReturnedNoRows));
@@ -715,6 +743,44 @@ mod tests {
         assert!(err.to_string().contains("invalid status"));
         // Missing id errors.
         assert!(store.update_status(4242, InboxStatus::Read).is_err());
+    }
+
+    // ── update_item_content (P1-2 batch adopt/discard refresh) ─────────
+
+    #[test]
+    fn update_item_content_refreshes_summary_in_place() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let item = store.append_item(item_new("batch run")).unwrap();
+
+        let updated = store
+            .update_item_content(
+                item.id,
+                "Adopted branch #0 · 1 other branch(es) cleaned up",
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            updated.summary,
+            "Adopted branch #0 · 1 other branch(es) cleaned up"
+        );
+        assert!(updated.error.is_none());
+        // Status is untouched by a content refresh.
+        assert_eq!(updated.status, item.status);
+
+        let with_error = store
+            .update_item_content(
+                item.id,
+                "Discarded · 2 removed, 1 skipped",
+                Some("branch #1 kept"),
+            )
+            .unwrap();
+        assert_eq!(with_error.error.as_deref(), Some("branch #1 kept"));
+
+        // Missing id errors (no silent upsert).
+        assert!(store.update_item_content(424_242, "x", None).is_err());
+
+        // Exactly one item remains — the refresh is in place, not append.
+        assert_eq!(store.list(None, None, 10).unwrap().len(), 1);
     }
 
     // ── stats ───────────────────────────────────────────────────────────

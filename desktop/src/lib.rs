@@ -189,6 +189,11 @@ pub mod inbox_commands;
 #[cfg(feature = "tauri")]
 pub mod goal_commands;
 
+/// P1-2 — desktop best-of-N batch runs: parallel worktree orchestration
+/// commands (start/list/diff/adopt/discard) + the `batch:updated` source.
+#[cfg(feature = "tauri")]
+pub mod batch_commands;
+
 /// P0-4 — cost observability: session budget, context breakdown and
 /// per-session usage aggregation commands.
 #[cfg(feature = "tauri")]

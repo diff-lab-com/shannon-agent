@@ -357,6 +357,11 @@ pub mod event_names {
     /// `desktop/src/goal_commands.rs`). Frontend: Tasks-page goal run cards
     /// refresh on this instead of polling.
     pub const GOAL_UPDATED: &str = "goal:updated";
+    /// P1-2: emitted whenever a desktop batch (best-of-N) run changes —
+    /// started, a branch finished (including live spend updates), adopted or
+    /// discarded. Payload: `BatchRunDto` (see `desktop/src/batch_commands.rs`).
+    /// Frontend: Tasks-page batch cards refresh on this instead of polling.
+    pub const BATCH_UPDATED: &str = "batch:updated";
     /// P0-4: the session's cumulative spend crossed 80% of its budget cap.
     /// Payload: [`BudgetStatusPayload`]. Frontend: yellow advisory bar.
     pub const BUDGET_WARNING: &str = "budget:warning";

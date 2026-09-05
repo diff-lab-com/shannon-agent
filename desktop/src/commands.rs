@@ -127,6 +127,9 @@ pub struct AppState {
     /// are rejected (see `send_message`) — goal and manual input are
     /// mutually exclusive.
     pub(crate) goal_runs: Arc<crate::goal_commands::GoalRunRegistry>,
+    /// P1-2 — best-of-N batch runs (live handles + on-disk records + the
+    /// branch-execution semaphore).
+    pub(crate) batch_runs: Arc<crate::batch_commands::BatchRunRegistry>,
     /// Open session windows — label → session id (P1-1). Mirrored into
     /// `DesktopConfig.open_session_windows` for restart restore.
     pub(crate) session_windows: crate::session_window_commands::SessionWindowRegistry,
@@ -361,8 +364,8 @@ impl AppState {
             scheduled_runs_store: Arc::new(shannon_core::scheduled_runs::ScheduledRunsStore::new()),
             triage_store: Arc::new(crate::scheduled_commands::TriageStore::new()),
             goal_runs: Arc::new(crate::goal_commands::GoalRunRegistry::new()),
-            session_windows:
-                crate::session_window_commands::SessionWindowRegistry::default(),
+            batch_runs: Arc::new(crate::batch_commands::BatchRunRegistry::new()),
+            session_windows: crate::session_window_commands::SessionWindowRegistry::default(),
             inbox_store: std::sync::OnceLock::new(),
             usage_store: Arc::new(crate::commands_usage::UsageStore::new()),
             routine_overrides: Arc::new(crate::scheduled_commands::RoutineOverrideStore::new()),

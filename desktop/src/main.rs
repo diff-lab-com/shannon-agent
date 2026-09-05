@@ -35,9 +35,9 @@ fn main() {
     use shannon_desktop::commands_voice_models;
     use shannon_desktop::engine_discovery;
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
-    use shannon_desktop::session_window_commands;
     use shannon_desktop::extensions_commands;
     use shannon_desktop::loopback_api;
+    use shannon_desktop::session_window_commands;
     use shannon_desktop::skill_pattern_detection;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
@@ -285,6 +285,12 @@ fn main() {
             shannon_desktop::goal_commands::pause_goal_run,
             shannon_desktop::goal_commands::resume_goal_run,
             shannon_desktop::goal_commands::update_goal_objective,
+            // P1-2 — desktop best-of-N batch runs (frozen contract)
+            shannon_desktop::batch_commands::start_batch_run,
+            shannon_desktop::batch_commands::list_batch_runs,
+            shannon_desktop::batch_commands::get_batch_branch_diff,
+            shannon_desktop::batch_commands::adopt_batch_branch,
+            shannon_desktop::batch_commands::discard_batch_run,
             // P0-4 — cost observability: session budget + context
             // breakdown + per-session usage aggregation
             shannon_desktop::cost_commands::set_session_budget,
@@ -348,7 +354,10 @@ fn main() {
                 session_window_commands::handle_main_window_destroyed(window.app_handle());
                 return;
             }
-            if window.label().starts_with(session_window_commands::SESSION_WINDOW_PREFIX) {
+            if window
+                .label()
+                .starts_with(session_window_commands::SESSION_WINDOW_PREFIX)
+            {
                 let label = window.label().to_string();
                 let app = window.app_handle().clone();
                 tauri::async_runtime::spawn(async move {
