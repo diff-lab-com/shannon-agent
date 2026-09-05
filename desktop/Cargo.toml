@@ -10,8 +10,13 @@ repository = "https://github.com/diff-lab-com/shannon-agent"
 homepage = "https://github.com/diff-lab-com/shannon-agent"
 
 [features]
-default = ["tauri"]
+default = ["tauri", "preview-capture"]
 tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-plugin-updater", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-window-state", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
+# P1-5 C-1 — native window/monitor screenshot capture backing
+# `preview_capture` / the `preview_screenshot` engine tool (xcap, the same
+# capture path the computer-use tool uses). Opt-out for CI matrices that
+# cannot link the capture backends.
+preview-capture = ["dep:xcap", "dep:image"]
 # Local STT (P2-5e). Pulls in whisper-rs (which builds whisper.cpp 1.5.x via
 # its own build.rs) and hound (pure-Rust WAV decoder). Requires cmake ≥ 3.18
 # and a C++17 compiler on the build host. The cloud D4 STT path is unchanged
@@ -82,6 +87,11 @@ tauri-plugin-notification = { version = "2", optional = true }
 # matrix stays fast and doesn't need the C++ toolchain.
 whisper-rs = { version = "0.13", optional = true }
 hound = { version = "3", optional = true }
+
+# P1-5 C-1 — `preview_capture` screenshot source (see `preview-capture`
+# feature). xcap version matches shannon-tools' computer-use feature.
+xcap = { version = "0.0.13", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

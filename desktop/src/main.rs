@@ -37,6 +37,7 @@ fn main() {
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
     use shannon_desktop::extensions_commands;
     use shannon_desktop::loopback_api;
+    use shannon_desktop::preview_commands;
     use shannon_desktop::session_window_commands;
     use shannon_desktop::skill_pattern_detection;
     use tauri::{Emitter, Listener, Manager};
@@ -340,6 +341,13 @@ fn main() {
             commands_memory::delete_memory,
             commands_memory::search_memories,
             commands_memory::get_memory_stats,
+            // P1-5 C-1 — dev-server preview (frozen contract) + log ring.
+            preview_commands::preview_detect,
+            preview_commands::preview_start,
+            preview_commands::preview_stop,
+            preview_commands::preview_status,
+            preview_commands::preview_capture,
+            preview_commands::preview_logs,
         ])
         // P1-1 — session window lifecycle: a destroyed `session-*` window
         // (titlebar close, close_session_window, OS teardown) drops its
@@ -349,6 +357,12 @@ fn main() {
                 return;
             }
             if window.label() == "main" {
+                // P1-5 C-1 — the preview dev-server child must never outlive
+                // the app: kill it before teardown (kill_on_drop on the
+                // managed AppState is the backstop if this doesn't run).
+                if let Some(state) = window.app_handle().try_state::<commands::AppState>() {
+                    preview_commands::shutdown_on_exit(&state);
+                }
                 // 主窗口关闭 = 退出应用 (existing semantic, P1-1): persist the
                 // open-session list for next-launch restore, then close the
                 // session windows so the app actually exits.

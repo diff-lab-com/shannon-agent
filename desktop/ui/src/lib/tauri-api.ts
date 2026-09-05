@@ -1899,3 +1899,63 @@ export async function remoteSetDefaultTarget(name: string | null): Promise<void>
 export async function remoteTestTarget(name: string): Promise<RemoteHealth> {
   return invoke('remote_test_target', { name })
 }
+
+// Dev-server preview (P1-5 C-1 — live preview in the artifact panel).
+// `projectDir` may be omitted: the backend then resolves the current
+// session's working directory (desktop config mirror).
+
+/** A detected dev-server launch recipe (frozen backend contract). */
+export interface PreviewDevServerInfo {
+  command: string
+  url: string
+}
+
+export interface PreviewDetectResponse {
+  devServer: PreviewDevServerInfo | null
+}
+
+export interface PreviewStatusResponse {
+  running: boolean
+  url: string | null
+  startedAtMs: number | null
+}
+
+export interface PreviewLogLine {
+  tsMs: number
+  /** `stdout` | `stderr` | `system` */
+  stream: string
+  text: string
+}
+
+export interface PreviewCaptureResponse {
+  imageBase64: string
+  mediaType: string
+  width: number
+  height: number
+  /** Set when the whole monitor was captured instead of the app window. */
+  fallback?: string
+}
+
+export async function previewDetect(projectDir?: string | null): Promise<PreviewDetectResponse> {
+  return invoke('preview_detect', { projectDir: projectDir ?? null })
+}
+
+export async function previewStart(projectDir?: string | null): Promise<{ url: string }> {
+  return invoke('preview_start', { projectDir: projectDir ?? null })
+}
+
+export async function previewStop(): Promise<void> {
+  await invoke('preview_stop')
+}
+
+export async function previewStatus(): Promise<PreviewStatusResponse> {
+  return invoke('preview_status')
+}
+
+export async function previewCapture(): Promise<PreviewCaptureResponse> {
+  return invoke('preview_capture')
+}
+
+export async function previewLogs(limit?: number | null): Promise<PreviewLogLine[]> {
+  return invoke('preview_logs', { limit: limit ?? null })
+}
