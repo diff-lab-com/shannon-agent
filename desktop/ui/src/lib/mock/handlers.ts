@@ -43,6 +43,16 @@ let nextInboxId = Math.max(...MOCK_INBOX_ITEMS.map(i => i.id)) + 1
 // P0-4: demo session budget — null = no cap; set via the budget control.
 let demoBudgetUsd: number | null = null
 
+// P1-5 C-1: demo live-preview lifecycle (single instance, like the backend).
+const demoPreview = {
+  running: false,
+  url: null as string | null,
+  startedAtMs: null as number | null,
+}
+const PREVIEW_URL = 'http://localhost:5173'
+// 1x1 transparent PNG so demo capture payloads stay a real image.
+const PREVIEW_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
 // P1-2: demo best-of-N batch runs. One running + one finished so the Tasks
 // page batch cards and the compare dialog both have something to show.
 const demoBatchBranch = (i: number, status: string, files: number, spent: number, err: string | null = null) => ({
@@ -911,6 +921,47 @@ export const handlers: Record<string, MockHandler> = {
     run.adoptedIndex = args.index
     return { merged: true, conflicts: null }
   },
+  // --- Live preview (P1-5 C-1) ---
+  async preview_detect() {
+    await delay()
+    return {
+      devServer: demoPreview.running
+        ? null
+        : { command: 'npm run dev', url: PREVIEW_URL },
+    }
+  },
+  async preview_start() {
+    await delay(500)
+    demoPreview.running = true
+    demoPreview.url = PREVIEW_URL
+    demoPreview.startedAtMs = Date.now()
+    return { url: PREVIEW_URL }
+  },
+  async preview_stop() {
+    await delay()
+    demoPreview.running = false
+    demoPreview.url = null
+    demoPreview.startedAtMs = null
+  },
+  async preview_status() {
+    await delay()
+    return clone(demoPreview)
+  },
+  async preview_capture() {
+    await delay()
+    return { imageBase64: PREVIEW_PNG, mediaType: 'image/png', width: 1, height: 1 }
+  },
+  async preview_logs() {
+    await delay()
+    return demoPreview.running
+      ? [
+          { tsMs: demoPreview.startedAtMs ?? Date.now(), stream: 'system', text: 'starting `npm run dev`' },
+          { tsMs: Date.now(), stream: 'stdout', text: 'VITE v6.0.1  ready in 231 ms' },
+          { tsMs: Date.now(), stream: 'stdout', text: `Local: ${PREVIEW_URL}/` },
+        ]
+      : []
+  },
+
   async discard_batch_run(args: { batchId: string }) {
     await delay()
     const idx = batchRuns.findIndex(r => r.batchId === args.batchId)
