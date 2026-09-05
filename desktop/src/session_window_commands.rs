@@ -35,7 +35,14 @@
 
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+
+/// Set while the main window is being torn down: session windows are closed
+/// to keep「关闭主窗口 = 退出应用」true, and their `Destroyed` cleanup must
+/// NOT drain the persisted list (it is exactly what the next launch
+/// restores).
+static APP_EXITING: AtomicBool = AtomicBool::new(false);
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
@@ -126,18 +133,6 @@ impl SessionWindowRegistry {
 }
 
 // ── Persistence (DesktopConfig.open_session_windows) ─────────────────────
-
-/// Keep exactly one entry per session id (dedupe on re-open).
-pub(crate) fn upsert_session_window(list: &mut Vec<String>, session_id: &str) {
-    if !list.iter().any(|id| id == session_id) {
-        list.push(session_id.to_string());
-    }
-}
-
-/// Drop a session id if present.
-pub(crate) fn remove_session_window(list: &mut Vec<String>, session_id: &str) {
-    list.retain(|id| id != session_id);
-}
 
 /// Keep only the entries that parse as UUIDs (normalized by trimming) —
 /// persisted lists from older or hand-edited configs must not poison
@@ -301,9 +296,43 @@ pub async fn cleanup_destroyed_window(state: &AppState, label: &str) {
     if session_id_from_label(label).is_none() {
         return;
     }
+    if APP_EXITING.load(Ordering::SeqCst) {
+        // App shutdown via the main window — keep the persisted list so the
+        // same session windows come back on the next launch.
+        return;
+    }
     if let Some(session_id) = state.session_windows.unregister(label) {
         tracing::info!(%label, %session_id, "session window destroyed");
         persist_session_windows(state).await;
+    }
+}
+
+/// Main window destroyed (global `on_window_event` hook in `main.rs`):
+/// preserve「关闭主窗口 = 退出应用」— persist the current session-window list
+/// (so it restores next launch) and close the remaining session windows.
+/// Their cleanup is suppressed via [`APP_EXITING`].
+pub fn handle_main_window_destroyed(app: &tauri::AppHandle) {
+    APP_EXITING.store(true, Ordering::SeqCst);
+    let state = app.state::<AppState>();
+    let ids: Vec<String> = state
+        .session_windows
+        .list()
+        .into_iter()
+        .map(|w| w.session_id)
+        .collect();
+    if !ids.is_empty() {
+        tauri::async_runtime::block_on(async {
+            let mut cfg = state.desktop_config.write().await;
+            cfg.open_session_windows = ids;
+            if let Err(e) = config::save_config(&cfg) {
+                tracing::warn!(error = %e, "failed to persist session windows on main close");
+            }
+        });
+        for info in state.session_windows.list() {
+            if let Some(window) = app.get_webview_window(&info.label) {
+                let _ = window.close();
+            }
+        }
     }
 }
 
@@ -393,19 +422,6 @@ mod tests {
         assert_eq!(registry.unregister("session-a").as_deref(), Some("a"));
         assert_eq!(registry.unregister("session-a"), None, "second unregister");
         assert_eq!(registry.list().len(), 1);
-    }
-
-    #[test]
-    fn upsert_and_remove_keep_list_deduped() {
-        let mut list = Vec::new();
-        upsert_session_window(&mut list, "a");
-        upsert_session_window(&mut list, "b");
-        upsert_session_window(&mut list, "a"); // re-open of an existing window
-        assert_eq!(list, vec!["a".to_string(), "b".to_string()]);
-        remove_session_window(&mut list, "a");
-        assert_eq!(list, vec!["b".to_string()]);
-        remove_session_window(&mut list, "missing"); // no-op
-        assert_eq!(list, vec!["b".to_string()]);
     }
 
     #[test]

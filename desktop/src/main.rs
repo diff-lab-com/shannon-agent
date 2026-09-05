@@ -338,9 +338,17 @@ fn main() {
         // (titlebar close, close_session_window, OS teardown) drops its
         // registry entry and refreshes the persisted restore list.
         .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::Destroyed)
-                && window.label().starts_with(session_window_commands::SESSION_WINDOW_PREFIX)
-            {
+            if !matches!(event, tauri::WindowEvent::Destroyed) {
+                return;
+            }
+            if window.label() == "main" {
+                // 主窗口关闭 = 退出应用 (existing semantic, P1-1): persist the
+                // open-session list for next-launch restore, then close the
+                // session windows so the app actually exits.
+                session_window_commands::handle_main_window_destroyed(window.app_handle());
+                return;
+            }
+            if window.label().starts_with(session_window_commands::SESSION_WINDOW_PREFIX) {
                 let label = window.label().to_string();
                 let app = window.app_handle().clone();
                 tauri::async_runtime::spawn(async move {
