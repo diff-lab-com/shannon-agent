@@ -137,6 +137,16 @@ Run the entire toolchain on a remote machine or inside a container:
 shannon --target build-box -p "run the test suite"   # headless
 ```
 
+### IM Channel Integration
+
+Route messages from Telegram / Discord / Slack / Feishu / DingTalk into Shannon as tasks
+from the desktop "Social Connections" settings (see the
+[IM channels integration guide](docs/integrations/im-channels.md), Chinese):
+
+- **Inbound triggers** — DMs answer directly; group chats need an @mention or a `/shannon` prefix (configurable)
+- **Lifecycle push** — task start / completion / failure reported back to the original chat
+- **Security baseline** — credentials only in the OS keyring, webhook signatures verified, sensitive operations confirmed back in IM
+
 ### Internationalization
 
 - 10 languages: English, Chinese, Hindi, Spanish, French, Arabic, Bengali, Portuguese, Russian, Japanese
