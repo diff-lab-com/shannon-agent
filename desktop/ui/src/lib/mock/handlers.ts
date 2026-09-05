@@ -39,6 +39,60 @@ let nextInboxId = Math.max(...MOCK_INBOX_ITEMS.map(i => i.id)) + 1
 // P0-4: demo session budget — null = no cap; set via the budget control.
 let demoBudgetUsd: number | null = null
 
+// P1-2: demo best-of-N batch runs. One running + one finished so the Tasks
+// page batch cards and the compare dialog both have something to show.
+const demoBatchBranch = (i: number, status: string, files: number, spent: number, err: string | null = null) => ({
+  index: i,
+  branchName: `batch-demo000${i}-${i}`,
+  worktreePath: `/tmp/demo-repo/.shannon/scheduled-worktrees/batch-demo000${i}-${i}`,
+  status,
+  error: err,
+  summary: status === 'running' ? null : { filesChanged: files, additions: files * 7, deletions: files * 2 },
+  spentUsd: spent,
+})
+const batchRuns: Record<string, unknown>[] = [
+  {
+    batchId: '0196batch-0000-7000-8000-000000000001',
+    title: 'Speed up the search box',
+    prompt: 'Reduce search-as-you-type latency; consider caching and debounce',
+    count: 3,
+    status: 'running',
+    createdAtMs: Date.now() - 4 * 60_000,
+    branches: [
+      demoBatchBranch(0, 'completed', 4, 0.31),
+      demoBatchBranch(1, 'running', 0, 0.12),
+      demoBatchBranch(2, 'failed', 0, 0.05, 'provider overloaded (429)'),
+    ],
+    adoptedIndex: null,
+  },
+  {
+    batchId: '0196batch-0000-7000-8000-000000000002',
+    title: 'Add CSV export to reports',
+    prompt: 'Add an export button that downloads the filtered report as CSV',
+    count: 2,
+    status: 'completed',
+    createdAtMs: Date.now() - 40 * 60_000,
+    branches: [demoBatchBranch(0, 'completed', 6, 0.44), demoBatchBranch(1, 'completed', 3, 0.27)],
+    adoptedIndex: null,
+  },
+]
+const demoPatch = (branch: number) =>
+  [
+    'diff --git a/src/search.ts b/src/search.ts',
+    'index 83db48f..bf269f4 100644',
+    '--- a/src/search.ts',
+    '+++ b/src/search.ts',
+    '@@ -12,7 +12,10 @@ export function createSearchBox() {',
+    '   const cache = new Map<string, Result>()',
+    '+  // branch #' + branch + ': debounce keystrokes before hitting the index',
+    '+  let timer: number | undefined',
+    '   input.addEventListener("input", () => {',
+    '-    runSearch(input.value)',
+    '+    clearTimeout(timer)',
+    '+    timer = setTimeout(() => runSearch(input.value), 120)',
+    '   })',
+  ].join('\n')
+
 // P0-2: demo goal runs. One live (so the Tasks page shows a run card) and
 // one finished; start_goal_run appends new running rows with live feel.
 const goalRuns = [
@@ -758,6 +812,74 @@ export const handlers: Record<string, MockHandler> = {
   async install_native_agent() { await delay(400); return { success: true, message: 'Agent installed (mock)' } },
 
   async list_installed_addons() { await delay(); return clone(MOCK_INSTALLED_ADDONS) },
+
+  // --- Batch runs (P1-2 desktop best-of-N) ---
+  async list_batch_runs() {
+    await delay()
+    return clone(batchRuns).sort((a, b) => (b.createdAtMs as number) - (a.createdAtMs as number))
+  },
+  async start_batch_run(args: { title: string; prompt: string; count: number }) {
+    await delay()
+    const batchId = `0196batch-0000-7000-8000-${String(batchRuns.length + 3).padStart(12, '0')}`
+    const count = Math.min(4, Math.max(2, args.count))
+    batchRuns.unshift({
+      batchId,
+      title: args.title.trim() || args.prompt.slice(0, 50),
+      prompt: args.prompt,
+      count,
+      status: 'running',
+      createdAtMs: Date.now(),
+      branches: Array.from({ length: count }, (_, i) => demoBatchBranch(i, 'running', 0, 0)),
+      adoptedIndex: null,
+    })
+    // Demo "progress": branches finish one by one.
+    setTimeout(() => {
+      const run = batchRuns.find(r => r.batchId === batchId)
+      if (!run) return
+      const branches = run.branches as ReturnType<typeof demoBatchBranch>[]
+      branches.forEach((b, i) => {
+        setTimeout(() => {
+          if (i === branches.length - 1 && branches.length > 2) {
+            b.status = 'failed'
+            b.error = 'provider overloaded (429)'
+          } else {
+            b.status = 'completed'
+          }
+          b.summary = { filesChanged: 2 + i, additions: (2 + i) * 7, deletions: (2 + i) * 2 }
+          b.spentUsd = 0.1 + 0.09 * i
+          if (branches.every(x => x.status !== 'running')) run.status = branches.some(x => x.status === 'failed') ? 'partially_failed' : 'completed'
+        }, 2500 * (i + 1))
+      })
+    }, 1500)
+    return { batchId }
+  },
+  async get_batch_branch_diff(args: { batchId: string; index: number }) {
+    await delay()
+    return { diff: demoPatch(args.index) }
+  },
+  async adopt_batch_branch(args: { batchId: string; index: number }) {
+    await delay()
+    const run = batchRuns.find(r => r.batchId === args.batchId)
+    if (!run) throw new Error(`batch not found: ${args.batchId}`)
+    if (run.status === 'running') throw new Error('batch is still running — wait for all branches to finish before adopting')
+    const conflict = (run.branches as ReturnType<typeof demoBatchBranch>[]).length > 2 && args.index === 2
+    if (conflict) {
+      return { merged: false, conflicts: ['src/search.ts'] }
+    }
+    run.status = 'adopted'
+    run.adoptedIndex = args.index
+    return { merged: true, conflicts: null }
+  },
+  async discard_batch_run(args: { batchId: string }) {
+    await delay()
+    const idx = batchRuns.findIndex(r => r.batchId === args.batchId)
+    if (idx < 0) throw new Error(`batch not found: ${args.batchId}`)
+    const run = batchRuns[idx]
+    if (run.status === 'adopted') throw new Error('batch was already adopted — nothing to discard')
+    const running = (run.branches as ReturnType<typeof demoBatchBranch>[]).filter(b => b.status === 'running').length
+    batchRuns.splice(idx, 1)
+    return { removed: (run.count as number) - running, skipped: running > 0 ? [`branch: still running`] : [] }
+  },
 }
 
 export const mockDiagnostics = MOCK_DIAGNOSTICS

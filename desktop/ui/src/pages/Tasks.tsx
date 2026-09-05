@@ -28,6 +28,7 @@ import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
 import * as api from '@/lib/tauri-api'
 import { useScheduledTasks } from '@/hooks/scheduled-tasks'
+import { useBatchRuns } from '@/hooks/batchRuns'
 import type { CreateTaskPayload } from '@/types'
 import { type FilterStatus, statusMatchesFilter, TASKS_PER_PAGE } from '@/components/tasks/shared'
 import { Banner } from '@/components/ui/banner'
@@ -49,6 +50,8 @@ import AgentAllocation from '@/components/tasks/AgentAllocation'
 import HistoryView from '@/components/tasks/HistoryView'
 import WorktreePanel from '@/components/tasks/WorktreePanel'
 import GoalRunPanel from '@/components/tasks/GoalRunPanel'
+import BatchRunPanel from '@/components/tasks/BatchRunPanel'
+import BatchForm from '@/components/tasks/BatchForm'
 import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
 import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
 
@@ -60,9 +63,12 @@ type Tab = 'active' | 'routines' | 'pipelines' | 'history' | 'worktrees'
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useCatalog()
-  const { switchSession } = useSessions()
+  const { switchSession, currentSessionId } = useSessions()
   const navigate = useNavigate()
   const { tasks: scheduledTasks, create: createScheduled, refresh: refreshScheduled } = useScheduledTasks()
+  // P1-2: start action for the batch form (the live cards in BatchRunPanel
+  // keep their own subscription, mirroring the goal-run split).
+  const { start: startBatch } = useBatchRuns()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
@@ -81,6 +87,8 @@ export default function Tasks() {
   const [teamFilter, setTeamFilter] = useState<string>('all')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [showNewTask, setShowNewTask] = useState(false)
+  // P1-2: best-of-N batch creation form + its data panel (live cards below).
+  const [showBatchForm, setShowBatchForm] = useState(false)
   const [showSchedule, setShowSchedule] = useState(false)
   const [newTaskPrompt, setNewTaskPrompt] = useState('')
   const [taskPage, setTaskPage] = useState(1)
@@ -194,6 +202,7 @@ export default function Tasks() {
           dagView={dagView}
           onToggleDag={() => { setDagView(!dagView); if (!dagView) setCalendarView(false) }}
           onToggleNewTask={() => setShowNewTask(!showNewTask)}
+          onToggleBatch={() => setShowBatchForm(!showBatchForm)}
           onToggleSchedule={() => setShowSchedule(!showSchedule)}
           teams={teams}
           teamFilter={teamFilter}
@@ -238,6 +247,22 @@ export default function Tasks() {
           </div>
         ) : (
           <>
+        {/* P1-2: best-of-N batch cards (live per-branch chips) + form. */}
+        <BatchRunPanel />
+
+        {showBatchForm && (
+          <BatchForm
+            sessionId={currentSessionId}
+            onSubmit={async ({ title, prompt, count, sessionId }) => {
+              const ok = await startBatch({ title, prompt, count, baseSessionId: sessionId })
+              if (ok !== null) {
+                setShowBatchForm(false)
+              }
+            }}
+            onCancel={() => setShowBatchForm(false)}
+          />
+        )}
+
         {/* P0-2: live goal-run cards sit above the regular task list. */}
         <GoalRunPanel onViewSession={handleViewGoalSession} />
 

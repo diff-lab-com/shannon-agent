@@ -992,6 +992,52 @@ export interface GoalRunDto {
   updatedAtMs: number
 }
 
+// --- Batch runs (P1-2 desktop best-of-N; serde contract is camelCase) ---
+
+/// Lifecycle of one batch branch. Terminal: completed | failed.
+export type BatchBranchStatus = 'running' | 'completed' | 'failed'
+
+/** Lifecycle of a best-of-N batch run. `partially_failed` = mixed terminals;
+/// `adopted`/`discarded` are the user-driven final states. */
+export type BatchRunStatus =
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'partially_failed'
+  | 'adopted'
+  | 'discarded'
+
+/// Per-branch diff stat block.
+export interface BatchDiffSummary {
+  filesChanged: number
+  additions: number
+  deletions: number
+}
+
+/// One parallel candidate branch (frozen backend contract).
+export interface BatchBranch {
+  index: number
+  branchName: string
+  worktreePath: string
+  status: BatchBranchStatus
+  error: string | null
+  summary: BatchDiffSummary | null
+  spentUsd: number
+}
+
+/// One best-of-N batch run (payload of `batch:updated`). `adoptedIndex` is
+/// additive: set once the batch is adopted.
+export interface BatchRunDto {
+  batchId: string
+  title: string
+  prompt: string
+  count: number
+  status: BatchRunStatus
+  createdAtMs: number
+  branches: BatchBranch[]
+  adoptedIndex: number | null
+}
+
 // --- Event Names ---
 
 export const EVENT_NAMES = {
@@ -1015,6 +1061,8 @@ export const EVENT_NAMES = {
   TRIAGE_UPDATED: 'triage-updated',
   INBOX_UPDATED: 'inbox-updated',
   GOAL_UPDATED: 'goal:updated',
+  /** P1-2: a best-of-N batch run changed (payload: BatchRunDto). */
+  BATCH_UPDATED: 'batch:updated',
   /** P0-4: session spend crossed 80% of its budget (yellow advisory bar). */
   BUDGET_WARNING: 'budget:warning',
   /** P0-4: budget cap hit — send rejected pre-turn or turn cancelled. */

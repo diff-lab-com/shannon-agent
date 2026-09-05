@@ -51,6 +51,7 @@ import type {
   TriageFilter,
   TriageStats,
   GoalRunDto,
+  BatchRunDto,
   InboxItem,
   InboxListFilter,
   InboxItemStatus,
@@ -1366,6 +1367,56 @@ export async function resumeGoalRun(sessionId: string): Promise<void> {
 
 export async function updateGoalObjective(sessionId: string, objective: string): Promise<void> {
   await invoke('update_goal_objective', { sessionId, objective })
+}
+
+// Batch runs (P1-2 desktop best-of-N worktree parallelism)
+
+export interface BatchRunStartInput {
+  title: string
+  prompt: string
+  count: number
+  /** Session whose working directory the batch runs against. */
+  baseSessionId?: string | null
+}
+
+/// Start a best-of-N batch: N (2..=4) parallel unattended runs of the same
+/// prompt, each in its own git worktree forked from the current HEAD.
+/// Resolves once the batch is registered (branches `running`).
+export async function startBatchRun(input: BatchRunStartInput): Promise<{ batchId: string }> {
+  return invoke('start_batch_run', {
+    title: input.title,
+    prompt: input.prompt,
+    count: input.count,
+    baseSessionId: input.baseSessionId ?? null,
+  })
+}
+
+export async function listBatchRuns(): Promise<BatchRunDto[]> {
+  return invoke('list_batch_runs')
+}
+
+/// The branch worktree's full diff (raw unified patch) against the batch's
+/// base commit.
+export async function getBatchBranchDiff(batchId: string, index: number): Promise<{ diff: string }> {
+  return invoke('get_batch_branch_diff', { batchId, index })
+}
+
+/// Merge the branch back into the base repo and clean up the other
+/// branches. On conflicts nothing is merged or deleted — `conflicts` lists
+/// the files and the worktrees stay for manual handling.
+export async function adoptBatchBranch(
+  batchId: string,
+  index: number,
+): Promise<{ merged: boolean; conflicts: string[] | null }> {
+  return invoke('adopt_batch_branch', { batchId, index })
+}
+
+/// Remove the batch's un-adopted branches. `skipped` lists branches that
+/// were left alone (`"<branchName>: <reason>"`).
+export async function discardBatchRun(
+  batchId: string,
+): Promise<{ removed: number; skipped: string[] }> {
+  return invoke('discard_batch_run', { batchId })
 }
 
 // History

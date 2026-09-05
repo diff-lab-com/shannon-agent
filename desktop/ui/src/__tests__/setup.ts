@@ -360,6 +360,13 @@ vi.mock('@/lib/tauri-api', () => ({
   pauseGoalRun: vi.fn().mockResolvedValue(undefined),
   resumeGoalRun: vi.fn().mockResolvedValue(undefined),
   updateGoalObjective: vi.fn().mockResolvedValue(undefined),
+  // P1-2 batch runs — default empty so the Tasks-page batch panel stays
+  // hidden and other tests are unaffected.
+  listBatchRuns: vi.fn().mockResolvedValue([]),
+  startBatchRun: vi.fn().mockResolvedValue({ batchId: 'batch-1' }),
+  getBatchBranchDiff: vi.fn().mockResolvedValue({ diff: '' }),
+  adoptBatchBranch: vi.fn().mockResolvedValue({ merged: true, conflicts: null }),
+  discardBatchRun: vi.fn().mockResolvedValue({ removed: 1, skipped: [] }),
   transcribeAudio: vi.fn().mockResolvedValue({ text: 'mock transcript' }),
   // P2-5e — local voice (whisper-rs). Default: returns the same
   // mock transcript as the cloud path so existing tests don't
