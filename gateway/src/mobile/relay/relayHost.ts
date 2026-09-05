@@ -160,9 +160,17 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
       case "paired": {
         clearPairTimer();
         logger.info("relay host: phone joined — E2E session active");
-        // Create fresh E2E channels (new phone or reconnect — counters restart).
-        sendChannel = new E2eChannel(opts.sessionKey);
+        // Recv: fresh channel on every pair (§G-rev2 defense in depth) — a
+        // reconnecting phone that lost its counter state restarts at 1 and
+        // must still be accepted.
         recvChannel = new E2eChannel(opts.sessionKey);
+        // Send: create once, PRESERVE across re-paired (§G-rev3) — this host
+        // socket never dropped, so its send counter must stay monotonic; a
+        // reconnecting phone's recv is parked at k and would reject frames
+        // whose counter restarts at 1 (replay check), wedging host→phone.
+        // Host process restart is unaffected: the relay treats the fresh
+        // register as host replacement and the phone resets recv then.
+        if (!sendChannel) sendChannel = new E2eChannel(opts.sessionKey);
         // The virtual socket routes sends through the send channel.
         virtualSocket = new VirtualSocket((plaintext) => {
           if (!sendChannel || !ws || ws.readyState !== WebSocket.OPEN) return;
@@ -182,9 +190,10 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
 
       case "peer_gone":
         logger.info("relay host: phone disconnected, waiting for re-pair");
-        // Reset recv counter so a reconnecting phone (counter starting at 1)
-        // isn't rejected by replay protection. The send channel is also reset
-        // and will be recreated on the next "paired" event.
+        // Reset recv so a reconnecting phone (counter starting at 1) isn't
+        // rejected by replay protection. The send channel is intentionally
+        // KEPT (§G-rev3): our socket never dropped, so its counter stays
+        // monotonic and is reused as-is on the next "paired" event.
         recvChannel = null;
         virtualSocket = null;
         sessionCtx = null;

@@ -16,6 +16,7 @@ import { createChainedSecretProvider } from "./secrets/chain.js";
 import { createConsoleLogger } from "./logger.js";
 import { GATEWAY_VERSION } from "./version.js";
 import { MobileServer } from "./mobile/server.js";
+import { advertiseMobileServer, type MdnsHandle } from "./mobile/mdns.js";
 import {
   createMobileHandlers,
   DeviceRegistry,
@@ -133,7 +134,7 @@ export async function bootstrap(
     : null;
   if (mobile) {
     logger.info(
-      `mobile shannon/* server listening on ${config.mobile?.host ?? "127.0.0.1"}:${mobile.port}`,
+      `mobile shannon/* server listening on ${config.mobile?.host ?? "0.0.0.0"}:${mobile.port}`,
     );
   }
 
@@ -171,7 +172,7 @@ async function startMobileServer(
   opts: BootstrapOptions,
 ): Promise<{ handle: { stop(): Promise<void> }; port: number }> {
   const mobileCfg = config.mobile!;
-  const host = mobileCfg.host ?? "127.0.0.1";
+  const host = mobileCfg.host ?? "0.0.0.0";
   const port = mobileCfg.port ?? 33430;
   const tokensFile = mobileCfg.tokensFile ?? join(homedir(), ".shannon", "mobile-pair-tokens.jsonl");
   const devicesFile = mobileCfg.devicesFile ?? join(homedir(), ".shannon", "mobile-devices.json");
@@ -195,6 +196,26 @@ async function startMobileServer(
 
   const server = new MobileServer({ host, port, logger, handlers });
   const handle = await server.start();
+
+  // §A8/§A8b (cross-repo-adaptation-spec): advertise _shannon._tcp while the
+  // pairing server is up. iOS ATS rejects raw-IP ws:// endpoints outright, so
+  // LAN direct-connect requires the phone to reach a .local hostname — this
+  // advertisement is that scenario's hard prerequisite. Loopback-only binds
+  // cannot serve phones anyway, so skip (and flag) instead of advertising an
+  // unreachable endpoint — also keeps test boots (127.0.0.1) mDNS-free.
+  let mdns: MdnsHandle | null = null;
+  if (host === "127.0.0.1" || host === "localhost" || host === "::1") {
+    logger.warn(
+      `mobile server bound to loopback (${host}) — LAN direct-connect is ` +
+        "unreachable from phones; set mobile.host to 0.0.0.0",
+    );
+  } else {
+    mdns = advertiseMobileServer({ port: handle.port, version: GATEWAY_VERSION, logger });
+  }
+  const stopServerAndMdns = async (): Promise<void> => {
+    await mdns?.stop().catch(() => {});
+    await handle.stop();
+  };
 
   // Relay host mode: also connect outbound to shannon-relay so phones can
   // pair without LAN access. The same MethodHandlers are reused — the relay
@@ -234,20 +255,20 @@ async function startMobileServer(
       logger.info(`relay host: QR payload written to ${mobileCfg.qrPayloadFile}`);
     }
 
-    // Extend the stop handle to also stop the relay host.
-    const originalStop = handle.stop;
+    // Extend the stop handle to also stop the relay host (and the mDNS
+    // advertisement, via stopServerAndMdns).
     return {
       handle: {
         stop: async () => {
           await relayHandle.stop().catch(() => {});
-          await originalStop();
+          await stopServerAndMdns();
         },
       },
       port: handle.port,
     };
   }
 
-  return { handle, port: handle.port };
+  return { handle: { stop: stopServerAndMdns }, port: handle.port };
 }
 
 function createEngineClient(config: GatewayConfig, sessionKey: string): EngineWsClient {
