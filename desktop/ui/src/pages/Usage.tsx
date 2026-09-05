@@ -75,6 +75,7 @@ function BucketTable({
   emptyTitle: string
   emptyLabel: string
 }) {
+  const t = useT()
   return (
     <div className="bg-surface-container-low rounded-2xl border border-outline-variant/30 overflow-hidden">
       <div className="flex items-center gap-xs px-lg py-md border-b border-outline-variant/20">
@@ -89,9 +90,9 @@ function BucketTable({
             <thead className="text-outline-variant">
               <tr className="border-b border-outline-variant/20">
                 <th className="px-lg py-xs font-label-sm font-medium">{labelTitle}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">Tokens</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">Cache</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">Cost</th>
+                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.tokens')}</th>
+                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.cache')}</th>
+                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.cost')}</th>
                 <th className="px-lg py-xs font-label-sm font-medium text-right">Reqs</th>
               </tr>
             </thead>
@@ -149,10 +150,10 @@ function SessionTable({ rows, locale, emptyTitle, emptyLabel }: {
             <thead className="text-outline-variant">
               <tr className="border-b border-outline-variant/20">
                 <th className="px-lg py-xs font-label-sm font-medium">{t('usage.col.session')}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">Tokens</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">Cache</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">Cost</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">Reqs</th>
+                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.tokens')}</th>
+                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.cache')}</th>
+                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.cost')}</th>
+                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.reqs')}</th>
                 <th className="px-lg py-xs font-label-sm font-medium text-right">{t('usage.col.lastUsed')}</th>
               </tr>
             </thead>

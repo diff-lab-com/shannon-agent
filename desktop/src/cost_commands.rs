@@ -49,6 +49,77 @@ pub(crate) fn budget_verdict(spent_usd: f64, budget_usd: f64) -> BudgetVerdict {
     }
 }
 
+/// Action the mid-turn guard asks of the caller after folding one Usage
+/// event in. `budget_usd` is carried along so the emitter stays a thin call.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum BudgetTurnAction {
+    /// Nothing to do this event.
+    Quiet,
+    /// First crossing of the 80% line — emit `budget:warning`.
+    Warn { spent_usd: f64, budget_usd: f64 },
+    /// First crossing of the cap — emit `budget:exceeded` and cancel the
+    /// turn. Latched: exactly once per turn.
+    Exceeded { spent_usd: f64, budget_usd: f64 },
+}
+
+/// Mid-turn budget accumulator — the injectable boundary for
+/// `send_message`'s streaming Usage arm (P0-4).
+///
+/// Folds each `QueryEvent::Usage` cost into the pre-turn spend basis and
+/// classifies the running total. Semantics (unit-tested):
+/// - `Exceeded` fires **exactly once** per turn (latched) — Usage events
+///   already buffered when the cancel lands must not re-emit;
+/// - `Warn` fires at most once, at the first crossing of
+///   [`BUDGET_WARNING_FRACTION`];
+/// - a single event large enough to jump straight past the cap yields
+///   `Exceeded` only — the `Exceeded` arm is checked first, so no stray
+///   `Warn` precedes it.
+#[derive(Debug)]
+pub(crate) struct BudgetTurnGuard {
+    budget_usd: f64,
+    spent_basis: f64,
+    turn_cost: f64,
+    warned: bool,
+    exceeded_emitted: bool,
+}
+
+impl BudgetTurnGuard {
+    /// Guard for one turn: `spent_basis` is the session's ledger spend
+    /// before the turn started, `budget_usd` the configured cap.
+    pub(crate) fn new(budget_usd: f64, spent_basis: f64) -> Self {
+        Self {
+            budget_usd,
+            spent_basis,
+            turn_cost: 0.0,
+            warned: false,
+            exceeded_emitted: false,
+        }
+    }
+
+    /// Fold one Usage event's cost in and classify the running total.
+    pub(crate) fn on_usage(&mut self, cost_usd: f64) -> BudgetTurnAction {
+        self.turn_cost += cost_usd;
+        let spent = self.spent_basis + self.turn_cost;
+        match budget_verdict(spent, self.budget_usd) {
+            BudgetVerdict::Exceeded if !self.exceeded_emitted => {
+                self.exceeded_emitted = true;
+                BudgetTurnAction::Exceeded {
+                    spent_usd: spent,
+                    budget_usd: self.budget_usd,
+                }
+            }
+            BudgetVerdict::Warning if !self.warned => {
+                self.warned = true;
+                BudgetTurnAction::Warn {
+                    spent_usd: spent,
+                    budget_usd: self.budget_usd,
+                }
+            }
+            _ => BudgetTurnAction::Quiet,
+        }
+    }
+}
+
 /// Read the session's budget cap from its sidecar (`None` = no cap).
 pub(crate) fn session_budget_usd(state: &AppState, session_id: uuid::Uuid) -> Option<f64> {
     state.l0_store().sidecar(&session_id).budget_usd
@@ -331,6 +402,74 @@ mod tests {
         // the cap — only the warning/exceeded split shifts.
         assert_eq!(budget_verdict(0.01, 0.01), BudgetVerdict::Exceeded);
         assert_eq!(budget_verdict(0.004, 0.005), BudgetVerdict::Warning);
+    }
+
+    // ── BudgetTurnGuard (mid-turn streaming semantics) ──────────────────
+
+    #[test]
+    fn guard_warns_once_at_80pct_then_stays_quiet_under_the_cap() {
+        let mut g = BudgetTurnGuard::new(10.0, 0.0);
+        // 7.0 = 70% → quiet.
+        assert_eq!(g.on_usage(7.0), BudgetTurnAction::Quiet);
+        // 1.5 more = 8.5 = 85% → first (and only) warning.
+        assert_eq!(
+            g.on_usage(1.5),
+            BudgetTurnAction::Warn {
+                spent_usd: 8.5,
+                budget_usd: 10.0
+            }
+        );
+        // Further in-budget events stay silent.
+        assert_eq!(g.on_usage(0.5), BudgetTurnAction::Quiet);
+        assert_eq!(g.on_usage(0.4), BudgetTurnAction::Quiet);
+    }
+
+    #[test]
+    fn guard_exceeded_fires_exactly_once_and_latches() {
+        let mut g = BudgetTurnGuard::new(1.0, 0.5);
+        assert_eq!(
+            g.on_usage(0.6),
+            BudgetTurnAction::Exceeded {
+                spent_usd: 1.1,
+                budget_usd: 1.0
+            }
+        );
+        // Events already buffered when the cancel lands must not re-emit.
+        assert_eq!(g.on_usage(0.1), BudgetTurnAction::Quiet);
+        assert_eq!(g.on_usage(0.1), BudgetTurnAction::Quiet);
+    }
+
+    #[test]
+    fn guard_jump_straight_past_the_cap_never_warns() {
+        // Arm-order contract: a single event crossing from below the
+        // warning line to >= 100% produces Exceeded only.
+        let mut g = BudgetTurnGuard::new(1.0, 0.0);
+        let actions = [g.on_usage(2.0), g.on_usage(0.5), g.on_usage(0.5)];
+        assert_eq!(
+            actions[0],
+            BudgetTurnAction::Exceeded {
+                spent_usd: 2.0,
+                budget_usd: 1.0
+            }
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, BudgetTurnAction::Warn { .. })),
+            "no warning may precede or follow the exceeded on a jump-past-cap turn"
+        );
+        assert_eq!(actions[1], BudgetTurnAction::Quiet, "exceeded is latched");
+    }
+
+    #[test]
+    fn guard_basis_carries_pre_turn_spend() {
+        // Basis 0.9 of a 1.0 cap: the very first event (however small, as
+        // long as it pushes ≥ 100%) exceeds without warning.
+        let mut g = BudgetTurnGuard::new(1.0, 0.95);
+        assert!(matches!(
+            g.on_usage(0.05),
+            BudgetTurnAction::Exceeded { .. }
+        ));
     }
 
     // ── aggregate_by_session ─────────────────────────────────────────────

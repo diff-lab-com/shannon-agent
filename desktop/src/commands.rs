@@ -465,33 +465,17 @@ pub async fn send_message(
         );
     }
 
-    // P0-4: session-budget pre-turn guard. Cumulative ledger spend for this
-    // session at/over the cap rejects the send and fires `budget:exceeded`
-    // (the frontend offers continue-once / raise-budget / stop).
-    // `budget_bypass` is the "continue once" choice: it exempts *exactly
-    // this send's* pre-turn check — the mid-turn streaming guard still
-    // enforces the cap.
+    // P0-4: session-budget pre-turn guard (logic in the generic helper so
+    // it stays testable — see `enforce_pre_turn_budget`).
     let budget_cap_usd = crate::cost_commands::session_budget_usd(&state, session_id);
-    if let Some(cap) = budget_cap_usd {
-        if !budget_bypass.unwrap_or(false) {
-            let spent = crate::cost_commands::session_spent_usd(&state, &session_id.to_string());
-            if crate::cost_commands::budget_verdict(spent, cap)
-                == crate::cost_commands::BudgetVerdict::Exceeded
-            {
-                crate::cost_commands::emit_budget_status(
-                    &app_handle,
-                    false,
-                    &session_id.to_string(),
-                    spent,
-                    cap,
-                );
-                return Err(format!(
-                    "Session budget exceeded: spent ${spent:.4} of ${cap:.4} — continue (ignore once), raise the budget, or stop"
-                ));
-            }
-        }
-    }
-
+    enforce_pre_turn_budget(
+        &state,
+        &app_handle,
+        session_id,
+        budget_cap_usd,
+        budget_bypass,
+    )
+    .await?;
     // Prevent concurrent queries — check and set in a single lock scope to avoid TOCTOU race
     {
         let mut querying = active_session.querying.lock().await;
@@ -680,14 +664,16 @@ pub async fn send_message(
     let notifier_arc = state.notifier.clone();
     let session_for_task = active_session.clone();
     // P0-4 mid-turn budget guard basis: spend already on the ledger before
-    // this turn started. The streaming Usage handler adds this turn's cost
-    // on top and enforces the cap (>=100% cancel + `budget:exceeded`,
-    // >=80% one-shot `budget:warning`). `None` cap = no accounting.
-    let budget_spent_basis = if budget_cap_usd.is_some() {
-        crate::cost_commands::session_spent_usd(&state, &session_id.to_string())
-    } else {
-        0.0
-    };
+    // this turn started. The streaming Usage handler folds each event's
+    // cost into the guard, which enforces the cap (>=100% cancel +
+    // one-shot `budget:exceeded`, >=80% one-shot `budget:warning`).
+    // `None` cap = no accounting.
+    let mut budget_guard = budget_cap_usd.map(|cap| {
+        crate::cost_commands::BudgetTurnGuard::new(
+            cap,
+            crate::cost_commands::session_spent_usd(&state, &session_id.to_string()),
+        )
+    });
 
     // P2-5b: per-session in-process fan-out. Every event the loop
     // emits to the Tauri wire is also pushed onto `session_for_task`'s
@@ -753,11 +739,6 @@ pub async fn send_message(
         // Consume the stream using futures::StreamExt
         use futures::StreamExt;
         let mut pin_stream = std::pin::pin!(stream);
-
-        // P0-4 mid-turn budget accounting (see budget_spent_basis above).
-        let mut turn_cost_usd: f64 = 0.0;
-        let mut budget_warned = false;
-        let mut budget_exceeded_emitted = false;
 
         while let Some(event_result) = pin_stream.next().await {
             // Check for cancellation
@@ -896,45 +877,20 @@ pub async fn send_message(
                         ));
                         let _ = app.emit(event_names::QUERY_USAGE, payload);
 
-                        // P0-4 mid-turn budget enforcement: the first Usage
-                        // event at/over the cap cancels the turn (the loop
-                        // top emits `query:cancelled` and breaks) after
-                        // firing `budget:exceeded` exactly once (latched —
-                        // events already buffered when the cancel lands
-                        // must not re-emit); crossing 80% fires a one-shot
-                        // `budget:warning`. A single event large enough to
-                        // jump straight past 100% emits exceeded only — no
-                        // stray warning.
-                        if let Some(cap) = budget_cap_usd {
-                            turn_cost_usd += cost_usd;
-                            let spent = budget_spent_basis + turn_cost_usd;
-                            match crate::cost_commands::budget_verdict(spent, cap) {
-                                crate::cost_commands::BudgetVerdict::Exceeded
-                                    if !budget_exceeded_emitted =>
-                                {
-                                    budget_exceeded_emitted = true;
-                                    crate::cost_commands::emit_budget_status(
-                                        &app,
-                                        false,
-                                        &session_id.to_string(),
-                                        spent,
-                                        cap,
-                                    );
-                                    cancel_token_clone.cancel();
-                                }
-                                crate::cost_commands::BudgetVerdict::Warning if !budget_warned => {
-                                    budget_warned = true;
-                                    crate::cost_commands::emit_budget_status(
-                                        &app,
-                                        true,
-                                        &session_id.to_string(),
-                                        spent,
-                                        cap,
-                                    );
-                                }
-                                _ => {}
-                            }
-                        }
+                        // P0-4 mid-turn budget enforcement (logic in the
+                        // generic helper — see `enforce_mid_turn_usage`):
+                        // first cap crossing cancels via the SAME token
+                        // `cancel_query` pulls (`query:cancelled` at the
+                        // loop top), exceeded latched to one emit; the
+                        // first 80% crossing warns once; a jump straight
+                        // past 100% emits exceeded only.
+                        enforce_mid_turn_usage(
+                            &app,
+                            &mut budget_guard,
+                            &cancel_token_clone,
+                            &session_id,
+                            cost_usd,
+                        );
                     }
                     QueryEvent::Completed { .. } => {
                         // Save final assistant message into the per-session buffer.
@@ -1145,6 +1101,96 @@ pub async fn send_message(
     Ok(SendMessageResponse {
         query_id: return_qid,
     })
+}
+
+// ── P0-4: send_message budget enforcement (injectable boundary) ──────────
+//
+// The `#[tauri::command]` `send_message` is `AppHandle<Wry>`-concrete, so
+// the mock-runtime test harness cannot drive it directly. All budget logic
+// therefore lives in these two runtime-generic helpers, which the command
+// calls and the tests exercise with `tauri::test::mock_app()` — the same
+// split used by the goal runner. Behavior is unchanged: the helpers carry
+// everything budget-related (sidecar/ledger reads, verdicts, emits, the
+// cancel token), the command just supplies its arguments.
+
+/// Pre-turn guard: when the session has a cap and `bypass` is not set,
+/// cumulative ledger spend at/over the cap rejects the send and fires
+/// `budget:exceeded` (the frontend offers continue-once / raise-budget /
+/// stop). `bypass` is the "continue once" choice: it exempts *exactly this
+/// send's* pre-turn check — the mid-turn guard still enforces the cap.
+/// Runs before the querying flag is set, so a rejected send leaves no
+/// trace on the session.
+pub(crate) async fn enforce_pre_turn_budget<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+    session_id: uuid::Uuid,
+    budget_cap_usd: Option<f64>,
+    bypass: Option<bool>,
+) -> Result<(), String> {
+    let Some(cap) = budget_cap_usd else {
+        return Ok(());
+    };
+    if bypass.unwrap_or(false) {
+        return Ok(());
+    }
+    let spent = crate::cost_commands::session_spent_usd(state, &session_id.to_string());
+    if crate::cost_commands::budget_verdict(spent, cap)
+        == crate::cost_commands::BudgetVerdict::Exceeded
+    {
+        crate::cost_commands::emit_budget_status(app, false, &session_id.to_string(), spent, cap);
+        return Err(format!(
+            "Session budget exceeded: spent ${spent:.4} of ${cap:.4} — continue (ignore once), raise the budget, or stop"
+        ));
+    }
+    Ok(())
+}
+
+/// Mid-turn guard: fold one streaming `Usage` event into the turn's
+/// [`crate::cost_commands::BudgetTurnGuard`]; on the first cap crossing
+/// emit `budget:exceeded` (latched — one emit per turn) and cancel via the
+/// SAME [`tokio_util::sync::CancellationToken`] the `cancel_query` command
+/// pulls, so the stream breaks through the identical path; on the first
+/// 80% crossing emit a one-shot `budget:warning`. A single event large
+/// enough to jump straight past 100% emits exceeded only — the Exceeded
+/// arm is checked first.
+pub(crate) fn enforce_mid_turn_usage<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    guard: &mut Option<crate::cost_commands::BudgetTurnGuard>,
+    cancel_token: &CancellationToken,
+    session_id: &uuid::Uuid,
+    cost_usd: f64,
+) {
+    let Some(g) = guard.as_mut() else {
+        return;
+    };
+    match g.on_usage(cost_usd) {
+        crate::cost_commands::BudgetTurnAction::Exceeded {
+            spent_usd,
+            budget_usd,
+        } => {
+            crate::cost_commands::emit_budget_status(
+                app,
+                false,
+                &session_id.to_string(),
+                spent_usd,
+                budget_usd,
+            );
+            cancel_token.cancel();
+        }
+        crate::cost_commands::BudgetTurnAction::Warn {
+            spent_usd,
+            budget_usd,
+        } => {
+            crate::cost_commands::emit_budget_status(
+                app,
+                true,
+                &session_id.to_string(),
+                spent_usd,
+                budget_usd,
+            );
+        }
+        crate::cost_commands::BudgetTurnAction::Quiet => {}
+    }
 }
 
 // Chat-related commands (get_conversation, list_models, get_status,
@@ -2209,5 +2255,314 @@ mod build_client_config_tests {
         );
         assert_eq!(out.base_url, "http://localhost:11434");
         assert_eq!(out.model, "llama3");
+    }
+}
+
+// ── P0-4: budget enforcement tests (injectable boundary) ────────────────
+// `send_message` is `AppHandle<Wry>`-concrete, so the budget logic was
+// extracted into the runtime-generic `enforce_pre_turn_budget` /
+// `enforce_mid_turn_usage` helpers (see above) and is tested here through
+// `tauri::test::mock_app()` with an AppState whose sessions dir + usage
+// ledger are redirected into a tempdir — the two stores the budget path
+// reads (`pub(crate)` fields, same crate). Mid-turn tests drive the real
+// `BudgetTurnGuard` + the SAME `CancellationToken` type the `cancel_query`
+// command pulls, so a cap crossing is asserted to cancel through the
+// identical mechanism as the user-facing cancel button.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod budget_enforcement_tests {
+    use super::*;
+    use crate::commands_usage::{UsageTotals, record_event};
+    use shannon_core::session_log::SessionSidecar;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tauri::Listener;
+
+    fn mock_app() -> tauri::AppHandle<tauri::test::MockRuntime> {
+        tauri::test::mock_app().handle().clone()
+    }
+
+    /// AppState with the budget-path stores redirected into `dir`.
+    /// `AppState::new()` only *reads* ambient config (providers.toml /
+    /// desktop config / default tools) — nothing here writes outside `dir`.
+    fn budget_test_state(dir: &std::path::Path) -> AppState {
+        let mut state = AppState::new();
+        state.state_manager = Arc::new(
+            StateManager::with_sessions_dir(dir.join("sessions")).expect("temp sessions dir"),
+        );
+        state.usage_store = Arc::new(crate::commands_usage::UsageStore::with_path(
+            dir.join("usage.jsonl"),
+        ));
+        state
+    }
+
+    fn seed_budget(state: &AppState, session_id: uuid::Uuid, cap: f64) {
+        state
+            .l0_store()
+            .save_sidecar_replace(
+                &session_id,
+                &SessionSidecar {
+                    budget_usd: Some(cap),
+                    ..Default::default()
+                },
+            )
+            .expect("seed sidecar budget");
+    }
+
+    fn seed_spend(state: &AppState, session_id: &uuid::Uuid, cost: f64) {
+        state
+            .usage_store
+            .append(&record_event(
+                "budget-path-test-model",
+                "anthropic",
+                UsageTotals {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                    cost_usd: cost,
+                },
+                Some(&session_id.to_string()),
+            ))
+            .expect("seed ledger spend");
+    }
+
+    /// Session-filtered counters for the two budget events.
+    struct BudgetEventCounters {
+        exceeded: Arc<AtomicUsize>,
+        warned: Arc<AtomicUsize>,
+        listeners: Vec<tauri::EventId>,
+    }
+
+    impl BudgetEventCounters {
+        fn exceeded(&self) -> usize {
+            self.exceeded.load(Ordering::SeqCst)
+        }
+        fn warned(&self) -> usize {
+            self.warned.load(Ordering::SeqCst)
+        }
+    }
+
+    fn count_budget_events(
+        app: &tauri::AppHandle<tauri::test::MockRuntime>,
+        session: &str,
+    ) -> BudgetEventCounters {
+        let warned = Arc::new(AtomicUsize::new(0));
+        let exceeded = Arc::new(AtomicUsize::new(0));
+        let mut listeners = Vec::new();
+
+        let ex_counter = exceeded.clone();
+        let ex_session = session.to_string();
+        listeners.push(app.listen_any(event_names::BUDGET_EXCEEDED, move |e| {
+            let Ok(p) =
+                serde_json::from_str::<shannon_types::events::BudgetStatusPayload>(e.payload())
+            else {
+                return;
+            };
+            if p.session_id == ex_session {
+                ex_counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+        let w_counter = warned.clone();
+        let w_session = session.to_string();
+        listeners.push(app.listen_any(event_names::BUDGET_WARNING, move |e| {
+            let Ok(p) =
+                serde_json::from_str::<shannon_types::events::BudgetStatusPayload>(e.payload())
+            else {
+                return;
+            };
+            if p.session_id == w_session {
+                w_counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
+        BudgetEventCounters {
+            exceeded,
+            warned,
+            listeners,
+        }
+    }
+
+    fn unlisten_all(app: &tauri::AppHandle<tauri::test::MockRuntime>, c: &BudgetEventCounters) {
+        for id in &c.listeners {
+            app.unlisten(*id);
+        }
+    }
+
+    /// Captured payloads for one event name — used to pin the frozen wire
+    /// shape (sessionId/spentUsd/budgetUsd) end-to-end.
+    fn capture_payloads(
+        app: &tauri::AppHandle<tauri::test::MockRuntime>,
+        name: &str,
+    ) -> Arc<std::sync::Mutex<Vec<shannon_types::events::BudgetStatusPayload>>> {
+        let sink: Arc<std::sync::Mutex<Vec<shannon_types::events::BudgetStatusPayload>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink_for_cb = sink.clone();
+        app.listen_any(name, move |e| {
+            if let Ok(p) =
+                serde_json::from_str::<shannon_types::events::BudgetStatusPayload>(e.payload())
+            {
+                sink_for_cb.lock().unwrap().push(p);
+            }
+        });
+        sink
+    }
+
+    // ① Pre-turn: spend at the cap (first-limit-wins boundary) rejects the
+    // send with an explicit error and emits budget:exceeded exactly once.
+    #[tokio::test]
+    async fn pre_turn_exhausted_budget_rejects_and_emits_exceeded() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let state = budget_test_state(tmp.path());
+        let sid = state.registry.get_or_create_active().session_id;
+        seed_budget(&state, sid, 1.0);
+        seed_spend(&state, &sid, 0.5);
+        let counters = count_budget_events(&app, &sid.to_string());
+        let payloads = capture_payloads(&app, event_names::BUDGET_EXCEEDED);
+
+        // Under the cap (0.5 of 1.0): allowed, no events.
+        enforce_pre_turn_budget(&state, &app, sid, Some(1.0), None)
+            .await
+            .expect("spend below the cap must pass");
+        assert_eq!(counters.exceeded(), 0);
+
+        // Push spend to 1.5 (over the 1.0 cap): rejected, explicit error,
+        // one emit with the frozen payload.
+        seed_spend(&state, &sid, 1.0);
+        let err = enforce_pre_turn_budget(&state, &app, sid, Some(1.0), None)
+            .await
+            .expect_err("spend at the cap must reject the send");
+        assert!(err.contains("budget exceeded"), "explicit error: {err}");
+
+        assert_eq!(counters.exceeded(), 1, "exactly one exceeded emit");
+        let seen = payloads.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].session_id, sid.to_string());
+        assert!((seen[0].spent_usd - 1.5).abs() < 1e-9);
+        assert!((seen[0].budget_usd - 1.0).abs() < 1e-9);
+        assert_eq!(counters.warned(), 0, "pre-turn reject never warns");
+        unlisten_all(&app, &counters);
+    }
+
+    // ② Bypass is per-call: exempts the send it is attached to, and the
+    // next (bypass-less) call rejects again — nothing is stored.
+    #[tokio::test]
+    async fn pre_turn_bypass_exempts_one_send_only() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let state = budget_test_state(tmp.path());
+        let sid = state.registry.get_or_create_active().session_id;
+        seed_budget(&state, sid, 1.0);
+        seed_spend(&state, &sid, 1.0);
+
+        // With bypass: accepted despite the exhausted budget.
+        enforce_pre_turn_budget(&state, &app, sid, Some(1.0), Some(true))
+            .await
+            .expect("bypass must exempt this send's pre-turn check");
+
+        // Immediately after, bypass-less: rejected again.
+        let err = enforce_pre_turn_budget(&state, &app, sid, Some(1.0), None)
+            .await
+            .expect_err("the follow-up bypass-less send must reject");
+        assert!(err.contains("budget exceeded"), "{err}");
+
+        // No cap at all: always fine, bypass or not.
+        enforce_pre_turn_budget(&state, &app, sid, None, None)
+            .await
+            .expect("no cap = no check");
+    }
+
+    // ③ Mid-turn: the first cap crossing cancels through the SAME
+    // CancellationToken the cancel_query command pulls, exceeded fires
+    // exactly once, and buffered events after the cancel stay silent.
+    #[tokio::test]
+    async fn mid_turn_exceeded_cancels_token_and_latches_to_one_emit() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let state = budget_test_state(tmp.path());
+        let sid = state.registry.get_or_create_active().session_id;
+        let counters = count_budget_events(&app, &sid.to_string());
+
+        // The exact wiring send_message uses: the token created for the
+        // turn is cloned into the session slot (cancel_query cancels that
+        // slot) and the same token guards the stream loop.
+        let turn_token = tokio_util::sync::CancellationToken::new();
+        let cancel_token_clone = turn_token.clone();
+
+        let mut guard = Some(crate::cost_commands::BudgetTurnGuard::new(1.0, 0.5));
+        assert!(!turn_token.is_cancelled());
+
+        // Event 1: 0.6 → spent 1.1 >= cap → exceeded + cancel.
+        enforce_mid_turn_usage(&app, &mut guard, &cancel_token_clone, &sid, 0.6);
+        assert!(turn_token.is_cancelled(), "cap crossing must cancel");
+        assert_eq!(counters.exceeded(), 1);
+
+        // Events 2..n: already buffered when the cancel lands — the latch
+        // must keep them silent, and the token stays cancelled.
+        enforce_mid_turn_usage(&app, &mut guard, &cancel_token_clone, &sid, 0.1);
+        enforce_mid_turn_usage(&app, &mut guard, &cancel_token_clone, &sid, 0.1);
+        assert_eq!(counters.exceeded(), 1, "exceeded is latched to one emit");
+        assert_eq!(counters.warned(), 0);
+        unlisten_all(&app, &counters);
+    }
+
+    // ④ Mid-turn: the 80% crossing warns exactly once; a single event that
+    // jumps straight from below the band to >= 100% must NOT warn (the
+    // Exceeded arm is checked first) — pinned here via the real guard.
+    #[tokio::test]
+    async fn mid_turn_warning_is_one_shot_and_jump_past_cap_never_warns() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let state = budget_test_state(tmp.path());
+        let sid = state.registry.get_or_create_active().session_id;
+        let counters = count_budget_events(&app, &sid.to_string());
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        // Warning band: 7.0 (70%, quiet) → +1.5 (85%, warn once) → quiet.
+        let mut guard = Some(crate::cost_commands::BudgetTurnGuard::new(10.0, 0.0));
+        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, 7.0);
+        assert_eq!(counters.warned(), 0);
+        assert!(!cancel.is_cancelled());
+        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, 1.5);
+        assert_eq!(counters.warned(), 1, "one-shot warning at the 80% line");
+        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, 0.5);
+        assert_eq!(counters.warned(), 1, "still under the cap: no re-warn");
+        assert_eq!(counters.exceeded(), 0);
+        assert!(!cancel.is_cancelled(), "under the cap: no cancel");
+
+        // Jump-past-cap turn: from 0 straight to 2.0 of a 1.0 cap.
+        let jump_counters = count_budget_events(&app, &sid.to_string());
+        let jump_cancel = tokio_util::sync::CancellationToken::new();
+        let mut guard = Some(crate::cost_commands::BudgetTurnGuard::new(1.0, 0.0));
+        enforce_mid_turn_usage(&app, &mut guard, &jump_cancel, &sid, 2.0);
+        enforce_mid_turn_usage(&app, &mut guard, &jump_cancel, &sid, 0.5);
+        assert_eq!(jump_counters.exceeded(), 1);
+        assert_eq!(
+            jump_counters.warned(),
+            0,
+            "no stray warning on a jump straight past the cap"
+        );
+        assert!(jump_cancel.is_cancelled());
+        unlisten_all(&app, &counters);
+        unlisten_all(&app, &jump_counters);
+    }
+
+    // ⑤ No cap on the session: the guard is a complete no-op (no events,
+    // no cancel) even for arbitrarily large usage.
+    #[tokio::test]
+    async fn mid_turn_without_a_cap_is_a_noop() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let state = budget_test_state(tmp.path());
+        let sid = state.registry.get_or_create_active().session_id;
+        let counters = count_budget_events(&app, &sid.to_string());
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        let mut guard: Option<crate::cost_commands::BudgetTurnGuard> = None;
+        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, 999.0);
+        assert_eq!(counters.exceeded(), 0);
+        assert_eq!(counters.warned(), 0);
+        assert!(!cancel.is_cancelled());
+        unlisten_all(&app, &counters);
     }
 }
