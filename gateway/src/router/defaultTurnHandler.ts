@@ -38,6 +38,8 @@ export function createDefaultTurnHandler(
   return {
     async handle(ctx: TurnContext): Promise<void> {
       const { client, adapter, replyTarget, inbound, logger } = ctx;
+      // P1-4 lifecycle: announce the start, then completed/failed at the end.
+      ctx.reporter?.started();
       const acc = newAccumulator();
       const stream = canStream(adapter)
         ? new StreamingReply(adapter, replyTarget, {
@@ -77,6 +79,8 @@ export function createDefaultTurnHandler(
       } else {
         await sendReply(adapter, replyTarget, acc, failurePrefix);
       }
+      if (acc.failed !== null) ctx.reporter?.failed(acc.failed);
+      else if (!acc.cancelled) ctx.reporter?.completed();
     },
   };
 }
