@@ -124,6 +124,9 @@ pub struct AppState {
     /// are rejected (see `send_message`) — goal and manual input are
     /// mutually exclusive.
     pub(crate) goal_runs: Arc<crate::goal_commands::GoalRunRegistry>,
+    /// Open session windows — label → session id (P1-1). Mirrored into
+    /// `DesktopConfig.open_session_windows` for restart restore.
+    pub(crate) session_windows: crate::session_window_commands::SessionWindowRegistry,
     /// SQLite inbox store (`~/.shannon/inbox.db`, P0-3). Lazily opened on
     /// first use so a failing on-disk open degrades to an in-memory store
     /// (with a warning) instead of poisoning every inbox command.
@@ -355,6 +358,8 @@ impl AppState {
             scheduled_runs_store: Arc::new(shannon_core::scheduled_runs::ScheduledRunsStore::new()),
             triage_store: Arc::new(crate::scheduled_commands::TriageStore::new()),
             goal_runs: Arc::new(crate::goal_commands::GoalRunRegistry::new()),
+            session_windows:
+                crate::session_window_commands::SessionWindowRegistry::default(),
             inbox_store: std::sync::OnceLock::new(),
             usage_store: Arc::new(crate::commands_usage::UsageStore::new()),
             routine_overrides: Arc::new(crate::scheduled_commands::RoutineOverrideStore::new()),
@@ -663,6 +668,9 @@ pub async fn send_message(
     let usage_store_arc = state.usage_store.clone();
     let notifier_arc = state.notifier.clone();
     let session_for_task = active_session.clone();
+    // P1-1: owner session stamped onto every `query:*` payload so
+    // multi-window shells can filter streams per window.
+    let session_id_str = session_for_task.session_id.to_string();
     // P0-4 mid-turn budget guard basis: spend already on the ledger before
     // this turn started. The streaming Usage handler folds each event's
     // cost into the guard, which enforces the cap (>=100% cancel +
@@ -693,6 +701,7 @@ pub async fn send_message(
     // onto the engine's choice enum (AlwaysAllow also lands in the engine's
     // in-session memory via process_permission_choice).
     let app_for_permissions = app_handle.clone();
+    let session_id_for_permissions = session_id_str.clone();
     tokio::spawn(async move {
         use shannon_engine::permissions::PermissionChoice;
         while let Some(request) = perm_rx.recv().await {
@@ -711,6 +720,7 @@ pub async fn send_message(
                 prompt.tool_input.clone(),
                 risk.to_string(),
                 300,
+                Some(session_id_for_permissions.clone()),
             )
             .await;
             let choice = match decision {
@@ -747,6 +757,7 @@ pub async fn send_message(
                     event_names::QUERY_CANCELLED,
                     events::QueryCancelledPayload {
                         query_id: qid_str.clone(),
+                        session_id: Some(session_id_str.clone()),
                     },
                 );
                 route_event(crate::session_registry::SessionEvent::Status(
@@ -762,6 +773,7 @@ pub async fn send_message(
                         let payload = events::QueryTextPayload {
                             query_id: qid_str.clone(),
                             content,
+                            session_id: Some(session_id_str.clone()),
                         };
                         route_event(crate::session_registry::SessionEvent::QueryText(
                             payload.clone(),
@@ -786,6 +798,7 @@ pub async fn send_message(
                             tool_use_id,
                             tool_name,
                             tool_input,
+                            session_id: Some(session_id_str.clone()),
                         };
                         route_event(crate::session_registry::SessionEvent::ToolStart(
                             payload.clone(),
@@ -805,6 +818,7 @@ pub async fn send_message(
                             tool_name,
                             result,
                             is_error,
+                            session_id: Some(session_id_str.clone()),
                         };
                         route_event(crate::session_registry::SessionEvent::ToolResult(
                             payload.clone(),
@@ -824,6 +838,7 @@ pub async fn send_message(
                             tool_name,
                             progress,
                             message: msg,
+                            session_id: Some(session_id_str.clone()),
                         };
                         route_event(crate::session_registry::SessionEvent::ToolProgress(
                             payload.clone(),
@@ -834,6 +849,7 @@ pub async fn send_message(
                         let payload = events::ThinkingPayload {
                             query_id: qid_str.clone(),
                             content,
+                            session_id: Some(session_id_str.clone()),
                         };
                         route_event(crate::session_registry::SessionEvent::Thinking(
                             payload.clone(),
@@ -871,6 +887,7 @@ pub async fn send_message(
                             input_tokens,
                             output_tokens,
                             cost_usd,
+                            session_id: Some(session_id_str.clone()),
                         };
                         route_event(crate::session_registry::SessionEvent::Usage(
                             payload.clone(),
@@ -932,6 +949,7 @@ pub async fn send_message(
                             event_names::QUERY_COMPLETED,
                             events::QueryCompletedPayload {
                                 query_id: qid_str.clone(),
+                                session_id: Some(session_id_str.clone()),
                             },
                         );
                         route_event(crate::session_registry::SessionEvent::Status(
@@ -1052,6 +1070,7 @@ pub async fn send_message(
                             events::QueryFailedPayload {
                                 query_id: qid_str.clone(),
                                 error: error.clone(),
+                                session_id: Some(session_id_str.clone()),
                             },
                         );
                         route_event(crate::session_registry::SessionEvent::Status(
@@ -1073,6 +1092,7 @@ pub async fn send_message(
                         events::QueryFailedPayload {
                             query_id: qid_str.clone(),
                             error: err_string.clone(),
+                            session_id: Some(session_id_str.clone()),
                         },
                     );
                     route_event(crate::session_registry::SessionEvent::Status(

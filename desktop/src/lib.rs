@@ -165,6 +165,10 @@ pub mod commands_tasks;
 #[cfg(feature = "tauri")]
 pub mod session_registry;
 
+// P1-1 — session multi-window commands/registry/restore.
+#[cfg(feature = "tauri")]
+pub mod session_window_commands;
+
 #[cfg(feature = "tauri")]
 pub mod commands_usage;
 

@@ -39,6 +39,10 @@ pub(crate) async fn prompt_user(
     input: serde_json::Value,
     risk: String,
     timeout_secs: u64,
+    // P1-1: owner session of the query that triggered the prompt, so
+    // multi-window shells can ignore other sessions' prompts. `None` for
+    // session-less callers (`request_permission` command).
+    session_id: Option<String>,
 ) -> PermissionDecision {
     let request_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel();
@@ -63,6 +67,7 @@ pub(crate) async fn prompt_user(
             input: input.clone(),
             risk: risk.clone(),
             request_id: request_id.clone(),
+            session_id,
         },
     );
 
@@ -92,7 +97,7 @@ pub async fn request_permission(
     input: serde_json::Value,
     risk: String,
 ) -> Result<bool, String> {
-    let decision = prompt_user(&state, &app_handle, tool, input, risk, 30).await;
+    let decision = prompt_user(&state, &app_handle, tool, input, risk, 30, None).await;
     Ok(decision != PermissionDecision::Deny)
 }
 

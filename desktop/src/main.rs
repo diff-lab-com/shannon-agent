@@ -35,6 +35,7 @@ fn main() {
     use shannon_desktop::commands_voice_models;
     use shannon_desktop::engine_discovery;
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
+    use shannon_desktop::session_window_commands;
     use shannon_desktop::extensions_commands;
     use shannon_desktop::loopback_api;
     use shannon_desktop::skill_pattern_detection;
@@ -290,6 +291,11 @@ fn main() {
             shannon_desktop::cost_commands::get_session_budget,
             shannon_desktop::cost_commands::get_session_context_breakdown,
             shannon_desktop::cost_commands::get_usage_by_session,
+            // P1-1 — session multi-window (frozen contract)
+            session_window_commands::open_session_window,
+            session_window_commands::list_session_windows,
+            session_window_commands::close_session_window,
+            session_window_commands::reveal_session_in_main,
             // Automation: hook-event catalog + custom permission profiles
             shannon_desktop::automation_commands::list_hook_events,
             shannon_desktop::automation_commands::list_permission_profiles,
@@ -328,10 +334,31 @@ fn main() {
             commands_memory::search_memories,
             commands_memory::get_memory_stats,
         ])
+        // P1-1 — session window lifecycle: a destroyed `session-*` window
+        // (titlebar close, close_session_window, OS teardown) drops its
+        // registry entry and refreshes the persisted restore list.
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed)
+                && window.label().starts_with(session_window_commands::SESSION_WINDOW_PREFIX)
+            {
+                let label = window.label().to_string();
+                let app = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(state) = app.try_state::<commands::AppState>() {
+                        session_window_commands::cleanup_destroyed_window(&state, &label).await;
+                    }
+                });
+            }
+        })
         .setup(|app| {
             let mut state = commands::AppState::new();
             state.attach_notification_handler(app.handle().clone());
             app.manage(state);
+
+            // P1-1 — reopen the session windows that were open at last
+            // shutdown. Silent on failure (stale ids are dropped from the
+            // persisted list); must run after `app.manage(state)`.
+            session_window_commands::restore_session_windows(app.handle());
 
             // E-1 方案 C — auto-start the gateway supervisor when `managed` is on.
             let app_handle = app.handle().clone();

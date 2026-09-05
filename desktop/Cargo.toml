@@ -95,6 +95,11 @@ tauri = { version = "2", features = ["test"] }
 
 [build-dependencies]
 tauri-build = { version = "2", optional = true, features = [] }
+# P1-1: minimal ACL codegen in build.rs (see the file header for why the
+# full `tauri_build::build()` is not used). tauri-utils provides the
+# Capability/Manifest/Resolved types the codegen hands to tauri-codegen.
+tauri-utils = "2"
+serde_json = "1.0"
 
 [[bench]]
 name = "load_tests"

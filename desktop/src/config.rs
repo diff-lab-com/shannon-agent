@@ -97,6 +97,12 @@ pub struct DesktopConfig {
     /// the UI's engine endpoints point at it).
     #[serde(default)]
     pub gateway: GatewayDesktopConfig,
+    /// Session ids with an open dedicated window (P1-1 multi-window).
+    /// Mirrored from the in-memory window registry; replayed at app startup
+    /// to restore the previous session-window set. `#[serde(default)]` keeps
+    /// older config files loadable.
+    #[serde(default)]
+    pub open_session_windows: Vec<String>,
     /// Provider allowlist — restricts the model catalog to the listed kinds
     /// (`anthropic` / `openai` / `ollama` / `gemini` / `deepseek` /
     /// `openai-compatible`). Drives the desktop Settings' "Provider
@@ -485,6 +491,7 @@ impl Default for DesktopConfig {
             stt: None,
             voice_local: VoiceLocalConfig::default(),
             gateway: GatewayDesktopConfig::default(),
+            open_session_windows: Vec::new(),
             enabled_providers: None,
         }
     }
@@ -563,6 +570,26 @@ mod tests {
         assert!(config.working_dir.is_none());
         assert!(config.theme.is_none());
         assert_eq!(config.approval_mode, Some("confirm".into()));
+    }
+
+    #[test]
+    fn test_open_session_windows_field_defaults_and_round_trips() {
+        // P1-1: config files written before the field existed must load with
+        // an empty restore list.
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(legacy.open_session_windows.is_empty());
+
+        let mut config = DesktopConfig::default();
+        config.open_session_windows = vec!["7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1".into()];
+        let json = serde_json::to_string(&config).unwrap();
+        let back: DesktopConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.open_session_windows,
+            vec!["7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1".to_string()]
+        );
     }
 
     #[test]

@@ -54,10 +54,16 @@ impl<T> EventEnvelope<T> {
 }
 
 /// A streaming text chunk from the LLM.
+///
+/// `session_id` (P1-1): optional owner session so multi-window shells can
+/// filter streams per window. Additive — older consumers ignore it (serde
+/// default), older events fill `None` on the receiving side.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryTextPayload {
     pub query_id: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// A tool call has started.
@@ -67,6 +73,8 @@ pub struct ToolStartPayload {
     pub tool_use_id: String,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// A tool call has completed.
@@ -77,6 +85,8 @@ pub struct ToolResultPayload {
     pub tool_name: String,
     pub result: String,
     pub is_error: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Tool progress update (e.g., bash command output).
@@ -87,6 +97,8 @@ pub struct ToolProgressPayload {
     pub tool_name: String,
     pub progress: f32,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Extended thinking content.
@@ -94,6 +106,8 @@ pub struct ToolProgressPayload {
 pub struct ThinkingPayload {
     pub query_id: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Background task status and update.
@@ -125,12 +139,16 @@ pub struct UsagePayload {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cost_usd: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Query completed successfully.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryCompletedPayload {
     pub query_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Query failed.
@@ -138,6 +156,8 @@ pub struct QueryCompletedPayload {
 pub struct QueryFailedPayload {
     pub query_id: String,
     pub error: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Permission request for tool execution.
@@ -147,6 +167,8 @@ pub struct PermissionRequest {
     pub input: serde_json::Value,
     pub risk: String,
     pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Session information for session list.
@@ -182,6 +204,8 @@ pub struct ChatMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryCancelledPayload {
     pub query_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// P0-4 session-budget status payload, shared by the `budget:warning`
@@ -388,6 +412,7 @@ mod tests {
         let payload = QueryTextPayload {
             query_id: "q1".into(),
             content: "hello".into(),
+            session_id: None,
         };
         let env = EventEnvelope::new(event_names::QUERY_TEXT, payload);
         let json = serde_json::to_string(&env).unwrap();
@@ -452,6 +477,7 @@ mod tests {
         let payload = QueryTextPayload {
             query_id: "test-q123".into(),
             content: "Hello, world!".into(),
+            session_id: None,
         };
         let envelope = EventEnvelope::new("query:text", payload);
 

@@ -1135,6 +1135,7 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                     event_names::QUERY_CANCELLED,
                     crate::events::QueryCancelledPayload {
                         query_id: qid.clone(),
+                        session_id: Some(self.session_id.to_string()),
                     },
                 );
                 break;
@@ -1148,6 +1149,7 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                             crate::events::QueryTextPayload {
                                 query_id: qid.clone(),
                                 content,
+                                session_id: Some(self.session_id.to_string()),
                             },
                         );
                     }
@@ -1165,6 +1167,7 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                                 tool_use_id,
                                 tool_name,
                                 tool_input,
+                                session_id: Some(self.session_id.to_string()),
                             },
                         );
                     }
@@ -1183,6 +1186,7 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                                 tool_name,
                                 result,
                                 is_error,
+                                session_id: Some(self.session_id.to_string()),
                             },
                         );
                     }
@@ -1201,6 +1205,7 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                                 tool_name,
                                 progress,
                                 message,
+                                session_id: Some(self.session_id.to_string()),
                             },
                         );
                     }
@@ -1210,6 +1215,7 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                             crate::events::ThinkingPayload {
                                 query_id: qid.clone(),
                                 content,
+                                session_id: Some(self.session_id.to_string()),
                             },
                         );
                     }
@@ -1245,6 +1251,7 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                                 input_tokens,
                                 output_tokens,
                                 cost_usd: event_cost,
+                                session_id: Some(self.session_id.to_string()),
                             },
                         );
                     }
@@ -1258,6 +1265,7 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                             crate::events::QueryFailedPayload {
                                 query_id: qid.clone(),
                                 error: error.clone(),
+                                session_id: Some(self.session_id.to_string()),
                             },
                         );
                         observation.failure = Some(error);
@@ -1272,6 +1280,7 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                         crate::events::QueryFailedPayload {
                             query_id: qid.clone(),
                             error: err.clone(),
+                            session_id: Some(self.session_id.to_string()),
                         },
                     );
                     observation.failure = Some(err);
@@ -1284,6 +1293,7 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                 event_names::QUERY_COMPLETED,
                 crate::events::QueryCompletedPayload {
                     query_id: qid.clone(),
+                    session_id: Some(self.session_id.to_string()),
                 },
             );
         }

@@ -6666,6 +6666,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+ "tauri-utils",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

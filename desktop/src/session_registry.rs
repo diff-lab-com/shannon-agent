@@ -522,6 +522,7 @@ mod tests {
             tool_use_id: "tu-a".into(),
             tool_name: "bash".into(),
             tool_input: serde_json::json!({"command": "ls"}),
+            session_id: Some(k_a.0.to_string()),
         };
         a.try_send_event(SessionEvent::ToolStart(a_payload.clone()));
 
@@ -530,6 +531,7 @@ mod tests {
         let b_payload = crate::events::QueryTextPayload {
             query_id: "qb".into(),
             content: "session B says hi".into(),
+            session_id: Some(k_b.0.to_string()),
         };
         b.try_send_event(SessionEvent::QueryText(b_payload.clone()));
 
