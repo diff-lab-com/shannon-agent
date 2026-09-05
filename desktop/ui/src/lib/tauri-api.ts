@@ -18,6 +18,7 @@ import type {
   MobileDeviceEntry,
   MobilePairToken,
   ContainerInfo,
+  SessionWindowInfo,
   RemoteHealth,
   RemoteTargetListItem,
   SshHostCandidate,
@@ -513,6 +514,25 @@ export async function loadSession(id: string): Promise<ChatMessage[]> {
 
 export async function switchSession(id: string): Promise<ChatMessage[]> {
   return invoke('switch_session', { id })
+}
+
+// --- P1-1 session multi-window (frozen backend contract) ---
+
+export async function openSessionWindow(sessionId: string): Promise<SessionWindowInfo> {
+  return invoke('open_session_window', { sessionId })
+}
+
+export async function listSessionWindows(): Promise<SessionWindowInfo[]> {
+  return invoke('list_session_windows')
+}
+
+export async function closeSessionWindow(label: string): Promise<void> {
+  await invoke('close_session_window', { label })
+}
+
+/** Focus the main window and have it switch to `sessionId`. */
+export async function revealSessionInMain(sessionId: string): Promise<void> {
+  await invoke('reveal_session_in_main', { sessionId })
 }
 
 export async function setSessionWorkingDir(id: string, path: string): Promise<void> {

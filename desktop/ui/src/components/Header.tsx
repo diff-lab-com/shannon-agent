@@ -12,6 +12,7 @@ import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates';
 import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal';
 import { useSidebar } from './Layout';
 import * as api from '@/lib/tauri-api';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { toastError } from '@/lib/errorToast';
 import { useSessionBudget } from '@/hooks/useSessionBudget';
 
@@ -43,9 +44,12 @@ export function Header() {
   const location = useLocation();
   const navigate = useNavigate();
   const { status, models, permissionRequest, respondPermission, refreshConfig, refreshStatus } = useCatalog();
-  const { sessions, currentSessionId } = useSessions();
+  const { sessions, currentSessionId, windowSessionId } = useSessions();
   const { contextPanelOpen, toggleContextPanel } = useChat();
   const { toggle: toggleSidebar } = useSidebar();
+  // P1-1 window mode: this window is a dedicated session window (slim
+  // chrome; header carries「在主窗口打开」+「关闭窗口」).
+  const isWindowMode = windowSessionId != null;
   const [modelOpen, setModelOpen] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);
   const [modelFocus, setModelFocus] = useState(-1);
@@ -110,12 +114,27 @@ export function Header() {
     } catch (e) { toastError(t('header.model.failed'), e) }
   }
 
+  // P1-1: focus the main window and have it switch to this window's
+  // session (backend focuses `main` and emits `session-window:reveal`).
+  const handleOpenInMain = () => {
+    if (!windowSessionId) return
+    api.revealSessionInMain(windowSessionId).catch(e => toastError(t('windowMode.openInMain.failed'), e))
+  }
+
+  const handleCloseWindow = () => {
+    // Only ever closes this window's own `session-*` label — the backend
+    // rejects non-session labels.
+    api.closeSessionWindow(getCurrentWindow().label).catch(e => toastError(t('windowMode.close.failed'), e))
+  }
+
   return (
     <>
       <header className="fixed top-0 right-0 z-header flex justify-between items-center h-16 px-lg bg-surface/80 backdrop-blur-md shadow-sm border-b border-outline-variant/10" style={{ left: 'var(--sidebar-w)' }}>
-        <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
-          <span className="material-symbols-outlined icon-lg">menu</span>
-        </Button>
+        {!isWindowMode && (
+          <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
+            <span className="material-symbols-outlined icon-lg">menu</span>
+          </Button>
+        )}
         <div className="flex items-center gap-md relative w-full overflow-hidden">
           {isOpcTask ? (
             <div className="flex items-center gap-2">
@@ -134,6 +153,37 @@ export function Header() {
           )}
         </div>
         <div className="flex items-center gap-lg shrink-0 pl-4 border-l border-outline-variant/20 md:border-none md:pl-0">
+          {/* P1-1 window mode: identify the dedicated window and offer the
+              two window controls from the task brief. */}
+          {isWindowMode && (
+            <div className="flex items-center gap-sm">
+              <span
+                className="hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-[11px] font-bold uppercase tracking-wider"
+                title={t('windowMode.badge.title')}
+              >
+                <span className="material-symbols-outlined text-[14px]" aria-hidden="true">picture_in_picture</span>
+                {t('windowMode.badge')}
+              </span>
+              <Button
+                variant="ghost"
+                aria-label={t('windowMode.openInMain.aria')}
+                title={t('windowMode.openInMain.title')}
+                className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
+                onClick={handleOpenInMain}
+              >
+                <span className="material-symbols-outlined icon-md" aria-hidden="true">open_in_new</span>
+              </Button>
+              <Button
+                variant="ghost"
+                aria-label={t('windowMode.close.aria')}
+                title={t('windowMode.close.title')}
+                className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-error transition-colors"
+                onClick={handleCloseWindow}
+              >
+                <span className="material-symbols-outlined icon-md" aria-hidden="true">close</span>
+              </Button>
+            </div>
+          )}
           {/* ContextPanel toggle — U2, moved here from the retired ChatHeader.
               Only meaningful on /chat, where the panel is mounted. */}
           {isChat && (

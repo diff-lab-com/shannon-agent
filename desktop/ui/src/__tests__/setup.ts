@@ -34,6 +34,20 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(),
 }))
 
+// P1-1 window mode: Layout syncs the native window title via
+// getCurrentWindow().setTitle(). The mocked getCurrentWindow hands out the
+// same `setTitle` spy on every call, so tests can inspect it through
+// `getCurrentWindow().setTitle` after a `mockReset`/`mockClear`.
+vi.mock('@tauri-apps/api/window', () => {
+  const setTitle = vi.fn().mockResolvedValue(undefined)
+  return {
+    getCurrentWindow: vi.fn(() => ({
+      label: 'session-00000000-0000-0000-0000-000000000000',
+      setTitle,
+    })),
+  }
+})
+
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn().mockResolvedValue(null),
   save: vi.fn().mockResolvedValue(null),
@@ -238,6 +252,11 @@ vi.mock('@/lib/tauri-api', () => ({
   loadSession: vi.fn().mockResolvedValue([]),
   switchSession: vi.fn().mockResolvedValue([]),
   setSessionWorkingDir: vi.fn().mockResolvedValue(undefined),
+  // P1-1 session multi-window.
+  openSessionWindow: vi.fn().mockResolvedValue({ label: 'session-1', sessionId: 'session-1' }),
+  listSessionWindows: vi.fn().mockResolvedValue([]),
+  closeSessionWindow: vi.fn().mockResolvedValue(undefined),
+  revealSessionInMain: vi.fn().mockResolvedValue(undefined),
   createSessionWorktree: vi.fn().mockResolvedValue({ task_id: 's-1', task_name: 'Session', path: '/tmp/wt', branch: 'wt-s-1' }),
   deleteSession: vi.fn().mockResolvedValue(true),
   renameSession: vi.fn().mockResolvedValue(true),

@@ -44,6 +44,8 @@ export interface UsagePayload {
   cost_usd: number
   cache_hit_rate?: number
   max_tokens?: number
+  /** P1-1: owner session for multi-window event filtering. */
+  session_id?: string
 }
 
 export interface QueryCompletedPayload {
@@ -64,6 +66,8 @@ export interface PermissionRequest {
   input: unknown
   risk: string
   request_id: string
+  /** P1-1: owner session for multi-window prompt filtering. */
+  session_id?: string
 }
 
 // --- Core Types ---
@@ -389,6 +393,14 @@ export interface TranscriptionResult {
 
 export interface SendMessageResponse {
   query_id: string
+}
+
+// --- Session multi-window (P1-1) ---
+
+/** Result of `open_session_window` / entry of `list_session_windows`. */
+export interface SessionWindowInfo {
+  label: string
+  sessionId: string
 }
 
 // --- Diff Types ---

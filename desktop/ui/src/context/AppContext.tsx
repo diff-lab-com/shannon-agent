@@ -12,6 +12,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { messageFor } from '@/i18n'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type { CheckpointInfo, FeedbackRating } from '@/lib/tauri-api'
@@ -69,6 +70,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  // P1-1 window mode: this webview was opened as a dedicated session window
+  // (`/?windowSession=<id>`). In-memory only — parsed from the URL once,
+  // never persisted, so the main window is unaffected.
+  const [windowSessionId] = useState<string | null>(() => parseWindowSession())
   const [status, setStatus] = useState<StatusResponse | null>(null)
   const [config, setConfig] = useState<DesktopConfig | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
@@ -330,11 +335,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async function register() {
       const handlers = [
         listen(EVENT_NAMES.QUERY_TEXT, (e) => {
-          const p = e.payload as { content: string }
+          const p = e.payload as { content: string; session_id?: string }
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           setStreamingText(prev => prev + p.content)
         }),
         listen(EVENT_NAMES.QUERY_TOOL_START, (e) => {
-          const p = e.payload as { tool_use_id: string; tool_name: string; tool_input: unknown }
+          const p = e.payload as { tool_use_id: string; tool_name: string; tool_input: unknown; session_id?: string }
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           setActiveToolCalls(prev => [...prev, {
             tool_use_id: p.tool_use_id,
             tool_name: p.tool_name,
@@ -343,7 +350,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }])
         }),
         listen(EVENT_NAMES.QUERY_TOOL_RESULT, (e) => {
-          const p = e.payload as { tool_use_id: string; result: string; is_error: boolean }
+          const p = e.payload as { tool_use_id: string; result: string; is_error: boolean; session_id?: string }
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           setActiveToolCalls(prev => prev.map(tc =>
             tc.tool_use_id === p.tool_use_id
               ? { ...tc, result: p.result, is_error: p.is_error, status: p.is_error ? 'error' : 'completed' }
@@ -351,7 +359,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           ))
         }),
         listen(EVENT_NAMES.QUERY_TOOL_PROGRESS, (e) => {
-          const p = e.payload as { tool_use_id: string; progress: number; message: string }
+          const p = e.payload as { tool_use_id: string; progress: number; message: string; session_id?: string }
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           setActiveToolCalls(prev => prev.map(tc =>
             tc.tool_use_id === p.tool_use_id
               ? { ...tc, progress: p.progress, progress_message: p.message }
@@ -359,13 +368,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
           ))
         }),
         listen(EVENT_NAMES.QUERY_THINKING, (e) => {
-          const p = e.payload as { content: string }
+          const p = e.payload as { content: string; session_id?: string }
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           setThinkingText(prev => prev + p.content)
         }),
         listen(EVENT_NAMES.QUERY_USAGE, (e) => {
-          setUsage(e.payload as UsagePayload)
+          const p = e.payload as UsagePayload
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          setUsage(p)
         }),
-        listen(EVENT_NAMES.QUERY_COMPLETED, () => {
+        listen(EVENT_NAMES.QUERY_COMPLETED, (e) => {
+          if (!isEventForCurrentWindow((e.payload as { session_id?: string }).session_id, windowSessionId)) return
           setIsQuerying(false)
           // Commit the streamed text as a finished assistant message. Read
           // via the ref (kept in sync on every render) instead of nesting
@@ -380,17 +393,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
           refreshStatus()
         }),
         listen(EVENT_NAMES.QUERY_FAILED, (e) => {
-          const p = e.payload as { error: string }
+          const p = e.payload as { error: string; session_id?: string }
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           setError(p.error)
           setIsQuerying(false)
           setCurrentQueryId(null)
         }),
-        listen(EVENT_NAMES.QUERY_CANCELLED, () => {
+        listen(EVENT_NAMES.QUERY_CANCELLED, (e) => {
+          if (!isEventForCurrentWindow((e.payload as { session_id?: string }).session_id, windowSessionId)) return
           setIsQuerying(false)
           setCurrentQueryId(null)
         }),
         listen(EVENT_NAMES.PERMISSION_REQUEST, (e) => {
-          setPermissionRequest(e.payload as PermissionRequest)
+          const p = e.payload as PermissionRequest
+          // Window mode: only prompt for this window's own session — a
+          // foreign session's approval dialog must not pop up here.
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          setPermissionRequest(p)
         }),
         listen(EVENT_NAMES.SESSIONS_UPDATED, () => { refreshSessions() }),
         listen(EVENT_NAMES.CONFIG_UPDATED, () => { refreshConfig() }),
@@ -443,7 +462,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       record('refreshAgents', refreshAgents()),
       record('refreshMcpServers', refreshMcpServers()),
       record('refreshBackgroundTasks', refreshBackgroundTasks()),
-      record('getConversation', api.getConversation().then(setMessages)),
+      // P1-1 window mode: auto-switch to the window's own session (instead
+      // of the backend's global active session) and load its messages.
+      record('getConversation', windowSessionId != null
+        ? switchToSession(windowSessionId)
+        : api.getConversation().then(setMessages)),
       record('goalOwnedSessions', api.listGoalRuns().then(runs =>
         setGoalOwnedSessionIds(runs.filter(r => r.status === 'running' || r.status === 'paused').map(r => r.sessionId))
       )),
@@ -451,7 +474,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (failures.length > 0) setInitError(failures[0])
     setLoading(false)
   }, [refreshStatus, refreshConfig, refreshSessions, refreshModels, refreshTasks,
-    refreshAgents, refreshMcpServers, refreshBackgroundTasks])
+    refreshAgents, refreshMcpServers, refreshBackgroundTasks, windowSessionId, switchToSession])
 
   useEffect(() => {
     void loadInitialData()
@@ -465,9 +488,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 
   const sessionValue = useMemo<SessionContextValue>(() => ({
-    sessions, currentSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,
+    sessions, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,
     deleteSession: deleteSessionAction, renameSession: renameSessionAction, refreshSessions,
-  }), [sessions, currentSessionId, createSession, createSessionInWorktree, switchToSession,
+  }), [sessions, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchToSession,
     deleteSessionAction, renameSessionAction, refreshSessions])
 
   const catalogValue = useMemo<CatalogContextValue>(() => ({
