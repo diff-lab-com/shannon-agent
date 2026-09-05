@@ -370,17 +370,18 @@ fn scan_core(source: MigrationSource, roots: &Roots) -> MigrationScanResult {
 }
 
 /// Defensive whitelist: a discovered source path is only usable when its
-/// canonical form stays inside one of the allowed roots. This kills symlink
-/// escapes from e.g. `~/.claude/skills/evil -> /etc` even before any read.
+/// canonical form stays inside one of the **exact source roots** — the probe
+/// directory (`~/.claude` or `~/.zcode`) and the project dir. Deliberately
+/// *not* all of `$HOME`: a symlink like `~/.claude/skills/evil -> ~/notes`
+/// must be rejected, so "somewhere in home" is never good enough. (Fixed-path
+/// files such as `~/.claude.json` never traverse this guard — they are
+/// constructed from known templates, not discovered by traversal.)
 fn is_whitelisted_source(path: &Path, roots: &Roots, source: MigrationSource) -> bool {
     let canonical = match path.canonicalize() {
         Ok(p) => p,
         Err(_) => return false,
     };
-    let mut allowed = vec![roots.project.clone(), roots.source_home(source)];
-    // `~/.claude.json` / `~/.zcode`-adjacent global files sit directly in home.
-    allowed.push(roots.home.clone());
-    allowed
+    [roots.source_home(source), roots.project.clone()]
         .iter()
         .any(|root| canonical.starts_with(root.canonicalize().unwrap_or_else(|_| root.clone())))
 }
@@ -568,6 +569,18 @@ fn scan_skills_dir(
         if !skill_md.is_file() {
             continue;
         }
+        // File-granularity guard: a symlinked SKILL.md must never be opened
+        // (its content feeds the conflict comparison), only reported.
+        if std::fs::symlink_metadata(&skill_md)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            result.errors.push(MigrationScanError {
+                path: skill_md.display().to_string(),
+                error: "refusing to follow symlink — remove it from the source and re-scan".into(),
+            });
+            continue;
+        }
         let Some(name) = skill_dir.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
@@ -672,6 +685,15 @@ fn push_memory_asset(
     } else {
         source.project_memory_file()
     };
+    // Whitelist BEFORE reading content: a symlinked memory file must never be
+    // opened, only rejected.
+    if !is_whitelisted_source(path, roots, source) {
+        result.errors.push(MigrationScanError {
+            path: path.display().to_string(),
+            error: "outside the whitelisted source roots — skipped".into(),
+        });
+        return;
+    }
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
@@ -682,13 +704,6 @@ fn push_memory_asset(
             return;
         }
     };
-    if !is_whitelisted_source(path, roots, source) {
-        result.errors.push(MigrationScanError {
-            path: path.display().to_string(),
-            error: "outside the whitelisted source roots — skipped".into(),
-        });
-        return;
-    }
     let project = roots.project.display().to_string();
     let already = memory_entry_exists(&content, &project, roots);
     let size_hint = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
@@ -1161,17 +1176,56 @@ fn dir_size(dir: &Path) -> u64 {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if let Ok(meta) = std::fs::metadata(&path) {
-                total += meta.len();
+            // symlink_metadata never follows links, so a link contributes only
+            // its own size and a link to a directory is not traversed.
+            match std::fs::symlink_metadata(&path) {
+                Ok(meta) if meta.is_dir() => stack.push(path),
+                Ok(meta) => total += meta.len(),
+                Err(_) => {}
             }
         }
     }
     total
 }
 
+/// Reject symlinks anywhere inside `dir` (including `dir` itself), **before
+/// anything is written**: a source-side link must never make us read or copy
+/// content outside the whitelisted source roots. The affected import fails
+/// with a clear error; the user removes the link and re-imports.
+fn reject_symlinks(dir: &Path) -> Result<(), String> {
+    let meta =
+        std::fs::symlink_metadata(dir).map_err(|e| format!("stat {}: {e}", dir.display()))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!(
+            "refusing to follow symlink {} — remove it from the source and re-import",
+            dir.display()
+        ));
+    }
+    if !meta.is_dir() {
+        return Ok(());
+    }
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let entry_meta = std::fs::symlink_metadata(&path)
+            .map_err(|e| format!("stat {}: {e}", path.display()))?;
+        if entry_meta.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to follow symlink {} — remove it from the source and re-import",
+                path.display()
+            ));
+        }
+        if entry_meta.is_dir() {
+            reject_symlinks(&path)?;
+        }
+    }
+    Ok(())
+}
+
 fn copy_dir_recursive(src: &Path, target: &Path) -> Result<(), String> {
+    // Pre-flight: bail out before any write so a symlink deeper in the tree
+    // can never leave a partially-copied target behind.
+    reject_symlinks(src)?;
     std::fs::create_dir_all(target).map_err(|e| format!("create {}: {e}", target.display()))?;
     let entries = std::fs::read_dir(src).map_err(|e| format!("read {}: {e}", src.display()))?;
     for entry in entries.flatten() {
@@ -1462,6 +1516,114 @@ mod tests {
                 .errors
                 .iter()
                 .any(|e| e.error.contains("whitelisted"))
+        );
+    }
+
+    #[test]
+    fn symlink_into_home_but_outside_source_root_is_rejected() {
+        // The whitelist must be the *exact* source roots (~/.claude, project),
+        // not "anywhere under $HOME": a skills-dir link pointing at another
+        // home location is still an escape.
+        let (_dir, roots) = temp_roots("symlink-home");
+        let stash = roots.home.join("private-notes");
+        write(
+            &stash.join("SKILL.md"),
+            "---\nname: home-evil\n---\nsecret body\n",
+        );
+        let src_home = roots.source_home(MigrationSource::ClaudeCode);
+        std::fs::create_dir_all(src_home.join("skills")).expect("skills dir");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&stash, src_home.join("skills/home-evil")).expect("symlink");
+
+        let result = scan_core(MigrationSource::ClaudeCode, &roots);
+        assert!(
+            !result.items.iter().any(|a| a.kind == "skill"),
+            "home-internal symlink escape must be filtered: {:?}",
+            result.items
+        );
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.error.contains("whitelisted")),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_symlink_inside_skill_is_not_followed_and_import_fails() {
+        // A file-level link inside an otherwise legit skill must not be
+        // followed at apply time: the item fails, nothing is written to the
+        // target (pre-flight rejection → no partial copy), and the linked-to
+        // content never lands in ~/.shannon.
+        let (_dir, roots) = temp_roots("symlink-file");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let secret = outside.path().join("secret.txt");
+        write(&secret, "top secret\n");
+        seed_claude_code(&roots);
+        let skill_dir = roots
+            .source_home(MigrationSource::ClaudeCode)
+            .join("skills/commit");
+        std::os::unix::fs::symlink(&secret, skill_dir.join("notes.md")).expect("symlink");
+
+        // Scan still offers the skill (the top-level dir is real and inside
+        // the whitelist); apply must fail that one item.
+        let scan = scan_core(MigrationSource::ClaudeCode, &roots);
+        assert!(
+            scan.items
+                .iter()
+                .any(|a| a.id == "claude-code:skill:commit")
+        );
+
+        let items = vec![MigrationItemInput {
+            id: "claude-code:skill:commit".into(),
+            action: "import".into(),
+            conflict: None,
+        }];
+        let report = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        assert_eq!(report.imported, 0, "{report:?}");
+        assert_eq!(report.failed.len(), 1);
+        assert!(report.failed[0].id == "claude-code:skill:commit");
+        assert!(
+            report.failed[0].error.contains("symlink"),
+            "error must name the symlink: {}",
+            report.failed[0].error
+        );
+        // Pre-flight rejection: no partial target directory at all.
+        assert!(
+            !shannon_skills_dir(&roots).join("commit").exists(),
+            "no partial copy may be left behind"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn memory_asset_symlink_escape_is_rejected_before_read() {
+        // A project-memory file that is itself a symlink pointing outside the
+        // whitelisted roots: whitelist runs BEFORE the content read, so the
+        // file is rejected (and never read), not imported.
+        let (_dir, roots) = temp_roots("symlink-memory");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let secret = outside.path().join("CLAUDE.md");
+        write(&secret, "stolen instructions\n");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&secret, roots.project.join("CLAUDE.md")).expect("symlink");
+
+        let result = scan_core(MigrationSource::ClaudeCode, &roots);
+        assert!(
+            !result.items.iter().any(|a| a.kind == "memory"),
+            "symlinked memory file must be filtered: {:?}",
+            result.items
+        );
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.error.contains("whitelisted")),
+            "{:?}",
+            result.errors
         );
     }
 
