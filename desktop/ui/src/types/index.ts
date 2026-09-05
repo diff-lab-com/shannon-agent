@@ -1094,9 +1094,27 @@ export const EVENT_NAMES = {
   BUDGET_WARNING: 'budget:warning',
   /** P0-4: budget cap hit — send rejected pre-turn or turn cancelled. */
   BUDGET_EXCEEDED: 'budget:exceeded',
+  /** P1-5 D: PTY output for the integrated terminal (data is base64). */
+  TERMINAL_OUTPUT: 'terminal:output',
 } as const
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]
+
+// --- Integrated terminal (P1-5 D, frozen backend contract) ---
+
+/** One live PTY session (`terminal_list` item / event correlation key). */
+export interface TerminalInfo {
+  terminalId: string
+  projectDir: string
+  shell: string
+  startedAtMs: number
+}
+
+/** `terminal:output` payload — `data` is the raw pty bytes, base64. */
+export interface TerminalOutputPayload {
+  terminalId: string
+  data: string
+}
 
 // --- Inter-agent message history (Phase D C3) ---
 

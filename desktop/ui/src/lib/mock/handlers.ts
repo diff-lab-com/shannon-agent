@@ -7,7 +7,8 @@ import { MOCK_SCHEDULED_ROUTINES, MOCK_TRIGGERED_ROUTINES, MOCK_HOOK_EVENTS, MOC
 import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
-import type { InboxItem, ProviderInput, SessionInfo } from '@/types'
+import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo } from '@/types'
+import { MOCK_TERMINAL_OUTPUT_EVENT } from '@/lib/runtime/terminalEvents'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
 import {
   MOCK_SKILL_CATALOG,
@@ -52,6 +53,56 @@ const demoPreview = {
 const PREVIEW_URL = 'http://localhost:5173'
 // 1x1 transparent PNG so demo capture payloads stay a real image.
 const PREVIEW_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+// P1-5 D: demo PTY sessions + a tiny simulated shell. Output rides the same
+// shape as the real `terminal:output` event (base64 data) re-dispatched as a
+// window CustomEvent — `runtime/terminalEvents.listenTerminalOutput` is the
+// single subscriber that knows about this transport.
+const demoTerminals = new Map<string, TerminalInfo & { buffer: string }>()
+let nextTerminalSeq = 1
+
+function demoTerminalEmit(terminalId: string, text: string) {
+  // base64, exactly like the Rust pump's wire payload
+  const bytes = new TextEncoder().encode(text)
+  let binary = ''
+  bytes.forEach(b => { binary += String.fromCharCode(b) })
+  const data = btoa(binary)
+  setTimeout(() => {
+    window.dispatchEvent(new CustomEvent(MOCK_TERMINAL_OUTPUT_EVENT, {
+      detail: { terminalId, data },
+    }))
+  }, 40 + Math.random() * 60)
+}
+
+/** Toy shell: prompt, echo, pwd, ls (canned), exit; anything else errs. */
+function demoShellRun(terminalId: string, input: string) {
+  const terminal = demoTerminals.get(terminalId)
+  if (!terminal) return
+  terminal.buffer += input
+  // A pty echoes typed input back (line discipline) — simulate it, with
+  // the tty's CRLF translation so xterm's cursor returns to column 0.
+  demoTerminalEmit(terminalId, input.replace(/\n/g, '\r\n'))
+  while (terminal.buffer.includes('\n')) {
+    const line = terminal.buffer.slice(0, terminal.buffer.indexOf('\n')).trim()
+    terminal.buffer = terminal.buffer.slice(terminal.buffer.indexOf('\n') + 1)
+    let out = ''
+    if (line === 'exit') {
+      out = '\r\n\u001b[2m[shannon: process exited — done]\u001b[0m\r\n'
+    } else if (line === '') {
+      out = '$ '
+    } else if (/^echo\b/.test(line)) {
+      out = `${line.replace(/^echo\s+/, '')}\r\n$ `
+    } else if (line === 'pwd') {
+      out = `${terminal.projectDir || '/tmp/demo'}\r\n$ `
+    } else if (line === 'ls') {
+      out = 'src\tpackage.json\r\n$ '
+    } else {
+      out = `sh: command not found: ${line.split(/\s+/)[0]}\r\n$ `
+    }
+    demoTerminalEmit(terminalId, out)
+    if (out.includes('process exited')) demoTerminals.delete(terminalId)
+  }
+}
 
 // P1-2: demo best-of-N batch runs. One running + one finished so the Tasks
 // page batch cards and the compare dialog both have something to show.
@@ -960,6 +1011,50 @@ export const handlers: Record<string, MockHandler> = {
           { tsMs: Date.now(), stream: 'stdout', text: `Local: ${PREVIEW_URL}/` },
         ]
       : []
+  },
+
+  // --- Integrated terminal (P1-5 D, simulated) ---
+  async terminal_spawn(args: { projectDir?: string | null; shell?: string | null }) {
+    await delay()
+    if (demoTerminals.size >= 4) {
+      throw new Error('terminal limit reached (4) — close a terminal before opening another')
+    }
+    const terminalId = `demo-terminal-${nextTerminalSeq}`
+    nextTerminalSeq += 1
+    const info: TerminalInfo & { buffer: string } = {
+      terminalId,
+      projectDir: args?.projectDir || '/tmp/demo-project',
+      shell: args?.shell || '/bin/bash',
+      startedAtMs: Date.now(),
+      buffer: '',
+    }
+    demoTerminals.set(terminalId, info)
+    demoTerminalEmit(terminalId, '$ ')
+    return { terminalId }
+  },
+  async terminal_write(args: { terminalId: string; data: string }) {
+    await delay(10)
+    if (!demoTerminals.has(args.terminalId)) {
+      throw new Error(`no such terminal: ${args.terminalId}`)
+    }
+    demoShellRun(args.terminalId, args.data)
+  },
+  async terminal_resize(_args: { terminalId: string; cols: number; rows: number }) {
+    await delay(10)
+    if (!demoTerminals.has(_args.terminalId)) {
+      throw new Error(`no such terminal: ${_args.terminalId}`)
+    }
+  },
+  async terminal_kill(args: { terminalId: string }) {
+    await delay()
+    const terminal = demoTerminals.get(args.terminalId)
+    if (!terminal) throw new Error(`no such terminal: ${args.terminalId}`)
+    demoTerminals.delete(args.terminalId)
+    return { terminalId: terminal.terminalId, projectDir: terminal.projectDir, shell: terminal.shell, startedAtMs: terminal.startedAtMs }
+  },
+  async terminal_list() {
+    await delay()
+    return [...demoTerminals.values()].map(({ buffer: _buffer, ...info }) => info)
   },
 
   async discard_batch_run(args: { batchId: string }) {

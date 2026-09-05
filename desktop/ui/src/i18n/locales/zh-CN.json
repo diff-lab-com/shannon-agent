@@ -2677,5 +2677,17 @@
   "settings.permissions.editor.addRule": "添加",
   "settings.permissions.editor.removeRule": "移除规则",
   "settings.permissions.editor.cancel": "取消",
-  "settings.permissions.editor.save": "保存配置"
+  "settings.permissions.editor.save": "保存配置",
+  "terminal.title": "终端",
+  "terminal.panel.toggle": "切换终端面板 (Ctrl+`)",
+  "terminal.panel.label": "集成终端",
+  "terminal.panel.close": "关闭终端面板",
+  "terminal.panel.fullHeight": "切换终端全高显示",
+  "terminal.panel.dismissHint": "关闭提示",
+  "terminal.tab.new": "新建终端",
+  "terminal.tab.close": "关闭终端",
+  "terminal.maxReached": "已达终端数量上限（{max}），请先关闭一个",
+  "terminal.historyWarning": "已重新列出存活终端：重连前的输出历史无法恢复。",
+  "terminal.exited": "已结束",
+  "terminal.empty": "没有打开的终端 — 按 + 新建一个"
 }

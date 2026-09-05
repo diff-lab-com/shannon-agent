@@ -38,6 +38,7 @@ import type {
   AgentInfo,
   FileDiff,
   FileNode,
+  TerminalInfo,
   WorkingDirInfo,
   CatalogEntry,
   DataSourceResult,
@@ -1958,4 +1959,33 @@ export async function previewCapture(): Promise<PreviewCaptureResponse> {
 
 export async function previewLogs(limit?: number | null): Promise<PreviewLogLine[]> {
   return invoke('preview_logs', { limit: limit ?? null })
+}
+
+// Integrated terminal (P1-5 D — frozen contract). `data` on the wire is
+// UTF-8 (xterm.js onData output incl. control bytes); PTY output arrives
+// base64-encoded on the `terminal:output` event (see runtime/terminalEvents).
+
+/** Spawn a PTY session rooted at `projectDir` (≤4 live instances). */
+export async function terminalSpawn(projectDir?: string | null, shell?: string): Promise<{ terminalId: string }> {
+  return invoke('terminal_spawn', { projectDir: projectDir ?? null, shell: shell ?? null })
+}
+
+/** Write to the terminal's stdin (keystrokes, paste, control bytes). */
+export async function terminalWrite(terminalId: string, data: string): Promise<void> {
+  await invoke('terminal_write', { terminalId, data })
+}
+
+/** Resize the pty (cols/rows from the fit addon). */
+export async function terminalResize(terminalId: string, cols: number, rows: number): Promise<void> {
+  await invoke('terminal_resize', { terminalId, cols, rows })
+}
+
+/** Kill the terminal's whole process tree. */
+export async function terminalKill(terminalId: string): Promise<void> {
+  await invoke('terminal_kill', { terminalId })
+}
+
+/** Live terminals, oldest first. */
+export async function terminalList(): Promise<TerminalInfo[]> {
+  return invoke('terminal_list')
 }
