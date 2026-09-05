@@ -757,6 +757,7 @@ pub async fn send_message(
         // P0-4 mid-turn budget accounting (see budget_spent_basis above).
         let mut turn_cost_usd: f64 = 0.0;
         let mut budget_warned = false;
+        let mut budget_exceeded_emitted = false;
 
         while let Some(event_result) = pin_stream.next().await {
             // Check for cancellation
@@ -898,15 +899,20 @@ pub async fn send_message(
                         // P0-4 mid-turn budget enforcement: the first Usage
                         // event at/over the cap cancels the turn (the loop
                         // top emits `query:cancelled` and breaks) after
-                        // firing `budget:exceeded`; crossing 80% fires a
-                        // one-shot `budget:warning`. A single event large
-                        // enough to jump straight past 100% emits exceeded
-                        // only — no stray warning.
+                        // firing `budget:exceeded` exactly once (latched —
+                        // events already buffered when the cancel lands
+                        // must not re-emit); crossing 80% fires a one-shot
+                        // `budget:warning`. A single event large enough to
+                        // jump straight past 100% emits exceeded only — no
+                        // stray warning.
                         if let Some(cap) = budget_cap_usd {
                             turn_cost_usd += cost_usd;
                             let spent = budget_spent_basis + turn_cost_usd;
                             match crate::cost_commands::budget_verdict(spent, cap) {
-                                crate::cost_commands::BudgetVerdict::Exceeded => {
+                                crate::cost_commands::BudgetVerdict::Exceeded
+                                    if !budget_exceeded_emitted =>
+                                {
+                                    budget_exceeded_emitted = true;
                                     crate::cost_commands::emit_budget_status(
                                         &app,
                                         false,
