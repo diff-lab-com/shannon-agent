@@ -45,6 +45,7 @@ futures = "0.3"
 tempfile = "3"
 base64 = "0.22"
 dirs = "5"
+gethostname = "1"  # QR pairing endpoint: advertise the desktop as <hostname>.local (§A8b, iOS ATS)
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service"] }
 libc = "0.2"  # macOS launchctl probe (gateway_service_probe::default_probe) + dev e2e
 toml = "0.8"

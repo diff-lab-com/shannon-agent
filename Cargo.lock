@@ -6589,6 +6589,7 @@ dependencies = [
  "dashmap",
  "dirs 5.0.1",
  "futures",
+ "gethostname",
  "hound",
  "keyring",
  "libc",
