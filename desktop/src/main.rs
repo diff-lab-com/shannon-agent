@@ -37,6 +37,7 @@ fn main() {
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
     use shannon_desktop::extensions_commands;
     use shannon_desktop::loopback_api;
+    use shannon_desktop::migration_commands;
     use shannon_desktop::session_window_commands;
     use shannon_desktop::skill_pattern_detection;
     use tauri::{Emitter, Listener, Manager};
@@ -340,6 +341,10 @@ fn main() {
             commands_memory::delete_memory,
             commands_memory::search_memories,
             commands_memory::get_memory_stats,
+            // P1-6 — migration wizard (Claude Code / ZCode → Shannon)
+            migration_commands::migration_scan,
+            migration_commands::migration_preview,
+            migration_commands::migration_apply,
         ])
         // P1-1 — session window lifecycle: a destroyed `session-*` window
         // (titlebar close, close_session_window, OS teardown) drops its
