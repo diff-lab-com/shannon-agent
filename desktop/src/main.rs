@@ -305,6 +305,7 @@ fn main() {
             // Automation: hook-event catalog + custom permission profiles
             shannon_desktop::automation_commands::list_hook_events,
             shannon_desktop::automation_commands::list_permission_profiles,
+            shannon_desktop::automation_commands::activate_permission_profile,
             shannon_desktop::automation_commands::save_custom_profile,
             shannon_desktop::automation_commands::delete_custom_profile,
             shannon_desktop::lsp_commands::lsp_code_actions,

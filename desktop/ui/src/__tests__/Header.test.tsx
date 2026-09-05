@@ -16,6 +16,7 @@ const mockCtx = vi.hoisted(() => ({
   respondPermission: vi.fn(),
   refreshConfig: vi.fn(),
   refreshStatus: vi.fn(),
+  config: { active_permission_profile: 'balanced', approval_mode: 'suggest', sandbox: { mode: 'off' } } as any,
 }))
 
 // U2: Header reads the session slice (title on /chat) and the chat slice
@@ -65,6 +66,7 @@ describe('Header component', () => {
     mockCtx.respondPermission = vi.fn()
     mockCtx.refreshConfig = vi.fn()
     mockCtx.refreshStatus = vi.fn()
+    mockCtx.config = { active_permission_profile: 'balanced', approval_mode: 'suggest', sandbox: { mode: 'off' } }
     mockSessionCtx.sessions = []
     mockSessionCtx.currentSessionId = null
     mockChatCtx.contextPanelOpen = false
@@ -311,5 +313,89 @@ describe('Header — skill candidate badge', () => {
     await waitFor(() => { expect(screen.getByLabelText('Notifications').querySelector('.bg-error')).toBeTruthy() })
     fireEvent.click(screen.getByLabelText('Notifications'))
     await waitFor(() => { expect(screen.getByText('Save as skill?')).toBeInTheDocument() })
+  })
+
+})
+
+// ── P1-3: execution-mode switcher + approval-dialog decision reason ──
+describe('Header — P1-3 execution mode + decision reason', () => {
+  beforeEach(() => {
+    // Top-level describe — the outer beforeEach does not run here, so
+    // re-seed the catalog config slice per test.
+    mockCtx.config = { active_permission_profile: 'balanced', approval_mode: 'suggest', sandbox: { mode: 'off' } }
+    // The skill-candidate describe resets this mock; the Header effect
+    // always calls it, so give it a benign resolved value here.
+    vi.mocked(api.listSkillCandidates).mockResolvedValue([])
+  })
+
+  it('renders the execution-mode switcher on /chat with the current tier', () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' })).toBeInTheDocument()
+  })
+
+  it('does not render the execution-mode switcher on other pages', () => {
+    render(wrap(<Header />, { route: '/tasks' }))
+    expect(screen.queryByRole('button', { name: /Execution mode:/ })).not.toBeInTheDocument()
+  })
+
+  it('shows a custom profile name on the custom tier', () => {
+    mockCtx.config = { ...mockCtx.config, active_permission_profile: 'research-mode' }
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByRole('button', { name: 'Execution mode: Custom: research-mode. Press to change.' })).toBeInTheDocument()
+  })
+
+  it('dispatches activate_permission_profile and refreshes config on tier switch', async () => {
+    vi.mocked(api.activatePermissionProfile).mockResolvedValue({ active: 'strict', approval_mode: 'suggest' })
+    render(wrap(<Header />, { route: '/chat' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Strict' }))
+    await waitFor(() => {
+      expect(api.activatePermissionProfile).toHaveBeenCalledWith('strict')
+      expect(mockCtx.refreshConfig).toHaveBeenCalled()
+    })
+  })
+
+  it('marks the active tier aria-selected in the menu', async () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' }))
+    const balanced = await screen.findByRole('option', { name: 'Balanced' })
+    expect(balanced).toHaveAttribute('aria-selected', 'true')
+    expect(await screen.findByRole('option', { name: 'Strict' })).toHaveAttribute('aria-selected', 'false')
+  })
+
+  // ── P1-3: approval-dialog decision reason ────────────────────────────
+
+  it('shows the matched rule as the reason line', () => {
+    mockCtx.permissionRequest = {
+      request_id: 'p1', tool: 'bash', risk: 'high', input: null,
+      reason: { source: 'rule', ruleName: 'Bash(git push *)', confidence: null },
+    }
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByText('Matched rule: Bash(git push *)')).toBeInTheDocument()
+  })
+
+  it('shows the classifier confidence as the reason line', () => {
+    mockCtx.permissionRequest = {
+      request_id: 'p1', tool: 'bash', risk: 'high', input: null,
+      reason: { source: 'llm', ruleName: null, confidence: 0.91 },
+    }
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByText('Safety classifier — confidence 91%')).toBeInTheDocument()
+  })
+
+  it('falls back to the policy-default wording when no rule name is known', () => {
+    mockCtx.permissionRequest = {
+      request_id: 'p1', tool: 'bash', risk: 'medium', input: null,
+      reason: { source: 'default', ruleName: null, confidence: null },
+    }
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByText('No specific rule matched — policy default')).toBeInTheDocument()
+  })
+
+  it('hides the reason line for legacy payloads without one', () => {
+    mockCtx.permissionRequest = { request_id: 'p1', tool: 'bash', risk: 'high', input: null }
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.queryByText(/Matched rule:/)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Why this prompt was raised')).not.toBeInTheDocument()
   })
 })

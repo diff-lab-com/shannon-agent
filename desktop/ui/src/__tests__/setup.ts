@@ -316,6 +316,12 @@ vi.mock('@/lib/tauri-api', () => ({
   getWebhookConfig: vi.fn().mockResolvedValue(null),
   saveWebhookConfig: vi.fn().mockResolvedValue(undefined),
   clearWebhookConfig: vi.fn().mockResolvedValue(undefined),
+  // P1-3 — permission profiles, execution mode, sandbox.
+  listPermissionProfiles: vi.fn().mockResolvedValue({ builtin: [], custom: [] }),
+  activatePermissionProfile: vi.fn().mockResolvedValue({ active: null, approval_mode: null }),
+  saveCustomProfile: vi.fn().mockResolvedValue({ name: 'p', description: '', auto_approve: [], confirm: [], deny: [] }),
+  deleteCustomProfile: vi.fn().mockResolvedValue([]),
+  listHookEvents: vi.fn().mockResolvedValue([]),
   listPluginMarketplace: vi.fn().mockResolvedValue([]),
   listCatalogUpstreams: vi.fn().mockResolvedValue([]),
   installSkillFromRepo: vi.fn().mockResolvedValue({ id: 'skill-1', name: 'Test Skill', install_path: '/path/to/skill' }),

@@ -1038,8 +1038,25 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
         // must not leak into other sessions).
         let mut tools = shannon_core::tools::ToolRegistry::new();
         let assembly = shannon_remote::assembly::assemble_dynamic();
-        register_default_tools_with_providers(&mut tools, &assembly.providers)
-            .map_err(|e| format!("goal tool registry init failed: {e}"))?;
+        // P1-3: honour the persisted `sandbox.mode` on the unattended path
+        // too — same assembly-time seam as AppState::new.
+        let desktop_cfg = deps.desktop_config.read().await;
+        let sandboxed_providers = match crate::sandbox_assembly::effective_sandbox_providers(
+            desktop_cfg.sandbox.as_ref().and_then(|s| s.mode.as_deref()),
+            desktop_cfg.working_dir.as_deref(),
+            &assembly.providers,
+        ) {
+            Ok(providers) => providers,
+            Err(e) => {
+                tracing::error!("goal run: sandbox disabled, continuing unrestricted: {e}");
+                None
+            }
+        };
+        register_default_tools_with_providers(
+            &mut tools,
+            sandboxed_providers.as_ref().unwrap_or(&assembly.providers),
+        )
+        .map_err(|e| format!("goal tool registry init failed: {e}"))?;
         shannon_tools::goal::register_goal_tools(
             &mut tools,
             Arc::new(RunnerGoalAccess {

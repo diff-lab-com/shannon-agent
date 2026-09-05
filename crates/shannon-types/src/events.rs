@@ -160,6 +160,28 @@ pub struct QueryFailedPayload {
     pub session_id: Option<String>,
 }
 
+/// P1-3: explanation of why a permission prompt was raised. Field names are a
+/// frozen contract (camelCase on the wire): `{ source, ruleName, confidence }`.
+///
+/// `source` is one of `"rule"` (a settings/profile permission rule matched),
+/// `"llm"` (the LLM safety classifier was consulted), or `"default"`
+/// (approval-mode / policy default — nothing more specific is known).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionReason {
+    /// `"rule"` | `"llm"` | `"default"` — kept as a plain string so older
+    /// forward-compatible producers may add sources without breaking parsers.
+    pub source: String,
+    /// Matched rule pattern (e.g. `Bash(git *)`), when the decision came from
+    /// a named rule. `null` when not applicable.
+    #[serde(default)]
+    pub rule_name: Option<String>,
+    /// Classifier confidence in `0.0..=1.0`, when a classifier produced the
+    /// verdict. `null` when not applicable.
+    #[serde(default)]
+    pub confidence: Option<f64>,
+}
+
 /// Permission request for tool execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRequest {
@@ -169,6 +191,12 @@ pub struct PermissionRequest {
     pub request_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// P1-3: why this prompt was raised. Optional + additive — payloads from
+    /// engines that predate this field must keep parsing (`serde(default)`),
+    /// and `None` is skipped on serialize so the wire shape is unchanged
+    /// when no reason is available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<PermissionReason>,
 }
 
 /// Session information for session list.
@@ -410,6 +438,67 @@ mod tests {
         let back: BudgetStatusPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back.session_id, "s1");
         assert!((back.spent_usd - 1.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn legacy_permission_request_without_reason_parses() {
+        // P1-3 backward compat: payloads emitted before the `reason` field
+        // existed must keep deserializing (serde default), and `reason` must
+        // stay absent from the wire when unset.
+        let legacy = r#"{"tool":"bash","input":{"command":"ls"},"risk":"medium",
+            "request_id":"req-1","session_id":"s1"}"#;
+        let req: PermissionRequest = serde_json::from_str(legacy).unwrap();
+        assert_eq!(req.tool, "bash");
+        assert!(req.reason.is_none(), "missing reason must default to None");
+
+        let without_session = r#"{"tool":"bash","input":null,"risk":"low","request_id":"r"}"#;
+        let req: PermissionRequest = serde_json::from_str(without_session).unwrap();
+        assert!(req.reason.is_none());
+        assert!(req.session_id.is_none());
+    }
+
+    #[test]
+    fn permission_reason_is_frozen_camel_case() {
+        let reason = PermissionReason {
+            source: "rule".into(),
+            rule_name: Some("Bash(git *)".into()),
+            confidence: Some(0.82),
+        };
+        let json = serde_json::to_string(&reason).unwrap();
+        assert!(json.contains("\"source\":\"rule\""), "{json}");
+        assert!(json.contains("\"ruleName\""), "{json}");
+        assert!(json.contains("\"confidence\""), "{json}");
+        // Null inner fields stay on the wire (frozen shape: string|null,
+        // number|null) rather than being skipped.
+        let nulls = PermissionReason { source: "default".into(), rule_name: None, confidence: None };
+        let json = serde_json::to_string(&nulls).unwrap();
+        assert!(json.contains("\"ruleName\":null"), "{json}");
+        assert!(json.contains("\"confidence\":null"), "{json}");
+        let back: PermissionReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.source, "default");
+        assert!(back.rule_name.is_none());
+    }
+
+    #[test]
+    fn permission_request_with_reason_round_trips() {
+        let req = PermissionRequest {
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "git status"}),
+            risk: "medium".into(),
+            request_id: "req-9".into(),
+            session_id: None,
+            reason: Some(PermissionReason {
+                source: "llm".into(),
+                rule_name: None,
+                confidence: Some(0.74),
+            }),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"reason\""), "{json}");
+        let back: PermissionRequest = serde_json::from_str(&json).unwrap();
+        let reason = back.reason.expect("reason survives the round trip");
+        assert_eq!(reason.source, "llm");
+        assert!((reason.confidence.unwrap() - 0.74).abs() < 1e-9);
     }
 
     #[test]

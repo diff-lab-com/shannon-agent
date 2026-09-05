@@ -25,6 +25,9 @@ export const MOCK_CONFIG: DesktopConfig = {
   temperature: 0.7,
   max_tokens: 8192,
   plan: 'Pro',
+  // P1-3: execution mode + command sandbox defaults for the demo.
+  active_permission_profile: 'balanced',
+  sandbox: { mode: 'off' },
 }
 
 // Managed-providers roster for the Models P2 UI (mirrors the Rust

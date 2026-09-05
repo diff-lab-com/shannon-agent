@@ -61,6 +61,16 @@ export interface QueryCancelledPayload {
   query_id: string
 }
 
+/** P1-3: why a permission prompt was raised (frozen camelCase wire shape). */
+export interface PermissionReason {
+  /** `rule` (settings/profile rule matched) | `llm` (classifier verdict) | `default`. */
+  source: 'rule' | 'llm' | 'default'
+  /** Matched rule pattern (e.g. `Bash(git *)`), when known. */
+  ruleName: string | null
+  /** Classifier confidence in 0..1, when a classifier decided. */
+  confidence: number | null
+}
+
 export interface PermissionRequest {
   tool: string
   input: unknown
@@ -68,6 +78,8 @@ export interface PermissionRequest {
   request_id: string
   /** P1-1: owner session for multi-window prompt filtering. */
   session_id?: string
+  /** P1-3: why this prompt was raised. Absent on payloads from older engines. */
+  reason?: PermissionReason
 }
 
 // --- Core Types ---
@@ -378,6 +390,21 @@ export interface DesktopConfig {
    *  so a user can keep a cloud key for fallback while local
    *  is the primary. */
   voice_local?: VoiceLocalConfig
+  /** P1-3: active permission profile (builtin id or custom name). Null/unset = plain approval_mode. */
+  active_permission_profile?: string | null
+  /** P1-3: command sandbox config — frozen key path `sandbox.mode`. */
+  sandbox?: SandboxConfig
+}
+
+/** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */
+export interface SandboxConfig {
+  mode?: 'off' | 'local' | 'landlock' | null
+}
+
+/** P1-3: result of `activate_permission_profile`. */
+export interface ActiveProfileStatus {
+  active: string | null
+  approval_mode: string | null
 }
 
 export interface SttConfig {

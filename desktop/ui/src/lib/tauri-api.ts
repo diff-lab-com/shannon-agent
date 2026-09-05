@@ -67,6 +67,7 @@ import type {
   ContextBreakdown,
   HookEventInfo,
   ProfilesList,
+  ActiveProfileStatus,
   CustomProfileInfo,
   OpcMetrics,
   TaskEvaluation,
@@ -1465,6 +1466,18 @@ export async function listHookEvents(): Promise<HookEventInfo[]> {
 
 export async function listPermissionProfiles(): Promise<ProfilesList> {
   return invoke('list_permission_profiles')
+}
+
+/**
+ * P1-3: activate (or deactivate) the session-wide permission profile.
+ * Frozen contract: `activate_permission_profile(name: string|null)`.
+ * Passing `null` clears the active profile; builtin ids and custom profile
+ * names sync `approval_mode` per the mode-switcher mapping.
+ */
+export async function activatePermissionProfile(
+  name: string | null,
+): Promise<ActiveProfileStatus> {
+  return invoke('activate_permission_profile', { name })
 }
 
 export async function saveCustomProfile(payload: {

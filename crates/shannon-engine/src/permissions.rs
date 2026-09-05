@@ -477,20 +477,38 @@ impl PermissionRuleChecker {
 
     /// Check a tool name and optional command against the rules.
     pub fn check(&self, tool_name: &str, command: &str) -> RuleCheckDecision {
+        self.check_with_rule(tool_name, command).0
+    }
+
+    /// Check a tool name and optional command, also returning the matched
+    /// rule pattern (P1-3). The decision semantics are identical to
+    /// [`Self::check`] — the pattern is informational only, surfaced to the
+    /// user as the reason a prompt was raised. `None` when no rule matched
+    /// (or the matcher hit a compiled glob with no raw pattern text).
+    pub fn check_with_rule(
+        &self,
+        tool_name: &str,
+        command: &str,
+    ) -> (RuleCheckDecision, Option<String>) {
         // 1. Deny has highest priority
-        if self.matches_pattern(tool_name, command, &self.deny_raw, &self.deny_globset) {
-            return RuleCheckDecision::Denied;
+        if let Some(rule) =
+            self.match_pattern(tool_name, command, &self.deny_raw, &self.deny_globset)
+        {
+            return (RuleCheckDecision::Denied, rule);
         }
         // 2. Ask is next
-        if self.matches_pattern(tool_name, command, &self.ask_raw, &self.ask_globset) {
-            return RuleCheckDecision::Ask;
+        if let Some(rule) = self.match_pattern(tool_name, command, &self.ask_raw, &self.ask_globset)
+        {
+            return (RuleCheckDecision::Ask, rule);
         }
         // 3. Allow
-        if self.matches_pattern(tool_name, command, &self.allow_raw, &self.allow_globset) {
-            return RuleCheckDecision::Allowed;
+        if let Some(rule) =
+            self.match_pattern(tool_name, command, &self.allow_raw, &self.allow_globset)
+        {
+            return (RuleCheckDecision::Allowed, rule);
         }
         // 4. No rule matched
-        RuleCheckDecision::NoMatch
+        (RuleCheckDecision::NoMatch, None)
     }
 
     /// Check if the raw rules are all empty (nothing to check).
@@ -499,13 +517,18 @@ impl PermissionRuleChecker {
     }
 
     /// Test a tool/command against a set of patterns.
-    fn matches_pattern(
+    ///
+    /// Returns `None` when nothing matched, otherwise `Some(matched_pattern)`
+    /// where the inner option carries the raw pattern text when the match came
+    /// from the raw list (compiled-glob-only matches have no raw text to show).
+    /// Decision semantics are identical to the previous boolean version.
+    fn match_pattern(
         &self,
         tool_name: &str,
         command: &str,
         raw_patterns: &[String],
         globset: &Option<GlobSet>,
-    ) -> bool {
+    ) -> Option<Option<String>> {
         // First check structured patterns (ToolName(cmd_pattern) form)
         for pattern in raw_patterns {
             if let Some((tool_pat, cmd_pat)) = pattern.split_once('(') {
@@ -516,23 +539,23 @@ impl PermissionRuleChecker {
                 }
                 // Check command pattern
                 if cmd_pat == "*" || cmd_pat == "**" || self.command_matches(command, cmd_pat) {
-                    return true;
+                    return Some(Some(pattern.clone()));
                 }
             }
             // Bare tool name or glob-only pattern
             else if pattern.eq_ignore_ascii_case(tool_name) || pattern == "*" {
-                return true;
+                return Some(Some(pattern.clone()));
             }
         }
 
         // Then check globset for plain glob patterns (e.g., "mcp__server__*")
         if let Some(gs) = globset {
             if gs.is_match(tool_name) {
-                return true;
+                return Some(None);
             }
         }
 
-        false
+        None
     }
 
     /// Simple glob matching for command strings.
@@ -547,6 +570,76 @@ impl PermissionRuleChecker {
         } else {
             command.contains(&pattern.replace('*', ""))
         }
+    }
+}
+
+/// Where a permission decision's explanation came from (P1-3).
+///
+/// Purely informational — it never feeds back into the decision itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasonSource {
+    /// A settings/profile permission rule matched (`Bash(git *)`, `mcp__x__*`, …).
+    Rule,
+    /// The LLM safety classifier was consulted and produced the verdict.
+    Llm,
+    /// Nothing more specific is known — approval-mode / policy default.
+    Default,
+}
+
+/// Why a permission prompt was raised. Attached to every
+/// [`PermissionPrompt`] so the desktop approval dialog can show the user
+/// the deciding rule name / classifier confidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecisionReason {
+    pub source: ReasonSource,
+    /// The matched rule pattern, when the decision came from a named rule.
+    pub rule_name: Option<String>,
+    /// Classifier confidence in `0.0..=1.0`, when a classifier decided.
+    pub confidence: Option<f32>,
+}
+
+impl DecisionReason {
+    /// A rule-driven reason: `source = Rule` with the matched pattern.
+    pub fn rule(rule_name: impl Into<String>) -> Self {
+        Self {
+            source: ReasonSource::Rule,
+            rule_name: Some(rule_name.into()),
+            confidence: None,
+        }
+    }
+
+    /// A rule-driven reason that also carries the classifier's confidence.
+    pub fn rule_with_confidence(rule_name: Option<String>, confidence: f32) -> Self {
+        Self {
+            source: ReasonSource::Rule,
+            rule_name,
+            confidence: Some(confidence),
+        }
+    }
+
+    /// An LLM-classifier-driven reason (confidence always known).
+    pub fn llm(confidence: f32) -> Self {
+        Self {
+            source: ReasonSource::Llm,
+            rule_name: None,
+            confidence: Some(confidence),
+        }
+    }
+
+    /// The fallback reason when nothing specific decided the prompt.
+    pub fn default_reason() -> Self {
+        Self {
+            source: ReasonSource::Default,
+            rule_name: None,
+            confidence: None,
+        }
+    }
+}
+
+impl Default for DecisionReason {
+    fn default() -> Self {
+        Self::default_reason()
     }
 }
 
@@ -572,6 +665,10 @@ pub struct PermissionPrompt {
     pub is_destructive: bool,
     /// Explanation of why this risk level was assigned
     pub risk_reason: String,
+    /// P1-3: why this prompt was raised (rule hit / LLM verdict / default).
+    /// Informational only — never consulted when deciding.
+    #[serde(default)]
+    pub reason: DecisionReason,
 }
 
 impl PermissionPrompt {
@@ -592,6 +689,7 @@ impl PermissionPrompt {
             diff_preview: None,
             is_destructive: false,
             risk_reason: String::new(),
+            reason: DecisionReason::default(),
         }
     }
 
@@ -607,6 +705,7 @@ impl PermissionPrompt {
             diff_preview: None,
             is_destructive: false,
             risk_reason: String::new(),
+            reason: DecisionReason::default(),
         }
     }
 
@@ -1130,6 +1229,36 @@ impl PermissionManager {
         )))
     }
 
+    /// Extract the P1-3 decision reason from a rule-classifier verdict.
+    ///
+    /// A named rule match reports `source = Rule` with the rule id and the
+    /// classifier confidence; an unnamed verdict degrades to the default
+    /// reason (no fabrication — the UI falls back to "policy default").
+    fn classifier_reason(
+        result: &crate::permission_classifier::ClassificationResult,
+    ) -> DecisionReason {
+        match &result.matched_rule {
+            Some(rule) => DecisionReason {
+                source: ReasonSource::Rule,
+                rule_name: Some(rule.clone()),
+                confidence: Some(result.confidence),
+            },
+            None => DecisionReason::default_reason(),
+        }
+    }
+
+    /// P1-3: attribute a decision reason from an LLM-classifier outcome.
+    ///
+    /// A consulted LLM verdict reports `source = Llm` with its confidence; a
+    /// non-consulted fallback is attributed to the underlying rule verdict.
+    fn llm_reason(llm_result: &crate::llm_classifier::LlmClassificationResult) -> DecisionReason {
+        if llm_result.llm_consulted {
+            DecisionReason::llm(llm_result.result.confidence)
+        } else {
+            Self::classifier_reason(&llm_result.result)
+        }
+    }
+
     /// Check if a session can execute a tool
     pub fn check_tool_permission(
         &self,
@@ -1351,6 +1480,7 @@ impl PermissionManager {
                 diff_preview: None,
                 is_destructive: self.is_tool_destructive(tool_name),
                 risk_reason: format!("Tool '{tool_name}' is in the always-denied list"),
+                reason: DecisionReason::default(),
             });
         }
 
@@ -1393,6 +1523,7 @@ impl PermissionManager {
             diff_preview: None,
             is_destructive,
             risk_reason: format!("{risk_level:?} risk based on tool policy and approval mode"),
+            reason: DecisionReason::default(),
         })
     }
 
@@ -1495,18 +1626,25 @@ impl PermissionManager {
                 .or_else(|| tool_input.get("path"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            match self.rule_checker.check(tool_name, command) {
+            let (decision, matched_rule) = self.rule_checker.check_with_rule(tool_name, command);
+            match decision {
                 RuleCheckDecision::Denied => {
                     return Err(PermissionError::Denied(format!(
                         "Denied by permission rule: {tool_name}"
                     )));
                 }
                 RuleCheckDecision::Ask => {
+                    let reason = DecisionReason {
+                        source: ReasonSource::Rule,
+                        rule_name: matched_rule,
+                        confidence: None,
+                    };
                     return self.create_permission_prompt_with_risk(
                         tool_name,
                         tool_input,
                         session_id,
                         RiskLevel::Medium,
+                        reason,
                     );
                 }
                 RuleCheckDecision::Allowed => {
@@ -1569,8 +1707,10 @@ impl PermissionManager {
                 }
 
                 // Medium or High risk: prompt user
-                return self
-                    .create_permission_prompt_with_risk(tool_name, tool_input, session_id, risk);
+                let reason = Self::classifier_reason(&result);
+                return self.create_permission_prompt_with_risk(
+                    tool_name, tool_input, session_id, risk, reason,
+                );
             }
             ApprovalMode::Plan => {
                 // If plan is approved for this session, auto-approve all tools
@@ -1632,13 +1772,16 @@ impl PermissionManager {
                 }
 
                 // Otherwise prompt
-                return self
-                    .create_permission_prompt_with_risk(tool_name, tool_input, session_id, risk);
+                let reason = Self::classifier_reason(&result);
+                return self.create_permission_prompt_with_risk(
+                    tool_name, tool_input, session_id, risk, reason,
+                );
             }
         }
 
         // --- Default classifier logic (Suggest / Plan mode path) ---
         let result = self.classifier.classify(tool_name, tool_input);
+        let reason = Self::classifier_reason(&result);
 
         match result.decision {
             crate::permission_classifier::RuleDecision::Deny => {
@@ -1654,6 +1797,7 @@ impl PermissionManager {
                     tool_input,
                     session_id,
                     convert_classifier_risk(result.risk_level),
+                    reason,
                 )
             }
             crate::permission_classifier::RuleDecision::Ask => {
@@ -1663,6 +1807,7 @@ impl PermissionManager {
                     tool_input,
                     session_id,
                     convert_classifier_risk(result.risk_level),
+                    reason,
                 )
             }
         }
@@ -1700,18 +1845,25 @@ impl PermissionManager {
                 .or_else(|| tool_input.get("path"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            match self.rule_checker.check(tool_name, command) {
+            let (decision, matched_rule) = self.rule_checker.check_with_rule(tool_name, command);
+            match decision {
                 RuleCheckDecision::Denied => {
                     return Err(PermissionError::Denied(format!(
                         "Denied by permission rule: {tool_name}"
                     )));
                 }
                 RuleCheckDecision::Ask => {
+                    let reason = DecisionReason {
+                        source: ReasonSource::Rule,
+                        rule_name: matched_rule,
+                        confidence: None,
+                    };
                     return self.create_permission_prompt_with_risk(
                         tool_name,
                         tool_input,
                         session_id,
                         RiskLevel::Medium,
+                        reason,
                     );
                 }
                 RuleCheckDecision::Allowed => return Ok(None),
@@ -1741,6 +1893,11 @@ impl PermissionManager {
         let llm_result = llm.classify(tool_name, tool_input).await;
         let risk = convert_classifier_risk(llm_result.result.risk_level);
 
+        // P1-3: reason attribution — when the LLM actually decided, say so
+        // with its confidence; a non-consulted fallback is attributed to the
+        // underlying rule verdict instead.
+        let reason = Self::llm_reason(&llm_result);
+
         match llm_result.result.decision {
             crate::permission_classifier::RuleDecision::Deny => {
                 Err(PermissionError::Denied(format!(
@@ -1754,22 +1911,29 @@ impl PermissionManager {
                 if risk <= RiskLevel::Low {
                     Ok(None)
                 } else {
-                    self.create_permission_prompt_with_risk(tool_name, tool_input, session_id, risk)
+                    self.create_permission_prompt_with_risk(
+                        tool_name, tool_input, session_id, risk, reason,
+                    )
                 }
             }
-            crate::permission_classifier::RuleDecision::Ask => {
-                self.create_permission_prompt_with_risk(tool_name, tool_input, session_id, risk)
-            }
+            crate::permission_classifier::RuleDecision::Ask => self
+                .create_permission_prompt_with_risk(
+                    tool_name, tool_input, session_id, risk, reason,
+                ),
         }
     }
 
     /// Create a permission prompt with an explicit risk level from classifier.
+    ///
+    /// `reason` (P1-3) is informational — it travels with the prompt so the
+    /// approval dialog can explain why it was raised.
     fn create_permission_prompt_with_risk(
         &self,
         tool_name: &str,
         tool_input: &serde_json::Value,
         session_id: uuid::Uuid,
         risk_level: RiskLevel,
+        reason: DecisionReason,
     ) -> Result<Option<PermissionPrompt>, PermissionError> {
         if self.memory.is_always_allowed(session_id, tool_name) {
             return Ok(None);
@@ -1818,6 +1982,7 @@ impl PermissionManager {
             risk_reason: format!(
                 "{risk_level:?} risk: policy-based classification for '{tool_name}'"
             ),
+            reason,
         }))
     }
 }
@@ -3246,6 +3411,152 @@ mod tests {
             mgr.classify_and_check(sid, "Bash", &serde_json::json!({"command": "git status"}));
         assert!(result.is_ok());
         assert!(result.unwrap().is_none()); // auto-approved
+    }
+
+    // ── P1-3 decision-reason tests ──────────────────────────────────────
+
+    #[test]
+    fn test_decision_reason_constructors_and_serde() {
+        let rule = DecisionReason::rule("Bash(git *)");
+        assert_eq!(rule.source, ReasonSource::Rule);
+        assert_eq!(rule.rule_name.as_deref(), Some("Bash(git *)"));
+        assert!(rule.confidence.is_none());
+
+        let llm = DecisionReason::llm(0.74);
+        assert_eq!(llm.source, ReasonSource::Llm);
+        assert!((llm.confidence.unwrap() - 0.74).abs() < 1e-6);
+
+        assert_eq!(DecisionReason::default(), DecisionReason::default_reason());
+        assert_eq!(
+            serde_json::to_string(&ReasonSource::Rule).unwrap(),
+            "\"rule\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ReasonSource::Llm).unwrap(),
+            "\"llm\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ReasonSource::Default).unwrap(),
+            "\"default\""
+        );
+    }
+
+    #[test]
+    fn test_check_with_rule_returns_matched_pattern() {
+        let ask = vec!["Bash(git push *)".to_string()];
+        let checker = PermissionRuleChecker::from_rule_strings(&[], &ask, &[]);
+        let (decision, rule) = checker.check_with_rule("Bash", "git push origin main");
+        assert_eq!(decision, RuleCheckDecision::Ask);
+        assert_eq!(rule.as_deref(), Some("Bash(git push *)"));
+
+        // No match → no pattern
+        let (decision, rule) = checker.check_with_rule("Bash", "ls");
+        assert_eq!(decision, RuleCheckDecision::NoMatch);
+        assert!(rule.is_none());
+    }
+
+    #[test]
+    fn test_check_with_rule_compiled_glob_only_match_has_no_pattern() {
+        // A plain glob never matches via the raw structured loop — only the
+        // compiled globset hits it, and no raw pattern text is available then.
+        // The decision must be unchanged; only the pattern text is absent.
+        let allow = vec!["mcp__github__*".to_string()];
+        let checker = PermissionRuleChecker::from_rule_strings(&[], &[], &allow);
+        let (decision, rule) = checker.check_with_rule("mcp__github__list_prs", "");
+        assert_eq!(decision, RuleCheckDecision::Allowed);
+        assert!(rule.is_none(), "globset-only match has no raw pattern");
+        // `check` stays decision-identical.
+        assert_eq!(checker.check("mcp__github__list_prs", ""), decision);
+    }
+
+    #[test]
+    fn test_ask_rule_prompt_carries_rule_reason() {
+        let mut mgr = PermissionManager::new();
+        let ask = vec!["Bash(git push *)".to_string()];
+        mgr.set_rule_checker(PermissionRuleChecker::from_rule_strings(&[], &ask, &[]));
+
+        let sid = Uuid::new_v4();
+        let prompt = mgr
+            .classify_and_check(
+                sid,
+                "Bash",
+                &serde_json::json!({"command": "git push origin"}),
+            )
+            .expect("ask rule must not error")
+            .expect("ask rule must prompt");
+        assert_eq!(prompt.reason.source, ReasonSource::Rule);
+        assert_eq!(prompt.reason.rule_name.as_deref(), Some("Bash(git push *)"));
+    }
+
+    #[test]
+    fn test_destructive_tool_prompt_has_default_reason() {
+        let mut mgr = PermissionManager::new();
+        mgr.register_destructive_tool("DangerousTool".to_string());
+        let sid = Uuid::new_v4();
+        let prompt = mgr
+            .create_permission_prompt("DangerousTool", &serde_json::json!({"a": 1}), sid)
+            .expect("destructive tool must prompt");
+        assert_eq!(prompt.reason, DecisionReason::default_reason());
+        assert_eq!(prompt.reason.source, ReasonSource::Default);
+    }
+
+    #[test]
+    fn test_classifier_prompt_reason_matches_classifier_verdict() {
+        // Suggest mode: non-read tool falls through to the rule classifier,
+        // whose verdict the prompt's reason must mirror exactly.
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::Suggest);
+        let sid = Uuid::new_v4();
+        let input = serde_json::json!({"command": "python script.py"});
+        let prompt = mgr
+            .classify_and_check(sid, "Bash", &input)
+            .expect("classification must not error")
+            .expect("bash must prompt in suggest mode");
+        let verdict = mgr.classifier.classify("Bash", &input);
+        assert_eq!(
+            prompt.reason,
+            PermissionManager::classifier_reason(&verdict)
+        );
+    }
+
+    #[test]
+    fn test_llm_reason_attribution_follows_consultation() {
+        use crate::llm_classifier::{LlmClassificationResult, LlmTier};
+        use crate::permission_classifier::{
+            ClassificationResult, RiskLevel as ClassifierRisk, RuleDecision,
+        };
+
+        let verdict = ClassificationResult {
+            decision: RuleDecision::Ask,
+            confidence: 0.42,
+            reason: "uncertain".to_string(),
+            matched_rule: Some("dangerous_pattern".to_string()),
+            risk_level: ClassifierRisk::Medium,
+        };
+
+        // LLM consulted → its confidence wins, source becomes Llm.
+        let consulted = LlmClassificationResult {
+            result: ClassificationResult {
+                confidence: 0.91,
+                ..verdict.clone()
+            },
+            tier: LlmTier::Allow,
+            llm_consulted: true,
+        };
+        let reason = PermissionManager::llm_reason(&consulted);
+        assert_eq!(reason.source, ReasonSource::Llm);
+        assert!((reason.confidence.unwrap() - 0.91).abs() < 1e-6);
+
+        // Not consulted → attributed to the underlying rule verdict.
+        let fallback = LlmClassificationResult {
+            result: verdict,
+            tier: LlmTier::Allow,
+            llm_consulted: false,
+        };
+        let reason = PermissionManager::llm_reason(&fallback);
+        assert_eq!(reason.source, ReasonSource::Rule);
+        assert_eq!(reason.rule_name.as_deref(), Some("dangerous_pattern"));
+        assert!((reason.confidence.unwrap() - 0.42).abs() < 1e-6);
     }
 
     #[test]

@@ -209,6 +209,9 @@ pub mod lsp_commands;
 pub mod automation_commands;
 
 #[cfg(feature = "tauri")]
+pub mod sandbox_assembly;
+
+#[cfg(feature = "tauri")]
 pub mod extensions_commands;
 
 #[cfg(feature = "tauri")]

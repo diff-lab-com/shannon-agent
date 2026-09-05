@@ -24,6 +24,10 @@ const delay = (ms = 80) => new Promise<void>(r => setTimeout(r, ms + Math.random
 const deletedSessions = new Set<string>()
 const renamedSessions = new Map<string, SessionInfo>()
 
+// P1-3: mutable desktop config so execution-mode / sandbox switches in the
+// demo feel live (get_config hands out a fresh clone of this).
+const demoConfig = clone(MOCK_CONFIG)
+
 // Mutable state for "live" feeling during demo
 const state = {
   tasks: clone(MOCK_TASKS),
@@ -160,8 +164,17 @@ export const handlers: Record<string, MockHandler> = {
   async cancel_query() { await delay(30) },
 
   // --- Config ---
-  async get_config() { await delay(); return clone(MOCK_CONFIG) },
-  async configure() { await delay() },
+  async get_config() { await delay(); return clone(demoConfig) },
+  async configure(args: { key: string; value: string }) {
+    await delay()
+    // P1-3: keep the persisted keys the new settings surfaces touch in sync.
+    if (args?.key === 'sandbox.mode') {
+      const mode = String(args.value || 'off') as 'off' | 'local' | 'landlock'
+      demoConfig.sandbox = { mode }
+    } else if (args?.key === 'approval_mode') {
+      demoConfig.approval_mode = args.value
+    }
+  },
 
   // --- Managed providers (Models P2) ---
   async test_provider_connection() {
@@ -712,17 +725,45 @@ export const handlers: Record<string, MockHandler> = {
   // --- Hook events + profiles ---
   async list_hook_events() { await delay(); return clone(MOCK_HOOK_EVENTS) },
   async list_permission_profiles() { await delay(); return clone(MOCK_PROFILES) },
-  async save_custom_profile(args: { name: string }) {
-    await delay(100)
-    return {
-      name: args.name,
-      description: '',
-      auto_approve: [],
-      confirm: [],
-      deny: [],
+  // P1-3: frozen contract — activate_permission_profile(name: string|null).
+  async activate_permission_profile(args: { name: string | null }) {
+    await delay(60)
+    const name = (args?.name ?? '').trim()
+    if (name !== '' && name !== 'strict' && name !== 'balanced' && name !== 'permissive' &&
+        !MOCK_PROFILES.custom.some((c) => c.name === name)) {
+      throw new Error(`unknown permission profile \`${name}\``)
     }
+    demoConfig.active_permission_profile = name === '' ? null : name
+    // Mirror the backend's mode mapping so the demo header reflects it.
+    if (name === 'strict' || name === 'balanced') demoConfig.approval_mode = 'suggest'
+    else if (name === 'permissive') demoConfig.approval_mode = 'auto_edit'
+    return { active: name === '' ? null : name, approval_mode: demoConfig.approval_mode }
   },
-  async delete_custom_profile() { await delay(60); return ['standard', 'relaxed', 'strict'] },
+  async save_custom_profile(args: { name: string; description?: string; auto_approve: string[]; confirm: string[]; deny: string[] }) {
+    await delay(100)
+    const trimmed = args.name.trim()
+    if (trimmed === '') throw new Error('profile name must not be empty')
+    const row = {
+      name: trimmed,
+      description: args.description ?? '',
+      auto_approve: args.auto_approve,
+      confirm: args.confirm,
+      deny: args.deny,
+    }
+    const existing = MOCK_PROFILES.custom.findIndex((c) => c.name === trimmed)
+    if (existing >= 0) MOCK_PROFILES.custom[existing] = row
+    else MOCK_PROFILES.custom.push(row)
+    return clone(row)
+  },
+  async delete_custom_profile(args: { name: string }) {
+    await delay(60)
+    const idx = MOCK_PROFILES.custom.findIndex((c) => c.name === args?.name)
+    if (idx >= 0) MOCK_PROFILES.custom.splice(idx, 1)
+    if (demoConfig.active_permission_profile === args?.name) {
+      demoConfig.active_permission_profile = null
+    }
+    return idx >= 0 ? [`.shannon/profiles/${args.name}.toml`] : []
+  },
 
   // --- OPC analytics ---
   async get_opc_metrics() { await delay(); return clone(MOCK_OPC_METRICS) },

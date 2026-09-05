@@ -336,10 +336,31 @@ impl AppState {
         // remote target can be attached later without a registry rebuild.
         let mut tool_registry = ToolRegistry::new();
         let assembly = shannon_remote::assembly::assemble_dynamic();
+        // P1-3: the persisted `sandbox.mode` config (off|local|landlock)
+        // decorates the execution worlds at assembly time — the same seam
+        // the TUI's env flag feeds. Invalid/unavailable configs degrade
+        // loudly here and run unrestricted (never silently fake-restrict).
+        let sandboxed_providers = match crate::sandbox_assembly::effective_sandbox_providers(
+            desktop_config
+                .sandbox
+                .as_ref()
+                .and_then(|s| s.mode.as_deref()),
+            desktop_config.working_dir.as_deref(),
+            &assembly.providers,
+        ) {
+            Ok(providers) => providers,
+            Err(e) => {
+                tracing::error!("sandbox disabled, continuing unrestricted: {e}");
+                None
+            }
+        };
         let _agent_context = {
             let _ = &assembly;
-            register_default_tools_with_providers(&mut tool_registry, &assembly.providers)
-                .expect("Failed to register default tools")
+            register_default_tools_with_providers(
+                &mut tool_registry,
+                sandboxed_providers.as_ref().unwrap_or(&assembly.providers),
+            )
+            .expect("Failed to register default tools")
         };
 
         Self {
@@ -609,6 +630,15 @@ pub async fn send_message(
     // rules written by "Always allow" in the permission modal) feed the rule
     // checker so previously granted tools stop re-prompting.
     let mut permissions = PermissionManager::new();
+    // P1-3: the active permission profile (strict/balanced/permissive or a
+    // custom `.shannon/profiles/*.toml` name) contributes its rule
+    // side-effects (deny list, active-profile record). The configured
+    // `approval_mode` is applied AFTER so a manual mode edit stays
+    // authoritative over the profile-derived mode.
+    crate::automation_commands::apply_active_profile(
+        &mut permissions,
+        desktop_cfg.active_permission_profile.as_deref(),
+    );
     permissions.set_approval_mode(approval_mode);
     let mut settings = SettingsManager::new();
     if let Err(e) = settings.load_from_files() {
@@ -720,6 +750,23 @@ pub async fn send_message(
     let session_id_for_permissions = session_id_str.clone();
     tokio::spawn(async move {
         use shannon_engine::permissions::PermissionChoice;
+        // P1-3: engine DecisionReason → wire PermissionReason (frozen
+        // camelCase shape) so the approval dialog can show why it fired.
+        fn wire_reason(
+            reason: &shannon_engine::permissions::DecisionReason,
+        ) -> shannon_types::events::PermissionReason {
+            use shannon_engine::permissions::ReasonSource;
+            shannon_types::events::PermissionReason {
+                source: match reason.source {
+                    ReasonSource::Rule => "rule",
+                    ReasonSource::Llm => "llm",
+                    ReasonSource::Default => "default",
+                }
+                .to_string(),
+                rule_name: reason.rule_name.clone(),
+                confidence: reason.confidence.map(f64::from),
+            }
+        }
         while let Some(request) = perm_rx.recv().await {
             let prompt = &request.prompt;
             let risk = match prompt.risk_level {
@@ -737,6 +784,7 @@ pub async fn send_message(
                 risk.to_string(),
                 300,
                 Some(session_id_for_permissions.clone()),
+                Some(wire_reason(&prompt.reason)),
             )
             .await;
             let choice = match decision {
