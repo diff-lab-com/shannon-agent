@@ -380,6 +380,37 @@ impl SessionRegistry {
     pub fn active_key(&self) -> Option<SessionKey> {
         self.active_session.try_lock().ok().and_then(|guard| *guard)
     }
+
+    /// P1-1 (multi-window routing fix): resolve the target session for a
+    /// per-session command (send/cancel).
+    ///
+    /// - `Some(id)` — **explicit routing**: return the named session from
+    ///   the registry; an unknown id is a hard error (the caller surfaces
+    ///   it). Never materialises a session and **never touches the active
+    ///   pointer** — one window resolving its target must not re-route
+    ///   another window's commands.
+    /// - `None` — legacy behavior (unchanged): the active session,
+    ///   materialised lazily on first use.
+    pub fn resolve_explicit_or_active(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<(SessionKey, Arc<SessionState>), String> {
+        match session_id {
+            None => {
+                let state = self.get_or_create_active();
+                Ok((SessionKey(state.session_id), state))
+            }
+            Some(raw) => {
+                let uuid = Uuid::parse_str(raw.trim())
+                    .map_err(|e| format!("invalid sessionId: {e}"))?;
+                let key = SessionKey(uuid);
+                let state = self.get(key).ok_or_else(|| {
+                    format!("unknown session {uuid} — open or switch to it first")
+                })?;
+                Ok((key, state))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -613,5 +644,93 @@ mod tests {
         // streaming.
         s.try_send_event(SessionEvent::Status(SessionEventStatus::Started));
         s.try_send_event(SessionEvent::Status(SessionEventStatus::Cancelled));
+    }
+
+    // === P1-1 fix: explicit per-window send/cancel routing ===
+
+    /// Explicit id routes to THAT session without mutating the active
+    /// pointer — the load-bearing invariant behind per-window sends: one
+    /// window resolving its target must never re-route another window.
+    #[test]
+    fn resolve_explicit_routes_without_touching_active_pointer() {
+        let reg = SessionRegistry::new();
+        let a = reg.get_or_create_active(); // active = A
+        let b_key = SessionKey::new();
+        reg.insert(b_key.0);
+        let b = reg.get(b_key).expect("B registered");
+
+        let (key, resolved) = reg
+            .resolve_explicit_or_active(Some(&b_key.0.to_string()))
+            .expect("known id resolves");
+        assert_eq!(key, b_key);
+        assert!(Arc::ptr_eq(&resolved, &b), "routes to session B");
+        assert!(
+            Arc::ptr_eq(&reg.get_or_create_active(), &a),
+            "active pointer still A — explicit resolution must not promote"
+        );
+        assert_eq!(reg.active_key(), Some(SessionKey(a.session_id)));
+    }
+
+    /// Two "windows" targeting their own sessions get distinct session
+    /// states — writes to one conversation buffer can never land in the
+    /// other's.
+    #[test]
+    fn resolve_explicit_two_windows_route_to_distinct_states() {
+        let reg = SessionRegistry::new();
+        let a_key = SessionKey::new();
+        let b_key = SessionKey::new();
+        reg.insert(a_key.0);
+        reg.insert(b_key.0);
+
+        let (_, a) = reg
+            .resolve_explicit_or_active(Some(&a_key.0.to_string()))
+            .expect("A resolves");
+        let (_, b) = reg
+            .resolve_explicit_or_active(Some(&b_key.0.to_string()))
+            .expect("B resolves");
+
+        assert!(reg.active_key().is_none(), "no active promotion happened");
+        assert_ne!(a.session_id, b.session_id);
+        // Buffer isolation: a message appended to A's buffer must not
+        // appear in B's (both captured Arcs are the live registry states).
+        let msg = crate::commands::ChatMessage {
+            role: "user".into(),
+            content: "for A only".into(),
+            timestamp: 0,
+            file_attachments: None,
+        };
+        a.messages.try_lock().expect("a lock").push(msg);
+        assert!(
+            b.messages.try_lock().expect("b lock").is_empty(),
+            "A's message must not land in B's session state"
+        );
+    }
+
+    #[test]
+    fn resolve_explicit_unknown_or_malformed_id_errors() {
+        let reg = SessionRegistry::new();
+        let never = SessionKey::new();
+        let err = reg
+            .resolve_explicit_or_active(Some(&never.0.to_string()))
+            .err()
+            .expect("unknown-but-valid id must error");
+        assert!(err.contains("unknown session"), "{err}");
+
+        let err = reg
+            .resolve_explicit_or_active(Some("not-a-uuid"))
+            .err()
+            .expect("malformed id must error");
+        assert!(err.contains("invalid sessionId"), "{err}");
+    }
+
+    #[test]
+    fn resolve_none_keeps_legacy_active_fallback() {
+        let reg = SessionRegistry::new();
+        // Empty registry: materialises + promotes (legacy first-call case).
+        let (_, first) = reg.resolve_explicit_or_active(None).expect("materialises");
+        assert_eq!(reg.active_key(), Some(SessionKey(first.session_id)));
+        // Subsequent None calls return the same session.
+        let (_, again) = reg.resolve_explicit_or_active(None).expect("active");
+        assert!(Arc::ptr_eq(&first, &again));
     }
 }

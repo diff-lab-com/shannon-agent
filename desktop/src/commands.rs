@@ -62,9 +62,12 @@ fn plugin_registry_dir() -> std::path::PathBuf {
 pub struct AppState {
     /// Per-session state registry. Holds the active session's messages /
     /// querying flag / cancellation token, plus the "focused" session
-    /// pointer (P0-4 / `query-coordinator-concurrency`). Spike scope: all
-    /// existing single-session command paths resolve the active session
-    /// via `registry.get_or_create_active()`.
+    /// pointer (P0-4 / `query-coordinator-concurrency`). Spike scope: most
+    /// single-session command paths resolve the active session
+    /// via `registry.get_or_create_active()`. P1-1 exception: `send_message`
+    /// and `cancel_query` route explicitly via
+    /// `registry.resolve_explicit_or_active` (multi-window), so they never
+    /// read or move the pointer when a sessionId is supplied.
     pub(crate) registry: Arc<SessionRegistry>,
     /// LLM client config — used to build clients on demand. P1.2-B:
     /// this is the single source of truth for the active `model` /
@@ -443,8 +446,14 @@ impl AppState {
 /// session ID are now sourced from the active session in `state.registry`
 /// instead of from `AppState` directly. The active session is materialised
 /// lazily on first call. The hard-rejection ("A query is already in
-/// progress") now fires per-session rather than globally — multi-session
-/// multiplexing is unlocked but not yet exercised by the UI.
+/// progress") now fires per-session rather than globally.
+///
+/// P1-1 (multi-window routing fix): `session_id` — when provided, the send
+/// is routed to **that** session (registered via `new_session` /
+/// `switch_session`); an unknown id is a hard error and the shared
+/// active-session pointer is **never touched**, so one window's send can no
+/// longer silently land in another window's session. Without the parameter
+/// the legacy active-session fallback applies (back-compat).
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn send_message(
@@ -453,10 +462,14 @@ pub async fn send_message(
     message: String,
     file_paths: Option<Vec<String>>,
     budget_bypass: Option<bool>,
+    session_id: Option<String>,
 ) -> Result<SendMessageResponse, String> {
-    // P0-4: resolve the active session lazily. Falls through to creating
-    // one if the registry is empty (the "first call ever" case).
-    let active_session = state.registry.get_or_create_active();
+    // P1-1: explicit sessionId routes to that session without touching the
+    // shared active pointer; no sessionId keeps the legacy active fallback
+    // (materialises lazily on the "first call ever" case).
+    let (_, active_session) = state
+        .registry
+        .resolve_explicit_or_active(session_id.as_deref())?;
     let session_id = active_session.session_id;
 
     // P0-2: a desktop goal run owns this session while active — a manual

@@ -160,13 +160,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIsQuerying(true)
     setMessages(prev => [...prev, { role: 'user', content: message, timestamp: Date.now() }])
     try {
-      // P1-1 window mode: the backend resolves send_message against the
-      // shared "active session" pointer, so re-point it at this window's
-      // session right before sending (last-writer-wins across windows).
-      if (windowSessionId != null) {
-        await api.switchSession(windowSessionId).catch(e => logSoftFailure('window re-point', e))
-      }
-      const resp = await api.sendMessage(message, filePaths, options?.budgetBypass)
+      // P1-1 fix: explicit session routing — the window targets its own
+      // session, the main window its current one; the backend never routes
+      // via the shared active pointer for these calls. `null` (no session
+      // yet) keeps the backend's legacy active fallback.
+      const targetSessionId = windowSessionId ?? currentSessionId
+      const resp = await api.sendMessage(
+        message,
+        filePaths,
+        options?.budgetBypass,
+        targetSessionId ?? undefined,
+      )
       setCurrentQueryId(resp.query_id)
     } catch (e) {
       setError(String(e))
@@ -174,16 +178,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [currentSessionId, goalOwnedSessionIds, windowSessionId])
 
+  // P1-1 fix: cancelQuery's targetSessionId mirrors sendMessage's — both
+  // route explicitly instead of re-pointing the shared pointer.
   const cancelQuery = useCallback(async () => {
+    const targetSessionId = windowSessionId ?? currentSessionId
     try {
-      // P1-1 window mode: cancel_query targets the shared active session —
-      // re-point it first so this window cancels its own query.
-      if (windowSessionId != null) {
-        await api.switchSession(windowSessionId).catch(e => logSoftFailure('window re-point', e))
-      }
-      await api.cancelQuery()
+      await api.cancelQuery(targetSessionId ?? undefined)
     } catch (e) { toastError('Failed to cancel query', e) }
-  }, [windowSessionId])
+  }, [windowSessionId, currentSessionId])
 
   const createSession = useCallback(async () => {
     try {

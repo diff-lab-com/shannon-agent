@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { AppProvider, useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
@@ -55,10 +55,52 @@ describe('AppContext', () => {
     })
 
     // P0-4: the third arg carries the optional budget-bypass flag.
-    expect(spy).toHaveBeenCalledWith('Hello', undefined, undefined)
+    // P1-1 fix: the fourth arg routes explicitly — no currentSessionId in
+    // this bare render, so undefined keeps the backend active fallback.
+    expect(spy).toHaveBeenCalledWith('Hello', undefined, undefined, undefined)
     expect(result.current.isQuerying).toBe(true)
     expect(result.current.streamingText).toBe('')
     spy.mockRestore()
+  })
+
+  it('sendMessage routes to the current session explicitly (P1-1 fix)', async () => {
+    const newId = '11111111-2222-4333-8444-555555555555'
+    vi.spyOn(api, 'newSession').mockResolvedValue(newId)
+    const sendSpy = vi.spyOn(api, 'sendMessage').mockResolvedValue({ query_id: 'q1' })
+    const { result } = renderHook(() => useApp(), { wrapper })
+
+    await act(async () => {
+      await result.current.createSession()
+    })
+    expect(result.current.currentSessionId).toBe(newId)
+
+    await act(async () => {
+      await result.current.sendMessage('Hello')
+    })
+
+    // The main window names its own active session on every send — the
+    // backend routes via the explicit id, never the shared pointer.
+    expect(sendSpy).toHaveBeenCalledWith('Hello', undefined, undefined, newId)
+    sendSpy.mockRestore()
+  })
+
+  it('cancelQuery routes to the current session explicitly (P1-1 fix)', async () => {
+    const newId = '11111111-2222-4333-8444-555555555555'
+    vi.spyOn(api, 'newSession').mockResolvedValue(newId)
+    const cancelSpy = vi.spyOn(api, 'cancelQuery').mockResolvedValue(undefined)
+    const { result } = renderHook(() => useApp(), { wrapper })
+
+    await act(async () => {
+      await result.current.createSession()
+    })
+    expect(result.current.currentSessionId).toBe(newId)
+
+    await act(async () => {
+      await result.current.cancelQuery()
+    })
+
+    expect(cancelSpy).toHaveBeenCalledWith(newId)
+    cancelSpy.mockRestore()
   })
 
   it('sendMessage handles errors', async () => {

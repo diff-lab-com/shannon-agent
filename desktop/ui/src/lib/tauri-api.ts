@@ -96,11 +96,15 @@ export async function sendMessage(
   message: string,
   filePaths?: string[],
   budgetBypass?: boolean,
+  // P1-1 fix: explicit session routing (multi-window). Undefined keeps the
+  // backend's legacy active-session fallback.
+  sessionId?: string,
 ): Promise<SendMessageResponse> {
   return invoke('send_message', {
     message,
     filePaths: filePaths ?? null,
     budgetBypass: budgetBypass ?? null,
+    sessionId: sessionId ?? null,
   })
 }
 
@@ -108,8 +112,8 @@ export async function getConversation(): Promise<ChatMessage[]> {
   return invoke('get_conversation')
 }
 
-export async function cancelQuery(): Promise<void> {
-  await invoke('cancel_query')
+export async function cancelQuery(sessionId?: string): Promise<void> {
+  await invoke('cancel_query', { sessionId: sessionId ?? null })
 }
 
 // --- Config ---

@@ -76,7 +76,7 @@ mod shannon_desktop_build {
             ("allow-emit", "emit", "This permission allows emitting an event to all targets."),
             // Permission names are kebab-case upstream; the *command* stays
             // `emit_to` (the IPC name the JS API invokes).
-            ("allow-emit-to", "emit_to", "This permission allows emitting an event to all targets."),
+            ("allow-emit-to", "emit_to", "This permission allows emitting an event to a specific target."),
         ] {
             m.permissions.insert(
                 name.to_string(),
