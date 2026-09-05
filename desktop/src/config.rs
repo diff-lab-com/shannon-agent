@@ -582,8 +582,10 @@ mod tests {
         .expect("legacy config must deserialize");
         assert!(legacy.open_session_windows.is_empty());
 
-        let mut config = DesktopConfig::default();
-        config.open_session_windows = vec!["7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1".into()];
+        let config = DesktopConfig {
+            open_session_windows: vec!["7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1".into()],
+            ..Default::default()
+        };
         let json = serde_json::to_string(&config).unwrap();
         let back: DesktopConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(

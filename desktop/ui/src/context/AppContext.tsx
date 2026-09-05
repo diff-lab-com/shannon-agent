@@ -160,17 +160,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIsQuerying(true)
     setMessages(prev => [...prev, { role: 'user', content: message, timestamp: Date.now() }])
     try {
+      // P1-1 window mode: the backend resolves send_message against the
+      // shared "active session" pointer, so re-point it at this window's
+      // session right before sending (last-writer-wins across windows).
+      if (windowSessionId != null) {
+        await api.switchSession(windowSessionId).catch(e => logSoftFailure('window re-point', e))
+      }
       const resp = await api.sendMessage(message, filePaths, options?.budgetBypass)
       setCurrentQueryId(resp.query_id)
     } catch (e) {
       setError(String(e))
       setIsQuerying(false)
     }
-  }, [currentSessionId, goalOwnedSessionIds])
+  }, [currentSessionId, goalOwnedSessionIds, windowSessionId])
 
   const cancelQuery = useCallback(async () => {
-    try { await api.cancelQuery() } catch (e) { toastError('Failed to cancel query', e) }
-  }, [])
+    try {
+      // P1-1 window mode: cancel_query targets the shared active session —
+      // re-point it first so this window cancels its own query.
+      if (windowSessionId != null) {
+        await api.switchSession(windowSessionId).catch(e => logSoftFailure('window re-point', e))
+      }
+      await api.cancelQuery()
+    } catch (e) { toastError('Failed to cancel query', e) }
+  }, [windowSessionId])
 
   const createSession = useCallback(async () => {
     try {
