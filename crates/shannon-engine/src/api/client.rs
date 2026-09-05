@@ -109,7 +109,12 @@ impl LlmClient {
     ///   timeout). `timeout_seconds` is reused as that idle bound — a
     ///   connection that produced nothing for a whole legacy budget is
     ///   stalled by any definition, while a stream that keeps producing
-    ///   chunks is never cut no matter how long the total transfer runs;
+    ///   chunks is never cut no matter how long the total transfer runs.
+    ///   NOTE: this is a per-*read* bound — SSE keepalive bytes (comments,
+    ///   blank lines, pings) keep resetting it, so a response that is
+    ///   byte-alive but content-dead is invisible here. That case is
+    ///   covered by the content-level stream idle watchdog
+    ///   (`SHANNON_STREAM_IDLE_SECS`, see `streaming.rs`), off by default;
     /// - non-streaming requests re-add a total deadline per-request via
     ///   `RequestBuilder::timeout` (see `send_message`), preserving their
     ///   previous end-to-end semantics exactly.

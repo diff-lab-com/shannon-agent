@@ -207,8 +207,12 @@ impl GrepTool {
             None
         } else {
             let match_count = matches.len();
+            // A3: echo the path in the command sandbox's view (e.g.
+            // `/workspace/src/x.rs`) so the model can feed it straight into
+            // a sandboxed Bash command. Identity when output aliasing is off.
+            let display_path = self.sandbox.alias_display_path(path);
             Some(GrepFileMatch {
-                file: path.to_string_lossy().to_string(),
+                file: display_path,
                 matches,
                 match_count,
             })
@@ -365,18 +369,26 @@ impl Tool for GrepTool {
         let search_root = PathBuf::from(search_path);
 
         // Validate search path through sandbox
-        self.sandbox
+        let canonical_root = self
+            .sandbox
             .validate(&search_root)
             .await
             .map_err(|e| ToolError::InvalidInput(format!("Path sandbox: {e}")))?;
 
         // Existence is provider-checked: on a remote world the search root
         // lives on the target, so `Path::exists` would probe the wrong disk.
-        if !self.fs.exists_blocking(&search_root) {
+        // When the raw spelling is missing but the sandbox resolved it (bind
+        // alias addressing like `/workspace/src`), walk the canonical host
+        // root — the companion of the output aliasing in `search_file`.
+        let search_root = if self.fs.exists_blocking(&search_root) {
+            search_root
+        } else if self.fs.exists_blocking(&canonical_root) {
+            canonical_root
+        } else {
             return Err(ToolError::ExecutionFailed(format!(
                 "Path does not exist: {search_path}"
             )));
-        }
+        };
 
         // Traversal, gitignore handling and content reads all follow the
         // injected filesystem world (local by default, SSH/Docker under a
@@ -667,6 +679,73 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    // ── A3: sandbox-visible output paths (docs/eval-findings-2026-09-glm.md) ──
+
+    /// Sandbox wired like the project registration: project root + temp root,
+    /// output aliasing enabled.
+    fn alias_output_sandbox(root: &Path) -> PathSandbox {
+        PathSandbox::with_config(crate::file::sandbox::SandboxConfig {
+            allowed_roots: crate::file::sandbox::SandboxConfig::command_aligned_roots(root),
+            denied_patterns: crate::file::sandbox::SandboxConfig::default_denied_patterns(),
+            strict_mode: true,
+        })
+        .with_bind_alias_output(true)
+    }
+
+    fn alias_grep_fixture() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/a.rs"), "needle here\n").unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn grep_alias_sandbox_echoes_workspace_paths() {
+        let dir = alias_grep_fixture();
+        let tool = GrepTool::with_sandbox(alias_output_sandbox(dir.path()));
+        let host_str = dir.path().to_string_lossy().to_string();
+
+        let output = Tool::execute(
+            &tool,
+            json!({ "pattern": "needle", "path": dir.path().to_string_lossy() }),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            output.content.contains("/workspace/src/a.rs"),
+            "output must show sandbox-visible paths, got: {}",
+            output.content
+        );
+        assert!(
+            !output.content.contains(&host_str),
+            "output must not leak the host path, got: {}",
+            output.content
+        );
+    }
+
+    #[tokio::test]
+    async fn grep_accepts_alias_search_root() {
+        if std::path::Path::new("/workspace").exists() {
+            return; // host really has /workspace — alias addressing is ambiguous
+        }
+        let dir = alias_grep_fixture();
+        let tool = GrepTool::with_sandbox(alias_output_sandbox(dir.path()));
+
+        let output = Tool::execute(
+            &tool,
+            json!({ "pattern": "needle", "path": "/workspace" }),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            output.content.contains("/workspace/src/a.rs"),
+            "grep must walk the alias-resolved root, got: {}",
+            output.content
+        );
+    }
 
     /// Helper to create a temp directory with test files
     fn setup_test_files() -> TempDir {

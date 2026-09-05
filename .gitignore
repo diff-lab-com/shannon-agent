@@ -152,3 +152,5 @@ artifacts/
 
 # Python bytecode (dogfood supervisor)
 __pycache__/
+.eval-bin/
+.eval-bin/

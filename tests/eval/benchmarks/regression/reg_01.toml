@@ -71,14 +71,12 @@ pub fn connect(store: &ProviderStore, incoming: &str) -> String {
 rule = "exit_code"
 value = "success"
 
-[[verify.rules]]
-rule = "file_content"
-path = "src/store.rs"
-contains = "merge"
-
-[[verify.rules]]
-rule = "trajectory_contains"
-sequence = [{ tool = "MultiEdit" }]
+# RCA 2026-09-05 (docs/eval-findings-2026-09-glm.md F1.5/B1): the literal
+# `contains "merge"` and hard MultiEdit trajectory rules killed three runs
+# that carried the semantically correct fix (one with different variable
+# naming, two via single Edit). The script block below already pins the
+# contract (carry-forward + append-on-absent + no clobber); tool choice is a
+# means, not the contract (RCA 2026-08-28 §5).
 
 script = '''
 set -e
@@ -97,7 +95,7 @@ grep -qF 'store.connected.clone()' src/store.rs \
 forbidden_tools = ["Write", "Bash"]
 
 [limits]
-max_turns = 6
+max_turns = 10
 max_tokens = 300000
 timeout_secs = 180
 

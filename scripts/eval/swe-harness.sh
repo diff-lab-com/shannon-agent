@@ -267,6 +267,15 @@ if [ "$SWE_AGENT_HINT" = "1" ]; then
 - After Edit/Write, run a focused verification (e.g. `python3 -m pytest -x
   <test_file>::<test_name>` for the relevant test). This is process guidance,
   not secret info — you're only running tests you already see in the repo.
+- NEVER modify existing test files (anything under `tests/`) or add new
+  tests to make failing tests pass — the grader applies its own canonical
+  test patch and conflicts count as failure. Fix the implementation instead.
+  (batch-11 RCA: 2/17 failures were test-file edits, one of them breaking
+  previously-passing tests)
+- After your edit, run the WHOLE relevant test module (`python3 -m pytest -x
+  <test_file>.py`), not only the target test — a fix that breaks other tests
+  in the module counts as failure. (batch-11 RCA: django-11087 broke 23
+  passing tests while fixing the target)
 - Prefer Grep (not Bash grep) for symbol search; it indexes once and is
   far cheaper on tokens for repeated queries.
 
@@ -277,10 +286,10 @@ if [ "$SMOKE" != "1" ]; then
   mkdir -p "$ws/shannon-home" "$ws/sessions"
   t0=$(date +%s)
   ( cd "$WT" \
-    && SHANNON_HOME="$ws/shannon-home" SHANNON_SESSIONS_DIR="$ws/sessions" \
-       ${SHANNON_TURN_CHECKPOINT:+SHANNON_TURN_CHECKPOINT="$SHANNON_TURN_CHECKPOINT"} \
-       ${SHANNON_TOKEN_BUDGET_WARNING:+SHANNON_TOKEN_BUDGET_WARNING="$SHANNON_TOKEN_BUDGET_WARNING"} \
-       timeout "$AGENT_SECS" "$AGENT" --prompt "$AGENT_PROMPT" \
+    && export SHANNON_HOME="$ws/shannon-home" SHANNON_SESSIONS_DIR="$ws/sessions" \
+              SHANNON_TURN_CHECKPOINT="${SHANNON_TURN_CHECKPOINT:-15}" \
+              SHANNON_TOKEN_BUDGET_WARNING="${SHANNON_TOKEN_BUDGET_WARNING:-true}" \
+    && timeout "$AGENT_SECS" "$AGENT" --prompt "$AGENT_PROMPT" \
        --output-format json --max-turns "$AGENT_MAX_TURNS" \
     > "$ws/agent-out.json" 2> "$ws/agent-err.log" )
   agent_rc=$?

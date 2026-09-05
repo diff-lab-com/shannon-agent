@@ -62,7 +62,10 @@ exec 2> >(tee -a "$LOG" >&2)
 
 HARNESS=/home/ed/workspace/app/work/shannon/shannon-mono/scripts/eval/swe-harness.sh
 COLLECT=/home/ed/workspace/app/work/shannon/shannon-mono/scripts/eval/swe-collect-verdicts.sh
-WRAPPER=/home/ed/workspace/app/work/shannon/shannon-mono/scripts/eval/wrapper-minimax.sh
+# WRAPPER is overridable so a glm batch runs with:
+#   WRAPPER=.../wrapper-glm.sh SWE_KEY_FILE=~/.shannon/credentials/zhipu.json \
+#     MODEL='shannon:shannon-glm-5.3-flash' ./swe-batch-driver.sh
+WRAPPER="${WRAPPER:-/home/ed/workspace/app/work/shannon/shannon-mono/scripts/eval/wrapper-minimax.sh}"
 SMOKE=/home/ed/workspace/app/work/shannon/shannon-mono/scripts/eval/wrapper-pacing-smoke-test.sh
 RETRY_SMOKE=/home/ed/workspace/app/work/shannon/shannon-mono/scripts/eval/driver-retry-resume-smoke-test.sh
 MODEL="${MODEL:-shannon:shannon-minimax-m3}"
@@ -107,8 +110,10 @@ LOG="$OUT_BASE/$LOG_NAME"
 echo "[batch] OUT_BASE=$OUT_BASE  MODEL=$MODEL  PACING_MS=$PACING_MS"
 echo "[batch] RESUME=$RESUME  RL_MAX_RETRIES=$RL_MAX_RETRIES  RL_DELAY_SECS=$RL_DELAY_SECS  SKIP_PROBE=$SKIP_PROBE"
 
-# Pre-flight 1: wrapper pacing smoke test
-if [ "$SKIP_SMOKE" != "1" ]; then
+# Pre-flight 1: wrapper pacing smoke test (minimax default wrapper only —
+# the glm wrapper's pacing block is a line-for-line port and its live
+# provider contact is covered by the quota probe below)
+if [ "$SKIP_SMOKE" != "1" ] && [ "$WRAPPER" = "/home/ed/workspace/app/work/shannon/shannon-mono/scripts/eval/wrapper-minimax.sh" ]; then
   echo
   echo "[batch] pre-flight wrapper pacing smoke test:"
   SMOKE_OUT="$(bash "$SMOKE" 2>&1)"
@@ -146,8 +151,8 @@ if [ "$BIN_MTIME" -lt "$WRAPPER_MTIME" ]; then
   echo "WARN: binary older than wrapper. Rebuild recommended." >&2
 fi
 
-# Pre-flight 4: credentials
-KEY_FILE=~/.shannon/credentials/minimax.json
+# Pre-flight 4: credentials (provider-specific key file via SWE_KEY_FILE)
+KEY_FILE="${SWE_KEY_FILE:-$HOME/.shannon/credentials/minimax.json}"
 [ -r "$KEY_FILE" ] || { echo "FATAL: $KEY_FILE missing" >&2; exit 9; }
 echo "[batch]   credentials: $KEY_FILE readable"
 
