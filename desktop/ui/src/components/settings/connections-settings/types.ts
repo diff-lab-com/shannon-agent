@@ -2,6 +2,8 @@
 // sub-components. No React state, no side effects — kept here so individual
 // sub-components can import them without dragging the orchestrator along.
 
+import type { GatewayProcessState } from '@/types'
+
 // The gateway platforms (mirrors the `Platform` enum in
 // shannon-gateway/src/adapters/types.ts). Order = display order.
 export const PLATFORMS = [
@@ -76,3 +78,62 @@ export const SECRET_MODEL: Record<Platform, SecretSlot[]> = {
 
 // Flatten once for the keyring-presence probe.
 export const ALL_SLOTS = PLATFORMS.flatMap((p) => SECRET_MODEL[p].map((s) => ({ p, s })))
+
+// ── P1-4: IM trigger policy + per-platform status ────────────────────────────
+
+/// Mirrors `AdapterTriggerConfig` in shannon-gateway/src/config/types.ts.
+/// Stored under `GatewayAdapterConfig.options.trigger` (an opaque bag on both
+/// the Rust and TS sides, so it round-trips verbatim) and consumed by the
+/// gateway's router/trigger.ts at inbound time.
+export interface AdapterTriggerConfig {
+  /// "mentionOrPrefix" (default): group chats need @mention or /shannon.
+  groupMode?: 'mentionOrPrefix' | 'any'
+  /// Respond to DMs directly. Default true.
+  dmDirect?: boolean
+  /// Prefix that arms a group message. Default "/shannon".
+  prefix?: string
+}
+
+/** Read `options.trigger`, tolerating missing/wrong shapes. */
+export function readTrigger(options?: Record<string, unknown>): AdapterTriggerConfig {
+  const raw = options?.trigger
+  if (typeof raw !== 'object' || raw === null) return {}
+  const t = raw as Record<string, unknown>
+  return {
+    groupMode: t.groupMode === 'any' ? 'any' : 'mentionOrPrefix',
+    dmDirect: t.dmDirect === false ? false : true,
+  }
+}
+
+/** Merge a trigger config back into an adapter options bag (immutably). */
+export function withTrigger(
+  options: Record<string, unknown> | undefined,
+  trigger: AdapterTriggerConfig,
+): Record<string, unknown> {
+  return { ...(options ?? {}), trigger }
+}
+
+/// Four-state status dot per platform (P1-4): 未配置 / 已配置 / 运行中 / 错误.
+export type PlatformStatus = 'notConfigured' | 'configured' | 'running' | 'error'
+
+type SupervisorStatus = GatewayProcessState['status']
+
+/**
+ * Derive the per-platform status: credentials missing → notConfigured;
+ * adapter disabled (or gateway not up yet) → configured; enabled + supervised
+ * gateway running → running; enabled but the gateway process exited → error.
+ */
+export function platformStatus(args: {
+  hasAllRequiredSecrets: boolean
+  enabled: boolean
+  supervisor: SupervisorStatus
+}): PlatformStatus {
+  if (!args.hasAllRequiredSecrets) return 'notConfigured'
+  if (!args.enabled) return 'configured'
+  if (typeof args.supervisor === 'object' && args.supervisor !== null && 'running' in args.supervisor)
+    return 'running'
+  if (typeof args.supervisor === 'object' && args.supervisor !== null && 'exited' in args.supervisor)
+    return 'error'
+  // stopped / notInstalled: config is valid, waiting for the gateway to start.
+  return 'configured'
+}

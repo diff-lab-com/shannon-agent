@@ -2518,5 +2518,19 @@
   "windowMode.close": "Close Window",
   "windowMode.close.aria": "Close this session window",
   "windowMode.close.title": "Close this session window (the session itself is kept)",
-  "windowMode.close.failed": "Could not close the window"
+  "windowMode.close.failed": "Could not close the window",
+  "settings.connections.status.notConfigured": "Not configured",
+  "settings.connections.status.configured": "Configured",
+  "settings.connections.status.running": "Running",
+  "settings.connections.status.error": "Error",
+  "settings.connections.trigger.groupMention": "Groups need @mention or /shannon",
+  "settings.connections.trigger.groupMentionHint": "When on, group-chat messages only start a task if they @mention the bot or start with the /shannon prefix. When off, every group message starts a task.",
+  "settings.connections.trigger.dmDirect": "Answer DMs directly",
+  "settings.connections.trigger.dmDirectHint": "When on, direct/private messages start a task immediately without any prefix.",
+  "settings.connections.test.button": "Test connection",
+  "settings.connections.test.unsupported": "Not supported in v1: the gateway has no control API yet. Send it a message to verify.",
+  "settings.connections.restart.required": "Restart the gateway to apply the saved changes.",
+  "settings.connections.restart.now": "Restart gateway",
+  "settings.connections.restart.restarted": "Gateway restarted",
+  "settings.connections.secret.set": "Set"
 }
