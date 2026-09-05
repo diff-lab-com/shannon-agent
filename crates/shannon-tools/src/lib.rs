@@ -56,6 +56,7 @@ pub mod mcp_tools;
 pub mod messaging;
 pub mod notebook;
 pub mod plan_mode;
+pub mod preview;
 pub mod pty;
 pub mod remote_trigger;
 pub mod repl_tool;

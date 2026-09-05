@@ -133,6 +133,10 @@ pub struct AppState {
     /// Open session windows — label → session id (P1-1). Mirrored into
     /// `DesktopConfig.open_session_windows` for restart restore.
     pub(crate) session_windows: crate::session_window_commands::SessionWindowRegistry,
+    /// P1-5 C-1 — dev-server preview lifecycle owner (single instance,
+    /// process-group kill on stop/exit, ≤500-line log ring, capture source).
+    /// Also backs the desktop-only `preview_screenshot` engine tool.
+    pub(crate) preview: Arc<crate::preview_commands::PreviewManager>,
     /// SQLite inbox store (`~/.shannon/inbox.db`, P0-3). Lazily opened on
     /// first use so a failing on-disk open degrades to an in-memory store
     /// (with a warning) instead of poisoning every inbox command.
@@ -363,6 +367,19 @@ impl AppState {
             .expect("Failed to register default tools")
         };
 
+        // P1-5 C-1 — dev-server preview manager + the desktop-only
+        // `preview_screenshot` engine tool bound to it. Registration happens
+        // here, NOT in `register_default_tools`, so CLI/headless surfaces
+        // never see the tool (it is meaningless without the desktop panel).
+        let preview = Arc::new(crate::preview_commands::PreviewManager::new());
+        shannon_tools::preview::register_preview_screenshot_tool(
+            &mut tool_registry,
+            Arc::new(crate::preview_commands::ManagerPreviewAccess::new(
+                preview.clone(),
+            )),
+        )
+        .expect("Failed to register preview_screenshot tool");
+
         Self {
             registry: Arc::new(SessionRegistry::new()),
             client_config: Arc::new(RwLock::new(client_config)),
@@ -387,6 +404,7 @@ impl AppState {
             goal_runs: Arc::new(crate::goal_commands::GoalRunRegistry::new()),
             batch_runs: Arc::new(crate::batch_commands::BatchRunRegistry::new()),
             session_windows: crate::session_window_commands::SessionWindowRegistry::default(),
+            preview,
             inbox_store: std::sync::OnceLock::new(),
             usage_store: Arc::new(crate::commands_usage::UsageStore::new()),
             routine_overrides: Arc::new(crate::scheduled_commands::RoutineOverrideStore::new()),

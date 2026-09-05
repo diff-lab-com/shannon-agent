@@ -194,6 +194,12 @@ pub mod goal_commands;
 #[cfg(feature = "tauri")]
 pub mod batch_commands;
 
+/// P1-5 C-1 — dev-server preview: detect/start/stop/status/capture
+/// commands + the `PreviewManager` lifecycle owner (also backs the
+/// desktop-only `preview_screenshot` engine tool).
+#[cfg(feature = "tauri")]
+pub mod preview_commands;
+
 /// P0-4 — cost observability: session budget, context breakdown and
 /// per-session usage aggregation commands.
 #[cfg(feature = "tauri")]

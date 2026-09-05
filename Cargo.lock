@@ -6638,6 +6638,7 @@ dependencies = [
  "dirs 5.0.1",
  "futures",
  "hound",
+ "image",
  "keyring",
  "libc",
  "lsp-types",
@@ -6681,6 +6682,7 @@ dependencies = [
  "url",
  "uuid",
  "whisper-rs",
+ "xcap",
  "zip 2.4.2",
 ]
 
