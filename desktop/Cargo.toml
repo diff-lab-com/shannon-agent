@@ -93,6 +93,13 @@ hound = { version = "3", optional = true }
 xcap = { version = "0.0.13", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 
+# P1-5 D — integrated terminal PTY sessions. Same crate (and version) the
+# engine's interactive-command executor already uses (shannon-tools pty.rs),
+# so no second pty implementation enters the tree; `shell-words` is already
+# a portable-pty transitive dependency (same 1.1.x resolution in the lock).
+portable-pty = "0.8"
+shell-words = "1"
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"

@@ -137,6 +137,9 @@ pub struct AppState {
     /// process-group kill on stop/exit, ≤500-line log ring, capture source).
     /// Also backs the desktop-only `preview_screenshot` engine tool.
     pub(crate) preview: Arc<crate::preview_commands::PreviewManager>,
+    /// P1-5 D — integrated terminal PTY sessions (≤4, process trees owned
+    /// here and killed on app exit; output coalesced ≤16 ms per emit).
+    pub(crate) terminals: Arc<crate::terminal_commands::TerminalManager>,
     /// SQLite inbox store (`~/.shannon/inbox.db`, P0-3). Lazily opened on
     /// first use so a failing on-disk open degrades to an in-memory store
     /// (with a warning) instead of poisoning every inbox command.
@@ -405,6 +408,7 @@ impl AppState {
             batch_runs: Arc::new(crate::batch_commands::BatchRunRegistry::new()),
             session_windows: crate::session_window_commands::SessionWindowRegistry::default(),
             preview,
+            terminals: Arc::new(crate::terminal_commands::TerminalManager::new()),
             inbox_store: std::sync::OnceLock::new(),
             usage_store: Arc::new(crate::commands_usage::UsageStore::new()),
             routine_overrides: Arc::new(crate::scheduled_commands::RoutineOverrideStore::new()),

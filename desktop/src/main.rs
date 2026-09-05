@@ -40,6 +40,7 @@ fn main() {
     use shannon_desktop::preview_commands;
     use shannon_desktop::session_window_commands;
     use shannon_desktop::skill_pattern_detection;
+    use shannon_desktop::terminal_commands;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
         menu::{MenuBuilder, MenuItemBuilder},
@@ -348,6 +349,12 @@ fn main() {
             preview_commands::preview_status,
             preview_commands::preview_capture,
             preview_commands::preview_logs,
+            // P1-5 D — integrated terminal (frozen contract).
+            terminal_commands::terminal_spawn,
+            terminal_commands::terminal_write,
+            terminal_commands::terminal_resize,
+            terminal_commands::terminal_kill,
+            terminal_commands::terminal_list,
         ])
         // P1-1 — session window lifecycle: a destroyed `session-*` window
         // (titlebar close, close_session_window, OS teardown) drops its
@@ -362,6 +369,8 @@ fn main() {
                 // managed AppState is the backstop if this doesn't run).
                 if let Some(state) = window.app_handle().try_state::<commands::AppState>() {
                     preview_commands::shutdown_on_exit(&state);
+                    // P1-5 D — PTY process trees must never outlive the app.
+                    terminal_commands::shutdown_on_exit(&state);
                 }
                 // 主窗口关闭 = 退出应用 (existing semantic, P1-1): persist the
                 // open-session list for next-launch restore, then close the
@@ -385,6 +394,10 @@ fn main() {
         .setup(|app| {
             let mut state = commands::AppState::new();
             state.attach_notification_handler(app.handle().clone());
+            // P1-5 D — the terminal pump emits `terminal:output` through the
+            // AppHandle (attached as early as possible so a shell spawned
+            // before any command runs can already stream).
+            terminal_commands::attach_sink(&state, app.handle().clone());
             app.manage(state);
 
             // P1-1 — reopen the session windows that were open at last

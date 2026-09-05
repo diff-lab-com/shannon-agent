@@ -408,6 +408,13 @@ pub mod event_names {
     /// P2-5e local STT — progress events for whisper-rs model downloads.
     /// Subscribe in the frontend to drive the Settings → Voice download bar.
     pub const VOICE_MODEL_DOWNLOAD_PROGRESS: &str = "voice:model-download-progress";
+    /// P1-5 D: PTY output pushed from the integrated terminal's shell to the
+    /// xterm.js panel. Payload: `{ terminalId, data }` where `data` is the
+    /// raw PTY byte stream **base64-encoded** (byte-preserving — the
+    /// frontend decodes with TextDecoder/atob before writing to xterm).
+    /// Emitted by `desktop/src/terminal_commands.rs`; coalesced to at most
+    /// one event per 16 ms per terminal.
+    pub const TERMINAL_OUTPUT: &str = "terminal:output";
 }
 
 #[cfg(test)]
@@ -470,7 +477,11 @@ mod tests {
         assert!(json.contains("\"confidence\""), "{json}");
         // Null inner fields stay on the wire (frozen shape: string|null,
         // number|null) rather than being skipped.
-        let nulls = PermissionReason { source: "default".into(), rule_name: None, confidence: None };
+        let nulls = PermissionReason {
+            source: "default".into(),
+            rule_name: None,
+            confidence: None,
+        };
         let json = serde_json::to_string(&nulls).unwrap();
         assert!(json.contains("\"ruleName\":null"), "{json}");
         assert!(json.contains("\"confidence\":null"), "{json}");
