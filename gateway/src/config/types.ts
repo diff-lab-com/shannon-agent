@@ -25,6 +25,11 @@ export interface AdapterConfig {
    * Platform-specific NON-SECRET options, opaque to the gateway core. The
    * adapter factory reads what it needs (app id, team id, webhook path, ...).
    * Tokens go in `secrets`, never here.
+   *
+   * P1-4: `options.trigger` (an `AdapterTriggerConfig`) configures when an
+   * inbound message arms a task — group chats need a mention or a prefix,
+   * DMs answer directly. Kept inside the opaque `options` bag so the desktop
+   * (and any other config writer) round-trips it verbatim.
    */
   options?: Record<string, unknown>;
   /**
@@ -34,11 +39,46 @@ export interface AdapterConfig {
   secrets?: Record<string, string>;
 }
 
+/**
+ * P1-4 inbound trigger policy, one per adapter. Lives in
+ * `AdapterConfig.options.trigger` (opaque options bag).
+ */
+export interface AdapterTriggerConfig {
+  /**
+   * Group-chat policy: `"mentionOrPrefix"` (default) requires a platform
+   * @mention of the bot or the trigger prefix; `"any"` answers every group
+   * message.
+   */
+  groupMode?: "mentionOrPrefix" | "any";
+  /** Respond to DMs / private chats directly. Default true. */
+  dmDirect?: boolean;
+  /** Prefix that arms a group message. Default `"/shannon"`. */
+  prefix?: string;
+  /**
+   * Extra @names that count as a bot mention (matched as `@name` tokens in the
+   * text) — useful on platforms without native mention markers.
+   */
+  mentionNames?: string[];
+}
+
+/**
+ * P1-4 IM-channel integration switches (gateway-level, `config.im`).
+ */
+export interface ImChannelConfig {
+  /**
+   * Push 任务开始/完成/失败 lifecycle stamps back to the IM channel around
+   * each turn. Default true.
+   */
+  taskLifecycle?: boolean;
+}
+
 export interface GatewayConfig {
   engine: EngineConfig;
   adapters: AdapterConfig[];
   /** Log level. Default "info". */
   logLevel?: LogLevel;
+  /** IM channel behaviour (P1-4). Defaults resolve in bootstrap. */
+  im?: ImChannelConfig;
   /**
    * Inbound mobile `shannon/*` server (Option B mobile adapter). Optional and
    * off by default; the desktop enables it in the gateway config it writes.

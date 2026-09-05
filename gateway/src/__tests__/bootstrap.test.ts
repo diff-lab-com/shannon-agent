@@ -86,7 +86,7 @@ const baseConfig: GatewayConfig = {
 };
 
 describe("bootstrap", () => {
-  it("wires inbound → router → engine → reply end-to-end", async () => {
+  it("wires inbound → trigger gate → router → engine → reply end-to-end", async () => {
     const adapter = mockAdapter();
     const factory: AdapterFactory = () => adapter;
     const client = mockEngineClient([
@@ -110,17 +110,89 @@ describe("bootstrap", () => {
       senderName: "ed",
       text: "hi",
       timestamp: Date.now(),
+      isDirect: true, // DM → direct response under the P1-4 trigger policy
     });
 
     // onMessage is sync-void; the turn resolves asynchronously in the lane.
     await vi.waitFor(() => {
       expect(adapter.sent.length).toBeGreaterThan(0);
     });
-    expect(adapter.sent[0]?.text).toBe("hello world");
-    expect(adapter.sent[0]?.target.chatId).toBe("C1");
+    // P1-4 lifecycle stamps wrap the engine answer: start, answer, completed.
+    expect(adapter.sent.map((s) => s.text)).toEqual([
+      "🚀 已开始任务：hi",
+      "hello world",
+      "✅ 任务完成：hi",
+    ]);
+    expect(adapter.sent[1]?.target.chatId).toBe("C1");
 
     await handle.stop();
     expect(adapter.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a group message with no mention/prefix (P1-4 trigger policy)", async () => {
+    const adapter = mockAdapter();
+    const client = mockEngineClient([{ type: "completed", model: "mock" }]);
+    const handle = await bootstrap(baseConfig, {
+      factories: new Map([["slack", () => adapter]]),
+      engineClientFactory: () => client,
+      logger: noopLogger,
+    });
+
+    adapter.pushInbound({
+      platform: "slack",
+      chatId: "C1",
+      senderId: "U1",
+      senderName: "ed",
+      text: "just chatting",
+      timestamp: Date.now(),
+      // isDirect absent → group; no <@…> mention, no /shannon prefix → ignored
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(adapter.sent).toEqual([]);
+
+    // The /shannon prefix arms it, and the prefix is stripped from the prompt.
+    adapter.pushInbound({
+      platform: "slack",
+      chatId: "C1",
+      senderId: "U1",
+      senderName: "ed",
+      text: "/shannon 帮我写周报",
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(adapter.sent.length).toBeGreaterThan(0));
+    expect(adapter.sent[0]?.text).toBe("🚀 已开始任务：帮我写周报");
+
+    await handle.stop();
+  });
+
+  it("keeps the answer first when im.taskLifecycle is off (opt-out)", async () => {
+    const adapter = mockAdapter();
+    const client = mockEngineClient([
+      { type: "text", content: "plain answer" },
+      { type: "completed", model: "mock" },
+    ]);
+    const handle = await bootstrap(
+      { ...baseConfig, im: { taskLifecycle: false } },
+      {
+        factories: new Map([["slack", () => adapter]]),
+        engineClientFactory: () => client,
+        logger: noopLogger,
+      },
+    );
+
+    adapter.pushInbound({
+      platform: "slack",
+      chatId: "C1",
+      senderId: "U1",
+      senderName: "ed",
+      text: "hi",
+      timestamp: Date.now(),
+      isDirect: true,
+    });
+    await vi.waitFor(() => expect(adapter.sent.length).toBeGreaterThan(0));
+    expect(adapter.sent.map((s) => s.text)).toEqual(["plain answer"]);
+
+    await handle.stop();
   });
 
   it("throws when an enabled adapter has no factory registered", async () => {

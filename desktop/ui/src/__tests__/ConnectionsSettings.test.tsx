@@ -15,8 +15,8 @@ describe('ConnectionsSettings', () => {
     await waitFor(() => expect(screen.getByText('Social Connections')).toBeInTheDocument())
     expect(screen.getByText('Slack')).toBeInTheDocument()
     expect(screen.getByText('DingTalk (钉钉)')).toBeInTheDocument()
-    // gatewayHasSecret defaults to false for every platform.
-    await waitFor(() => expect(screen.getAllByText('No credential').length).toBe(8))
+    // P1-4 status model: no credentials stored → every platform is 未配置.
+    await waitFor(() => expect(screen.getAllByText('Not configured').length).toBe(8))
   })
 
   it('stores the platform credential in the OS keyring on save', async () => {
@@ -39,7 +39,10 @@ describe('ConnectionsSettings', () => {
     })
     render(<ConnectionsSettings />)
     await waitFor(() => expect(screen.getByTestId('connection-telegram')).toBeInTheDocument())
-    fireEvent.click(within(screen.getByTestId('connection-telegram')).getByRole('switch'))
+    // P1-4: three switches per row now (enable + 2 trigger toggles) — pick by name.
+    fireEvent.click(
+      within(screen.getByTestId('connection-telegram')).getByRole('switch', { name: 'Enable' }),
+    )
     await waitFor(() => expect(writeSpy).toHaveBeenCalled())
     const written = writeSpy.mock.calls[0]![0]
     expect(written.adapters).toEqual(
@@ -82,7 +85,9 @@ describe('ConnectionsSettings', () => {
     })
     render(<ConnectionsSettings />)
     await waitFor(() => expect(screen.getByTestId('connection-slack')).toBeInTheDocument())
-    fireEvent.click(within(screen.getByTestId('connection-slack')).getByRole('switch'))
+    fireEvent.click(
+      within(screen.getByTestId('connection-slack')).getByRole('switch', { name: 'Enable' }),
+    )
     await waitFor(() => expect(writeSpy).toHaveBeenCalled())
     const written = writeSpy.mock.calls[0]![0]
     expect(written.adapters).toEqual(
@@ -110,12 +115,15 @@ describe('ConnectionsSettings', () => {
     expect(setSpy).toHaveBeenCalledWith('slack/signing-secret', 'shh')
   })
 
-  it('marks every platform connected once all required slots are stored', async () => {
+  it('marks every platform Configured once all required slots are stored', async () => {
     vi.spyOn(api, 'gatewayHasSecret').mockResolvedValue(true)
     render(<ConnectionsSettings />)
-    await waitFor(() => expect(screen.getAllByText('Credential stored').length).toBe(8))
-    expect(screen.queryAllByText('No credential').length).toBe(0)
+    // Gateway supervisor mock is "stopped", so stored credentials read as
+    // Configured (ready) rather than Running for all eight platforms.
+    await waitFor(() => expect(screen.getAllByText('Configured').length).toBe(8))
+    expect(screen.queryAllByText('Not configured').length).toBe(0)
   })
+
 
   // ── E-1 方案 C — gateway process lifecycle card ────────────────────────────
 
@@ -225,4 +233,201 @@ describe('ConnectionsSettings', () => {
       expect(screen.queryByTestId('mobile-device-dev-1')).not.toBeInTheDocument(),
     )
   })
+  // ── P1-4 — per-platform status dot ──────────────────────────────────────────
+
+  it('shows Running for an enabled, fully-configured platform while the gateway runs', async () => {
+    vi.spyOn(api, 'gatewaySupervisorStatus').mockResolvedValue({
+      managed: true,
+      status: { running: { pid: 42 } },
+    })
+    vi.spyOn(api, 'gatewayHasSecret').mockResolvedValue(true)
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [
+        { platform: 'telegram', enabled: true, secrets: { botToken: 'telegram/bot-token' } },
+      ],
+    })
+    render(<ConnectionsSettings />)
+    const row = await screen.findByTestId('connection-telegram')
+    await waitFor(() => expect(within(row).getByText('Running')).toBeInTheDocument())
+    expect(within(row).getByTestId('connection-status-telegram')).toBeInTheDocument()
+  })
+
+  it('shows Error for an enabled platform after the gateway process exited', async () => {
+    vi.spyOn(api, 'gatewaySupervisorStatus').mockResolvedValue({
+      managed: true,
+      status: { exited: { code: 1 } },
+    })
+    vi.spyOn(api, 'gatewayHasSecret').mockResolvedValue(true)
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [
+        { platform: 'telegram', enabled: true, secrets: { botToken: 'telegram/bot-token' } },
+      ],
+    })
+    render(<ConnectionsSettings />)
+    const row = await screen.findByTestId('connection-telegram')
+    await waitFor(() => expect(within(row).getByText('Error')).toBeInTheDocument())
+  })
+
+  // ── P1-4 — credentials never echoed ─────────────────────────────────────────
+
+  it('never echoes a stored credential into the form', async () => {
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [],
+    })
+    vi.spyOn(api, 'gatewayHasSecret').mockResolvedValue(true)
+    render(<ConnectionsSettings />)
+    const row = await screen.findByTestId('connection-telegram')
+    const input = within(row).getByLabelText('Bot token — Telegram') as HTMLInputElement
+    // type=password + empty value: presence is probed, the secret value never
+    // crosses back into the webview.
+    expect(input.getAttribute('type')).toBe('password')
+    expect(input.value).toBe('')
+  })
+
+  // ── P1-4 — inbound trigger policy toggles ───────────────────────────────────
+
+  it('persists group @mention trigger policy into options.trigger', async () => {
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [],
+    })
+    const writeSpy = vi
+      .spyOn(api, 'gatewayWriteConfig')
+      .mockImplementation((cfg) => Promise.resolve(cfg))
+    render(<ConnectionsSettings />)
+    const row = await screen.findByTestId('connection-telegram')
+    // Enable first — the trigger toggles only apply to an existing adapter entry.
+    fireEvent.click(within(row).getByRole('switch', { name: 'Enable' }))
+    const groupSwitch = await within(row).findByRole<'switch'>('switch', {
+      name: 'Groups need @mention or /shannon',
+    })
+    await waitFor(() => expect(groupSwitch).not.toHaveAttribute('aria-disabled', 'true'))
+    fireEvent.click(groupSwitch)
+    await waitFor(() => {
+      const last = writeSpy.mock.calls.at(-1)![0] as {
+        adapters: Array<{ platform: string; options?: { trigger?: Record<string, unknown> } }>
+      }
+      const tg = last.adapters.find((a) => a.platform === 'telegram')!
+      expect(tg.options?.trigger).toEqual({ groupMode: 'any' })
+    })
+  })
+
+  it('persists dmDirect:false when DM direct response is switched off', async () => {
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [],
+    })
+    const writeSpy = vi
+      .spyOn(api, 'gatewayWriteConfig')
+      .mockImplementation((cfg) => Promise.resolve(cfg))
+    render(<ConnectionsSettings />)
+    const row = await screen.findByTestId('connection-telegram')
+    fireEvent.click(within(row).getByRole('switch', { name: 'Enable' }))
+    const dmSwitch = await within(row).findByRole<'switch'>('switch', {
+      name: 'Answer DMs directly',
+    })
+    await waitFor(() => expect(dmSwitch).not.toHaveAttribute('aria-disabled', 'true'))
+    fireEvent.click(dmSwitch)
+    await waitFor(() => {
+      const last = writeSpy.mock.calls.at(-1)![0] as {
+        adapters: Array<{ platform: string; options?: { trigger?: Record<string, unknown> } }>
+      }
+      const tg = last.adapters.find((a) => a.platform === 'telegram')!
+      expect(tg.options?.trigger).toEqual({ dmDirect: false })
+    })
+  })
+
+  it('preserves hand-edited trigger keys (prefix, mentionNames) across toggle writes', async () => {
+    // The docs teach setting options.trigger.prefix by hand — the UI switches
+    // must only own groupMode/dmDirect and never wipe the rest (fix round 1).
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [
+        {
+          platform: 'telegram',
+          enabled: true,
+          secrets: { botToken: 'telegram/bot-token' },
+          options: { trigger: { prefix: '/sh', mentionNames: ['shannon-bot'] } },
+        },
+      ],
+    })
+    const writeSpy = vi
+      .spyOn(api, 'gatewayWriteConfig')
+      .mockImplementation((cfg) => Promise.resolve(cfg))
+    render(<ConnectionsSettings />)
+    const row = await screen.findByTestId('connection-telegram')
+    const dmSwitch = within(row).getByRole('switch', { name: 'Answer DMs directly' })
+    fireEvent.click(dmSwitch)
+    await waitFor(() => {
+      const last = writeSpy.mock.calls.at(-1)![0] as {
+        adapters: Array<{ platform: string; options?: { trigger?: Record<string, unknown> } }>
+      }
+      const tg = last.adapters.find((a) => a.platform === 'telegram')!
+      expect(tg.options?.trigger).toMatchObject({
+        // hand-edited keys survive…
+        prefix: '/sh',
+        mentionNames: ['shannon-bot'],
+        // …while the toggled switch is updated (groupMode normalized to the
+        // gateway default, which is semantically identical to its absence).
+        groupMode: 'mentionOrPrefix',
+        dmDirect: false,
+      })
+    })
+  })
+
+  it('keeps the trigger toggles disabled until the platform has an adapter entry', async () => {
+    // Spies leak across tests in this file (no beforeEach restore by convention),
+    // so pin the state this test needs: no adapter entries, nothing configured.
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [],
+    })
+    render(<ConnectionsSettings />)
+    const row = await screen.findByTestId('connection-telegram')
+    const groupSwitch = within(row).getByRole('switch', {
+      name: 'Groups need @mention or /shannon',
+    })
+    // Base UI renders the switch as a span with aria-disabled — jest-dom's
+    // toBeDisabled() only understands form-control semantics.
+    const expectAriaDisabled = (el: HTMLElement) =>
+      expect(el).toHaveAttribute('aria-disabled', 'true')
+    expectAriaDisabled(groupSwitch)
+    expectAriaDisabled(within(row).getByRole('switch', { name: 'Answer DMs directly' }))
+  })
+
+  // ── P1-4 — reload semantics + test-connection ───────────────────────────────
+
+  it('offers a one-click gateway restart after a change while the gateway runs', async () => {
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [],
+    })
+    vi.spyOn(api, 'gatewaySupervisorStatus').mockResolvedValue({
+      managed: true,
+      status: { running: { pid: 42 } },
+    })
+    const stopSpy = vi
+      .spyOn(api, 'gatewaySupervisorStop')
+      .mockResolvedValue({ managed: true, status: 'stopped' })
+    const startSpy = vi
+      .spyOn(api, 'gatewaySupervisorStart')
+      .mockResolvedValue({ managed: true, status: { running: { pid: 43 } } })
+    render(<ConnectionsSettings />)
+    const row = await screen.findByTestId('connection-telegram')
+    fireEvent.click(within(row).getByRole('switch', { name: 'Enable' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Restart gateway' }))
+    await waitFor(() => expect(startSpy).toHaveBeenCalled())
+    expect(stopSpy).toHaveBeenCalled()
+  })
+
+  it('marks test-connection as unsupported for now', async () => {
+    render(<ConnectionsSettings />)
+    const row = await screen.findByTestId('connection-telegram')
+    const btn = within(row).getByRole('button', { name: 'Test connection' })
+    expect(btn).toBeDisabled()
+  })
+
 })

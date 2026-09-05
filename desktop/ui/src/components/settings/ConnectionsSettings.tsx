@@ -106,6 +106,7 @@ export default function ConnectionsSettings() {
         hasSecret={hasSecret}
         drafts={drafts}
         saving={saving}
+        procState={procState}
         onDraftChange={(key, value) => setDrafts((d) => ({ ...d, [key]: value }))}
         onSavedDrafts={(keys) =>
           setDrafts((d) => {
@@ -117,6 +118,7 @@ export default function ConnectionsSettings() {
         onSavingChange={setSaving}
         onConfigChange={setConfig}
         onHasSecretChange={setHasSecret}
+        onProcStateChange={setProcState}
       />
     </div>
   )

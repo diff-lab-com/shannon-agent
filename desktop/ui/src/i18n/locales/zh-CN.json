@@ -2659,4 +2659,19 @@
   "settings.permissions.editor.removeRule": "移除规则",
   "settings.permissions.editor.cancel": "取消",
   "settings.permissions.editor.save": "保存配置"
+,
+  "settings.connections.status.notConfigured": "未配置",
+  "settings.connections.status.configured": "已配置",
+  "settings.connections.status.running": "运行中",
+  "settings.connections.status.error": "错误",
+  "settings.connections.trigger.groupMention": "群聊需 @提及 或 /shannon",
+  "settings.connections.trigger.groupMentionHint": "开启后，群聊消息只有 @机器人 或以 /shannon 开头才会创建任务；关闭后任何群聊消息都会创建任务。",
+  "settings.connections.trigger.dmDirect": "私聊直接响应",
+  "settings.connections.trigger.dmDirectHint": "开启后，私聊/DM 消息无需前缀，直接创建任务。",
+  "settings.connections.test.button": "测试连接",
+  "settings.connections.test.unsupported": "v1 暂未支持：网关尚无控制 API。可向机器人发消息验证。",
+  "settings.connections.restart.required": "重启网关后，已保存的配置才会生效。",
+  "settings.connections.restart.now": "立即重启",
+  "settings.connections.restart.restarted": "网关已重启",
+  "settings.connections.secret.set": "已设置"
 }
