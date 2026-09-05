@@ -33,6 +33,7 @@ struct RunArgs {
     sb_home: Option<PathBuf>,
     harness_cmd: Option<String>,
     timeout_secs: u64,
+    task_list: Option<PathBuf>,
 }
 
 const USAGE: &str = "\
@@ -89,6 +90,7 @@ fn parse_run_args(raw: &[String]) -> Result<RunArgs, String> {
         sb_home: None,
         harness_cmd: None,
         timeout_secs: DELEGATION_DEFAULT_TIMEOUT_SECS,
+        task_list: None,
     };
     let mut i = 0usize;
     while i < raw.len() {
@@ -111,6 +113,10 @@ fn parse_run_args(raw: &[String]) -> Result<RunArgs, String> {
                 i += 1;
             }
             "--real" => args.real = true,
+            "--task-list" => {
+                args.task_list = Some(PathBuf::from(value_at(i + 1)?));
+                i += 1;
+            }
             "--out" => {
                 args.out_override = Some(PathBuf::from(value_at(i + 1)?));
                 i += 1;
@@ -148,6 +154,21 @@ fn parse_run_args(raw: &[String]) -> Result<RunArgs, String> {
 }
 
 fn cmd_run(args: RunArgs) -> ExitCode {
+    let only_ids: Vec<String> = match &args.task_list {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(text) => text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(str::to_string)
+                .collect(),
+            Err(e) => {
+                eprintln!("--task-list {}: {e}", path.display());
+                return ExitCode::from(2);
+            }
+        },
+        None => Vec::new(),
+    };
     let bench_dir = default_benchmark_dir();
     println!(
         "[bench] {} mode · suites: {} · n={} · pins root: {}",
@@ -175,6 +196,7 @@ fn cmd_run(args: RunArgs) -> ExitCode {
             sb_home: args.sb_home.clone(),
             harness_cmd: args.harness_cmd.clone(),
             delegation_timeout_secs: args.timeout_secs,
+            only_ids: only_ids.clone(),
         };
         match run_benchmark(&options, &bench_dir) {
             Ok((report, run_dir)) => {

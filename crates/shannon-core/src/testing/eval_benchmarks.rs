@@ -849,6 +849,10 @@ pub struct BenchmarkOptions {
     pub harness_cmd: Option<String>,
     /// Wall-clock ceiling per delegated repetition.
     pub delegation_timeout_secs: u64,
+    /// Restrict the run to these native ids (sharded parallel passes). The
+    /// report still fingerprints the FULL pin manifest, so a filtered run's
+    /// citation gates must be read with the filter in mind (diagnostic use).
+    pub only_ids: Vec<String>,
 }
 
 impl Default for BenchmarkOptions {
@@ -863,6 +867,7 @@ impl Default for BenchmarkOptions {
             sb_home: None,
             harness_cmd: None,
             delegation_timeout_secs: DELEGATION_DEFAULT_TIMEOUT_SECS,
+            only_ids: Vec::new(),
         }
     }
 }
@@ -1220,6 +1225,24 @@ pub fn run_benchmark(
         tb_tasks.as_deref(),
         sb_home.as_deref(),
     )?;
+    let cases: Vec<_> = if options.only_ids.is_empty() {
+        cases
+    } else {
+        let want: std::collections::HashSet<&str> =
+            options.only_ids.iter().map(String::as_str).collect();
+        let filtered: Vec<_> = cases
+            .into_iter()
+            .filter(|c| want.contains(c.native_id.as_str()))
+            .collect();
+        if filtered.len() != want.len() {
+            return Err(EvalError::Config(format!(
+                "--task-list: {}/{} ids not found in the suite's cases",
+                want.len() - filtered.len(),
+                want.len()
+            )));
+        }
+        filtered
+    };
 
     let out_root = bench_output_root(options);
     let run_id = fresh_run_id("bench");
