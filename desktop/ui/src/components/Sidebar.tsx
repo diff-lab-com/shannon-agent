@@ -458,6 +458,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
              <SubNavLink to="/settings/general" labelId="nav.general" />
              <SubNavLink to="/settings/theme" labelId="nav.theme" />
              <SubNavLink to="/settings/models" labelId="nav.models" />
+             <SubNavLink to="/settings/permissions" labelId="nav.permissions" />
              {mode === 'dev' && (
                <SubNavLink to="/settings/advanced" labelId="nav.advanced" />
              )}

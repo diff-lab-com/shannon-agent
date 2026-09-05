@@ -15,6 +15,7 @@ import * as api from '@/lib/tauri-api';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { toastError } from '@/lib/errorToast';
 import { useSessionBudget } from '@/hooks/useSessionBudget';
+import { ExecutionModeSwitcher } from '@/components/chat/ExecutionModeSwitcher';
 
 const TITLE_MAP: [string, string][] = [
   ['/opc/task', 'header.title.opcTask'],
@@ -226,6 +227,9 @@ export function Header() {
               {(sessionUsage?.cost_usd ?? 0).toFixed(2)} / ${sessionBudget.toFixed(2)}
             </span>
           )}
+          {/* P1-3: execution-mode switcher (严格/平衡/宽松/自定义) — chat
+              header only, kept next to the model selector. */}
+          {isChat && <ExecutionModeSwitcher />}
           {/* Model selector */}
           <div className="relative" ref={modelRef}>
             <Button
@@ -334,6 +338,28 @@ export function Header() {
                 <pre className="text-body-sm text-on-surface-variant bg-surface-container p-sm rounded-lg overflow-x-auto max-h-[200px] mt-sm">{JSON.stringify(permissionRequest.input as object, null, 2)}</pre>
               ) : null}
             </div>
+            {/* P1-3: why this prompt fired — matched rule / classifier
+                confidence / policy default. One restrained line; absent on
+                legacy payloads without a reason. */}
+            {permissionRequest.reason && (
+              <div
+                className="flex items-center gap-xs mb-lg px-md py-sm rounded-lg bg-surface-container-low text-on-surface-variant"
+                aria-label={t('header.permRequest.reason.aria')}
+              >
+                <span className="material-symbols-outlined icon-sm" aria-hidden="true">info</span>
+                <span className="text-label-md truncate">
+                  {permissionRequest.reason.source === 'rule'
+                    ? t('header.permRequest.reason.rule', {
+                        rule: permissionRequest.reason.ruleName ?? t('header.permRequest.reason.unnamedRule'),
+                      })
+                    : permissionRequest.reason.source === 'llm' && permissionRequest.reason.confidence != null
+                      ? t('header.permRequest.reason.llm', {
+                          confidence: Math.round(permissionRequest.reason.confidence * 100),
+                        })
+                      : t('header.permRequest.reason.default')}
+                </span>
+              </div>
+            )}
             {/* U3 follow-up: "Always allow" persists an allow rule for the
                 tool (respond_permission scope="always_tool" → user
                 settings.json permissions.allow). The engine's rule checker
