@@ -616,11 +616,13 @@ mod tests {
         assert!(legacy.active_permission_profile.is_none());
         assert!(legacy.sandbox.is_none());
 
-        let mut config = DesktopConfig::default();
-        config.active_permission_profile = Some("strict".into());
-        config.sandbox = Some(SandboxConfig {
-            mode: Some("local".into()),
-        });
+        let config = DesktopConfig {
+            active_permission_profile: Some("strict".into()),
+            sandbox: Some(SandboxConfig {
+                mode: Some("local".into()),
+            }),
+            ..Default::default()
+        };
         let json = serde_json::to_string(&config).unwrap();
         assert!(
             json.contains("\"active_permission_profile\":\"strict\""),
