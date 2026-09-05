@@ -59,7 +59,12 @@ export interface RelayConfig {
 export interface MobileGatewayConfig {
   /** Enable the inbound mobile `shannon/*` WS server. Default false. */
   enabled?: boolean;
-  /** Bind host. Default "127.0.0.1" — must not widen before pairing is live. */
+  /**
+   * Bind host. Default "0.0.0.0" — LAN direct-connect pairing requires the
+   * server to be reachable from phones (§A8b: iOS ATS rejects raw-IP
+   * endpoints, so the desktop advertises a .local hostname over mDNS and
+   * binds non-loopback). Access is gated by one-time pair tokens.
+   */
   host?: string;
   /** Bind port. Default 33430. */
   port?: number;
