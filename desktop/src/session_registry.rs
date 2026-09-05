@@ -401,8 +401,8 @@ impl SessionRegistry {
                 Ok((SessionKey(state.session_id), state))
             }
             Some(raw) => {
-                let uuid = Uuid::parse_str(raw.trim())
-                    .map_err(|e| format!("invalid sessionId: {e}"))?;
+                let uuid =
+                    Uuid::parse_str(raw.trim()).map_err(|e| format!("invalid sessionId: {e}"))?;
                 let key = SessionKey(uuid);
                 let state = self.get(key).ok_or_else(|| {
                     format!("unknown session {uuid} — open or switch to it first")

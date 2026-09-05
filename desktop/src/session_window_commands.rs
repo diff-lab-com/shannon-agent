@@ -35,8 +35,8 @@
 
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
@@ -69,8 +69,7 @@ const SESSION_WINDOW_MIN_SIZE: (f64, f64) = (800.0, 600.0);
 /// Derive the deterministic window label for a session id.
 /// Errors on non-UUID input — labels are derived from validated UUIDs only.
 pub fn session_window_label(session_id: &str) -> Result<String, String> {
-    let uuid =
-        Uuid::parse_str(session_id.trim()).map_err(|e| format!("invalid sessionId: {e}"))?;
+    let uuid = Uuid::parse_str(session_id.trim()).map_err(|e| format!("invalid sessionId: {e}"))?;
     Ok(format!("{SESSION_WINDOW_PREFIX}{uuid}"))
 }
 
@@ -185,8 +184,7 @@ async fn open_session_window_inner(
     app: &tauri::AppHandle,
     session_id: &str,
 ) -> Result<SessionWindowInfo, String> {
-    let uuid =
-        Uuid::parse_str(session_id.trim()).map_err(|e| format!("invalid sessionId: {e}"))?;
+    let uuid = Uuid::parse_str(session_id.trim()).map_err(|e| format!("invalid sessionId: {e}"))?;
     let id_str = uuid.to_string();
     let label = session_window_label(&id_str)?;
 
@@ -386,7 +384,10 @@ mod tests {
             "label rule: session-<uuid>"
         );
         // Trimmed input is accepted (frontend may send padded strings).
-        assert_eq!(session_window_label(" 7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1 ").unwrap(), format!("session-{id}"));
+        assert_eq!(
+            session_window_label(" 7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1 ").unwrap(),
+            format!("session-{id}")
+        );
     }
 
     #[test]
@@ -457,7 +458,10 @@ mod tests {
             "Refactor the parser"
         );
         // Unknown session → fallback.
-        assert_eq!(session_title(&sessions, "deadbeef-0000-0000-0000-000000000000"), "Shannon");
+        assert_eq!(
+            session_title(&sessions, "deadbeef-0000-0000-0000-000000000000"),
+            "Shannon"
+        );
         // Blank title → fallback.
         let blank = vec![SessionMeta {
             id: "7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1".into(),
@@ -468,7 +472,10 @@ mod tests {
             parent_id: None,
             branch_point: None,
         }];
-        assert_eq!(session_title(&blank, "7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1"), "Shannon");
+        assert_eq!(
+            session_title(&blank, "7e6c3f18-4a2e-4f6a-9a52-6d1c1a0f83f1"),
+            "Shannon"
+        );
     }
 
     #[test]

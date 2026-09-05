@@ -197,10 +197,7 @@ pub async fn cancel_query(
 
 /// Body of [`cancel_query`], split out so the routing behavior is testable
 /// without a Wry app handle.
-async fn cancel_session_query(
-    state: &AppState,
-    session_id: Option<&str>,
-) -> Result<(), String> {
+async fn cancel_session_query(state: &AppState, session_id: Option<&str>) -> Result<(), String> {
     let (_, session) = state.registry.resolve_explicit_or_active(session_id)?;
 
     // Take the cancellation token and cancel it
