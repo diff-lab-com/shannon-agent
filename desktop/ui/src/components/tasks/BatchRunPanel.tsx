@@ -11,6 +11,7 @@
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { cn } from '@/lib/utils'
 import { useBatchRuns } from '@/hooks/batchRuns'
 import type { BatchBranch, BatchRunDto, BatchRunStatus } from '@/types'
@@ -83,7 +84,7 @@ function branchChipClasses(status: BatchBranch['status']): string {
 interface BatchRunCardProps {
   run: BatchRunDto
   onCompare: (run: BatchRunDto) => void
-  onDiscard: (batchId: string) => void
+  onDiscard: (run: BatchRunDto) => void
 }
 
 export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
@@ -172,7 +173,7 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
               size="sm"
               aria-label={t('batch.card.discardAria')}
               className="h-8 font-label-sm text-error hover:bg-error/10 cursor-pointer"
-              onClick={() => onDiscard(run.batchId)}
+              onClick={() => onDiscard(run)}
             >
               <span className="material-symbols-outlined icon-sm" aria-hidden="true">
                 delete_sweep
@@ -205,6 +206,7 @@ export default function BatchRunPanel() {
   // Track the compared batch by id and derive the live run from `runs`, so
   // the dialog reflects `batch:updated` refreshes (statuses, adopted state).
   const [compareBatchId, setCompareBatchId] = useState<string | null>(null)
+  const [discardTarget, setDiscardTarget] = useState<BatchRunDto | null>(null)
   const compareTarget = runs.find(r => r.batchId === compareBatchId) ?? null
 
   if (runs.length === 0) return null
@@ -226,7 +228,7 @@ export default function BatchRunPanel() {
             key={run.batchId}
             run={run}
             onCompare={() => setCompareBatchId(run.batchId)}
-            onDiscard={batchId => void discard(batchId)}
+            onDiscard={setDiscardTarget}
           />
         ))}
       </div>
@@ -235,6 +237,23 @@ export default function BatchRunPanel() {
         run={compareTarget}
         onClose={() => setCompareBatchId(null)}
         onAdopt={(batchId, index) => adopt(batchId, index)}
+      />
+
+      {/* Discard deletes worktrees + branches — confirm first (the un-merged
+          attempts are gone for good). */}
+      <ConfirmDialog
+        open={discardTarget !== null}
+        title={intl.formatMessage({ id: 'batch.discard.title' })}
+        message={intl.formatMessage({ id: 'batch.discard.message' })}
+        confirmLabel={intl.formatMessage({ id: 'batch.discard.confirm' })}
+        cancelLabel={intl.formatMessage({ id: 'batch.discard.cancel' })}
+        destructive
+        onConfirm={() => {
+          const batchId = discardTarget?.batchId
+          setDiscardTarget(null)
+          if (batchId) void discard(batchId)
+        }}
+        onCancel={() => setDiscardTarget(null)}
       />
     </section>
   )

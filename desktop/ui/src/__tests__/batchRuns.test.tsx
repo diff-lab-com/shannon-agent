@@ -188,7 +188,7 @@ describe('BatchRunCard', () => {
 // ── BatchRunPanel (list + actions) ───────────────────────────────────────
 
 describe('BatchRunPanel', () => {
-  it('renders the hook runs and dispatches discard with the batch id', async () => {
+  it('renders the hook runs and dispatches discard after confirmation', async () => {
     const discard = vi.fn().mockResolvedValue({ removed: 1, skipped: [] })
     vi.mocked(useBatchRuns).mockReturnValue({
       runs: [makeBatch({})],
@@ -204,6 +204,9 @@ describe('BatchRunPanel', () => {
     expect(screen.getByText('Speed up the search box')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: /discard this batch/i }))
+    // Guarded by a destructive confirm — nothing removed before confirming.
+    expect(discard).not.toHaveBeenCalled()
+    fireEvent.click(await screen.findByRole('button', { name: /discard batch|放弃批次/i }))
     await waitFor(() => expect(discard).toHaveBeenCalledWith('batch-1'))
   })
 
