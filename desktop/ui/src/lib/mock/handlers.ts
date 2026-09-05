@@ -28,6 +28,10 @@ const renamedSessions = new Map<string, SessionInfo>()
 // demo feel live (get_config hands out a fresh clone of this).
 const demoConfig = clone(MOCK_CONFIG)
 
+// P1-6: ids already imported in this demo session — re-applying the same
+// migration surfaces as skipped (conflict handling), never duplicates.
+const demoMigration = { applied: new Set<string>() }
+
 // Mutable state for "live" feeling during demo
 const state = {
   tasks: clone(MOCK_TASKS),
@@ -824,6 +828,124 @@ export const handlers: Record<string, MockHandler> = {
   async delete_memory() { await delay() },
   async search_memories(args: { query: string; project?: string | null }) {
     return handlers.list_memories({ query: args.query, project: args.project })
+  },
+
+  // --- Migration wizard (P1-6): stateful demo — a second apply run shows
+  // conflict handling (identical targets) instead of duplicates. ---
+  async migration_scan(args: { source: 'claude-code' | 'zcode' }) {
+    await delay()
+    if (args?.source === 'zcode') {
+      return {
+        source: 'zcode',
+        items: [
+          {
+            id: 'zcode:skill:commit',
+            kind: 'skill',
+            name: 'commit',
+            sourcePath: '~/.zcode/skills/commit',
+            targetPath: '~/.shannon/skills/commit',
+            conflict: demoMigration.applied.has('zcode:skill:commit') ? 'skip-existing' : 'none',
+            sizeHint: 482,
+          },
+        ],
+        notFound: [
+          'settings — ~/.zcode/settings.json',
+          'commands — ~/.zcode/commands',
+          'memory (project) — AGENTS.md',
+          'memory (global) — ~/.zcode/AGENTS.md',
+          'mcp (settings) — ~/.zcode/settings.json',
+        ],
+        errors: [],
+      }
+    }
+    return {
+      source: 'claude-code',
+      items: [
+        {
+          id: 'claude-code:mcp:github',
+          kind: 'mcp',
+          name: 'github',
+          sourcePath: '~/.claude.json',
+          targetPath: '~/.shannon/desktop/mcp-servers.json',
+          conflict: demoMigration.applied.has('claude-code:mcp:github') ? 'skip-existing' : 'overwrite',
+          sizeHint: 5120,
+        },
+        {
+          id: 'claude-code:skill:commit',
+          kind: 'skill',
+          name: 'commit',
+          sourcePath: '~/.claude/skills/commit',
+          targetPath: '~/.shannon/skills/commit',
+          conflict: demoMigration.applied.has('claude-code:skill:commit') ? 'skip-existing' : 'none',
+          sizeHint: 482,
+        },
+        {
+          id: 'claude-code:command:deploy',
+          kind: 'command',
+          name: 'deploy',
+          sourcePath: '~/.claude/commands/deploy.md',
+          targetPath: '~/.shannon/commands/deploy.md',
+          conflict: demoMigration.applied.has('claude-code:command:deploy') ? 'skip-existing' : 'none',
+          sizeHint: 311,
+        },
+        {
+          id: 'claude-code:memory:project-memory',
+          kind: 'memory',
+          name: 'CLAUDE.md',
+          sourcePath: 'CLAUDE.md',
+          targetPath: '~/.shannon/memories',
+          conflict: demoMigration.applied.has('claude-code:memory:project-memory') ? 'skip-existing' : 'none',
+          sizeHint: 1024,
+        },
+        {
+          id: 'claude-code:settings-rules:settings-json',
+          kind: 'settings-rules',
+          name: 'claude-code-imported.toml',
+          sourcePath: '~/.claude/settings.json',
+          targetPath: '.shannon/profiles/claude-code-imported.toml',
+          conflict: demoMigration.applied.has('claude-code:settings-rules:settings-json')
+            ? 'skip-existing'
+            : 'none',
+          sizeHint: 890,
+        },
+      ],
+      notFound: [],
+      errors: [
+        { path: '~/.claude/settings.json', error: 'permissions block unreadable — rules skipped' },
+      ],
+    }
+  },
+  async migration_preview(args: { source: string; items: { id: string; action: string }[] }) {
+    await delay()
+    const summaries: Record<string, string> = {
+      'claude-code:mcp:github':
+        "Server 'github' exists with a different config — your conflict choice decides overwrite vs rename.",
+      'claude-code:skill:commit':
+        "New skill 'commit' (0 KB) — copies to ~/.shannon/skills/commit.",
+      'claude-code:command:deploy':
+        "New command 'deploy' — copies to ~/.shannon/commands/deploy.md.",
+      'claude-code:memory:project-memory':
+        'Adds one project-memory entry (1024 chars) for the current project — editable in the Memory page.',
+      'claude-code:settings-rules:settings-json':
+        "Creates permission profile 'claude-code-imported' from the source allow rules.",
+      'zcode:skill:commit': "New skill 'commit' — copies to ~/.shannon/skills/commit.",
+    }
+    return {
+      perItem: (args?.items ?? []).map(i => ({
+        id: i.id,
+        diffSummary: summaries[i.id] ?? 'No changes detected.',
+      })),
+    }
+  },
+  async migration_apply(args: { source: string; items: { id: string; action: string }[] }) {
+    await delay(160)
+    const imported = (args?.items ?? []).filter(i => i.action === 'import')
+    let skipped = 0
+    for (const item of imported) {
+      if (demoMigration.applied.has(item.id)) skipped += 1
+      else demoMigration.applied.add(item.id)
+    }
+    return { imported: imported.length - skipped, skipped, failed: [] }
   },
 
   // --- Notification preferences (Notifications P2 DND / quiet hours) ---
