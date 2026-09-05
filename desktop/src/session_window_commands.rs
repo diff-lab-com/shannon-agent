@@ -37,17 +37,17 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use uuid::Uuid;
+
+use crate::commands::{AppState, SessionMeta};
+use crate::config;
 
 /// Set while the main window is being torn down: session windows are closed
 /// to keep「关闭主窗口 = 退出应用」true, and their `Destroyed` cleanup must
 /// NOT drain the persisted list (it is exactly what the next launch
 /// restores).
 static APP_EXITING: AtomicBool = AtomicBool::new(false);
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
-use uuid::Uuid;
-
-use crate::commands::{AppState, SessionMeta};
-use crate::config;
 
 /// Prefix of every session window's label; also the security boundary for
 /// [`close_session_window`] (main can never be closed through it).
