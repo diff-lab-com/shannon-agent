@@ -107,6 +107,14 @@ pub struct AutoTestConfig {
     pub total_timeout_secs: u64,
 
     /// Stop after the same failure recurs this many times (default: 3).
+    ///
+    /// In **headless** mode (`output_format == json-stream`) the engine sets
+    /// the `SHANNON_HEADLESS_AUTO_TEST_STRIKES` env var and the
+    /// [`ensure_headless_auto_test_strikes`] helper turns this back to 3
+    /// when a config was explicit-set to 0 (i.e. "disabled"). The
+    /// headless auto-enable is opt-out: pass
+    /// `SHANNON_HEADLESS_AUTO_TEST_STRIKES=0` to keep the historical
+    /// "no strikes" behavior.
     #[serde(default = "default_no_progress_strikes")]
     pub no_progress_strikes: u32,
 
@@ -147,7 +155,66 @@ impl Default for AutoTestConfig {
     }
 }
 
+// ── B.7: headless auto-enable for `no_progress_strikes` ──────────────────
+//
+// When the engine runs headless (`output_format == json-stream` / harbor CI),
+// the loop cannot prompt for confirmation, so a no-progress tail must abort
+// before the model burns the entire turn budget re-issuing the same failing
+// command. `default_no_progress_strikes` already returns 3 — the historical
+// reason headless runs sometimes lost this guard was the AutoTestConfig
+// came through the eval/test harness with an explicit `no_progress_strikes
+// = 0` (or any value < 3), bypassing the default. We cannot change eval/ —
+// so the headless auto-enable lives here, keyed off a process-global flag
+// (`SHANNON_HEADLESS_AUTO_TEST_STRIKES`) that the CLI's `run_headless_query`
+// sets to the value of `--output-format` (anything non-empty/non-"0" enables).
+//
+// The flag itself: any non-empty, non-"0" value enables the guard; unset
+// means the caller stays in charge. The CLI sets the flag in
+// `run_headless_query`. Eval harnesses that want the historical opt-out can
+// pass `SHANNON_HEADLESS_AUTO_TEST_STRIKES=0`.
+
+/// Headless auto-enable flag name. The CLI sets this to a non-empty value
+/// (e.g. `json-stream`) when launching a non-interactive query, so the
+/// auto-test guard can verify it has been engaged without taking a
+/// dependency on the cli flag types directly.
+pub const HEADLESS_AUTO_TEST_STRIKES_ENV: &str = "SHANNON_HEADLESS_AUTO_TEST_STRIKES";
+
+/// True when the headless auto-enable guard is on for this process. Honors
+/// the same parse contract as the other env knobs: unset / empty / `0` →
+/// off; any other value → on.
+pub fn headless_auto_test_strikes_enabled() -> bool {
+    match std::env::var(HEADLESS_AUTO_TEST_STRIKES_ENV) {
+        Ok(v) => {
+            let trimmed = v.trim();
+            !trimmed.is_empty() && trimmed != "0"
+        }
+        Err(_) => false,
+    }
+}
+
+/// Apply the headless auto-enable in-place: when the guard is enabled and
+/// the config currently disables it (`no_progress_strikes == 0`), set the
+/// config to the default 3. Already-configured values are preserved — the
+/// caller wins when they asked for a specific value.
+pub fn ensure_headless_auto_test_strikes(cfg: &mut AutoTestConfig) {
+    if headless_auto_test_strikes_enabled() && cfg.no_progress_strikes == 0 {
+        cfg.no_progress_strikes = default_no_progress_strikes();
+    }
+}
+
 impl AutoTestConfig {
+    /// Builder-style headless auto-enable. Mirrors the
+    /// [`ensure_headless_auto_test_strikes`] helper but returns the modified
+    /// config so it composes naturally at the call site.
+    ///
+    /// ```ignore
+    /// let cfg = AutoTestConfig::default().for_headless();
+    /// ```
+    pub fn for_headless(mut self) -> Self {
+        ensure_headless_auto_test_strikes(&mut self);
+        self
+    }
+
     /// Parse from a TOML string. Returns the default config when the section is missing.
     pub fn from_toml_str(s: &str) -> Result<Self, AutoTestConfigError> {
         #[derive(Deserialize)]
@@ -531,6 +598,13 @@ pub fn project_dir() -> PathBuf {
 mod tests {
     use super::*;
 
+    /// B.7: process-global env mutex shared by every test that touches
+    /// `SHANNON_HEADLESS_AUTO_TEST_STRIKES`. Must live at the module
+    /// level (not inside the function body) so all 3 tests in this file
+    /// share a single `OnceLock` and effectively serialize against each
+    /// other.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn default_config_round_trip() {
         let cfg = AutoTestConfig::default();
@@ -541,6 +615,118 @@ mod tests {
         assert_eq!(cfg.max_failure_lines, 200);
         assert!(cfg.command.is_none());
         assert!(cfg.languages.is_empty());
+    }
+
+    // ── B.7: headless auto-enable for `no_progress_strikes` ─────────────
+
+    /// The plan-doc test contract: in a headless environment, an
+    /// `AutoTestConfig` that has `no_progress_strikes = 0` (the historical
+    /// eval-harness shape) must be flipped back to 3. Locks the env-flag
+    /// contract and prevents regressions where headless runs slip past the
+    /// anti-loop guard.
+    #[test]
+    fn headless_env_auto_enables_zero_strikes() {
+        let _guard = ENV_LOCK.lock().expect("env-var test mutex poisoned");
+
+        let saved = std::env::var(HEADLESS_AUTO_TEST_STRIKES_ENV).ok();
+
+        // Simulate the CLI setting the env var when `--output-format=json-stream`.
+        unsafe {
+            std::env::set_var(HEADLESS_AUTO_TEST_STRIKES_ENV, "json-stream");
+        }
+        assert!(
+            headless_auto_test_strikes_enabled(),
+            "headless flag must report enabled when env var is non-empty/non-zero"
+        );
+
+        // Eval harness came in with explicit zero strikes — the headless
+        // auto-enable must flip it back to the default 3.
+        let mut cfg = AutoTestConfig::default();
+        cfg.no_progress_strikes = 0;
+        ensure_headless_auto_test_strikes(&mut cfg);
+        assert_eq!(
+            cfg.no_progress_strikes, 3,
+            "headless auto-enable must restore strikes=3 when caller had 0"
+        );
+
+        // Already configured values are preserved (caller wins when they
+        // asked for something specific).
+        let mut cfg = AutoTestConfig::default();
+        cfg.no_progress_strikes = 5;
+        ensure_headless_auto_test_strikes(&mut cfg);
+        assert_eq!(
+            cfg.no_progress_strikes, 5,
+            "headless auto-enable must not override an explicit non-zero value"
+        );
+
+        // Builder-style API mirrors the in-place helper.
+        let cfg = AutoTestConfig {
+            no_progress_strikes: 0,
+            ..AutoTestConfig::default()
+        }
+        .for_headless();
+        assert_eq!(cfg.no_progress_strikes, 3);
+
+        match saved {
+            Some(v) => unsafe {
+                std::env::set_var(HEADLESS_AUTO_TEST_STRIKES_ENV, v)
+            },
+            None => unsafe { std::env::remove_var(HEADLESS_AUTO_TEST_STRIKES_ENV) },
+        }
+    }
+
+    /// Off-by-default: with no env var, an explicit 0 stays 0. Locks the
+    /// opt-out contract so the headless auto-enable never silently engages
+    /// in non-headless contexts.
+    #[test]
+    fn headless_auto_enable_off_when_env_unset() {
+        let _guard = ENV_LOCK.lock().expect("env-var test mutex poisoned");
+
+        let saved = std::env::var(HEADLESS_AUTO_TEST_STRIKES_ENV).ok();
+        unsafe {
+            std::env::remove_var(HEADLESS_AUTO_TEST_STRIKES_ENV);
+        }
+        assert!(!headless_auto_test_strikes_enabled());
+
+        let mut cfg = AutoTestConfig::default();
+        cfg.no_progress_strikes = 0;
+        ensure_headless_auto_test_strikes(&mut cfg);
+        assert_eq!(
+            cfg.no_progress_strikes, 0,
+            "no env flag = no auto-enable; explicit 0 must persist"
+        );
+
+        match saved {
+            Some(v) => unsafe {
+                std::env::set_var(HEADLESS_AUTO_TEST_STRIKES_ENV, v)
+            },
+            None => unsafe { std::env::remove_var(HEADLESS_AUTO_TEST_STRIKES_ENV) },
+        }
+    }
+
+    /// The opt-out contract: setting the env var to `0` keeps the historical
+    /// "no strikes" behavior even when the CLI would otherwise auto-enable.
+    #[test]
+    fn headless_auto_enable_opt_out_via_zero_env() {
+        let _guard = ENV_LOCK.lock().expect("env-var test mutex poisoned");
+
+        let saved = std::env::var(HEADLESS_AUTO_TEST_STRIKES_ENV).ok();
+        unsafe {
+            std::env::set_var(HEADLESS_AUTO_TEST_STRIKES_ENV, "0");
+        }
+        assert!(!headless_auto_test_strikes_enabled());
+
+        let mut cfg = AutoTestConfig::default();
+        cfg.no_progress_strikes = 0;
+        ensure_headless_auto_test_strikes(&mut cfg);
+        assert_eq!(cfg.no_progress_strikes, 0);
+
+        match saved {
+            Some(v) => unsafe {
+                std::env::set_var(HEADLESS_AUTO_TEST_STRIKES_ENV, v)
+            },
+            None => unsafe { std::env::remove_var(HEADLESS_AUTO_TEST_STRIKES_ENV) },
+        }
     }
 
     #[test]

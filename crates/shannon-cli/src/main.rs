@@ -1690,6 +1690,24 @@ fn run_headless_query(
     // Arm structured crash capture when the dogfood loop (or any CI harness)
     // points SHANNON_CRASH_DIR at a scratch directory; no-op otherwise.
     crash_hook::install_from_env();
+
+    // B.7: turn on the headless auto-enable for `auto_test.no_progress_strikes`.
+    // The CLI sets the env var to the output-format string ("text" / "json" /
+    // "json-stream") — anything non-empty and non-"0" enables the guard, so a
+    // CI harness that explicitly passes "0" can still opt out. The default
+    // value is `unset`, so the previous behavior is preserved when this
+    // function isn't reached.
+    if matches!(output_format, OutputFormat::JsonStream | OutputFormat::Json) {
+        // SAFETY: process-global env mutation before tokio runtime is
+        // constructed; no other thread is reading this var at this point.
+        unsafe {
+            std::env::set_var(
+                shannon_core::auto_test::HEADLESS_AUTO_TEST_STRIKES_ENV,
+                "json-stream",
+            );
+        }
+    }
+
     let rt = tokio::runtime::Runtime::new()?;
     let exit_code: HeadlessExitCode = rt.block_on(async {
         let start = Instant::now();
