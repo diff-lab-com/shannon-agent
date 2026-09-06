@@ -247,6 +247,16 @@ impl InboxStore {
         // from blocking each other. On in-memory databases the pragma is a
         // no-op, which is fine.
         let _ = conn.pragma_update(None, "journal_mode", "WAL");
+        // P2-7 fix round: serve-side execution introduced a second write
+        // process on the same inbox.db; without a busy timeout any cross-
+        // process write collision (e.g. desktop rerun racing a serve-side
+        // record_run_finish) returns SQLITE_BUSY immediately, and the
+        // warning-only fallback in finalize_run would leave the routine
+        // row stuck in `running`. 2000ms is generous for WAL-backed
+        // short transactions (the desktop is the only other writer and
+        // its operations are single-statement). On in-memory databases
+        // the pragma is a no-op.
+        let _ = conn.pragma_update(None, "busy_timeout", "2000");
         conn.execute_batch(SCHEMA_SQL)?;
         let store = Self {
             conn: Mutex::new(conn),
@@ -259,26 +269,56 @@ impl InboxStore {
         self.conn.lock().map_err(|_| InboxStoreError::Poisoned)
     }
 
+    /// Retry an inner closure until it succeeds or returns a non-busy error.
+    ///
+    /// `busy_timeout` (2s by default, set in [`Self::init`]) makes SQLite
+    /// wait internally for contended writers in the common case; this helper
+    /// covers the rare case where the busy_timeout window still elapses
+    /// (very long cross-process writer queue) by retrying once with a short
+    /// backoff. Two short retries is enough — finalize callers
+    /// (`append_item`, `record_run_finish`) must terminate a routine row
+    /// even under stress, but spinning forever would mask real bugs.
+    fn with_busy_retry<T>(
+        &self,
+        mut f: impl FnMut() -> Result<T, rusqlite::Error>,
+    ) -> Result<T, InboxStoreError> {
+        // First attempt (busy_timeout has already absorbed up to 2s of wait).
+        match f() {
+            Ok(v) => return Ok(v),
+            Err(e) if e.sqlite_error_code() == Some(rusqlite::ErrorCode::DatabaseBusy) => {}
+            Err(other) => return Err(other.into()),
+        }
+        // One short backoff, then one more attempt.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        match f() {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     // ── inbox_items ─────────────────────────────────────────────────────
 
     /// Append a new pending item. Returns the stored row (with id).
     pub fn append_item(&self, item: InboxItemNew) -> Result<InboxItem, InboxStoreError> {
         let now = now_ms();
         let conn = self.lock_conn()?;
-        conn.execute(
-            "INSERT INTO inbox_items
-                (source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7)",
-            params![
-                item.source,
-                item.source_id,
-                item.session_id,
-                item.title,
-                item.summary,
-                item.error,
-                now
-            ],
-        )?;
+        self.with_busy_retry(|| {
+            conn.execute(
+                "INSERT INTO inbox_items
+                    (source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7)",
+                params![
+                    item.source,
+                    item.source_id,
+                    item.session_id,
+                    item.title,
+                    item.summary,
+                    item.error,
+                    now
+                ],
+            )?;
+            Ok(conn.last_insert_rowid())
+        })?;
         Ok(InboxItem {
             id: conn.last_insert_rowid(),
             source: item.source,
@@ -404,16 +444,23 @@ impl InboxStore {
     ) -> Result<String, InboxStoreError> {
         let id = uuid::Uuid::new_v4().to_string();
         let conn = self.lock_conn()?;
-        conn.execute(
-            "INSERT INTO routine_runs (id, task_id, task_name, status, started_at_ms)
-             VALUES (?1, ?2, ?3, 'running', ?4)",
-            params![id, task_id, task_name, now_ms()],
-        )?;
+        self.with_busy_retry(|| {
+            conn.execute(
+                "INSERT INTO routine_runs (id, task_id, task_name, status, started_at_ms)
+                 VALUES (?1, ?2, ?3, 'running', ?4)",
+                params![&id, task_id, task_name, now_ms()],
+            )?;
+            Ok(())
+        })?;
         Ok(id)
     }
 
     /// Complete a run: sets status/error, computes `duration_ms` from the
     /// start timestamp, and links the inbox item produced by the run.
+    ///
+    /// P2-7 fix round: retried on SQLITE_BUSY (busy_timeout + one short
+    /// backoff) so a serve↔desktop writer collision cannot leave a routine
+    /// row stuck in `running`.
     pub fn record_run_finish(
         &self,
         run_id: &str,
@@ -422,14 +469,18 @@ impl InboxStore {
         inbox_item_id: Option<i64>,
     ) -> Result<(), InboxStoreError> {
         let conn = self.lock_conn()?;
-        conn.execute(
-            "UPDATE routine_runs
-             SET status = ?1, error = ?2, finished_at_ms = ?3,
-                 duration_ms = ?3 - COALESCE(started_at_ms, ?3),
-                 inbox_item_id = ?4
-             WHERE id = ?5",
-            params![status, error, now_ms(), inbox_item_id, run_id],
-        )?;
+        let now = now_ms();
+        self.with_busy_retry(|| {
+            conn.execute(
+                "UPDATE routine_runs
+                 SET status = ?1, error = ?2, finished_at_ms = ?3,
+                     duration_ms = ?3 - COALESCE(started_at_ms, ?3),
+                     inbox_item_id = ?4
+                 WHERE id = ?5",
+                params![status, error, now, inbox_item_id, run_id],
+            )?;
+            Ok(())
+        })?;
         Ok(())
     }
 
@@ -1062,5 +1113,167 @@ mod tests {
     fn default_paths_live_under_shannon_dir() {
         assert!(default_db_path().ends_with(".shannon/inbox.db"));
         assert!(default_legacy_triage_path().ends_with(".shannon/triage.jsonl"));
+    }
+
+    // ── Concurrency (P2-7 fix round) ────────────────────────────────────
+
+    /// busy_timeout pragma is set by [`Self::init`]. Asserted on a fresh
+    /// on-disk database so a pragma regression in init is caught here.
+    #[test]
+    fn init_sets_busy_timeout_pragma() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("busy.db");
+        let store = InboxStore::open(&path).unwrap();
+        let conn = store.lock_conn().unwrap();
+        let busy: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            busy >= 2000,
+            "busy_timeout must be ≥2000ms to absorb serve↔desktop collisions, got {busy}"
+        );
+    }
+
+    /// Simulate a serve-side finalize colliding with a desktop-side write on
+    /// the same `inbox.db`. Without busy_timeout + retry, one writer would
+    /// surface SQLITE_BUSY; the other's `record_run_finish` would silently
+    /// leave its routine row stuck in `running`, breaking the
+    /// "every-path-terminates" guarantee. With the fix, both finalize
+    /// writes succeed and both runs reach a terminal status.
+    #[test]
+    fn concurrent_writers_do_not_leave_runs_stuck_running() {
+        use std::collections::HashSet;
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.db");
+
+        // Open the store on the main thread first so init runs and the
+        // WAL/shared-cache files exist before the second process-shaped
+        // connection opens.
+        let _store = InboxStore::open(&path).unwrap();
+
+        // Simulate the second writer (desktop-side) by opening its own
+        // raw rusqlite Connection to the same file, mirroring how a
+        // second process would talk to the shared inbox.db.
+        let mut desktop_conn = Connection::open(&path).unwrap();
+        desktop_conn
+            .pragma_update(None, "busy_timeout", "2000")
+            .unwrap();
+
+        // Now the serve-side store (P2-7 path) opens the same file.
+        let serve = Arc::new(InboxStore::open(&path).unwrap());
+        let task_id = "shared-task".to_string();
+        let total = 8;
+        let barrier = Arc::new(Barrier::new(total + 1));
+
+        // Half the threads simulate desktop "rerun"/archive writes
+        // (inbox_items + status updates). The other half simulate
+        // serve-side finalize runs (record_run_start + append_item +
+        // record_run_finish). They all start at the barrier to maximise
+        // lock contention.
+        let mut handles = Vec::new();
+        for i in 0..total {
+            if i % 2 == 0 {
+                // Desktop-side: INSERT inbox_items + UPDATE status.
+                let path = path.clone();
+                let barrier = barrier.clone();
+                handles.push(thread::spawn(move || {
+                    let conn = Connection::open(&path).unwrap();
+                    conn.pragma_update(None, "busy_timeout", "2000").unwrap();
+                    barrier.wait();
+                    for k in 0..20 {
+                        conn.execute(
+                            "INSERT INTO inbox_items
+                            (source, source_id, session_id, title, summary, error,
+                             status, created_at_ms, updated_at_ms)
+                         VALUES ('routine', 'r', NULL, ?1, '', NULL, 'pending', ?2, ?2)",
+                            rusqlite::params![format!("d-{k}-{i}"), i64::from(k)],
+                        )
+                        .unwrap();
+                        // Single-row status flip on a known id (mirrors how
+                        // the desktop `update_inbox_item_status` command
+                        // works) — UPDATE…LIMIT isn't valid SQLite.
+                        let id = conn
+                            .query_row(
+                                "SELECT id FROM inbox_items WHERE title = ?1",
+                                rusqlite::params![format!("d-{k}-{i}")],
+                                |r| r.get::<_, i64>(0),
+                            )
+                            .unwrap();
+                        conn.execute(
+                            "UPDATE inbox_items SET status = 'read' WHERE id = ?1",
+                            rusqlite::params![id],
+                        )
+                        .unwrap();
+                    }
+                }));
+            } else {
+                // Serve-side: full record_run_start + append_item +
+                // record_run_finish, which is exactly what the GitHub
+                // hook's finalize_run does.
+                let serve = serve.clone();
+                let task_id = task_id.clone();
+                let barrier = barrier.clone();
+                handles.push(thread::spawn(move || {
+                    barrier.wait();
+                    for _ in 0..5 {
+                        let run_id = serve.record_run_start(&task_id, "shared").unwrap();
+                        let item = serve
+                            .append_item(InboxItemNew {
+                                source: SOURCE_ROUTINE.to_string(),
+                                source_id: Some(task_id.clone()),
+                                session_id: None,
+                                title: format!("s-{run_id}"),
+                                summary: "ok".into(),
+                                error: None,
+                            })
+                            .unwrap();
+                        // The fix under test: this call must not raise
+                        // SQLITE_BUSY even when desktop writers are
+                        // pounding the file concurrently.
+                        serve
+                            .record_run_finish(&run_id, "succeeded", None, Some(item.id))
+                            .unwrap();
+                    }
+                }));
+            }
+        }
+
+        barrier.wait();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Every serve-side run must have reached a terminal status.
+        // (record_run_start succeeded; if record_run_finish had raised
+        // SQLITE_BUSY and been swallowed, the row would still be
+        // 'running' here.)
+        let runs = serve.list_runs(1000).unwrap();
+        let stuck: Vec<&RunRecord> = runs
+            .iter()
+            .filter(|r| r.task_id == task_id && r.status == "running")
+            .collect();
+        assert!(
+            stuck.is_empty(),
+            "{} runs stuck in `running` after concurrent writers: {:?}",
+            stuck.len(),
+            stuck
+        );
+        let terminal: HashSet<&str> = runs.iter().map(|r| r.status.as_str()).collect();
+        assert!(terminal.contains("succeeded"));
+
+        // Sanity: desktop-side writes also all committed.
+        let item_count: i64 = serve
+            .lock_conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM inbox_items WHERE title LIKE 'd-%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(item_count, 80, "desktop-side inserts must all be visible");
     }
 }
