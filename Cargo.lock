@@ -6849,6 +6849,7 @@ dependencies = [
  "insta",
  "landlock",
  "mockito",
+ "once_cell",
  "portable-pty",
  "proptest",
  "regex",

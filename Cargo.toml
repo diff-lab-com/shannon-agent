@@ -55,6 +55,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # ---- HTTP / WS server ----
+# `rustls-tls` is locked on (no `default-features`) so the workspace builds
+# cleanly against `x86_64-unknown-linux-musl` — `openssl` is intentionally
+# absent. musl still needs a C cross-toolchain because `ring` (rustls's
+# crypto backend) compiles a small amount of C; see README.md §Static /
+# musl Builds for the one-time setup. Adding `aws-lc-sys` here would
+# drop the C dependency entirely once reqwest exposes a stable feature
+# gate for it.
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
 axum = { version = "0.7", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors"] }
@@ -114,6 +121,9 @@ walkdir = "2.5"
 
 # ---- File watcher (used by shannon-repomap incremental update) ----
 notify = "7"
+
+# ---- Lazy statics / one-time globals ----
+once_cell = "1.20"
 
 # ---- Binary cache for the repo map ----
 bincode = "1"

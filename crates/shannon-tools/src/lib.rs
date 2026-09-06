@@ -37,6 +37,7 @@ pub mod sandbox;
 
 pub mod agent;
 pub mod ask_user;
+pub mod background;
 pub mod brief;
 pub mod computer_use;
 pub mod config;
@@ -78,6 +79,11 @@ pub use ask_user::{
     AskUserError, AskUserInput, AskUserQuestionTool, ErrorQuestionHandler, MockQuestionHandler,
     Question, QuestionAnswer, QuestionHandler, QuestionOption, SharedQuestionHandler,
     TerminalQuestionHandler,
+};
+pub use background::{
+    BackgroundEntry, DEFAULT_POLL_MS, DEFAULT_WAIT_TIMEOUT_MS, EntryStatus, KillBackgroundInput,
+    KillBackgroundOutput, KillBackgroundTool, REGISTRY, RING_CAPACITY, RunBackgroundInput,
+    RunBackgroundOutput, RunBackgroundTool, WaitForLogInput, WaitForLogOutput, WaitForLogTool,
 };
 pub use brief::{BriefFormat, BriefInput, BriefMessage, BriefTool};
 pub use computer_use::{
@@ -320,6 +326,24 @@ fn register_all_tools(
         PowerShellTool::new().with_process(process.clone()),
     ))?;
     registry.register(Box::new(ReplTool::new().with_process(process.clone())))?;
+
+    // ── Background processes (§B.5) ────────────────────────────────────
+    // Spawn / poll / kill long-running children. Only meaningful against a
+    // process-capable, non-remote world: the global registry assumes the
+    // OS-level signal model, which a remote (SSH / Docker) world violates.
+    // Future revision: thread an explicit RemoteRegistry through the provider.
+    let is_remote = process.capabilities().is_remote;
+    if !is_remote {
+        registry.register(Box::new(
+            RunBackgroundTool::new().with_process(process.clone()),
+        ))?;
+        registry.register(Box::new(
+            WaitForLogTool::new().with_process(process.clone()),
+        ))?;
+        registry.register(Box::new(
+            KillBackgroundTool::new().with_process(process.clone()),
+        ))?;
+    }
 
     // ── Git operations ─────────────────────────────────────────────────
     registry.register(Box::new(GitBranchTool::new().with_process(process.clone())))?;
@@ -696,6 +720,35 @@ mod tests {
         let tools = registry.list_tools_info();
         // Should have a substantial number of tools registered
         assert!(tools.len() > 30, "Expected >30 tools, got {}", tools.len());
+    }
+
+    // ── §B.5 BackgroundProcess tool group ──────────────────────────────
+
+    /// The three background tools must register on the default (local) tool
+    /// set. Their visibility is gated on `process.capabilities().is_remote`
+    /// being false; the default world is local, so all three must appear.
+    #[test]
+    fn register_default_tools_registers_background_tools() {
+        let mut registry = ToolRegistry::new();
+        register_default_tools(&mut registry).unwrap();
+
+        let names: Vec<String> = registry
+            .list_tools_info()
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert!(
+            names.contains(&"RunBackground".to_string()),
+            "RunBackground must register on local worlds"
+        );
+        assert!(
+            names.contains(&"WaitForLog".to_string()),
+            "WaitForLog must register on local worlds"
+        );
+        assert!(
+            names.contains(&"KillBackground".to_string()),
+            "KillBackground must register on local worlds"
+        );
     }
 
     // ── A3/B3: project registration aligns file tools with the command sandbox ──
