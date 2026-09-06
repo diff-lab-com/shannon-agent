@@ -412,6 +412,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
                 temperature: None,
                 top_p: None,
             },
+            attachments: Vec::new(),
         };
 
         let mut final_output = String::new();

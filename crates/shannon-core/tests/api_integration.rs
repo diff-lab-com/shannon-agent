@@ -1520,6 +1520,7 @@ mod query_pipeline_tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: message.to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: false,

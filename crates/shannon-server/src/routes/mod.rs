@@ -23,6 +23,115 @@ pub struct CreateSessionResponse {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct MessageRequest {
     pub content: String,
+    /// Optional multimodal attachments delivered alongside `content`.
+    /// Images are carried to the LLM as base64 content blocks (Anthropic /
+    /// OpenAI vision); anything else is rejected with a 400.
+    #[serde(default)]
+    pub attachments: Option<Vec<MessageAttachment>>,
+}
+
+/// A single base64-encoded attachment on a message.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct MessageAttachment {
+    /// File name (informational; shown to the model in the message text).
+    pub name: Option<String>,
+    /// MIME type. Supported: image/png, image/jpeg, image/gif, image/webp.
+    pub media_type: String,
+    /// Base64-encoded file bytes.
+    pub data: String,
+}
+
+/// Stable error body returned with non-2xx responses on
+/// `/v1/sessions/:id/messages`. Mirrors Anthropic/OpenAI conventions:
+/// a `code` for programmatic handling plus a human-readable `message`.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ApiError {
+    /// Stable error class — see the `code` field for known values.
+    pub code: &'static str,
+    /// Human-readable detail, safe to surface to the user.
+    pub message: String,
+}
+
+impl ApiError {
+    pub const EMPTY_MESSAGE_CODE: &str = "empty_message";
+    pub const EMPTY_MESSAGE_TEXT: &str = "content is empty and no attachments provided";
+    pub const SESSION_NOT_FOUND_CODE: &str = "session_not_found";
+    pub const SESSION_NOT_FOUND_TEXT: &str = "session not found";
+
+    pub fn empty_message() -> Self {
+        Self {
+            code: Self::EMPTY_MESSAGE_CODE,
+            message: Self::EMPTY_MESSAGE_TEXT.into(),
+        }
+    }
+
+    pub fn session_not_found() -> Self {
+        Self {
+            code: Self::SESSION_NOT_FOUND_CODE,
+            message: Self::SESSION_NOT_FOUND_TEXT.into(),
+        }
+    }
+
+    fn attachment(message: String) -> Self {
+        Self {
+            code: "attachment_invalid",
+            message,
+        }
+    }
+}
+
+/// Largest decoded attachment (10 MB), mirroring the desktop app limit.
+const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
+/// Maximum attachments per message (Anthropic accepts up to 100; this keeps
+/// a single request's multimodal payload bounded).
+const MAX_ATTACHMENTS: usize = 8;
+/// MIME types the multimodal adapters can serialize.
+const SUPPORTED_MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// Validate attachments and convert them to provider-agnostic content
+/// blocks. Returns a user-facing error message on the first violation.
+fn attachments_to_blocks(
+    attachments: &[MessageAttachment],
+) -> Result<Vec<shannon_engine::api::ContentBlock>, String> {
+    use base64::Engine;
+
+    if attachments.len() > MAX_ATTACHMENTS {
+        return Err(format!(
+            "too many attachments: {} (max {MAX_ATTACHMENTS})",
+            attachments.len()
+        ));
+    }
+
+    let mut blocks = Vec::with_capacity(attachments.len());
+    for (i, att) in attachments.iter().enumerate() {
+        let label = att
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("attachment-{i}"));
+        if !SUPPORTED_MEDIA_TYPES.contains(&att.media_type.as_str()) {
+            return Err(format!(
+                "attachment \"{label}\": unsupported media_type \"{}\" (supported: {})",
+                att.media_type,
+                SUPPORTED_MEDIA_TYPES.join(", ")
+            ));
+        }
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(att.data.as_bytes())
+            .map_err(|_| format!("attachment \"{label}\": data is not valid base64"))?;
+        if decoded.len() > MAX_ATTACHMENT_BYTES {
+            return Err(format!(
+                "attachment \"{label}\": {} bytes exceeds the {MAX_ATTACHMENT_BYTES} byte limit",
+                decoded.len()
+            ));
+        }
+        blocks.push(shannon_engine::api::ContentBlock::Image {
+            source: shannon_engine::api::ImageSource::base64(
+                att.media_type.clone(),
+                att.data.clone(),
+            ),
+        });
+    }
+    Ok(blocks)
 }
 
 #[utoipa::path(post, path = "/v1/sessions", request_body = CreateSessionRequest, responses((status = 200, body = CreateSessionResponse)))]
@@ -89,17 +198,32 @@ pub async fn post_message(
     Json(request): Json<MessageRequest>,
 ) -> Result<
     Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>,
-    StatusCode,
+    (StatusCode, Json<ApiError>),
 > {
-    if request.content.trim().is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+    if request.content.trim().is_empty() && request.attachments.as_ref().is_none_or(Vec::is_empty) {
+        return Err((StatusCode::BAD_REQUEST, Json(ApiError::empty_message())));
     }
-    let session = state.sessions.get(id).await.ok_or(StatusCode::NOT_FOUND)?;
+    let attachments = match request.attachments.as_deref() {
+        None => Vec::new(),
+        Some(atts) => match attachments_to_blocks(atts) {
+            Ok(blocks) => blocks,
+            Err(message) => {
+                tracing::warn!("attachment validation failed: {message}");
+                return Err((StatusCode::BAD_REQUEST, Json(ApiError::attachment(message))));
+            }
+        },
+    };
+    let session = state
+        .sessions
+        .get(id)
+        .await
+        .ok_or((StatusCode::NOT_FOUND, Json(ApiError::session_not_found())))?;
     let engine = session.engine;
     let context = shannon_core::query_engine::QueryContext {
         query_id: Uuid::new_v4(),
         session_id: id,
         user_message: request.content,
+        attachments,
         metadata: shannon_core::query_engine::QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: true,
@@ -228,4 +352,121 @@ fn not_implemented(id: &str) -> Response {
         }),
     )
         .into_response()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn png_b64(len: usize) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(vec![0x89u8; len])
+    }
+
+    #[test]
+    fn test_valid_image_attachments_convert_to_blocks() {
+        let atts = vec![
+            MessageAttachment {
+                name: Some("shot.png".into()),
+                media_type: "image/png".into(),
+                data: png_b64(16),
+            },
+            MessageAttachment {
+                name: None,
+                media_type: "image/jpeg".into(),
+                data: png_b64(16),
+            },
+        ];
+        let blocks = attachments_to_blocks(&atts).unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(
+            blocks[0],
+            shannon_engine::api::ContentBlock::Image { .. }
+        ));
+    }
+
+    #[test]
+    fn test_unsupported_media_type_rejected() {
+        let atts = vec![MessageAttachment {
+            name: Some("doc.pdf".into()),
+            media_type: "application/pdf".into(),
+            data: png_b64(16),
+        }];
+        let err = attachments_to_blocks(&atts).unwrap_err();
+        assert!(err.contains("unsupported media_type"), "got: {err}");
+    }
+
+    #[test]
+    fn test_invalid_base64_rejected() {
+        let atts = vec![MessageAttachment {
+            name: None,
+            media_type: "image/png".into(),
+            data: "not!base64!".into(),
+        }];
+        let err = attachments_to_blocks(&atts).unwrap_err();
+        assert!(err.contains("not valid base64"), "got: {err}");
+    }
+
+    #[test]
+    fn test_oversized_attachment_rejected() {
+        let atts = vec![MessageAttachment {
+            name: Some("big.png".into()),
+            media_type: "image/png".into(),
+            data: png_b64(MAX_ATTACHMENT_BYTES + 1),
+        }];
+        let err = attachments_to_blocks(&atts).unwrap_err();
+        assert!(err.contains("exceeds"), "got: {err}");
+    }
+
+    #[test]
+    fn test_too_many_attachments_rejected() {
+        let atts: Vec<MessageAttachment> = (0..=MAX_ATTACHMENTS)
+            .map(|_| MessageAttachment {
+                name: None,
+                media_type: "image/png".into(),
+                data: png_b64(4),
+            })
+            .collect();
+        let err = attachments_to_blocks(&atts).unwrap_err();
+        assert!(err.contains("too many attachments"), "got: {err}");
+    }
+
+    #[test]
+    fn test_svg_not_accepted_via_rest() {
+        // Vision providers accept png/jpeg/gif/webp only; the desktop app
+        // filters SVG before this point, and the REST API rejects it.
+        let atts = vec![MessageAttachment {
+            name: Some("logo.svg".into()),
+            media_type: "image/svg+xml".into(),
+            data: png_b64(8),
+        }];
+        assert!(attachments_to_blocks(&atts).is_err());
+    }
+
+    // ── ApiError body — structured JSON for non-2xx responses ──
+    // Locks down the contract added in the T2 follow-up: clients can
+    // surface `message` directly; `code` is stable for programmatic
+    // handling.
+
+    #[test]
+    fn api_error_serialization_includes_code_and_message() {
+        let err = ApiError::empty_message();
+        let json = serde_json::to_string(&err).unwrap();
+        assert!(json.contains("\"code\":\"empty_message\""));
+        assert!(json.contains("\"message\":"));
+    }
+
+    #[test]
+    fn api_error_attachment_carries_validation_message() {
+        let err = ApiError::attachment(String::from("attachment \"x\": unsupported media_type"));
+        assert_eq!(err.code, "attachment_invalid");
+        assert!(err.message.contains("unsupported"));
+    }
+
+    #[test]
+    fn api_error_session_not_found_is_stable() {
+        let err = ApiError::session_not_found();
+        assert_eq!(err.code, ApiError::SESSION_NOT_FOUND_CODE);
+    }
 }

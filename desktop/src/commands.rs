@@ -608,6 +608,35 @@ pub async fn send_message(
         }
     });
 
+    // Route image attachments into the multimodal query path so the model
+    // actually sees them. The `FileAttachment`s stored on the ChatMessage
+    // below are display-only (chat history / UI chips); only these content
+    // blocks reach the LLM. SVG is excluded — vision providers accept
+    // png/jpeg/gif/webp only.
+    let image_blocks: Vec<shannon_engine::api::ContentBlock> = attachments
+        .as_ref()
+        .map(|list| {
+            list.iter()
+                .filter_map(|att| {
+                    let b64 = att.base64_data.as_ref()?;
+                    let media_type = att.media_type.as_deref()?;
+                    if !matches!(
+                        media_type,
+                        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+                    ) {
+                        return None;
+                    }
+                    Some(shannon_engine::api::ContentBlock::Image {
+                        source: shannon_engine::api::ImageSource::base64(
+                            media_type.to_string(),
+                            b64.clone(),
+                        ),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     // Tier-1 auto-title: capture emptiness before the push — this message is
     // the session's first user message iff the buffer was empty.
     let first_user_message = {
@@ -727,6 +756,7 @@ pub async fn send_message(
         query_id,
         session_id,
         user_message: message,
+        attachments: image_blocks,
         metadata: shannon_core::query_engine::QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: true,
@@ -1425,6 +1455,7 @@ pub async fn start_background_task(
             query_id,
             session_id: uuid::Uuid::new_v4(),
             user_message: prompt.clone(),
+            attachments: Vec::new(),
             metadata: shannon_core::query_engine::QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,

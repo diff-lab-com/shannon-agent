@@ -1396,6 +1396,10 @@ expression: output
       "enum": [
         "screenshot",
         "click",
+        "right_click",
+        "middle_click",
+        "double_click",
+        "triple_click",
         "type",
         "scroll",
         "key_press",

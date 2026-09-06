@@ -493,6 +493,15 @@ struct Cli {
     #[arg(short = 'c', long, alias = "cont")]
     r#continue: bool,
 
+    /// Attach one or more image files to the next query (headless mode).
+    /// Mirrors the Claude Code `--attach` and Codex `--image` flags:
+    /// the model sees each file as a multimodal content block alongside
+    /// the prompt. Accepted extensions: png, jpg/jpeg, gif, webp, bmp.
+    /// SVG is rejected (vision providers don't accept it). Repeatable.
+    /// Example: shannon -p "what's in this diagram" --attach ./shot.png
+    #[arg(long = "attach", value_name = "PATH", num_args = 1..)]
+    attach: Vec<String>,
+
     /// Session goal injected into the system prompt (headless: injection only).
     /// Example: shannon -p "make CI green" --goal "all tests passing"
     #[arg(long = "goal", value_name = "OBJECTIVE")]
@@ -1353,6 +1362,7 @@ fn run_noninteractive_query(
     resume_session: Option<shannon_core::session_log::StoredSession>,
     disallowed_tools: Vec<String>,
     goal: Option<String>,
+    attachments: Vec<shannon_engine::api::ContentBlock>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
 
@@ -1609,6 +1619,7 @@ fn run_noninteractive_query(
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: query.to_string(),
+            attachments,
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: should_enable_tools(llm_provider.clone()),
@@ -1988,6 +1999,7 @@ fn run_headless_query(
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: prompt.to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: should_enable_tools(llm_provider.clone()),
@@ -2549,6 +2561,50 @@ fn load_headless_webhook_config() -> Option<shannon_core::notifier::WebhookConfi
 
 /// Read all of stdin into a String. Returns empty string if stdin is a terminal
 /// (i.e., not piped).
+/// Convert `--attach <PATH>` entries into multimodal content blocks.
+/// Mirrors the supported set advertised by the flag doc-comment (and the
+/// REST `MessageRequest.attachments` allowlist); bmp accepted here for
+/// parity with the TUI `/image` command.
+const CLI_ATTACH_MEDIA: &[(&str, &str)] = &[
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("gif", "image/gif"),
+    ("webp", "image/webp"),
+    ("bmp", "image/bmp"),
+];
+
+fn parse_attachments(paths: &[String]) -> Result<Vec<shannon_engine::api::ContentBlock>> {
+    use base64::Engine;
+    use std::path::Path;
+
+    let mut blocks = Vec::with_capacity(paths.len());
+    for p in paths {
+        let path = Path::new(p);
+        if !path.exists() {
+            return Err(anyhow::anyhow!("--attach: file not found: {p}"));
+        }
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase);
+        let media_type = ext
+            .as_deref()
+            .and_then(|e| CLI_ATTACH_MEDIA.iter().find(|(k, _)| *k == e).map(|(_, v)| *v))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--attach: unsupported extension for {p} (supported: png, jpg, jpeg, gif, webp, bmp)"
+                )
+            })?;
+        let bytes = std::fs::read(path).map_err(|e| anyhow::anyhow!("--attach: read {p}: {e}"))?;
+        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        blocks.push(shannon_engine::api::ContentBlock::Image {
+            source: shannon_engine::api::ImageSource::base64(media_type, data),
+        });
+    }
+    Ok(blocks)
+}
+
 fn read_stdin() -> String {
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() {
@@ -2961,6 +3017,7 @@ fn run_team_agent_mode(
                                     query_id: Uuid::new_v4(),
                                     session_id: Uuid::new_v4(),
                                     user_message: task_desc,
+                                    attachments: Vec::new(),
                                     metadata: QueryMetadata {
                                         timestamp: chrono::Utc::now(),
                                         tools_allowed: should_enable_tools(llm_provider.clone()),
@@ -4440,6 +4497,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             None,
             cli.disallowed_tools.clone(),
             cli.goal.clone(),
+            parse_attachments(&cli.attach)?,
         );
     }
 
@@ -4463,6 +4521,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             resume_data,
             cli.disallowed_tools.clone(),
             cli.goal.clone(),
+            parse_attachments(&cli.attach)?,
         );
     }
 
@@ -4487,6 +4546,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             resume_data,
             cli.disallowed_tools.clone(),
             cli.goal.clone(),
+            parse_attachments(&cli.attach)?,
         );
     }
 
@@ -4722,6 +4782,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 resume_data,
                 cli.disallowed_tools.clone(),
                 cli.goal.clone(),
+                parse_attachments(&cli.attach)?,
             )?;
         }
         Some(Commands::Serve {

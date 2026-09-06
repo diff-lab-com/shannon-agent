@@ -705,9 +705,9 @@ mod tests {
     #[test]
     fn test_sanitize_removes_api_keys() {
         let content = format!(
-        "My key is {}-api03-{} and token {}123456789012345678901234567890123456",
-        "sk-ant", "abcdefghijklmnopqrstuvwx", "ghp_"
-    );
+            "My key is {}-api03-{} and token {}123456789012345678901234567890123456",
+            "sk-ant", "abcdefghijklmnopqrstuvwx", "ghp_"
+        );
         let sanitized = sanitize_content(&content, "/home/user");
         assert!(!sanitized.contains("sk-ant-api03-"));
         assert!(!sanitized.contains("ghp_"));

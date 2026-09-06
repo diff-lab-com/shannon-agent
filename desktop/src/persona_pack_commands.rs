@@ -1877,7 +1877,10 @@ mod tests {
         let fixture_sk_live = format!("api_key = \"{}-live-abcdef123456\"", "sk");
         let cases: Vec<(&str, &str)> = vec![
             // R1 — assignment lines (whole line replaced)
-            (concat!("api_key = \"sk-", "live-abcdef123456\""), STRIPPED_PLACEHOLDER),
+            (
+                concat!("api_key = \"sk-", "live-abcdef123456\""),
+                STRIPPED_PLACEHOLDER,
+            ),
             ("API_KEY=hunter2hunter2", STRIPPED_PLACEHOLDER),
             ("\"api_key\": \"value-here\"", STRIPPED_PLACEHOLDER),
             ("- token: abc123def456", STRIPPED_PLACEHOLDER),
@@ -1912,9 +1915,15 @@ mod tests {
         let fixture = format!("{}{}", "xoxb", "-123456789-abcdefghijklmnopqrstuv");
         let (out, n) = strip_text(&fixture, false);
         assert_eq!(n, 1);
-        let fixture_gp_tok = format!("{}{}{}", "github", "_pat_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ123_4567890");
+        let fixture_gp_tok = format!(
+            "{}{}{}",
+            "github", "_pat_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ123_4567890"
+        );
         let (out, n) = strip_text(&fixture_gp_tok, false);
-        let fixture = format!("{}{}{}", "github", "_pat_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ123_4567890");
+        let fixture = format!(
+            "{}{}{}",
+            "github", "_pat_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ123_4567890"
+        );
         let (out, n) = strip_text(&fixture, false);
         assert_eq!(n, 1);
 
@@ -2600,7 +2609,10 @@ Authorization: none
         let e = env("toml-profile");
         write(
             &e.src.profiles_dir().join("leaky.toml"),
-            &format!("name = \"leaky\"\ndescription = \"Team baseline\"\napi_key = \"{}-live-abcdef1234567890\"\nauto_approve = []\nconfirm = []\ndeny = []\n", "sk"),
+            &format!(
+                "name = \"leaky\"\ndescription = \"Team baseline\"\napi_key = \"{}-live-abcdef1234567890\"\nauto_approve = []\nconfirm = []\ndeny = []\n",
+                "sk"
+            ),
         );
         let out = export_core(ALL, &e.src, &pack_path(&e)).expect("export");
         assert_eq!(out.stripped, 1, "one R1 redaction expected");

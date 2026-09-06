@@ -288,6 +288,7 @@ async fn spawn_github_routine_run(
                     session_id,
                     user_message: prompt,
                     metadata,
+                    attachments: Vec::new(),
                 };
                 use futures::StreamExt;
                 let mut stream = session

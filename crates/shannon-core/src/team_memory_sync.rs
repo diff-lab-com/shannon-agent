@@ -1041,7 +1041,10 @@ mod tests {
         let file_path = tmp.path().join("test.md");
         fs::write(
             &file_path,
-            concat!("GITHUB_TOKEN=ghp_", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij\n"),
+            concat!(
+                "GITHUB_TOKEN=ghp_",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij\n"
+            ),
         )
         .unwrap();
 

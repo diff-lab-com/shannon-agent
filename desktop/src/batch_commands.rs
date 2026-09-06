@@ -619,6 +619,7 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
                 temperature: None,
                 top_p: None,
             },
+            attachments: Vec::new(),
         };
 
         let mut failure: Option<String> = None;
