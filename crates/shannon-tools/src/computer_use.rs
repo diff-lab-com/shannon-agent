@@ -1137,6 +1137,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(feature = "computer-use"))]
     async fn test_execute_without_feature_returns_error() {
         let tool = ComputerUseTool::new();
 
@@ -1176,6 +1177,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(feature = "computer-use"))]
     async fn test_execute_click_without_feature() {
         let tool = ComputerUseTool::new();
         let result = tool
@@ -1199,6 +1201,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(feature = "computer-use"))]
     async fn test_execute_type_without_feature() {
         let tool = ComputerUseTool::new();
         let result = tool
@@ -1241,6 +1244,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(feature = "computer-use"))]
     async fn test_execute_scroll_default_direction() {
         let tool = ComputerUseTool::new();
         let result = tool.execute(make_input("scroll")).await.unwrap();

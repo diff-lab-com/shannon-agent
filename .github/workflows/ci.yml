@@ -75,7 +75,9 @@ jobs:
           # CLI passthrough feature (opt-in desktop automation build)
           CARGO_TARGET_DIR=target-feature cargo build -p shannon-cli --features computer-use
       - name: Test with computer-use feature
-        run: CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools --features computer-use --lib --no-fail-fast
+        # Only the computer module matters here (feature-off stub tests are
+        # cfg-gated out; the full lib run would drag in HOME-race git tests).
+        run: CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools --features computer-use --lib computer --no-fail-fast
       - name: Doctests
         # nextest does not execute doctests, so a doctest-only regression
         # (e.g. an example that relies on opt-in configuration) stays green
