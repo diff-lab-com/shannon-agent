@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import type { WorkspaceLayout } from '@/components/workspace/layout'
 import type {
   ChatMessage,
   StatusResponse,
@@ -2199,4 +2200,21 @@ export async function terminalKill(terminalId: string): Promise<void> {
 /** Live terminals, oldest first. */
 export async function terminalList(): Promise<TerminalInfo[]> {
   return invoke('terminal_list')
+}
+
+// Draggable panel workspace (P1-5 C-2 — frozen contract). Layout geometry
+// types live with the model in components/workspace/layout.ts; the backend
+// stores per-project layouts in ~/.shannon/desktop/workspace-layouts.json.
+
+/**
+ * The saved layout for `projectKey`, or `null` when none is stored **or the
+ * stored version is unsupported** (both reset the UI to the default preset).
+ */
+export async function workspaceGetLayout(projectKey: string): Promise<WorkspaceLayout | null> {
+  return invoke('workspace_get_layout', { projectKey })
+}
+
+/** Persist the layout for `projectKey` (validated backend-side). */
+export async function workspaceSetLayout(projectKey: string, layout: WorkspaceLayout): Promise<void> {
+  await invoke('workspace_set_layout', { projectKey, layout })
 }

@@ -81,7 +81,25 @@ function dirLabel(projectDir: string): string {
   return base.length > 0 ? base : projectDir;
 }
 
-export function TerminalPanel({ projectDir }: { projectDir?: string | null }) {
+export interface TerminalPanelProps {
+  projectDir?: string | null
+  /**
+   * P1-5 C-2 — `drawer` (default) is the chat-page bottom drawer.
+   * `panel` renders the same component as an always-open WorkspaceGrid
+   * panel: it fills its container, skips the drawer toggle affordances and
+   * the Ctrl+` window handler (the grid host owns panel presence instead).
+   * The Chat page renders ONE instance and physically moves its dock DOM
+   * node between the two containers (manual reparenting — NOT a portal
+   * container swap, which in React 19 remounts the subtree), so xterm
+   * instances (and their scrollback) survive the drawer↔grid handoff. The
+   * embedded variant additionally reconciles with `terminal_list` on mount,
+   * and the Rust-side TerminalManager keeps processes alive throughout.
+   */
+  variant?: 'drawer' | 'panel'
+}
+
+export function TerminalPanel({ projectDir, variant = 'drawer' }: TerminalPanelProps) {
+  const embedded = variant === 'panel'
   const intl = useIntl();
   const t = useCallback(
     (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values),
@@ -89,7 +107,9 @@ export function TerminalPanel({ projectDir }: { projectDir?: string | null }) {
   );
   const resolvedTheme = useResolvedThemeAttr();
 
-  const [open, setOpen] = useState(false);
+  const [openState, setOpen] = useState(false);
+  // Grid-embedded panels are always open; the drawer keeps its own state.
+  const open = embedded || openState;
   const [fullHeight, setFullHeight] = useState(false);
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -309,8 +329,28 @@ export function TerminalPanel({ projectDir }: { projectDir?: string | null }) {
     }
   }, [open, openPanel]);
 
-  // Ctrl+` — capture phase so it wins over xterm's own key handling.
+  // Embedded (workspace grid) variant: reconcile with the backend on mount.
+  // The panel can be mounted while PTYs are already alive (fresh page mount
+  // straight into a layout that contains a terminal panel); `terminal_list`
+  // restores those tabs without spawning. The ref guard keeps StrictMode
+  // double-effects from double-spawning; `openPanel`'s `booted` state guard
+  // stays as the second layer. The drawer variant is untouched: it
+  // reconciles on first OPEN, not on mount.
+  const embeddedBootRef = useRef(false);
   useEffect(() => {
+    if (!embedded || embeddedBootRef.current) return;
+    embeddedBootRef.current = true;
+    void openPanel();
+    // One-shot reconcile when the panel first renders embedded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedded]);
+
+  // Ctrl+` — capture phase so it wins over xterm's own key handling.
+  // Skipped when embedded in a workspace grid panel: the grid host owns
+  // whether the terminal panel exists at all (its close button removes the
+  // panel), so the shortcut must not fight the layout.
+  useEffect(() => {
+    if (embedded) return;
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === '`') {
         e.preventDefault();
@@ -320,7 +360,7 @@ export function TerminalPanel({ projectDir }: { projectDir?: string | null }) {
     };
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
-  }, [togglePanel]);
+  }, [embedded, togglePanel]);
 
   const closeTab = useCallback((terminalId: string) => {
     void api.terminalKill(terminalId).catch(() => {});
@@ -366,10 +406,13 @@ export function TerminalPanel({ projectDir }: { projectDir?: string | null }) {
     <section
       role="region"
       aria-label={t('terminal.panel.label')}
-      className={`shrink-0 flex flex-col border-t border-outline-variant/30 bg-surface-container-lowest ${
-        fullHeight ? 'flex-1 min-h-0' : ''
+      data-terminal-variant={variant}
+      className={`flex flex-col bg-surface-container-lowest ${
+        embedded
+          ? 'h-full min-h-0'
+          : `shrink-0 border-t border-outline-variant/30 ${fullHeight ? 'flex-1 min-h-0' : ''}`
       }`}
-      style={fullHeight ? undefined : { height: DRAWER_HEIGHT_PX }}
+      style={!embedded && !fullHeight ? { height: DRAWER_HEIGHT_PX } : undefined}
     >
       {/* Toolbar: tabs + actions */}
       <div className="flex items-center gap-xs px-sm py-1 border-b border-outline-variant/20 bg-surface-container-low/60">
@@ -417,18 +460,20 @@ export function TerminalPanel({ projectDir }: { projectDir?: string | null }) {
         >
           <span className="material-symbols-outlined icon-sm" aria-hidden="true">add</span>
         </button>
-        <button
-          type="button"
-          onClick={() => setFullHeight(p => !p)}
-          aria-pressed={fullHeight}
-          aria-label={t('terminal.panel.fullHeight')}
-          title={t('terminal.panel.fullHeight')}
-          className="p-1 rounded text-on-surface-variant hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-        >
-          <span className="material-symbols-outlined icon-sm" aria-hidden="true">
-            {fullHeight ? 'collapse_content' : 'expand_content'}
-          </span>
-        </button>
+        {!embedded && (
+          <button
+            type="button"
+            onClick={() => setFullHeight(p => !p)}
+            aria-pressed={fullHeight}
+            aria-label={t('terminal.panel.fullHeight')}
+            title={t('terminal.panel.fullHeight')}
+            className="p-1 rounded text-on-surface-variant hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          >
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+              {fullHeight ? 'collapse_content' : 'expand_content'}
+            </span>
+          </button>
+        )}
         <button
           ref={toggleRef}
           type="button"

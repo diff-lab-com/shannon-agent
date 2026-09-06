@@ -425,4 +425,21 @@ vi.mock('@/lib/tauri-api', () => ({
   // the populated-action / failure paths.
   lspCodeActions: vi.fn().mockResolvedValue({ actions: [] }),
   applyCodeAction: vi.fn().mockResolvedValue(0),
+  // P1-5 C-2 — workspace layout persistence. Default: nothing stored, so
+  // the Chat page boots on the default focus preset in every test.
+  workspaceGetLayout: vi.fn().mockResolvedValue(null),
+  workspaceSetLayout: vi.fn().mockResolvedValue(undefined),
+  // P1-5 C-2 — preview panel content (LivePreview sync on mount).
+  previewStatus: vi.fn().mockResolvedValue({ running: false, url: null, startedAtMs: null }),
+  previewDetect: vi.fn().mockResolvedValue({ devServer: null }),
+  previewStart: vi.fn().mockResolvedValue({ url: 'http://localhost:5173' }),
+  previewStop: vi.fn().mockResolvedValue(undefined),
+  previewLogs: vi.fn().mockResolvedValue([]),
+  previewCapture: vi.fn().mockResolvedValue({ imageBase64: '', mediaType: 'image/png', width: 1, height: 1 }),
+  // P1-5 D — terminal drawer/panel (reconciles on open).
+  terminalList: vi.fn().mockResolvedValue([]),
+  terminalSpawn: vi.fn().mockResolvedValue({ terminalId: 'term-1' }),
+  terminalWrite: vi.fn().mockResolvedValue(undefined),
+  terminalResize: vi.fn().mockResolvedValue(undefined),
+  terminalKill: vi.fn().mockResolvedValue(undefined),
 }))
