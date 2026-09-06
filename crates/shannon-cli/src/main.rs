@@ -66,8 +66,7 @@ enum HeadlessExitCode {
     Error = 1,
     /// 2 - maximum turns reached before completion.
     TurnLimit = 2,
-    /// 3 - timeout occurred (request took too long).
-    #[allow(dead_code)] // KEEP: future use
+    /// 3 - request timed out (retries exhausted after read/timeouts).
     Timeout = 3,
     /// 4 - rate limited by API provider.
     RateLimited = 4,
@@ -80,6 +79,29 @@ enum HeadlessExitCode {
 impl From<HeadlessExitCode> for i32 {
     fn from(code: HeadlessExitCode) -> i32 {
         code as i32
+    }
+}
+
+/// Map a query-failure message to the headless exit code (§ headless
+/// contract). Order matters: the most specific cause wins. Timeout sits
+/// behind the others because "denied"/"rate limit" messages can mention
+/// retrying after a delay, while timeout text is distinctive.
+fn classify_headless_failure(error: &str) -> HeadlessExitCode {
+    let err_lower = error.to_lowercase();
+    if err_lower.contains("context")
+        || err_lower.contains("token limit")
+        || err_lower.contains("max_tokens")
+        || err_lower.contains("context_length")
+    {
+        HeadlessExitCode::ContextOverflow
+    } else if err_lower.contains("rate limit") || err_lower.contains("429") {
+        HeadlessExitCode::RateLimited
+    } else if err_lower.contains("permission") || err_lower.contains("denied") {
+        HeadlessExitCode::PermissionDenied
+    } else if err_lower.contains("timed out") || err_lower.contains("timeout") {
+        HeadlessExitCode::Timeout
+    } else {
+        HeadlessExitCode::Error
     }
 }
 
@@ -148,6 +170,13 @@ enum CiEvent {
     #[serde(rename = "diff")]
     #[allow(dead_code)] // KEEP: future use
     Diff { path: String, content: String },
+    /// Non-fatal progress note (API retry activity, environment notices).
+    /// Emitted on stderr in text mode; NDJSON in `json-stream` mode.
+    #[serde(rename = "progress")]
+    Progress { message: String },
+    /// Non-fatal warning — the run continues (e.g. turn-budget pressure).
+    #[serde(rename = "warning")]
+    Warning { message: String },
     /// Error occurred.
     #[serde(rename = "error")]
     Error { message: String },
@@ -439,11 +468,12 @@ struct Cli {
     #[arg(long = "disallowed-tools", value_name = "TOOL", num_args = 0.., hide = true)]
     disallowed_tools: Vec<String>,
 
-    /// Resume the most recent session, or a specific session by UUID.
-    /// Without a UUID argument, loads the most recent session.
-    /// With a UUID argument, loads that specific session.
-    /// Example: shannon --resume           (most recent)
-    ///          shannon --resume abc-123... (specific session)
+    /// Resume a session by UUID, or the most recent session recorded in the
+    /// current directory (falling back to the globally most recent session
+    /// with a warning). Scripts should prefer `--resume-id <UUID>`: explicit
+    /// and independent of directory ordering.
+    /// Example: shannon --resume             (most recent in this directory)
+    ///          shannon --resume abc-123...  (specific session)
     #[arg(
         short = 'r',
         long,
@@ -453,12 +483,13 @@ struct Cli {
     )]
     resume: Option<String>,
 
-    /// Resume a specific session by UUID (explicit alternative to --resume `<UUID>`).
-    /// Example: shannon --resume-id 550e8400-e29b-41d4-a716-446655440000
+    /// Resume a specific session by UUID (explicit alternative to --resume `<UUID>`;
+    /// preferred for scripts). Example: shannon --resume-id 550e8400-e29b-41d4-a716-446655440000
     #[arg(long = "resume-id", value_name = "UUID")]
     resume_id: Option<String>,
 
-    /// Continue the most recent session (alias for --resume).
+    /// Continue the most recent session recorded in the current directory
+    /// (alias for --resume). Headless mode refuses a cross-directory resume.
     #[arg(short = 'c', long, alias = "cont")]
     r#continue: bool,
 
@@ -1185,16 +1216,47 @@ fn sessions_container_from_env() -> std::path::PathBuf {
     }
 }
 
-/// Load a session for resumption from its L0 event log (§4.6 cutover).
+/// How a session was selected for resumption (§ resume guard).
+#[derive(Debug)]
+struct ResolvedResume {
+    session: shannon_core::session_log::StoredSession,
+    /// True when the session's recorded working directory matches the
+    /// current one (best-effort canonicalized comparison). Sessions recorded
+    /// without a working directory never match.
+    cwd_match: bool,
+}
+
+/// Best-effort comparison of a session's recorded project path against the
+/// current working directory. Falls back to exact string equality when either
+/// side cannot be canonicalized; `None` (unrecorded) never matches.
+fn current_cwd_matches(project_path: Option<&str>) -> bool {
+    let Some(recorded) = project_path else {
+        return false;
+    };
+    let recorded_path = std::path::PathBuf::from(recorded);
+    let Ok(cwd) = std::env::current_dir() else {
+        return false;
+    };
+    if recorded_path == cwd {
+        return true;
+    }
+    match (recorded_path.canonicalize(), cwd.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Resolve the session to resume (§4.6 cutover).
 ///
-/// If `session_id_str` is provided, loads that specific session by UUID.
-/// Otherwise, loads the most recent session from the sessions container.
+/// - `--resume-id <UUID>` / `--resume <UUID>`: load that exact session.
+/// - Bare `--resume` / `--continue`: load the most recent session recorded
+///   in the current working directory; when none matches, fall back to the
+///   globally most recent session and let the caller warn (interactive) or
+///   refuse (headless) about the cross-directory resume.
 ///
-/// Returns the projected [`StoredSession`](shannon_core::session_log::StoredSession) on success. Legacy snapshot files
-/// are neither read nor migrated (DP4).
-fn load_resume_session(
-    session_id_str: Option<&str>,
-) -> Result<shannon_core::session_log::StoredSession> {
+/// Returns `Ok(None)` when there is nothing to resume (empty sessions
+/// container) so callers keep their "start fresh" fallback.
+fn resolve_resume(session_id_str: Option<&str>) -> Result<Option<ResolvedResume>> {
     let store = shannon_core::session_log::SessionStore::new(sessions_container_from_env());
 
     if let Some(id_str) = session_id_str {
@@ -1206,19 +1268,74 @@ fn load_resume_session(
             };
             anyhow::anyhow!("Invalid session UUID '{display}': {e}")
         })?;
-        store
+        let session = store
             .load(&uuid)?
-            .ok_or_else(|| anyhow::anyhow!("Session {uuid} not found"))
-    } else {
-        let latest = store
-            .list()?
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("No previous sessions found to resume"))?;
-        let id = latest.session_id;
-        store
-            .load(&id)?
-            .ok_or_else(|| anyhow::anyhow!("Session {id} not found on disk"))
+            .ok_or_else(|| anyhow::anyhow!("Session {uuid} not found"))?;
+        let cwd_match = current_cwd_matches(session.metadata.project_path.as_deref());
+        return Ok(Some(ResolvedResume { session, cwd_match }));
+    }
+
+    let infos = store.list()?;
+    if infos.is_empty() {
+        return Ok(None);
+    }
+    let cwd = std::env::current_dir().ok();
+    let cwd_pick = cwd.as_ref().and_then(|cwd| {
+        infos.iter().find(|info| {
+            info.project_path
+                .as_deref()
+                .is_some_and(|p| std::path::Path::new(p) == cwd.as_path())
+        })
+    });
+    let picked_id = cwd_pick
+        .or_else(|| infos.first())
+        .map(|info| info.session_id)
+        .expect("non-empty list yields a candidate");
+    let session = store
+        .load(&picked_id)?
+        .ok_or_else(|| anyhow::anyhow!("Session {picked_id} not found on disk"))?;
+    let cwd_match = current_cwd_matches(session.metadata.project_path.as_deref());
+    Ok(Some(ResolvedResume { session, cwd_match }))
+}
+
+/// Headless resume guard. Resuming a session that was recorded in a different
+/// working directory is how one project's context bleeds into another
+/// project's run (the silent `-c` picks the globally most recent session), so
+/// refuse when both directories are known and differ. Sessions recorded
+/// without a working directory (legacy logs) only qualify for a stderr note —
+/// they cannot be verified, and refusing them would break legacy workflows.
+/// Returns `Ok(None)` when there is nothing to resume (fresh start).
+fn headless_resume_data(
+    should_resume: bool,
+    resume_session_id: Option<&str>,
+) -> Result<Option<shannon_core::session_log::StoredSession>> {
+    if !should_resume {
+        return Ok(None);
+    }
+    match resolve_resume(resume_session_id)? {
+        Some(resolved) if !resolved.cwd_match => {
+            let recorded = resolved.session.metadata.project_path.clone();
+            match recorded {
+                Some(recorded) => {
+                    let cwd = std::env::current_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "<unknown>".to_string());
+                    Err(anyhow::anyhow!(
+                        "refusing to resume session {}: recorded in '{recorded}', but the current directory is '{cwd}'. `cd` into that directory or pass --resume-id <UUID> explicitly.",
+                        resolved.session.session_id
+                    ))
+                }
+                None => {
+                    eprintln!(
+                        "NOTE: resuming session {} (no recorded working directory; cannot verify it belongs to this project).",
+                        resolved.session.session_id
+                    );
+                    Ok(Some(resolved.session))
+                }
+            }
+        }
+        Some(resolved) => Ok(Some(resolved.session)),
+        None => Ok(None),
     }
 }
 
@@ -1615,6 +1732,9 @@ enum OutputEvent {
     },
     #[serde(rename = "error")]
     Error { message: String },
+    /// Non-fatal warning — the run continues.
+    #[serde(rename = "warning")]
+    Warning { message: String },
     #[serde(rename = "done")]
     Done { exit_code: i32 },
 }
@@ -1669,8 +1789,8 @@ fn load_schema(input: &str) -> Result<shannon_core::StructuredOutputConfig> {
 /// - Outputs structured JSON with `--output-format json`
 ///
 /// Exit codes (`HeadlessExitCode`): 0 success, 1 error, 2 max turns
-/// reached, 3 timeout (reserved, currently unused), 4 rate limited,
-/// 5 context overflow, 6 permission denied.
+/// reached, 3 timeout (retries exhausted after read/timeouts), 4 rate
+/// limited (retries exhausted), 5 context overflow, 6 permission denied.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn run_headless_query(
@@ -1897,6 +2017,10 @@ fn run_headless_query(
         let mut engine_usage: Option<(u64, u64)> = None;
         let mut exit_code = HeadlessExitCode::Success;
         let mut _turn_count: usize = 0;
+        // Turn-budget pressure warnings fire once per threshold (§ max-turns
+        // early warning) so headless callers can wrap up before the hard cut.
+        let mut turn_budget_warning_80_fired = false;
+        let mut turn_budget_warning_95_fired = false;
         let mut changed_files: Vec<(String, String, String)> = Vec::new(); // (path, old, new)
         let allowed_set: Option<std::collections::HashSet<String>> =
             allowed_tools.map(|v| v.iter().cloned().collect());
@@ -2060,6 +2184,37 @@ fn run_headless_query(
                     // engine tee, including crash-window tail recovery — so a
                     // run killed mid-flight resumes with `--resume <session_id>`
                     // without extra writes here.
+                    // Turn-budget pressure warnings (§ max-turns early
+                    // warning): fire once per threshold, before the hard
+                    // TurnLimit break below, so headless callers can wrap up
+                    // or checkpoint instead of being cut mid-task.
+                    if let Some(max) = max_turns {
+                        let max = max.max(1) as usize;
+                        let pct = turn_number.saturating_mul(100) / max;
+                        let threshold = if pct >= 95 && !turn_budget_warning_95_fired {
+                            turn_budget_warning_95_fired = true;
+                            Some((95, "the run stops at the --max-turns limit"))
+                        } else if pct >= 80 && !turn_budget_warning_80_fired {
+                            turn_budget_warning_80_fired = true;
+                            Some((80, "wrap up or checkpoint soon"))
+                        } else {
+                            None
+                        };
+                        if let Some((mark, advice)) = threshold {
+                            let message = format!(
+                                "Turn budget: {turn_number}/{max} turns used ({mark}%) — {advice}."
+                            );
+                            if !quiet {
+                                eprintln!("[headless: {message}]");
+                            }
+                            if output_format == OutputFormat::JsonStream {
+                                emit_ci_event(&CiEvent::Warning {
+                                    message: message.clone(),
+                                });
+                                emit_output_event(&OutputEvent::Warning { message });
+                            }
+                        }
+                    }
                     // Check max turns
                     if let Some(max) = max_turns {
                         if turn_number >= max as usize {
@@ -2098,24 +2253,43 @@ fn run_headless_query(
                 }
                 Ok(QueryEvent::Failed { error, .. }) => {
                     eprintln!("Error: {error}");
-                    let err_lower = error.to_lowercase();
-                    if err_lower.contains("context")
-                        || err_lower.contains("token limit")
-                        || err_lower.contains("max_tokens")
-                        || err_lower.contains("context_length")
-                    {
-                        exit_code = HeadlessExitCode::ContextOverflow;
-                    } else if err_lower.contains("rate limit") || err_lower.contains("429") {
-                        exit_code = HeadlessExitCode::RateLimited;
-                    } else if err_lower.contains("permission") || err_lower.contains("denied") {
-                        exit_code = HeadlessExitCode::PermissionDenied;
-                    } else {
-                        exit_code = HeadlessExitCode::Error;
-                    }
+                    exit_code = classify_headless_failure(&error);
                     if output_format == OutputFormat::JsonStream {
                         emit_output_event(&OutputEvent::Error {
                             message: error.clone(),
                         });
+                    }
+                }
+                Ok(QueryEvent::Progress { message, .. }) => {
+                    // Engine-side progress (API retry activity, context
+                    // truncation, ...): always on stderr in text mode so CI
+                    // logs show why a run is pausing; NDJSON progress events
+                    // in json-stream mode.
+                    if !quiet {
+                        eprintln!("[headless: {message}]");
+                    }
+                    if output_format == OutputFormat::JsonStream {
+                        emit_ci_event(&CiEvent::Progress { message });
+                    }
+                }
+                Ok(QueryEvent::Warning { message, .. }) => {
+                    if !quiet {
+                        eprintln!("[headless: warning: {message}]");
+                    }
+                    if output_format == OutputFormat::JsonStream {
+                        emit_ci_event(&CiEvent::Warning {
+                            message: message.clone(),
+                        });
+                        emit_output_event(&OutputEvent::Warning { message });
+                    }
+                }
+                Ok(QueryEvent::RateLimit {
+                    requests_used,
+                    requests_limit,
+                    ..
+                }) => {
+                    if !quiet {
+                        eprintln!("[headless: provider rate-limit window {requests_used}/{requests_limit}]");
                     }
                 }
                 Ok(_) => {}
@@ -4211,11 +4385,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             false,
             HashMap::new(),
         );
-        let resume_data = if should_resume {
-            load_resume_session(resume_session_id).ok()
-        } else {
-            None
-        };
+        let resume_data = headless_resume_data(should_resume, resume_session_id)?;
         // Convert comma-separated team_allowed_tools into Vec<String>
         let allowed_vec: Option<Vec<String>> = cli
             .team_allowed_tools
@@ -4284,11 +4454,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             false,
             HashMap::new(),
         );
-        let resume_data = if should_resume {
-            load_resume_session(resume_session_id).ok()
-        } else {
-            None
-        };
+        let resume_data = headless_resume_data(should_resume, resume_session_id)?;
         return run_noninteractive_query(
             &prompt,
             true,
@@ -4312,11 +4478,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             false,
             HashMap::new(),
         );
-        let resume_data = if should_resume {
-            load_resume_session(resume_session_id).ok()
-        } else {
-            None
-        };
+        let resume_data = headless_resume_data(should_resume, resume_session_id)?;
         return run_noninteractive_query(
             &stdin_content,
             true,
@@ -4418,11 +4580,26 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                     eprintln!("Warning: could not open session picker: {e}");
                 }
             } else if should_resume {
-                match load_resume_session(resume_session_id) {
-                    Ok(session_data) => {
-                        let count = repl.restore_session(session_data);
+                match resolve_resume(resume_session_id) {
+                    Ok(Some(resolved)) => {
+                        if !resolved.cwd_match {
+                            // Cross-directory resume: say so loudly instead of
+                            // silently blending another project's context in.
+                            match resolved.session.metadata.project_path.as_deref() {
+                                Some(recorded) => eprintln!(
+                                    "WARNING: resuming session {} recorded in '{recorded}', but the current directory is different — its context may belong to another project (pass --resume-id <UUID> to be explicit).",
+                                    resolved.session.session_id
+                                ),
+                                None => eprintln!(
+                                    "WARNING: resuming session {} (no recorded working directory; cannot verify it belongs to this project).",
+                                    resolved.session.session_id
+                                ),
+                            }
+                        }
+                        let count = repl.restore_session(resolved.session);
                         eprintln!("Resumed session ({count} messages loaded)");
                     }
+                    Ok(None) => {}
                     Err(e) => eprintln!("Warning: could not resume session: {e}"),
                 }
             }
@@ -4444,11 +4621,26 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                     eprintln!("Warning: could not open session picker: {e}");
                 }
             } else if should_resume {
-                match load_resume_session(resume_session_id) {
-                    Ok(session_data) => {
-                        let count = repl.restore_session(session_data);
+                match resolve_resume(resume_session_id) {
+                    Ok(Some(resolved)) => {
+                        if !resolved.cwd_match {
+                            // Cross-directory resume: say so loudly instead of
+                            // silently blending another project's context in.
+                            match resolved.session.metadata.project_path.as_deref() {
+                                Some(recorded) => eprintln!(
+                                    "WARNING: resuming session {} recorded in '{recorded}', but the current directory is different — its context may belong to another project (pass --resume-id <UUID> to be explicit).",
+                                    resolved.session.session_id
+                                ),
+                                None => eprintln!(
+                                    "WARNING: resuming session {} (no recorded working directory; cannot verify it belongs to this project).",
+                                    resolved.session.session_id
+                                ),
+                            }
+                        }
+                        let count = repl.restore_session(resolved.session);
                         eprintln!("Resumed session ({count} messages loaded)");
                     }
+                    Ok(None) => {}
                     Err(e) => eprintln!("Warning: could not resume session: {e}"),
                 }
             }
@@ -4521,11 +4713,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         Some(Commands::Query {
             query, no_stream, ..
         }) => {
-            let resume_data = if should_resume {
-                load_resume_session(resume_session_id).ok()
-            } else {
-                None
-            };
+            let resume_data = headless_resume_data(should_resume, resume_session_id)?;
             run_noninteractive_query(
                 &query,
                 !no_stream,
@@ -5548,11 +5736,11 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
         assert_eq!(cli.headless_prompt.as_deref(), Some("continue this"));
     }
 
-    // ── load_resume_session tests ────────────────────────────────────────
+    // ── resolve_resume tests ─────────────────────────────────────────────
 
     #[test]
-    fn test_load_resume_session_invalid_uuid() {
-        let result = load_resume_session(Some("not-a-valid-uuid"));
+    fn test_resolve_resume_invalid_uuid() {
+        let result = resolve_resume(Some("not-a-valid-uuid"));
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -5562,9 +5750,9 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
     }
 
     #[test]
-    fn test_load_resume_session_nonexistent_uuid() {
+    fn test_resolve_resume_nonexistent_uuid() {
         let uuid = Uuid::new_v4();
-        let result = load_resume_session(Some(&uuid.to_string()));
+        let result = resolve_resume(Some(&uuid.to_string()));
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -5574,10 +5762,11 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
     }
 
     #[test]
-    fn test_load_resume_session_no_sessions() {
-        // With an empty default sessions dir, should return an error.
-        // Just verify it doesn't panic.
-        let _ = load_resume_session(None);
+    fn test_resolve_resume_no_sessions_is_ok_none() {
+        // With no matching sessions in the container this resolves to
+        // Ok(None) (fresh start) rather than an error — callers keep their
+        // graceful fallback. Just verify it doesn't panic.
+        let _ = resolve_resume(None);
     }
 
     // ── New REPL options tests ────────────────────────────────────────────
@@ -6402,6 +6591,43 @@ profile_routes = []
         assert_eq!(i32::from(HeadlessExitCode::Error), 1);
         assert_eq!(i32::from(HeadlessExitCode::ContextOverflow), 5);
         assert_eq!(i32::from(HeadlessExitCode::PermissionDenied), 6);
+    }
+
+    #[test]
+    fn test_classify_headless_failure_maps_specific_causes() {
+        use HeadlessExitCode as E;
+        // Context overflow wording wins over generic tokens.
+        assert_eq!(
+            E::ContextOverflow,
+            classify_headless_failure("prompt exceeded context_length")
+        );
+        // Rate limit: both provider phrasings, including the engine's
+        // "Rate limit exceeded.<suggestion>" composite text.
+        assert_eq!(
+            E::RateLimited,
+            classify_headless_failure(
+                "Rate limit exceeded. Rate limited — the request will be retried automatically."
+            )
+        );
+        assert_eq!(
+            E::RateLimited,
+            classify_headless_failure("HTTP 429 received")
+        );
+        assert_eq!(
+            E::PermissionDenied,
+            classify_headless_failure("tool permission denied by policy")
+        );
+        // Timeout: read-idle/total deadlines exhausted after retries
+        // (previously collapsed into the generic error bucket).
+        assert_eq!(
+            E::Timeout,
+            classify_headless_failure("Timeout. Request timed out. Try again.")
+        );
+        assert_eq!(
+            E::Timeout,
+            classify_headless_failure("connection timed out")
+        );
+        assert_eq!(E::Error, classify_headless_failure("something exploded"));
     }
 
     #[test]
