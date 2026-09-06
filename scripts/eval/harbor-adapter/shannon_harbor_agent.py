@@ -166,7 +166,13 @@ class Shannon(BaseInstalledAgent):
                 f"--model {shlex.quote(model)} "
                 "--output-format json-stream "
                 f"{extra_flags}"
-                f"-p - < {shlex.quote(prompt_target)} "
+                # Attached long-form --prompt=<value>: clap refuses SEPARATED
+                # option values that start with '-' (RCA 2026-09-07: '-p - <file'
+                # assigned the literal "-" as the prompt → 0/85 sweep; '-p
+                # "$(cat f)"' with a leading-dash file was ALSO rejected). The
+                # attached `=` form carries the file's bytes verbatim — verified
+                # byte-exact with leading '-', newlines, backticks and $().
+                f"--prompt=\"$(cat {shlex.quote(prompt_target)})\" "
                 "> /logs/agent/shannon.ndjson 2> /logs/agent/shannon.stderr"
             ),
             env=env,
