@@ -25,6 +25,13 @@ export function titleFromText(text: string, max = 30): string {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
+/**
+ * Prefix of the 任务失败 stamp. Exported so the mobile dispatch journal (P2-1)
+ * can recognize a failure push passing back through the channel and reflect it
+ * in `shannon/task.list` without duplicating the wording.
+ */
+export const TASK_FAILED_STAMP_PREFIX = "❌ 任务失败：";
+
 export function formatTaskStarted(title: string): string {
   return `🚀 已开始任务：${title}`;
 }
@@ -34,7 +41,7 @@ export function formatTaskCompleted(title: string): string {
 }
 
 export function formatTaskFailed(title: string, error: string): string {
-  return `❌ 任务失败：${title}\n${error}`;
+  return `${TASK_FAILED_STAMP_PREFIX}${title}\n${error}`;
 }
 
 /** Build a reporter that pushes lifecycle stamps to one reply target. */

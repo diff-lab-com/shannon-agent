@@ -208,10 +208,15 @@ vi.mock('@/lib/tauri-api', () => ({
   gatewayReadConfig: vi.fn().mockResolvedValue({
     engine: { wsUrl: 'ws://127.0.0.1:33420/api/ws', httpBaseUrl: 'http://127.0.0.1:33420' },
     adapters: [],
+    // P2-1 — the desktop writes this mobile block by default
+    // (commands_mobile_pairing default_mobile_config), so the dispatch card
+    // shows a live channel status out of the box.
+    mobile: { enabled: true, host: '127.0.0.1', port: 33430 },
   }),
   gatewayWriteConfig: vi.fn().mockResolvedValue({
     engine: { wsUrl: 'ws://127.0.0.1:33420/api/ws', httpBaseUrl: 'http://127.0.0.1:33420' },
     adapters: [],
+    mobile: { enabled: true, host: '127.0.0.1', port: 33430 },
   }),
   // E-1 方案 C — default: managed on, not installed (no binary in the test env).
   gatewaySupervisorStart: vi.fn().mockResolvedValue({ managed: true, status: 'notInstalled' }),

@@ -401,6 +401,8 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
 
 function bindSession(ctx: MethodContext, deviceId: string): void {
   ctx.sessionId = deviceId;
+  // P2-1: let the dispatch hub (if attached) start pushing to this device.
+  ctx.onSessionBound?.(deviceId);
 }
 
 // ── composer: pairing + engine bridge, wired with the session gate ─────────
@@ -425,13 +427,20 @@ export interface MobileHandlersOptions {
   logger: Logger;
   resumeClockSkewMs?: number;
   now?: () => number;
+  /**
+   * P2-1: extra handlers merged after pairing + engine bridge (currently
+   * `createTaskHandlers` — shannon/task.dispatch + shannon/task.list). They
+   * self-gate on the bound session.
+   */
+  tasks?: MethodHandlers;
 }
 
 /**
  * Build the full `shannon/*` handler map: pairing (pair/resume) + engine bridge
- * (query/cancel/approval/health/model/agent), with session-gating and mandatory
- * approval signatures enforced. This is what the gateway wires into a MobileServer
- * once P1.2 is live; tests compose it directly.
+ * (query/cancel/approval/health/model/agent) + optional task dispatch handlers
+ * (P2-1), with session-gating and mandatory approval signatures enforced. This
+ * is what the gateway wires into a MobileServer once P1.2 is live; tests
+ * compose it directly.
  */
 export function createMobileHandlers(opts: MobileHandlersOptions): MethodHandlers {
   const pairing = createPairingHandlers({
@@ -446,5 +455,5 @@ export function createMobileHandlers(opts: MobileHandlersOptions): MethodHandler
     requireSession: true,
     verifyDeviceSignature: createRegistryVerifier(opts.registry),
   });
-  return { ...engine, ...pairing };
+  return { ...engine, ...pairing, ...opts.tasks };
 }

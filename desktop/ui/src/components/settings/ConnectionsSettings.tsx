@@ -8,7 +8,7 @@ import type { GatewayConfig, GatewayProcessState } from '@/types'
 
 import { EngineConnectionCard } from './connections-settings/EngineConnectionCard'
 import { GatewayProcessCard } from './connections-settings/GatewayProcessCard'
-import { MobilePairingCard } from './connections-settings/MobilePairingCard'
+import { MobileDispatchCard } from './connections-settings/MobileDispatchCard'
 import { PlatformsCard } from './connections-settings/PlatformsCard'
 import { ALL_SLOTS, type Platform } from './connections-settings/types'
 
@@ -99,7 +99,7 @@ export default function ConnectionsSettings() {
 
       <GatewayProcessCard procState={procState} onProcStateChange={setProcState} />
 
-      <MobilePairingCard />
+      <MobileDispatchCard config={config} procState={procState} />
 
       <PlatformsCard
         config={config}

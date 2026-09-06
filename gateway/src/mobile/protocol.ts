@@ -21,9 +21,11 @@
 export const JSONRPC_VERSION = "2.0" as const;
 
 /**
- * Every shannon/* method the gateway recognizes (Phase-1 minimal set, R5).
- * `shannon/pair` and `shannon/device.resume` land in P1.2 — P1.1 returns a
- * not-implemented error for them so the protocol surface is documented early.
+ * Every shannon/* method the gateway recognizes. Phase-1 minimal set (R5) plus
+ * the P2-1 task-dispatch pair: `shannon/task.dispatch` routes a text through
+ * the same inbound pipeline the IM adapters use (trigger-free: the dispatch
+ * action itself is the trigger), and `shannon/task.list` returns the recent
+ * tasks the gateway dispatched for this device (minimal read-only surface).
  */
 export type ShannonMethod =
   | "shannon/pair"
@@ -35,7 +37,9 @@ export type ShannonMethod =
   | "shannon/agent.detail"
   | "shannon/model.list"
   | "shannon/model.switch"
-  | "shannon/health";
+  | "shannon/health"
+  | "shannon/task.dispatch"
+  | "shannon/task.list";
 
 // ── Requests (phone → gateway) ───────────────────────────────────────────
 
@@ -69,6 +73,25 @@ export interface AgentDetailParams {
   session_id: string;
   /** Subscribe to the session's task.progress stream. */
   subscribe?: boolean;
+}
+
+/**
+ * `shannon/task.dispatch` — send a text through the IM-style inbound pipeline
+ * (per-device lane → lifecycle → approval loop). If the device has a pending
+ * approval request, a Y/N text resolves it instead of creating a task (the
+ * DingTalk `parseChoice` pattern, P2-1).
+ */
+export interface TaskDispatchParams {
+  text: string;
+}
+
+/**
+ * `shannon/task.list` — recent tasks dispatched from this device with their
+ * gateway-side status (running/completed/failed). In-memory journal, newest
+ * first.
+ */
+export interface TaskListParams {
+  limit?: number;
 }
 
 /**
@@ -145,6 +168,15 @@ export type ShannonEvent =
       description: string;
       is_destructive: boolean;
       diff_preview: string | null;
+    }
+  | {
+      /**
+       * P2-1: a plain text message pushed to a dispatched task's device — the
+       * engine's final reply and the 任务开始/完成/失败 lifecycle stamps (the
+       * same strings the IM channels receive from `router/lifecycle.ts`).
+       */
+      type: "task.message";
+      text: string;
     };
 
 export interface ToolFrame {
@@ -189,6 +221,38 @@ export interface DeviceSessionResult {
 
 export interface OkResult {
   ok: true;
+}
+
+// ── P2-1 task dispatch shapes ───────────────────────────────────────────────
+
+/** `shannon/task.dispatch` success. */
+export interface TaskDispatchResult {
+  ok: true;
+  /** `"approval"` — the text resolved a pending approval; `"task"` — a task was created. */
+  kind: "approval" | "task";
+  /** The dispatched task's id (null when the text resolved an approval instead). */
+  task_id: string | null;
+  /** Present when kind === "approval": the choice the device's text resolved. */
+  choice?: "allow" | "deny";
+}
+
+/** One journaled dispatched task (gateway-side, in-memory, this process). */
+export interface MobileTaskRecord {
+  task_id: string;
+  device_id: string;
+  /** Short title (first 30 chars of the text, same rule as the IM lifecycle). */
+  title: string;
+  /** The full dispatched text. */
+  text: string;
+  status: "running" | "completed" | "failed";
+  started_at: number;
+  finished_at: number | null;
+  error: string | null;
+}
+
+/** `shannon/task.list` success — newest first. */
+export interface TaskListResult {
+  tasks: MobileTaskRecord[];
 }
 
 // ── Error codes ────────────────────────────────────────────────────────────
