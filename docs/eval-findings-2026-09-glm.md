@@ -125,3 +125,16 @@ n=1 数字仅内部参考（引用规范不变）。剩余问题（进入下一�
 2. SWE50 n=1（改进二进制，STREAM_IDLE_SECS=360）→ 逐题对照 P1b
 3. 靶题复放：think-only 三题（minimax b11：astropy-14508 / matplotlib-20676 / django-11066）
 4. 引用规范不变：n / date / anchor（app_version + 规则指纹区分改进前后）
+
+### 4.4 P1c Terminal-Bench 9-pin（改进二进制，n=3，2026-09-06）
+
+- 三轮成绩稳定：**3/9、3/9、3/9**（零轮间波动）；token 台账 11M/15M 闸。
+- 分桶：stable_pass=2（hello-world、sanitize-git-repo）；flaky=2（crack-7z-hash 2/3、
+  path-tracing 1/3）；**agent 层 stable_fail=3**（chess-best-move 3.3M tokens 仍未解、
+  polyglot-c-py 快速失败 38K、raman-fitting 2.5M 未解）。
+- **infra DNF=2**（simple-sheets-put、train-fasttext）：compose up 失败——前者因多服务
+  compose 被 --no-build 挡住 api 辅助镜像构建，后者冷构建失败且日志被丢弃。已修复 harness
+  （失败自动 --build 重试 + compose 日志留档，`5285dc0f`）并补跑确认。
+- 9-pin 子集是 TB 1.x 时代的难题切片，与 GLM 官方 TB2.1=69.2（89 题）不可直接比；
+  P1d 的 harbor 全量才是对标口径。
+- 运行：`~/.shannon/eval/v3-glm-tb9/`（prune 事故的首轮已隔离为 `*-poisoned-prune`）。
