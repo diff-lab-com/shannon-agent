@@ -34,6 +34,10 @@ const demoConfig = clone(MOCK_CONFIG)
 // migration surfaces as skipped (conflict handling), never duplicates.
 const demoMigration = { applied: new Set<string>() }
 
+// P2-2: whether the persona pack was already imported in this demo session —
+// a second import run surfaces as skipped (identical content), never dupes.
+const demoPersonaPack = { imported: false }
+
 // Mutable state for "live" feeling during demo
 const state = {
   tasks: clone(MOCK_TASKS),
@@ -1066,6 +1070,60 @@ export const handlers: Record<string, MockHandler> = {
       else demoMigration.applied.add(item.id)
     }
     return { imported: imported.length - skipped, skipped, failed: [] }
+  },
+
+  // --- Persona / profile pack (P2-2): stateful demo — export reports a
+  // stripped-secret count, a second import of the same pack surfaces as
+  // skipped (conflict handling), never duplicates. ---
+  async persona_pack_export(args: { path: string; include: Record<string, boolean> }) {
+    await delay(200)
+    const include = args?.include ?? {}
+    const n = (flag: boolean) => (flag ? 1 : 0)
+    return {
+      path: args?.path ?? '~/shannon-pack.tar.gz',
+      counts: {
+        skills: n(include.skills),
+        commands: n(include.commands),
+        memories: include.memory ? 3 : 0,
+        routines: n(include.routines),
+        profiles: n(include.profiles),
+        persona: n(include.persona),
+      },
+      stripped: include.skills ? 2 : 0,
+    }
+  },
+  async persona_pack_inspect(_args: { path: string }) {
+    await delay()
+    return {
+      version: 1,
+      generator: 'shannon-0.11.0',
+      createdAtMs: Date.now(),
+      counts: { skills: 1, commands: 1, memories: 3, routines: 1, profiles: 1, persona: 1 },
+    }
+  },
+  async persona_pack_import(args: {
+    path: string
+    conflict: 'skip' | 'overwrite' | 'rename'
+    include: Record<string, boolean>
+  }) {
+    await delay(200)
+    const include = args?.include ?? {}
+    const n = (flag: boolean) => (flag ? 1 : 0)
+    const secondRun = demoPersonaPack.imported
+    demoPersonaPack.imported = true
+    const counts = (multi: number): Record<string, number> => ({
+      skills: n(include.skills) * multi,
+      commands: n(include.commands) * multi,
+      memories: (include.memory ? 3 : 0) * multi,
+      routines: n(include.routines) * multi,
+      profiles: n(include.profiles) * multi,
+      persona: n(include.persona) * multi,
+    })
+    return {
+      imported: counts(secondRun ? 0 : 1),
+      skipped: counts(secondRun ? 1 : 0),
+      failed: [],
+    }
   },
 
   // --- Notification preferences (Notifications P2 DND / quiet hours) ---
