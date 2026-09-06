@@ -233,8 +233,7 @@ fn register_all_tools(
             // project dir plus the temp root. Without the temp root, Write
             // refuses /tmp while sandboxed Bash happily writes it, and the
             // model splits its writes across inconsistent tool worlds.
-            let allowed_roots =
-                crate::file::sandbox::SandboxConfig::command_aligned_roots(dir);
+            let allowed_roots = crate::file::sandbox::SandboxConfig::command_aligned_roots(dir);
             // A3: when the command sandbox backends relocate the project dir
             // to /workspace (bwrap/Docker — see `SANDBOX_BIND_ALIAS`), echo
             // output paths in that same view so `cd`/`ls` on an echoed path

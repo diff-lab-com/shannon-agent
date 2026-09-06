@@ -733,12 +733,9 @@ mod tests {
         let dir = alias_grep_fixture();
         let tool = GrepTool::with_sandbox(alias_output_sandbox(dir.path()));
 
-        let output = Tool::execute(
-            &tool,
-            json!({ "pattern": "needle", "path": "/workspace" }),
-        )
-        .await
-        .unwrap();
+        let output = Tool::execute(&tool, json!({ "pattern": "needle", "path": "/workspace" }))
+            .await
+            .unwrap();
 
         assert!(
             output.content.contains("/workspace/src/a.rs"),
