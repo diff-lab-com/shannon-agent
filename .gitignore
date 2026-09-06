@@ -154,3 +154,25 @@ artifacts/
 __pycache__/
 .eval-bin/
 .eval-bin/
+
+# ── Security: never commit credentials / secrets / session artifacts ────
+# ZCode session plan files (may contain command lines and local paths)
+.zcode/
+# Credential stores (mirrors ~/.shannon/credentials layout)
+credentials*.json
+credentials*.toml
+# Key material
+*.pem
+*.key
+*.p12
+*.jks
+id_rsa*
+id_ed25519*
+.netrc
+# Secret-bearing env variants (.env.example stays tracked)
+.env.*
+!.env.example
+# Generic secret containers
+secrets.*
+*secrets.yaml
+*secrets.yml
