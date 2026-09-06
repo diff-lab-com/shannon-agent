@@ -480,7 +480,7 @@ fn stage_file(
     if is_textual(rel) {
         let (data, stripped) = match String::from_utf8(raw) {
             Ok(text) => {
-                let (stripped_text, n) = strip_text(&text);
+                let (stripped_text, n) = strip_text(&text, is_structured(rel));
                 (stripped_text.into_bytes(), n)
             }
             Err(e) => (e.into_bytes(), 0), // not valid UTF-8 → pack verbatim
@@ -527,7 +527,10 @@ fn pack_memories(roots: &PackRoots, files: &mut Vec<PackedFile>) -> Result<u32, 
     let mut lines: Vec<String> = Vec::new();
     let mut stripped: u32 = 0;
     for entry in store.all_entries() {
-        let (content, n) = strip_text(&entry.content);
+        // Memory content is free prose (serialized into a JSON string after
+        // stripping), so plain-text semantics apply — the JSONL row structure
+        // is created after stripping and stays valid by construction.
+        let (content, n) = strip_text(&entry.content, false);
         stripped += n;
         let row = ExportedMemory {
             category: entry.category.to_string(),
@@ -583,24 +586,43 @@ fn file_count(files: &[PackedFile], prefix: &str) -> u32 {
 // Rule list (published in the P2-2 report; every rule has a test):
 //   R1 secret assignment lines — `key = value` / `key: value` /
 //      `"key": value` / `- key: value` / `export KEY=value` where key
-//      (case-insensitive, `-`≡`_`) is one of the secret keys below → whole
-//      line replaced.
+//      (case-insensitive, `-`≡`_`) is one of the secret keys below.
+//      Plain-text assets (`.md`/`.txt`): the whole line is replaced.
+//      Structured assets (`.toml`/`.json`/`.jsonl`/`.yml`/`.yaml`): only the
+//      VALUE is replaced with `"[stripped: secret]"` so the line — and the
+//      file Shannon re-parses on import — stays syntactically valid
+//      (same philosophy as R2's in-place token replacement).
 //   R2 prefixed credential tokens — `sk-…` (≥16), `ghp_…` (≥20),
 //      `github_pat_…` (≥20), `xoxa-/xoxb-/xoxp-/xoxr-/xoxs-…` (≥10) → token
 //      substring replaced, rest of the line kept.
-//   R3 webhook URLs — known credential-bearing webhook URLs
-//      (Discord / Slack / Feishu) truncated right after their fixed prefix;
-//      URL query params `key|token|access_token|secret|password|sig|signature`
-//      replaced with the placeholder.
+//   R3 webhook URLs — the credential segment of known webhook URLs
+//      (Discord / Slack / Feishu) is replaced in place (the URL ends at the
+//      first whitespace/quote/bracket); text before and after the URL on the
+//      same line is preserved. URL query params
+//      `key|token|access_token|secret|password|sig|signature` replaced with
+//      the placeholder.
 //   R4 Authorization bearer tokens — `Bearer <token≥12>` → token replaced.
 //   R5 PEM private-key blocks — from `-----BEGIN … PRIVATE KEY-----` through
-//      the matching `-----END …-----` → single placeholder line.
+//      the matching `-----END …-----` → single placeholder line. (If the
+//      BEGIN line itself is a secret assignment in a structured file, the
+//      value is replaced R1-style and the rest of the block is still
+//      consumed — no key material may survive, hard rule wins.)
 //
 // Nothing else is rewritten: `max_tokens = 4096`, `token_refresh_interval`,
 // `passwords are bad`, `sk-learn` and ordinary prose/prose-URLs are untouched
 // (asserted by tests).
 
-fn strip_text(content: &str) -> (String, u32) {
+/// Structured (parser-validated) asset extensions: R1 must preserve line
+/// syntax so Shannon can re-parse the imported file.
+fn is_structured(rel: &str) -> bool {
+    Path::new(rel)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e, "toml" | "json" | "jsonl" | "yml" | "yaml"))
+        .unwrap_or(false)
+}
+
+fn strip_text(content: &str, structured: bool) -> (String, u32) {
     let mut out = String::with_capacity(content.len());
     let mut count: u32 = 0;
     let mut in_pem = false;
@@ -617,13 +639,33 @@ fn strip_text(content: &str) -> (String, u32) {
         }
         if line.contains("-----BEGIN") && line.contains("PRIVATE KEY") {
             in_pem = true;
+            if let Some(sep) = secret_assignment_sep(line) {
+                // Assignment carrying an inline PEM (e.g. TOML
+                // `key = '''-----BEGIN …'''`): replace the value R1-style so
+                // the key text itself is gone, then keep consuming the rest
+                // of the block. The closing delimiter dies with the block —
+                // accepted (and documented): no key material may survive.
+                if structured {
+                    out.push_str(&strip_assignment_value(line, sep));
+                    out.push_str(newline);
+                } else {
+                    out.push_str(STRIPPED_PLACEHOLDER);
+                    out.push_str(newline);
+                }
+                count += 1;
+                continue;
+            }
             out.push_str(STRIPPED_PLACEHOLDER);
             out.push_str(newline);
             count += 1;
             continue;
         }
-        if is_secret_assignment(line) {
-            out.push_str(STRIPPED_PLACEHOLDER);
+        if let Some(sep) = secret_assignment_sep(line) {
+            if structured {
+                out.push_str(&strip_assignment_value(line, sep));
+            } else {
+                out.push_str(STRIPPED_PLACEHOLDER);
+            }
             out.push_str(newline);
             count += 1;
             continue;
@@ -661,31 +703,83 @@ const SECRET_KEYS: &[&str] = &[
     "webhook_secret",
 ];
 
-/// R1 — whole-line secret assignment detector.
-fn is_secret_assignment(line: &str) -> bool {
-    let mut t = line.trim();
-    // Markdown list markers and shell `export`.
-    t = t.trim_start_matches(['-', '*', '+']);
-    let t = t.trim_start();
-    let t = t.strip_prefix("export ").unwrap_or(t).trim_start();
-    let Some(sep_pos) = t.find(['=', ':']) else {
-        return false;
+/// R1 — secret assignment detector. Returns the byte offset of the `=`/`:`
+/// separator in `line` when the line assigns to a secret key (matched
+/// case-insensitively with `-` normalized to `_`, FULL-key match only, and
+/// only when a non-empty value follows — `password:` alone is a prompt).
+fn secret_assignment_sep(line: &str) -> Option<usize> {
+    let start = {
+        let t = line.trim_start();
+        // Markdown list markers and shell `export`.
+        let t = t.trim_start_matches(['-', '*', '+']);
+        let t = t.trim_start();
+        let t = t.strip_prefix("export ").unwrap_or(t).trim_start();
+        line.len() - t.len()
     };
-    let key = t[..sep_pos]
+    let t = &line[start..];
+    let sep_rel = t.find(['=', ':'])?;
+    let key = t[..sep_rel]
         .trim()
         .trim_matches('"')
         .trim_matches('\'')
         .trim();
     if key.is_empty() {
-        return false;
+        return None;
     }
     let normalized = key.to_ascii_lowercase().replace('-', "_");
     if !SECRET_KEYS.contains(&normalized.as_str()) {
-        return false;
+        return None;
     }
     // Require a non-empty value — `password:` with nothing after it is a
     // prompt/placeholder, not a secret.
-    !t[sep_pos + 1..].trim().is_empty()
+    if t[sep_rel + 1..].trim().is_empty() {
+        return None;
+    }
+    Some(start + sep_rel)
+}
+
+/// R1 for structured assets — replace ONLY the value with
+/// `"[stripped: secret]"`, keeping `key<sep>` (and any trailing content such
+/// as a JSON comma or TOML comment) so the line stays parseable.
+fn strip_assignment_value(line: &str, sep: usize) -> String {
+    let bytes = line.as_bytes();
+    let mut value_start = sep + 1;
+    while value_start < bytes.len() && (bytes[value_start] == b' ' || bytes[value_start] == b'\t') {
+        value_start += 1;
+    }
+    let value_end = if bytes.get(value_start) == Some(&b'"') {
+        // Quoted string: run to the closing, unescaped quote.
+        let mut i = value_start + 1;
+        while i < bytes.len() {
+            if bytes[i] == b'\\' {
+                i += 2;
+                continue;
+            }
+            if bytes[i] == b'"' {
+                i += 1;
+                break;
+            }
+            i += 1;
+        }
+        i.min(bytes.len())
+    } else {
+        // Bare value: runs to the first structural character or end of line.
+        let mut i = value_start;
+        while i < bytes.len() {
+            match bytes[i] {
+                b' ' | b'\t' | b',' | b'}' | b']' | b'#' | b'\r' => break,
+                _ => i += 1,
+            }
+        }
+        i
+    };
+    let mut out = String::with_capacity(line.len());
+    out.push_str(&line[..value_start]);
+    out.push('"');
+    out.push_str(STRIPPED_PLACEHOLDER);
+    out.push('"');
+    out.push_str(&line[value_end..]);
+    out
 }
 
 /// R2/R3/R4 — inline replacements. Returns the rewritten line and the number
@@ -694,14 +788,22 @@ fn strip_inline_secrets(line: &str) -> (String, u32) {
     let mut out = line.to_string();
     let mut count = 0;
 
-    // R3a — known credential-bearing webhook URLs: truncate after the fixed
-    // prefix (id + token segments are the credential).
+    // R3a — known credential-bearing webhook URLs: replace only the URL's
+    // credential segment (everything after the fixed prefix, up to the end of
+    // the URL) so text before/after the URL on the same line survives.
     for prefix in WEBHOOK_PREFIXES {
         if let Some(pos) = out.find(prefix) {
-            let end = pos + prefix.len();
-            if !out[end..].is_empty() {
-                out.truncate(end);
-                out.push_str(STRIPPED_PLACEHOLDER);
+            let start = pos + prefix.len();
+            let bytes = out.as_bytes();
+            let mut end = start;
+            while end < bytes.len() {
+                match bytes[end] {
+                    b' ' | b'\t' | b'"' | b'\'' | b')' | b']' | b'>' | b',' | b';' => break,
+                    _ => end += 1,
+                }
+            }
+            if end > start {
+                out.replace_range(start..end, STRIPPED_PLACEHOLDER);
                 count += 1;
             }
         }
@@ -815,14 +917,29 @@ fn replace_query_params(out: &mut String) -> u32 {
     count
 }
 
+/// ASCII-case-insensitive substring search with byte offsets that stay valid
+/// for `hay` (no `to_lowercase`, which can change byte lengths on non-ASCII).
+fn find_ignore_ascii_case(hay: &str, needle: &str, from: usize) -> Option<usize> {
+    let hay = hay.as_bytes();
+    let needle = needle.as_bytes();
+    let mut i = from;
+    while i + needle.len() <= hay.len() {
+        if hay[i..i + needle.len()].eq_ignore_ascii_case(needle) {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Replace `Bearer <token>` (≥12 token chars) — typical Authorization header.
 fn replace_bearer(out: &mut String) -> u32 {
     let mut count = 0;
     let mut search_from = 0;
-    while let Some(rel) = out[search_from..].to_lowercase().find("bearer ") {
-        let bearer_start = search_from + rel;
-        // Only when preceded by a non-token char (or line start) so prose like
-        // "share-bearer 7" does not... (defensive; cheap to keep).
+    while let Some(rel) = find_ignore_ascii_case(out, "bearer ", search_from) {
+        let bearer_start = rel;
+        // Only when preceded by a non-token char (or line start) so prose
+        // like "share-bearer 7" does not match.
         if bearer_start > 0 {
             let prev = out.as_bytes()[bearer_start - 1];
             if prev.is_ascii_alphanumeric() || prev == b'-' || prev == b'_' {
@@ -860,12 +977,61 @@ struct ReadPack {
     manifest: PackManifest,
     /// Non-manifest entries by pack-relative path (sorted).
     files: BTreeMap<String, Vec<u8>>,
+    /// Assets whose recorded sha256/size did not match the packed bytes.
+    /// Import refuses these units (surfaced in the report's `failed` list);
+    /// inspect tolerates them so the user can still preview the pack.
+    integrity_failures: Vec<(String, String)>,
+}
+
+/// Recompute `counts` from the archive contents — the same unit semantics the
+/// exporter uses (skill/routine dirs are one unit; commands/profiles per
+/// file; memories per JSONL row; persona 0/1). A manifest whose counts
+/// disagree with the archive is corrupt.
+fn counts_from_files(files: &BTreeMap<String, Vec<u8>>) -> Result<PackCounts, String> {
+    let distinct_first = |prefix: &str| -> u32 {
+        let group_prefix = format!("{prefix}/");
+        let mut names: Vec<&str> = Vec::new();
+        for rel in files.keys() {
+            if let Some(rest) = rel.strip_prefix(&group_prefix) {
+                let name = rest.split('/').next().unwrap_or("");
+                if !name.is_empty() && !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        names.len() as u32
+    };
+    let count_prefix = |prefix: &str| -> u32 {
+        let group_prefix = format!("{prefix}/");
+        files
+            .keys()
+            .filter(|rel| rel.starts_with(&group_prefix))
+            .count() as u32
+    };
+    let memories = match files.get("memories.jsonl") {
+        None => 0,
+        Some(data) => {
+            let text = std::str::from_utf8(data)
+                .map_err(|_| "corrupt pack: memories.jsonl is not valid UTF-8".to_string())?;
+            text.lines().filter(|l| !l.trim().is_empty()).count() as u32
+        }
+    };
+    Ok(PackCounts {
+        skills: distinct_first("skills"),
+        commands: count_prefix("commands"),
+        memories,
+        routines: distinct_first("routines"),
+        profiles: count_prefix("profiles"),
+        persona: u32::from(files.contains_key("persona.md")),
+    })
 }
 
 /// Open a `.tar.gz` pack, validate every entry (path safety, entry type,
 /// size caps), read it fully into memory and cross-check it against the
-/// manifest. Nothing is ever written to the target stores here, so both
-/// inspect and import get their pre-flight from this one place.
+/// manifest — presence, per-asset sha256/size integrity, and that the
+/// manifest counts match the archive contents. Nothing is ever written to
+/// the target stores here, so both inspect and import get their pre-flight
+/// from this one place.
 fn read_pack(path: &Path) -> Result<ReadPack, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let mut archive = Archive::new(GzDecoder::new(file));
@@ -948,7 +1114,43 @@ fn read_pack(path: &Path) -> Result<ReadPack, String> {
             "corrupt pack: archive contains entries not listed in the manifest".to_string(),
         );
     }
-    Ok(ReadPack { manifest, files })
+    // Manifest counts must match the archive contents (same unit semantics as
+    // the exporter) — a lying manifest is a corrupt pack.
+    let recomputed = counts_from_files(&files)?;
+    if recomputed != manifest.counts {
+        return Err(format!(
+            "corrupt pack: manifest counts {:?} do not match archive contents {:?}",
+            manifest.counts, recomputed
+        ));
+    }
+    // Per-asset integrity: recorded sha256/size must match the packed bytes.
+    // A mismatch fails that asset's import unit (reported in `failed`);
+    // inspect still previews the pack.
+    let mut integrity_failures: Vec<(String, String)> = Vec::new();
+    for asset in &manifest.assets {
+        let data = &files[&asset.path];
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let got_sha = format!("{:x}", hasher.finalize());
+        if got_sha != asset.sha256 || data.len() as u64 != asset.bytes {
+            integrity_failures.push((
+                asset.path.clone(),
+                format!(
+                    "integrity check failed — manifest records sha256 {} / {} bytes, archive has \
+                     {} / {} bytes",
+                    &asset.sha256[..asset.sha256.len().min(12)],
+                    asset.bytes,
+                    &got_sha[..12],
+                    data.len()
+                ),
+            ));
+        }
+    }
+    Ok(ReadPack {
+        manifest,
+        files,
+        integrity_failures,
+    })
 }
 
 /// Zip-slip guard for pack-relative paths: relative, forward slashes only, no
@@ -998,6 +1200,8 @@ pub fn inspect_core(path: &Path) -> Result<PackInspectResult, String> {
 struct ImportUnit {
     label: String,
     kind: &'static str,
+    /// Pack-relative source paths of this unit's files (integrity checks).
+    pack_paths: Vec<String>,
     targets: Vec<(PathBuf, Vec<u8>)>,
     /// `None` when rename is not meaningful for this kind (persona).
     renamed: Option<Vec<(PathBuf, Vec<u8>)>>,
@@ -1037,6 +1241,7 @@ pub fn import_core(
             units.push(ImportUnit {
                 label: rel.clone(),
                 kind: "command",
+                pack_paths: vec![rel.clone()],
                 targets: vec![(roots.commands_dir().join(suffix), data.clone())],
                 renamed: Some(vec![(
                     roots.commands_dir().join(renamed_file_name(suffix)),
@@ -1072,6 +1277,7 @@ pub fn import_core(
                 units.push(ImportUnit {
                     label: rel.to_string(),
                     kind: "routine",
+                    pack_paths: vec![rel.to_string()],
                     targets: vec![(target.clone(), data.clone())],
                     renamed: Some(vec![(target.with_file_name(renamed_name), data.clone())]),
                 });
@@ -1087,6 +1293,7 @@ pub fn import_core(
             units.push(ImportUnit {
                 label: rel.clone(),
                 kind: "profile",
+                pack_paths: vec![rel.clone()],
                 targets: vec![(roots.profiles_dir().join(suffix), data.clone())],
                 renamed: Some(vec![(
                     roots.profiles_dir().join(renamed_file_name(suffix)),
@@ -1103,13 +1310,33 @@ pub fn import_core(
             units.push(ImportUnit {
                 label: "persona.md".to_string(),
                 kind: "persona",
+                pack_paths: vec!["persona.md".to_string()],
                 targets: vec![(roots.persona_file(), data.clone())],
                 renamed: None,
             });
         }
     }
 
+    // Integrity-failed assets (manifest sha256/size mismatch) never import:
+    // any unit containing one fails wholesale — with a per-unit error that
+    // surfaces in the UI's failed list — and nothing is written for it.
+    let integrity_failed = |unit: &ImportUnit| -> Option<String> {
+        unit.pack_paths.iter().find_map(|p| {
+            pack.integrity_failures
+                .iter()
+                .find(|(path, _)| path == p)
+                .map(|(_, err)| format!("{p}: {err}"))
+        })
+    };
+
     for unit in &units {
+        if let Some(error) = integrity_failed(unit) {
+            report.failed.push(PackFailure {
+                item: unit.label.clone(),
+                error,
+            });
+            continue;
+        }
         match resolve_unit(unit, conflict) {
             Ok(true) => report.imported.bump_kind(unit.kind),
             Ok(false) => report.skipped.bump_kind(unit.kind),
@@ -1124,7 +1351,16 @@ pub fn import_core(
     // project. Conflict strategies have no "rename" meaning for rows; the
     // dedup semantics keep re-imports idempotent for all strategies.
     if include.memory {
-        if let Some(data) = pack.files.get("memories.jsonl") {
+        if let Some((_, err)) = pack
+            .integrity_failures
+            .iter()
+            .find(|(path, _)| path == "memories.jsonl")
+        {
+            report.failed.push(PackFailure {
+                item: "memories.jsonl".to_string(),
+                error: err.clone(),
+            });
+        } else if let Some(data) = pack.files.get("memories.jsonl") {
             import_memories(data, roots, &mut report);
         }
     }
@@ -1142,9 +1378,9 @@ fn group_by_first_component(
     units: &mut Vec<ImportUnit>,
 ) {
     let group_prefix = format!("{prefix}/");
-    // key: name → (target rest paths, bytes), in deterministic first-seen order.
+    // key: name → (pack rel, target path, bytes), in deterministic first-seen order.
     let mut order: Vec<String> = Vec::new();
-    let mut grouped: BTreeMap<String, Vec<(PathBuf, Vec<u8>)>> = BTreeMap::new();
+    let mut grouped: BTreeMap<String, Vec<(String, PathBuf, Vec<u8>)>> = BTreeMap::new();
     for (rel, data) in files {
         let Some(suffix) = rel.strip_prefix(&group_prefix) else {
             continue;
@@ -1160,21 +1396,29 @@ fn group_by_first_component(
         grouped
             .entry(name.clone())
             .or_default()
-            .push((target, data.clone()));
+            .push((rel.clone(), target, data.clone()));
         if !order.contains(&name) {
             order.push(name);
         }
     }
     for name in order {
         let grouped_files = grouped.remove(&name).unwrap_or_default();
+        let pack_paths: Vec<String> = grouped_files
+            .iter()
+            .map(|(rel, _, _)| rel.clone())
+            .collect();
         units.push(ImportUnit {
             label: format!("{prefix}/{name}"),
             kind,
-            targets: grouped_files.clone(),
+            pack_paths,
+            targets: grouped_files
+                .iter()
+                .map(|(_, target, data)| (target.clone(), data.clone()))
+                .collect(),
             renamed: Some(
                 grouped_files
                     .into_iter()
-                    .map(|(target, data)| {
+                    .map(|(_, target, data)| {
                         let rest = target
                             .strip_prefix(target_root.join(&name))
                             .unwrap_or(&target)
@@ -1641,13 +1885,13 @@ mod tests {
             ("client_secret = \"abc\"", STRIPPED_PLACEHOLDER),
         ];
         for (line, expected) in cases {
-            let (out, n) = strip_text(&format!("{line}\n"));
+            let (out, n) = strip_text(&format!("{line}\n"), false);
             assert_eq!(out, format!("{expected}\n"), "R1 failed for {line:?}");
             assert_eq!(n, 1, "R1 count for {line:?}");
         }
 
         // R2 — prefixed tokens: only the token is replaced.
-        let (out, n) = strip_text("use key sk-abcdef1234567890abcdef12 tomorrow");
+        let (out, n) = strip_text("use key sk-abcdef1234567890abcdef12 tomorrow", false);
         assert!(
             out.contains(STRIPPED_PLACEHOLDER) && !out.contains("sk-abcdef"),
             "{out}"
@@ -1658,15 +1902,15 @@ mod tests {
         );
         assert_eq!(n, 1);
         let (out, n) = let fixture_ghp = format!("{}{}", "ghp", "_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890");
-        let (out, n) = strip_text(&fixture_ghp);
+        let (out, n) = strip_text(&fixture_ghp, false);;
         assert_eq!(out.trim_end(), STRIPPED_PLACEHOLDER, "{out}");
         assert_eq!(n, 1);
         let (out, n) = let fixture_xoxb = format!("{}{}", "xoxb", "-123456789-abcdefghijklmnopqrstuv");
-        let (out, n) = strip_text(&fixture_xoxb);
+        let (out, n) = strip_text(&fixture_xoxb, false);;
         assert_eq!(out.trim_end(), STRIPPED_PLACEHOLDER, "{out}");
         assert_eq!(n, 1);
         let (out, n) = let fixture_gp = format!("{}{}{}", "github", "_pat_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ123_4567890");
-        let (out, n) = strip_text(&fixture_gp);
+        let (out, n) = strip_text(&fixture_gp, false);;
         assert_eq!(out.trim_end(), STRIPPED_PLACEHOLDER, "{out}");
         assert_eq!(n, 1);
 
@@ -1676,7 +1920,7 @@ mod tests {
             "https://hooks.slack.com/services/T000/B000/XXXX",
             "https://open.feishu.cn/open-apis/bot/v2/hook/abc-def-123",
         ] {
-            let (out, n) = strip_text(&format!("notify: {url}"));
+            let (out, n) = strip_text(&format!("notify: {url}"), false);
             assert!(out.contains(STRIPPED_PLACEHOLDER), "{url} → {out}");
             assert!(
                 !out.contains("supersecret") && !out.contains("XXXX"),
@@ -1685,8 +1929,10 @@ mod tests {
             assert_eq!(n, 1);
         }
         // R3b — credential query params.
-        let (out, n) =
-            strip_text("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=SECRETVALUE99");
+        let (out, n) = strip_text(
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=SECRETVALUE99",
+            false,
+        );
         assert!(
             out.contains(STRIPPED_PLACEHOLDER) && !out.contains("SECRETVALUE99"),
             "{out}"
@@ -1694,7 +1940,10 @@ mod tests {
         assert_eq!(n, 1);
 
         // R4 — bearer tokens.
-        let (out, n) = strip_text("Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9");
+        let (out, n) = strip_text(
+            "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+            false,
+        );
         assert!(
             out.contains(STRIPPED_PLACEHOLDER) && !out.contains("eyJhbGci"),
             "{out}"
@@ -1703,7 +1952,7 @@ mod tests {
 
         // R5 — PEM private-key block collapses to one placeholder line.
         let pem = "before\n-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQ\nAbCdEfGhIjKlMnO\n-----END RSA PRIVATE KEY-----\nafter\n";
-        let (out, n) = strip_text(pem);
+        let (out, n) = strip_text(pem, false);
         assert_eq!(
             out,
             format!("before\n{STRIPPED_PLACEHOLDER}\nafter\n"),
@@ -1724,7 +1973,7 @@ Use sklearn and sk-learn for the ML bits.
 See https://example.com/docs and https://example.com/?utm=1
 Authorization: none
 ";
-        let (out, n) = strip_text(normal);
+        let (out, n) = strip_text(normal, false);
         assert_eq!(n, 0, "false positives in:\n{out}");
         assert!(out.contains("max_tokens = 4096"));
         assert!(out.contains("sk-learn"));
@@ -1753,16 +2002,28 @@ Authorization: none
 
     // ─── Path safety ────────────────────────────────────────────────────────
 
-    /// Serialize a manifest to pretty JSON bytes.
-    fn manifest_bytes(assets: Vec<PackAssetEntry>) -> Vec<u8> {
+    /// Serialize a manifest to JSON bytes with explicit counts.
+    fn manifest_bytes_with(assets: Vec<PackAssetEntry>, counts: PackCounts) -> Vec<u8> {
         let manifest = PackManifest {
             version: PACK_VERSION,
             generator: "shannon-test".to_string(),
             created_at_ms: 0,
-            counts: PackCounts::default(),
+            counts,
             assets,
         };
         serde_json::to_vec(&manifest).expect("manifest")
+    }
+
+    /// Manifest bytes with default (all-zero) counts — only usable for packs
+    /// whose checks fail before the counts verification (path-safety cases).
+    fn manifest_bytes(assets: Vec<PackAssetEntry>) -> Vec<u8> {
+        manifest_bytes_with(assets, PackCounts::default())
+    }
+
+    fn sha_of(data: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        format!("{:x}", hasher.finalize())
     }
 
     /// Byte-level tar.gz writer used to craft packs the `tar` crate itself
@@ -2167,5 +2428,208 @@ Authorization: none
             );
             assert_eq!(data.len() as u64, asset.bytes, "{}", asset.path);
         }
+    }
+
+    // ─── Fix round 1: strip fidelity & manifest verification ────────────────
+
+    #[test]
+    fn r1_structured_assets_stay_parseable() {
+        // TOML profile: only the value is replaced — the file still parses.
+        let toml_input = "name = \"leaky\"\ndescription = \"Team baseline\"\nauto_approve = []\napi_key = \"super-secret-value\"\nconfirm = []\n";
+        let (out, n) = strip_text(toml_input, true);
+        assert_eq!(n, 1, "{out}");
+        let parsed: toml::Value = toml::from_str(&out).expect("stripped TOML must parse");
+        assert_eq!(parsed["name"].as_str(), Some("leaky"));
+        assert_eq!(parsed["auto_approve"], toml::Value::Array(Vec::new()));
+        assert!(
+            out.contains("api_key = \"[stripped: secret]\""),
+            "structured R1 must keep key syntax: {out}"
+        );
+        assert!(!out.contains("super-secret-value"));
+
+        // JSON (routine-overrides shape): value replaced in place, trailing
+        // comma and sibling keys survive, file still parses.
+        let json_input = "{\n  \"post-merge\": true,\n  \"webhook_secret\": \"whsec_abc123\",\n  \"enabled\": 2\n}\n";
+        let (out, n) = strip_text(json_input, true);
+        assert_eq!(n, 1, "{out}");
+        let parsed: serde_json::Value =
+            serde_json::from_str(out.trim_end()).expect("stripped JSON must parse");
+        assert_eq!(parsed["post-merge"], serde_json::json!(true));
+        assert_eq!(parsed["enabled"], serde_json::json!(2));
+        assert_eq!(
+            parsed["webhook_secret"],
+            serde_json::json!("[stripped: secret]")
+        );
+
+        // YAML list-item assignment keeps the key.
+        let (out, _) = strip_text("- token: abc123def456\n", true);
+        assert!(out.starts_with("- token: "), "{out}");
+        assert!(out.contains(STRIPPED_PLACEHOLDER), "{out}");
+    }
+
+    #[test]
+    fn r3a_keeps_text_around_the_webhook_url() {
+        let (out, n) = strip_text(
+            "notify: https://discord.com/api/webhooks/123456/leakytoken at 9am\n",
+            false,
+        );
+        assert_eq!(n, 1, "{out}");
+        assert!(out.starts_with("notify: "), "prefix must survive: {out}");
+        assert!(out.contains(" at 9am"), "trailing text must survive: {out}");
+        assert!(out.contains(STRIPPED_PLACEHOLDER), "{out}");
+        assert!(!out.contains("leakytoken"), "{out}");
+
+        // A webhook URL in quotes (e.g. inside a JSON string) keeps the quotes.
+        let (out, _) = strip_text(
+            "\"hook\": \"https://hooks.slack.com/services/T0/B0/SECRETX\"\n",
+            true,
+        );
+        assert!(out.starts_with("\"hook\": \""), "{out}");
+        assert!(out.ends_with("\"\n"), "closing quote must survive: {out}");
+        assert!(!out.contains("SECRETX"), "{out}");
+    }
+
+    #[test]
+    fn r4_bearer_with_non_ascii_prefix_does_not_panic() {
+        // 'İ' lowercases to a LONGER byte sequence; a to_lowercase+offset
+        // search would compute invalid byte offsets. Byte-safe lookup must
+        // both not panic and still strip.
+        let (out, n) = strip_text("\u{130}\u{30c}k Bearer abc123def456ghi\n", false);
+        assert_eq!(n, 1, "{out}");
+        assert!(out.contains(STRIPPED_PLACEHOLDER), "{out}");
+        assert!(!out.contains("abc123def456ghi"), "{out}");
+        assert!(
+            out.starts_with("\u{130}\u{30c}k "),
+            "non-ASCII prefix survives: {out}"
+        );
+    }
+
+    #[test]
+    fn manifest_counts_mismatch_is_rejected() {
+        let e = env("counts-mismatch");
+        write_raw_pack(
+            &pack_path(&e),
+            &manifest_bytes_with(
+                vec![PackAssetEntry {
+                    path: "commands/deploy.md".to_string(),
+                    kind: "command".to_string(),
+                    bytes: 7,
+                    sha256: sha_of(b"Deploy."),
+                    stripped: 0,
+                }],
+                PackCounts {
+                    commands: 5,
+                    ..Default::default()
+                },
+            ),
+            &[RawEntry {
+                name: "commands/deploy.md",
+                typeflag: b'0',
+                linkname: "",
+                data: b"Deploy.",
+            }],
+        );
+        let err = import_core(&pack_path(&e), "skip", ALL, &e.dst).unwrap_err();
+        assert!(err.contains("counts"), "{err}");
+        assert!(inspect_core(&pack_path(&e)).is_err());
+        assert!(!e.dst.commands_dir().join("deploy.md").exists());
+    }
+
+    #[test]
+    fn sha256_mismatch_fails_that_unit_in_the_report() {
+        let e = env("sha-mismatch");
+        write_raw_pack(
+            &pack_path(&e),
+            &manifest_bytes_with(
+                vec![
+                    PackAssetEntry {
+                        path: "commands/good.md".to_string(),
+                        kind: "command".to_string(),
+                        bytes: 4,
+                        sha256: sha_of(b"good"),
+                        stripped: 0,
+                    },
+                    PackAssetEntry {
+                        path: "commands/tampered.md".to_string(),
+                        kind: "command".to_string(),
+                        bytes: 99,
+                        sha256: "deadbeefdeadbeefdeadbeef".to_string(),
+                        stripped: 0,
+                    },
+                ],
+                PackCounts {
+                    commands: 2,
+                    ..Default::default()
+                },
+            ),
+            &[
+                RawEntry {
+                    name: "commands/good.md",
+                    typeflag: b'0',
+                    linkname: "",
+                    data: b"good",
+                },
+                RawEntry {
+                    name: "commands/tampered.md",
+                    typeflag: b'0',
+                    linkname: "",
+                    data: b"evil-bytes",
+                },
+            ],
+        );
+        let report =
+            import_core(&pack_path(&e), "overwrite", ALL, &e.dst).expect("import proceeds");
+        assert_eq!(report.imported.commands, 1, "{report:?}");
+        assert_eq!(report.failed.len(), 1, "{report:?}");
+        assert_eq!(report.failed[0].item, "commands/tampered.md");
+        assert!(
+            report.failed[0].error.contains("integrity check failed"),
+            "{:?}",
+            report.failed[0]
+        );
+        assert!(e.dst.commands_dir().join("good.md").is_file());
+        assert!(!e.dst.commands_dir().join("tampered.md").exists());
+    }
+
+    #[test]
+    fn exported_toml_profile_with_secret_imports_and_parses() {
+        let e = env("toml-profile");
+        write(
+            &e.src.profiles_dir().join("leaky.toml"),
+            &format!("name = \"leaky\"\ndescription = \"Team baseline\"\napi_key = \"{}-live-abcdef1234567890\"\nauto_approve = []\nconfirm = []\ndeny = []\n", "sk"),
+        );
+        let out = export_core(ALL, &e.src, &pack_path(&e)).expect("export");
+        assert_eq!(out.stripped, 1, "one R1 redaction expected");
+
+        let packed = pack_entry(&pack_path(&e), "profiles/leaky.toml").expect("entry");
+        let text = std::str::from_utf8(&packed).expect("utf8");
+        let parsed: toml::Value = toml::from_str(text).expect("stripped profile is valid TOML");
+        assert_eq!(parsed["name"].as_str(), Some("leaky"));
+        assert!(text.contains("api_key = \"[stripped: secret]\""), "{text}");
+        assert!(!text.contains("sk-live"), "{text}");
+
+        import_core(&pack_path(&e), "skip", ALL, &e.dst).expect("import");
+        let on_disk = read(&e.dst.profiles_dir().join("leaky.toml"));
+        let reparsed: toml::Value = toml::from_str(&on_disk).expect("imported profile parses");
+        assert_eq!(reparsed["name"].as_str(), Some("leaky"));
+        assert!(!on_disk.contains("sk-live"), "{on_disk}");
+    }
+
+    #[test]
+    fn exported_json_routines_file_with_secret_stays_parseable() {
+        let e = env("json-routines");
+        write(
+            &e.src.routine_overrides(),
+            "{\"post-merge\": true,\n \"bot_token\": \"tok-1234567890abcdefg\",\n \"enabled\": 2}\n",
+        );
+        export_core(ALL, &e.src, &pack_path(&e)).expect("export");
+        let packed = pack_entry(&pack_path(&e), "routines/routine-overrides.json").expect("entry");
+        let text = std::str::from_utf8(&packed).expect("utf8");
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("stripped overrides are valid JSON");
+        assert_eq!(parsed["post-merge"], serde_json::json!(true));
+        assert_eq!(parsed["enabled"], serde_json::json!(2));
+        assert_eq!(parsed["bot_token"], serde_json::json!("[stripped: secret]"));
+        assert!(!text.contains("tok-1234567890abcdefg"), "{text}");
     }
 }
