@@ -917,6 +917,39 @@ impl Default for BashTool {
     }
 }
 
+/// One-line sandbox orientation appended to failed command output when a
+/// process sandbox is active (§ sandbox self-description).
+///
+/// Without it the model sees a bare "Command failed with exit code 2" and
+/// burns turns probing the filesystem or installing toolchains: it does not
+/// know that paths outside the project are invisible inside the sandbox, or
+/// that host toolchains (node, ...) may not exist there at all. Heuristics
+/// stay conservative — only failures that look like a path/environment miss
+/// get the note, so ordinary command failures stay clean.
+fn sandbox_failure_note(sandboxed: bool, output: &CommandOutput) -> Option<String> {
+    if !sandboxed || output.success {
+        return None;
+    }
+    let stderr = output.stderr.to_lowercase();
+    let looks_like_env_miss = stderr.contains("no such file")
+        || stderr.contains("cannot access")
+        || stderr.contains("permission denied")
+        || stderr.contains("command not found")
+        || stderr.contains("not found")
+        || output.exit_code == 127;
+    if !looks_like_env_miss {
+        return None;
+    }
+    Some(
+        "[sandbox] Commands run inside a sandbox with limited visibility: the project \
+         root is available (Docker sandboxes mount it at /workspace) and /tmp is \
+         writable, but paths outside the project are not visible and host toolchains \
+         may be absent — probe with `command -v <tool>` and adapt instead of \
+         installing packages."
+            .to_string(),
+    )
+}
+
 impl BashTool {
     pub fn new() -> Self {
         Self {
@@ -949,12 +982,22 @@ impl BashTool {
         self
     }
 
-    /// Create a BashTool with a platform process sandbox (bwrap/Seatbelt).
+    /// Create a BashTool with a platform process sandbox (bwrap/Seatbelt/Docker).
     ///
     /// The `SandboxExecutor` is auto-detected from the current platform.
     /// If no sandbox backend is available, commands run unsandboxed.
+    ///
+    /// `SHANNON_SANDBOX_EXTRA_RO_MOUNTS` (colon-separated host directories) is
+    /// added as extra read-only mounts on the Docker backend — the escape
+    /// hatch for making host toolchains (e.g. `/usr/local`, a nvm checkout)
+    /// visible inside the sandbox without changing code.
     pub fn with_process_sandbox(project_dir: impl Into<std::path::PathBuf>) -> Self {
-        let config = SandboxConfig::new(project_dir);
+        let mut config = SandboxConfig::new(project_dir);
+        if let Ok(extra) = std::env::var("SHANNON_SANDBOX_EXTRA_RO_MOUNTS") {
+            for dir in extra.split(':').filter(|s| !s.is_empty()) {
+                config = config.readonly_mount(dir);
+            }
+        }
         let executor = SandboxExecutor::new(config);
         let sandbox_type = executor.sandbox_type();
         let has_sandbox = !matches!(sandbox_type, SandboxType::None);
@@ -969,7 +1012,14 @@ impl BashTool {
         };
         Self {
             description: if has_sandbox {
-                format!("Executes bash commands (sandboxed via {sandbox_type})")
+                format!(
+                    "Executes bash commands (sandboxed via {sandbox_type}). Inside the \
+                     sandbox the project is available at its mounted path (Docker: \
+                     /workspace) and only the project plus /tmp are writable; paths \
+                     outside the project are not visible and host toolchains may be \
+                     absent — probe availability with `command -v <tool>` and adapt \
+                     instead of installing packages."
+                )
             } else {
                 "Executes bash commands and returns output".to_string()
             },
@@ -1180,8 +1230,9 @@ impl Tool for BashTool {
         let content = if output.success {
             format!("{}{}", output.stdout, command_description)
         } else {
+            let sandbox_note = sandbox_failure_note(self.process_sandbox.is_some(), &output);
             format!(
-                "{}Command failed with exit code {}: {}{}",
+                "{}Command failed with exit code {}: {}{}{}",
                 command_description,
                 output.exit_code,
                 output.stderr,
@@ -1189,7 +1240,10 @@ impl Tool for BashTool {
                     "\n"
                 } else {
                     ""
-                }
+                },
+                sandbox_note
+                    .map(|note| format!("\n{note}"))
+                    .unwrap_or_default(),
             )
         };
 
@@ -1425,8 +1479,17 @@ impl BashTool {
         let content = if success {
             format!("{stdout_buf}{command_description}")
         } else {
+            let sandbox_note = sandbox_failure_note(
+                self.process_sandbox.is_some(),
+                &CommandOutput {
+                    stdout: stdout_buf.clone(),
+                    stderr: stderr_buf.clone(),
+                    exit_code,
+                    success,
+                },
+            );
             format!(
-                "{}Command failed with exit code {}: {}{}",
+                "{}Command failed with exit code {}: {}{}{}",
                 command_description,
                 exit_code,
                 stderr_buf,
@@ -1434,7 +1497,10 @@ impl BashTool {
                     "\n"
                 } else {
                     ""
-                }
+                },
+                sandbox_note
+                    .map(|note| format!("\n{note}"))
+                    .unwrap_or_default(),
             )
         };
 
@@ -1738,6 +1804,56 @@ impl Tool for SleepTool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use super::{CommandOutput, sandbox_failure_note};
+
+    #[test]
+    fn sandbox_failure_note_only_fires_for_sandboxed_env_misses() {
+        let miss = CommandOutput {
+            stdout: String::new(),
+            stderr: "ls: cannot access '/opt/x': No such file or directory".to_string(),
+            exit_code: 2,
+            success: false,
+        };
+        let note = sandbox_failure_note(true, &miss).expect("env-miss failure gets a note");
+        assert!(note.contains("[sandbox]"));
+        assert!(note.contains("command -v"));
+
+        // Ordinary command failure (e.g. grep no-match: exit 1, empty
+        // stderr) stays clean — the note must not add noise to every
+        // non-zero exit.
+        let ordinary = CommandOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 1,
+            success: false,
+        };
+        assert!(sandbox_failure_note(true, &ordinary).is_none());
+
+        // Successful runs never get the note.
+        let ok = CommandOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            success: true,
+        };
+        assert!(sandbox_failure_note(true, &ok).is_none());
+
+        // Without an active sandbox: never.
+        assert!(sandbox_failure_note(false, &miss).is_none());
+    }
+
+    #[test]
+    fn sandbox_failure_note_covers_command_not_found() {
+        let miss = CommandOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 127,
+            success: false,
+        };
+        let note = sandbox_failure_note(true, &miss).expect("127 gets a note");
+        assert!(note.contains("[sandbox]"));
+    }
+
     /// Remote-capable fake process world: records the last program it was
     /// asked to run and reports `is_remote`.
     #[derive(Default)]
