@@ -19,25 +19,38 @@ import { toast } from 'sonner'
 import {
   createMemory,
   deleteMemory,
+  getMemoryGraph,
   getMemoryStats,
   listMemories,
   listMemoryProjects,
   updateMemory,
   type MemoryEntry,
+  type MemoryGraph,
   type MemoryStats,
 } from '@/lib/tauri-api'
 import { CATEGORIES, type CategoryFilter } from './constants'
 import { MemoryCard } from './MemoryCard'
 import { MemoryEditor, type MemorySaveInput } from './MemoryEditor'
+import { MemoryGraphView } from './MemoryGraphView'
 import StatCard from '@/components/ui/stat-card'
+import { cn } from '@/lib/utils'
 
-export default function MemoryPanel() {
+type MemoryView = 'list' | 'graph'
+
+export default function MemoryPanel({
+  onOpenMemorySource,
+}: {
+  onOpenMemorySource?: (memoryId: string, sourceSessionId: string) => void
+}) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
+  const [view, setView] = useState<MemoryView>('list')
   const [entries, setEntries] = useState<MemoryEntry[]>([])
   const [projects, setProjects] = useState<string[]>([])
   const [stats, setStats] = useState<MemoryStats | null>(null)
+  const [graph, setGraph] = useState<MemoryGraph | null>(null)
+  const [graphLoading, setGraphLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
@@ -75,6 +88,27 @@ export default function MemoryPanel() {
   useEffect(() => {
     void fetchAll()
   }, [fetchAll])
+
+  // P2-4: graph payload is fetched when the graph tab is opened (and refetched
+  // when the project filter changes — category/query narrow client-side).
+  useEffect(() => {
+    if (view !== 'graph') return
+    let cancelled = false
+    setGraphLoading(true)
+    getMemoryGraph(projectFilter === 'all' ? null : projectFilter)
+      .then((g) => {
+        if (!cancelled) setGraph(g)
+      })
+      .catch((e) => {
+        if (!cancelled) setErrorMsg(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => {
+        if (!cancelled) setGraphLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [view, projectFilter])
 
   const handleDelete = (id: string) => setPendingDeleteId(id)
 
@@ -181,6 +215,34 @@ export default function MemoryPanel() {
         )}
 
         <div className="flex flex-wrap items-center gap-md mb-lg">
+          {/* P2-4: list/graph view switch — the list view stays the
+              accessible alternative to the svg graph. */}
+          <div
+            role="tablist"
+            aria-label={t('memory.view.aria')}
+            className="flex rounded-xl border border-outline-variant bg-surface-container-low p-[2px]"
+          >
+            {(['list', 'graph'] as const).map((v) => (
+              <button
+                key={v}
+                role="tab"
+                aria-selected={view === v}
+                onClick={() => setView(v)}
+                className={cn(
+                  'px-md py-sm rounded-lg text-label-md font-bold transition-colors cursor-pointer',
+                  view === v
+                    ? 'bg-surface-container-lowest text-on-surface shadow-sm'
+                    : 'text-on-surface-variant hover:text-on-surface',
+                )}
+              >
+                <span className="material-symbols-outlined text-[16px] align-middle mr-xs">
+                  {v === 'list' ? 'list' : 'hub'}
+                </span>
+                {t(`memory.view.${v}`)}
+              </button>
+            ))}
+          </div>
+
           <select
             value={projectFilter}
             onChange={(e) => setProjectFilter(e.target.value)}
@@ -234,7 +296,15 @@ export default function MemoryPanel() {
           {intl.formatMessage({ id: 'memory.listCount' }, { count: filteredCount })}
         </div>
 
-        {loading ? (
+        {view === 'graph' ? (
+          <MemoryGraphView
+            graph={graph ?? { project: null, nodes: [], edges: [], entryCount: 0, maxEntries: 200, truncated: false }}
+            loading={loading || graphLoading}
+            category={categoryFilter}
+            query={query}
+            onOpenMemorySource={onOpenMemorySource}
+          />
+        ) : loading ? (
           <div className="text-center py-3xl text-on-surface-variant">
             {t('memory.loading')}
           </div>
@@ -260,6 +330,7 @@ export default function MemoryPanel() {
                 entry={entry}
                 onEdit={() => setEditing(entry)}
                 onDelete={() => handleDelete(entry.id)}
+                onOpenMemorySource={onOpenMemorySource}
               />
             ))}
           </div>

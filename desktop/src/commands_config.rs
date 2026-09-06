@@ -246,6 +246,23 @@ pub struct ConfigUpdate {
     pub value: String,
 }
 
+/// P1-3: validate + normalize a `sandbox.mode` config value.
+///
+/// Accepts the engine sandbox vocabulary (`off` | `local` | `landlock`,
+/// case-insensitive) plus `""` to clear the override. Returns the
+/// canonical token to persist — `None` clears — or an error listing the
+/// allowed values.
+pub(crate) fn validate_sandbox_mode(value: &str) -> Result<Option<String>, String> {
+    let mode = value.trim().to_ascii_lowercase();
+    match mode.as_str() {
+        "" => Ok(None),
+        "off" | "local" | "landlock" => Ok(Some(mode)),
+        other => Err(format!(
+            "Invalid sandbox.mode: `{other}` (expected off | local | landlock)"
+        )),
+    }
+}
+
 /// Update a single desktop config key. The frontend uses this for every
 /// settings panel mutation — model, api_key, theme, toggles, etc. Persists
 /// the new config to `~/.shannon/desktop/config.json` and emits
@@ -475,6 +492,59 @@ pub async fn configure(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
                     key: "approval_mode".into(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
+        "sandbox.mode" => {
+            // P1-3: frozen config key `sandbox.mode` — engine sandbox
+            // vocabulary (`off` | `local` | `landlock`). Takes effect on the
+            // next app launch (the tool registry is assembled once at
+            // startup); the UI copy says so.
+            let mode = validate_sandbox_mode(&update.value)?;
+            let mut desktop_cfg = state.desktop_config.write().await;
+            let sandbox = desktop_cfg
+                .sandbox
+                .get_or_insert_with(crate::config::SandboxConfig::default);
+            sandbox.mode = mode;
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "sandbox.mode".into(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
+        "offpeak.model_override" => {
+            // P2-5: frozen config key `offpeak.model_override` — model used
+            // for routine executions that start inside their off-peak
+            // execution window. Empty/whitespace value = disabled (brief
+            // contract), persisted as None so the wire stays clean.
+            let trimmed = update.value.trim().to_string();
+            let mut desktop_cfg = state.desktop_config.write().await;
+            desktop_cfg.offpeak.model_override = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            };
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "offpeak.model_override".into(),
                     value: update.value,
                 },
             );
@@ -1493,6 +1563,34 @@ mod tests {
         let back: ConfigUpdate = serde_json::from_str(&json).unwrap();
         assert_eq!(back.key, "model");
         assert_eq!(back.value, "claude-opus");
+    }
+
+    #[test]
+    fn validate_sandbox_mode_accepts_engine_vocabulary() {
+        assert_eq!(validate_sandbox_mode("off").unwrap(), Some("off".into()));
+        assert_eq!(
+            validate_sandbox_mode("local").unwrap(),
+            Some("local".into())
+        );
+        assert_eq!(
+            validate_sandbox_mode("landlock").unwrap(),
+            Some("landlock".into())
+        );
+        // Case-insensitive + trim.
+        assert_eq!(
+            validate_sandbox_mode(" Landlock ").unwrap(),
+            Some("landlock".into())
+        );
+        // Empty clears the override.
+        assert_eq!(validate_sandbox_mode("").unwrap(), None);
+        assert_eq!(validate_sandbox_mode("   ").unwrap(), None);
+    }
+
+    #[test]
+    fn validate_sandbox_mode_rejects_unknown_tokens() {
+        let err = validate_sandbox_mode("banana").unwrap_err();
+        assert!(err.contains("off | local | landlock"), "{err}");
+        assert!(validate_sandbox_mode("full").is_err());
     }
 
     #[test]

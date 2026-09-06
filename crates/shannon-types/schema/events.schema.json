@@ -73,6 +73,30 @@
     "title": "BackgroundTaskUpdate",
     "type": "object"
   },
+  "BudgetStatusPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "P0-4 session-budget status payload (must match src/events.rs exactly). Serde emits camelCase field names on the wire.",
+    "properties": {
+      "budgetUsd": {
+        "format": "double",
+        "type": "number"
+      },
+      "sessionId": {
+        "type": "string"
+      },
+      "spentUsd": {
+        "format": "double",
+        "type": "number"
+      }
+    },
+    "required": [
+      "budgetUsd",
+      "sessionId",
+      "spentUsd"
+    ],
+    "title": "BudgetStatusPayload",
+    "type": "object"
+  },
   "ChatMessage": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "properties": {
@@ -258,13 +282,60 @@
   },
   "PermissionRequest": {
     "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "PermissionReason": {
+        "description": "P1-3 mirror of `src/events.rs::PermissionReason` — frozen camelCase wire shape `{ source, ruleName, confidence }`.",
+        "properties": {
+          "confidence": {
+            "default": null,
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "ruleName": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "type": "object"
+      }
+    },
     "properties": {
       "input": true,
+      "reason": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/PermissionReason"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "P1-3: why this prompt was raised. Additive — must mirror src/events.rs exactly."
+      },
       "request_id": {
         "type": "string"
       },
       "risk": {
         "type": "string"
+      },
+      "session_id": {
+        "description": "P1-1: optional owner session (multi-window filtering). Additive — must mirror src/events.rs exactly.",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "tool": {
         "type": "string"
@@ -284,6 +355,13 @@
     "properties": {
       "query_id": {
         "type": "string"
+      },
+      "session_id": {
+        "description": "P1-1: optional owner session (multi-window filtering). Additive — must mirror src/events.rs exactly.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "required": [
@@ -297,6 +375,13 @@
     "properties": {
       "query_id": {
         "type": "string"
+      },
+      "session_id": {
+        "description": "P1-1: optional owner session (multi-window filtering). Additive — must mirror src/events.rs exactly.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "required": [
@@ -313,6 +398,13 @@
       },
       "query_id": {
         "type": "string"
+      },
+      "session_id": {
+        "description": "P1-1: optional owner session (multi-window filtering). Additive — must mirror src/events.rs exactly.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "required": [
@@ -330,6 +422,13 @@
       },
       "query_id": {
         "type": "string"
+      },
+      "session_id": {
+        "description": "P1-1: optional owner session (multi-window filtering). Additive — must mirror src/events.rs exactly.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "required": [
@@ -527,6 +626,13 @@
       },
       "query_id": {
         "type": "string"
+      },
+      "session_id": {
+        "description": "P1-1: optional owner session (multi-window filtering). Additive — must mirror src/events.rs exactly.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "required": [
@@ -548,6 +654,13 @@
       },
       "query_id": {
         "type": "string"
+      },
+      "session_id": {
+        "description": "P1-1: optional owner session (multi-window filtering). Additive — must mirror src/events.rs exactly.",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "tool_name": {
         "type": "string"
@@ -578,6 +691,13 @@
       "result": {
         "type": "string"
       },
+      "session_id": {
+        "description": "P1-1: optional owner session (multi-window filtering). Additive — must mirror src/events.rs exactly.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "tool_name": {
         "type": "string"
       },
@@ -600,6 +720,13 @@
     "properties": {
       "query_id": {
         "type": "string"
+      },
+      "session_id": {
+        "description": "P1-1: optional owner session (multi-window filtering). Additive — must mirror src/events.rs exactly.",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "tool_input": true,
       "tool_name": {
@@ -680,6 +807,13 @@
       },
       "query_id": {
         "type": "string"
+      },
+      "session_id": {
+        "description": "P1-1: optional owner session (multi-window filtering). Additive — must mirror src/events.rs exactly.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "required": [

@@ -49,6 +49,11 @@ pub mod config_watcher;
 pub mod diagnostics;
 pub mod extract_memories;
 pub mod git_operation_tracking;
+/// GitHub event trigger matching for routines (P2-7).
+pub mod github_triggers;
+/// Session-goal continuation decision (P0-2) — pure goal loop logic shared
+/// by the TUI and the desktop goal runner.
+pub mod goal_loop;
 pub mod internal_logging;
 pub mod magic_docs;
 pub mod mcp_advanced;
@@ -97,6 +102,8 @@ pub mod enhanced_suggestions;
 pub mod feature_flags;
 pub mod goal;
 pub mod housekeeping;
+/// SQLite inbox + automation-run store (P0-3).
+pub mod inbox_store;
 pub mod lsp;
 pub mod mcp_server_approval;
 pub mod plugin;

@@ -8,7 +8,7 @@
 
 ## P2-4.x · doc hardening(`cargo doc --no-deps -D warnings` advisory → required)
 
-**Status**: 🟡 **大部分已做**(2026-08-08 更新)—— P2-4 已落地 doc build / rustsec-audit / cross-platform matrix(`2bf92611`);`doc` job 仍带 `continue-on-error: true`,即 `-D warnings` required 这最后一公里未关。
+**Status**: ✅ **已解决 2026-09-05，证据 d37af11d**（`95d90224` 修复最后一批 intra-doc 断链后，`d37af11d` 移除 `doc` job 的 `continue-on-error: true`，`cargo doc --no-deps -D warnings` 升级为 hard gate——`-D warnings` required 这最后一公里已关；分支保护还需把 "Doc Build" 加入 required checks 才对合并生效。以下为销账前的历史记录）
 
 **当前状态**:
 - `.github/workflows/ci.yml` 的 `doc` job 设了 `continue-on-error: true`
@@ -48,7 +48,7 @@
 
 ## TD-2 · `pre_resolve_context` 签名债(返回 `()` 非 `Result`)
 
-**Status**: ⏸️ **deferred**(ADR-0008 P2-6,登记 2026-08-08;2026-08-10 复审维持)
+**Status**: ⏸️ **deferred**(ADR-0008 P2-6,登记 2026-08-08;2026-08-10 复审维持;2026-09-05 复核仍成立——`pre_resolve_context` 仍返回 `()`(`crates/shannon-core/src/query_engine/engine.rs:508`),无 error 路径,未清偿)
 
 **当前状态**:
 - `crates/shannon-core/src/query_engine/engine.rs:420` 的 `pub async fn pre_resolve_context(&mut self)` 返回 `()`。**2026-08-10 复审核实**:实际实现是 Ollama-only 的 `check_ollama_capabilities().await` → `Option`,`if let Some` 命中才更新 `effective_max_context_tokens`,None 静默跳过 —— **无 `catch_unwind`、无 error 路径**(原登记描述"catch_unwind 兜底,错误靠日志"不准确,已修正)。
@@ -68,7 +68,7 @@
 
 ## TD-3 · 桌面状态层用 JSONL 而非 SQLite
 
-**Status**: ⏸️ **deferred**(登记 2026-08-08;对应 improvement-plan P3-4)
+**Status**: ⏸️ **deferred**(登记 2026-08-08;对应 improvement-plan P3-4;2026-09-05 复核仍成立——桌面侧仍无 SQLite 依赖,状态层依旧 JSONL;2026-09 计划决议 SQLite 仅限收件箱/automation 运行记录,本项范围收窄但未清偿)
 
 **当前状态**:
 - 桌面会话历史 / scheduled-runs / triage / skill-candidates 均为 append-only **JSONL**(`desktop/src/scheduled_commands.rs`、`skill_pattern_detection.rs` 等);`shannon-core` 侧 `SessionManager` 同样 JSONL。
@@ -87,7 +87,7 @@
 
 ## TD-4 · ADR-0009 Phase 2 — retire `ProviderConnection` wire type
 
-**Status**: ✅ **已完成**(PR #54,合并至 dev `07913d97`,2026-08-10)
+**Status**: ✅ **已完成**(PR #54,合并至 dev `07913d97`,2026-08-10;2026-09-05 复核现状一致——`ProviderConnection` 仍为镜像 `ProviderProfile` 的薄 wire DTO(`crates/shannon-core/src/provider_config_store.rs`、`crates/shannon-ui/src/repl/commands/config.rs`),`mask_providers` 已不存在)
 
 **落地结果**:
 - `ProviderConnection` 现镜像 `ProviderProfile`(`label`→`display_name`、`provider_kind`→`kind` 保留为 String slug;删除死字段 `api_key`/`model`/`created_at`;新增 `has_api_key: bool` 派生自 `credential_manager::read_credential_value_default(id)` —— 修复 Phase 1 起的 dead signal:UI `hasKey = !!conn.api_key` 恒为 false)。
@@ -101,7 +101,7 @@
 
 ## TD-5 · auto-commit hook 拆分多文件提交(UX 债)
 
-**Status**: ⏸️ **known,暂不改**(登记 2026-08-08;2026-08-10 复审维持)
+**Status**: ⏸️ **known,暂不改**(登记 2026-08-08;2026-08-10 复审维持;2026-09-05 复核仍成立——本仓库 `.githooks/` 仅 pre-commit(fmt)/pre-push(local-check),该 auto-commit hook 确在开发工具链侧、不在本仓库)
 
 **当前状态**:
 - PostToolUse hook 在每次 Edit/Write 后触发,把多文件重构拆成多个泛化 commit;多文件 PR 需手动 `git reset --soft HEAD~N && git commit` 合并。

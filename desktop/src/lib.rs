@@ -165,6 +165,10 @@ pub mod commands_tasks;
 #[cfg(feature = "tauri")]
 pub mod session_registry;
 
+// P1-1 — session multi-window commands/registry/restore.
+#[cfg(feature = "tauri")]
+pub mod session_window_commands;
+
 #[cfg(feature = "tauri")]
 pub mod commands_usage;
 
@@ -177,6 +181,55 @@ pub mod commands_voice_models;
 #[cfg(feature = "tauri")]
 pub mod scheduled_commands;
 
+/// P0-3 — SQLite inbox commands + shared routine-run executor.
+#[cfg(feature = "tauri")]
+pub mod inbox_commands;
+
+/// P0-2 — desktop goal runner + Tasks-page run-card commands.
+#[cfg(feature = "tauri")]
+pub mod goal_commands;
+
+/// P1-2 — desktop best-of-N batch runs: parallel worktree orchestration
+/// commands (start/list/diff/adopt/discard) + the `batch:updated` source.
+#[cfg(feature = "tauri")]
+pub mod batch_commands;
+
+/// P1-5 C-1 — dev-server preview: detect/start/stop/status/capture
+/// commands + the `PreviewManager` lifecycle owner (also backs the
+/// desktop-only `preview_screenshot` engine tool).
+#[cfg(feature = "tauri")]
+pub mod preview_commands;
+
+/// P1-5 D — integrated terminal: long-lived PTY sessions (≤4, owned by
+/// AppState, killed on exit), the frozen `terminal_*` command contract and
+/// the throttled `terminal:output` event.
+#[cfg(feature = "tauri")]
+pub mod terminal_commands;
+
+/// P1-5 C-2 — draggable panel workspace: per-project layout persistence
+/// (`~/.shannon/desktop/workspace-layouts.json`), frozen `workspace_*`
+/// command contract. Pure file storage; no engine interaction.
+#[cfg(feature = "tauri")]
+pub mod workspace_commands;
+
+/// P0-4 — cost observability: session budget, context breakdown and
+/// per-session usage aggregation commands.
+#[cfg(feature = "tauri")]
+pub mod cost_commands;
+
+/// P1-6 — migration wizard: scan / preview / apply imports from a Claude
+/// Code or ZCode install (settings rules, MCP servers, skills, commands,
+/// project memory). Read-scan + user-approved import only; known source
+/// paths, never arbitrary ones.
+#[cfg(feature = "tauri")]
+pub mod migration_commands;
+
+/// P2-2 — persona/profile pack: export & import Shannon's personalization
+/// surfaces (skills, commands, memories, routines, profiles, persona) as a
+/// single secret-stripped `.tar.gz` with path-safe, idempotent imports.
+#[cfg(feature = "tauri")]
+pub mod persona_pack_commands;
+
 #[cfg(feature = "tauri")]
 pub mod commands_routine_templates;
 
@@ -185,6 +238,9 @@ pub mod lsp_commands;
 
 #[cfg(feature = "tauri")]
 pub mod automation_commands;
+
+#[cfg(feature = "tauri")]
+pub mod sandbox_assembly;
 
 #[cfg(feature = "tauri")]
 pub mod extensions_commands;

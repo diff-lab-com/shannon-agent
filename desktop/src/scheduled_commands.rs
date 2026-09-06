@@ -17,11 +17,13 @@ use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shannon_core::scheduled_routines::{
-    ExecutionPolicy, ScheduledRoutine, TriggerType, compute_next_fire_utc,
+    ExecutionPolicy, ExecutionWindow, RoutineManager, ScheduledRoutine, TriggerType,
+    compute_next_fire_utc,
 };
 use shannon_core::scheduled_runs::{ScheduledRun, ScheduledRunsStore};
 use shannon_core::scheduled_task_store::ScheduledTaskStore;
@@ -30,6 +32,7 @@ use tauri::Emitter;
 use tokio::sync::RwLock;
 
 use crate::commands::AppState;
+use crate::inbox_commands::{RoutineRunDeps, spawn_routine_run};
 
 // ─── DTOs ───────────────────────────────────────────────────────────────────
 
@@ -459,6 +462,31 @@ impl AppState {
         &self.triage_store
     }
 
+    /// Borrow the shared SQLite inbox store (P0-3), opening it on first use.
+    ///
+    /// Falls back to an in-memory database when the on-disk open fails
+    /// (permissions, corrupt file) so inbox features degrade gracefully
+    /// instead of failing on every command.
+    pub fn inbox_store(&self) -> Arc<shannon_core::inbox_store::InboxStore> {
+        self.inbox_store
+            .get_or_init(
+                || match shannon_core::inbox_store::InboxStore::open_default() {
+                    Ok(store) => Arc::new(store),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "inbox store: on-disk open failed, using in-memory fallback"
+                        );
+                        Arc::new(
+                            shannon_core::inbox_store::InboxStore::open_in_memory()
+                                .expect("in-memory SQLite must always open"),
+                        )
+                    }
+                },
+            )
+            .clone()
+    }
+
     /// Borrow the shared routine-override store.
     pub fn routine_overrides(&self) -> &RoutineOverrideStore {
         &self.routine_overrides
@@ -553,7 +581,8 @@ pub async fn create_scheduled_task(
     if let Some(max) = payload.max_fires {
         routine.max_fires = Some(max);
     }
-    if payload.policy.is_some() {
+    if let Some(policy) = &payload.policy {
+        validate_execution_window(policy.execution_window.as_ref())?;
         routine.policy = payload.policy.clone();
     }
     if let Some(deps) = payload.depends_on.clone() {
@@ -615,7 +644,8 @@ pub async fn update_scheduled_task(
     if let Some(max) = payload.max_fires {
         routine.max_fires = Some(max);
     }
-    if payload.policy.is_some() {
+    if let Some(policy) = &payload.policy {
+        validate_execution_window(policy.execution_window.as_ref())?;
         routine.policy = payload.policy.clone();
     }
     if let Some(deps) = payload.depends_on.clone() {
@@ -723,6 +753,295 @@ pub async fn preview_cron(expression: String) -> Result<CronPreview, String> {
         error: None,
         next_fires,
     })
+}
+
+// ─── P2-5: desktop routine scheduler (due check + off-peak windows) ───────
+//
+// The desktop historically had no scheduler loop: routines only executed via
+// explicit rerun/trigger. P2-5 adds the minimal periodic due check that makes
+// execution windows observable end-to-end:
+//
+// - every [`SCHEDULER_TICK_SECS`] the loop loads all routines from the task
+//   store and runs [`RoutineManager::drain_due_with_history_at`] with a
+//   clock-injectable `now`;
+// - a routine due **inside** its execution window (or without a window) is
+//   executed through the shared [`spawn_routine_run`] path (inbox item +
+//   run history on completion, exactly like rerun/trigger);
+// - a routine due **outside** its window is recorded by the core as a
+//   `Queued` JSONL tombstone (visible in the History tab) and the routine is
+//   NOT executed — the first due check inside the window fires it;
+// - the `offpeak.model_override` config is applied by [`spawn_routine_run`]
+//   itself, so reruns and loopback triggers behave identically.
+
+/// How often the scheduler polls for due routines. The core due check is
+/// cheap (a directory listing + per-routine fire check), so 30s keeps the
+/// queue→execute transition latency well under a minute without burning CPU.
+pub(crate) const SCHEDULER_TICK_SECS: u64 = 30;
+
+/// Spawn the background scheduler loop. Called once from app setup.
+///
+/// `pub` because the binary crate's `main.rs` (setup hook) is the caller;
+/// the rest of the scheduler machinery stays crate-private.
+pub fn spawn_scheduler(state: &AppState, app: tauri::AppHandle) {
+    let deps = std::sync::Arc::new(RoutineRunDeps::from_state(state));
+    let tasks = state.scheduled_task_store.clone();
+    let runs = state.scheduled_runs_store.clone();
+    tauri::async_runtime::spawn(async move {
+        tracing::info!(tick_secs = SCHEDULER_TICK_SECS, "routine scheduler started");
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(SCHEDULER_TICK_SECS)).await;
+            if let Err(e) = run_due_check(&deps, &tasks, &runs, &app).await {
+                tracing::warn!(error = %e, "routine scheduler: due check failed");
+            }
+        }
+    });
+}
+
+/// One due check at the real current time.
+pub(crate) async fn run_due_check(
+    deps: &RoutineRunDeps,
+    tasks: &ScheduledTaskStore,
+    runs: &ScheduledRunsStore,
+    app: &tauri::AppHandle,
+) -> Result<usize, String> {
+    run_due_check_at(deps, tasks, runs, app, chrono::Utc::now()).await
+}
+
+/// The slice of [`ScheduledTaskStore`] the scheduler needs, as a trait so
+/// tests can inject a persisting store that fails saves (review fix round 1,
+/// Important 2 — the duplicate-fire window when persistence breaks).
+pub(crate) trait RoutinePersistence {
+    fn save_routine(
+        &self,
+        routine: &ScheduledRoutine,
+    ) -> Result<std::path::PathBuf, shannon_core::scheduled_task_store::TaskStoreError>;
+    fn list_routines(
+        &self,
+    ) -> Result<Vec<ScheduledRoutine>, shannon_core::scheduled_task_store::TaskStoreError>;
+}
+
+impl RoutinePersistence for ScheduledTaskStore {
+    fn save_routine(
+        &self,
+        routine: &ScheduledRoutine,
+    ) -> Result<std::path::PathBuf, shannon_core::scheduled_task_store::TaskStoreError> {
+        self.save(routine)
+    }
+
+    fn list_routines(
+        &self,
+    ) -> Result<Vec<ScheduledRoutine>, shannon_core::scheduled_task_store::TaskStoreError> {
+        self.list()
+    }
+}
+
+/// Retire a drained `Running` placeholder record.
+///
+/// `drain_due_with_history_at` mints a JSONL `Running` record per fired
+/// routine and its contract says the CALLER finishes it via
+/// `ScheduledRunsStore::update`. The desktop executor
+/// (`spawn_routine_run`) mints its OWN run id (SQLite-first, D6) and
+/// finalizes that one — the drained id never executes in this process, so
+/// it must be closed here or it lingers as a ghost `running` row in the
+/// History view and, via `routine.last_run_id`, deadlocks C4 dependencies
+/// forever (`routine_last_run_succeeded` requires `Succeeded`).
+///
+/// `RunStatus::Cancelled` keeps core C4 semantics intact: a cancelled
+/// record still counts as "pending" for `routine_last_run_succeeded`, so
+/// dependents unblock only when the REAL run (the id we repoint
+/// `last_run_id` to) finishes `Succeeded`.
+fn retire_drained_run(runs: &ScheduledRunsStore, run_id: &str, reason: &str) {
+    if let Err(e) = runs.update(run_id, |r| {
+        r.finish(
+            shannon_core::scheduled_runs::RunStatus::Cancelled,
+            Some(reason.to_string()),
+        );
+    }) {
+        tracing::warn!(
+            run_id = %run_id,
+            error = %e,
+            "scheduler: failed to retire drained run record (history may show a stale running row)"
+        );
+    }
+}
+
+/// In-flight guard: the SQLite `routine_runs` table is authoritative for
+/// spawned runs — `spawn_routine_run` always terminates its row (panic
+/// guard included), so a still-`running` row means the previous execution
+/// has not finalized. Skip this tick instead of double-firing a paid run.
+///
+/// The 24h window keeps a process kill between `record_run_start` and
+/// finalize from wedging the routine forever (best-effort, fail-open on
+/// store errors so a stats hiccup cannot stop scheduling).
+fn has_run_in_flight(inbox: &shannon_core::inbox_store::InboxStore, task_id: &str) -> bool {
+    let Ok(rows) = inbox.list_runs(200) else {
+        return false;
+    };
+    let day_ago_ms = chrono::Utc::now().timestamp_millis() - 24 * 3600 * 1000;
+    rows.iter().any(|r| {
+        r.task_id == task_id
+            && r.status == "running"
+            && r.started_at_ms.is_some_and(|ts| ts >= day_ago_ms)
+    })
+}
+
+/// Clock-injectable due check (P2-5 minimal refactor for tests).
+///
+/// Returns the number of routines that actually started executing. Queued
+/// (out-of-window) routines are persisted with their `Queued` run tombstone
+/// but are not executed here — the window-open tick will pick them up.
+///
+/// Per fired routine the tick follows a strict order (review fix round 1):
+///
+/// 1. **Persist before acting.** `mark_fired`/queued `last_run_id` is saved
+///    BEFORE spawning; a failed save retires the drained record and skips —
+///    the routine stays un-fired in the store, so the next tick retries
+///    instead of double-firing a paid run after a crash between save and
+///    spawn.
+/// 2. **In-flight guard.** A still-`running` SQLite row for the task skips
+///    the spawn for this tick.
+/// 3. **Spawn, then reconcile run ids.** The drained `Running` placeholder
+///    is retired (Cancelled, "superseded by run X") and
+///    `routine.last_run_id` is repointed to the executor's real run id, so
+///    C4 dependency resolution and the History view follow the record that
+///    will actually be finalized.
+pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
+    deps: &RoutineRunDeps,
+    tasks: &T,
+    runs: &ScheduledRunsStore,
+    app: &tauri::AppHandle<R>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<usize, String> {
+    let all = tasks.list_routines().map_err(|e| e.to_string())?;
+    if all.is_empty() {
+        return Ok(0);
+    }
+    let mut mgr = RoutineManager::default();
+    for routine in all {
+        mgr.add(routine);
+    }
+
+    let due = mgr
+        .drain_due_with_history_at(now, runs)
+        .map_err(|e| e.to_string())?;
+    let mut executed = 0usize;
+    for d in due {
+        let Some(updated) = mgr.get(&d.task_id) else {
+            continue;
+        };
+        // 1. Persist BEFORE acting. On failure the drained record (queued
+        // tombstone or running placeholder) never becomes the routine's
+        // durable state — retire it so no ghost rows accumulate and the
+        // next tick retries from a clean, un-fired store state.
+        if let Err(e) = tasks.save_routine(updated) {
+            tracing::warn!(
+                task_id = %d.task_id,
+                error = %e,
+                "scheduler: failed to persist routine state — skipping this tick (routine stays un-fired)"
+            );
+            retire_drained_run(
+                runs,
+                &d.run_id,
+                "scheduler: routine state not persisted this tick; record retired",
+            );
+            continue;
+        }
+        if d.queued_for_window {
+            tracing::info!(
+                task_id = %d.task_id,
+                run_id = %d.run_id,
+                "routine due outside its execution window — queued until the window opens"
+            );
+            continue;
+        }
+        // 2. In-flight guard — never stack a second paid run on top of an
+        // unfinished one.
+        if has_run_in_flight(&deps.inbox, &d.task_id) {
+            tracing::info!(
+                task_id = %d.task_id,
+                "scheduler: previous run still in flight — skipping this tick"
+            );
+            retire_drained_run(
+                runs,
+                &d.run_id,
+                "scheduler: skipped, previous run still in flight",
+            );
+            continue;
+        }
+        let Some(routine) = mgr.get(&d.task_id).cloned() else {
+            continue;
+        };
+        // 3. Spawn, then reconcile run ids.
+        match spawn_routine_run(
+            deps,
+            app.clone(),
+            routine,
+            shannon_core::inbox_store::SOURCE_ROUTINE,
+            None,
+        )
+        .await
+        {
+            Ok(new_run_id) => {
+                // The executor finalized... nothing yet — it owns `new_run_id`
+                // and will finish it (succeeded/failed) in its own finalize
+                // path. Close the drained placeholder and follow the real run.
+                retire_drained_run(runs, &d.run_id, &format!("superseded by run {new_run_id}"));
+                if let Some(r) = mgr.get_mut(&d.task_id) {
+                    r.last_run_id = Some(new_run_id.clone());
+                }
+                // Repoint last_run_id durably so C4 reads the record whose
+                // terminal status reflects the real execution. A failure here
+                // is safe (store still points at the CANCELLED drained record
+                // = pending for C4, no deadlock) but is warned loudly because
+                // the History view will not link the routine to the live run
+                // until the next successful fire.
+                if let Some(updated) = mgr.get(&d.task_id) {
+                    if let Err(e) = tasks.save_routine(updated) {
+                        tracing::warn!(
+                            task_id = %d.task_id,
+                            error = %e,
+                            "scheduler: failed to repoint last_run_id to the spawned run"
+                        );
+                    }
+                }
+                tracing::info!(
+                    task_id = %d.task_id,
+                    run_id = %new_run_id,
+                    "scheduler: routine executed"
+                );
+                executed += 1;
+            }
+            Err(e) => {
+                // Nothing spawned. The persisted mark_fired consumed this
+                // firing; retire the placeholder so history stays honest and
+                // C4 sees a terminal (cancelled) record — the routine fires
+                // again after its interval elapses.
+                retire_drained_run(
+                    runs,
+                    &d.run_id,
+                    &format!("scheduler: failed to start run: {e}"),
+                );
+                tracing::warn!(
+                    task_id = %d.task_id,
+                    error = %e,
+                    "scheduler: failed to start routine run"
+                );
+            }
+        }
+    }
+    Ok(executed)
+}
+
+/// Validate an execution window coming from the frontend (P2-5). Hours
+/// outside `0..=23` are rejected with a user-readable error instead of
+/// being silently persisted.
+fn validate_execution_window(window: Option<&ExecutionWindow>) -> Result<(), String> {
+    let Some(w) = window else {
+        return Ok(());
+    };
+    ExecutionWindow::new(w.start_hour, w.end_hour, w.timezone.clone())
+        .map(|_| ())
+        .map_err(|e| format!("invalid execution_window: {e}"))
 }
 
 /// List triage items matching the filter.
@@ -1490,6 +1809,7 @@ mod tests {
             notify_on_failure: true,
             budget_usd: Some(10.0),
             auto_archive_when_empty: false,
+            execution_window: None,
         };
         let json = serde_json::to_string(&policy).unwrap();
         assert!(json.contains("budget_usd"));
@@ -2041,5 +2361,380 @@ mod tests {
         assert!(!is_in_progress_status("failed"));
         assert!(!is_in_progress_status("queued"));
         assert!(!is_in_progress_status(""));
+    }
+
+    // ── P2-5: off-peak scheduler ─────────────────────────────────────────
+
+    use chrono::TimeZone as _;
+    use shannon_core::inbox_store::InboxStore;
+    use shannon_engine::api::types::LlmClientConfig;
+
+    fn utc_at(h: u32, m: u32) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 1, 15, h, m, 0).unwrap()
+    }
+
+    fn windowed_routine_utc(start: u8, end: u8) -> ScheduledRoutine {
+        let mut r = ScheduledRoutine::new("nightly".into(), "do nightly work".into(), 3600);
+        r.policy = Some(ExecutionPolicy {
+            execution_window: Some(ExecutionWindow::new(start, end, Some("UTC".into())).unwrap()),
+            ..ExecutionPolicy::default()
+        });
+        r
+    }
+
+    /// Deps + isolated stores for scheduler tests (mirrors the inbox test
+    /// fixture, but with a real JSONL runs store on a tempdir).
+    fn scheduler_fixture(
+        tmp: &std::path::Path,
+    ) -> (
+        RoutineRunDeps,
+        ScheduledTaskStore,
+        ScheduledRunsStore,
+        std::sync::Arc<InboxStore>,
+    ) {
+        let inbox: std::sync::Arc<InboxStore> =
+            std::sync::Arc::new(InboxStore::open_with_legacy(&tmp.join("inbox.db"), None).unwrap());
+        let runs = ScheduledRunsStore::with_base(tmp.join("runs").to_path_buf());
+        let deps = RoutineRunDeps {
+            inbox: inbox.clone(),
+            runs_store: std::sync::Arc::new(runs.clone()),
+            usage_store: std::sync::Arc::new(crate::commands_usage::UsageStore::with_path(
+                tmp.join("usage.jsonl"),
+            )),
+            client_config: std::sync::Arc::new(RwLock::new(LlmClientConfig::default())),
+            desktop_config: std::sync::Arc::new(RwLock::new(
+                crate::config::DesktopConfig::default(),
+            )),
+            tools: std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+            memory_store: std::sync::Arc::new(std::sync::RwLock::new(
+                shannon_core::MemoryStore::new(tmp.join("memories")),
+            )),
+        };
+        let tasks = ScheduledTaskStore::with_base(tmp.join("tasks").to_path_buf());
+        (deps, tasks, runs, inbox)
+    }
+
+    #[tokio::test]
+    async fn scheduler_queues_due_routine_outside_window_without_executing() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, tasks, runs, inbox) = scheduler_fixture(tmp.path());
+
+        let routine = windowed_routine_utc(22, 6);
+        let id = routine.id.clone();
+        tasks.save(&routine).unwrap();
+
+        // 12:00 UTC — due but outside the 22→6 window.
+        let executed = run_due_check_at(&deps, &tasks, &runs, app.handle(), utc_at(12, 0))
+            .await
+            .unwrap();
+        assert_eq!(executed, 0, "out-of-window routines must not execute");
+
+        // History: exactly one queued tombstone.
+        let history = runs.list_by_task(&id, 10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].status,
+            shannon_core::scheduled_runs::RunStatus::Queued
+        );
+
+        // Routine persisted with the queued run id; never marked fired.
+        let stored = tasks.load(&id).unwrap().unwrap();
+        assert_eq!(
+            stored.last_run_id.as_deref(),
+            Some(history[0].run_id.as_str())
+        );
+        assert!(stored.last_fired.is_none());
+        assert_eq!(stored.fire_count, 0);
+
+        // No inbox item, no SQLite routine_runs row (queueing never writes
+        // the inbox, brief contract).
+        assert!(inbox.list(None, None, 10).unwrap().is_empty());
+        assert!(inbox.list_runs(10).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn scheduler_executes_queued_routine_at_first_in_window_check() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, tasks, runs, inbox) = scheduler_fixture(tmp.path());
+
+        let routine = windowed_routine_utc(22, 6);
+        let id = routine.id.clone();
+        tasks.save(&routine).unwrap();
+        // A dependent child (disabled so it never fires itself) whose C4
+        // unblock depends on the parent's REAL run reaching `Succeeded`.
+        let mut child = ScheduledRoutine::new("child".into(), "p".into(), 3600);
+        child.enabled = false;
+        child.depends_on = vec![id.clone()];
+        let child_id = child.id.clone();
+        tasks.save(&child).unwrap();
+
+        // Queue while outside the window…
+        let executed = run_due_check_at(&deps, &tasks, &runs, app.handle(), utc_at(12, 0))
+            .await
+            .unwrap();
+        assert_eq!(executed, 0);
+        let queued_run_id = tasks.load(&id).unwrap().unwrap().last_run_id.unwrap();
+
+        // …then the first due check inside the window executes it.
+        let executed = run_due_check_at(&deps, &tasks, &runs, app.handle(), utc_at(22, 30))
+            .await
+            .unwrap();
+        assert_eq!(executed, 1);
+
+        // A real run row was created synchronously by spawn_routine_run.
+        let runs_rows = inbox.list_runs(10).unwrap();
+        assert_eq!(runs_rows.len(), 1);
+        assert_eq!(runs_rows[0].task_id, id);
+        assert_eq!(runs_rows[0].status, "running");
+        let new_run_id = runs_rows[0].id.clone();
+
+        // Routine state advanced with the injected clock…
+        let stored = tasks.load(&id).unwrap().unwrap();
+        assert_eq!(stored.fire_count, 1);
+        let fired_at = stored.last_fired.expect("marked fired");
+        assert_eq!(
+            fired_at.timestamp(),
+            utc_at(22, 30).timestamp(),
+            "injected clock used for mark_fired"
+        );
+        // …and last_run_id REPOINTED to the spawned run (Critical 1) so C4
+        // reads the record the executor will actually finalize.
+        assert_eq!(
+            stored.last_run_id.as_deref(),
+            Some(new_run_id.as_str()),
+            "last_run_id must follow the real run, not the drained placeholder"
+        );
+
+        // Critical 1: the 22:30 tick's drained `Running` placeholder is
+        // retired — no ghost `running` row lingers for a run that never
+        // executes. History is exactly: the 12:00 Queued tombstone, the
+        // retired placeholder (Cancelled, pointing at the real run), and
+        // the executor's own Running record.
+        let history = runs.list_by_task(&id, 10).unwrap();
+        assert_eq!(history.len(), 3, "queued + retired placeholder + real run");
+        assert!(
+            history.iter().any(|h| h.run_id == queued_run_id
+                && h.status == shannon_core::scheduled_runs::RunStatus::Queued),
+            "12:00 queued tombstone stays queued"
+        );
+        let placeholders: Vec<_> = history
+            .iter()
+            .filter(|h| h.status == shannon_core::scheduled_runs::RunStatus::Cancelled)
+            .collect();
+        assert_eq!(placeholders.len(), 1, "exactly one retired placeholder");
+        assert_ne!(placeholders[0].run_id, queued_run_id);
+        assert!(
+            placeholders[0]
+                .error_message
+                .as_deref()
+                .unwrap_or_default()
+                .contains(&format!("superseded by run {new_run_id}")),
+            "retired record must point at the real run: {:?}",
+            placeholders[0].error_message
+        );
+        let running: Vec<_> = history
+            .iter()
+            .filter(|h| h.status == shannon_core::scheduled_runs::RunStatus::Running)
+            .collect();
+        assert_eq!(running.len(), 1, "only the executor's own run is running");
+        assert_eq!(running[0].run_id, new_run_id);
+
+        // C4: before the real run finalizes, the child stays blocked…
+        let mgr = build_manager_from_store(&tasks);
+        assert!(
+            mgr.check_dependencies(&child_id, &runs).is_blocked(),
+            "child blocked while the real run has not finished"
+        );
+        // …and unblocks exactly when the executor's run reaches Succeeded
+        // (finalize_run performs this same JSONL mirror update).
+        runs.update(&new_run_id, |r| {
+            r.finish(shannon_core::scheduled_runs::RunStatus::Succeeded, None)
+        })
+        .unwrap();
+        let mgr = build_manager_from_store(&tasks);
+        assert!(
+            !mgr.check_dependencies(&child_id, &runs).is_blocked(),
+            "dependency must unblock once the real run succeeded"
+        );
+    }
+
+    /// Review fix round 1, Important 2: a failed persist must skip the spawn
+    /// (routine stays un-fired, no ghost rows) and the next tick recovers.
+    struct FlakySaveStore {
+        inner: ScheduledTaskStore,
+        fail: std::sync::atomic::AtomicBool,
+    }
+
+    impl RoutinePersistence for FlakySaveStore {
+        fn save_routine(
+            &self,
+            routine: &ScheduledRoutine,
+        ) -> Result<std::path::PathBuf, shannon_core::scheduled_task_store::TaskStoreError>
+        {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(shannon_core::scheduled_task_store::TaskStoreError::Io(
+                    std::io::Error::other("simulated persist outage"),
+                ));
+            }
+            self.inner.save_routine(routine)
+        }
+
+        fn list_routines(
+            &self,
+        ) -> Result<Vec<ScheduledRoutine>, shannon_core::scheduled_task_store::TaskStoreError>
+        {
+            self.inner.list_routines()
+        }
+    }
+
+    #[tokio::test]
+    async fn scheduler_save_failure_skips_spawn_and_recovers_next_tick() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, tasks, runs, inbox) = scheduler_fixture(tmp.path());
+
+        let routine = windowed_routine_utc(22, 6);
+        let id = routine.id.clone();
+        tasks.save(&routine).unwrap();
+
+        let flaky = FlakySaveStore {
+            inner: tasks.clone(),
+            fail: std::sync::atomic::AtomicBool::new(true),
+        };
+
+        // Tick inside the window while persistence is down: the firing must
+        // NOT be consumed by a spawn.
+        let executed = run_due_check_at(&deps, &flaky, &runs, app.handle(), utc_at(22, 30))
+            .await
+            .unwrap();
+        assert_eq!(executed, 0, "save failure must skip the spawn");
+        assert!(inbox.list_runs(10).unwrap().is_empty(), "no run row");
+        assert!(
+            inbox.list(None, None, 10).unwrap().is_empty(),
+            "no inbox item"
+        );
+        // The drained placeholder was retired, not left running.
+        let history = runs.list_by_task(&id, 10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].status,
+            shannon_core::scheduled_runs::RunStatus::Cancelled
+        );
+        // Nothing was persisted: the store keeps the routine un-fired.
+        let stored = tasks.load(&id).unwrap().unwrap();
+        assert_eq!(stored.fire_count, 0);
+        assert!(stored.last_fired.is_none());
+
+        // Next tick with persistence recovered: it executes normally.
+        flaky.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+        let executed = run_due_check_at(&deps, &flaky, &runs, app.handle(), utc_at(23, 0))
+            .await
+            .unwrap();
+        assert_eq!(executed, 1, "recovered tick spawns");
+        assert_eq!(inbox.list_runs(10).unwrap().len(), 1);
+        let stored = tasks.load(&id).unwrap().unwrap();
+        assert_eq!(stored.fire_count, 1);
+    }
+
+    #[tokio::test]
+    async fn scheduler_skips_refire_while_previous_run_in_flight() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, tasks, runs, inbox) = scheduler_fixture(tmp.path());
+
+        // interval_secs = 0 → due on every tick.
+        let routine = ScheduledRoutine::new("rapid".into(), "p".into(), 0);
+        let id = routine.id.clone();
+        tasks.save(&routine).unwrap();
+
+        // Simulate a previous execution still running (SQLite is
+        // authoritative: spawn_routine_run always finalizes its row).
+        inbox.record_run_start(&id, "rapid").unwrap();
+
+        let executed = run_due_check_at(&deps, &tasks, &runs, app.handle(), utc_at(9, 0))
+            .await
+            .unwrap();
+        assert_eq!(executed, 0, "in-flight guard must skip the spawn");
+        // Only the pre-existing row — no second run was stacked.
+        assert_eq!(inbox.list_runs(10).unwrap().len(), 1);
+        // The drained placeholder was retired with the skip reason.
+        let history = runs.list_by_task(&id, 10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].status,
+            shannon_core::scheduled_runs::RunStatus::Cancelled
+        );
+        assert!(
+            history[0]
+                .error_message
+                .as_deref()
+                .unwrap()
+                .contains("in flight")
+        );
+    }
+
+    fn build_manager_from_store(tasks: &ScheduledTaskStore) -> RoutineManager {
+        let mut mgr = RoutineManager::default();
+        for r in tasks.list().unwrap() {
+            mgr.add(r);
+        }
+        mgr
+    }
+
+    #[tokio::test]
+    async fn scheduler_without_window_executes_immediately() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, tasks, runs, _inbox) = scheduler_fixture(tmp.path());
+
+        let routine = ScheduledRoutine::new("instant".into(), "p".into(), 3600);
+        tasks.save(&routine).unwrap();
+
+        let executed = run_due_check_at(&deps, &tasks, &runs, app.handle(), utc_at(3, 15))
+            .await
+            .unwrap();
+        assert_eq!(
+            executed, 1,
+            "no window field = immediate execution (legacy)"
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduler_on_empty_store_is_a_noop() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, tasks, runs, _inbox) = scheduler_fixture(tmp.path());
+        let executed = run_due_check_at(&deps, &tasks, &runs, app.handle(), utc_at(9, 0))
+            .await
+            .unwrap();
+        assert_eq!(executed, 0);
+    }
+
+    #[test]
+    fn validate_execution_window_rejects_invalid_hours_and_accepts_valid() {
+        assert!(validate_execution_window(None).is_ok());
+        assert!(
+            validate_execution_window(Some(&ExecutionWindow::new(22, 6, None).unwrap())).is_ok()
+        );
+        let err = validate_execution_window(Some(&ExecutionWindow {
+            start_hour: 24,
+            end_hour: 6,
+            timezone: None,
+        }))
+        .unwrap_err();
+        assert!(err.contains("invalid execution_window"), "{err}");
+    }
+
+    #[test]
+    fn offpeak_model_override_configures_through_desktop_config() {
+        // The configure command stores the trimmed value; empty = disabled.
+        // This pins the storage-level contract the command relies on.
+        let mut cfg = crate::config::DesktopConfig::default();
+        cfg.offpeak.model_override = Some("  glm-4-flash ".into());
+        assert_eq!(cfg.offpeak.effective_model_override(), Some("glm-4-flash"));
+        cfg.offpeak.model_override = Some("".into());
+        assert!(cfg.offpeak.effective_model_override().is_none());
     }
 }

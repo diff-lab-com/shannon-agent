@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use tauri::State;
 
 use crate::commands::AppState;
+use shannon_engine::permission_profile::PermissionProfile;
 
 // ─── DTOs ───────────────────────────────────────────────────────────────────
 
@@ -482,6 +483,168 @@ pub async fn delete_custom_profile(
     Ok(removed)
 }
 
+// ─── active profile (P1-3) ──────────────────────────────────────────────────
+
+/// Result of `activate_permission_profile`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveProfileStatus {
+    /// The now-active profile name (`strict` / `balanced` / `permissive` /
+    /// custom name), or `null` when no profile is active.
+    pub active: Option<String>,
+    /// The `approval_mode` config value that ships with this activation
+    /// (see [`profile_approval_mode`]), or the pre-existing value when
+    /// deactivated.
+    pub approval_mode: Option<String>,
+}
+
+/// Canonical `approval_mode` config value for a profile activation (P1-3).
+///
+/// This is the frozen mode-switcher mapping: 严格 = `strict` + `suggest`,
+/// 平衡 = `balanced` + `suggest`, 宽松 = `permissive` + `auto_edit`. Custom
+/// profiles derive their mode the same way
+/// `PermissionManager::apply_custom_profile_def` does (read+write+bash
+/// auto-approved → `auto_edit`, otherwise `suggest`).
+///
+/// `Ok(None)` for an empty/deactivated profile; `Err` for a name that is
+/// neither built-in nor an existing custom profile file.
+pub(crate) fn profile_approval_mode(
+    name: &str,
+    registry: &shannon_engine::custom_profiles::CustomProfileRegistry,
+) -> Result<Option<&'static str>, String> {
+    match name {
+        "" => Ok(None),
+        "strict" | "balanced" => Ok(Some("suggest")),
+        "permissive" => Ok(Some("auto_edit")),
+        custom => {
+            let def = registry.get(custom).ok_or_else(|| {
+                format!(
+                    "unknown permission profile `{custom}` — create it first (Settings → 权限配置)"
+                )
+            })?;
+            let def = def.clone();
+            // Same tool-group mapping `PermissionManager::apply_custom_profile_def`
+            // uses to derive an approval mode from a custom profile.
+            let any =
+                |tools: &[String], pats: &[&str]| tools.iter().any(|t| pats.contains(&t.as_str()));
+            let auto_read = any(&def.auto_approve, &["Read", "Glob", "Grep", "LS"]);
+            let auto_write = any(&def.auto_approve, &["Edit", "Write", "MultiEdit"]);
+            let auto_bash = any(&def.auto_approve, &["Bash"]);
+            Ok(Some(if auto_read && auto_write && auto_bash {
+                "auto_edit"
+            } else {
+                "suggest"
+            }))
+        }
+    }
+}
+
+/// Apply the persisted active profile to a freshly built `PermissionManager`
+/// (P1-3). No-op when `name` is empty/None so legacy configs behave exactly
+/// as before. Unknown custom names are skipped with a warning (the command
+/// validates on activation; a profile deleted afterwards must not break
+/// session startup).
+///
+/// Mode note: `apply_profile` / `apply_custom_profile_def` derive an
+/// `ApprovalMode` from the profile rules — which by construction matches the
+/// mode persisted at activation. Callers should still apply the configured
+/// `approval_mode` **after** this so a manual mode edit stays authoritative.
+pub(crate) fn apply_active_profile(
+    permissions: &mut shannon_engine::permissions::PermissionManager,
+    name: Option<&str>,
+) {
+    let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) else {
+        return;
+    };
+    match name {
+        "strict" => permissions.apply_profile(PermissionProfile::Strict),
+        "balanced" => permissions.apply_profile(PermissionProfile::Balanced),
+        "permissive" => permissions.apply_profile(PermissionProfile::Permissive),
+        custom => {
+            let registry = shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs();
+            match registry.get(custom) {
+                Some(def) => permissions.apply_custom_profile_def(def),
+                None => tracing::warn!(
+                    profile = %custom,
+                    "active permission profile no longer exists; ignoring"
+                ),
+            }
+        }
+    }
+}
+
+/// Activate (or deactivate) the session-wide permission profile.
+///
+/// **Frozen contract (P1-3):** `activate_permission_profile(name: string|null)`.
+/// - `name = null` / `""` → clears the active profile; the plain
+///   `approval_mode` config drives the engine again (unchanged value).
+/// - `strict` / `balanced` / `permissive` → activates the built-in profile
+///   and syncs `approval_mode` per the mode-switcher mapping.
+/// - any other name → must match a custom profile under
+///   `.shannon/profiles/` (or `.claude/profiles/`); activates it and syncs
+///   `approval_mode` from its rules.
+///
+/// Persists both keys to `~/.shannon/desktop/config.json` and emits
+/// `config-updated` for each so open windows refresh. The next
+/// `send_message` builds its `PermissionManager` from the new state, so the
+/// change takes effect on the very next turn of the open session.
+#[tauri::command]
+pub async fn activate_permission_profile(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    name: Option<String>,
+) -> Result<ActiveProfileStatus, String> {
+    use tauri::Emitter;
+
+    let trimmed = name.unwrap_or_default().trim().to_string();
+
+    // Validate (and resolve the synced approval mode) before touching config.
+    let registry = shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs();
+    let synced_mode = profile_approval_mode(&trimmed, &registry)?.map(str::to_string);
+
+    let mut desktop_cfg = state.desktop_config.write().await;
+    desktop_cfg.active_permission_profile = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.clone())
+    };
+    if let Some(mode) = &synced_mode {
+        desktop_cfg.approval_mode = Some(mode.clone());
+    }
+    drop(desktop_cfg);
+
+    {
+        let desktop_cfg = state.desktop_config.read().await;
+        crate::config::save_config(&desktop_cfg)?;
+    }
+
+    if let Some(mode) = &synced_mode {
+        let _ = app_handle.emit(
+            crate::events::event_names::CONFIG_UPDATED,
+            crate::events::ConfigUpdatedPayload {
+                key: "approval_mode".into(),
+                value: mode.clone(),
+            },
+        );
+    }
+    let _ = app_handle.emit(
+        crate::events::event_names::CONFIG_UPDATED,
+        crate::events::ConfigUpdatedPayload {
+            key: "active_permission_profile".into(),
+            value: trimmed.clone(),
+        },
+    );
+    tracing::info!(profile = %trimmed, mode = ?synced_mode, "activated permission profile");
+
+    Ok(ActiveProfileStatus {
+        active: if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        },
+        approval_mode: synced_mode,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,5 +704,93 @@ mod tests {
         assert!(!strict.auto_approve_write);
         assert!(!strict.auto_approve_bash);
         assert!(strict.deny_destructive.contains(&"Bash".to_string()));
+    }
+
+    // ── P1-3: active profile ────────────────────────────────────────────
+
+    fn empty_registry() -> shannon_engine::custom_profiles::CustomProfileRegistry {
+        shannon_engine::custom_profiles::CustomProfileRegistry::new()
+    }
+
+    #[test]
+    fn builtin_profile_approval_mode_mapping_is_frozen() {
+        // 严格 = suggest, 平衡 = suggest, 宽松 = auto_edit (P1-3 mapping).
+        let reg = empty_registry();
+        assert_eq!(
+            profile_approval_mode("strict", &reg).unwrap(),
+            Some("suggest")
+        );
+        assert_eq!(
+            profile_approval_mode("balanced", &reg).unwrap(),
+            Some("suggest")
+        );
+        assert_eq!(
+            profile_approval_mode("permissive", &reg).unwrap(),
+            Some("auto_edit")
+        );
+        assert_eq!(profile_approval_mode("", &reg).unwrap(), None);
+        assert!(profile_approval_mode("nope", &reg).is_err());
+    }
+
+    #[test]
+    fn custom_profile_approval_mode_derives_from_rules() {
+        let reg = empty_registry();
+        // Unknown custom name must error (the command validates on
+        // activation).
+        assert!(profile_approval_mode("ghost", &reg).is_err());
+    }
+
+    #[test]
+    fn apply_active_profile_noop_when_unset() {
+        let mut mgr = shannon_engine::permissions::PermissionManager::new();
+        mgr.set_approval_mode(shannon_engine::permissions::ApprovalMode::Auto);
+        apply_active_profile(&mut mgr, None);
+        apply_active_profile(&mut mgr, Some(""));
+        apply_active_profile(&mut mgr, Some("   "));
+        assert!(mgr.active_profile().is_none());
+        // Approval mode untouched by a no-op activation.
+        assert_eq!(
+            mgr.approval_mode(),
+            shannon_engine::permissions::ApprovalMode::Auto
+        );
+    }
+
+    #[test]
+    fn apply_active_profile_builtin_records_profile_and_mode() {
+        let mut mgr = shannon_engine::permissions::PermissionManager::new();
+        apply_active_profile(&mut mgr, Some("strict"));
+        assert_eq!(
+            mgr.active_profile(),
+            Some(&PermissionProfile::Strict),
+            "strict must be recorded as the active profile"
+        );
+        // Profile-derived mode (Suggest) is applied; the caller still
+        // overrides with the configured approval_mode afterwards.
+        assert_eq!(
+            mgr.approval_mode(),
+            shannon_engine::permissions::ApprovalMode::Suggest
+        );
+        // Strict marks Write/Bash destructive (the 严格↔平衡 differentiator).
+        assert!(mgr.is_tool_destructive("Write"));
+        assert!(mgr.is_tool_destructive("Bash"));
+
+        let mut mgr = shannon_engine::permissions::PermissionManager::new();
+        apply_active_profile(&mut mgr, Some("balanced"));
+        assert_eq!(mgr.active_profile(), Some(&PermissionProfile::Balanced));
+        assert!(!mgr.is_tool_destructive("Write"));
+
+        let mut mgr = shannon_engine::permissions::PermissionManager::new();
+        apply_active_profile(&mut mgr, Some("permissive"));
+        assert_eq!(
+            mgr.approval_mode(),
+            shannon_engine::permissions::ApprovalMode::AutoEdit
+        );
+    }
+
+    #[test]
+    fn apply_active_profile_unknown_custom_name_is_skipped() {
+        let mut mgr = shannon_engine::permissions::PermissionManager::new();
+        apply_active_profile(&mut mgr, Some("ghost-profile"));
+        assert!(mgr.active_profile().is_none());
     }
 }

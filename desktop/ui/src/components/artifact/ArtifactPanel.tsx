@@ -14,8 +14,9 @@ import { SvgRenderer } from './SvgRenderer'
 import { MermaidRenderer } from './MermaidRenderer'
 import { DocumentRenderer } from './DocumentRenderer'
 import { CodeBlock } from './CodeBlock'
+import { LivePreview } from './LivePreview'
 
-type Tab = 'preview' | 'code'
+type Tab = 'preview' | 'code' | 'live'
 
 const FILE_EXT: Record<string, string> = {
   html: 'html',
@@ -204,7 +205,7 @@ export function ArtifactPanel() {
       )}
 
       <div className="flex items-center gap-xs px-md py-xs border-b border-outline-variant/10 bg-surface-container-lowest">
-        {(['preview', 'code'] as Tab[]).map(tb => (
+        {(['preview', 'code', 'live'] as Tab[]).map(tb => (
           <Button
             key={tb}
             type="button"
@@ -245,8 +246,10 @@ export function ArtifactPanel() {
         </Button>
       </div>
 
-      <div className="flex-1 overflow-auto">
-        {tab === 'preview' ? (
+      <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+        {tab === 'live' ? (
+          <LivePreview />
+        ) : tab === 'preview' ? (
           active.kind === 'html' ? <HtmlRenderer source={active.source} title={active.title} />
           : active.kind === 'svg' ? <SvgRenderer source={active.source} title={active.title} />
           : active.kind === 'mermaid' ? <MermaidRenderer source={active.source} title={active.title} />

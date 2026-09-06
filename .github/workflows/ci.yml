@@ -374,6 +374,16 @@ jobs:
     needs: [test, clippy, audit, rustsec-audit]
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
+        with:
+          node-version: "24"
+      - name: README metrics drift check
+        # README badges/tables are generated from docs/metrics.md by
+        # scripts/update-readme-metrics.mjs — blocks hand-edits that skip the
+        # generator. Runs BEFORE gen-metrics.sh below so it compares the
+        # committed READMEs against the committed metrics.md snapshot;
+        # regenerating metrics.md happens afterwards for the artifact.
+        run: node scripts/update-readme-metrics.mjs --check
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.88"

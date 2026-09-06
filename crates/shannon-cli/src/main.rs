@@ -1124,6 +1124,7 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
         presets: None,
         permission_profile: None,
         notifications: None,
+        hooks: None,
         provider_model,
     };
 

@@ -38,7 +38,10 @@ pub struct SessionContextStats {
 /// already carries the resolved system prompt / context-window overrides);
 /// otherwise constructs a minimal one — the client is never contacted, the
 /// engine is only consulted for its local estimators.
-async fn restored_engine(state: &AppState, session_id: uuid::Uuid) -> Result<QueryEngine, String> {
+pub(crate) async fn restored_engine(
+    state: &AppState,
+    session_id: uuid::Uuid,
+) -> Result<QueryEngine, String> {
     let session = state
         .registry
         .get(crate::session_registry::SessionKey(session_id))
@@ -47,16 +50,15 @@ async fn restored_engine(state: &AppState, session_id: uuid::Uuid) -> Result<Que
     let stashed = session.query_engine.lock().await.clone();
     let mut engine = match stashed {
         Some(engine) => engine,
-        None => {
-            let client_config = state.client_config.read().await.clone();
-            let client = LlmClient::new(client_config);
+        None => crate::commands_memory::attach_shared_memory(
             QueryEngine::with_defaults_arc(
-                client,
+                LlmClient::new(state.client_config.read().await.clone()),
                 state.tools.clone(),
                 PermissionManager::new(),
                 StateManager::new(),
-            )
-        }
+            ),
+            &state.memory_store,
+        ),
     };
     engine.set_session_id(session_id);
     engine

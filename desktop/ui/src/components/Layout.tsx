@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, createContext, useContext } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { useIntl } from 'react-intl';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -13,6 +14,8 @@ import { useSessions } from '@/context/SessionContext';
 import { useCatalog } from '@/context/CatalogContext';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { shouldShowWelcome } from '@/pages/Welcome';
+import { listen } from '@tauri-apps/api/event';
+import { SESSION_WINDOW_REVEAL_EVENT } from '@/lib/windowSession';
 
 interface SidebarContextValue {
   open: boolean
@@ -25,10 +28,14 @@ export const useSidebar = () => useContext(SidebarContext)
 
 export function Layout() {
   const { usage } = useChat();
-  const { createSession } = useSessions();
+  const { createSession, sessions, switchSession, windowSessionId } = useSessions();
   const { backgroundTasks, config, loading, initError, retryInit } = useCatalog();
   const navigate = useNavigate();
   const intl = useIntl();
+  // P1-1 window mode: this window is pinned to one session — sidebar hidden
+  // (lowest-cost slim chrome; nav lives in the main window), content spans
+  // the full width, and the native window title tracks the session title.
+  const isWindowMode = windowSessionId != null;
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -51,6 +58,42 @@ export function Layout() {
     }
   }, [loading, config, navigate])
 
+  // P1-1 window mode: the sidebar normally owns `--sidebar-w`; without it,
+  // pin the variable to zero so Header/main/footer span the full width.
+  useEffect(() => {
+    if (!isWindowMode) return
+    document.documentElement.style.setProperty('--sidebar-w', '0px')
+  }, [isWindowMode])
+
+  // P1-1 window mode: keep the native window title in sync with the session
+  // title (follows renames and Tier-1 auto-titling via the sessions list).
+  useEffect(() => {
+    if (!isWindowMode) return
+    const title = sessions.find(s => s.id === windowSessionId)?.title
+    if (!title) return
+    getCurrentWindow().setTitle(title).catch(() => { /* best-effort chrome sync */ })
+  }, [isWindowMode, sessions, windowSessionId])
+
+  // P1-1: a session window's「在主窗口打开」focused us and asked for a
+  // session switch (backend emits this only at `main`). Requires the
+  // `core:event` capability granted by capabilities/session-windows.json.
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+    void listen(SESSION_WINDOW_REVEAL_EVENT, (e) => {
+      const sessionId = (e.payload as { sessionId?: string }).sessionId
+      if (!sessionId) return
+      void switchSession(sessionId).then(() => navigate('/chat'))
+    }).then(fn => {
+      if (cancelled) { fn(); return }
+      unlisten = fn
+    })
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [switchSession, navigate])
+
   const activeBgTasks = backgroundTasks.filter(t => t.status === 'running').length
   const version = config?.version ?? ''
 
@@ -61,12 +104,18 @@ export function Layout() {
         {sidebarOpen && (
           <div className="fixed inset-0 z-scrim bg-black/40 backdrop-blur-sm md:hidden" onClick={closeSidebar} />
         )}
-        <div className="md:hidden">
-          <Sidebar mobile />
-        </div>
-        <div className="hidden md:block">
-          <Sidebar />
-        </div>
+        {/* P1-1 window mode: no sidebar rail — the window is pinned to one
+            session and the Header carries the window controls. */}
+        {!isWindowMode && (
+          <>
+            <div className="md:hidden">
+              <Sidebar mobile />
+            </div>
+            <div className="hidden md:block">
+              <Sidebar />
+            </div>
+          </>
+        )}
         <Header />
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
         <KeyboardShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />

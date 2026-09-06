@@ -21,7 +21,11 @@ export type Platform =
   | "matrix"
   | "wecom"
   | "feishu"
-  | "dingtalk";
+  | "dingtalk"
+  /** P2-1: the paired-phone channel. Not a chat platform — the adapter lifts
+   *  connected mobile devices into the same router/lifecycle pipeline the IM
+   *  adapters use (dispatch → lane → approval → lifecycle push back to the phone). */
+  | "mobile";
 
 export const PLATFORMS: readonly Platform[] = [
   "slack",
@@ -32,6 +36,7 @@ export const PLATFORMS: readonly Platform[] = [
   "wecom",
   "feishu",
   "dingtalk",
+  "mobile",
 ];
 
 /**

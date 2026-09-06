@@ -221,6 +221,8 @@ mod tests {
             created_at,
             accessed_at: created_at,
             access_count: 0,
+            source_session_id: None,
+            source_kind: None,
         }
     }
 

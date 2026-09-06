@@ -12,6 +12,8 @@ import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type { ApprovalMode } from '@/types'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
+import MigrationWizard from '@/components/migration/MigrationWizard'
+import PersonaPackSettings from './PersonaPackSettings'
 import { FeedbackSummaryCard } from './FeedbackSummaryCard'
 
 type ApprovalModeKey = ApprovalMode
@@ -34,6 +36,8 @@ export default function GeneralSettings() {
   const [approvalMode, setApprovalMode] = useState<number>(2) // default to "plan"
   const [saving, setSaving] = useState(false)
   const [testingNotification, setTestingNotification] = useState(false)
+  // P1-6 — migration wizard (import from Claude Code / ZCode).
+  const [migrationOpen, setMigrationOpen] = useState(false)
 
   const handleRerunWizard = () => {
     window.localStorage.removeItem(WELCOME_SEEN_KEY)
@@ -195,6 +199,26 @@ export default function GeneralSettings() {
         {/* PM-12: persisted message ratings, aggregated per session */}
         <FeedbackSummaryCard />
 
+        {/* P1-6 — migration wizard entry (import from Claude Code / ZCode) */}
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>move_in</span>
+            <h3 className="font-headline-md text-headline-md">{t('settings.migration.title')}</h3>
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.migration.desc')}</p>
+          <Button
+            variant="outline"
+            onClick={() => setMigrationOpen(true)}
+            data-testid="settings-migration-open"
+            className="px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          >
+            {t('settings.migration.button')}
+          </Button>
+        </section>
+
+        {/* P2-2 — persona/profile pack (one-file export & import) */}
+        <PersonaPackSettings />
+
         {/* Re-run setup wizard */}
         <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
           <div className="flex items-center gap-md mb-xs">
@@ -211,6 +235,10 @@ export default function GeneralSettings() {
           </Button>
         </section>
       </div>
+
+      {migrationOpen && (
+        <MigrationWizard open={migrationOpen} onClose={() => setMigrationOpen(false)} />
+      )}
     </div>
   )
 }

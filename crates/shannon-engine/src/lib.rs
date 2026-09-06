@@ -50,6 +50,7 @@
 
 pub mod api;
 pub mod compact;
+pub mod context_breakdown;
 pub mod context_budget;
 pub mod context_pressure;
 pub mod custom_profiles;

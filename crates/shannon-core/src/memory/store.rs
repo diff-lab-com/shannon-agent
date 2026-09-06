@@ -606,6 +606,20 @@ impl MemoryStore {
         self.entries.is_empty()
     }
 
+    /// Snapshot of every loaded entry, oldest first (ties broken by id for a
+    /// stable order). P2-2 pack export walks this to serialize content fields;
+    /// callers decide which fields to keep (packs never carry provenance
+    /// session ids or project paths).
+    pub fn all_entries(&self) -> Vec<MemoryEntry> {
+        let mut out: Vec<MemoryEntry> = self.entries.values().cloned().collect();
+        out.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        out
+    }
+
     /// Get memories filtered by [`MemoryType`].
     ///
     /// Maps the `MemoryType` to the corresponding [`MemoryCategory`] and
@@ -1086,6 +1100,8 @@ mod tests {
             created_at,
             accessed_at,
             access_count,
+            source_session_id: None,
+            source_kind: None,
         }
     }
 

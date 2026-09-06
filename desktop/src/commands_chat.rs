@@ -180,14 +180,25 @@ pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<StatusRespo
     })
 }
 
-/// Cancel the current query.
+/// Cancel the in-flight query.
+///
+/// P1-1 (multi-window routing fix): `session_id` — when provided, cancels
+/// **that** session's in-flight query without touching the shared
+/// active-session pointer (an unknown id is a hard error). Without it the
+/// legacy active-session fallback applies.
 #[tauri::command]
 pub async fn cancel_query(
     state: tauri::State<'_, AppState>,
     _app_handle: tauri::AppHandle,
+    session_id: Option<String>,
 ) -> Result<(), String> {
-    // P0-4: cancel the active session's in-flight query.
-    let session = state.registry.get_or_create_active();
+    cancel_session_query(&state, session_id.as_deref()).await
+}
+
+/// Body of [`cancel_query`], split out so the routing behavior is testable
+/// without a Wry app handle.
+async fn cancel_session_query(state: &AppState, session_id: Option<&str>) -> Result<(), String> {
+    let (_, session) = state.registry.resolve_explicit_or_active(session_id)?;
 
     // Take the cancellation token and cancel it
     let token_opt = {
@@ -272,5 +283,87 @@ mod tests {
         // typing "Anthropic" in the env var must still hit.
         let out = list_models_for("anthropic", Some(vec!["ANTHROPIC".into()])).unwrap();
         assert!(!out.is_empty());
+    }
+
+    // === P1-1 fix: cancel_query explicit per-window routing ===
+    //
+    // `cancel_session_query` is the command body, split out so the routing
+    // behavior is testable with a plain AppState (no Wry handle needed).
+
+    use crate::session_registry::SessionKey;
+    use tokio_util::sync::CancellationToken;
+
+    async fn seed_token(state: &AppState, key: SessionKey) -> CancellationToken {
+        let token = CancellationToken::new();
+        let session = state.registry.get(key).expect("seeded session");
+        *session.cancellation_token.lock().await = Some(token.clone());
+        token
+    }
+
+    /// Explicit sessionId cancels THAT session's query — and never the
+    /// active one (the regression: a session window's cancel used to hit
+    /// whichever session the shared pointer named).
+    #[tokio::test]
+    async fn cancel_query_explicit_session_cancels_only_that_session() {
+        let state = AppState::new();
+        let a = state.registry.create();
+        let b = state.registry.create();
+        state.registry.set_active(a); // active pointer = A
+
+        let token_a = seed_token(&state, a).await;
+        let token_b = seed_token(&state, b).await;
+
+        super::cancel_session_query(&state, Some(&b.0.to_string()))
+            .await
+            .expect("cancel succeeds");
+
+        assert!(token_b.is_cancelled(), "B's query is cancelled");
+        assert!(!token_a.is_cancelled(), "A's query must be untouched");
+        assert_eq!(
+            state.registry.active_key(),
+            Some(a),
+            "cancel must not move the active pointer"
+        );
+        assert!(
+            !*state.registry.get(a).unwrap().querying.try_lock().unwrap(),
+            "A's querying flag must stay as-is"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_query_unknown_session_errors_hard() {
+        let state = AppState::new();
+        let active = state.registry.get_or_create_active();
+        let token = seed_token(&state, SessionKey(active.session_id)).await;
+
+        let err = super::cancel_session_query(&state, Some(&uuid::Uuid::new_v4().to_string()))
+            .await
+            .expect_err("unknown session must be a hard error");
+        assert!(err.contains("unknown session"), "{err}");
+        assert!(!token.is_cancelled(), "nothing was cancelled");
+    }
+
+    /// No parameter → legacy behavior: cancels the active session's query.
+    #[tokio::test]
+    async fn cancel_query_none_falls_back_to_active() {
+        let state = AppState::new();
+        let active = state.registry.get_or_create_active();
+        let token = seed_token(&state, SessionKey(active.session_id)).await;
+
+        super::cancel_session_query(&state, None)
+            .await
+            .expect("legacy cancel succeeds");
+
+        assert!(token.is_cancelled(), "active session's query is cancelled");
+        assert!(
+            !*state
+                .registry
+                .get(SessionKey(active.session_id))
+                .unwrap()
+                .querying
+                .try_lock()
+                .unwrap(),
+            "querying flag is cleared"
+        );
     }
 }

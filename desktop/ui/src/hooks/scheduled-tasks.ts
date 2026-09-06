@@ -14,9 +14,6 @@ import type {
   CreateTaskPayload,
   UpdateTaskPayload,
   CronPreview,
-  TriageItem,
-  TriageFilter,
-  TriageStats,
   TaskExecution,
   TaskExecutionDetail,
   TaskWorktreeDto,
@@ -118,61 +115,6 @@ export function useScheduledTasks() {
   return { tasks, loading, error, refresh, create, update, remove, toggle, trigger }
 }
 
-// ─── Triage items ──────────────────────────────────────────────────────────
-
-export function useTriageItems(initialFilter?: TriageFilter) {
-  const t = useT()
-  const [filter, setFilter] = useState<TriageFilter | undefined>(initialFilter)
-  const [items, setItems] = useState<TriageItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const refresh = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      setItems(await api.listTriageItems(filter))
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setError(msg)
-      console.warn('useTriageItems.refresh failed:', e)
-    } finally {
-      setLoading(false)
-    }
-  }, [filter])
-
-  const markRead = useCallback(async (id: string): Promise<boolean> => {
-    try {
-      await api.markTriageRead(id)
-      await refresh()
-      return true
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : t('tasks.toast.failed.markRead')
-      setError(msg)
-      toastError(t('tasks.toast.failed.markRead'), e)
-      return false
-    }
-  }, [refresh, t])
-
-  const archive = useCallback(async (id: string): Promise<boolean> => {
-    try {
-      await api.archiveTriageItem(id)
-      toast.success(t('tasks.toast.archived'))
-      await refresh()
-      return true
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : t('tasks.toast.failed.archive')
-      setError(msg)
-      toastError(t('tasks.toast.failed.archive'), e)
-      return false
-    }
-  }, [refresh, t])
-
-  useEffect(() => { refresh() }, [refresh])
-
-  return { items, loading, error, filter, setFilter, refresh, markRead, archive }
-}
-
 // ─── Task executions (history) ─────────────────────────────────────────────
 
 export function useTaskExecutions(taskId?: string) {
@@ -245,32 +187,6 @@ export function useCronPreview() {
   }, [])
 
   return { preview, loading, error, runPreview }
-}
-
-// ─── Triage stats ──────────────────────────────────────────────────────────
-
-export function useTriageStats() {
-  const [stats, setStats] = useState<TriageStats>({ total: 0, unread: 0, archived: 0, by_kind: {} })
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const refresh = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      setStats(await api.getTriageStats())
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setError(msg)
-      console.warn('useTriageStats.refresh failed:', e)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { refresh() }, [refresh])
-
-  return { stats, loading, error, refresh }
 }
 
 // ─── Task worktrees (P2.5) ─────────────────────────────────────────────────

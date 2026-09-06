@@ -30,10 +30,11 @@ test.describe('Command palette', () => {
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
 
-    // "billing" uniquely matches the Usage & Billing page command — a
-    // pure route navigation, no side effects.
-    await page.keyboard.type('billing')
+    // "theme" uniquely matches the Theme Settings page command — a pure
+    // route navigation, no side effects. (The old "billing" probe was
+    // removed with the billing page itself, P0-4 decision D5.)
+    await page.keyboard.type('theme')
     await page.keyboard.press('Enter')
-    await expect(page).toHaveURL(/settings\/billing/)
+    await expect(page).toHaveURL(/settings\/theme/)
   })
 })

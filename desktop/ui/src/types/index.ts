@@ -44,6 +44,8 @@ export interface UsagePayload {
   cost_usd: number
   cache_hit_rate?: number
   max_tokens?: number
+  /** P1-1: owner session for multi-window event filtering. */
+  session_id?: string
 }
 
 export interface QueryCompletedPayload {
@@ -59,11 +61,25 @@ export interface QueryCancelledPayload {
   query_id: string
 }
 
+/** P1-3: why a permission prompt was raised (frozen camelCase wire shape). */
+export interface PermissionReason {
+  /** `rule` (settings/profile rule matched) | `llm` (classifier verdict) | `default`. */
+  source: 'rule' | 'llm' | 'default'
+  /** Matched rule pattern (e.g. `Bash(git *)`), when known. */
+  ruleName: string | null
+  /** Classifier confidence in 0..1, when a classifier decided. */
+  confidence: number | null
+}
+
 export interface PermissionRequest {
   tool: string
   input: unknown
   risk: string
   request_id: string
+  /** P1-1: owner session for multi-window prompt filtering. */
+  session_id?: string
+  /** P1-3: why this prompt was raised. Absent on payloads from older engines. */
+  reason?: PermissionReason
 }
 
 // --- Core Types ---
@@ -374,6 +390,29 @@ export interface DesktopConfig {
    *  so a user can keep a cloud key for fallback while local
    *  is the primary. */
   voice_local?: VoiceLocalConfig
+  /** P1-3: active permission profile (builtin id or custom name). Null/unset = plain approval_mode. */
+  active_permission_profile?: string | null
+  /** P1-3: command sandbox config — frozen key path `sandbox.mode`. */
+  sandbox?: SandboxConfig
+  /** P2-5: off-peak execution settings — frozen key path `offpeak.model_override`. */
+  offpeak?: OffpeakConfig
+}
+
+/** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */
+export interface SandboxConfig {
+  mode?: 'off' | 'local' | 'landlock' | null
+}
+
+/** P2-5: `offpeak` config payload. Empty/missing `model_override` = disabled. */
+export interface OffpeakConfig {
+  /** Model id used for routine executions inside their execution window. Empty = disabled. */
+  model_override?: string | null
+}
+
+/** P1-3: result of `activate_permission_profile`. */
+export interface ActiveProfileStatus {
+  active: string | null
+  approval_mode: string | null
 }
 
 export interface SttConfig {
@@ -389,6 +428,14 @@ export interface TranscriptionResult {
 
 export interface SendMessageResponse {
   query_id: string
+}
+
+// --- Session multi-window (P1-1) ---
+
+/** Result of `open_session_window` / entry of `list_session_windows`. */
+export interface SessionWindowInfo {
+  label: string
+  sessionId: string
 }
 
 // --- Diff Types ---
@@ -636,28 +683,45 @@ export interface AgentInfo {
   session_id?: string
 }
 
-// --- Billing Types ---
+// --- P0-4 Cost Observability Types ---
+//
+// Field names mirror the Rust DTOs in shannon-desktop/src/cost_commands.rs
+// exactly (serde camelCase on the wire).
 
-export interface BillingPlan {
-  name: string
-  price: number
-  token_limit: number
-  features: string[]
+/** One session's aggregated usage for the Usage page's per-session view. */
+export interface SessionUsageRow {
+  sessionId: string
+  /** Session title when the sidecar has one; UI falls back to a short id. */
+  title: string | null
+  inputTokens: number
+  outputTokens: number
+  cacheCreationTokens: number
+  cacheReadTokens: number
+  costUsd: number
+  requests: number
+  /** Epoch ms of the session's most recent ledger event. */
+  lastUsedAtMs: number
 }
 
-export interface CostRecord {
-  date: string
-  input_tokens: number
-  output_tokens: number
-  cost_usd: number
+/** One category row of the context breakdown (`key` is a stable string). */
+export interface ContextBreakdownCategory {
+  key: 'system' | 'tools' | 'skills' | 'memory' | 'mcp' | 'conversation'
+  tokens: number
 }
 
-export interface BillingHistory {
-  id: string
-  date: string
-  description: string
-  amount: number
-  status: 'paid' | 'pending' | 'failed'
+/** Six-category context estimate (frozen wire shape, camelCase). */
+export interface ContextBreakdown {
+  totalTokens: number
+  /** `null` when the model's window is genuinely unknown. */
+  contextWindow: number | null
+  categories: ContextBreakdownCategory[]
+}
+
+/** Payload of the `budget:warning` / `budget:exceeded` events (frozen). */
+export interface BudgetStatusPayload {
+  sessionId: string
+  spentUsd: number
+  budgetUsd: number
 }
 
 // --- Usage Stats Types ---
@@ -704,6 +768,21 @@ export interface ExecutionPolicy {
   /// "slack:#ops", "email:ops@example.com", "notification", "log".
   /// Empty array = log only (default behavior).
   result_routing?: string[]
+  /// P2-5: off-peak execution window (frozen contract
+  /// `ExecutionPolicy.execution_window`). Hours are inclusive wall-clock
+  /// hours in `timezone`; cross-midnight windows (start > end) wrap.
+  /// null/undefined = execute immediately when due (legacy behavior).
+  execution_window?: ExecutionWindow | null
+}
+
+/// P2-5: off-peak execution window. The window covers
+/// [start_hour:00, (end_hour + 1):00) — both hours inclusive — in
+/// `timezone` (IANA name, "UTC", a fixed offset like "+08:00"; null/empty =
+/// machine-local timezone). start=0 & end=23 = the full 24-hour window.
+export interface ExecutionWindow {
+  start_hour: number
+  end_hour: number
+  timezone?: string | null
 }
 
 /// A single scheduled routine (wire-level type, matches Rust `ScheduledRoutine`).
@@ -804,6 +883,44 @@ export interface TriageStats {
   by_kind: Record<string, number>
 }
 
+// --- Inbox (P0-3 SQLite inbox; serde contract is camelCase) ---
+
+/// Where an inbox item came from. `routine`/`scheduled_task` are produced by
+/// scheduled-task runs (and are the only rerunnable sources); `goal` and
+/// `trigger` come from goal events / the external trigger endpoint; `batch`
+/// is the aggregate completion record of a parallel batch run (T3).
+export type InboxSource = 'routine' | 'scheduled_task' | 'goal' | 'trigger' | 'batch'
+
+/// Lifecycle status of an inbox item (`pending` → `read` → `archived`).
+export type InboxItemStatus = 'pending' | 'read' | 'archived'
+
+/// A single inbox row as returned by `list_inbox_items`.
+export interface InboxItem {
+  id: number
+  source: InboxSource
+  sourceId: string | null
+  sessionId: string | null
+  title: string
+  summary: string
+  error: string | null
+  status: InboxItemStatus
+  createdAtMs: number
+  updatedAtMs: number
+}
+
+/// Optional filters for `list_inbox_items`. All fields optional.
+export interface InboxListFilter {
+  status?: InboxItemStatus
+  source?: InboxSource
+  limit?: number
+}
+
+/// Badge counts from `get_inbox_stats`.
+export interface InboxStats {
+  pending: number
+  today: number
+}
+
 /// Lightweight execution record for the history list.
 export interface TaskExecution {
   run_id: string
@@ -896,6 +1013,82 @@ export type ApprovalMode =
   | 'dont_ask'
   | 'confirm'
 
+// --- Goal runs (P0-2 desktop goal runner; serde contract is camelCase) ---
+
+/// Lifecycle of a desktop goal run. `interrupted` marks a sidecar goal the
+/// app restarted under (resumable); `paused` covers max/budget/anti-spin
+/// pauses and engine failures.
+export type GoalRunStatus =
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'blocked'
+  | 'stopped'
+  | 'interrupted'
+
+/// One goal run as rendered by the Tasks-page run card (payload of
+/// `goal:updated`).
+export interface GoalRunDto {
+  sessionId: string
+  title: string
+  objective: string
+  status: GoalRunStatus
+  iterations: number
+  maxTurns: number | null
+  spentUsd: number
+  budgetUsd: number | null
+  stallStrikes: number
+  lastError: string | null
+  startedAtMs: number
+  updatedAtMs: number
+}
+
+// --- Batch runs (P1-2 desktop best-of-N; serde contract is camelCase) ---
+
+/// Lifecycle of one batch branch. Terminal: completed | failed.
+export type BatchBranchStatus = 'running' | 'completed' | 'failed'
+
+/** Lifecycle of a best-of-N batch run. `partially_failed` = mixed terminals;
+/// `adopted`/`discarded` are the user-driven final states. */
+export type BatchRunStatus =
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'partially_failed'
+  | 'adopted'
+  | 'discarded'
+
+/// Per-branch diff stat block.
+export interface BatchDiffSummary {
+  filesChanged: number
+  additions: number
+  deletions: number
+}
+
+/// One parallel candidate branch (frozen backend contract).
+export interface BatchBranch {
+  index: number
+  branchName: string
+  worktreePath: string
+  status: BatchBranchStatus
+  error: string | null
+  summary: BatchDiffSummary | null
+  spentUsd: number
+}
+
+/// One best-of-N batch run (payload of `batch:updated`). `adoptedIndex` is
+/// additive: set once the batch is adopted.
+export interface BatchRunDto {
+  batchId: string
+  title: string
+  prompt: string
+  count: number
+  status: BatchRunStatus
+  createdAtMs: number
+  branches: BatchBranch[]
+  adoptedIndex: number | null
+}
+
 // --- Event Names ---
 
 export const EVENT_NAMES = {
@@ -917,9 +1110,35 @@ export const EVENT_NAMES = {
   BACKGROUND_TASKS_UPDATED: 'background-tasks-updated',
   AGENT_MESSAGES_UPDATED: 'agent-messages-updated',
   TRIAGE_UPDATED: 'triage-updated',
+  INBOX_UPDATED: 'inbox-updated',
+  GOAL_UPDATED: 'goal:updated',
+  /** P1-2: a best-of-N batch run changed (payload: BatchRunDto). */
+  BATCH_UPDATED: 'batch:updated',
+  /** P0-4: session spend crossed 80% of its budget (yellow advisory bar). */
+  BUDGET_WARNING: 'budget:warning',
+  /** P0-4: budget cap hit — send rejected pre-turn or turn cancelled. */
+  BUDGET_EXCEEDED: 'budget:exceeded',
+  /** P1-5 D: PTY output for the integrated terminal (data is base64). */
+  TERMINAL_OUTPUT: 'terminal:output',
 } as const
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]
+
+// --- Integrated terminal (P1-5 D, frozen backend contract) ---
+
+/** One live PTY session (`terminal_list` item / event correlation key). */
+export interface TerminalInfo {
+  terminalId: string
+  projectDir: string
+  shell: string
+  startedAtMs: number
+}
+
+/** `terminal:output` payload — `data` is the raw pty bytes, base64. */
+export interface TerminalOutputPayload {
+  terminalId: string
+  data: string
+}
 
 // --- Inter-agent message history (Phase D C3) ---
 

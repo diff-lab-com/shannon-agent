@@ -118,6 +118,7 @@ mod tests {
         let p = QueryTextPayload {
             query_id: "abc".into(),
             content: "hello".into(),
+            session_id: Some("s1".into()),
         };
         let json = serde_json::to_string(&p).unwrap();
         assert!(json.contains("abc"));
@@ -131,6 +132,7 @@ mod tests {
             tool_use_id: "t1".into(),
             tool_name: "bash".into(),
             tool_input: serde_json::json!({"command": "ls"}),
+            session_id: None,
         };
         let json = serde_json::to_string(&p).unwrap();
         assert!(json.contains("bash"));
@@ -163,11 +165,15 @@ mod tests {
             input: serde_json::json!({"command": "ls"}),
             risk: "medium".into(),
             request_id: "req-123".into(),
+            session_id: Some("s1".into()),
+            reason: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: PermissionRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(back.tool, "bash");
         assert_eq!(back.risk, "medium");
         assert_eq!(back.request_id, "req-123");
+        // P1-3: reason unset → stays off the wire and deserializes as None.
+        assert!(back.reason.is_none());
     }
 }

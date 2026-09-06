@@ -113,6 +113,12 @@ fn main() {
         schemars::schema_for!(TaskRetryPayload),
     );
 
+    // P0-4 session-budget status events (budget:warning / budget:exceeded)
+    schemas.insert(
+        "BudgetStatusPayload".to_string(),
+        schemars::schema_for!(BudgetStatusPayload),
+    );
+
     // EventEnvelope (generic, using serde_json::Value as concrete type)
     schemas.insert(
         "EventEnvelope".to_string(),
@@ -168,6 +174,11 @@ fn main() {
 pub struct QueryTextPayload {
     pub query_id: String,
     pub content: String,
+
+    /// P1-1: optional owner session (multi-window filtering). Additive —
+    /// must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -176,6 +187,11 @@ pub struct ToolStartPayload {
     pub tool_use_id: String,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
+
+    /// P1-1: optional owner session (multi-window filtering). Additive —
+    /// must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -185,6 +201,11 @@ pub struct ToolResultPayload {
     pub tool_name: String,
     pub result: String,
     pub is_error: bool,
+
+    /// P1-1: optional owner session (multi-window filtering). Additive —
+    /// must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -194,12 +215,22 @@ pub struct ToolProgressPayload {
     pub tool_name: String,
     pub progress: f32,
     pub message: String,
+
+    /// P1-1: optional owner session (multi-window filtering). Additive —
+    /// must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThinkingPayload {
     pub query_id: String,
     pub content: String,
+
+    /// P1-1: optional owner session (multi-window filtering). Additive —
+    /// must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -228,17 +259,44 @@ pub struct UsagePayload {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cost_usd: f64,
+
+    /// P1-1: optional owner session (multi-window filtering). Additive —
+    /// must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct QueryCompletedPayload {
     pub query_id: String,
+
+    /// P1-1: optional owner session (multi-window filtering). Additive —
+    /// must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct QueryFailedPayload {
     pub query_id: String,
     pub error: String,
+
+    /// P1-1: optional owner session (multi-window filtering). Additive —
+    /// must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+/// P1-3 mirror of `src/events.rs::PermissionReason` — frozen camelCase wire
+/// shape `{ source, ruleName, confidence }`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionReason {
+    pub source: String,
+    #[serde(default)]
+    pub rule_name: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -247,6 +305,16 @@ pub struct PermissionRequest {
     pub input: serde_json::Value,
     pub risk: String,
     pub request_id: String,
+
+    /// P1-1: optional owner session (multi-window filtering). Additive —
+    /// must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+
+    /// P1-3: why this prompt was raised. Additive — must mirror
+    /// src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<PermissionReason>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -278,6 +346,21 @@ pub struct ChatMessage {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct QueryCancelledPayload {
     pub query_id: String,
+
+    /// P1-1: optional owner session (multi-window filtering). Additive —
+    /// must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+/// P0-4 session-budget status payload (must match src/events.rs exactly).
+/// Serde emits camelCase field names on the wire.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetStatusPayload {
+    pub session_id: String,
+    pub spent_usd: f64,
+    pub budget_usd: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
