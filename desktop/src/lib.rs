@@ -206,6 +206,12 @@ pub mod preview_commands;
 #[cfg(feature = "tauri")]
 pub mod terminal_commands;
 
+/// P1-5 C-2 — draggable panel workspace: per-project layout persistence
+/// (`~/.shannon/desktop/workspace-layouts.json`), frozen `workspace_*`
+/// command contract. Pure file storage; no engine interaction.
+#[cfg(feature = "tauri")]
+pub mod workspace_commands;
+
 /// P0-4 — cost observability: session budget, context breakdown and
 /// per-session usage aggregation commands.
 #[cfg(feature = "tauri")]
