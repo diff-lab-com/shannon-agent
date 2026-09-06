@@ -218,6 +218,12 @@ pub mod cost_commands;
 #[cfg(feature = "tauri")]
 pub mod migration_commands;
 
+/// P2-2 — persona/profile pack: export & import Shannon's personalization
+/// surfaces (skills, commands, memories, routines, profiles, persona) as a
+/// single secret-stripped `.tar.gz` with path-safe, idempotent imports.
+#[cfg(feature = "tauri")]
+pub mod persona_pack_commands;
+
 #[cfg(feature = "tauri")]
 pub mod commands_routine_templates;
 
