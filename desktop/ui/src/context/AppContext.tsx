@@ -173,6 +173,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
       )
       setCurrentQueryId(resp.query_id)
     } catch (e) {
+      // P0-4 fix: the backend rejected the send BEFORE recording the user
+      // message (budget-exceeded pre-turn guard, goal-owned guard,
+      // concurrent-query guard — see `send_message`), so roll back the
+      // optimistic append above. Without this, "Continue (ignore once)"
+      // re-sends the same text and the rejected message renders twice.
+      setMessages(prev => {
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].role === 'user' && prev[i].content === message) {
+            const next = [...prev]
+            next.splice(i, 1)
+            return next
+          }
+        }
+        return prev
+      })
       setError(String(e))
       setIsQuerying(false)
     }
