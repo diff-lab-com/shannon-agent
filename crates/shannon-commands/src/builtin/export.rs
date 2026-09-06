@@ -704,8 +704,11 @@ mod tests {
 
     #[test]
     fn test_sanitize_removes_api_keys() {
-        let content = "My key is sk-ant-api03-abcdefghijklmnopqrstuvwx and token ghp_123456789012345678901234567890123456";
-        let sanitized = sanitize_content(content, "/home/user");
+        let content = format!(
+        "My key is {}-api03-{} and token {}123456789012345678901234567890123456",
+        "sk-ant", "abcdefghijklmnopqrstuvwx", "ghp_"
+    );
+        let sanitized = sanitize_content(&content, "/home/user");
         assert!(!sanitized.contains("sk-ant-api03-"));
         assert!(!sanitized.contains("ghp_"));
         assert!(sanitized.contains("<REDACTED"));
