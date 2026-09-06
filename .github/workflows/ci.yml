@@ -35,6 +35,11 @@ jobs:
         with:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Bump to invalidate caches that predate the feature-isolated
+          # target dir (a stale cache carried feature-ON shannon-tools test
+          # binaries into the feature-OFF workspace run).
+          prefix-key: ci-v2
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -55,7 +60,10 @@ jobs:
         # settings: per-test retries (2, exponential backoff) so known
         # load-sensitive tests (e.g. the byte-exact session-log tee mock
         # round-trip) don't fail the whole gate on a runner hiccup.
-        run: cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
+        run: |
+          # Guard against stale cached binaries with unexpected feature sets.
+          cargo clean -p shannon-tools
+          cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
       # Feature-gated build/tests (downscale_dims, click_spec, key combos).
       # Runs AFTER the main gate, in an ISOLATED target dir: sharing
       # `target/` with feature-OFF steps leaked the enabled feature into the
