@@ -127,6 +127,7 @@ mod session_log_tee {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         QueryEngine::with_session_id(
             shannon_engine::api::LlmClient::new(config),
@@ -484,6 +485,7 @@ mod session_log_tee {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let registry = ToolRegistry::new();
         registry.register(Box::new(LeakyTool)).unwrap();

@@ -859,6 +859,7 @@ mod tests {
             SessionEventBody::UserMessage(UserMessagePayload {
                 source: UserMessagePayload::SOURCE_USER.into(),
                 content: content.into(),
+                attachment_count: 0,
             }),
         )
     }

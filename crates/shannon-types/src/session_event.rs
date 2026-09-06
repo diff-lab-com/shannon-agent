@@ -252,6 +252,12 @@ pub struct UserMessagePayload {
     pub source: String,
     /// Message content.
     pub content: String,
+    /// Number of multimodal attachments (images) delivered alongside the
+    /// message. `0` for text-only turns; the base64 payloads themselves are
+    /// NOT persisted (volume / leakage). Defaults to 0 when reading sessions
+    /// recorded before multimodal attachments existed.
+    #[serde(default)]
+    pub attachment_count: usize,
 }
 
 impl UserMessagePayload {
@@ -671,6 +677,7 @@ mod tests {
             SessionEventKind::UserMessage => SessionEventBody::UserMessage(UserMessagePayload {
                 source: UserMessagePayload::SOURCE_USER.into(),
                 content: "hello world".into(),
+                attachment_count: 0,
             }),
             SessionEventKind::AssistantChunk => {
                 SessionEventBody::AssistantChunk(AssistantChunkPayload {

@@ -369,6 +369,17 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
         },
     ];
 
+    // T5 (option B): bmp/svg are accepted but most vision providers only
+    // render png/jpeg/gif/webp — warn rather than silently losing the image.
+    if matches!(media_type, "image/bmp" | "image/svg+xml") {
+        repl.chat.add_message(
+            ChatRole::System,
+            format!(
+                "Note: {media_type} is attached, but most vision models only render PNG/JPEG/GIF/WebP — the model may not see this image. Convert to PNG for reliable results."
+            ),
+        );
+    }
+
     engine.add_user_message_blocks(blocks);
     // Generate inline image preview
     let preview_config = crate::terminal_image::ImageRenderConfig::default();

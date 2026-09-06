@@ -15,6 +15,7 @@ pub mod error;
 pub mod probe;
 pub mod retry;
 pub mod streaming;
+pub mod toolsets;
 pub mod types;
 
 // Re-export all public types so that `crate::api::X` paths continue to work.

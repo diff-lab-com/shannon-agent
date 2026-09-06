@@ -619,6 +619,7 @@ mod tests {
                     3 => SessionEventBody::UserMessage(UserMessagePayload {
                         source: UserMessagePayload::SOURCE_USER.into(),
                         content: "msg".into(),
+                        attachment_count: 0,
                     }),
                     4 => SessionEventBody::Error(ErrorPayload {
                         category: "warning".into(),

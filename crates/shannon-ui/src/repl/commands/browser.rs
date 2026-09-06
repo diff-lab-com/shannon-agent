@@ -29,11 +29,14 @@ pub(crate) fn handle_browser(repl: &mut Repl, args: &str) -> Result<()> {
     match args.trim() {
         "setup" => handle_setup(repl),
         "uninstall" | "remove" | "rm" => handle_uninstall(repl),
+        "doctor" => handle_doctor(repl),
         "" | "status" => handle_status(repl),
         other => {
             repl.chat.add_message(
                 ChatRole::System,
-                format!("Unknown /browser subcommand: {other}\n\nUsage: /browser [setup|status|uninstall]"),
+                format!(
+                    "Unknown /browser subcommand: {other}\n\nUsage: /browser [setup|status|uninstall|doctor]"
+                ),
             );
             Ok(())
         }
@@ -113,6 +116,48 @@ fn handle_uninstall(repl: &mut Repl) -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+/// T14 Phase 1 foundation: report the native system-browser path (the
+/// chromiumoxide integration target) alongside the MCP configuration
+/// state, with actionable install hints when neither is available.
+fn handle_doctor(repl: &mut Repl) -> Result<()> {
+    let mut lines = String::from("Browser diagnostics:\n");
+
+    match shannon_remote::browser::detect_system_browser() {
+        Ok(exe) => lines.push_str(&format!(
+            "  ✓ System browser ({}): {}\n     → used by the upcoming built-in CDP path;\n       launch env override: SHANNON_BROWSER_PATH\n",
+            exe.source,
+            exe.path.display()
+        )),
+        Err(err) => {
+            lines.push_str("  ✗ System browser: not found\n");
+            for p in &err.searched {
+                lines.push_str(&format!("     searched: {}\n", p.display()));
+            }
+        }
+    }
+
+    let config_path = Path::new(&repl.state.working_directory).join(".mcp.json");
+    let mcp_playwright = std::fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("mcpServers").cloned())
+        .map(|s| s.get(PLAYWRIGHT_SERVER).is_some())
+        .unwrap_or(false);
+    if mcp_playwright {
+        lines.push_str(&format!(
+            "  ✓ Playwright MCP: configured in {}\n",
+            config_path.display()
+        ));
+    } else {
+        lines.push_str("  ✗ Playwright MCP: not configured (/browser setup)\n");
+    }
+
+    lines.push('\n');
+    lines.push_str(shannon_remote::browser::install_hint());
+    repl.chat.add_message(ChatRole::System, lines);
     Ok(())
 }
 

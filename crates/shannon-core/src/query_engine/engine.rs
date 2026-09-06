@@ -1450,6 +1450,7 @@ impl QueryEngine {
         let l0_container = crate::session_log::effective_log_container(self.state.sessions_dir());
         let user_message = context.user_message.clone();
         let user_attachments = context.attachments.clone();
+        let attachment_count = user_attachments.len();
         let cost_tracker = self.cost_tracker.clone();
         let hook_manager = self.hook_manager.clone();
         let triggered_routines = self.triggered_routines.clone();
@@ -1764,7 +1765,7 @@ impl QueryEngine {
 
             // §4.2: open the L0 record for this query — the user message and
             // turn boundary precede anything the model sees.
-            tee.record_user_message(&user_message);
+            tee.record_user_message_with_count(&user_message, attachment_count);
             tee.record_turn_start(Some(query_id.to_string()));
 
             // Fire UserPromptSubmit hook — §4.8: as a bus trigger picked up

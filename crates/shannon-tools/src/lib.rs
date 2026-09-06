@@ -36,6 +36,7 @@ mod defaults;
 pub mod sandbox;
 
 pub mod agent;
+pub mod applescript;
 pub mod ask_user;
 pub mod brief;
 pub mod computer_use;
@@ -56,6 +57,7 @@ pub mod mcp_tools;
 pub mod messaging;
 pub mod notebook;
 pub mod plan_mode;
+pub mod platform_adapter;
 pub mod preview;
 pub mod pty;
 pub mod remote_trigger;
@@ -75,6 +77,7 @@ pub mod worktree;
 
 // Re-exports for convenience
 pub use agent::{AgentOperation, AgentTool, AgentToolContext};
+pub use applescript::AppleScriptTool;
 pub use ask_user::{
     AskUserError, AskUserInput, AskUserQuestionTool, ErrorQuestionHandler, MockQuestionHandler,
     Question, QuestionAnswer, QuestionHandler, QuestionOption, SharedQuestionHandler,
@@ -427,6 +430,9 @@ fn register_all_tools(
 
     // ── Computer Use (desktop automation) ────────────────────────────────
     registry.register(Box::new(ComputerUseTool::new()))?;
+
+    // ── AppleScript / Shortcuts (macOS app automation, T13 Tier 1) ───────
+    registry.register(Box::new(applescript::AppleScriptTool::new()))?;
 
     // ── MCP resource tools ─────────────────────────────────────────────
     registry.register(Box::new(McpResourceTool::new()))?;

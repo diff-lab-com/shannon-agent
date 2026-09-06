@@ -66,6 +66,7 @@ fn make_client(server: &ServerGuard, provider: LlmProvider) -> LlmClient {
         max_stream_reconnects: 3,
         budget_tokens: None,
         reasoning_effort: None,
+        enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
     };
     LlmClient::new(config)
 }
@@ -801,6 +802,7 @@ fn test_session_persistence_round_trip() {
                 shannon_types::session_event::UserMessagePayload {
                     source: shannon_types::session_event::UserMessagePayload::SOURCE_USER.into(),
                     content: prompt.into(),
+                    attachment_count: 0,
                 },
             ));
             w.record(

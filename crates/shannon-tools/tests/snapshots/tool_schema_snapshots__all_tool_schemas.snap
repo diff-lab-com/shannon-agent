@@ -1267,6 +1267,40 @@ expression: output
   "type": "object"
 }
 
+## applescript
+{
+  "properties": {
+    "language": {
+      "description": "Scripting language for target=applescript (default AppleScript; JavaScript = JXA)",
+      "enum": [
+        "AppleScript",
+        "JavaScript"
+      ],
+      "type": "string"
+    },
+    "name": {
+      "description": "Alternative field name for the shortcut name when target=shortcuts",
+      "type": "string"
+    },
+    "script": {
+      "description": "AppleScript/JXA source (target=applescript) or shortcut name (target=shortcuts)",
+      "type": "string"
+    },
+    "target": {
+      "description": "Scripting backend: \"applescript\" (osascript, default) or \"shortcuts\" (run a Shortcuts shortcut)",
+      "enum": [
+        "applescript",
+        "shortcuts"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "script"
+  ],
+  "type": "object"
+}
+
 ## ask_user_question
 {
   "properties": {

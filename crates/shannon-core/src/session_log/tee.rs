@@ -390,9 +390,16 @@ impl SessionTee {
 
     /// Record the user message that started the turn.
     pub fn record_user_message(&mut self, content: &str) {
+        self.record_user_message_with_count(content, 0);
+    }
+
+    /// Record the user message plus how many multimodal attachments (images)
+    /// accompanied it. The base64 payloads themselves are NOT persisted.
+    pub fn record_user_message_with_count(&mut self, content: &str, attachment_count: usize) {
         self.record_body(SessionEventBody::UserMessage(UserMessagePayload {
             source: UserMessagePayload::SOURCE_USER.into(),
             content: self.policy.redact_str(content),
+            attachment_count,
         }));
     }
 
@@ -713,6 +720,13 @@ impl TeeHandle {
         }
     }
 
+    /// See [`SessionTee::record_user_message_with_count`].
+    pub fn record_user_message_with_count(&self, content: &str, attachment_count: usize) {
+        if let Ok(mut tee) = self.tee.lock() {
+            tee.record_user_message_with_count(content, attachment_count);
+        }
+    }
+
     /// Record `turn/start`.
     pub fn record_turn_start(&self, query_id: Option<String>) {
         if let Ok(mut tee) = self.tee.lock() {
@@ -816,6 +830,26 @@ mod tests {
             tee.close();
         }
         assert_eq!(read_bodies(&dir).len(), 1, "reopen writes no session/start");
+    }
+
+    #[test]
+    fn test_record_user_message_with_count_persists_attachment_count() {
+        let dir = TempDir::new().expect("tempdir");
+        {
+            let mut tee = open_tee(&dir);
+            tee.record_user_message("text only");
+            tee.record_user_message_with_count("with two images", 2);
+            tee.close();
+        }
+        let bodies = read_bodies(&dir);
+        let counts: Vec<usize> = bodies
+            .iter()
+            .filter_map(|b| match b {
+                SessionEventBody::UserMessage(p) => Some(p.attachment_count),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(counts, vec![0, 2], "attachment_count must round-trip");
     }
 
     #[test]

@@ -242,6 +242,10 @@ fn detect_media_type(path: &str) -> Option<String> {
 /// Security: `path` must already be validated by the caller — see
 /// `validate_attachment_path`. This helper does no path checking on its own
 /// because callers sometimes pass already-canonicalized paths.
+/// Cap on injected PDF text per attachment (50 KiB, mirrors the TUI
+/// @-reference FILE_CONTENT_LIMIT).
+const PDF_TEXT_INJECT_LIMIT: usize = 50 * 1024;
+
 fn file_to_base64(path: &str) -> Result<(String, String), String> {
     use base64::Engine;
     use std::fs;
@@ -637,6 +641,57 @@ pub async fn send_message(
         })
         .unwrap_or_default();
 
+    // T6: PDF attachments reach the model as extracted text blocks (vision
+    // providers have no PDF document-block contract on the OpenAI-compatible
+    // side, so text is the portable representation). Extracted via pdftotext
+    // when available (same helper the attachment preview uses); scanned PDFs
+    // with no extractable text are called out explicitly so the model can
+    // tell the user instead of guessing.
+    let mut attachment_blocks = image_blocks;
+    {
+        let pdf_futs = attachments
+            .as_ref()
+            .map(|list| {
+                list.iter()
+                    .filter(|att| att.media_type.as_deref() == Some("application/pdf"))
+                    .map(|att| async move {
+                        let text = crate::commands_files::extract_pdf_text_best_effort(
+                            std::path::Path::new(&att.path),
+                        )
+                        .await;
+                        (att.name.clone(), att.size, text)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for (name, size, text) in futures::future::join_all(pdf_futs).await {
+            let trimmed = text.trim();
+            let body = if trimmed.is_empty() {
+                format!(
+                    "Attached PDF \"{name}\" ({size} bytes). No extractable text — the PDF is likely scanned/image-only; OCR is not available."
+                )
+            } else {
+                let mut end = PDF_TEXT_INJECT_LIMIT;
+                while !trimmed.is_char_boundary(end) && end > 0 {
+                    end -= 1;
+                }
+                let truncated = &trimmed[..end];
+                let suffix = if trimmed.len() > end {
+                    format!(
+                        "\n*[Truncated — showing first {end} of {} bytes]*",
+                        trimmed.len()
+                    )
+                } else {
+                    String::new()
+                };
+                format!(
+                    "Attached PDF \"{name}\" ({size} bytes). Extracted text:\n```text\n{truncated}\n```{suffix}"
+                )
+            };
+            attachment_blocks.push(shannon_engine::api::ContentBlock::Text { text: body });
+        }
+    }
+
     // Tier-1 auto-title: capture emptiness before the push — this message is
     // the session's first user message iff the buffer was empty.
     let first_user_message = {
@@ -756,7 +811,7 @@ pub async fn send_message(
         query_id,
         session_id,
         user_message: message,
-        attachments: image_blocks,
+        attachments: attachment_blocks,
         metadata: shannon_core::query_engine::QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: true,
@@ -1632,6 +1687,7 @@ mod tests {
                     UserMessagePayload {
                         source: UserMessagePayload::SOURCE_USER.into(),
                         content: text,
+                        attachment_count: 0,
                     },
                 ));
             } else {

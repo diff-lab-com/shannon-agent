@@ -194,6 +194,7 @@ fn seed_messages_session(
                     UserMessagePayload {
                         source: UserMessagePayload::SOURCE_USER.into(),
                         content: text,
+                        attachment_count: 0,
                     },
                 ));
             }
