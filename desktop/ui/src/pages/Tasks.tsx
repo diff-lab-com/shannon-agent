@@ -27,7 +27,7 @@ import { useIntl } from 'react-intl'
 import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
 import * as api from '@/lib/tauri-api'
-import { useScheduledTasks } from '@/hooks/scheduled-tasks'
+import { useScheduledTasks, useTaskExecutions } from '@/hooks/scheduled-tasks'
 import { useBatchRuns } from '@/hooks/batchRuns'
 import type { CreateTaskPayload } from '@/types'
 import { type FilterStatus, statusMatchesFilter, TASKS_PER_PAGE } from '@/components/tasks/shared'
@@ -66,6 +66,9 @@ export default function Tasks() {
   const { switchSession, currentSessionId } = useSessions()
   const navigate = useNavigate()
   const { tasks: scheduledTasks, create: createScheduled, refresh: refreshScheduled } = useScheduledTasks()
+  // P2-5: recent executions across all routines — drives the "queued for
+  // off-peak window" status chip on the routines DAG nodes.
+  const { executions } = useTaskExecutions()
   // P1-2: start action for the batch form (the live cards in BatchRunPanel
   // keep their own subscription, mirroring the goal-run split).
   const { start: startBatch } = useBatchRuns()
@@ -100,6 +103,19 @@ export default function Tasks() {
   const selectedRoutine = selectedRoutineId
     ? scheduledTasks.find(r => r.id === selectedRoutineId) ?? null
     : null
+
+  // P2-5: ids of routines whose latest run is queued for their off-peak
+  // execution window (list_task_executions returns newest first).
+  const queuedRoutineIds = useMemo(() => {
+    const seen = new Set<string>()
+    const queued = new Set<string>()
+    for (const e of executions) {
+      if (seen.has(e.task_id)) continue
+      seen.add(e.task_id)
+      if (e.status === 'queued') queued.add(e.task_id)
+    }
+    return queued
+  }, [executions])
 
   // G11: derive unique team list from tasks (multi-session aggregated view).
   const teams = useMemo(() => {
@@ -237,7 +253,7 @@ export default function Tasks() {
           <WorktreePanel />
         ) : tab === 'routines' ? (
           <div className="space-y-gutter">
-            <ScheduleDAGView routines={scheduledTasks} onSelectRoutine={setSelectedRoutineId} />
+            <ScheduleDAGView routines={scheduledTasks} onSelectRoutine={setSelectedRoutineId} queuedTaskIds={queuedRoutineIds} />
             <RoutineTemplatesBrowser onInstantiated={() => void refreshScheduled()} />
           </div>
         ) : tab === 'pipelines' ? (

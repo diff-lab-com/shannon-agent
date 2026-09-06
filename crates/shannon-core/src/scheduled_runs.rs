@@ -49,6 +49,13 @@ pub enum RunStatus {
     Cancelled,
     /// Run was archived (Codex `auto_archive_when_empty` pattern — no findings).
     Archived,
+    /// The routine came due but is outside its `execution_window` (P2-5
+    /// off-peak queueing, the `queued_for_window` state). The record is a
+    /// tombstone: the routine is NOT marked fired and the run never executes
+    /// under this id — the first due check inside the window starts a fresh
+    /// `Running` run. Queued records are written to the JSONL history only
+    /// (no inbox item) so users can see why nothing happened yet.
+    Queued,
 }
 
 /// A single execution record for a scheduled task.

@@ -146,6 +146,32 @@ pub async fn continue_inbox_item_session(
 
 // ── Shared execution path ────────────────────────────────────────────────
 
+/// P2-5: resolve the off-peak model override for a routine run.
+///
+/// The `offpeak.model_override` config applies iff ALL of:
+/// - the routine has an `execution_window` in its policy,
+/// - an override is configured and non-empty (empty = disabled), and
+/// - the run starts inside the window.
+///
+/// Pure in `now` so tests inject the clock; [`spawn_routine_run`] calls it
+/// with the real clock at spawn time. Reruns and loopback triggers get the
+/// same treatment because they funnel through the same executor.
+pub(crate) fn resolve_offpeak_model(
+    routine: &ScheduledRoutine,
+    configured_override: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<String> {
+    let configured = configured_override
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let window = routine.policy.as_ref()?.execution_window.as_ref()?;
+    if window.contains_utc(now) {
+        Some(configured.to_string())
+    } else {
+        None
+    }
+}
+
 /// The legacy JSONL mirror seam. Object-safe on purpose: tests inject a
 /// failing implementation to prove a mirror outage can never wedge the
 /// SQLite `routine_runs` row (review fix round 1, Important 1).
@@ -296,7 +322,26 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
 
     let client_config = deps.client_config.read().await.clone();
     let approval_mode_str = deps.desktop_config.read().await.approval_mode.clone();
-    let model = client_config.model.clone();
+    // P2-5: in-window routine executions downgrade to the configured
+    // `offpeak.model_override` model (empty config = disabled). Everything
+    // else about the run — approval mode, tools, usage ledger — is unchanged;
+    // only QueryMetadata.model and the usage attribution swap.
+    let offpeak_override = {
+        let desktop_cfg = deps.desktop_config.read().await;
+        resolve_offpeak_model(
+            &routine,
+            desktop_cfg.offpeak.effective_model_override(),
+            chrono::Utc::now(),
+        )
+    };
+    if let Some(ref m) = offpeak_override {
+        tracing::info!(
+            run_id = %run_id,
+            model = %m,
+            "off-peak window active: executing routine with model override"
+        );
+    }
+    let model = offpeak_override.unwrap_or_else(|| client_config.model.clone());
     let model_for_usage = model.clone();
     let provider = client_config.provider.to_string();
     let prompt = routine.prompt.clone();
@@ -556,6 +601,8 @@ fn first_line_snapshot(output: &str, failed: bool) -> String {
 mod tests {
     use super::*;
 
+    use chrono::TimeZone as _;
+
     // ── pure helpers ────────────────────────────────────────────────────
 
     #[test]
@@ -608,6 +655,102 @@ mod tests {
         assert!(RERUNNABLE_SOURCES.contains(&shannon_core::inbox_store::SOURCE_SCHEDULED_TASK));
         assert!(RERUNNABLE_SOURCES.contains(&shannon_core::inbox_store::SOURCE_TRIGGER));
         assert!(!RERUNNABLE_SOURCES.contains(&shannon_core::inbox_store::SOURCE_GOAL));
+    }
+
+    // ── P2-5: off-peak model override resolution ─────────────────────────
+
+    fn windowed_routine(start: u8, end: u8, tz: Option<&str>) -> ScheduledRoutine {
+        let mut r = ScheduledRoutine::new("nightly".into(), "p".into(), 3600);
+        r.policy = Some(shannon_core::scheduled_routines::ExecutionPolicy {
+            execution_window: Some(
+                shannon_core::scheduled_routines::ExecutionWindow::new(
+                    start,
+                    end,
+                    tz.map(str::to_string),
+                )
+                .unwrap(),
+            ),
+            ..Default::default()
+        });
+        r
+    }
+
+    fn utc_at(h: u32, m: u32) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 1, 15, h, m, 0).unwrap()
+    }
+
+    #[test]
+    fn offpeak_override_applies_only_inside_window() {
+        let routine = windowed_routine(22, 6, Some("UTC"));
+        // In window (23:00 UTC) + configured → override.
+        assert_eq!(
+            resolve_offpeak_model(&routine, Some("glm-4-flash"), utc_at(23, 0)),
+            Some("glm-4-flash".into())
+        );
+        // Boundary: window start hour is inclusive.
+        assert_eq!(
+            resolve_offpeak_model(&routine, Some("glm-4-flash"), utc_at(22, 0)),
+            Some("glm-4-flash".into())
+        );
+        // End hour inclusive, closes at 07:00.
+        assert_eq!(
+            resolve_offpeak_model(&routine, Some("glm-4-flash"), utc_at(6, 59)),
+            Some("glm-4-flash".into())
+        );
+        // Outside the window → active model, no override.
+        assert_eq!(
+            resolve_offpeak_model(&routine, Some("glm-4-flash"), utc_at(12, 0)),
+            None
+        );
+        assert_eq!(
+            resolve_offpeak_model(&routine, Some("glm-4-flash"), utc_at(7, 0)),
+            None
+        );
+    }
+
+    #[test]
+    fn offpeak_override_requires_configured_non_empty_value() {
+        let routine = windowed_routine(22, 6, Some("UTC"));
+        assert_eq!(resolve_offpeak_model(&routine, None, utc_at(23, 0)), None);
+        assert_eq!(
+            resolve_offpeak_model(&routine, Some(""), utc_at(23, 0)),
+            None
+        );
+        assert_eq!(
+            resolve_offpeak_model(&routine, Some("   "), utc_at(23, 0)),
+            None
+        );
+        // Whitespace around a value is trimmed, not rejected.
+        assert_eq!(
+            resolve_offpeak_model(&routine, Some(" glm-4-flash "), utc_at(23, 0)),
+            Some("glm-4-flash".into())
+        );
+    }
+
+    #[test]
+    fn offpeak_override_ignored_without_window_and_respects_timezone() {
+        // No window → override never applies (immediate execution semantics).
+        let plain = ScheduledRoutine::new("plain".into(), "p".into(), 3600);
+        assert_eq!(
+            resolve_offpeak_model(&plain, Some("glm-4-flash"), utc_at(23, 0)),
+            None
+        );
+        // Window in +08:00: UTC 15:00 is 23:00 wall — inside; UTC 13:00 is
+        // 21:00 wall — one hour before the window opens.
+        let tz = windowed_routine(22, 6, Some("+08:00"));
+        assert_eq!(
+            resolve_offpeak_model(&tz, Some("glm-4-flash"), utc_at(15, 0)),
+            Some("glm-4-flash".into())
+        );
+        assert_eq!(
+            resolve_offpeak_model(&tz, Some("glm-4-flash"), utc_at(14, 0)),
+            Some("glm-4-flash".into()),
+            "UTC 14:00 = 22:00+08:00 wall — inclusive window start"
+        );
+        assert_eq!(
+            resolve_offpeak_model(&tz, Some("glm-4-flash"), utc_at(13, 0)),
+            None
+        );
     }
 
     // ── store-backed pieces (no Tauri runtime needed) ───────────────────

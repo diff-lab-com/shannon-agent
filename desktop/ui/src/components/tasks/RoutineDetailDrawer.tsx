@@ -13,6 +13,7 @@
 import { useIntl } from 'react-intl'
 import type { ScheduledRoutine } from '@/types'
 import DependsOnEditor from './DependsOnEditor'
+import OffpeakWindowEditor from './OffpeakWindowEditor'
 import { SidePanel, SidePanelBody, SidePanelCloseButton, SidePanelHeader, SidePanelTitle } from '@/components/ui/side-panel'
 
 interface RoutineDetailDrawerProps {
@@ -91,6 +92,9 @@ export default function RoutineDetailDrawer({
               <p className="font-body-md text-error mt-xs break-words">{routine.last_error}</p>
             </div>
           )}
+          {/* P2-5: off-peak execution window editor + queued status.
+              Keyed by routine id so toggles/inputs reset per routine. */}
+          <OffpeakWindowEditor key={routine.id} routine={routine} onUpdated={onUpdated} />
           {routine.policy?.result_routing && routine.policy.result_routing.length > 0 ? (
             <div>
               <span className="text-label-sm text-on-surface-variant">{t('tasks.routineDetailDrawer.resultRouting')}</span>

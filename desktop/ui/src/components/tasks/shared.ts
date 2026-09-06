@@ -34,6 +34,10 @@ export function statusBadge(status: string): StatusBadge {
       return { bg: 'bg-error/10 text-error border-error/20', dot: 'bg-error', icon: 'error', labelId: 'tasks.status.failed.label', tipId: 'tasks.status.failed.tip' }
     case 'pending':
       return { bg: 'bg-surface-container-highest text-on-surface-variant border-outline-variant/30', dot: 'bg-outline', icon: 'schedule', labelId: 'tasks.status.pending.label', tipId: 'tasks.status.pending.tip' }
+    case 'queued':
+      // P2-5: due but outside the routine's off-peak execution window —
+      // waiting for the window to open; never executes under this record.
+      return { bg: 'bg-secondary/10 text-secondary border-secondary/20', dot: 'bg-secondary animate-pulse', icon: 'bedtime', labelId: 'tasks.status.queued.label', tipId: 'tasks.status.queued.tip' }
     default:
       return { bg: 'bg-surface-container-high text-on-surface-variant border-outline-variant/30', dot: 'bg-outline-variant', icon: 'task_alt', labelId: 'tasks.status.unknown.label', tipId: 'tasks.status.unknown.tip', values: { status } }
   }

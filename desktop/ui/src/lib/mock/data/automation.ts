@@ -45,6 +45,8 @@ export const MOCK_SCHEDULED_ROUTINES: ScheduledRoutine[] = [
       notify_on_failure: true,
       auto_archive_when_empty: false,
       result_routing: ['notification', 'log'],
+      // P2-5: off-peak window (00:00–07:00, inclusive hours, machine-local).
+      execution_window: { start_hour: 0, end_hour: 6, timezone: null },
     },
   } as unknown as ScheduledRoutine,
   {

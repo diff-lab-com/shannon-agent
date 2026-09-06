@@ -255,6 +255,10 @@ export const handlers: Record<string, MockHandler> = {
       demoConfig.sandbox = { mode }
     } else if (args?.key === 'approval_mode') {
       demoConfig.approval_mode = args.value
+    } else if (args?.key === 'offpeak.model_override') {
+      // P2-5: frozen config key — empty value disables the override.
+      const trimmed = String(args.value ?? '').trim()
+      demoConfig.offpeak = { model_override: trimmed ? trimmed : null }
     }
   },
 
@@ -767,7 +771,9 @@ export const handlers: Record<string, MockHandler> = {
       task_name: MOCK_SCHEDULED_ROUTINES[i % MOCK_SCHEDULED_ROUTINES.length].name,
       started_at: Math.floor((Date.now() - i * 86400_000) / 1000),
       completed_at: Math.floor((Date.now() - i * 86400_000 + 600) / 1000),
-      status: i === 0 ? 'failed' : 'succeeded',
+      // P2-5: one queued record so the off-peak queue state is visible in
+      // the demo History tab (nightly-backup-check carries a window).
+      status: i === 0 ? 'failed' : i === 3 ? 'queued' : 'succeeded',
       duration_secs: 600,
       output_preview: 'Task output preview...',
     }))
