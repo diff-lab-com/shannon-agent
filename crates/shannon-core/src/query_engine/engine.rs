@@ -247,10 +247,16 @@ struct ToolResultEntry {
 impl ToolResultEntry {
     /// Build the appropriate `ToolResultContent` for this entry.
     ///
-    /// For image results (detected via `metadata["type"] == "image"`),
+    /// For single-image results (detected via `metadata["type"] == "image"`),
     /// returns `ToolResultContent::Multiple` containing a text description
     /// block followed by a `ContentBlock::Image` block so the LLM can
     /// "see" the image.
+    ///
+    /// For multi-image batch results (`metadata["type"] == "images"`,
+    /// produced by the AnalyzeImages tool — C-ImgBatch), expands the
+    /// `images[]` payload into interleaved `## <path>` text headings and
+    /// `ContentBlock::Image` blocks so the whole batch rides in ONE
+    /// tool_result → ONE LLM vision request.
     ///
     /// For everything else, returns `ToolResultContent::Single`.
     fn to_tool_result_content(&self) -> Option<ToolResultContent> {
@@ -258,13 +264,19 @@ impl ToolResultEntry {
             return Some(ToolResultContent::Single(self.content.clone()));
         }
 
-        // Check if this is an image result from the Read/AnalyzeImage tool.
-        let is_image = self
+        let output_type = self
             .metadata
             .get("type")
             .and_then(|v| v.as_str())
-            .map(|s| s == "image")
-            .unwrap_or(false);
+            .unwrap_or("");
+
+        // Multi-image batch results (C-ImgBatch).
+        if output_type == "images" {
+            return Some(self.multi_image_content());
+        }
+
+        // Check if this is an image result from the Read/AnalyzeImage tool.
+        let is_image = output_type == "image";
 
         if is_image {
             let media_type = self
@@ -304,6 +316,80 @@ impl ToolResultEntry {
         } else {
             Some(ToolResultContent::Single(self.content.clone()))
         }
+    }
+
+    /// Expand an AnalyzeImages batch payload (C-ImgBatch) into a single
+    /// `ToolResultContent::Multiple` holding, per image, a `## <path>` text
+    /// heading followed by an image block — one tool_result, one vision
+    /// request with N image parts.
+    ///
+    /// Wire support: Anthropic passes `tool_result` content blocks through
+    /// verbatim (multi-image works). The OpenAI/Ollama/Gemini adapters
+    /// currently flatten `tool_result` content to text, so there the model
+    /// only sees the text headings without pixels — degradation that already
+    /// applied to the single-image path. Follow-up: teach those adapters to
+    /// emit multi-image tool results; add a per-batch pixel budget.
+    fn multi_image_content(&self) -> ToolResultContent {
+        let parsed = serde_json::from_str::<serde_json::Value>(&self.content).ok();
+        let images = parsed
+            .as_ref()
+            .and_then(|v| v.get("images"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        if images.is_empty() {
+            // Fallback: couldn't parse the batch payload, return as text.
+            return ToolResultContent::Single(self.content.clone());
+        }
+
+        let prompt = parsed
+            .as_ref()
+            .and_then(|v| v.get("prompt"))
+            .and_then(|p| p.as_str())
+            .unwrap_or("");
+
+        let count = images.len();
+        let mut intro = format!(
+            "Batch of {count} images follows; each image is preceded by a `## <path>` heading. Analyze each in order."
+        );
+        if !prompt.is_empty() {
+            intro.push_str(&format!("\nPrompt for each image: {prompt}"));
+        }
+
+        let mut blocks = Vec::with_capacity(1 + images.len() * 2);
+        blocks.push(ContentBlock::Text { text: intro });
+
+        let mut emitted = 0usize;
+        for (i, img) in images.iter().enumerate() {
+            let source = img
+                .get("source")
+                .and_then(|s| s.as_str())
+                .unwrap_or("unknown");
+            let media_type = img
+                .get("media_type")
+                .and_then(|m| m.as_str())
+                .unwrap_or("application/octet-stream");
+            let data = img.get("data").and_then(|d| d.as_str()).unwrap_or_default();
+            if data.is_empty() {
+                tracing::warn!(index = i, source, "batch image entry has no data; skipping");
+                continue;
+            }
+            blocks.push(ContentBlock::Text {
+                text: format!("## {source}"),
+            });
+            blocks.push(ContentBlock::Image {
+                source: ImageSource::base64(media_type, data),
+            });
+            emitted += 1;
+        }
+
+        if emitted == 0 {
+            // No decodable image data — degrade to the raw text payload.
+            return ToolResultContent::Single(self.content.clone());
+        }
+
+        ToolResultContent::Multiple(blocks)
     }
 }
 
@@ -6375,6 +6461,159 @@ mod tests {
         match result {
             ToolResultContent::Single(text) => assert_eq!(text, "Image load failed"),
             other => panic!("Expected Single for error, got: {other:?}"),
+        }
+    }
+
+    // ── Multi-image batch results (C-ImgBatch) ──────────────────────
+
+    /// Build an AnalyzeImages-style content payload with the given images.
+    fn make_batch_images_json(images: &[(&str, &str, &str)], prompt: &str) -> String {
+        let arr: Vec<serde_json::Value> = images
+            .iter()
+            .map(|(source, media_type, data)| {
+                serde_json::json!({
+                    "source": source,
+                    "media_type": media_type,
+                    "data": data,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "type": "images",
+            "count": arr.len(),
+            "prompt": prompt,
+            "images": arr,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn test_tool_result_entry_multi_image_creates_sectioned_blocks() {
+        let content = make_batch_images_json(
+            &[
+                ("/tmp/a.png", "image/png", "AAAA"),
+                ("/tmp/b.jpg", "image/jpeg", "BBBB"),
+            ],
+            "describe each",
+        );
+        let entry = ToolResultEntry {
+            tool_use_id: "batch_1".to_string(),
+            content,
+            is_error: false,
+            metadata: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("type".to_string(), serde_json::json!("images"));
+                map.insert("count".to_string(), serde_json::json!(2));
+                map
+            },
+        };
+
+        let result = entry.to_tool_result_content().unwrap();
+        match result {
+            ToolResultContent::Multiple(blocks) => {
+                // intro + (heading + image) per image = 1 + 2*2 = 5 blocks
+                assert_eq!(blocks.len(), 5, "blocks: {blocks:?}");
+                match &blocks[0] {
+                    ContentBlock::Text { text } => {
+                        assert!(text.contains("2 images"), "intro: {text}");
+                        assert!(text.contains("describe each"), "intro: {text}");
+                    }
+                    other => panic!("Expected intro Text, got: {other:?}"),
+                }
+                // Per-image `## <path>` heading directly before its image.
+                for (heading, image, expected) in [
+                    (&blocks[1], &blocks[2], ("/tmp/a.png", "image/png", "AAAA")),
+                    (&blocks[3], &blocks[4], ("/tmp/b.jpg", "image/jpeg", "BBBB")),
+                ] {
+                    match heading {
+                        ContentBlock::Text { text } => {
+                            assert_eq!(text, &format!("## {}", expected.0));
+                        }
+                        other => panic!("Expected heading Text, got: {other:?}"),
+                    }
+                    match image {
+                        ContentBlock::Image { source } => {
+                            assert_eq!(source.media_type, expected.1);
+                            assert_eq!(source.data, expected.2);
+                        }
+                        other => panic!("Expected Image block, got: {other:?}"),
+                    }
+                }
+            }
+            other => panic!("Expected Multiple for batch images, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_tool_result_entry_multi_image_batch_error_stays_single() {
+        let entry = ToolResultEntry {
+            tool_use_id: "batch_1".to_string(),
+            content: "Failed to load image 1 of 2".to_string(),
+            is_error: true,
+            metadata: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("type".to_string(), serde_json::json!("images"));
+                map
+            },
+        };
+        let result = entry.to_tool_result_content().unwrap();
+        match result {
+            ToolResultContent::Single(text) => {
+                assert_eq!(text, "Failed to load image 1 of 2");
+            }
+            other => panic!("Expected Single for batch error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_tool_result_entry_multi_image_unparseable_falls_back_to_single() {
+        let entry = ToolResultEntry {
+            tool_use_id: "batch_1".to_string(),
+            content: "not json".to_string(),
+            is_error: false,
+            metadata: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("type".to_string(), serde_json::json!("images"));
+                map
+            },
+        };
+        let result = entry.to_tool_result_content().unwrap();
+        match result {
+            ToolResultContent::Single(text) => assert_eq!(text, "not json"),
+            other => panic!("Expected Single fallback, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_tool_result_entry_multi_image_empty_data_entries_skipped() {
+        let content = make_batch_images_json(
+            &[
+                ("/tmp/empty.png", "image/png", ""),
+                ("/tmp/ok.png", "image/png", "CCCC"),
+            ],
+            "",
+        );
+        let entry = ToolResultEntry {
+            tool_use_id: "batch_1".to_string(),
+            content,
+            is_error: false,
+            metadata: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("type".to_string(), serde_json::json!("images"));
+                map
+            },
+        };
+        let result = entry.to_tool_result_content().unwrap();
+        match result {
+            ToolResultContent::Multiple(blocks) => {
+                // intro + 1 usable image pair (empty-data entry skipped)
+                assert_eq!(blocks.len(), 3, "blocks: {blocks:?}");
+                match &blocks[1] {
+                    ContentBlock::Text { text } => assert_eq!(text, "## /tmp/ok.png"),
+                    other => panic!("Expected heading Text, got: {other:?}"),
+                }
+            }
+            other => panic!("Expected Multiple, got: {other:?}"),
         }
     }
 

@@ -116,7 +116,9 @@ pub use git::{
 };
 pub use github::{GhIssueListTool, GhIssueViewTool, GhPrCreateTool, GhPrListTool, GhPrViewTool};
 pub use grep::GrepTool;
-pub use image_analysis::{AnalyzeImageInput, AnalyzeImageTool};
+pub use image_analysis::{
+    AnalyzeImageInput, AnalyzeImageTool, AnalyzeImagesInput, AnalyzeImagesTool, MAX_BATCH_IMAGES,
+};
 pub use lsp::{
     CodeActionItem, CodeActionsInput, CodeActionsOutput, CodeActionsTool, DocumentSymbolInput,
     DocumentSymbolItem, DocumentSymbolOutput, DocumentSymbolTool, FindReferencesInput,
@@ -380,6 +382,7 @@ fn register_all_tools(
 
     // ── Multimodal ──────────────────────────────────────────────────────
     registry.register(Box::new(AnalyzeImageTool::new().with_fs(fs.clone())))?;
+    registry.register(Box::new(AnalyzeImagesTool::new().with_fs(fs.clone())))?;
 
     // ── Agent & team ───────────────────────────────────────────────────
     let agent_tool = AgentTool::new();
