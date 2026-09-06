@@ -22,6 +22,7 @@ The binary evaluated is the LOCAL dev build pointed at by SHANNON_HARBOR_BIN
 
 import os
 import shlex
+import tempfile
 from pathlib import Path
 from typing import override
 
@@ -128,10 +129,34 @@ class Shannon(BaseInstalledAgent):
         for key, value in os.environ.items():
             if key.startswith("SHANNON_") and key not in env:
                 env[key] = value
+        # Eval default: turn on the content-idle stream watchdog. On
+        # zhipu-coding-plan a thinking-mode SSE can stay silent for 5+ minutes
+        # before a Request-timed-out error; the watchdog terminates the stale
+        # stream and retryable errors fall into the engine's retry path. The
+        # default in the engine is 0 (off) to keep interactive UX unchanged;
+        # eval-grade runs opt in.
+        env.setdefault("SHANNON_STREAM_IDLE_SECS", "180")
 
-        escaped_instruction = shlex.quote(instruction)
         cli_flags = self.build_cli_flags()
         extra_flags = (cli_flags + " ") if cli_flags else ""
+
+        # Write the prompt to a temp file and upload it into the container, then
+        # feed it to `shannon -p -` via stdin. This handles prompts that:
+        #   * begin with '-' (clap mis-parses as a flag; e.g. TB pytorch-model-recovery)
+        #   * contain characters that shlex.quote or shell expansion mangles
+        # The heredoc alternative (`shannon -p -- <<EOF`) breaks clap because
+        # '--' consumes the prompt value rather than terminating flag parsing.
+        prompt_filename = "shannon_prompt.txt"
+        prompt_target = f"/tmp/{prompt_filename}"
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write(instruction)
+            tmp_path = Path(tmp.name)
+        try:
+            await environment.upload_file(tmp_path, prompt_target)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
         await self.exec_as_agent(
             environment,
@@ -139,10 +164,9 @@ class Shannon(BaseInstalledAgent):
                 "shannon "
                 f"--provider {shlex.quote(provider)} "
                 f"--model {shlex.quote(model)} "
-                "--disallowed-tools WebFetch --disallowed-tools WebSearch "
                 "--output-format json-stream "
                 f"{extra_flags}"
-                f"-p {escaped_instruction} "
+                f"-p - < {shlex.quote(prompt_target)} "
                 "> /logs/agent/shannon.ndjson 2> /logs/agent/shannon.stderr"
             ),
             env=env,
