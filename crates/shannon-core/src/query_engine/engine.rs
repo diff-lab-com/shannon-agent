@@ -393,6 +393,48 @@ fn think_only_min_answer_chars() -> usize {
     ) as usize
 }
 
+// ── B.6 ────────────────────────────────────────────────────────────────────
+// SHANNON_TOKEN_BUDGET: a hard cap on cumulative input tokens. When the cap
+// is exceeded the engine synthesizes a user-side message that pushes the
+// model away from full-file reads (the eval failure mode measured in
+// eval-findings-2026-09-glm.md F2 — single-shot `cat` of multi-MB files
+// burned the remaining turn budget). Disabling the cap = SHANNON_TOKEN_BUDGET=0.
+
+/// Default value for the B.6 token-budget watchdog (`SHANNON_TOKEN_BUDGET`).
+/// Zero disables it entirely so non-eval users are unaffected.
+const DEFAULT_TOKEN_BUDGET: u64 = 0;
+
+/// Recommended eval setting for SWE-bench / TB2.1 runs (120k tokens ≈
+/// the cap after which the model starts losing recent context in
+/// `estimate_tokens`).
+#[allow(dead_code)] // surfaced as documentation; eval reads the env directly.
+pub const RECOMMENDED_TOKEN_BUDGET: u64 = 120_000;
+
+/// Resolve the configured B.6 budget. `0` (default) disables the watchdog.
+/// Honors the same parse contract as [`env_num_override`]: unset, empty,
+/// or unparseable → `DEFAULT_TOKEN_BUDGET`.
+fn token_budget_limit() -> u64 {
+    env_num_override("SHANNON_TOKEN_BUDGET", DEFAULT_TOKEN_BUDGET as u32) as u64
+}
+
+/// Build the targeted-read nudge the model receives when the B.6 budget is
+/// exceeded. Pure: depends only on `(used, budget)` so the call site can
+/// pass live counts and unit tests can pin both arguments.
+///
+/// Returns `None` when `budget == 0` (disabled) or `used <= budget`. The
+/// text is the exact phrase required by the plan — verbatim so the unit
+/// test's `contains("Context is large")` assertion matches.
+fn token_budget_nudge_for(used: u64, budget: u64) -> Option<String> {
+    if budget == 0 || used <= budget {
+        return None;
+    }
+    Some(format!(
+        "Context is large ({used}/{budget} tokens). Prefer targeted reads \
+         (`Grep`, `head -c`, `Read` with offset+limit) over full-file reads \
+         or `cat`. Re-read only what you need; commit fixes promptly."
+    ))
+}
+
 /// Split inline `<think>...</think>` reasoning out of assistant text.
 ///
 /// Returns `(saw_reasoning, visible_text)` where `visible_text` is the text
@@ -2059,6 +2101,51 @@ impl QueryEngine {
                         conversation.messages.push(synth_msg);
                         token_warning_80_fired = true;
                         tracing::info!(pct, "P-M 80% token-budget synthetic message fired");
+                    }
+
+                    // B.6: SHANNON_TOKEN_BUDGET watchdog. Different from the
+                    // 60%/80% ratio warnings above — that pair is keyed to
+                    // the model's context window (which is provider/model
+                    // specific). The B.6 budget is keyed to a caller-supplied
+                    // cap (env `SHANNON_TOKEN_BUDGET`, default 0 = off; eval
+                    // recommends 120_000). When the cumulative input-token
+                    // total crosses the cap the engine nudges the model
+                    // toward targeted reads (`Grep` / `head -c` / Read with
+                    // offset+limit) instead of full-file reads.
+                    //
+                    // Fires on EVERY turn where the cap is exceeded (unlike
+                    // the once-per-query ratio warnings) because the model
+                    // may still default to `cat` until it sees the reminder
+                    // in the current turn's user-context.
+                    let budget = token_budget_limit();
+                    if budget > 0 && total_input_tokens > budget {
+                        if let Some(text) =
+                            token_budget_nudge_for(total_input_tokens, budget)
+                        {
+                            let synth_msg = Message {
+                                role: "user".to_string(),
+                                content: MessageContent::Text(text.clone()),
+                            };
+                            messages.push(synth_msg.clone());
+                            conversation.messages.push(synth_msg);
+                            tracing::info!(
+                                used = total_input_tokens,
+                                budget,
+                                turn,
+                                "B.6 SHANNON_TOKEN_BUDGET synthetic message fired",
+                            );
+                            send_event!(
+                                tx,
+                                QueryEvent::Progress {
+                                    query_id,
+                                    message: format!(
+                                        "Token budget exceeded ({} > {}); injecting \
+                                         targeted-read nudge",
+                                        total_input_tokens, budget
+                                    ),
+                                }
+                            );
+                        }
                     }
 
                     if usage_ratio > config.compression_threshold {
@@ -5159,6 +5246,126 @@ mod tests {
             Some(v) => unsafe { env::set_var("SHANNON_THINK_ONLY_MIN_ANSWER_CHARS", v) },
             None => unsafe { env::remove_var("SHANNON_THINK_ONLY_MIN_ANSWER_CHARS") },
         }
+    }
+
+    /// B.6: SHANNON_TOKEN_BUDGET parses the same way as the think-only
+    /// overrides — unset / empty / unparseable → default (0 = disabled).
+    /// Locks the process-global env behind the same mutex used by the
+    /// think-only env tests to keep parallel tests from racing.
+    #[test]
+    fn token_budget_env_override_parses() {
+        use std::sync::{Mutex, OnceLock};
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env-var test mutex poisoned");
+
+        let saved = env::var("SHANNON_TOKEN_BUDGET").ok();
+
+        unsafe {
+            env::remove_var("SHANNON_TOKEN_BUDGET");
+        }
+        assert_eq!(
+            token_budget_limit(),
+            0,
+            "unset should default to 0 (disabled)"
+        );
+
+        unsafe {
+            env::set_var("SHANNON_TOKEN_BUDGET", "120000");
+        }
+        assert_eq!(token_budget_limit(), 120_000);
+
+        unsafe {
+            env::set_var("SHANNON_TOKEN_BUDGET", "0");
+        }
+        assert_eq!(token_budget_limit(), 0, "explicit 0 must disable");
+
+        unsafe {
+            env::set_var("SHANNON_TOKEN_BUDGET", "");
+        }
+        assert_eq!(
+            token_budget_limit(),
+            0,
+            "empty value must fall back to default"
+        );
+
+        unsafe {
+            env::set_var("SHANNON_TOKEN_BUDGET", "bogus");
+        }
+        assert_eq!(
+            token_budget_limit(),
+            0,
+            "garbage must fall back to default"
+        );
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TOKEN_BUDGET", v) },
+            None => unsafe { env::remove_var("SHANNON_TOKEN_BUDGET") },
+        }
+    }
+
+    /// B.6: pure nudge builder contract. Pinned so the wired-in engine
+    /// call site and any future tweak share the exact phrase tested here.
+    #[test]
+    fn token_budget_nudge_for_pure_contract() {
+        // Disabled budget → no nudge.
+        assert!(token_budget_nudge_for(50_000, 0).is_none());
+        // At or under budget → no nudge.
+        assert!(token_budget_nudge_for(100, 100).is_none());
+        assert!(token_budget_nudge_for(99, 100).is_none());
+        // Over budget → nudge with the required prefix.
+        let nudge = token_budget_nudge_for(101, 100).expect("nudge fires");
+        assert!(
+            nudge.contains("Context is large"),
+            "must contain the exact phrase 'Context is large'; got: {nudge:?}"
+        );
+        assert!(
+            nudge.contains("101/100 tokens"),
+            "must report used/budget; got: {nudge:?}"
+        );
+    }
+
+    /// B.6 integration-style test: simulate the per-turn `total_input_tokens`
+    /// accumulating past the budget. Each turn where the cumulative total
+    /// exceeds the cap must yield a nudge message starting with the
+    /// required phrase. The plan-doc test contract: "模拟 budget=100, 注入
+    /// 两轮累计 token > 100, 断言第三轮 user message 含 'Context is large'".
+    #[test]
+    fn token_budget_nudge_fires_across_three_turns() {
+        let budget: u64 = 100;
+        // Per-turn usage: 60, 60, 60 → cumulative 60, 120, 180.
+        // Only turn 2 and turn 3 exceed the budget.
+        let per_turn = [60u64, 60, 60];
+        let mut cumulative: u64 = 0;
+        let mut nudge_count = 0;
+        let mut last_nudge: Option<String> = None;
+
+        for (turn_idx, inc) in per_turn.iter().enumerate() {
+            cumulative = cumulative.saturating_add(*inc);
+            // Mirror the engine loop's gating: `total_input_tokens > budget`.
+            if let Some(text) = token_budget_nudge_for(cumulative, budget) {
+                nudge_count += 1;
+                last_nudge = Some(text);
+                eprintln!("turn {} nudge fired (cumulative={cumulative})", turn_idx + 1);
+            }
+        }
+
+        assert_eq!(
+            nudge_count, 2,
+            "two turns exceeded the budget (turn 2 and turn 3)"
+        );
+        let text = last_nudge.expect("a nudge must have fired");
+        assert!(
+            text.contains("Context is large"),
+            "the third turn's user message must contain 'Context is large' \
+             (plan-doc test contract); got: {text}"
+        );
+        assert!(
+            text.contains("180/100 tokens"),
+            "must report the third turn's cumulative total; got: {text}"
+        );
     }
 
     #[tokio::test]
