@@ -94,6 +94,11 @@ pub struct StoredLoop {
     pub iteration: usize,
     #[serde(default = "default_true")]
     pub active: bool,
+    /// Progress-guard counters (P2.1/P2.2), defaulted for older sidecars.
+    #[serde(default)]
+    pub no_tool_turns: usize,
+    #[serde(default)]
+    pub stall_strikes: usize,
 }
 
 /// Persistence DTO for an active `/ralph`. Same shape as `StoredLoop`
@@ -107,6 +112,11 @@ pub struct StoredRalph {
     pub iteration: usize,
     #[serde(default = "default_true")]
     pub active: bool,
+    /// Progress-guard counters (P2.1/P2.2), defaulted for older sidecars.
+    #[serde(default)]
+    pub no_tool_turns: usize,
+    #[serde(default)]
+    pub stall_strikes: usize,
 }
 
 fn default_true() -> bool {
@@ -124,6 +134,9 @@ pub struct StoredGoal {
     pub iterations: usize,
     #[serde(default)]
     pub max_iterations: usize,
+    /// Fired blocked check-ins (caps at 3 across restarts).
+    #[serde(default)]
+    pub checkins: usize,
 }
 
 impl SessionSidecar {
@@ -953,6 +966,7 @@ mod tests {
             status: "active".into(),
             iterations: 3,
             max_iterations: 25,
+            checkins: 0,
         };
         let json = serde_json::to_string(&goal).unwrap();
         let back: StoredGoal = serde_json::from_str(&json).unwrap();
@@ -982,6 +996,7 @@ mod tests {
                         status: "active".into(),
                         iterations: 1,
                         max_iterations: 25,
+                        checkins: 0,
                     }),
                     ..Default::default()
                 },
@@ -996,6 +1011,7 @@ mod tests {
                 status: "active".into(),
                 iterations: 1,
                 max_iterations: 25,
+                checkins: 0,
             })
         );
         // A goal-less save must not wipe the stored goal.
@@ -1018,6 +1034,8 @@ mod tests {
             max_iterations: 5,
             iteration: 3,
             active: true,
+            no_tool_turns: 0,
+            stall_strikes: 0,
         };
         let back: StoredLoop = serde_json::from_str(&serde_json::to_string(&lp).unwrap()).unwrap();
         assert_eq!(back, lp);
@@ -1031,6 +1049,8 @@ mod tests {
             max_iterations: 4,
             iteration: 2,
             active: true,
+            no_tool_turns: 0,
+            stall_strikes: 0,
         };
         let back: StoredRalph = serde_json::from_str(&serde_json::to_string(&rp).unwrap()).unwrap();
         assert_eq!(back, rp);
@@ -1052,6 +1072,8 @@ mod tests {
                         max_iterations: 7,
                         iteration: 3,
                         active: true,
+                        no_tool_turns: 0,
+                        stall_strikes: 0,
                     }),
                     ..Default::default()
                 },

@@ -70,9 +70,10 @@ rule = "file_content"
 path = "src/preset_filter.rs"
 contains = 'starts_with("agent:")'
 
-[[verify.rules]]
-rule = "trajectory_contains"
-sequence = [{ tool = "MultiEdit" }]
+# RCA 2026-09-05 (docs/eval-findings-2026-09-glm.md F1.5/B1): the hard
+# MultiEdit trajectory rule failed two runs that applied the exact fix with a
+# single Edit (both runs ended exit-0 with every file_content rule passing).
+# Tool choice is a means, not the contract (RCA 2026-08-28 §5).
 
 script = '''
 set -e

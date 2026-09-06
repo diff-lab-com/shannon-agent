@@ -911,6 +911,43 @@ mod openai_truncation_continuation_tests {
     }
 
     #[tokio::test]
+    async fn truncated_think_only_uses_truncation_not_nudge() {
+        // Precedence (A1 vs truncation continuation): a `length`-cut
+        // response whose `<think>` never closes looks like a think-only
+        // response, but the truncation machinery owns it. The think-only
+        // nudge must stay silent so the truncation bound remains a bound.
+        let (engine, mocks, _server) = setup_openai_engine(vec![
+            openai_sse_think_truncated_then_usage(300, 4096),
+            openai_sse_text_then_usage(400, 120),
+        ])
+        .await;
+        let events = run_query(&engine).await;
+
+        for m in &mocks {
+            m.assert();
+        }
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                QueryEvent::Warning { message, .. } if message.contains("output token limit")
+            )),
+            "the truncation continuation must own the re-prompt"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                QueryEvent::Warning { message, .. } if message.contains("re-prompting")
+            )),
+            "the think-only nudge must not fire on an output-limit truncation"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, QueryEvent::Completed { .. }))
+        );
+    }
+
+    #[tokio::test]
     async fn length_truncation_without_tool_calls_continues_instead_of_completing() {
         let (engine, mocks, _server) = setup_openai_engine(vec![
             openai_sse_think_truncated_then_usage(300, 4096),

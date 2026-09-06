@@ -187,10 +187,24 @@ impl Tool for ReadTool {
             .map_err(|e| ToolError::InvalidInput(format!("Invalid read input: {e}")))?;
 
         let canonical = validate_path(&self.sandbox, &read_input.file_path).await?;
+        // A3: echo the sandbox-visible spelling of the path. The actual read
+        // below keeps using the canonical host path — only the output is
+        // re-rendered (bind-alias reverse map, see `PathSandbox::
+        // alias_display_path`).
+        let display_path = self.sandbox.alias_display_path(&canonical);
         let mut input = read_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
-        read::execute_with(input, self.fs.as_ref()).await
+        let mut output = read::execute_with(input, self.fs.as_ref()).await?;
+        output
+            .metadata
+            .insert("file_path".to_string(), json!(display_path));
+        // Image outputs embed the source path inside the JSON content blob —
+        // that is a tool-generated echo too, not file content.
+        if output.metadata.get("type").and_then(|t| t.as_str()) == Some("image") {
+            output.content = self.sandbox.alias_display_text(&output.content);
+        }
+        Ok(output)
     }
     fn is_read_only(&self) -> bool {
         true
@@ -294,7 +308,9 @@ impl Tool for WriteTool {
         input.file_path = canonical.to_string_lossy().to_string();
 
         snapshot_for_undo(self.fs.as_ref(), &self.history, &input.file_path);
-        write::execute_with(input, self.fs.as_ref()).await
+        let mut output = write::execute_with(input, self.fs.as_ref()).await?;
+        self.sandbox.remap_tool_output(&mut output);
+        Ok(output)
     }
 }
 
@@ -412,7 +428,11 @@ impl Tool for EditTool {
         input.file_path = canonical.to_string_lossy().to_string();
 
         snapshot_for_undo(self.fs.as_ref(), &self.history, &input.file_path);
-        edit::execute_with(input, self.fs.as_ref(), self.process.as_ref()).await
+        let mut output = edit::execute_with(input, self.fs.as_ref(), self.process.as_ref()).await?;
+        // A3: the success message and diff header embed the file path —
+        // re-render them into the sandbox-visible spelling.
+        self.sandbox.remap_tool_output(&mut output);
+        Ok(output)
     }
 }
 
@@ -543,7 +563,9 @@ impl Tool for MultiEditTool {
             }
         }
 
-        multiedit::execute_with(multi_input, self.fs.as_ref()).await
+        let mut output = multiedit::execute_with(multi_input, self.fs.as_ref()).await?;
+        self.sandbox.remap_tool_output(&mut output);
+        Ok(output)
     }
 }
 
@@ -616,11 +638,25 @@ impl Tool for GlobTool {
             .map_err(|e| ToolError::InvalidInput(format!("Invalid glob input: {e}")))?;
 
         // Validate the base path (if provided) through the sandbox
+        let mut glob_input = glob_input;
         if let Some(ref base_path) = glob_input.path {
-            validate_path(&self.sandbox, base_path).await?;
+            let canonical = validate_path(&self.sandbox, base_path).await?;
+            // When the raw spelling does not exist on the active world but
+            // the sandbox resolved it (bind-alias addressing like
+            // `/workspace/src`), walk the canonical host root instead — the
+            // companion of the output aliasing below. Any spelling that
+            // exists as-is (relative paths, real absolute paths) is kept
+            // byte-for-byte so existing glob semantics are unchanged.
+            if !self.fs.exists_blocking(Path::new(base_path))
+                && self.fs.exists_blocking(&canonical)
+            {
+                glob_input.path = Some(canonical.to_string_lossy().to_string());
+            }
         }
 
-        glob::execute_with(glob_input, self.fs.as_ref()).await
+        let mut output = glob::execute_with(glob_input, self.fs.as_ref()).await?;
+        self.sandbox.remap_tool_output(&mut output);
+        Ok(output)
     }
     fn is_read_only(&self) -> bool {
         true
@@ -1072,6 +1108,220 @@ mod tests {
         assert!(
             mgr.get_history(&path).is_err(),
             "oversized pre-modify content must not be snapshotted"
+        );
+    }
+
+    // ── A3/B3: sandbox-visible output paths + root alignment ────────────
+    //
+    // docs/eval-findings-2026-09-glm.md: Read/Edit/Write used to echo host
+    // absolute paths while the sandboxed Bash saw the same dir at /workspace,
+    // so every cd/ls on an echoed path burned turns. With output aliasing on,
+    // tool outputs must show the /workspace form; without it, they must stay
+    // byte-identical host paths.
+
+    /// Sandbox wired like the project registration: project root + temp root
+    /// (B3), output aliasing enabled (A3), default denied patterns intact.
+    fn alias_enabled_sandbox(dir: &Path) -> PathSandbox {
+        PathSandbox::with_config(crate::file::sandbox::SandboxConfig {
+            allowed_roots: crate::file::sandbox::SandboxConfig::command_aligned_roots(dir),
+            denied_patterns: crate::file::sandbox::SandboxConfig::default_denied_patterns(),
+            strict_mode: true,
+        })
+        .with_bind_alias_output(true)
+    }
+
+    fn unique_tmp_name(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "{prefix}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ))
+    }
+
+    #[tokio::test]
+    async fn read_tool_echoes_alias_path_when_enabled() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "hello").unwrap();
+        let host_path = dir.path().join("a.txt");
+
+        let tool = ReadTool::with_sandbox(alias_enabled_sandbox(dir.path()));
+        let output = tool
+            .execute(serde_json::json!({ "file_path": host_path.to_string_lossy() }))
+            .await
+            .unwrap();
+
+        assert_eq!(output.metadata["file_path"], "/workspace/a.txt");
+        assert_eq!(
+            output.content, "hello",
+            "file content itself must not be rewritten"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_tool_echoes_host_path_without_alias() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "hello").unwrap();
+        let host_path = dir.path().join("a.txt");
+
+        let tool = ReadTool::with_sandbox(sandbox_for(dir.path()));
+        let output = tool
+            .execute(serde_json::json!({ "file_path": host_path.to_string_lossy() }))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            output.metadata["file_path"],
+            host_path.to_string_lossy().to_string(),
+            "plain (no alias mount) scenario keeps host-path echo"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_tool_echoes_alias_path_and_accepts_tmp() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tool = WriteTool::with_sandbox(alias_enabled_sandbox(dir.path()));
+
+        // Project-root write echoes the /workspace spelling.
+        let host_target = dir.path().join("w.txt");
+        let output = tool
+            .execute(serde_json::json!({
+                "file_path": host_target.to_string_lossy(),
+                "content": "data"
+            }))
+            .await
+            .unwrap();
+        assert!(!output.is_error);
+        assert_eq!(output.metadata["file_path"], "/workspace/w.txt");
+        assert_eq!(std::fs::read_to_string(&host_target).unwrap(), "data");
+
+        // B3: /tmp is writable through Write, same as the sandboxed Bash.
+        let tmp_target = unique_tmp_name("shannon_b3_write_tool");
+        let output = tool
+            .execute(serde_json::json!({
+                "file_path": tmp_target.to_string_lossy(),
+                "content": "scratch"
+            }))
+            .await
+            .unwrap();
+        assert!(!output.is_error, "Write to /tmp must succeed");
+        // The temp root is not relocated by the command sandbox: echo stays.
+        assert_eq!(output.metadata["file_path"], tmp_target.to_string_lossy().to_string());
+        assert_eq!(std::fs::read_to_string(&tmp_target).unwrap(), "scratch");
+        let _ = std::fs::remove_file(&tmp_target);
+    }
+
+    #[tokio::test]
+    async fn write_tool_rejects_etc_and_lists_allowed_roots() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tool = WriteTool::with_sandbox(alias_enabled_sandbox(dir.path()));
+
+        let result = tool
+            .execute(serde_json::json!({
+                "file_path": "/etc/shannon-b3-denied.txt",
+                "content": "nope"
+            }))
+            .await;
+        assert!(result.is_err(), "Write to /etc must stay rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("allowed") && err.contains("/tmp"),
+            "rejection must list the allowed roots, got: {err}"
+        );
+        assert!(
+            !std::path::Path::new("/etc/shannon-b3-denied.txt").exists(),
+            "no file may be created in /etc"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_tool_outside_roots_error_lists_roots() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tool = WriteTool::with_sandbox(alias_enabled_sandbox(dir.path()));
+
+        // /usr/lib is not denied, just outside every root.
+        let result = tool
+            .execute(serde_json::json!({
+                "file_path": "/usr/lib/shannon-b3-outside.txt",
+                "content": "nope"
+            }))
+            .await;
+        assert!(result.is_err(), "Write outside every root must fail");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not within any allowed root")
+                && err.contains("allowed: /workspace")
+                && err.contains("/tmp"),
+            "outside-roots error must list sandbox-visible roots, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_tool_echoes_alias_path_when_enabled() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let host_path = dir.path().join("e.txt");
+        std::fs::write(&host_path, "foo bar").unwrap();
+
+        let tool = EditTool::with_sandbox(alias_enabled_sandbox(dir.path()));
+        let output = tool
+            .execute(serde_json::json!({
+                "file_path": host_path.to_string_lossy(),
+                "old_string": "bar",
+                "new_string": "baz"
+            }))
+            .await
+            .unwrap();
+
+        let host_str = host_path.to_string_lossy().to_string();
+        assert_eq!(output.metadata["file_path"], "/workspace/e.txt");
+        assert!(
+            output.content.contains("/workspace/e.txt"),
+            "message must show the sandbox-visible path, got: {}",
+            output.content
+        );
+        assert!(
+            !output.content.contains(&host_str),
+            "message must not leak the host path, got: {}",
+            output.content
+        );
+    }
+
+    #[tokio::test]
+    async fn glob_tool_echoes_alias_paths_and_accepts_alias_base() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/a.rs"), "fn a() {}").unwrap();
+        std::fs::write(dir.path().join("src/b.rs"), "fn b() {}").unwrap();
+
+        let tool = GlobTool::with_sandbox(alias_enabled_sandbox(dir.path()));
+        let host_str = dir.path().to_string_lossy().to_string();
+
+        let output = tool
+            .execute(serde_json::json!({
+                "pattern": "**/*.rs",
+                "path": dir.path().to_string_lossy()
+            }))
+            .await
+            .unwrap();
+        assert!(output.content.contains("/workspace/src/a.rs"), "got: {}", output.content);
+        assert!(!output.content.contains(&host_str), "must not leak host paths");
+        assert_eq!(output.metadata["files"][0]["path"], "/workspace/src/a.rs");
+
+        // Bind-alias addressing: `/workspace` does not exist on the host, so
+        // the canonical base the sandbox resolved must drive the walk.
+        if std::path::Path::new("/workspace").exists() {
+            return; // dev box really has /workspace — alias addressing is ambiguous
+        }
+        let output = tool
+            .execute(serde_json::json!({ "pattern": "**/*.rs", "path": "/workspace" }))
+            .await
+            .unwrap();
+        assert!(
+            output.content.contains("/workspace/src/a.rs"),
+            "glob must walk the alias-resolved root, got: {}",
+            output.content
         );
     }
 }

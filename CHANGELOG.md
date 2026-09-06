@@ -6,6 +6,57 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ### Added
 
+### Follow-ups — goal hardening & API surface (feat/goal-followups)
+
+- **Blocked 3-turn audit (Codex parity)**: the same blocker (normalized
+  reason) must persist 3 consecutive goal turns before the pause is
+  accepted; earlier claims continue with an audit warning, different
+  reasons restart the streak.
+- **Verified-wait self-report (P2.2)**: continuation replies may open
+  with `GOAL_PROGRESS: progress|verified_wait|no_progress`; claims can
+  only help when backed by tool activity, no-progress counts with or
+  without it.
+- **Check-in backoff (P2.4)**: blocked goals re-test their blocker at
+  30m → 1h → 2h, max 3 fires (checkins persisted); `SHANNON_GOAL_
+  CHECKIN_MINUTES=0` disables; `/goal resume` resets the budget.
+- **`shannon_core::goal` + `GoalApi`**: the goal state machine and the
+  continuation decision moved out of `shannon-ui` so server/desktop
+  clients can drive the same lifecycle without UI dependencies.
+- **Goal eval track (#5)**: `EvalTier::Goal` + `goal_prompt_block`
+  injection + `goal_01`/`goal_02` tasks (suite now 22 tasks; guards
+  updated).
+
+### Phase 2 — autonomous-loop guard rails (feat/goal-phase2 + feat/goal-live-wiring)
+
+- **Progress-based guard rails replace turn-count-as-guard**: `/goal`,
+  `/loop`, and `/ralph` now share deterministic drift protection —
+  anti-spin (2 consecutive no-tool turns → pause) and stall strikes
+  (3-strike budget → pause with a re-planning hint), via the shared
+  `repl::loop_guard` module. R15: goal defaults to **unlimited turns**
+  (`--max N` is an explicit fallback); `/ralph` defaults to 100;
+  `/loop` was always unlimited (plan doc corrected).
+- **`goal_get` / `goal_update` tools** (Codex-spec contract): the model
+  can report completion or blockers through structured tool calls;
+  blocked requires a reason; pause stays user-owned. Wired live via
+  `GoalShared` — the tools observe and transition the real goal during
+  a query, and transitions are replayed, persisted, and surfaced at
+  query completion.
+- **`--budget $N` on `/goal`**: live budget signal from the billing
+  store (spend since set/resume); exceeding it pauses the goal as a
+  recoverable terminal (raise the cap or clear). Defaults off — no
+  implicit termination.
+- **Recursive-submit fixes**: all three loops queue their continuations
+  through `submit_input`'s flat drain loop (O(1) stack depth) instead
+  of nesting `handle_query` frames (stack-overflow hazard with
+  unlimited loops).
+- **Persistence**: active `/loop` and `/ralph` state now persists in
+  the session sidecar and is restored by `/resume` / `--resume`.
+- **`/ralph` completion hardening**: keywords match only the final
+  non-empty line (substring-in-body no longer ends the loop); default
+  cap raised 10 → 100; invalid `--max` falls back to the real default.
+- Deferred: check-in backoff scheduling (needs a one-shot routine
+  primitive), model self-reported progress classification.
+
 - **`/goal` — session goal: a persistent objective with auto-continuation**
   (parity with Claude Code `/goal` and Codex CLI Goals; design + competitive
   research in `docs/plans/2026-09-04-goal-design.md` and

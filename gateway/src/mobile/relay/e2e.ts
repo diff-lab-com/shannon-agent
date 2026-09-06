@@ -116,14 +116,14 @@ function counterToNonce(counter: number): Buffer {
 /**
  * HKDF-Extract: HMAC-SHA256(salt, ikm) → PRK.
  */
-function hkdfExtract(ikm: Buffer, salt: Buffer): Buffer {
+export function hkdfExtract(ikm: Buffer, salt: Buffer): Buffer {
   return createHmac("sha256", salt).update(ikm).digest();
 }
 
 /**
  * HKDF-Expand: expand PRK to the desired length using info.
  */
-function hkdfExpand(prk: Buffer, info: Buffer, length: number): Buffer {
+export function hkdfExpand(prk: Buffer, info: Buffer, length: number): Buffer {
   const blocks: Buffer[] = [];
   let prev = Buffer.alloc(0);
   while (Buffer.concat(blocks).length < length) {
@@ -143,11 +143,22 @@ function hkdfExpand(prk: Buffer, info: Buffer, length: number): Buffer {
  *
  * Both sides (gateway host and phone) share the same pair token from the QR code,
  * so both derive the same key.
+ *
+ * SECURITY (formalized 2026-09-06, decision record in docs/e2e-transport-handoff.md):
+ * the pair token IS the channel's trust root. Pairing enforces single-use
+ * consumption and a 75s TTL, but anyone who captures the QR payload (screenshot,
+ * shoulder surf, relay of the rendered code) holds the token and can derive this
+ * key and decrypt every frame of the resulting session. The `hostE2EPubKey` QR
+ * field is deliberately NOT part of this derivation today. Replacing the token
+ * with an X25519 handshake (static-static first, ephemeral per-connection keys
+ * for forward secrecy in v0.3) is the planned fix — e2e_channel D-1 /
+ * cross-repo-adaptation-spec §G-rev. Until then, TTL + single-use consumption
+ * are the only mitigations. The frozen vectors in `__tests__/e2e.test.ts` pin
+ * this KDF against cross-language drift.
  */
 export function deriveSessionKey(pairToken: string): Buffer {
   const ikm = Buffer.from(pairToken, "utf8");
   const salt = Buffer.from("shannon-relay", "utf8");
   const info = Buffer.from("shannon-e2e-v1", "utf8");
-  const prk = hkdfExtract(ikm, salt);
-  return hkdfExpand(prk, info, 32);
+  return hkdfExpand(hkdfExtract(ikm, salt), info, 32);
 }

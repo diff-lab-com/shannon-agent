@@ -340,6 +340,8 @@ pub struct LoopState {
     pub iteration: usize,
     /// Whether the loop is active
     pub active: bool,
+    /// P2.1/P2.2 progress guards (see `repl::loop_guard`).
+    pub guard: crate::repl::loop_guard::GuardCounters,
 }
 
 /// State for the Ralph Wiggum completion-based loop.
@@ -359,130 +361,8 @@ pub struct RalphState {
     pub iteration: usize,
     /// Whether the loop is active
     pub active: bool,
-}
-
-/// Lifecycle of a session goal (`/goal`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GoalStatus {
-    Active,
-    Paused,
-    Complete,
-}
-
-/// Session goal set via `/goal`: a persistent objective the agent keeps
-/// working toward across turns until a strict completion marker is met.
-///
-/// Auto-continuations count in [`GoalState::iterations`]; the loop pauses
-/// when `max_iterations` is reached (0 = unlimited).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct GoalState {
-    /// The user's objective / completion condition (verbatim user words)
-    pub objective: String,
-    pub status: GoalStatus,
-    /// Auto-continuations performed so far
-    pub iterations: usize,
-    /// Continuation cap; 0 = unlimited. Default [`GOAL_DEFAULT_MAX_ITERATIONS`].
-    pub max_iterations: usize,
-    /// P2.1/P2.2 — active guard rails for progress detection.
-    /// `consecutive_no_tool_turns` counts turns that produced zero tool
-    /// calls since the last user input (anti-spin). `stall_strikes` is the
-    /// shared budget for both deterministic anti-spin and model-reported
-    /// `Progress: none` (stall strikes).
-    pub consecutive_no_tool_turns: usize,
-    pub stall_strikes: usize,
-    /// P2.3 — budget cap (USD). `None` = no budget cap; only billing-alert
-    /// notifications fire at the global `monthly_budget` threshold. This
-    /// defaults to None to avoid implicit termination (design R4: only
-    /// explicit `--budget` should terminate the goal).
-    pub max_budget_usd: Option<f64>,
-}
-
-/// Default cap on `stall_strikes` before the goal pauses (Magentic-One +
-/// auto_test::no_progress_strikes both use 3 as the default).
-pub const GOAL_DEFAULT_MAX_STALL_STRIKES: usize = 3;
-
-/// Default continuation cap — **unlimited** (0).
-///
-/// R15 (revisiting R13): the active guard rails landed in Phase 2 are the
-/// real stop signals — strict completion contract (goal_update tool /
-/// GOAL_COMPLETE marker), anti-spin (2 consecutive no-tool turns),
-/// stall strikes (3), GOAL_BLOCKED pause, and the optional `--budget` cap.
-/// A total-turn cap is a blunt unit mismatch (a turn is neither a unit of
-/// progress nor of cost) and defaults to off, matching Claude Code and
-/// Codex, which ship no turn cap at all. `--max N` re-introduces an
-/// explicit fallback cap when the user wants one; hitting it pauses the
-/// goal (recoverable via `/goal resume`).
-pub const GOAL_DEFAULT_MAX_ITERATIONS: usize = 0;
-
-impl GoalState {
-    pub fn new(objective: impl Into<String>) -> Self {
-        Self {
-            objective: objective.into(),
-            status: GoalStatus::Active,
-            iterations: 0,
-            max_iterations: GOAL_DEFAULT_MAX_ITERATIONS,
-            consecutive_no_tool_turns: 0,
-            stall_strikes: 0,
-            max_budget_usd: None,
-        }
-    }
-
-    /// Engine injection mapping: Active and Paused goals are injected
-    /// (paused with marker output suppressed); completed goals are not
-    /// injected at all.
-    pub fn to_spec(&self) -> Option<shannon_core::query_engine::GoalSpec> {
-        match self.status {
-            GoalStatus::Complete => None,
-            GoalStatus::Active => Some(shannon_core::query_engine::GoalSpec {
-                objective: self.objective.clone(),
-                paused: false,
-            }),
-            GoalStatus::Paused => Some(shannon_core::query_engine::GoalSpec {
-                objective: self.objective.clone(),
-                paused: true,
-            }),
-        }
-    }
-
-    pub fn to_stored(&self) -> shannon_core::session_log::StoredGoal {
-        shannon_core::session_log::StoredGoal {
-            objective: self.objective.clone(),
-            status: match self.status {
-                GoalStatus::Active => "active",
-                GoalStatus::Paused => "paused",
-                GoalStatus::Complete => "complete",
-            }
-            .to_string(),
-            iterations: self.iterations,
-            max_iterations: self.max_iterations,
-        }
-    }
-
-    /// Restore from persisted sidecar data. Unknown status strings degrade
-    /// to Paused — the safe state that keeps the objective visible without
-    /// auto-continuing.
-    pub fn from_stored(stored: shannon_core::session_log::StoredGoal) -> Self {
-        let status = match stored.status.as_str() {
-            "active" => GoalStatus::Active,
-            "complete" => GoalStatus::Complete,
-            _ => GoalStatus::Paused,
-        };
-        Self {
-            objective: stored.objective,
-            status,
-            iterations: stored.iterations,
-            max_iterations: stored.max_iterations,
-            // Progress counters and budget cap are not persisted: resuming a
-            // long-running goal starts with a fresh budget (otherwise
-            // pre-/post-resume counts double-count and the user can never
-            // escape the loop). Budget cap must be re-set by the user via
-            // `/goal <obj> --budget $5`.
-            consecutive_no_tool_turns: 0,
-            stall_strikes: 0,
-            max_budget_usd: None,
-        }
-    }
+    /// P2.1/P2.2 progress guards (see `repl::loop_guard`).
+    pub guard: crate::repl::loop_guard::GuardCounters,
 }
 
 impl LoopState {
@@ -492,6 +372,8 @@ impl LoopState {
             max_iterations: self.max_iterations,
             iteration: self.iteration,
             active: self.active,
+            no_tool_turns: self.guard.no_tool_turns,
+            stall_strikes: self.guard.stall_strikes,
         }
     }
     pub fn from_stored(stored: shannon_core::session_log::StoredLoop) -> Self {
@@ -500,6 +382,10 @@ impl LoopState {
             max_iterations: stored.max_iterations,
             iteration: stored.iteration,
             active: stored.active,
+            guard: crate::repl::loop_guard::GuardCounters {
+                no_tool_turns: stored.no_tool_turns,
+                stall_strikes: stored.stall_strikes,
+            },
         }
     }
 }
@@ -512,6 +398,8 @@ impl RalphState {
             max_iterations: self.max_iterations,
             iteration: self.iteration,
             active: self.active,
+            no_tool_turns: self.guard.no_tool_turns,
+            stall_strikes: self.guard.stall_strikes,
         }
     }
     pub fn from_stored(stored: shannon_core::session_log::StoredRalph) -> Self {
@@ -521,6 +409,10 @@ impl RalphState {
             max_iterations: stored.max_iterations,
             iteration: stored.iteration,
             active: stored.active,
+            guard: crate::repl::loop_guard::GuardCounters {
+                no_tool_turns: stored.no_tool_turns,
+                stall_strikes: stored.stall_strikes,
+            },
         }
     }
 }
@@ -823,6 +715,7 @@ mod tests {
             status: "bogus".into(),
             iterations: 2,
             max_iterations: 25,
+            checkins: 0,
         };
         let g = GoalState::from_stored(stored);
         assert_eq!(g.status, GoalStatus::Paused);
@@ -928,6 +821,7 @@ mod tests {
             max_iterations: 5,
             iteration: 2,
             active: true,
+            guard: Default::default(),
         };
         assert_eq!(ls.task, "fix bugs");
         assert!(ls.active);
@@ -941,5 +835,158 @@ mod tests {
         assert_eq!(s.selected_category_idx, 0);
         assert_eq!(s.selected_command_idx, 0);
         assert!(s.search_query.is_empty());
+    }
+}
+
+// The goal state machine moved to `shannon_core::goal` (P2.5/#4) so
+// server/desktop clients can drive it; re-exported here to keep the
+// established `crate::repl::state::*` paths working.
+pub use shannon_core::goal::{
+    GOAL_DEFAULT_MAX_ITERATIONS, GOAL_DEFAULT_MAX_STALL_STRIKES, GoalState, GoalStatus,
+};
+
+/// Shared, live handle to the session goal (P2.5 wiring).
+///
+/// The `goal_get` / `goal_update` tools execute inside the engine's agent
+/// loop, on a different task than the REPL — but `ReplState.goal` is plain
+/// data the REPL owns. This handle is registered with the tools and synced
+/// at two boundaries:
+///
+/// * query entry: `sync_from(&repl.state.goal)` snapshots the current goal
+///   so the tools observe it;
+/// * query completion: `take_transition()` returns the goal (possibly
+///   mutated by `goal_update`) plus the transition, which the REPL replays
+///   onto `ReplState.goal`, persists to the sidecar, and surfaces to the
+///   user. Between the boundaries the handle is authoritative.
+#[derive(Clone)]
+pub struct GoalShared {
+    inner: std::sync::Arc<std::sync::Mutex<Option<GoalState>>>,
+    transition: std::sync::Arc<std::sync::Mutex<Option<shannon_tools::goal::GoalUpdateOutcome>>>,
+}
+
+impl Default for GoalShared {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GoalShared {
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            transition: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    /// Query-entry sync: mirror the REPL-owned goal and forget any stale
+    /// transition from a previous turn.
+    pub fn sync_from(&self, goal: &Option<GoalState>) {
+        if let Ok(mut inner) = self.inner.lock() {
+            *inner = goal.clone();
+        }
+        if let Ok(mut t) = self.transition.lock() {
+            *t = None;
+        }
+    }
+
+    /// Current snapshot (what the tools observe).
+    pub fn current(&self) -> Option<GoalState> {
+        self.inner.lock().ok().and_then(|g| g.clone())
+    }
+
+    /// Query-completion pull: returns the (possibly tool-mutated) goal and
+    /// the transition only when a `goal_update` actually fired this turn.
+    pub fn take_transition(&self) -> Option<(GoalState, shannon_tools::goal::GoalUpdateOutcome)> {
+        let mut guard = self.transition.lock().ok()?;
+        let t = guard.take()?;
+        drop(guard);
+        let g = self.inner.lock().ok()?.clone()?;
+        Some((g, t))
+    }
+
+    /// Apply a `goal_update` outcome to the live goal. Rejected outcomes
+    /// leave the state untouched. Returns `None` when no goal is set.
+    pub(crate) fn apply(&self, outcome: shannon_tools::goal::GoalUpdateOutcome) -> Option<()> {
+        let mut inner = self.inner.lock().ok()?;
+        let g = inner.as_mut()?;
+        match outcome {
+            shannon_tools::goal::GoalUpdateOutcome::Completed => {
+                g.status = GoalStatus::Complete;
+            }
+            shannon_tools::goal::GoalUpdateOutcome::Paused(_) => {
+                g.status = GoalStatus::Paused;
+            }
+            shannon_tools::goal::GoalUpdateOutcome::Rejected(_) => return Some(()),
+        }
+        if let Ok(mut t) = self.transition.lock() {
+            *t = Some(outcome);
+        }
+        Some(())
+    }
+}
+
+#[cfg(test)]
+mod goal_shared_tests {
+    use super::*;
+
+    #[test]
+    fn goal_shared_roundtrip_and_transition() {
+        let shared = GoalShared::new();
+        assert!(shared.current().is_none());
+        assert!(shared.take_transition().is_none(), "no transition yet");
+
+        shared.sync_from(&Some(GoalState::new("ship it")));
+        let g = shared.current().expect("synced");
+        assert_eq!(g.objective, "ship it");
+        assert!(
+            shared.take_transition().is_none(),
+            "sync is not a transition"
+        );
+
+        shared.apply(shannon_tools::goal::GoalUpdateOutcome::Paused(
+            "no creds".into(),
+        ));
+        let (g, t) = shared.take_transition().expect("transition recorded");
+        assert_eq!(g.status, GoalStatus::Paused);
+        assert!(matches!(
+            t,
+            shannon_tools::goal::GoalUpdateOutcome::Paused(_)
+        ));
+        // Transition is consumed.
+        assert!(shared.take_transition().is_none());
+    }
+
+    #[test]
+    fn goal_shared_complete_transition() {
+        let shared = GoalShared::new();
+        shared.sync_from(&Some(GoalState::new("ship it")));
+        shared.apply(shannon_tools::goal::GoalUpdateOutcome::Completed);
+        let (g, t) = shared.take_transition().expect("transition recorded");
+        assert_eq!(g.status, GoalStatus::Complete);
+        assert!(matches!(
+            t,
+            shannon_tools::goal::GoalUpdateOutcome::Completed
+        ));
+    }
+
+    #[test]
+    fn goal_shared_apply_without_goal_is_noop() {
+        let shared = GoalShared::new();
+        assert!(
+            shared
+                .apply(shannon_tools::goal::GoalUpdateOutcome::Completed)
+                .is_none()
+        );
+        assert!(shared.take_transition().is_none());
+    }
+
+    #[test]
+    fn goal_shared_sync_clears_stale_transition() {
+        let shared = GoalShared::new();
+        shared.sync_from(&Some(GoalState::new("ship it")));
+        shared.apply(shannon_tools::goal::GoalUpdateOutcome::Completed);
+        // A new turn syncs from REPL state — stale transition must be dropped.
+        shared.sync_from(&Some(GoalState::new("ship it")));
+        assert!(shared.take_transition().is_none());
     }
 }

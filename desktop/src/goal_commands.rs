@@ -455,7 +455,8 @@ pub async fn start_goal_run(
         &deps,
         session_uuid,
         Some(StoredGoal {
-            objective: objective.clone(),
+
+            checkins: 0,            objective: objective.clone(),
             status: "active".into(),
             iterations: 0,
             max_iterations: max_turns.unwrap_or(0) as usize,
@@ -563,7 +564,8 @@ pub async fn pause_goal_run(
             &GoalRunDeps::from_state(&state),
             uuid,
             Some(StoredGoal {
-                objective: s.objective.clone(),
+
+                checkins: 0,                objective: s.objective.clone(),
                 status: "paused".into(),
                 iterations: usize::try_from(s.iterations).unwrap_or(usize::MAX),
                 max_iterations: s.max_turns.unwrap_or(0) as usize,
@@ -591,7 +593,8 @@ pub async fn resume_goal_run(
         let stored = {
             let s = handle.state.lock().await;
             StoredGoal {
-                objective: s.objective.clone(),
+
+                checkins: 0,                objective: s.objective.clone(),
                 status: "active".into(),
                 iterations: usize::try_from(s.iterations).unwrap_or(usize::MAX),
                 max_iterations: s.max_turns.unwrap_or(0) as usize,
@@ -646,7 +649,8 @@ pub async fn resume_goal_run(
         &deps,
         uuid,
         Some(StoredGoal {
-            objective: handle.state.lock().await.objective.clone(),
+
+            checkins: 0,            objective: handle.state.lock().await.objective.clone(),
             status: "active".into(),
             iterations: 0,
             max_iterations: max_turns.unwrap_or(0) as usize,
@@ -689,7 +693,8 @@ pub async fn update_goal_objective(
         let stored = {
             let s = handle.state.lock().await;
             StoredGoal {
-                objective: s.objective.clone(),
+
+                checkins: 0,                objective: s.objective.clone(),
                 status: "active".into(),
                 iterations: usize::try_from(s.iterations).unwrap_or(usize::MAX),
                 max_iterations: s.max_turns.unwrap_or(0) as usize,
@@ -1658,7 +1663,8 @@ async fn persist_turn_progress(deps: &GoalRunDeps, handle: &Arc<GoalRunHandle>) 
         deps,
         s.session_id,
         Some(StoredGoal {
-            objective: s.objective.clone(),
+
+            checkins: 0,            objective: s.objective.clone(),
             status: status.into(),
             iterations: usize::try_from(s.iterations).unwrap_or(usize::MAX),
             max_iterations: s.max_turns.unwrap_or(0) as usize,
@@ -1704,7 +1710,8 @@ async fn finalize_goal_run<R: tauri::Runtime>(
         deps,
         session_uuid,
         Some(StoredGoal {
-            objective: dto.objective.clone(),
+
+            checkins: 0,            objective: dto.objective.clone(),
             status: sidecar_status.into(),
             iterations: usize::try_from(dto.iterations).unwrap_or(usize::MAX),
             max_iterations: dto.max_turns.unwrap_or(0) as usize,
@@ -2046,7 +2053,8 @@ mod tests {
         let store = SessionStore::new(deps.sessions_dir.clone());
         let mut sidecar = store.sidecar(&session);
         sidecar.goal = Some(StoredGoal {
-            objective: objective.into(),
+
+            checkins: 0,            objective: objective.into(),
             status: status.into(),
             iterations: 4,
             max_iterations: 12,

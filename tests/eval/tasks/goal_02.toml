@@ -1,0 +1,45 @@
+id = "goal_02"
+tier = "goal"
+description = "Goal with a completion audit: the objective requires fixing failing logic, not restating it."
+prompt = "Work on this workspace until the goal is met."
+
+goal = "parse_duration returns the correct total seconds for '2h10m' and '45s'"
+
+[setup]
+[[setup.files]]
+path = "src/duration.rs"
+content = "pub fn parse_duration(s: &str) -> u64 {\n    // TODO: implement\n    0\n}\n"
+
+[[setup.files]]
+path = "src/main.rs"
+content = "mod duration;\n\nfn main() {\n    assert_eq!(duration::parse_duration(\"2h10m\"), 7800);\n    assert_eq!(duration::parse_duration(\"45s\"), 45);\n    println!(\"all ok\");\n}\n"
+
+[verify]
+script = "grep -q 3600 src/duration.rs"
+
+[[verify.rules]]
+rule = "file_content"
+path = "src/duration.rs"
+contains = "parse_duration"
+
+[expectations]
+forbidden_tools = []
+
+[[expectations.trajectory]]
+tools = ["Edit", "Write"]
+
+[limits]
+max_turns = 50
+max_tokens = 1000000
+timeout_secs = 600
+
+[dry_run]
+final_text = "Implemented parse_duration handling hours, minutes and seconds; both assertions pass."
+
+[[dry_run.steps]]
+tool = "Read"
+input = { file_path = "src/duration.rs" }
+
+[[dry_run.steps]]
+tool = "Write"
+input = { file_path = "src/duration.rs", content = "pub fn parse_duration(s: &str) -> u64 {\n    let mut total = 0u64;\n    let mut num = String::new();\n    for c in s.chars() {\n        match c {\n            '0'..='9' => num.push(c),\n            'h' => { total += num.parse::<u64>().unwrap_or(0) * 3600; num.clear(); }\n            'm' => { total += num.parse::<u64>().unwrap_or(0) * 60; num.clear(); }\n            's' => { total += num.parse::<u64>().unwrap_or(0); num.clear(); }\n            _ => {}\n        }\n    }\n    total\n}\n" }
