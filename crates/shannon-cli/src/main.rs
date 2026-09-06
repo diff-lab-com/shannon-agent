@@ -2098,14 +2098,20 @@ fn run_headless_query(
                 Ok(QueryEvent::Failed { error, .. }) => {
                     eprintln!("Error: {error}");
                     let err_lower = error.to_lowercase();
-                    if err_lower.contains("context")
+                    // Order matters: timeout must beat context, since the
+                    // provider timeout hint ("...reduce context with /compact.")
+                    // contains the substring "context" and would otherwise be
+                    // mis-classified as ContextOverflow (RCA 2026-09-06).
+                    if err_lower.contains("timed out") || err_lower.contains("timeout") {
+                        exit_code = HeadlessExitCode::Timeout;
+                    } else if err_lower.contains("rate limit") || err_lower.contains("429") {
+                        exit_code = HeadlessExitCode::RateLimited;
+                    } else if err_lower.contains("context")
                         || err_lower.contains("token limit")
                         || err_lower.contains("max_tokens")
                         || err_lower.contains("context_length")
                     {
                         exit_code = HeadlessExitCode::ContextOverflow;
-                    } else if err_lower.contains("rate limit") || err_lower.contains("429") {
-                        exit_code = HeadlessExitCode::RateLimited;
                     } else if err_lower.contains("permission") || err_lower.contains("denied") {
                         exit_code = HeadlessExitCode::PermissionDenied;
                     } else {
