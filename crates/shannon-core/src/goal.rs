@@ -268,20 +268,21 @@ pub enum ProgressReport {
 }
 
 /// Parse the `GOAL_PROGRESS: progress|verified_wait|no_progress` line from
-/// a reply. Case-insensitive; hyphen and underscore both accepted.
+/// a reply. Case-insensitive; hyphen and underscore both accepted. Scans the
+/// whole reply: the marker may follow other text (clippy `never_loop` caught
+/// an earlier version that bailed on the first non-marker line).
 pub fn parse_progress_report(msg: &str) -> Option<ProgressReport> {
-    for line in msg.lines() {
+    msg.lines().find_map(|line| {
         let t = line.trim().to_lowercase();
         let rest = t.strip_prefix("goal_progress:")?;
         let v = rest.trim().replace('_', "-");
-        return match v.as_str() {
+        match v.as_str() {
             "progress" => Some(ProgressReport::Progress),
             "verified-wait" => Some(ProgressReport::VerifiedWait),
             "no-progress" => Some(ProgressReport::NoProgress),
             _ => None,
-        };
-    }
-    None
+        }
+    })
 }
 
 /// Scan `chat` for tool messages produced since the last user message.
