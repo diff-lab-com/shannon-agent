@@ -161,13 +161,14 @@ class Shannon(BaseInstalledAgent):
         for key, value in os.environ.items():
             if key.startswith("SHANNON_") and key not in env:
                 env[key] = value
-        # Eval default: turn on the content-idle stream watchdog. On
-        # zhipu-coding-plan a thinking-mode SSE can stay silent for 5+ minutes
-        # before a Request-timed-out error; the watchdog terminates the stale
-        # stream and retryable errors fall into the engine's retry path. The
-        # default in the engine is 0 (off) to keep interactive UX unchanged;
-        # eval-grade runs opt in.
-        env.setdefault("SHANNON_STREAM_IDLE_SECS", "180")
+        # Eval default: turn on the content-idle stream watchdog. CAUTION on
+        # the threshold: GLM-5.3-flash thinking mode has NORMAL mid-reasoning
+        # silences up to ~5 min (312 s measured; RCA 2026-09-07 — a 180 s
+        # watchdog killed healthy thinking streams, and each engine retry
+        # re-thought from scratch, producing another 180 s silence: the
+        # rc=3 death spiral that took the re-test to 18/86). 420 s covers
+        # observed silences with margin while still bounding true stalls.
+        env.setdefault("SHANNON_STREAM_IDLE_SECS", "420")
 
         cli_flags = self.build_cli_flags()
         extra_flags = (cli_flags + " ") if cli_flags else ""
