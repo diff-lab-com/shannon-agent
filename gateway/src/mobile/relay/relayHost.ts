@@ -34,6 +34,13 @@ export interface RelayHostOptions {
   logger: Logger;
   /** ms to wait for phone to join (default 75_000). */
   pairTimeout?: number;
+  /**
+   * P2-1: notified when a phone joins and the per-session MethodContext is
+   * created (and again on every subsequent join). The dispatch hub uses this
+   * to track the device once pairing binds the session. The returned detach
+   * function (if any) is invoked when the peer goes away.
+   */
+  onContext?: (ctx: MethodContext) => void | (() => void);
 }
 
 export interface RelayHostHandle {
@@ -91,6 +98,8 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
   // and reused for all subsequent binary frames on that session, mirroring
   // MobileServer's per-connection context.
   let sessionCtx: MethodContext | null = null;
+  // P2-1: detach the hub registration when the peer goes away.
+  let detachHub: (() => void) | null = null;
 
   let pairResolve: (() => void) | null = null;
   let pairReject: ((err: Error) => void) | null = null;
@@ -176,6 +185,7 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
           sessionId: null,
           logger,
         };
+        detachHub = opts.onContext?.(sessionCtx) ?? null;
         if (pairResolve) pairResolve();
         break;
       }
@@ -185,6 +195,8 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
         // Reset recv counter so a reconnecting phone (counter starting at 1)
         // isn't rejected by replay protection. The send channel is also reset
         // and will be recreated on the next "paired" event.
+        detachHub?.();
+        detachHub = null;
         recvChannel = null;
         virtualSocket = null;
         sessionCtx = null;
@@ -233,6 +245,8 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
     if (stopped) return;
     stopped = true;
     clearPairTimer();
+    detachHub?.();
+    detachHub = null;
     if (ws) {
       ws.close();
       ws = null;

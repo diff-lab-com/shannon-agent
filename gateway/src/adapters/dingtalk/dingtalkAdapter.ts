@@ -11,6 +11,7 @@ import {
   type ReplyTarget,
   type SendOpts,
 } from "../types.js";
+import { parseApprovalChoice } from "../approvalChoice.js";
 import { type AdapterConfig } from "../../config/types.js";
 
 /**
@@ -106,12 +107,13 @@ export function normalizeDingTalkMessage(body: unknown): NormalizedInbound | nul
   };
 }
 
-/** Recognize a free-text allow/deny reply (buttonless approval fallback). */
+/**
+ * Recognize a free-text allow/deny reply (buttonless approval fallback).
+ * Re-exported shared implementation (P2-1 moved the token set to
+ * `adapters/approvalChoice.ts` so the mobile channel speaks the same dialect).
+ */
 export function parseChoice(text: string): "allow" | "deny" | null {
-  const t = text.trim().toLowerCase();
-  if (["allow", "yes", "y", "同意", "允许", "✅"].includes(t)) return "allow";
-  if (["deny", "no", "n", "拒绝", "否", "❌"].includes(t)) return "deny";
-  return null;
+  return parseApprovalChoice(text);
 }
 
 // ── outbound request builder (pure) ─────────────────────────────────────
