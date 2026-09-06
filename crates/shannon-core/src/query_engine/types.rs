@@ -767,6 +767,7 @@ impl Default for QueryEngineConfig {
                      - Use Bash for system commands, builds, and tests.\n\
                      - After writing code, run tests or builds only if a toolchain is available: probe first (e.g. `command -v cargo`); when it is missing, verify by re-reading your changes instead of hunting for missing tools.\n\
                      - When the requested changes are complete, give your final answer promptly; do not spend remaining turns on extra confirmation.\n\
+                     - Completing the environment (installing a package, provisioning a tool) is NOT task completion. Before answering, re-check the original request: every required artifact must exist and work. Never stop while a required deliverable is still missing.\n\
                      - When editing, include enough context for unique matches.\n\
                      \n\
                      ## Code Editing Rules\n\
