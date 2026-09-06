@@ -90,10 +90,21 @@ export T_BENCH_TEST_DIR="$TEST_DIR"
 export T_BENCH_TASK_LOGS_PATH="$LOGS" T_BENCH_CONTAINER_LOGS_PATH="/logs"
 export T_BENCH_TASK_AGENT_LOGS_PATH="$AGENT_LOGS" T_BENCH_CONTAINER_AGENT_LOGS_PATH="/agent-logs"
 
+# Compose flags: --no-build is mandatory when a prebaked image exists (a
+# build would silently erase the prebake layer), but when we have NO image
+# the build is the only way to materialize one (RCA 2026-09-06: after a
+# docker prune the cold path passed --no-build with a nonexistent image and
+# every case died at compose up).
+# Prefer --no-build to protect a prebaked client layer; on failure retry once
+# with --build (multi-service composes may still need to build helper images,
+# e.g. simple-sheets-put's api service). Compose output is kept for forensics.
 UP_START=$(date +%s)
-if ! docker compose -f "$TASK_DIR/docker-compose.yaml" up -d --no-build >/dev/null 2>&1; then
-  printf '{"resolved": false, "notes": "compose up failed (image=%s)"}\n' "$IMG" > "$VERDICT_FILE"
-  exit 0
+if ! docker compose -f "$TASK_DIR/docker-compose.yaml" up -d --no-build     > "$WORK/compose-up.log" 2>&1; then
+  echo "[tb-harness] --no-build up failed; retrying with --build" >&2
+  if ! docker compose -f "$TASK_DIR/docker-compose.yaml" up -d --build       >> "$WORK/compose-up.log" 2>&1; then
+    printf '{"resolved": false, "notes": "compose up failed (image=%s; see compose-up.log)"}\n' "$IMG" > "$VERDICT_FILE"
+    exit 0
+  fi
 fi
 UP_SECS=$(( $(date +%s) - UP_START ))
 
@@ -109,14 +120,22 @@ docker exec "$CONTAINER" chmod +x /usr/local/bin/shannon >/dev/null
 printf '%s' "$INSTRUCTION" > "$WORK/instruction.txt"
 docker cp "$WORK/instruction.txt" "$CONTAINER:/tmp/tb-instruction.txt" >/dev/null
 AGENT_START=$(date +%s)
-timeout "$AGENT_TIMEOUT" docker exec \
-  -e SHANNON_API_KEY="$API_KEY" \
-  -w /app "$CONTAINER" \
-  sh -c "shannon --provider $PROVIDER --model $MODEL \
-      --disallowed-tools WebFetch --disallowed-tools WebSearch \
-      --output-format json-stream --max-turns $MAX_TURNS \
-      -p \"\$(cat /tmp/tb-instruction.txt)\" > /agent-logs/agent.ndjson 2>/tmp/agent-stderr.log"
-AGENT_RC=$?
+# rc=4 = engine rate-limit (429). Coding-plan windows are bursty; a case that
+# dies on its first call wastes the whole rep. Retry twice with backoff
+# (RCA 2026-09-06: concurrent streams collided on the first call).
+AGENT_TRIES=0; AGENT_RC=4
+while [ "$AGENT_RC" -eq 4 ] && [ "$AGENT_TRIES" -lt 3 ]; do
+  [ "$AGENT_TRIES" -gt 0 ] && { echo "[tb-harness] agent rc=4 rate-limited; retry $AGENT_TRIES/3 after 60s" >&2; sleep 60; }
+  AGENT_TRIES=$((AGENT_TRIES + 1))
+  timeout "$AGENT_TIMEOUT" docker exec \
+    -e SHANNON_API_KEY="$API_KEY" \
+    -w /app "$CONTAINER" \
+    sh -c "shannon --provider $PROVIDER --model $MODEL \
+        --disallowed-tools WebFetch --disallowed-tools WebSearch \
+        --output-format json-stream --max-turns $MAX_TURNS \
+        -p \"\$(cat /tmp/tb-instruction.txt)\" > /agent-logs/agent.ndjson 2>/tmp/agent-stderr.log"
+  AGENT_RC=$?
+done
 AGENT_SECS=$(( $(date +%s) - AGENT_START ))
 docker cp "$CONTAINER:/agent-logs/agent.ndjson" "$WORK/agent.ndjson" >/dev/null 2>&1 || true
 docker cp "$CONTAINER:/tmp/agent-stderr.log" "$WORK/agent-stderr.log" >/dev/null 2>&1 || true

@@ -100,9 +100,55 @@ n=1 数字仅内部参考（引用规范不变）。剩余问题（进入下一�
 - **reg_05**：recovery 契约遵循——A2 提示的「探测工具链」措辞可能反向鼓励了 Bash 调用；
   需要「recovery/受限层完全不调用被禁工具」的显式分层指引（或 eval 提示注入声明约束）。
 
-### 4.2 正式 P4 复测（P1b/P1c/P1d 完成后）
+### 4.2 SWE-bench Verified 50 全量三方对照（2026-09-06，n=1 口径）
+
+| 被测 | resolved | tokens_in | 流停滞致死 |
+|---|---|---|---|
+| shannon 旧基线 + glm-5.3-flash | 30/50 (60%) | 42M | 3 |
+| **shannon 改进版 + glm-5.3-flash** | **37/50 (74%)** | **34M** | 1 |
+| shannon（同期） + minimax-m3（batch11 历史） | 33/50 (66%) | 59M | — |
+
+- **净 +7 题（+10 / −3）**，且总 token 反降 19%（收工指引减少空转 + 停滞不再烧满窗口）。
+- **+10 中有 4 题是 minimax 从未解出的**：seaborn-3069、django-10914、astropy-14182、pytest-10051。
+  改进版 shannon+glm 的 74% 超过 minimax-m3 批次最佳的 66%。
+- A5 看门狗战果：astropy-14995（旧：0-token 停滞之死 → 新：解出）。
+- −3（django-12276 / sympy-12419 / sympy-13031）需注意 **n=1 方差**：minimax 同代码批次间
+  波动曾达 ±8 题（30→22→33），净 +7 中真实信号与方差的分离需 n≥3 复测确认（P4 遗留项）。
+- 数据遗留问题：2 个 0-token verdict 中 1 个实际 resolved（astropy-14182）——token 回取管道
+  在部分路径下失败，列入 C 类观测性修复。
+- 运行目录：旧 `~/.shannon/eval/v2-glm-swe50{,-p1s0,-p1s1}/`、新 `v3-glm-swe50-imp{0..3}/`；
+  矩阵 JSON：`~/.shannon/eval/shards/{old-baseline,improved}-matrix.json`。
+
+### 4.3 正式 P4 复测（余项）
 1. 回归池 n=3（改进二进制 + v2 规则）→ stable 分桶 vs v2 规则 + 旧二进制的对照
    （需补一次旧二进制 × v2 规则的 n=3，隔离判分修正贡献）
 2. SWE50 n=1（改进二进制，STREAM_IDLE_SECS=360）→ 逐题对照 P1b
 3. 靶题复放：think-only 三题（minimax b11：astropy-14508 / matplotlib-20676 / django-11066）
 4. 引用规范不变：n / date / anchor（app_version + 规则指纹区分改进前后）
+
+### 4.4 P1c Terminal-Bench 9-pin（改进二进制，n=3，2026-09-06）
+
+- 三轮成绩稳定：**3/9、3/9、3/9**（零轮间波动）；token 台账 11M/15M 闸。
+- 分桶：stable_pass=2（hello-world、sanitize-git-repo）；flaky=2（crack-7z-hash 2/3、
+  path-tracing 1/3）；**agent 层 stable_fail=3**（chess-best-move 3.3M tokens 仍未解、
+  polyglot-c-py 快速失败 38K、raman-fitting 2.5M 未解）。
+- **infra DNF=2**（simple-sheets-put、train-fasttext）：compose up 失败——前者因多服务
+  compose 被 --no-build 挡住 api 辅助镜像构建，后者冷构建失败且日志被丢弃。已修复 harness
+  （失败自动 --build 重试 + compose 日志留档，`5285dc0f`）并补跑确认。
+- 9-pin 子集是 TB 1.x 时代的难题切片，与 GLM 官方 TB2.1=69.2（89 题）不可直接比；
+  P1d 的 harbor 全量才是对标口径。
+- 运行：`~/.shannon/eval/v3-glm-tb9/`（prune 事故的首轮已隔离为 `*-poisoned-prune`）。
+
+### 4.5 sympy-13031 回归根因（专项 RCA，2026-09-06）
+
+- sweep 那次失败 = **基础设施故障**（LLM 请求 ~600s 超时 → context_overflow → 空 patch），
+  非 agent 行为问题。
+- down3 0/3 = **修复策略层模型方差**（sparse 矩阵 row_join 零尺寸陷阱：任何经 row_join
+  归约的修法在 sparse 全零场景坍缩为 (0,3)；旧基线成功解用了 `classof()._new` 直接构造，
+  新三次 run 都没看到那个先例——grep 采样差异，非提示决定）。A1/A3/A4 全部排除
+  （5 个 run 中 nudge 零触发、安全器零拒绝、路径别名零胜负影响）。
+- A2 措辞微调建议（低成本）：验证指引补充「patch 共享基类方法时，把修复追踪到每个
+  子类对所调用原语的 override」。
+- **新 backlog 项 A7（引擎重试）**：query-failed/context_overflow/rate_limited 需要
+  run 级重试；空 patch 应标记 infra 而非计为模型失败。verdict 层实测 infra 噪声：
+  旧 3/50、改进 1/50（排除后 old 30/47 vs improved 37/49，结论不变）。
