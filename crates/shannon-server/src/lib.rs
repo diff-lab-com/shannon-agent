@@ -1,4 +1,5 @@
 mod auth;
+pub mod github;
 pub mod routes;
 pub mod sessions;
 pub mod sse;
@@ -21,6 +22,20 @@ pub struct AppState {
     /// `Authorization: Bearer` request may use the trigger endpoint without
     /// an HMAC signature (the middleware has already enforced the token).
     pub auth_token: Option<String>,
+    /// HMAC secret for `POST /hooks/github` (P2-7), read once at router
+    /// construction from `[hooks.github] secret` in `~/.shannon/config.toml`.
+    /// `None` disables the endpoint (503).
+    pub github_secret: Option<String>,
+    /// `X-GitHub-Delivery` replay cache for the GitHub hook endpoint
+    /// (in-memory, bounded; not persisted).
+    pub github_deliveries: std::sync::Arc<std::sync::Mutex<github::DeliveryCache>>,
+    /// Routine snapshot served to the GitHub hook, loaded from the shared
+    /// scheduled-task store (`~/.shannon/scheduled-tasks/`) at router
+    /// construction. Read-only: the serve process never mutates routines.
+    pub routines: std::sync::Arc<Vec<shannon_core::scheduled_routines::ScheduledRoutine>>,
+    /// Shared inbox store (`~/.shannon/inbox.db`): serve-side routine
+    /// execution writes run records + results here so the desktop sees them.
+    pub inbox: std::sync::Arc<shannon_core::inbox_store::InboxStore>,
 }
 #[derive(OpenApi)]
 #[openapi(
@@ -28,7 +43,8 @@ pub struct AppState {
         routes::create_session,
         routes::get_session,
         routes::post_message,
-        routes::trigger_routine
+        routes::trigger_routine,
+        github::github_hook
     ),
     components(schemas(
         routes::CreateSessionRequest,
@@ -37,6 +53,8 @@ pub struct AppState {
         routes::TriggerRoutineRequest,
         routes::TriggerAccepted,
         routes::TriggerError,
+        github::GitHubHookAccepted,
+        github::GitHubHookError,
         sessions::SessionSummary
     ))
 )]
@@ -44,27 +62,38 @@ pub struct ApiDoc;
 
 pub fn router(client_config: LlmClientConfig, token: Option<String>) -> Router {
     let secret = read_webhook_secret();
-    router_with_secret(client_config, token, secret)
+    let github_secret = github_secret_from_config();
+    let routines = github::load_routines();
+    let inbox = std::sync::Arc::new(github::open_inbox());
+    router_full(client_config, token, secret, github_secret, routines, inbox)
 }
 
-/// [`router`] with the trigger-endpoint HMAC secret injected (test seam).
+/// [`router`] with all state injected (test seam for the GitHub hook).
 #[doc(hidden)]
-pub fn router_with_secret(
+pub fn router_full(
     client_config: LlmClientConfig,
     token: Option<String>,
     webhook_secret: Option<String>,
+    github_secret: Option<String>,
+    routines: Vec<shannon_core::scheduled_routines::ScheduledRoutine>,
+    inbox: std::sync::Arc<shannon_core::inbox_store::InboxStore>,
 ) -> Router {
     let state = AppState {
         client_config,
         sessions: sessions::SessionRegistry::default(),
         webhook_secret,
         auth_token: token.clone(),
+        github_secret,
+        github_deliveries: github::delivery_cache(),
+        routines: std::sync::Arc::new(routines),
+        inbox,
     };
     Router::new()
         .route("/v1/sessions", post(routes::create_session))
         .route("/v1/sessions/:id", get(routes::get_session))
         .route("/v1/sessions/:id/messages", post(routes::post_message))
         .route("/routines/:id/trigger", post(routes::trigger_routine))
+        .route(github::GITHUB_HOOK_PATH, post(github::github_hook))
         .route(
             "/openapi.json",
             get(|| async { axum::Json(ApiDoc::openapi()) }),
@@ -74,6 +103,42 @@ pub fn router_with_secret(
             auth::bearer_middleware,
         ))
         .with_state(state)
+}
+
+/// [`router`] with only the legacy trigger-endpoint secret injected — the
+/// pre-P2-7 test seam, kept for the existing trigger tests. The GitHub hook
+/// is disabled (no secret) and backed by an in-memory inbox and no routines.
+#[doc(hidden)]
+pub fn router_with_secret(
+    client_config: LlmClientConfig,
+    token: Option<String>,
+    webhook_secret: Option<String>,
+) -> Router {
+    let inbox = std::sync::Arc::new(
+        shannon_core::inbox_store::InboxStore::open_in_memory()
+            .expect("in-memory inbox always opens"),
+    );
+    router_full(
+        client_config,
+        token,
+        webhook_secret,
+        None,
+        Vec::new(),
+        inbox,
+    )
+}
+
+/// Resolve the GitHub hook secret the same way the trigger-endpoint secret is
+/// resolved: from the global Shannon config (`~/.shannon/config.toml`), here
+/// `[hooks.github] secret`. Missing section/field → `None`, which disables
+/// the endpoint (safe default, 503).
+fn github_secret_from_config() -> Option<String> {
+    shannon_core::unified_config::ConfigBuilder::new()
+        .load_global_toml()
+        .build()
+        .hooks
+        .and_then(|h| h.github)
+        .and_then(|g| g.secret)
 }
 
 /// Resolve the trigger-endpoint HMAC secret the same way the desktop does:

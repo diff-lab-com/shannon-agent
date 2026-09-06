@@ -25,6 +25,17 @@ pub struct RoutineTemplate {
     /// Present when `trigger_type = "interval"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interval_secs: Option<u64>,
+    /// Present when `trigger_type = "github"`: the `X-GitHub-Event` name
+    /// (`issues`, `issue_comment`, `pull_request`, `check_run`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_event: Option<String>,
+    /// Present when `trigger_type = "github"`: repository full name
+    /// (`owner/name`) or `*` for any repository.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_repo: Option<String>,
+    /// Optional GitHub action qualifier (`opened`, `created`, `completed`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_action: Option<String>,
     /// Optional timezone hint (IANA name). Empty string means "use local".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
@@ -43,6 +54,12 @@ struct RawTemplate {
     #[serde(default)]
     interval_secs: Option<u64>,
     #[serde(default)]
+    github_event: Option<String>,
+    #[serde(default)]
+    github_repo: Option<String>,
+    #[serde(default)]
+    github_action: Option<String>,
+    #[serde(default)]
     timezone: Option<String>,
 }
 
@@ -57,6 +74,9 @@ impl From<RawTemplate> for RoutineTemplate {
             trigger_type: r.trigger_type,
             cron_expr: r.cron_expr,
             interval_secs: r.interval_secs,
+            github_event: r.github_event,
+            github_repo: r.github_repo,
+            github_action: r.github_action,
             timezone: r.timezone,
         }
     }
@@ -177,7 +197,7 @@ mod tests {
             assert!(!t.category.is_empty(), "{}: category empty", t.id);
             assert!(!t.prompt.trim().is_empty(), "{}: prompt empty", t.id);
             assert!(
-                t.trigger_type == "cron" || t.trigger_type == "interval",
+                matches!(t.trigger_type.as_str(), "cron" | "interval" | "github"),
                 "{}: bad trigger_type {}",
                 t.id,
                 t.trigger_type
@@ -193,6 +213,18 @@ mod tests {
                 assert!(
                     t.interval_secs.is_some(),
                     "{}: interval trigger missing interval_secs",
+                    t.id
+                );
+            }
+            if t.trigger_type == "github" {
+                assert!(
+                    t.github_event.is_some(),
+                    "{}: github trigger missing github_event",
+                    t.id
+                );
+                assert!(
+                    t.github_repo.is_some(),
+                    "{}: github trigger missing github_repo",
                     t.id
                 );
             }

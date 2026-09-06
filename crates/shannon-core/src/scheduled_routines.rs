@@ -304,6 +304,11 @@ pub enum TriggerType {
     Webhook,
     /// Event trigger: fires when a matching hook event fires.
     Event,
+    /// GitHub webhook trigger (P2-7): fires when the shannon-server
+    /// `POST /hooks/github` endpoint receives a delivery matching the
+    /// routine's `github` config. Event-driven only — never fires from the
+    /// time-based drain (see [`ScheduledRoutine::should_fire`]).
+    Github,
 }
 
 /// A single scheduled routine.
@@ -372,6 +377,14 @@ pub struct ScheduledRoutine {
     /// non-terminal/failed state, this routine is blocked.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
+
+    // ── GitHub event trigger (P2-7) ─────────────────────────────────────
+    /// GitHub event trigger config. Present only when `trigger_type` is
+    /// [`TriggerType::Github`]; matched against incoming
+    /// `POST /hooks/github` deliveries by
+    /// [`crate::github_triggers::matching_github_routines`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<crate::github_triggers::GitHubTrigger>,
 }
 
 /// Result of checking a routine's dependencies.
@@ -433,6 +446,7 @@ impl ScheduledRoutine {
             last_run_id: None,
             last_error: None,
             depends_on: Vec::new(),
+            github: None,
         }
     }
 
@@ -467,6 +481,7 @@ impl ScheduledRoutine {
             last_run_id: None,
             last_error: None,
             depends_on: Vec::new(),
+            github: None,
         })
     }
 
@@ -508,6 +523,9 @@ impl ScheduledRoutine {
         }
         match self.trigger_type {
             TriggerType::Cron => self.should_fire_cron_at(now),
+            // Github routines are event-driven: only `POST /hooks/github`
+            // fires them, never the interval drain.
+            TriggerType::Github => false,
             _ => self.should_fire_interval_at(now),
         }
     }

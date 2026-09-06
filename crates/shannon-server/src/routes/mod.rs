@@ -34,23 +34,33 @@ pub async fn create_session(
     if let Some(model) = request.model {
         config.model = model;
     }
-    let client = if config.provider.requires_auth() {
-        shannon_engine::api::LlmClient::new(config)
-    } else {
-        shannon_engine::api::LlmClient::new_unauthenticated(config)
-    };
-    let engine = shannon_core::query_engine::QueryEngine::with_defaults(
-        client,
-        shannon_core::tools::ToolRegistry::new(),
-        shannon_engine::permissions::PermissionManager::new(),
-        shannon_engine::state::StateManager::new(),
-    );
+    let engine = build_engine(config);
     let summary = state.sessions.create(engine).await;
     Json(CreateSessionResponse {
         id: summary.id,
         created_at: summary.created_at,
         message_count: summary.message_count,
     })
+}
+
+/// Build a fresh `QueryEngine` from an LLM client config — the exact engine
+/// construction `POST /v1/sessions` uses (bare `ToolRegistry`, default
+/// `PermissionManager`). Shared with the GitHub hook's serve-side routine
+/// execution (P2-7) so both paths stay identical.
+pub(crate) fn build_engine(
+    config: shannon_engine::api::LlmClientConfig,
+) -> shannon_core::query_engine::QueryEngine {
+    let client = if config.provider.requires_auth() {
+        shannon_engine::api::LlmClient::new(config)
+    } else {
+        shannon_engine::api::LlmClient::new_unauthenticated(config)
+    };
+    shannon_core::query_engine::QueryEngine::with_defaults(
+        client,
+        shannon_core::tools::ToolRegistry::new(),
+        shannon_engine::permissions::PermissionManager::new(),
+        shannon_engine::state::StateManager::new(),
+    )
 }
 
 #[utoipa::path(get, path = "/v1/sessions/{id}", params(("id" = Uuid, Path)), responses((status = 200, body = CreateSessionResponse), (status = 404)))]

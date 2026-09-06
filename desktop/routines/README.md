@@ -16,12 +16,19 @@ Required keys:
 | `description`    | string | one-line summary shown in the browser                    |
 | `category`       | string | `engineering` / `security` / `productivity` / `finops` / `documentation` / `operations` (free-form, but keep it short) |
 | `prompt`         | string | the prompt the routine runs                              |
-| `trigger_type`   | string | `cron` or `interval`                                     |
+| `trigger_type`   | string | `cron`, `interval`, or `github`                          |
 
 Trigger-specific keys:
 
 - `trigger_type = "cron"` → `cron_expr` (string, required), `timezone` (string, optional)
 - `trigger_type = "interval"` → `interval_secs` (integer, required)
+- `trigger_type = "github"` → `github_event` (string, required: `issues` /
+  `issue_comment` / `pull_request` / `check_run`), `github_repo` (string,
+  required: `owner/name` or `*`), `github_action` (string, optional:
+  `opened` / `created` / `completed`). Fires from the shannon-server
+  `POST /hooks/github` endpoint (P2-7) — see
+  `docs/integrations/github-triggers.md` for deployment and the frozen
+  first-batch event mappings.
 
 Optional keys: none yet. Future fields (max_fires, expires_at, depends_on)
 will be added as the schema grows.
