@@ -226,6 +226,23 @@ pub const SPAN_TURN: &str = "shannon.turn";
 /// Pure function: no I/O, no global state, deterministic ids. Events must
 /// be in seq order (they always are on disk). An empty slice yields an
 /// empty vec; otherwise there is always exactly one root.
+/// Desktop session kind for telemetry attribution: `"wayland"` /
+/// `"x11"` on Linux (from the session env), `"native"` on macOS/Windows
+/// (no display-server split), `"headless"` when neither is present.
+fn display_server_kind() -> &'static str {
+    if cfg!(target_os = "linux") {
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            "wayland"
+        } else if std::env::var_os("DISPLAY").is_some() {
+            "x11"
+        } else {
+            "headless"
+        }
+    } else {
+        "native"
+    }
+}
+
 pub fn build_span_tree(events: &[SessionEvent]) -> Vec<TelemetrySpanNode> {
     let Some(first) = events.first() else {
         return Vec::new();
@@ -245,6 +262,13 @@ pub fn build_span_tree(events: &[SessionEvent]) -> Vec<TelemetrySpanNode> {
         .unwrap_or_else(|| format!("session-{session_id}"));
     let mut root_attrs: Vec<(String, SpanAttribute)> =
         vec![("shannon.session_id".into(), session_id.clone().into())];
+    // Host context for platform prioritization (T13-T2 / T10-P2 scheduling
+    // evidence): OS plus, on Linux, X11 vs native-Wayland session type.
+    root_attrs.push(("shannon.os".into(), std::env::consts::OS.into()));
+    root_attrs.push((
+        "shannon.display_server".into(),
+        display_server_kind().into(),
+    ));
     if let Some(p) = start_payload {
         root_attrs.push(("shannon.model".into(), p.model.clone().into()));
         for (key, value) in [
@@ -869,6 +893,7 @@ mod tests {
             SessionEventBody::UserMessage(UserMessagePayload {
                 source: UserMessagePayload::SOURCE_USER.into(),
                 content: "hi".into(),
+                attachment_count: 0,
             }),
         )
     }
@@ -1208,5 +1233,31 @@ mod tests {
         let s = mgr.stats();
         assert_eq!((s.exports, s.spans_emitted, s.degraded_sinks), (0, 0, 0));
         assert!(mgr.shutdown().is_ok());
+    }
+
+    #[test]
+    fn test_root_span_carries_host_context() {
+        let mut events = two_turn_fixture();
+        let tree = build_span_tree(&events);
+        let root = &tree[0];
+        assert_eq!(root.name, SPAN_SESSION);
+        let get = |k: &str| {
+            root.attributes
+                .iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.clone())
+        };
+        assert!(get("shannon.os").is_some(), "os attribute present");
+        let ds = get("shannon.display_server").expect("display_server attr");
+        let ds = format!("{ds:?}");
+        assert!(
+            ["wayland", "x11", "headless", "native"]
+                .iter()
+                .any(|v| ds.contains(v)),
+            "display_server must be one of the documented kinds, got {ds}"
+        );
+        // Silence unused-mut warning path (fixture reuse keeps parity with
+        // neighboring tests).
+        let _ = &mut events;
     }
 }

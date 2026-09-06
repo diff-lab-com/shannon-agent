@@ -1163,6 +1163,18 @@ impl PermissionManager {
         );
         self.tool_policies
             .insert("computer".to_string(), computer_policy);
+
+        // AppleScript tool - high risk (reads and mutates application state
+        // across Mail/Calendar/Messages/…). Same per-action confirmation
+        // posture as `computer`.
+        let applescript_policy = ToolPermissionPolicy::new(
+            "applescript".to_string(),
+            RiskLevel::High,
+            "Run AppleScript/Shortcuts against macOS applications; can read and mutate app state"
+                .to_string(),
+        );
+        self.tool_policies
+            .insert("applescript".to_string(), applescript_policy);
     }
 
     /// Register or update a tool's permission policy

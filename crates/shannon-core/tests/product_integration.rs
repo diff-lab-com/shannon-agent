@@ -706,6 +706,7 @@ mod state_extra_tests {
                     UserMessagePayload {
                         source: UserMessagePayload::SOURCE_USER.into(),
                         content: format!("Message {i}"),
+                        attachment_count: 0,
                     },
                 ));
             } else {

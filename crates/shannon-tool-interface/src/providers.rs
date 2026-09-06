@@ -300,6 +300,19 @@ pub trait ProcessProvider: Send + Sync + 'static {
     }
 }
 
+/// T14 Phase 1 foundation: seam for browser automation providers
+/// (local system Chrome via CDP, remote-browser-over-SSH, MCP-backed).
+/// Concrete sessions arrive with the chromiumoxide integration; this trait
+/// lets tool layers target "a browser world" without binding to one.
+pub trait BrowserProvider: Send + Sync + 'static {
+    /// Stable provider identifier (e.g. "system-browser", "mcp-playwright").
+    fn name(&self) -> &str;
+
+    /// Whether a usable browser executable/context is available right now.
+    /// Cheap, non-spawning check (path probe / config lookup).
+    fn available(&self) -> bool;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

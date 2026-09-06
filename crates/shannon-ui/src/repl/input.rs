@@ -1784,6 +1784,16 @@ fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                                         "Image \"{value}\" attached — it will be sent with your next message."
                                     ),
                                 );
+                                if super::at_reference::needs_vision_conversion_hint(
+                                    crate::repl::at_reference::image_media_type(&value)
+                                        .unwrap_or(""),
+                                ) {
+                                    repl.chat.add_message(
+                                        ChatRole::System,
+                                        "Note: bmp/svg attachments are usually NOT rendered by vision models (png/jpeg/gif/webp only) — convert to PNG for reliable results."
+                                            .to_string(),
+                                    );
+                                }
                             }
                             Err(msg) => {
                                 repl.chat.add_message(ChatRole::System, msg);
@@ -1951,6 +1961,16 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                                             "Image \"{path}\" attached — it will be sent with your next message."
                                         ),
                                     );
+                                    if super::at_reference::needs_vision_conversion_hint(
+                                        crate::repl::at_reference::image_media_type(&path)
+                                            .unwrap_or(""),
+                                    ) {
+                                        repl.chat.add_message(
+                                            ChatRole::System,
+                                            "Note: bmp/svg attachments are usually NOT rendered by vision models (png/jpeg/gif/webp only) — convert to PNG for reliable results."
+                                                .to_string(),
+                                        );
+                                    }
                                 }
                                 Err(msg) => {
                                     repl.chat.add_message(ChatRole::System, msg);

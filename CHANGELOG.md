@@ -4,6 +4,38 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### P3 follow-ups: backend selection, AppleScript, browser toolset, foundations (feat/p3-follow-ups)
+
+- **Selectable Linux input backends (T10 Phase 1)**: mutually exclusive
+  cargo features `computer-use-libei` (xdg-desktop-portal RemoteDesktop —
+  the Wayland path), `computer-use-wayland`, `computer-use-x11rb` alongside
+  the existing xdo default. Failing computer-tool actions on a
+  native-Wayland session now carry an actionable hint instead of a bare
+  "Input init failed". Passthrough features on `shannon-cli` and
+  `shannon-desktop`; CI gains a libei build leg.
+- **AppleScript/Shortcuts tool (T13 Tier 1)**: new `applescript` builtin
+  tool runs `osascript` (AppleScript or JXA) and `shortcuts run` against
+  scriptable macOS apps. macOS-only execution (explanatory stub
+  elsewhere); High-risk permission policy; 30s timeout + 50 KiB output cap.
+- **Anthropic browser toolset dual path (T12 Option C)**: with
+  `SHANNON_ANTHROPIC_TOOLSETS=1`, Anthropic requests on Claude 4.x/5.x
+  Opus/Sonnet models carry the server-executed
+  `browser_toolset_20260801` entry plus the `computer-use-2025-11-24`
+  beta, superseding the local `computer` tool and Playwright/Chrome
+  DevTools MCP tools. Non-Anthropic providers are untouched.
+- **Desktop PDF attachments (T6)**: picked/dropped PDFs now reach the
+  model as pdftotext-extracted text blocks (50 KiB cap per PDF; scanned
+  PDFs are called out explicitly).
+- **Attachment polish**: bmp/svg attachments warn that vision models may
+  not render them (T5-B); `UserMessagePayload.attachment_count` records
+  per-turn attachment counts in the session log (T9).
+- **Browser foundations (T14 + T10-P2)**: system-browser detection
+  (Linux/macOS/Windows, `SHANNON_BROWSER_PATH` override) with distro
+  install hints, a `BrowserProvider` provider seam, a
+  `PlatformAdapter` desktop-control abstraction with a Tier-2 macOS AX
+  skeleton, and a `/browser doctor` subcommand reporting detection and
+  MCP state. Shannon still never bundles a browser binary.
+
 ### Computer use closed loop, one-command browser automation & file attachments (feat/use-browser-computer-upload)
 
 - **Computer use screenshot loop fixed**: tool image results now deliver the

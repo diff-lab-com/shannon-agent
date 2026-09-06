@@ -17,6 +17,11 @@ path = "src/main.rs"
 # (desktop automation). Opt-in: Linux builds need libxdo + X11 dev libraries.
 # Runtime access is still gated by the permission system (High risk policy).
 computer-use = ["shannon-tools/computer-use"]
+# T10 Phase 1 — alternative Linux input backends (Wayland via libei portal,
+# direct wayland-client, pure-Rust X11). See shannon-tools [features].
+computer-use-libei = ["shannon-tools/computer-use-libei"]
+computer-use-wayland = ["shannon-tools/computer-use-wayland"]
+computer-use-x11rb = ["shannon-tools/computer-use-x11rb"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

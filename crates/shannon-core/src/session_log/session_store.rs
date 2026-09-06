@@ -673,6 +673,7 @@ impl SessionStore {
             push(SessionEventBody::UserMessage(UserMessagePayload {
                 source: UserMessagePayload::SOURCE_USER.into(),
                 content: user.clone(),
+                attachment_count: 0,
             }))?;
             // The projection finalizes an assistant step only when a chunk
             // stream preceded it — mirror a real (non-interrupted) turn.
@@ -744,6 +745,7 @@ mod tests {
         w.record(SessionEventBody::UserMessage(UserMessagePayload {
             source: UserMessagePayload::SOURCE_USER.into(),
             content: "hi".into(),
+            attachment_count: 0,
         }));
         w.record(SessionEventBody::AssistantChunk(AssistantChunkPayload {
             delta: "He".into(),
@@ -822,6 +824,7 @@ mod tests {
             w.record(SessionEventBody::UserMessage(UserMessagePayload {
                 source: UserMessagePayload::SOURCE_USER.into(),
                 content: format!("question {turn}"),
+                attachment_count: 0,
             }));
             w.record(SessionEventBody::AssistantChunk(AssistantChunkPayload {
                 delta: format!("answer {turn}"),
@@ -905,6 +908,7 @@ mod tests {
         w.record(SessionEventBody::UserMessage(UserMessagePayload {
             source: UserMessagePayload::SOURCE_USER.into(),
             content: "after rewind".into(),
+            attachment_count: 0,
         }));
         w.close().unwrap();
 
@@ -1280,6 +1284,7 @@ mod tests {
         w.record(SessionEventBody::UserMessage(UserMessagePayload {
             source: UserMessagePayload::SOURCE_USER.into(),
             content: "post-compact prompt".into(),
+            attachment_count: 0,
         }));
         w.close().unwrap();
 

@@ -134,6 +134,7 @@ mod tool_use_tests {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let client = shannon_engine::api::LlmClient::new(config);
         QueryEngine::new(
@@ -700,6 +701,7 @@ mod openai_trailing_usage_tests {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool)).unwrap();
@@ -878,6 +880,7 @@ mod openai_truncation_continuation_tests {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let engine = QueryEngine::new(
             shannon_engine::api::LlmClient::new(config),
@@ -1163,6 +1166,7 @@ mod zhipu_tool_use_broadcast_tests {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool)).unwrap();

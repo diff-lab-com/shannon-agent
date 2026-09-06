@@ -602,6 +602,7 @@ impl From<ShannonConfig> for shannon_engine::api::LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         }
     }
 }
@@ -662,6 +663,7 @@ pub fn build_client_from_resolved(
         max_stream_reconnects: 3,
         budget_tokens: None,
         reasoning_effort: None,
+        enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
     }
 }
 

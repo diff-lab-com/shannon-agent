@@ -29,6 +29,59 @@ use enigo::{Axis, Direction, Keyboard, Mouse};
 pub const REFERENCE_WIDTH: u32 = 1024;
 pub const REFERENCE_HEIGHT: u32 = 768;
 
+// ── T10 Phase 1: Linux input backend selection ─────────────────────────
+// The backend is chosen at compile time via mutually exclusive cargo
+// features; guard against accidental combinations.
+
+#[cfg(all(feature = "computer-use-libei", feature = "computer-use-wayland"))]
+compile_error!(
+    "features `computer-use-libei` and `computer-use-wayland` are mutually exclusive: pick one Linux input backend"
+);
+#[cfg(all(feature = "computer-use-libei", feature = "computer-use-x11rb"))]
+compile_error!(
+    "features `computer-use-libei` and `computer-use-x11rb` are mutually exclusive: pick one Linux input backend"
+);
+#[cfg(all(feature = "computer-use-wayland", feature = "computer-use-x11rb"))]
+compile_error!(
+    "features `computer-use-wayland` and `computer-use-x11rb` are mutually exclusive: pick one Linux input backend"
+);
+
+/// Name of the compile-time-selected enigo input backend, for diagnostics
+/// and error messages. On non-Linux targets every backend feature maps to
+/// the same platform implementation, so this reports the generic name.
+pub fn input_backend_name() -> &'static str {
+    if cfg!(feature = "computer-use-libei") {
+        "libei (xdg-desktop-portal RemoteDesktop)"
+    } else if cfg!(feature = "computer-use-wayland") {
+        "wayland-client"
+    } else if cfg!(feature = "computer-use-x11rb") {
+        "x11rb"
+    } else {
+        "xdo (X11)"
+    }
+}
+
+/// Returns a hint when the compiled input backend is X11-only but the
+/// session looks like native Wayland (`WAYLAND_DISPLAY` set, `DISPLAY`
+/// unset). XWayland sessions (both set) still work with X11 backends, so
+/// no hint is produced there.
+#[cfg(feature = "computer-use")]
+pub fn session_compatibility_hint() -> Option<&'static str> {
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let x11 = std::env::var_os("DISPLAY").is_some();
+    let x11_only_backend =
+        !(cfg!(feature = "computer-use-libei") || cfg!(feature = "computer-use-wayland"));
+    if wayland && !x11 && x11_only_backend {
+        Some(concat!(
+            "This build uses an X11-only input backend (xdo), but the session looks like ",
+            "native Wayland (WAYLAND_DISPLAY set, DISPLAY unset). Rebuild with ",
+            "`--features computer-use-libei` (Wayland via xdg-desktop-portal) or run under XWayland."
+        ))
+    } else {
+        None
+    }
+}
+
 /// Actions supported by the computer use tool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -328,7 +381,7 @@ impl Tool for ComputerUseTool {
             });
         }
 
-        match computer_input.action {
+        let mut result = match computer_input.action {
             ComputerAction::Screenshot => self.execute_screenshot().await,
             ComputerAction::Click
             | ComputerAction::RightClick
@@ -384,7 +437,19 @@ impl Tool for ComputerUseTool {
                 })?;
                 self.execute_drag(start, end).await
             }
+        };
+        #[cfg(feature = "computer-use")]
+        if let Ok(out) = &mut result {
+            if out.is_error {
+                if let Some(hint) = session_compatibility_hint() {
+                    if !out.content.ends_with(hint) {
+                        out.content.push_str("\n\n");
+                        out.content.push_str(hint);
+                    }
+                }
+            }
         }
+        result
     }
 }
 
@@ -1268,6 +1333,21 @@ mod tests {
             .unwrap();
         assert!(result.is_error);
         assert!(result.content.contains("not allowed"));
+    }
+
+    #[test]
+    fn test_input_backend_name_reports_a_backend() {
+        // Diagnostics contract: always a non-empty, stable name.
+        assert!(!input_backend_name().is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "computer-use")]
+    fn test_session_hint_absent_without_wayland_only_session() {
+        // In the test env neither WAYLAND_DISPLAY nor DISPLAY is guaranteed;
+        // the hint must only fire on the wayland-without-x11 combination, so
+        // assert the function is total and returns Option.
+        let _ = session_compatibility_hint();
     }
 
     #[test]

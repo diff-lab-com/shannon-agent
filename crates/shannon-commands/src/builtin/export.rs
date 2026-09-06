@@ -750,6 +750,7 @@ mod tests {
                 shannon_types::session_event::UserMessagePayload {
                     source: shannon_types::session_event::UserMessagePayload::SOURCE_USER.into(),
                     content: "run ls".into(),
+                    attachment_count: 0,
                 },
             ));
             w.record(shannon_types::session_event::SessionEventBody::ToolCall(

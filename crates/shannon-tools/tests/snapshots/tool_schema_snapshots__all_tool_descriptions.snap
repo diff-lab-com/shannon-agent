@@ -44,6 +44,7 @@ WebFetch: Fetches a URL from the internet and optionally extracts its contents
 WebSearch: Search the web for information using a real search API
 Worktree: Manage git worktree sessions for isolated branch work
 Write: Write content to a file, overwriting if it exists
+applescript: Run AppleScript or JXA against scriptable macOS applications (Mail, Calendar, Reminders, Messages, Finder, Notes, …), or run a Shortcuts shortcut. Requires macOS; the first call per application triggers Apple's standard Automation permission prompt.
 ask_user_question: Ask the user a question during execution. Supports single-select, multi-select, and free-text input. Use this when you need confirmation, option selection, or information from the user.
 auto_commit: Smart git commit tool. Stages changes (all or specific files), generates semantic commit messages from diffs, and creates commits. Supports dry-run preview and co-author trailers. Shows git status and diff stats before committing.
 code_actions: Get available code actions (quick fixes, refactorings) for a range in a file. Uses the language server to suggest fixes for diagnostics and available refactorings.

@@ -11,6 +11,7 @@
 //! deliberately has no walk module.
 
 pub mod assembly;
+pub mod browser;
 pub mod docker;
 pub mod dynamic;
 pub mod ssh;

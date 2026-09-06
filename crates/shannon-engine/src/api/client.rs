@@ -254,6 +254,17 @@ impl LlmClient {
         }
     }
 
+    /// T12 Option C: post-process a serialized Anthropic request body —
+    /// drop tools superseded by the browser toolset and append the toolset
+    /// entry. No-op for non-Anthropic providers, when the opt-in flag is
+    /// off, or on unsupported models.
+    fn apply_anthropic_toolsets(&self, body: &mut serde_json::Value) {
+        let enabled = self.config.provider == LlmProvider::Anthropic
+            && self.config.enable_anthropic_toolsets
+            && super::toolsets::model_supports_toolsets(&self.config.model);
+        super::toolsets::apply_browser_toolset(body, enabled);
+    }
+
     /// Build authentication headers for the configured provider
     pub(crate) fn auth_headers(&self) -> Vec<(String, String)> {
         let mut headers = Vec::new();
@@ -267,7 +278,15 @@ impl LlmClient {
                     ));
                 }
                 // Inject model-declared beta headers (e.g. 1M context unlock).
-                let betas = beta_headers_for(&self.config.model);
+                let mut betas: Vec<&'static str> = beta_headers_for(&self.config.model).to_vec();
+                // T12: the browser toolset family requires the umbrella
+                // computer-use beta; only added when toolsets are enabled.
+                if self.config.enable_anthropic_toolsets
+                    && super::toolsets::model_supports_toolsets(&self.config.model)
+                    && !betas.contains(&super::toolsets::COMPUTER_USE_BETA)
+                {
+                    betas.push(super::toolsets::COMPUTER_USE_BETA);
+                }
                 if !betas.is_empty() {
                     headers.push(("anthropic-beta".to_string(), betas.join(",")));
                 }
@@ -517,11 +536,12 @@ impl LlmClient {
             reasoning_effort: self.config.reasoning_effort,
         };
 
-        let serialized = super::adapter::serialize_request_with_base_url(
+        let mut serialized = super::adapter::serialize_request_with_base_url(
             &request_body,
             &self.config.provider,
             &self.config.base_url,
         );
+        self.apply_anthropic_toolsets(&mut serialized);
 
         // ── Replay mode: return saved fixture ──
         if let Some(stream) = self.try_replay(&serialized, &self.config.provider) {
@@ -668,11 +688,12 @@ impl LlmClient {
             request = request.header(k.as_str(), v.as_str());
         }
 
-        let body = super::adapter::serialize_request_with_base_url(
+        let mut body = super::adapter::serialize_request_with_base_url(
             &request_body,
             &self.config.provider,
             &self.config.base_url,
         );
+        self.apply_anthropic_toolsets(&mut body);
         // Session-log tee: observe the exact wire body of the real request.
         self.capture_request(&body);
         request = request.json(&body);
@@ -767,11 +788,12 @@ impl LlmClient {
         let url = self.endpoint_url();
         let headers = self.auth_headers();
 
-        let serialized = super::adapter::serialize_request_with_base_url(
+        let mut serialized = super::adapter::serialize_request_with_base_url(
             &request_body,
             &self.config.provider,
             &self.config.base_url,
         );
+        self.apply_anthropic_toolsets(&mut serialized);
         // Session-log tee: observe the exact wire body of the real request.
         self.capture_request(&serialized);
 
@@ -856,11 +878,12 @@ impl LlmClient {
         let url = self.endpoint_url();
         let headers = self.auth_headers();
 
-        let serialized = super::adapter::serialize_request_with_base_url(
+        let mut serialized = super::adapter::serialize_request_with_base_url(
             &request_body,
             &self.config.provider,
             &self.config.base_url,
         );
+        self.apply_anthropic_toolsets(&mut serialized);
         // Session-log tee: observe the exact wire body of the real request.
         self.capture_request(&serialized);
 
@@ -1321,6 +1344,7 @@ mod tests {
             fallback_base_url: None,
             retry_config: Default::default(),
             reasoning_effort: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
         }
     }
 
@@ -1340,6 +1364,7 @@ mod tests {
             fallback_base_url: None,
             retry_config: Default::default(),
             reasoning_effort: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
         }
     }
 
@@ -1366,6 +1391,7 @@ mod tests {
             fallback_base_url: None,
             retry_config: Default::default(),
             reasoning_effort: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
         }
     }
 
@@ -1676,6 +1702,85 @@ mod tests {
     }
 
     #[test]
+    fn test_toolset_beta_header_added_when_enabled() {
+        let mut cfg = test_config();
+        cfg.model = "claude-opus-4-5".to_string();
+        cfg.enable_anthropic_toolsets = true;
+        let client = LlmClient::new(cfg);
+        let beta = client
+            .auth_headers()
+            .into_iter()
+            .find(|(k, _)| k == "anthropic-beta")
+            .map(|(_, v)| v)
+            .unwrap_or_default();
+        assert!(
+            beta.contains(crate::api::toolsets::COMPUTER_USE_BETA),
+            "expected computer-use beta in \"{beta}\""
+        );
+    }
+
+    #[test]
+    fn test_toolset_beta_header_absent_when_disabled() {
+        let mut cfg = test_config();
+        cfg.model = "claude-opus-4-5".to_string();
+        // enable_anthropic_toolsets stays false (or env unset in tests)
+        cfg.enable_anthropic_toolsets = false;
+        let client = LlmClient::new(cfg);
+        let beta = client
+            .auth_headers()
+            .into_iter()
+            .find(|(k, _)| k == "anthropic-beta")
+            .map(|(_, v)| v)
+            .unwrap_or_default();
+        assert!(
+            !beta.contains(crate::api::toolsets::COMPUTER_USE_BETA),
+            "beta must not appear without the opt-in flag, got \"{beta}\""
+        );
+    }
+
+    #[test]
+    fn test_apply_anthropic_toolsets_injects_and_prunes() {
+        let mut cfg = test_config();
+        cfg.provider = LlmProvider::Anthropic;
+        cfg.model = "claude-opus-4-5".to_string();
+        cfg.enable_anthropic_toolsets = true;
+        let client = LlmClient::new(cfg);
+        let mut body = serde_json::json!({
+            "tools": [
+                {"name": "Read", "description": "r", "input_schema": {}},
+                {"name": "computer", "description": "c", "input_schema": {}},
+                {"name": "mcp__playwright__browser_navigate", "description": "p", "input_schema": {}}
+            ]
+        });
+        client.apply_anthropic_toolsets(&mut body);
+        let tools = body["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t.get("name").and_then(|n| n.as_str()))
+            .collect();
+        assert_eq!(names, vec!["Read"]);
+        assert_eq!(
+            tools.last().unwrap()["type"],
+            serde_json::json!(crate::api::toolsets::BROWSER_TOOLSET_TYPE)
+        );
+    }
+
+    #[test]
+    fn test_apply_anthropic_toolsets_noop_for_openai() {
+        let mut cfg = test_config();
+        cfg.provider = LlmProvider::OpenAI;
+        cfg.model = "gpt-5".to_string();
+        cfg.enable_anthropic_toolsets = true; // even with the flag on
+        let client = LlmClient::new(cfg);
+        let mut body = serde_json::json!({
+            "tools": [{"name": "computer", "description": "c", "input_schema": {}}]
+        });
+        client.apply_anthropic_toolsets(&mut body);
+        // Non-Anthropic providers must be untouched (Option C guarantee).
+        assert_eq!(body["tools"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
     fn test_auth_headers_openai() {
         let mut cfg = test_config();
         cfg.provider = LlmProvider::OpenAI;
@@ -1815,6 +1920,7 @@ mod tests {
             fallback_base_url: None,
             retry_config: Default::default(),
             reasoning_effort: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
         };
         let client = LlmClient::new(config);
         let headers = client.auth_headers();

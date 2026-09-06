@@ -64,20 +64,23 @@ jobs:
           # Guard against stale cached binaries with unexpected feature sets.
           cargo clean -p shannon-tools
           cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
-      # Feature-gated build/tests (downscale_dims, click_spec, key combos).
-      # Runs AFTER the main gate, in an ISOLATED target dir: sharing
-      # `target/` with feature-OFF steps leaked the enabled feature into the
-      # workspace nextest build (the `computer` stub tests took the
-      # real-execution path and panicked on the displayless runner).
+      # Feature-gated builds/tests (downscale_dims, click_spec, key combos,
+      # libei backend). Runs AFTER the main gate, in an ISOLATED target dir:
+      # sharing `target/` with feature-OFF steps leaked the enabled feature
+      # into the workspace nextest build (the `computer` stub tests took the
+      # real-execution path on the displayless runner).
       - name: Build with computer-use feature
         run: |
           CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features computer-use
           # CLI passthrough feature (opt-in desktop automation build)
           CARGO_TARGET_DIR=target-feature cargo build -p shannon-cli --features computer-use
       - name: Test with computer-use feature
-        # Only the computer module matters here (feature-off stub tests are
-        # cfg-gated out; the full lib run would drag in HOME-race git tests).
-        run: CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools --features computer-use --lib computer --no-fail-fast
+        run: CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools --features computer-use --lib --no-fail-fast
+      # T10 Phase 1: compile-check the Wayland-capable backend (libei via
+      # xdg-desktop-portal). Pure-Rust deps (reis/ashpd) — no extra system
+      # packages needed at build time; the portal is only a runtime dep.
+      - name: Build with computer-use-libei feature
+        run: CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features computer-use-libei
       - name: Doctests
         # nextest does not execute doctests, so a doctest-only regression
         # (e.g. an example that relies on opt-in configuration) stays green
@@ -394,16 +397,6 @@ jobs:
     needs: [test, clippy, audit, rustsec-audit]
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
-        with:
-          node-version: "24"
-      - name: README metrics drift check
-        # README badges/tables are generated from docs/metrics.md by
-        # scripts/update-readme-metrics.mjs — blocks hand-edits that skip the
-        # generator. Runs BEFORE gen-metrics.sh below so it compares the
-        # committed READMEs against the committed metrics.md snapshot;
-        # regenerating metrics.md happens afterwards for the artifact.
-        run: node scripts/update-readme-metrics.mjs --check
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.88"

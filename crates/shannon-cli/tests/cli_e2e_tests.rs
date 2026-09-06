@@ -1684,6 +1684,7 @@ fn write_session_file_with_cwd(
             w.record(SessionEventBody::UserMessage(UserMessagePayload {
                 source: UserMessagePayload::SOURCE_USER.into(),
                 content: user["content"].as_str().unwrap_or_default().into(),
+                attachment_count: 0,
             }));
         }
         if let Some(reply) = pair.get(1) {

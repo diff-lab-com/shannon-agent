@@ -1436,6 +1436,7 @@ validate: []
                 SessionEventBody::UserMessage(UserMessagePayload {
                     source: UserMessagePayload::SOURCE_USER.into(),
                     content: "do it".into(),
+                    attachment_count: 0,
                 }),
             ),
             SessionEvent::new(
