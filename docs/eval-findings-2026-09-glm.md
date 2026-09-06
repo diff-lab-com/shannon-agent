@@ -138,3 +138,17 @@ n=1 数字仅内部参考（引用规范不变）。剩余问题（进入下一�
 - 9-pin 子集是 TB 1.x 时代的难题切片，与 GLM 官方 TB2.1=69.2（89 题）不可直接比；
   P1d 的 harbor 全量才是对标口径。
 - 运行：`~/.shannon/eval/v3-glm-tb9/`（prune 事故的首轮已隔离为 `*-poisoned-prune`）。
+
+### 4.5 sympy-13031 回归根因（专项 RCA，2026-09-06）
+
+- sweep 那次失败 = **基础设施故障**（LLM 请求 ~600s 超时 → context_overflow → 空 patch），
+  非 agent 行为问题。
+- down3 0/3 = **修复策略层模型方差**（sparse 矩阵 row_join 零尺寸陷阱：任何经 row_join
+  归约的修法在 sparse 全零场景坍缩为 (0,3)；旧基线成功解用了 `classof()._new` 直接构造，
+  新三次 run 都没看到那个先例——grep 采样差异，非提示决定）。A1/A3/A4 全部排除
+  （5 个 run 中 nudge 零触发、安全器零拒绝、路径别名零胜负影响）。
+- A2 措辞微调建议（低成本）：验证指引补充「patch 共享基类方法时，把修复追踪到每个
+  子类对所调用原语的 override」。
+- **新 backlog 项 A7（引擎重试）**：query-failed/context_overflow/rate_limited 需要
+  run 级重试；空 patch 应标记 infra 而非计为模型失败。verdict 层实测 infra 噪声：
+  旧 3/50、改进 1/50（排除后 old 30/47 vs improved 37/49，结论不变）。
