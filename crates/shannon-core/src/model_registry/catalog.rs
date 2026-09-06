@@ -386,6 +386,26 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_output: 0.14,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
     },
+    ModelInfo {
+        id: "glm-5.3-flash",
+        display_name: "GLM-5.3 Flash",
+        aliases: &[],
+        provider: LlmProvider::Zhipu,
+        context_window: 1_000_000,
+        max_output: 128_000,
+        // bigmodel.cn list price ¥0.8/M input, ¥2.8/M output (cache hit
+        // ¥0.23/M) — GLM-5.3's 1/10 tier; converted at ≈7 CNY/USD following
+        // the catalog's RMB→USD convention (source: bigmodel.cn pricing /
+        // Zhipu research announcement, checked 2026-09-06). Without this
+        // entry, cost lookup fell through to the $3/$15 fallback (or a
+        // random `contains("glm-5")` match at $7.14), inflating eval cost
+        // columns ~10-50x.
+        cost_per_m_input: 0.114,
+        cost_per_m_output: 0.40,
+        capabilities: ModelCapabilities::speed()
+            .or(ModelCapabilities::cheap())
+            .or(ModelCapabilities::vision()),
+    },
     // ── GLM / Zhipu International ──────────────────────────────
     ModelInfo {
         id: "glm-4-plus-intl",
@@ -452,6 +472,22 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_input: 0.14,
         cost_per_m_output: 0.14,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+    },
+    ModelInfo {
+        id: "glm-5.3-flash-intl",
+        display_name: "GLM-5.3 Flash (Int'l)",
+        aliases: &[],
+        provider: LlmProvider::ZhipuInternational,
+        context_window: 1_000_000,
+        max_output: 128_000,
+        // z.ai standard API rates $0.15/M input, $0.50/M output, cached
+        // input $0.03/M (checked 2026-09-06). List price is 1/10 of
+        // GLM-5.3's; a limited-time discount may bill less.
+        cost_per_m_input: 0.15,
+        cost_per_m_output: 0.50,
+        capabilities: ModelCapabilities::speed()
+            .or(ModelCapabilities::cheap())
+            .or(ModelCapabilities::vision()),
     },
     // ── Kimi / Moonshot ──────────────────────────────────────
     ModelInfo {
@@ -802,3 +838,61 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn find(id: &str) -> &ModelInfo {
+        MODEL_CATALOG
+            .iter()
+            .find(|m| m.id == id)
+            .unwrap_or_else(|| panic!("{id} must be present in MODEL_CATALOG"))
+    }
+
+    /// C4: glm-5.3-flash (the TB2.1 eval anchor model) must be cataloged
+    /// with reference pricing — before this entry the cost lookup fell
+    /// through to the $3/$15 fallback or a substring match on "glm-5"
+    /// ($7.14), inflating eval cost columns by an order of magnitude.
+    #[test]
+    fn glm_5_3_flash_entry_carries_reference_pricing() {
+        for id in ["glm-5.3-flash", "glm-5.3-flash-intl"] {
+            let info = find(id);
+            assert!(info.context_window > 0, "{id}: context window recorded");
+            assert!(info.max_output > 0, "{id}: max output recorded");
+            assert!(
+                info.cost_per_m_input > 0.0 && info.cost_per_m_output > 0.0,
+                "{id}: reference prices must be positive"
+            );
+        }
+        // Domestic (bigmodel.cn): ¥0.8 in / ¥2.8 out per Mtok at ≈7 CNY/USD.
+        let domestic = find("glm-5.3-flash");
+        assert_eq!(domestic.context_window, 1_000_000);
+        assert_eq!(domestic.max_output, 128_000);
+        assert_eq!(domestic.provider, LlmProvider::Zhipu);
+        assert!((domestic.cost_per_m_input - 0.114).abs() < 1e-9);
+        assert!((domestic.cost_per_m_output - 0.40).abs() < 1e-9);
+        // International (z.ai): $0.15 in / $0.50 out per Mtok.
+        let intl = find("glm-5.3-flash-intl");
+        assert_eq!(intl.provider, LlmProvider::ZhipuInternational);
+        assert!((intl.cost_per_m_input - 0.15).abs() < 1e-9);
+        assert!((intl.cost_per_m_output - 0.50).abs() < 1e-9);
+        // The eval anchor runs on the thinking-enabled multimodal flash
+        // tier: fast + cheap + vision.
+        assert!(
+            domestic
+                .capabilities
+                .has(ModelCapabilities::cheap().or(ModelCapabilities::vision()))
+        );
+    }
+
+    /// Catalog hygiene: ids stay unique (an exact-match pricing duplicate
+    /// would silently shadow the first entry).
+    #[test]
+    fn catalog_ids_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for info in MODEL_CATALOG {
+            assert!(seen.insert(info.id), "duplicate catalog id: {}", info.id);
+        }
+    }
+}

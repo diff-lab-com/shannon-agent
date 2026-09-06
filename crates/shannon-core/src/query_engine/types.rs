@@ -1406,4 +1406,33 @@ mod tests {
             "prompt must tell the agent to wrap up once the goal is met"
         );
     }
+
+    // -- C4: catalog-priced cost accounting for the eval anchor model --
+
+    #[test]
+    fn glm_5_3_flash_cost_uses_catalog_price_not_fallback() {
+        // The TB2.1 eval anchor model must price from the static catalog
+        // ($0.114 in / $0.40 out per Mtok, bigmodel.cn reference), not from
+        // the $3/$15 DEFAULT_PRICING_FALLBACK — and, because exact match now
+        // wins over the `contains` scan, not from the "glm-5" entry's
+        // $7.14/$7.14 either.
+        let cost = CostTracker::calculate_cost("glm-5.3-flash", 1_000_000, 1_000_000);
+        let expected = 0.114 + 0.40;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "expected catalog price {expected}, got {cost}"
+        );
+        // Guard against both regression directions explicitly.
+        assert!(
+            (cost - 3.0 - 15.0).abs() > 1.0,
+            "must not fall back to the default estimate"
+        );
+        assert!(
+            (cost - 7.14 - 7.14).abs() > 1.0,
+            "must not substring-match the glm-5 entry"
+        );
+        // Scaled input shape: 42M input / 9M output (sweep-magnitude run).
+        let cost = CostTracker::calculate_cost("glm-5.3-flash", 42_000_000, 9_000_000);
+        assert!((cost - (42.0 * 0.114 + 9.0 * 0.40)).abs() < 1e-6);
+    }
 }
