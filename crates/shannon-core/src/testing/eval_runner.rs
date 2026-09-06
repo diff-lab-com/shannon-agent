@@ -3326,6 +3326,97 @@ input = { file_path = "meta.txt" }
         assert_eq!(persisted.stable_digest(), report.stable_digest());
     }
 
+    /// C2 regression: a task declaring `verify.script` must get a
+    /// `verify_script` row in the record's `rule_outcomes` (and therefore in
+    /// the per-task `result.json`), exactly like the inline rules — the
+    /// v0.11.0 sweep artifacts were missing it, leaving script-only failures
+    /// undiagnosable from the JSON alone. Passing variant: the stub applies
+    /// the declared Edit, so the script (grep for the renamed symbol) passes.
+    #[cfg(unix)]
+    #[test]
+    fn verify_script_pass_is_written_to_rule_outcomes_and_result_json() {
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+        let scripted = SAMPLE_TASK.replacen(
+            "[[verify.rules]]",
+            "[verify]\nscript = \"grep -q 'fn load_data' src/api.rs\"\n\n[[verify.rules]]",
+            1,
+        );
+        let task =
+            parse_task(&write_task(tasks_root.path(), "scripted.toml", &scripted)).expect("parse");
+        assert_eq!(task.verify.script, "grep -q 'fn load_data' src/api.rs");
+
+        let options = options_into(run_root.path());
+        let (report, run_dir) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
+        let record = &report.records[0];
+        assert_eq!(record.status, RunStatus::Passed, "{:?}", record.violations);
+
+        // The script row exists, passed, and rides after the inline rules.
+        let script_row = record
+            .rule_outcomes
+            .iter()
+            .find(|o| o.rule == "verify_script")
+            .expect("verify_script row must be recorded in rule_outcomes");
+        assert!(script_row.passed);
+        assert!(script_row.details.is_empty());
+        // Declared rules (2) + trajectory expectation + two forbidden-tool
+        // bans, plus exactly one verify_script row.
+        assert_eq!(record.rule_outcomes.len(), 2 + 1 + 2 + 1);
+
+        // The row survives into the persisted per-task result.json.
+        let result: Value = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.join("edit_42").join("result.json"))
+                .expect("read result.json"),
+        )
+        .expect("result.json parses");
+        let rows = result["rule_outcomes"].as_array().expect("rows");
+        assert!(
+            rows.iter()
+                .any(|r| r["rule"] == "verify_script" && r["passed"] == true),
+            "{rows:?}"
+        );
+    }
+
+    /// C2 regression, failing variant: the `verify_script` row's `details`
+    /// carry the output summary — the script's exit code plus its captured
+    /// stderr tail — so the JSON verdict says WHY the script rejected the
+    /// patch without opening the workspace.
+    #[cfg(unix)]
+    #[test]
+    fn verify_script_failure_details_carry_exit_code_and_output_tail() {
+        let run_root = tempfile::TempDir::new().expect("runroot");
+        let tasks_root = tempfile::TempDir::new().expect("tasks");
+        let scripted = SAMPLE_TASK.replacen(
+            "[[verify.rules]]",
+            "[verify]\nscript = \"echo 'verifier: acceptance marker missing' >&2; exit 3\"\n\n[[verify.rules]]",
+            1,
+        );
+        let task = parse_task(&write_task(tasks_root.path(), "scriptfail.toml", &scripted))
+            .expect("parse");
+
+        let options = options_into(run_root.path());
+        let (report, _) = run_suite(std::slice::from_ref(&task), &options).expect("suite");
+        let record = &report.records[0];
+        assert_eq!(record.status, RunStatus::Failed);
+        assert!(!record.passed);
+
+        let script_row = record
+            .rule_outcomes
+            .iter()
+            .find(|o| o.rule == "verify_script")
+            .expect("verify_script row must be recorded in rule_outcomes");
+        assert!(!script_row.passed);
+        assert!(
+            script_row
+                .details
+                .iter()
+                .any(|d| d.contains("verify_script exited with 3")
+                    && d.contains("verifier: acceptance marker missing")),
+            "{:?}",
+            script_row.details
+        );
+    }
+
     #[test]
     fn pipeline_detects_violation_when_script_drifts_from_rules() {
         let run_root = tempfile::TempDir::new().expect("runroot");
