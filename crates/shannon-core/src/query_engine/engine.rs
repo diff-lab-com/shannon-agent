@@ -407,7 +407,7 @@ const DEFAULT_TOKEN_BUDGET: u64 = 0;
 /// Recommended eval setting for SWE-bench / TB2.1 runs (120k tokens ≈
 /// the cap after which the model starts losing recent context in
 /// `estimate_tokens`).
-#[allow(dead_code)] // surfaced as documentation; eval reads the env directly.
+#[allow(dead_code)] // KEEP: documentation anchor; eval reads the env directly.
 pub const RECOMMENDED_TOKEN_BUDGET: u64 = 120_000;
 
 /// Resolve the configured B.6 budget. `0` (default) disables the watchdog.
