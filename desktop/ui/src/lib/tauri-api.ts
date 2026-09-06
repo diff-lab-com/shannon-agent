@@ -1760,6 +1760,10 @@ export interface MemoryEntry {
   created_at: string
   accessed_at: string
   access_count: number
+  /** P2-4 provenance: session that produced this entry, when known. */
+  source_session_id?: string | null
+  /** P2-4 provenance: 'manual' | 'import' | 'auto-extract'. */
+  source_kind?: string | null
 }
 
 export interface MemoryStats {
@@ -1767,6 +1771,45 @@ export interface MemoryStats {
   by_category: Record<string, number>
   by_project: Record<string, number>
   most_recent_at: string | null
+}
+
+// --- P2-4 memory provenance + graph ---
+
+export type MemorySourceKind = 'manual' | 'import' | 'auto-extract'
+
+/** Frozen contract payload of `get_memory_source`. */
+export interface MemorySource {
+  sessionId: string
+}
+
+export interface MemoryGraphNode {
+  /** `project:<path>` | `category:<project>|<category>` | `entry:<id>` */
+  id: string
+  kind: 'project' | 'category' | 'entry'
+  label: string
+  category?: MemoryCategory | null
+  /** Entry count for project/category nodes, confidence for entries. */
+  weight: number
+  /** Entry tags (empty for project/category nodes). */
+  tags?: string[] | null
+  sourceKind?: MemorySourceKind | null
+  sourceSessionId?: string | null
+}
+
+export interface MemoryGraphEdge {
+  source: string
+  target: string
+  /** 'cluster' (project→category→entry) | 'session' (same source session). */
+  kind: 'cluster' | 'session'
+}
+
+export interface MemoryGraph {
+  project: string | null
+  nodes: MemoryGraphNode[]
+  edges: MemoryGraphEdge[]
+  entryCount: number
+  maxEntries: number
+  truncated: boolean
 }
 
 export async function listMemoryProjects(): Promise<string[]> {
@@ -1814,6 +1857,16 @@ export async function searchMemories(query: string, project?: string | null): Pr
 
 export async function getMemoryStats(): Promise<MemoryStats> {
   return invoke('get_memory_stats')
+}
+
+/** Frozen contract (P2-4): source session of a memory, null when untracked. */
+export async function getMemorySource(sessionId: string | null, memoryId: string): Promise<MemorySource | null> {
+  return invoke('get_memory_source', { sessionId: sessionId ?? '', memoryId })
+}
+
+/** P2-4 graph payload for the Memory page's graph view. */
+export async function getMemoryGraph(project?: string | null): Promise<MemoryGraph> {
+  return invoke('get_memory_graph', { project: project ?? null })
 }
 
 // --- Skill Loop (E2) ---

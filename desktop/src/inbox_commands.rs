@@ -188,6 +188,9 @@ pub(crate) struct RoutineRunDeps {
     pub(crate) client_config: std::sync::Arc<RwLock<shannon_engine::api::types::LlmClientConfig>>,
     pub(crate) desktop_config: std::sync::Arc<RwLock<DesktopConfig>>,
     pub(crate) tools: std::sync::Arc<shannon_core::tools::ToolRegistry>,
+    /// Shared memory store handle (P2-4b) — passed into the spawned runner so
+    /// its engine attaches the same store the interactive path uses.
+    pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
 }
 
 impl RoutineRunDeps {
@@ -199,6 +202,7 @@ impl RoutineRunDeps {
             client_config: state.client_config.clone(),
             desktop_config: state.desktop_config.clone(),
             tools: state.tools.clone(),
+            memory_store: state.memory_store.clone(),
         }
     }
 }
@@ -298,6 +302,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     let prompt = routine.prompt.clone();
     let usage_store = deps.usage_store.clone();
     let tools = deps.tools.clone();
+    let memory_store = deps.memory_store.clone();
 
     let finish_deps = RoutineRunDeps {
         inbox: deps.inbox.clone(),
@@ -306,6 +311,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
         client_config: deps.client_config.clone(),
         desktop_config: deps.desktop_config.clone(),
         tools: deps.tools.clone(),
+        memory_store: deps.memory_store.clone(),
     };
     let ctx = RunFinishContext {
         run_id: run_id.clone(),
@@ -343,8 +349,10 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
             ));
         }
 
-        let engine =
-            QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new());
+        let engine = crate::commands_memory::attach_shared_memory(
+            QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
+            &memory_store,
+        );
 
         let session_id = uuid::Uuid::new_v4();
         let context = QueryContext {
@@ -696,6 +704,9 @@ mod tests {
             )),
             desktop_config: std::sync::Arc::new(RwLock::new(DesktopConfig::default())),
             tools: std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+            memory_store: std::sync::Arc::new(std::sync::RwLock::new(
+                shannon_core::MemoryStore::new(tmp.join("memories")),
+            )),
         };
         (deps, inbox)
     }

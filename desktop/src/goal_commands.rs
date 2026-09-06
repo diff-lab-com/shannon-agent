@@ -359,6 +359,10 @@ pub(crate) struct GoalRunDeps {
     pub(crate) usage_store: Arc<crate::commands_usage::UsageStore>,
     pub(crate) client_config: Arc<RwLock<shannon_engine::api::types::LlmClientConfig>>,
     pub(crate) desktop_config: Arc<RwLock<DesktopConfig>>,
+    /// Shared memory store handle (P2-4b) — passed into the spawned runner so
+    /// its engine attaches the same store the interactive path uses (the
+    /// unattended goal run then carries the project's memories).
+    pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
     /// Session container (`~/.shannon/sessions`) for sidecar persistence.
     pub(crate) sessions_dir: PathBuf,
 }
@@ -370,6 +374,7 @@ impl GoalRunDeps {
             usage_store: state.usage_store.clone(),
             client_config: state.client_config.clone(),
             desktop_config: state.desktop_config.clone(),
+            memory_store: state.memory_store.clone(),
             sessions_dir: state.state_manager.sessions_dir().to_path_buf(),
         }
     }
@@ -1065,11 +1070,14 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
         )
         .map_err(|e| format!("registering goal tools failed: {e}"))?;
 
-        let mut engine = QueryEngine::with_defaults_arc(
-            LlmClient::new(client_config),
-            Arc::new(tools),
-            permissions,
-            StateManager::new(),
+        let mut engine = crate::commands_memory::attach_shared_memory(
+            QueryEngine::with_defaults_arc(
+                LlmClient::new(client_config),
+                Arc::new(tools),
+                permissions,
+                StateManager::new(),
+            ),
+            &deps.memory_store,
         );
         engine.set_session_id(session_id);
         match engine.restore_session(session_id) {
@@ -1772,6 +1780,9 @@ mod tests {
                 shannon_engine::api::types::LlmClientConfig::default(),
             )),
             desktop_config: Arc::new(RwLock::new(DesktopConfig::default())),
+            memory_store: std::sync::Arc::new(std::sync::RwLock::new(
+                shannon_core::MemoryStore::new(dir.join("memories")),
+            )),
             sessions_dir: dir.join("sessions"),
         }
     }

@@ -350,6 +350,12 @@ vi.mock('@/lib/tauri-api', () => ({
   getMemoryStats: vi.fn().mockResolvedValue({
     total: 0, by_category: {}, by_project: {}, most_recent_at: null,
   }),
+  // P2-4 memory provenance + graph — defaults so the Memory page graph tab
+  // renders sanely without per-test mocking.
+  getMemorySource: vi.fn().mockResolvedValue(null),
+  getMemoryGraph: vi.fn().mockResolvedValue({
+    project: null, nodes: [], edges: [], entryCount: 0, maxEntries: 200, truncated: false,
+  }),
   // P0-3 inbox — defaults so components consuming useInboxStats (e.g. the
   // sidebar badge) render sanely without per-test mocking.
   listInboxItems: vi.fn().mockResolvedValue([]),

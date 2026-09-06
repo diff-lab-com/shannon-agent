@@ -343,6 +343,8 @@ fn main() {
             commands_memory::delete_memory,
             commands_memory::search_memories,
             commands_memory::get_memory_stats,
+            commands_memory::get_memory_source,
+            commands_memory::get_memory_graph,
             // P1-5 C-1 — dev-server preview (frozen contract) + log ring.
             preview_commands::preview_detect,
             preview_commands::preview_start,

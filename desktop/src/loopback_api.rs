@@ -75,6 +75,8 @@ pub(crate) struct TriggerState<R: tauri::Runtime = tauri::Wry> {
     pub(crate) client_config: Arc<RwLock<LlmClientConfig>>,
     pub(crate) desktop_config: Arc<RwLock<DesktopConfig>>,
     pub(crate) tools: Arc<ToolRegistry>,
+    /// Shared memory store handle (P2-4b) for the runner's engine.
+    pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
     /// `[notifications.webhook] secret` resolved once at spawn time.
     /// `None` disables the endpoint (403) — safe default.
     pub(crate) secret: Option<String>,
@@ -93,6 +95,7 @@ impl<R: tauri::Runtime> Clone for TriggerState<R> {
             client_config: self.client_config.clone(),
             desktop_config: self.desktop_config.clone(),
             tools: self.tools.clone(),
+            memory_store: self.memory_store.clone(),
             secret: self.secret.clone(),
         }
     }
@@ -114,6 +117,7 @@ impl<R: tauri::Runtime> TriggerState<R> {
             client_config: state.client_config.clone(),
             desktop_config: state.desktop_config.clone(),
             tools: state.tools.clone(),
+            memory_store: state.memory_store.clone(),
             secret,
         }
     }
@@ -126,6 +130,7 @@ impl<R: tauri::Runtime> TriggerState<R> {
             client_config: self.client_config.clone(),
             desktop_config: self.desktop_config.clone(),
             tools: self.tools.clone(),
+            memory_store: self.memory_store.clone(),
         }
     }
 }
@@ -312,6 +317,7 @@ mod tests {
             client_config: Arc::new(RwLock::new(LlmClientConfig::default())),
             desktop_config: Arc::new(RwLock::new(DesktopConfig::default())),
             tools: Arc::new(ToolRegistry::new()),
+            memory_store: crate::commands_memory::open_shared_store_at(tmp.join("memories")),
             secret,
         }
     }
