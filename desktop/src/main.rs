@@ -38,6 +38,7 @@ fn main() {
     use shannon_desktop::extensions_commands;
     use shannon_desktop::loopback_api;
     use shannon_desktop::migration_commands;
+    use shannon_desktop::persona_pack_commands;
     use shannon_desktop::preview_commands;
     use shannon_desktop::session_window_commands;
     use shannon_desktop::skill_pattern_detection;
@@ -423,6 +424,11 @@ fn main() {
             // E-1 方案 C — auto-start the gateway supervisor when `managed` is on.
             let app_handle = app.handle().clone();
             let state_ref: tauri::State<'_, commands::AppState> = app.state();
+            // The P2-5 scheduler below also needs an AppHandle and runs
+            // outside this `async move` block; clone once so the outer
+            // binding isn't consumed by the block_on future (rustc's
+            // `async move` capture moves the original by value).
+            let app_handle_for_block = app_handle.clone();
             tauri::async_runtime::block_on(async move {
                 // Q4-A — before hosting our own loopback engine API server,
                 // probe 127.0.0.1:33420. If another engine (typically the
@@ -447,7 +453,7 @@ fn main() {
                     // runs for the lifetime of the process on a detached task.
                     // P0-3 — the same listener also serves the HMAC-gated
                     // POST /api/routines/:id/trigger endpoint.
-                    loopback_api::spawn(state_ref.inner(), app_handle.clone()).await;
+                    loopback_api::spawn(state_ref.inner(), app_handle_for_block.clone()).await;
                     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                 } else {
                     tracing::info!(
@@ -455,7 +461,7 @@ fn main() {
                          skipping loopback host"
                     );
                 }
-                commands_connections::bootstrap_gateway_supervisor(&state_ref, &app_handle).await;
+                commands_connections::bootstrap_gateway_supervisor(&state_ref, &app_handle_for_block).await;
             });
 
             // P2-5 — routine scheduler: periodic due check (every 30s).
