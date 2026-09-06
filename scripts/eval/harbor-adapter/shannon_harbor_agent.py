@@ -123,6 +123,11 @@ class Shannon(BaseInstalledAgent):
         }
         if access.base_url:
             env["SHANNON_BASE_URL"] = access.base_url
+        # Forward host-side SHANNON_* tuning into the container (stream-idle
+        # watchdog, nudge caps, ...) so eval controls apply verbatim.
+        for key, value in os.environ.items():
+            if key.startswith("SHANNON_") and key not in env:
+                env[key] = value
 
         escaped_instruction = shlex.quote(instruction)
         cli_flags = self.build_cli_flags()
