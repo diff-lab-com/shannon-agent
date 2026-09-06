@@ -1618,7 +1618,16 @@ impl QueryEngine {
 
         // Inject the working directory so the model knows where to write files.
         if let Ok(cwd) = std::env::current_dir() {
-            let cwd_text = format!("\n\n## Environment\n\nWorking directory: {}", cwd.display());
+            let mut cwd_text =
+                format!("\n\n## Environment\n\nWorking directory: {}", cwd.display());
+            // Sandbox self-description (§ sandbox self-description): the
+            // model cannot otherwise know the sandbox's path remapping or
+            // that host toolchains may be absent — eval runs showed it
+            // burning turns probing the filesystem / running apt-get.
+            if let Some(sandbox_text) = crate::sandbox::sandbox_self_description(&cwd) {
+                cwd_text.push_str("\n\n");
+                cwd_text.push_str(&sandbox_text);
+            }
             if let Some(ref mut prompt) = system_prompt {
                 prompt.push_str(&cwd_text);
             }
@@ -2435,6 +2444,23 @@ impl QueryEngine {
                 }
 
                 // Call the API — use structured system blocks when available for prompt caching
+                // Surface API retry activity as query progress (§ retry
+                // observability): without this the retry loop is invisible
+                // to consumers and a rate-limited run looks like a silent
+                // multi-second stall.
+                client.set_retry_observer(Some(std::sync::Arc::new({
+                    let tx = tx.clone();
+                    move |notice: &shannon_engine::api::retry::RetryNotice| {
+                        let message = format!(
+                            "API retry {}/{} (next try in {:.0}s): {}",
+                            notice.attempt,
+                            notice.total_attempts,
+                            notice.wait.as_secs_f32(),
+                            notice.reason
+                        );
+                        send_event!(tx, QueryEvent::Progress { query_id, message });
+                    }
+                })));
                 let stream_result = if let Some(ref blocks) = system_blocks_opt {
                     client
                         .send_message_stream_structured_with_retry(
@@ -2452,6 +2478,7 @@ impl QueryEngine {
                         )
                         .await
                 };
+                client.set_retry_observer(None);
                 match stream_result {
                     Ok(mut stream) => {
                         // Per-index tool call state. OpenAI streaming interleaves
@@ -4281,7 +4308,12 @@ impl QueryEngine {
                                         }
                                     }
 
-                                    // No partial content, non-recoverable — fail
+                                    // No partial content, non-recoverable — fail.
+                                    // Keep the ORIGINAL error text (not just the
+                                    // suggestion) so consumers can classify the
+                                    // failure — headless exit codes match on
+                                    // "rate limit" / "timed out" substrings of
+                                    // the provider error.
                                     let suggestion = e
                                         .user_suggestion()
                                         .map(|s| format!(" {s}"))
@@ -4289,7 +4321,7 @@ impl QueryEngine {
                                     let user_error = if suggestion.is_empty() {
                                         format!("{e}")
                                     } else {
-                                        suggestion
+                                        format!("{e}.{suggestion}")
                                     };
                                     send_event!(
                                         tx,

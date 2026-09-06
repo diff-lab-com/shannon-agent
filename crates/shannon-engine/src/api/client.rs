@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use super::adapter::{OpenaiStreamState, normalize_sse_event};
 use super::error::ApiError;
-use super::retry::retry_request;
+use super::retry::{RetryNotice, RetryObserver, retry_request_with_observer};
 use super::streaming::MessageStream;
 use super::types::*;
 use crate::testing::record_replay::{RecordedExchange, RecordedRequest, RecordedResponse};
@@ -86,6 +86,9 @@ pub struct LlmClient {
     ollama_info: std::sync::Arc<std::sync::RwLock<Option<OllamaModelInfo>>>,
     /// Optional request observer (see [`RequestCapture`]).
     request_capture: Option<RequestCapture>,
+    /// Optional retry observer: fired before every retry sleep / mid-stream
+    /// reconnect so consumers can surface the pause (§ retry observability).
+    retry_observer: std::sync::Arc<std::sync::RwLock<Option<RetryObserver>>>,
 }
 
 impl LlmClient {
@@ -141,6 +144,7 @@ impl LlmClient {
             client,
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
             request_capture: None,
+            retry_observer: Default::default(),
         }
     }
 
@@ -156,6 +160,7 @@ impl LlmClient {
             client,
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
             request_capture: None,
+            retry_observer: Default::default(),
         })
     }
 
@@ -188,6 +193,44 @@ impl LlmClient {
             client,
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
             request_capture: None,
+            retry_observer: Default::default(),
+        }
+    }
+
+    /// Attach a retry observer: fired before every retry sleep (rate-limit
+    /// backoff, read-timeout retry) and before mid-stream reconnects, so
+    /// consumers can surface the pause instead of watching a silent stall.
+    /// See [`RetryNotice`](super::retry::RetryNotice).
+    pub fn set_retry_observer(&self, observer: Option<RetryObserver>) {
+        *self
+            .retry_observer
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = observer;
+    }
+
+    /// Builder variant of [`Self::set_retry_observer`]; propagated to
+    /// internal fallback / reconnect client clones.
+    pub fn with_retry_observer(self, observer: Option<RetryObserver>) -> Self {
+        self.set_retry_observer(observer);
+        self
+    }
+
+    fn retry_observer_handle(&self) -> Option<RetryObserver> {
+        self.retry_observer
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Fire the retry observer (if attached).
+    pub(crate) fn notify_retry(&self, notice: &RetryNotice) {
+        if let Some(observer) = self
+            .retry_observer
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            observer(notice);
         }
     }
 
@@ -566,7 +609,8 @@ impl LlmClient {
             let reconnect_client = match self.request_capture_handle() {
                 Some(capture) => reconnect_client.with_request_capture(capture),
                 None => reconnect_client,
-            };
+            }
+            .with_retry_observer(self.retry_observer_handle());
             Ok(super::streaming::sse_stream_from_response_resumable(
                 response,
                 self.config.provider.clone(),
@@ -1006,7 +1050,8 @@ impl LlmClient {
         system: Option<String>,
     ) -> Result<Vec<ContentBlock>, ApiError> {
         let retry_config = &self.config.retry_config;
-        let result = retry_request(retry_config, || {
+        let retry_observer = self.retry_observer_handle();
+        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
             self.send_message(messages.clone(), tools.clone(), system.clone())
         })
         .await;
@@ -1036,8 +1081,10 @@ impl LlmClient {
                     let fallback_client = match self.request_capture_handle() {
                         Some(capture) => Self::new(fallback_config).with_request_capture(capture),
                         None => Self::new(fallback_config),
-                    };
-                    retry_request(&fallback_retry, || {
+                    }
+                    .with_retry_observer(self.retry_observer_handle());
+                    let fallback_observer = fallback_client.retry_observer_handle();
+                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
                         fallback_client.send_message(
                             messages.clone(),
                             tools.clone(),
@@ -1060,7 +1107,8 @@ impl LlmClient {
         system: Option<String>,
     ) -> Result<MessageStream, ApiError> {
         let retry_config = &self.config.retry_config;
-        let result = retry_request(retry_config, || {
+        let retry_observer = self.retry_observer_handle();
+        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
             self.send_message_stream(messages.clone(), tools.clone(), system.clone())
         })
         .await;
@@ -1088,8 +1136,10 @@ impl LlmClient {
                     let fallback_client = match self.request_capture_handle() {
                         Some(capture) => Self::new(fallback_config).with_request_capture(capture),
                         None => Self::new(fallback_config),
-                    };
-                    retry_request(&fallback_retry, || {
+                    }
+                    .with_retry_observer(self.retry_observer_handle());
+                    let fallback_observer = fallback_client.retry_observer_handle();
+                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
                         fallback_client.send_message_stream(
                             messages.clone(),
                             tools.clone(),
@@ -1112,7 +1162,8 @@ impl LlmClient {
         system_blocks: Vec<super::types::SystemContentBlock>,
     ) -> Result<MessageStream, ApiError> {
         let retry_config = &self.config.retry_config;
-        let result = retry_request(retry_config, || {
+        let retry_observer = self.retry_observer_handle();
+        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
             self.send_message_stream_structured(
                 messages.clone(),
                 tools.clone(),
@@ -1144,8 +1195,10 @@ impl LlmClient {
                     let fallback_client = match self.request_capture_handle() {
                         Some(capture) => Self::new(fallback_config).with_request_capture(capture),
                         None => Self::new(fallback_config),
-                    };
-                    retry_request(&fallback_retry, || {
+                    }
+                    .with_retry_observer(self.retry_observer_handle());
+                    let fallback_observer = fallback_client.retry_observer_handle();
+                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
                         fallback_client.send_message_stream_structured(
                             messages.clone(),
                             tools.clone(),

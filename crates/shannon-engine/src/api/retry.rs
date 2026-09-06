@@ -8,8 +8,29 @@
 //! / `retry_operation()` async wrappers.
 
 use crate::api::error::ApiError;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
+
+/// Details of one retry that is about to happen after a failed attempt.
+///
+/// Emitted through [`RetryObserver`] so consumers (the query engine's event
+/// stream, headless stderr) can see *why* a request is pausing instead of
+/// watching a silent multi-second stall.
+#[derive(Debug, Clone)]
+pub struct RetryNotice {
+    /// 1-based index of the attempt that just failed.
+    pub attempt: u32,
+    /// Total attempts that will be made (initial call + retries).
+    pub total_attempts: u32,
+    /// How long the caller waits before the next attempt.
+    pub wait: Duration,
+    /// Short display of what went wrong with the attempt.
+    pub reason: String,
+}
+
+/// Observer invoked before each retry sleep.
+pub type RetryObserver = Arc<dyn Fn(&RetryNotice) + Send + Sync>;
 
 /// Configuration for API retry behavior.
 #[derive(Debug, Clone)]
@@ -254,6 +275,21 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, ApiError>>,
 {
+    retry_request_with_observer(config, None, f).await
+}
+
+/// [`retry_request`], plus an observer fired before every retry sleep so the
+/// pause is visible to consumers (stderr, query event stream) instead of
+/// being a silent stall.
+pub async fn retry_request_with_observer<F, Fut, T>(
+    config: &RetryConfig,
+    observer: Option<&RetryObserver>,
+    mut f: F,
+) -> Result<T, ApiError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, ApiError>>,
+{
     let mut last_error: Option<ApiError> = None;
 
     for attempt in 0..=config.max_retries {
@@ -281,6 +317,14 @@ where
                     e,
                     wait
                 );
+                if let Some(observer) = observer {
+                    observer(&RetryNotice {
+                        attempt: attempt + 1,
+                        total_attempts: config.max_retries + 1,
+                        wait,
+                        reason: e.to_string(),
+                    });
+                }
                 sleep(wait).await;
                 last_error = Some(e);
             }
@@ -418,6 +462,51 @@ mod tests {
             result.unwrap_err(),
             ApiError::RateLimitExceeded { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn test_retry_observer_fires_per_retry_with_details() {
+        use std::sync::Mutex;
+
+        let config = RetryConfig::new(2, 1, 10);
+        let notices: Arc<Mutex<Vec<RetryNotice>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = notices.clone();
+        let observer: RetryObserver = Arc::new(move |notice: &RetryNotice| {
+            sink.lock().unwrap().push(notice.clone());
+        });
+
+        let mut calls = 0;
+        let result: Result<i32, ApiError> =
+            retry_request_with_observer(&config, Some(&observer), || {
+                calls += 1;
+                async move {
+                    if calls <= 2 {
+                        Err(ApiError::RateLimitExceeded {
+                            retry_after_secs: None,
+                        })
+                    } else {
+                        Ok(42)
+                    }
+                }
+            })
+            .await;
+        assert_eq!(result.unwrap(), 42);
+
+        let notices = notices.lock().unwrap();
+        assert_eq!(notices.len(), 2, "one notice per retry");
+        assert_eq!(notices[0].attempt, 1);
+        assert_eq!(notices[1].attempt, 2);
+        assert!(notices.iter().all(|n| n.total_attempts == 3));
+        assert!(notices.iter().all(|n| n.reason.contains("Rate limit")));
+        assert!(notices.iter().all(|n| n.wait > Duration::ZERO));
+    }
+
+    #[tokio::test]
+    async fn test_retry_observer_none_keeps_legacy_behavior() {
+        let config = RetryConfig::new(1, 1, 10);
+        let result: Result<i32, ApiError> =
+            retry_request_with_observer(&config, None, || async { Err(ApiError::Timeout) }).await;
+        assert!(matches!(result.unwrap_err(), ApiError::Timeout));
     }
 
     #[tokio::test]
