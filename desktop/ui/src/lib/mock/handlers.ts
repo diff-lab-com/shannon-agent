@@ -9,6 +9,7 @@ import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
 import type { InboxItem, ProviderInput, SessionInfo } from '@/types'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
+import type { MemoryGraph } from '@/lib/tauri-api'
 import {
   MOCK_SKILL_CATALOG,
   MOCK_AGENT_CATALOG,
@@ -832,12 +833,70 @@ export const handlers: Record<string, MockHandler> = {
       created_at: new Date().toISOString(),
       accessed_at: new Date().toISOString(),
       access_count: 0,
+      source_kind: 'manual',
     }
   },
   async update_memory() { await delay() },
   async delete_memory() { await delay() },
   async search_memories(args: { query: string; project?: string | null }) {
     return handlers.list_memories({ query: args.query, project: args.project })
+  },
+
+  // --- P2-4 memory provenance + graph ---
+  async get_memory_source(args: { sessionId: string; memoryId: string }) {
+    await delay()
+    const m = MOCK_MEMORIES.find((x) => x.id === args.memoryId)
+    return m?.source_session_id ? { sessionId: m.source_session_id } : null
+  },
+  async get_memory_graph(args?: { project?: string | null }) {
+    await delay()
+    const scoped = MOCK_MEMORIES.filter(
+      (m) => !args?.project || m.project === args.project,
+    )
+    const nodes: MemoryGraph['nodes'] = []
+    const edges: MemoryGraph['edges'] = []
+    const byProject = new Map<string, typeof scoped>()
+    for (const m of scoped) {
+      const list = byProject.get(m.project) ?? []
+      list.push(m)
+      byProject.set(m.project, list)
+    }
+    for (const [project, members] of byProject) {
+      const rootId = `project:${project}`
+      nodes.push({ id: rootId, kind: 'project', label: project, weight: members.length, category: null, sourceKind: null, sourceSessionId: null })
+      const byCategory = new Map<string, typeof scoped>()
+      for (const m of members) {
+        const list = byCategory.get(m.category) ?? []
+        list.push(m)
+        byCategory.set(m.category, list)
+      }
+      for (const [category, catMembers] of byCategory) {
+        const catId = `category:${project}|${category}`
+        nodes.push({ id: catId, kind: 'category', label: category, category: category as MemoryGraph['nodes'][number]['category'], weight: catMembers.length, sourceKind: null, sourceSessionId: null })
+        edges.push({ source: rootId, target: catId, kind: 'cluster' })
+        for (const m of catMembers) {
+          const entryId = `entry:${m.id}`
+          nodes.push({ id: entryId, kind: 'entry', label: m.content, category: m.category, weight: m.confidence, sourceKind: (m.source_kind ?? null) as MemoryGraph['nodes'][number]['sourceKind'], sourceSessionId: m.source_session_id ?? null })
+          edges.push({ source: catId, target: entryId, kind: 'cluster' })
+        }
+      }
+      // Weak same-session association edges, chained per project.
+      const bySession = new Map<string, typeof scoped>()
+      for (const m of members) {
+        if (!m.source_session_id) continue
+        const list = bySession.get(m.source_session_id) ?? []
+        list.push(m)
+        bySession.set(m.source_session_id, list)
+      }
+      for (const group of bySession.values()) {
+        const ordered = [...group].sort((a, b) => a.created_at.localeCompare(b.created_at))
+        for (let i = 1; i < ordered.length; i++) {
+          edges.push({ source: `entry:${ordered[i - 1].id}`, target: `entry:${ordered[i].id}`, kind: 'session' })
+        }
+      }
+    }
+    const graph: MemoryGraph = { project: args?.project ?? null, nodes, edges, entryCount: scoped.length, maxEntries: 200, truncated: false }
+    return graph
   },
 
   // --- Migration wizard (P1-6): stateful demo — a second apply run shows

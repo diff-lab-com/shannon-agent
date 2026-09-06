@@ -12,6 +12,8 @@ export const MOCK_MEMORIES: MemoryEntry[] = [
     created_at: '2026-06-20T10:15:00Z',
     accessed_at: '2026-06-24T14:32:00Z',
     access_count: 7,
+    source_kind: 'auto-extract',
+    source_session_id: '0a1960aa-9c1d-4a5e-b8f0-31f2d1c4091a',
   },
   {
     id: 'mem-002',
@@ -23,6 +25,8 @@ export const MOCK_MEMORIES: MemoryEntry[] = [
     created_at: '2026-06-18T09:20:00Z',
     accessed_at: '2026-06-22T11:05:00Z',
     access_count: 3,
+    source_kind: 'auto-extract',
+    source_session_id: '0a1960aa-9c1d-4a5e-b8f0-31f2d1c4091a',
   },
   {
     id: 'mem-003',

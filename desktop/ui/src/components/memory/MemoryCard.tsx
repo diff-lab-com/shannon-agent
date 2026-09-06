@@ -1,5 +1,6 @@
 // Memory panel — single memory row card (icon + metadata + content + tags +
-// edit/delete actions). Extracted from MemoryPanel.tsx (T3.1).
+// provenance badge + edit/delete actions). Extracted from MemoryPanel.tsx
+// (T3.1); P2-4 adds the optional "source session" badge + jump.
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import type { MemoryEntry } from '@/lib/tauri-api'
@@ -10,11 +11,17 @@ interface MemoryCardProps {
   entry: MemoryEntry
   onEdit: () => void
   onDelete: () => void
+  onOpenMemorySource?: (memoryId: string, sourceSessionId: string) => void
 }
 
-export function MemoryCard({ entry, onEdit, onDelete }: MemoryCardProps) {
+function shortSession(id: string): string {
+  return id.length > 10 ? `${id.slice(0, 8)}…` : id
+}
+
+export function MemoryCard({ entry, onEdit, onDelete, onOpenMemorySource }: MemoryCardProps) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = (id: string, values?: Record<string, string | number>) =>
+    intl.formatMessage({ id }, values)
   const fmtDate = (iso: string) => {
     const d = new Date(iso)
     if (Number.isNaN(d.getTime())) return iso
@@ -30,7 +37,7 @@ export function MemoryCard({ entry, onEdit, onDelete }: MemoryCardProps) {
           {CATEGORY_ICON[entry.category]}
         </span>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-sm mb-xs">
+          <div className="flex items-center gap-sm mb-xs flex-wrap">
             <span className="text-label-xs px-sm py-[2px] rounded-full bg-surface-container-high text-on-surface-variant font-bold uppercase">
               {t(`memory.category.${entry.category}`)}
             </span>
@@ -43,22 +50,51 @@ export function MemoryCard({ entry, onEdit, onDelete }: MemoryCardProps) {
                 · {intl.formatMessage({ id: 'memory.used' }, { count: entry.access_count })}
               </span>
             )}
+            {/* P2-4 provenance: badge (with source kind) shown only when the
+                entry carries a source session id, per the frozen UX contract. */}
+            {entry.source_session_id && (
+              <span
+                className="inline-flex items-center gap-xs text-label-xs px-sm py-[2px] rounded-full bg-primary-container/40 text-on-surface"
+                data-testid="memory-source-badge"
+              >
+                <span className="material-symbols-outlined text-[12px]" aria-hidden>
+                  history
+                </span>
+                {entry.source_kind ? t(`memory.source.kind.${entry.source_kind}`) : t('memory.source.badge', { session: shortSession(entry.source_session_id) })}
+                {entry.source_kind ? ` · ${shortSession(entry.source_session_id)}` : ''}
+              </span>
+            )}
           </div>
           <p className="text-body-md text-on-surface whitespace-pre-wrap break-words mb-md">
             {entry.content}
           </p>
-          {entry.tags.length > 0 && (
-            <div className="flex flex-wrap gap-xs mt-sm">
-              {entry.tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="text-label-xs px-sm py-[2px] rounded bg-primary-container text-on-primary-container"
-                >
-                  #{tag}
-                </span>
-              ))}
-            </div>
-          )}
+          <div className="flex items-center flex-wrap gap-sm">
+            {entry.tags.length > 0 && (
+              <div className="flex flex-wrap gap-xs">
+                {entry.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="text-label-xs px-sm py-[2px] rounded bg-primary-container text-on-primary-container"
+                  >
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            )}
+            {entry.source_session_id && onOpenMemorySource && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-xs px-sm py-xs text-label-sm"
+                onClick={() =>
+                  onOpenMemorySource(entry.id, entry.source_session_id as string)
+                }
+              >
+                <span className="material-symbols-outlined text-[14px]">chat</span>
+                {t('memory.source.jump')}
+              </Button>
+            )}
+          </div>
         </div>
         <div className="flex gap-xs">
           <Button
