@@ -179,12 +179,12 @@ describe('ConnectionsSettings', () => {
     await waitFor(() => expect(stopSpy).toHaveBeenCalled())
   })
 
-  // ── P1.3 — mobile device pairing card ──────────────────────────────────────
+  // ── P1.3/P2-1 — mobile dispatch card (pairing entry + channel status) ──────
 
-  it('renders the mobile pairing card with no devices by default', async () => {
+  it('renders the mobile dispatch card with pairing entry and no devices by default', async () => {
     render(<ConnectionsSettings />)
     await waitFor(() =>
-      expect(screen.getByText('Mobile device pairing')).toBeInTheDocument(),
+      expect(screen.getByText('Mobile dispatch')).toBeInTheDocument(),
     )
     expect(screen.getByText('No devices paired yet.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Generate pairing code' })).toBeInTheDocument()
@@ -232,6 +232,73 @@ describe('ConnectionsSettings', () => {
     await waitFor(() =>
       expect(screen.queryByTestId('mobile-device-dev-1')).not.toBeInTheDocument(),
     )
+  })
+
+  // ── P2-1 — mobile dispatch channel status + browser-as-phone pairing ───────
+
+  it('shows the channel badge Running when mobile is enabled and the gateway runs', async () => {
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [],
+      mobile: { enabled: true, host: '127.0.0.1', port: 33430 },
+    })
+    vi.spyOn(api, 'gatewaySupervisorStatus').mockResolvedValue({
+      managed: true,
+      status: { running: { pid: 42 } },
+    })
+    render(<ConnectionsSettings />)
+    const badge = await screen.findByTestId('mobile-dispatch-badge')
+    await waitFor(() => expect(badge).toHaveTextContent('Running'))
+  })
+
+  it('shows the channel badge Gateway stopped when mobile is enabled but the gateway is down', async () => {
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [],
+      mobile: { enabled: true, host: '127.0.0.1', port: 33430 },
+    })
+    vi.spyOn(api, 'gatewaySupervisorStatus').mockResolvedValue({
+      managed: true,
+      status: 'stopped',
+    })
+    render(<ConnectionsSettings />)
+    const badge = await screen.findByTestId('mobile-dispatch-badge')
+    await waitFor(() => expect(badge).toHaveTextContent('Gateway stopped'))
+  })
+
+  it('shows the channel badge Disabled when the gateway config has no mobile block', async () => {
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [],
+    })
+    render(<ConnectionsSettings />)
+    const badge = await screen.findByTestId('mobile-dispatch-badge')
+    await waitFor(() => expect(badge).toHaveTextContent('Disabled'))
+  })
+
+  it('shows the PWA page URL hint and the raw token for browser-as-phone pairing', async () => {
+    // Spies leak in this file — pin the token + a routable config explicitly.
+    vi.spyOn(api, 'mobileGeneratePairToken').mockResolvedValue({
+      token: 'tok-1234',
+      expiresAt: Date.now() + 75_000,
+      lanEndpoint: 'ws://192.168.1.10:33430',
+      qrDataUrl: 'data:image/svg+xml;base64,PHN2Zz4=',
+    })
+    render(<ConnectionsSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate pairing code' }))
+    const hint = await screen.findByTestId('mobile-dispatch-url-hint')
+    // lanEndpoint ws://192.168.1.10:33430 → the page is the same address over http.
+    expect(hint).toHaveTextContent('http://192.168.1.10:33430/')
+    expect(screen.getByTestId('mobile-token-text')).toHaveTextContent('tok-1234')
+  })
+
+  it('describes the four dispatch actions in the card description', async () => {
+    render(<ConnectionsSettings />)
+    await waitFor(() =>
+      expect(screen.getByText(/send a text to create a task/i)).toBeInTheDocument(),
+    )
+    expect(screen.getByText(/approve or deny tool-use requests/i)).toBeInTheDocument()
+    expect(screen.getByText(/started\/completed\/failed progress/i)).toBeInTheDocument()
   })
   // ── P1-4 — per-platform status dot ──────────────────────────────────────────
 

@@ -2,14 +2,46 @@ import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
-import type { MobileDeviceEntry, MobilePairToken } from '@/types'
+import type {
+  GatewayConfig,
+  GatewayProcessState,
+  MobileDeviceEntry,
+  MobilePairToken,
+} from '@/types'
 
-export function MobilePairingCard() {
+interface MobileDispatchCardProps {
+  /** Live gateway config — `mobile.enabled` drives the channel status badge. */
+  config: GatewayConfig
+  /** Supervised gateway process state (E-1 方案 C) — running means the mobile
+   *  shannon/* server (and the PWA page) is actually listening. */
+  procState: GatewayProcessState | null
+}
+
+/** Whether the supervised gateway process is currently running. */
+function isGatewayRunning(procState: GatewayProcessState | null): boolean {
+  const status = procState?.status
+  return typeof status === 'object' && status !== null && 'running' in status
+}
+
+const DEFAULT_MOBILE_PORT = 33430
+
+function isLoopback(host: string): boolean {
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1'
+}
+
+/**
+ * 「移动派发」status card (P2-1): pairing entry (QR from mobile_generate_pair_token),
+ * the raw one-time token + the PWA page URL for browser-as-phone pairing, the
+ * paired-device list (existing commands), and the channel status — dispatch /
+ * 看任务 / 审批 / 进度推送 all run over this one channel; no native app.
+ */
+export function MobileDispatchCard({ config, procState }: MobileDispatchCardProps) {
   const intl = useIntl()
   const t = (id: string): string => intl.formatMessage({ id })
   const tVal = (id: string, values: Record<string, string | number>): string =>
@@ -22,6 +54,26 @@ export function MobilePairingCard() {
   const [revokeTarget, setRevokeTarget] = useState<MobileDeviceEntry | null>(null)
   const [revokeBusy, setRevokeBusy] = useState(false)
   const [nowMs, setNowMs] = useState(() => Date.now())
+
+  const mobileEnabled = config.mobile?.enabled === true
+  const gatewayRunning = isGatewayRunning(procState)
+  const channelBadge = !mobileEnabled
+    ? { variant: 'neutral' as const, label: t('settings.connections.mobile.statusOff') }
+    : gatewayRunning
+      ? { variant: 'success' as const, label: t('settings.connections.mobile.statusRunning') }
+      : { variant: 'warning' as const, label: t('settings.connections.mobile.statusStopped') }
+
+  // The page URL a phone browser opens (PWA page served by the gateway itself).
+  // Prefer the LAN endpoint from a freshly minted token; fall back to the
+  // configured bind address when it is a routable one.
+  const pageUrl = (() => {
+    if (pairToken) return pairToken.lanEndpoint.replace(/^ws(s)?:\/\//, 'http$1://') + '/'
+    const host = config.mobile?.host
+    if (host && !isLoopback(host)) {
+      return `http://${host}:${config.mobile?.port ?? DEFAULT_MOBILE_PORT}/`
+    }
+    return null
+  })()
 
   // P1.3 — load the paired-device registry once on mount.
   useEffect(() => {
@@ -85,7 +137,12 @@ export function MobilePairingCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{t('settings.connections.mobile.title')}</CardTitle>
+        <CardTitle className="flex items-center gap-sm">
+          {t('settings.connections.mobile.title')}
+          <Badge variant={channelBadge.variant} data-testid="mobile-dispatch-badge">
+            {channelBadge.label}
+          </Badge>
+        </CardTitle>
         <CardDescription>{t('settings.connections.mobile.description')}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-md">
@@ -120,6 +177,14 @@ export function MobilePairingCard() {
               <code className="font-label-sm text-on-surface-variant break-all">
                 {pairToken.lanEndpoint}
               </code>
+              {/* The PWA page in a phone browser pairs with this token — the
+                  v1 page has no QR camera scan. */}
+              <code
+                className="font-label-xs text-on-surface-variant max-w-xs break-all"
+                data-testid="mobile-token-text"
+              >
+                {pairToken.token}
+              </code>
             </div>
           )}
 
@@ -138,6 +203,15 @@ export function MobilePairingCard() {
             </p>
           )}
         </div>
+
+        {pageUrl && (
+          <p
+            className="font-body-sm text-on-surface-variant max-w-prose"
+            data-testid="mobile-dispatch-url-hint"
+          >
+            {tVal('settings.connections.mobile.pageHint', { url: pageUrl })}
+          </p>
+        )}
 
         {/* Paired devices (registry the gateway writes on shannon/pair). */}
         <div className="space-y-sm border-t border-surface-border pt-md">

@@ -75,6 +75,13 @@ let nextTerminalSeq = 1
 // for ~/.shannon/desktop/workspace-layouts.json).
 const demoWorkspaceLayouts = new Map<string, WorkspaceLayout>()
 
+// P2-1: mobile dispatch demo state — a minted pair token + the paired-device
+// registry the gateway would own (~/.shannon/mobile-devices.json).
+let demoPairToken: { token: string; expiresAt: number; lanEndpoint: string; qrDataUrl: string } | null = null
+let demoDevices: Array<{ deviceId: string; publicKey: string; label?: string | null; addedAt: number; lastSeenAt: number }> = [
+  { deviceId: 'demo-4f8a2c1e9b7d3a05c6e1f2b4a8d60317', publicKey: 'demo-key-x', label: 'Pixel 9', addedAt: 1735689600000, lastSeenAt: 1735693200000 },
+]
+
 function demoTerminalEmit(terminalId: string, text: string) {
   // base64, exactly like the Rust pump's wire payload
   const bytes = new TextEncoder().encode(text)
@@ -1320,6 +1327,47 @@ export const handlers: Record<string, MockHandler> = {
     const running = (run.branches as ReturnType<typeof demoBatchBranch>[]).filter(b => b.status === 'running').length
     batchRuns.splice(idx, 1)
     return { removed: (run.count as number) - running, skipped: running > 0 ? [`branch: still running`] : [] }
+  },
+
+  // ── Gateway / Settings → Connections (P2-1: incl. the mobile dispatch card) ──
+  async gateway_read_config() {
+    await delay()
+    return {
+      engine: { wsUrl: 'ws://127.0.0.1:33420/api/ws', httpBaseUrl: 'http://127.0.0.1:33420' },
+      adapters: [],
+      mobile: { enabled: true, host: '127.0.0.1', port: 33430 },
+    }
+  },
+  async gateway_write_config(cfg: unknown) { await delay(); return clone(cfg) },
+  async gateway_set_secret() { await delay() },
+  async gateway_has_secret() { await delay(40); return false },
+  async gateway_delete_secret() { await delay() },
+  async gateway_supervisor_status() { await delay(40); return { managed: true, status: 'stopped' as const } },
+  async gateway_supervisor_start() { await delay(120); return { managed: true, status: { running: { pid: 3345 } } } },
+  async gateway_supervisor_stop() { await delay(120); return { managed: true, status: 'stopped' as const } },
+  async gateway_set_managed() { await delay(); return { managed: true, status: 'stopped' as const } },
+
+  // P2-1 mobile dispatch — pairing entry + paired-device registry the gateway
+  // owns. Demo QR is a 1x1 transparent PNG data URL like the preview capture.
+  async mobile_generate_pair_token() {
+    await delay()
+    demoPairToken = {
+      token: `demo-${Math.random().toString(36).slice(2, 10)}`,
+      expiresAt: Date.now() + 75_000,
+      lanEndpoint: `ws://${location.hostname || '192.168.1.10'}:33430`,
+      qrDataUrl: `data:image/svg+xml;base64,${btoa('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>')}`,
+    }
+    return clone(demoPairToken)
+  },
+  async mobile_list_paired_devices() {
+    await delay(40)
+    return clone(demoDevices)
+  },
+  async mobile_revoke_device(args: { deviceId: string }) {
+    await delay()
+    const before = demoDevices.length
+    demoDevices = demoDevices.filter(d => d.deviceId !== args.deviceId)
+    return demoDevices.length < before
   },
 }
 
