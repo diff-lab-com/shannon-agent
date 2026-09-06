@@ -22,8 +22,8 @@ function makeGraph(): MemoryGraph {
       { id: 'project:my-startup', kind: 'project', label: 'my-startup', weight: 3, category: null, sourceKind: null, sourceSessionId: null },
       { id: 'category:my-startup|preference', kind: 'category', label: 'preference', category: 'preference', weight: 1, sourceKind: null, sourceSessionId: null },
       { id: 'category:my-startup|decision', kind: 'category', label: 'decision', category: 'decision', weight: 2, sourceKind: null, sourceSessionId: null },
-      { id: 'entry:m1', kind: 'entry', label: 'Prefers concise responses', category: 'preference', weight: 0.9, sourceKind: 'auto-extract', sourceSessionId: SESSION_A },
-      { id: 'entry:m2', kind: 'entry', label: 'Use Postgres for billing', category: 'decision', weight: 0.85, sourceKind: 'import', sourceSessionId: null },
+      { id: 'entry:m1', kind: 'entry', label: 'Prefers concise responses', category: 'preference', weight: 0.9, tags: ['style', 'tone'], sourceKind: 'auto-extract', sourceSessionId: SESSION_A },
+      { id: 'entry:m2', kind: 'entry', label: 'Use Postgres for billing', category: 'decision', weight: 0.85, tags: ['db'], sourceKind: 'import', sourceSessionId: null },
       { id: 'entry:m3', kind: 'entry', label: 'Deep-work block 9–12', category: 'decision', weight: 0.78, sourceKind: 'auto-extract', sourceSessionId: SESSION_A },
     ],
     edges: [
@@ -109,6 +109,7 @@ describe('MemoryGraphView', () => {
     fireEvent.click(svg.querySelector('[data-node-id="entry:m1"]')!)
     const detail = screen.getByTestId('memory-graph-detail')
     expect(detail).toHaveTextContent('Prefers concise responses')
+    expect(detail).toHaveTextContent('#style')
     expect(screen.getByTestId('memory-graph-source-badge')).toHaveTextContent(/auto-extract/i)
     fireEvent.click(screen.getByRole('button', { name: /open chat|跳转会话/i }))
     expect(onOpenMemorySource).toHaveBeenCalledWith('m1', SESSION_A)

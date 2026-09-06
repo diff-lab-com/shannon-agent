@@ -186,6 +186,18 @@ export function MemoryGraphView({
             <p className="text-body-md text-on-surface whitespace-pre-wrap break-words mb-sm">
               {selected.label}
             </p>
+            {(selected.tags?.length ?? 0) > 0 && (
+              <div className="flex flex-wrap gap-xs mb-sm">
+                {selected.tags!.map((tag) => (
+                  <span
+                    key={tag}
+                    className="text-label-xs px-sm py-[2px] rounded bg-primary-container text-on-primary-container"
+                  >
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            )}
             <p className="text-label-sm text-on-surface-variant mb-sm">
               {t('memory.graph.detail.confidence')}:{' '}
               {Math.round(Math.max(0, Math.min(selected.weight, 1)) * 100)}%

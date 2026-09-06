@@ -1789,6 +1789,8 @@ export interface MemoryGraphNode {
   category?: MemoryCategory | null
   /** Entry count for project/category nodes, confidence for entries. */
   weight: number
+  /** Entry tags (empty for project/category nodes). */
+  tags?: string[] | null
   sourceKind?: MemorySourceKind | null
   sourceSessionId?: string | null
 }

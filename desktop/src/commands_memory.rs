@@ -357,6 +357,9 @@ pub struct MemoryGraphNode {
     /// Visual weight: entry count for project/category nodes, confidence for
     /// entries. Drives node size in the UI.
     pub weight: f64,
+    /// Tags of the entry (empty for project/category nodes) — shown in the
+    /// detail popover.
+    pub tags: Vec<String>,
     /// Provenance passthrough for entry nodes.
     pub source_kind: Option<String>,
     /// Provenance passthrough for entry nodes.
@@ -458,6 +461,7 @@ pub(crate) fn build_memory_graph(project: Option<&str>, entries: &[MemoryEntry])
                 label: project.clone(),
                 category: None,
                 weight: count as f64,
+                tags: Vec::new(),
                 source_kind: None,
                 source_session_id: None,
             });
@@ -469,6 +473,7 @@ pub(crate) fn build_memory_graph(project: Option<&str>, entries: &[MemoryEntry])
             label: category.clone(),
             category: Some(category.clone()),
             weight: members.len() as f64,
+            tags: Vec::new(),
             source_kind: None,
             source_session_id: None,
         });
@@ -486,6 +491,7 @@ pub(crate) fn build_memory_graph(project: Option<&str>, entries: &[MemoryEntry])
                 label: e.content.clone(),
                 category: Some(category.clone()),
                 weight: e.confidence,
+                tags: e.tags.clone(),
                 source_kind: e.source_kind.clone(),
                 source_session_id: e.source_session_id.clone(),
             });
@@ -796,15 +802,21 @@ mod tests {
 
     #[test]
     fn graph_node_ids_are_stable_and_prefixed() {
-        let entries = vec![sourced("p", MemoryCategory::Pattern, "x", Some("s"))];
+        let mut tagged = sourced("p", MemoryCategory::Pattern, "x", Some("s"));
+        tagged.tags = vec!["alpha".to_string()];
+        let entries = vec![tagged];
         let g = build_memory_graph(Some("p"), &entries);
         let ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
         assert!(ids.contains(&"project:p"));
         assert!(ids.contains(&"category:p|pattern"));
         assert!(ids[2].starts_with("entry:"));
-        // Entry node passes provenance through for the detail popover.
+        // Entry node passes provenance + tags through for the detail popover.
         let entry_node = g.nodes.iter().find(|n| n.kind == "entry").unwrap();
         assert_eq!(entry_node.source_session_id.as_deref(), Some("s"));
+        assert_eq!(entry_node.tags, vec!["alpha".to_string()]);
+        // Cluster nodes carry no tags.
+        let root = g.nodes.iter().find(|n| n.kind == "project").unwrap();
+        assert!(root.tags.is_empty());
     }
 
     #[test]

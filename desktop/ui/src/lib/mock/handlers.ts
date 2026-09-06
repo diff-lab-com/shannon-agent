@@ -863,7 +863,7 @@ export const handlers: Record<string, MockHandler> = {
     }
     for (const [project, members] of byProject) {
       const rootId = `project:${project}`
-      nodes.push({ id: rootId, kind: 'project', label: project, weight: members.length, category: null, sourceKind: null, sourceSessionId: null })
+      nodes.push({ id: rootId, kind: 'project', label: project, weight: members.length, category: null, tags: [], sourceKind: null, sourceSessionId: null })
       const byCategory = new Map<string, typeof scoped>()
       for (const m of members) {
         const list = byCategory.get(m.category) ?? []
@@ -872,11 +872,11 @@ export const handlers: Record<string, MockHandler> = {
       }
       for (const [category, catMembers] of byCategory) {
         const catId = `category:${project}|${category}`
-        nodes.push({ id: catId, kind: 'category', label: category, category: category as MemoryGraph['nodes'][number]['category'], weight: catMembers.length, sourceKind: null, sourceSessionId: null })
+        nodes.push({ id: catId, kind: 'category', label: category, category: category as MemoryGraph['nodes'][number]['category'], weight: catMembers.length, tags: [], sourceKind: null, sourceSessionId: null })
         edges.push({ source: rootId, target: catId, kind: 'cluster' })
         for (const m of catMembers) {
           const entryId = `entry:${m.id}`
-          nodes.push({ id: entryId, kind: 'entry', label: m.content, category: m.category, weight: m.confidence, sourceKind: (m.source_kind ?? null) as MemoryGraph['nodes'][number]['sourceKind'], sourceSessionId: m.source_session_id ?? null })
+          nodes.push({ id: entryId, kind: 'entry', label: m.content, category: m.category, weight: m.confidence, tags: m.tags, sourceKind: (m.source_kind ?? null) as MemoryGraph['nodes'][number]['sourceKind'], sourceSessionId: m.source_session_id ?? null })
           edges.push({ source: catId, target: entryId, kind: 'cluster' })
         }
       }
