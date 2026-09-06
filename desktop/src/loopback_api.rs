@@ -237,12 +237,48 @@ pub(crate) fn trigger_router<R: tauri::Runtime>(ts: TriggerState<R>) -> axum::Ro
         .with_state(ts)
 }
 
+/// Resolve the execution-world providers for the loopback engine's registry
+/// from the persisted desktop config — the same P1-3 assembly seam as
+/// `AppState::new` (interactive sends) and the goal runner (unattended runs).
+/// `Ok(None)` = register `base` unchanged; `Err` = invalid mode (the caller
+/// must degrade loudly to `base`, never silently pretend to restrict).
+/// Named so the construction point's sandbox behaviour is directly
+/// assertable (see the tests below).
+fn loopback_sandbox_providers(
+    desktop_config: &DesktopConfig,
+    base: &shannon_tools::ToolProviders,
+) -> Result<Option<shannon_tools::ToolProviders>, String> {
+    crate::sandbox_assembly::effective_sandbox_providers(
+        desktop_config.sandbox.as_ref().and_then(|s| s.mode.as_deref()),
+        desktop_config.working_dir.as_deref(),
+        base,
+    )
+}
+
 /// Build the loopback engine API server from an LLM client config plus a
 /// freshly-registered default tool set. Pure construction — does not bind.
-pub fn build_server(client_config: LlmClientConfig) -> ShannonApiServer {
+///
+/// The tool set honours the persisted `sandbox.mode` config: IM-channel
+/// (T9) and mobile-dispatch (T14) turns execute through this registry via
+/// the gateway, so the execution-mode switcher must hold on this path too —
+/// not only on the interactive (`AppState::new`) and goal-runner seams.
+pub fn build_server(client_config: LlmClientConfig, desktop_config: &DesktopConfig) -> ShannonApiServer {
     let mut tools = ToolRegistry::new();
     let assembly = shannon_remote::assembly::assemble_dynamic();
-    if let Err(e) = register_default_tools_with_providers(&mut tools, &assembly.providers) {
+    let sandboxed_providers = match loopback_sandbox_providers(desktop_config, &assembly.providers)
+    {
+        Ok(providers) => providers,
+        Err(e) => {
+            tracing::error!(
+                "loopback engine API server: sandbox disabled, continuing unrestricted: {e}"
+            );
+            None
+        }
+    };
+    if let Err(e) = register_default_tools_with_providers(
+        &mut tools,
+        sandboxed_providers.as_ref().unwrap_or(&assembly.providers),
+    ) {
         tracing::warn!("loopback engine API server: default tool registration failed: {e}");
     }
     ShannonApiServer::new(client_config)
@@ -263,11 +299,12 @@ pub fn build_server(client_config: LlmClientConfig) -> ShannonApiServer {
 /// Must be awaited from a tokio runtime context (reads the async RwLock).
 pub async fn spawn(state: &AppState, app: tauri::AppHandle) {
     let client_config = state.client_config.read().await.clone();
+    let desktop_config = state.desktop_config.read().await.clone();
     let secret =
         crate::commands_notifications::load_desktop_webhook_config().and_then(|c| c.secret);
     let trigger_enabled = secret.is_some();
     let trigger = trigger_router(TriggerState::from_state(state, app, secret));
-    let server = build_server(client_config).with_extra_routes(trigger);
+    let server = build_server(client_config, &desktop_config).with_extra_routes(trigger);
     tracing::info!(
         "Spawning loopback engine API server on {LOOPBACK_HOST}:{LOOPBACK_PORT} \
          (POST /api/routines/:id/trigger {})",
@@ -291,6 +328,62 @@ mod tests {
     use shannon_core::scheduled_routines::ScheduledRoutine;
     use shannon_core::scheduled_runs::ScheduledRunsStore;
     use tower::ServiceExt;
+
+    /// Desktop config carrying only the sandbox-relevant fields (P1-3).
+    fn sandbox_cfg(mode: Option<&str>) -> DesktopConfig {
+        DesktopConfig {
+            working_dir: Some("/tmp".to_string()),
+            sandbox: mode.map(|m| crate::config::SandboxConfig {
+                mode: Some(m.to_string()),
+            }),
+            ..DesktopConfig::default()
+        }
+    }
+
+    /// The loopback construction point must apply the persisted
+    /// `sandbox.mode` exactly like the interactive (`AppState::new`) and
+    /// goal-runner seams: IM-channel (T9) and mobile-dispatch (T14) turns
+    /// execute through this registry via the gateway. Assertion style
+    /// mirrors `sandbox_assembly.rs` (decorated set over the dynamic world).
+    #[test]
+    fn loopback_build_applies_persisted_sandbox_mode() {
+        let base = shannon_remote::assembly::assemble_dynamic().providers;
+
+        // Unset / `off` → the plain dynamic assembly, no decoration.
+        assert!(
+            loopback_sandbox_providers(&DesktopConfig::default(), &base)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            loopback_sandbox_providers(&sandbox_cfg(Some("off")), &base)
+                .unwrap()
+                .is_none()
+        );
+
+        // `local` → a decorated provider set: fresh fs/process wrappers over
+        // the dynamic world (not the base Arcs), world-sandbox handle
+        // preserved.
+        let decorated = loopback_sandbox_providers(&sandbox_cfg(Some("local")), &base)
+            .unwrap()
+            .expect("local mode must yield providers");
+        assert!(
+            !std::sync::Arc::ptr_eq(&decorated.fs, &base.fs),
+            "fs tools must be policy-wrapped"
+        );
+        assert!(
+            !std::sync::Arc::ptr_eq(&decorated.process, &base.process),
+            "process tools must be policy-wrapped"
+        );
+        assert!(decorated.world_sandbox.is_some(), "world_sandbox preserved");
+
+        // Unknown mode → loud error (build_server degrades to base + logs;
+        // never a silent fake sandbox).
+        let err = loopback_sandbox_providers(&sandbox_cfg(Some("banana")), &base)
+            .err()
+            .expect("unknown mode must be an error");
+        assert!(err.contains("unknown sandbox.mode"), "{err}");
+    }
 
     fn test_state<R: tauri::Runtime>(
         app: tauri::AppHandle<R>,
@@ -459,7 +552,7 @@ mod tests {
         drop(probe);
 
         // Same construction as `build_server`, overridden to the free port.
-        let server = build_server(LlmClientConfig::default()).port(port);
+        let server = build_server(LlmClientConfig::default(), &DesktopConfig::default()).port(port);
         tokio::spawn(async move {
             let _ = server.serve().await;
         });
