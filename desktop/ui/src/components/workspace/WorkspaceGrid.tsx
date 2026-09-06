@@ -66,6 +66,19 @@ interface ResizeState {
   edge: ResizeEdge
 }
 
+/** Rect-level equality in panel order (all layout ops preserve order). */
+function panelsEqual(a: PanelLayout[], b: PanelLayout[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((p, i) => {
+    const q = b[i]
+    return (
+      p.id === q.id && p.kind === q.kind &&
+      p.rect.col === q.rect.col && p.rect.row === q.rect.row &&
+      p.rect.w === q.rect.w && p.rect.h === q.rect.h
+    )
+  })
+}
+
 export function WorkspaceGrid({ layout, renderPanelContent, onChange, chrome, ariaLabel }: WorkspaceGridProps) {
   const intl = useIntl()
   const t = useCallback((id: string, values?: Record<string, string>) =>
@@ -75,6 +88,13 @@ export function WorkspaceGrid({ layout, renderPanelContent, onChange, chrome, ar
   const [drag, setDrag] = useState<DragState | null>(null)
   const [draft, setDraft] = useState<{ id: string; rect: PanelRect } | null>(null)
   const resizeRef = useRef<ResizeState | null>(null)
+  // Mirror of `draft` so the end/cancel handler can read the latest value
+  // without performing side effects inside a state updater.
+  const draftRef = useRef<{ id: string; rect: PanelRect } | null>(null)
+  const applyDraft = useCallback((next: { id: string; rect: PanelRect } | null) => {
+    draftRef.current = next
+    setDraft(next)
+  }, [])
 
   const editing = onChange !== undefined
 
@@ -88,29 +108,36 @@ export function WorkspaceGrid({ layout, renderPanelContent, onChange, chrome, ar
   const handleMove = useCallback((id: string, dir: MoveDirection) => {
     const panel = findPanel(layout, id)
     if (!panel) return
-    onChange?.(movePanel(layout, id, dir))
+    const next = movePanel(layout, id, dir)
+    // A blocked move is a no-op: do not churn the host or persist it.
+    if (panelsEqual(next.panels, layout.panels)) return
+    onChange?.(next)
   }, [layout, onChange])
+
+  const dragRef = useRef<DragState | null>(null)
+  const applyDrag = useCallback((next: DragState | null) => {
+    dragRef.current = next
+    setDrag(next)
+  }, [])
 
   const handleDragStart = useCallback((panelId: string) => {
-    setDrag({ sourceId: panelId, targetId: null })
-  }, [])
+    applyDrag({ sourceId: panelId, targetId: null })
+  }, [applyDrag])
 
   const handleDragMove = useCallback((x: number, y: number) => {
-    setDrag(prev => {
-      if (!prev) return prev
-      const el = document.elementFromPoint(x, y)?.closest('[data-workspace-panel-id]')
-      const targetId = el?.getAttribute('data-workspace-panel-id') ?? null
-      const next = targetId && targetId !== prev.sourceId ? targetId : null
-      return prev.targetId === next ? prev : { ...prev, targetId: next }
-    })
-  }, [])
+    const prev = dragRef.current
+    if (!prev) return
+    const el = document.elementFromPoint(x, y)?.closest('[data-workspace-panel-id]')
+    const targetId = el?.getAttribute('data-workspace-panel-id') ?? null
+    const next = targetId && targetId !== prev.sourceId ? targetId : null
+    if (prev.targetId !== next) applyDrag({ ...prev, targetId: next })
+  }, [applyDrag])
 
   const handleDragEnd = useCallback(() => {
-    setDrag(prev => {
-      if (prev?.targetId) onChange?.(swapPanels(layout, prev.sourceId, prev.targetId))
-      return null
-    })
-  }, [layout, onChange])
+    const prev = dragRef.current
+    applyDrag(null)
+    if (prev?.targetId) onChange?.(swapPanels(layout, prev.sourceId, prev.targetId))
+  }, [layout, onChange, applyDrag])
 
   const handleResizeStart = useCallback((e: ReactPointerEvent<HTMLElement>, panel: PanelLayout, edge: ResizeEdge) => {
     if (!editing) return
@@ -128,16 +155,16 @@ export function WorkspaceGrid({ layout, renderPanelContent, onChange, chrome, ar
       edge,
     }
     // Preview immediately so the handles' base panel shows the live rect.
-    setDraft({ id: panel.id, rect: panel.rect })
+    applyDraft({ id: panel.id, rect: panel.rect })
     capturePointer(e)
-  }, [editing])
+  }, [editing, applyDraft])
 
   const handleResizeMove = useCallback((x: number, y: number) => {
     const state = resizeRef.current
     if (!state) return
     const dw = Math.round((x - state.startX) / state.cellW)
     const dh = Math.round((y - state.startY) / state.cellH)
-    setDraft({
+    applyDraft({
       id: state.id,
       rect: {
         col: state.base.col,
@@ -146,18 +173,24 @@ export function WorkspaceGrid({ layout, renderPanelContent, onChange, chrome, ar
         h: Math.max(1, state.base.h + (state.edge !== 'right' ? dh : 0)),
       },
     })
-  }, [])
+  }, [applyDraft])
 
   const handleResizeEnd = useCallback(() => {
     resizeRef.current = null
-    setDraft(prev => {
-      if (prev) onChange?.(resizePanel(layout, prev.id, prev.rect))
-      return null
-    })
-  }, [layout, onChange])
+    const current = draftRef.current
+    applyDraft(null)
+    if (!current) return
+    const next = resizePanel(layout, current.id, current.rect)
+    // A resize clamped back to the current rect is a no-op: skip the commit
+    // entirely so blocked interactions never churn or persist the layout.
+    if (panelsEqual(next.panels, layout.panels)) return
+    onChange?.(next)
+  }, [layout, onChange, applyDraft])
 
   // Resize tracking rides window-level pointer listeners: the handle sets
   // pointer capture, so move/up events retarget to it and bubble to window.
+  // pointercancel (touch/IME cancellation) is handled symmetrically with
+  // pointerup so the draft and listeners can never be left dangling.
   // (This also keeps WorkspacePanel free of resize plumbing.)
   useEffect(() => {
     if (!draft) return
@@ -165,9 +198,11 @@ export function WorkspaceGrid({ layout, renderPanelContent, onChange, chrome, ar
     const onUp = () => handleResizeEnd()
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
     return () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
     }
   }, [draft, handleResizeMove, handleResizeEnd])
 

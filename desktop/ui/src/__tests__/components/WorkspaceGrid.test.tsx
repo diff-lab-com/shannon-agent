@@ -6,7 +6,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { useEffect } from 'react'
 import { WorkspaceGrid } from '@/components/workspace/WorkspaceGrid'
-import { movePanel, presetLayout, swapPanels, type PanelKind, type PanelLayout, type WorkspaceLayout } from '@/components/workspace/layout'
+import { presetLayout, swapPanels, WORKSPACE_LAYOUT_VERSION, type PanelKind, type PanelLayout, type WorkspaceLayout } from '@/components/workspace/layout'
 
 let mountCount = 0
 // Probe content: counts MOUNTS (not renders) so tests can assert that layout
@@ -119,22 +119,22 @@ describe('WorkspaceGrid', () => {
     expect(onChangeSpy).not.toHaveBeenCalled()
   })
 
-  it('resize handle drags commit a collision-safe rect', () => {
+  it('resize clamped back to the current rect is a no-op: nothing commits', () => {
     const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
       .mockReturnValue({ width: 1200, height: 1200, x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 1200, toJSON: () => ({}) } as DOMRect)
     const { onChangeSpy } = renderGrid(presetLayout('review'))
 
     // Grid cell = 100px. Growing the chat panel (w 8 → 10) would collide
-    // with the diff panel (cols 9-12): the commit must clamp back to w 8.
+    // with the diff panel (cols 9-12); the clamp walks the request back to
+    // w 8 — identical to the current layout — so NOTHING may commit
+    // (blocked interactions never churn or persist the layout).
     const chatHandle = screen.getByRole('region', { name: 'Chat' })
       .querySelector('[data-resize-edge="right"]')!
     fireEvent.pointerDown(chatHandle, { button: 0, clientX: 800, clientY: 10 })
     fireEvent(window, new MouseEvent('pointermove', { clientX: 1000, clientY: 10 }))
     fireEvent(window, new MouseEvent('pointerup', { clientX: 1000, clientY: 10 }))
 
-    expect(onChangeSpy).toHaveBeenCalledTimes(1)
-    const next = onChangeSpy.mock.calls[0][0] as WorkspaceLayout
-    expect(next.panels.find(p => p.id === 'chat')?.rect.w).toBe(8)
+    expect(onChangeSpy).not.toHaveBeenCalled()
     expect(rectSpy).toHaveBeenCalled()
   })
 
@@ -149,19 +149,55 @@ describe('WorkspaceGrid', () => {
     fireEvent(window, new MouseEvent('pointermove', { clientX: 1000, clientY: 900 }))
     fireEvent(window, new MouseEvent('pointerup', { clientX: 1000, clientY: 900 }))
 
+    expect(onChangeSpy).toHaveBeenCalledTimes(1)
     const next = onChangeSpy.mock.calls[0][0] as WorkspaceLayout
     expect(next.panels.find(p => p.id === 'diff')?.rect.h).toBe(9) // 12 − 3 cells
   })
 
-  it('keyboard menu move (上移/move up equivalent) edits the layout', () => {
+  it('pointercancel settles the resize (commits, cleans listeners and draft)', () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockReturnValue({ width: 1200, height: 1200, x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 1200, toJSON: () => ({}) } as DOMRect)
     const { onChangeSpy } = renderGrid(presetLayout('review'))
+
+    const diffHandle = screen.getByRole('region', { name: 'Diff' })
+      .querySelector('[data-resize-edge="bottom"]')!
+    fireEvent.pointerDown(diffHandle, { button: 0, clientX: 1000, clientY: 1200 })
+    fireEvent(window, new MouseEvent('pointermove', { clientX: 1000, clientY: 900 }))
+    // Touch/IME cancellation: the draft must settle exactly like pointerup…
+    fireEvent(window, new Event('pointercancel'))
+    expect(onChangeSpy).toHaveBeenCalledTimes(1)
+    const next = onChangeSpy.mock.calls[0][0] as WorkspaceLayout
+    expect(next.panels.find(p => p.id === 'diff')?.rect.h).toBe(9)
+    // …and the listeners must be gone: later pointermove/up do nothing.
+    fireEvent(window, new MouseEvent('pointermove', { clientX: 1000, clientY: 400 }))
+    fireEvent(window, new MouseEvent('pointerup', { clientX: 1000, clientY: 400 }))
+    expect(onChangeSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('keyboard menu move commits a real move', () => {
+    // A sparse layout with free space: moving diff up one cell commits.
+    const sparse: WorkspaceLayout = {
+      version: WORKSPACE_LAYOUT_VERSION,
+      panels: [
+        { id: 'chat', kind: 'chat', rect: { col: 1, row: 1, w: 8, h: 12 } },
+        { id: 'diff', kind: 'diff', rect: { col: 9, row: 8, w: 4, h: 5 } },
+      ],
+    }
+    const { onChangeSpy } = renderGrid(sparse)
     fireEvent.click(screen.getByRole('button', { name: 'Panel menu: Diff' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Move up' }))
     expect(onChangeSpy).toHaveBeenCalledTimes(1)
-    const next = onChangeSpy.mock.calls[0][0] as WorkspaceLayout
-    // The diff panel is full-height: up is blocked, so the committed layout
-    // equals movePanel's no-op result (same rects).
-    expect(next).toEqual(movePanel(presetLayout('review'), 'diff', 'up'))
+    expect((onChangeSpy.mock.calls[0][0] as WorkspaceLayout).panels.find(p => p.id === 'diff')?.rect)
+      .toEqual({ col: 9, row: 7, w: 4, h: 5 })
+  })
+
+  it('keyboard menu move on a blocked direction does not commit (no persistence)', () => {
+    // The review preset tiles the whole grid — every move is blocked, so
+    // the grid must not even call onChange (the host would persist it).
+    const { onChangeSpy } = renderGrid(presetLayout('review'))
+    fireEvent.click(screen.getByRole('button', { name: 'Panel menu: Diff' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move up' }))
+    expect(onChangeSpy).not.toHaveBeenCalled()
   })
 
   it('F6 cycles focus across panel title bars', () => {

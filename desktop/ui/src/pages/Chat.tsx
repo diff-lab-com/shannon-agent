@@ -1,5 +1,4 @@
-import { useState, useRef, useEffect, useCallback, lazy } from 'react'
-import { createPortal } from 'react-dom'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, lazy } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -185,13 +184,28 @@ export default function Chat() {
   const showChrome = !matchesPreset(layout, 'focus')
 
   // The terminal drawer and the terminal grid panel are the SAME
-  // TerminalPanel instance portaled between two containers (see
-  // TerminalPanelProps.variant): the xterm instance — including scrollback —
-  // survives the handoff, and the Rust-side TerminalManager keeps the PTY
-  // processes alive regardless (never re-spawned).
+  // TerminalPanel instance (see TerminalPanelProps.variant). React 19
+  // UNMOUNTS and remounts portal children when a portal's container prop
+  // changes — which would dispose every xterm instance — so instead the
+  // panel is rendered ONCE into a parked wrapper and a layout effect
+  // physically MOVES that wrapper DOM node between the two slot containers
+  // (manual reparenting never remounts React-managed nodes). The xterm
+  // instances — including scrollback — survive the handoff, and the
+  // Rust-side TerminalManager keeps the PTY processes alive regardless
+  // (never re-spawned). The embedded variant additionally reconciles with
+  // `terminal_list` on mount as defense in depth.
   const [drawerSlot, setDrawerSlot] = useState<HTMLDivElement | null>(null)
   const [gridTerminalSlot, setGridTerminalSlot] = useState<HTMLDivElement | null>(null)
-  const terminalTarget = hasTerminalPanel && gridTerminalSlot ? gridTerminalSlot : drawerSlot
+  const terminalDockRef = useRef<HTMLDivElement | null>(null)
+
+  useLayoutEffect(() => {
+    const dock = terminalDockRef.current
+    const target = hasTerminalPanel ? gridTerminalSlot : drawerSlot
+    if (dock && target && dock.parentElement !== target) {
+      // Physical reparent — preserves the mounted TerminalPanel subtree.
+      target.appendChild(dock)
+    }
+  }, [hasTerminalPanel, gridTerminalSlot, drawerSlot])
 
   const renderPanelContent = useCallback((kind: PanelKind) => {
     switch (kind) {
@@ -209,7 +223,7 @@ export default function Chat() {
               setQuickFixOpen={setQuickFixOpen}
               setEditorOpen={setEditorOpen}
             />
-            {/* Terminal drawer slot: hosts the portaled TerminalPanel while
+            {/* Terminal drawer slot: hosts the docked TerminalPanel while
                 the layout has no terminal grid panel. */}
             <div
               ref={setDrawerSlot}
@@ -288,16 +302,16 @@ export default function Chat() {
                     ariaLabel={t('workspace.grid.aria')}
                   />
                 </div>
-                {/* One TerminalPanel instance, portaled into whichever
-                    container the layout calls for (drawer slot inside the
-                    chat panel, or the terminal grid panel's slot). */}
-                {terminalTarget && createPortal(
+                {/* One docked TerminalPanel instance. It renders here only
+                    until the layout effect moves the dock node into the
+                    active slot (drawer slot inside the chat panel, or the
+                    terminal grid panel's slot) — the move never remounts it. */}
+                <div ref={terminalDockRef} data-testid="terminal-dock" className="contents">
                   <TerminalPanel
                     projectDir={workingDir}
                     variant={hasTerminalPanel ? 'panel' : 'drawer'}
-                  />,
-                  terminalTarget,
-                )}
+                  />
+                </div>
               </>
             )}
           </section>

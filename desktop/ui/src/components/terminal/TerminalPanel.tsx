@@ -88,9 +88,12 @@ export interface TerminalPanelProps {
    * `panel` renders the same component as an always-open WorkspaceGrid
    * panel: it fills its container, skips the drawer toggle affordances and
    * the Ctrl+` window handler (the grid host owns panel presence instead).
-   * The Chat page portals ONE instance between the two containers, so xterm
-   * instances (and their scrollback) survive the drawer↔grid handoff, and
-   * the Rust-side TerminalManager keeps processes alive throughout.
+   * The Chat page renders ONE instance and physically moves its dock DOM
+   * node between the two containers (manual reparenting — NOT a portal
+   * container swap, which in React 19 remounts the subtree), so xterm
+   * instances (and their scrollback) survive the drawer↔grid handoff. The
+   * embedded variant additionally reconciles with `terminal_list` on mount,
+   * and the Rust-side TerminalManager keeps processes alive throughout.
    */
   variant?: 'drawer' | 'panel'
 }
@@ -325,6 +328,22 @@ export function TerminalPanel({ projectDir, variant = 'drawer' }: TerminalPanelP
       void openPanel();
     }
   }, [open, openPanel]);
+
+  // Embedded (workspace grid) variant: reconcile with the backend on mount.
+  // The panel can be mounted while PTYs are already alive (fresh page mount
+  // straight into a layout that contains a terminal panel); `terminal_list`
+  // restores those tabs without spawning. The ref guard keeps StrictMode
+  // double-effects from double-spawning; `openPanel`'s `booted` state guard
+  // stays as the second layer. The drawer variant is untouched: it
+  // reconciles on first OPEN, not on mount.
+  const embeddedBootRef = useRef(false);
+  useEffect(() => {
+    if (!embedded || embeddedBootRef.current) return;
+    embeddedBootRef.current = true;
+    void openPanel();
+    // One-shot reconcile when the panel first renders embedded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedded]);
 
   // Ctrl+` — capture phase so it wins over xterm's own key handling.
   // Skipped when embedded in a workspace grid panel: the grid host owns
