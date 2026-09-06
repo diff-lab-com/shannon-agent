@@ -4,6 +4,42 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Computer use closed loop, one-command browser automation & file attachments (feat/use-browser-computer-upload)
+
+- **Computer use screenshot loop fixed**: tool image results now deliver the
+  base64 payload to the model from `metadata["data"]` (the `computer` tool's
+  convention) in addition to the Read/AnalyzeImage JSON-in-content convention —
+  previously screenshots returned only the text "Screenshot captured (WxH)" and
+  the model never saw the screen.
+- **Screenshot downscaling**: captures are downscaled to
+  `max_screenshot_width/height` (default 1024×768 reference resolution,
+  aspect-preserving, never upscaled) — aligns the payload with the coordinate
+  contract and cuts multimodal tokens ~4x on Retina displays.
+- **Click variants**: `right_click` / `middle_click` / `double_click` /
+  `triple_click` actions added to the Anthropic-compatible `computer` schema.
+- **Permission policy**: the `computer` tool now registers a High-risk
+  permission policy (per-action confirmation by default), matching
+  Cursor/Cowork-style gating for GUI control.
+- **Feature passthrough**: `shannon-cli` and `shannon-desktop` expose a
+  `computer-use` cargo feature (opt-in; Linux needs libxdo/X11 dev libs) so
+  real screen capture / input simulation can ship in end binaries; CI builds it.
+- **`/browser setup` + `/browser status`**: one command merges the official
+  Playwright MCP server (`npx @playwright/mcp@latest`) into the project
+  `.mcp.json` (idempotent, preserves unrelated servers, refuses symlinked
+  targets); on top of the existing `browser_control_prompt` injection this
+  makes browser automation a first-class flow. New `browser_setup_hint`
+  system-prompt block tells the model to point users at `/browser setup` when
+  a browser task arrives with no browser tool registered.
+- **`QueryContext.attachments`**: the query engine now accepts multimodal
+  attachments on the context; non-empty attachments switch the user message to
+  content blocks (Anthropic + OpenAI adapters serialize both).
+- **File upload wired end-to-end**: REST `POST /v1/sessions/:id/messages`
+  accepts `attachments: [{name?, media_type, data(base64)}]` (png/jpeg/gif/webp,
+  10 MB / 8 files, 400 with reason on violation); the desktop app routes
+  picked/dropped images into the query instead of display-only storage; the
+  TUI `@` picker queues images (`@screenshot.png`) into the next query instead
+  of failing on binary content.
+
 ### Added
 
 ### Follow-ups — goal hardening & API surface (feat/goal-followups)

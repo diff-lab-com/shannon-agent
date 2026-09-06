@@ -23,6 +23,10 @@ preview-capture = ["dep:xcap", "dep:image"]
 # and remains the default; this feature is opt-in for privacy-first users.
 # See docs/integrations/voice-local.md for the design.
 voice-local = ["dep:whisper-rs", "dep:hound"]
+# Real screen capture / input simulation for the `computer` tool (desktop
+# automation). Opt-in: Linux builds need libxdo + X11 dev libraries. Runtime
+# access is still gated by the permission system (High risk policy).
+computer-use = ["shannon-tools/computer-use"]
 
 [dependencies]
 # Shannon engine crates — provided by the unified workspace (no git, no SSH, no rev, no patch).

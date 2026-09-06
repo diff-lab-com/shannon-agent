@@ -71,12 +71,28 @@ mod shannon_desktop_build {
             global_scope_schema: None,
         };
         for (name, cmd, desc) in [
-            ("allow-listen", "listen", "This permission allows listening to all events."),
-            ("allow-unlisten", "unlisten", "This permission allows unlistening to all events."),
-            ("allow-emit", "emit", "This permission allows emitting an event to all targets."),
+            (
+                "allow-listen",
+                "listen",
+                "This permission allows listening to all events.",
+            ),
+            (
+                "allow-unlisten",
+                "unlisten",
+                "This permission allows unlistening to all events.",
+            ),
+            (
+                "allow-emit",
+                "emit",
+                "This permission allows emitting an event to all targets.",
+            ),
             // Permission names are kebab-case upstream; the *command* stays
             // `emit_to` (the IPC name the JS API invokes).
-            ("allow-emit-to", "emit_to", "This permission allows emitting an event to a specific target."),
+            (
+                "allow-emit-to",
+                "emit_to",
+                "This permission allows emitting an event to a specific target.",
+            ),
         ] {
             m.permissions.insert(
                 name.to_string(),
@@ -84,7 +100,10 @@ mod shannon_desktop_build {
                     version: None,
                     identifier: name.to_string(),
                     description: Some(desc.to_string()),
-                    commands: Commands { allow: vec![cmd.to_string()], deny: vec![] },
+                    commands: Commands {
+                        allow: vec![cmd.to_string()],
+                        deny: vec![],
+                    },
                     scope: Default::default(),
                     platforms: None,
                 },
@@ -92,7 +111,8 @@ mod shannon_desktop_build {
         }
         m.default_permission = Some(PermissionSet {
             identifier: "default".into(),
-            description: "Default permissions for the plugin. Allows listening and emitting events.".into(),
+            description:
+                "Default permissions for the plugin. Allows listening and emitting events.".into(),
             permissions: vec![
                 "core:event:allow-listen".into(),
                 "core:event:allow-unlisten".into(),
@@ -119,9 +139,7 @@ mod shannon_desktop_build {
             Permission {
                 version: None,
                 identifier: "allow-set-title".to_string(),
-                description: Some(
-                    "This permission allows setting the window title.".to_string(),
-                ),
+                description: Some("This permission allows setting the window title.".to_string()),
                 commands: Commands {
                     allow: vec!["set_title".to_string()],
                     deny: vec![],

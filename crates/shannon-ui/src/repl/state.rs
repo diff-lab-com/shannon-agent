@@ -106,6 +106,10 @@ pub struct ReplState {
     pub fuzzy_picker: Option<crate::widgets::select::FuzzyPickerWidget>,
     /// Active file selector for /browse command
     pub file_selector: Option<crate::widgets::select::FileSelectorWidget>,
+    /// Multimodal attachments queued for the next query (e.g. images picked
+    /// via `@screenshot.png`). Drained into `QueryContext.attachments` when
+    /// the query is submitted.
+    pub pending_attachments: Vec<shannon_engine::api::ContentBlock>,
     /// Multi-progress widget for tracking parallel tool execution
     pub multi_progress: MultiProgressWidget,
     /// Whether multi-progress is visible (tools running in parallel)
@@ -552,6 +556,7 @@ impl Default for ReplState {
             input_dialog_action: None,
             fuzzy_picker: None,
             file_selector: None,
+            pending_attachments: Vec::new(),
             multi_progress: MultiProgressWidget::new(),
             multi_progress_visible: false,
             multi_select: None,

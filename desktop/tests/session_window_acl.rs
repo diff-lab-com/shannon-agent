@@ -39,9 +39,15 @@ const SESSION: &str = "session-00000000-0000-0000-0000-000000000000";
 fn event_api_allowed_on_main_and_session_windows() {
     for window in [MAIN, SESSION] {
         assert!(allowed("plugin:event|listen", window), "listen on {window}");
-        assert!(allowed("plugin:event|unlisten", window), "unlisten on {window}");
+        assert!(
+            allowed("plugin:event|unlisten", window),
+            "unlisten on {window}"
+        );
         assert!(allowed("plugin:event|emit", window), "emit on {window}");
-        assert!(allowed("plugin:event|emit_to", window), "emit_to on {window}");
+        assert!(
+            allowed("plugin:event|emit_to", window),
+            "emit_to on {window}"
+        );
     }
 }
 
@@ -63,8 +69,14 @@ fn capability_stays_minimal_no_other_plugin_commands_allowed() {
         assert!(!allowed("plugin:dialog|open", window), "dialog on {window}");
         // Window close is done through the `close_session_window` app
         // command (not ACL-gated), so the raw window API stays closed.
-        assert!(!allowed("plugin:window|close", window), "window close on {window}");
-        assert!(!allowed("plugin:window|set_focus", window), "set_focus on {window}");
+        assert!(
+            !allowed("plugin:window|close", window),
+            "window close on {window}"
+        );
+        assert!(
+            !allowed("plugin:window|set_focus", window),
+            "set_focus on {window}"
+        );
         assert!(!allowed("plugin:shell|open", window), "shell on {window}");
         assert!(
             !allowed("plugin:notification|notify", window),

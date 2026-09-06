@@ -605,6 +605,17 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to share a screenshot, diagram, or photo with the AI for visual analysis")
             .with_related(vec![])
         ),
+        "browser" => Some(
+            CommandHelpEntry::new(
+                "browser".to_string(),
+                "Browser automation via Playwright MCP: setup, status, uninstall".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[setup|status|uninstall]")
+            .with_examples(vec!["/browser setup", "/browser status", "/browser uninstall"])
+            .with_when_to_use("Use to enable, inspect, or remove one-command browser control (navigate, click, screenshot) via the Playwright MCP server")
+            .with_related(vec!["image", "mcp"])
+        ),
         "mode" => Some(
             CommandHelpEntry::new(
                 "mode".to_string(),

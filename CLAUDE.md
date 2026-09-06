@@ -156,7 +156,8 @@ just replay
 
 ### MEDIUM — Quality-of-life gaps
 
-- **Computer use**: Claude Code can click, type, see screen on macOS. Shannon has no equivalent.
+- **Computer use**: Claude Code can click, type, see screen on macOS. Shannon ships the equivalent as an **opt-in build** (`--features computer-use` passthrough on `shannon-cli`/`shannon-desktop`; Linux needs libxdo/X11 dev libs): `ComputerUseTool` (Anthropic `computer` schema, 12 actions incl. right/double/triple-click), screenshot downscale to the 1024×768 reference, High-risk permission policy, and a fixed screenshot→model return path (`metadata["data"]`). Without the feature the tool registers as a stub.
+- **Browser automation**: `/browser setup` merges the official Playwright MCP (`npx @playwright/mcp@latest`) into the project `.mcp.json`; browser tools then register as `mcp__playwright__browser_*` and the engine injects the browser-control workflow prompt. `browser_setup_hint` guides the model to suggest `/browser setup` when a browser task arrives with no browser tool. File attachments: `QueryContext.attachments` carries images from all entry points — TUI `/image` + Ctrl+V + `@image`, desktop attach/drag-drop, REST `POST /v1/sessions/:id/messages` `attachments` (base64 png/jpeg/gif/webp).
 
 (Resolved features moved to [CHANGELOG.md](CHANGELOG.md).)
 
@@ -181,7 +182,7 @@ Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensio
 - **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output, `--schema` for JSON schema validation, and `StructuredOutputConfig` for programmatic use.
 - **VS Code extension**: Scaffolded extension with WebView chat panel, NDJSON subprocess communication with `shannon --prompt`.
 
-- **Computer use**: `ComputerUseTool` with Anthropic-compatible `computer` tool schema (screenshot, click, type, scroll, key_press, wait, mouse_move, left_click_drag). Feature-gated behind `computer-use = ["xcap", "enigo", "image"]`. Without the feature, tool registers but returns helpful error messages. Coordinate scaling from 1024x768 reference resolution to actual screen resolution. Browser control system prompt injection when Playwright/Chrome DevTools MCP tools detected (`browser_control_prompt`).
+- **Computer use**: `ComputerUseTool` with Anthropic-compatible `computer` tool schema (screenshot, click, right/middle/double/triple_click, type, scroll, key_press, wait, mouse_move, left_click_drag). Feature-gated behind `computer-use = ["xcap", "enigo", "image"]`, with `computer-use` passthrough features on `shannon-cli` and `shannon-desktop`. Without the feature, tool registers but returns helpful error messages. Coordinate scaling from 1024x768 reference resolution to actual screen resolution; screenshots auto-downscale to the configured maximum. Screenshot results reach the model as image blocks via `metadata["data"]`. Registered permission policy: High risk (per-action confirmation). Browser control system prompt injection when Playwright/Chrome DevTools MCP tools detected (`browser_control_prompt`), plus `browser_setup_hint` and the `/browser` REPL command for one-command Playwright MCP setup.
 
 ### Tier 3 — Quality of Life
 Computer use (desktop automation via `computer-use` feature flag). Browser automation via MCP Playwright integration.

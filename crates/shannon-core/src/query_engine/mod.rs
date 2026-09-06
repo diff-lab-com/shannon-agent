@@ -14,6 +14,7 @@ mod types;
 
 // Re-export all public types to maintain the same public API as the original flat file.
 pub use browser_control_prompt::browser_control_prompt;
+pub use browser_control_prompt::browser_setup_hint;
 pub use context_injector::ContextInjector;
 pub use engine::{ProviderHealth, ProviderHealthStatus, QueryEngine};
 pub use repo_map_injector::RepoMapInjector;
@@ -76,6 +77,7 @@ mod tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: "Hello".to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
@@ -1130,6 +1132,7 @@ mod tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: "test query".to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: false,

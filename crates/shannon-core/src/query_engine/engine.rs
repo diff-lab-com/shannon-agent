@@ -273,11 +273,20 @@ impl ToolResultEntry {
                 .and_then(|v| v.as_str())
                 .unwrap_or("application/octet-stream");
 
-            // Parse the base64 data from the JSON content string.
-            // The Read tool returns a JSON structure with a "data" field.
-            let base64_data = serde_json::from_str::<serde_json::Value>(&self.content)
-                .ok()
-                .and_then(|v| v.get("data").and_then(|d| d.as_str()).map(String::from))
+            // Two metadata conventions carry the base64 payload: the
+            // computer tool returns it in `metadata["data"]` with plain text
+            // in `content`, while Read/AnalyzeImage return a JSON object in
+            // `content` with a `data` field. Prefer the metadata form.
+            let base64_data = self
+                .metadata
+                .get("data")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .or_else(|| {
+                    serde_json::from_str::<serde_json::Value>(&self.content)
+                        .ok()
+                        .and_then(|v| v.get("data").and_then(|d| d.as_str()).map(String::from))
+                })
                 .unwrap_or_default();
 
             if base64_data.is_empty() {
@@ -285,18 +294,20 @@ impl ToolResultEntry {
                 return Some(ToolResultContent::Single(self.content.clone()));
             }
 
-            let file_path = self
-                .metadata
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("image");
+            let mut text = match self.metadata.get("file_path").and_then(|v| v.as_str()) {
+                Some(path) => format!("Image file: {path} ({media_type})"),
+                None => format!("Image ({media_type})"),
+            };
+            if let (Some(w), Some(h)) = (
+                self.metadata.get("width").and_then(|v| v.as_u64()),
+                self.metadata.get("height").and_then(|v| v.as_u64()),
+            ) {
+                text.push_str(&format!(" {w}x{h}"));
+            }
+            text.push_str("\nThe image content is provided as an image block below.");
 
             Some(ToolResultContent::Multiple(vec![
-                ContentBlock::Text {
-                    text: format!(
-                        "Image file: {file_path} ({media_type})\nThe image content is provided as an image block below."
-                    ),
-                },
+                ContentBlock::Text { text },
                 ContentBlock::Image {
                     source: ImageSource::base64(media_type, base64_data),
                 },
@@ -1438,6 +1449,7 @@ impl QueryEngine {
         // `SHANNON_HOME` still wins when set (legacy whole-root override).
         let l0_container = crate::session_log::effective_log_container(self.state.sessions_dir());
         let user_message = context.user_message.clone();
+        let user_attachments = context.attachments.clone();
         let cost_tracker = self.cost_tracker.clone();
         let hook_manager = self.hook_manager.clone();
         let triggered_routines = self.triggered_routines.clone();
@@ -1566,6 +1578,17 @@ impl QueryEngine {
             }
         }
 
+        // Browser-related request but no browser tool: surface the
+        // `/browser setup` hint so the model can guide the user instead of
+        // failing the task silently.
+        {
+            let tool_names = tools.list();
+            if let Some(hint) = crate::query_engine::browser_setup_hint(&tool_names, &user_message)
+            {
+                system_blocks.push(SystemContentBlock::text(hint));
+            }
+        }
+
         // Inject team coordination instructions when team tools are present
         {
             let tool_names = tools.list();
@@ -1649,9 +1672,23 @@ impl QueryEngine {
                 .unwrap_or("none"),
             "Starting new query: cloning conversation for background task"
         );
+        // Attachments (e.g. images from the REST API, desktop app, or TUI)
+        // switch the user message to content blocks so multimodal adapters
+        // can carry them to the provider; text-only queries keep the plain
+        // string form.
+        let user_content = if user_attachments.is_empty() {
+            MessageContent::Text(user_message.clone())
+        } else {
+            let mut blocks = Vec::with_capacity(user_attachments.len() + 1);
+            blocks.push(shannon_engine::api::ContentBlock::Text {
+                text: user_message.clone(),
+            });
+            blocks.extend(user_attachments);
+            MessageContent::Blocks(blocks)
+        };
         conversation.messages.push(Message {
             role: "user".to_string(),
-            content: MessageContent::Text(user_message.clone()),
+            content: user_content,
         });
 
         // Clone memory store for post-query extraction (fire-and-forget)
@@ -5089,6 +5126,7 @@ async fn maybe_run_auto_test(
 mod tests {
     use super::*;
     use crate::tools::ToolRegistry;
+    use shannon_engine::api::ImageSource;
     use shannon_engine::api::{LlmClient, LlmClientConfig, MessageContent};
     use shannon_engine::permissions::PermissionManager;
     use std::env;
@@ -6733,5 +6771,141 @@ mod tests {
         engine.set_max_turns(42);
         assert_eq!(engine.config.max_turns, 42);
         assert_ne!(engine.config.max_turns, default_turns);
+    }
+
+    // ── ToolResultEntry::to_tool_result_content — direct coverage ─────
+    // Locks down the dual-metadata-image convention added in the
+    // use-browser-computer-upload branch: the `computer` tool returns
+    // base64 in `metadata["data"]` with plain text in `content`, while
+    // Read/AnalyzeImage return a JSON object in `content` with a `data`
+    // field. Both paths must produce an Image content block for the LLM
+    // to "see" the file; failure to parse must fall back to plain text.
+
+    fn make_entry(
+        content: &str,
+        metadata: std::collections::HashMap<String, serde_json::Value>,
+    ) -> ToolResultEntry {
+        ToolResultEntry {
+            tool_use_id: "test".into(),
+            content: content.into(),
+            is_error: false,
+            metadata,
+        }
+    }
+
+    fn image_metadata() -> std::collections::HashMap<String, serde_json::Value> {
+        let mut m = std::collections::HashMap::new();
+        m.insert("type".into(), serde_json::json!("image"));
+        m.insert("media_type".into(), serde_json::json!("image/png"));
+        m.insert("data".into(), serde_json::json!("iVBORw0KGgo="));
+        m.insert("width".into(), serde_json::json!(1920u32));
+        m.insert("height".into(), serde_json::json!(1080u32));
+        m.insert("file_path".into(), serde_json::json!("/tmp/shot.png"));
+        m
+    }
+
+    #[test]
+    fn tool_result_entry_image_from_metadata_data() {
+        let entry = make_entry("Screenshot captured (1920x1080)", image_metadata());
+        let out = entry
+            .to_tool_result_content()
+            .expect("image result yields content");
+        let ToolResultContent::Multiple(blocks) = out else {
+            panic!("expected Multiple for image metadata, got single");
+        };
+        assert_eq!(blocks.len(), 2);
+        // text block describes the file (path + media type + dims)
+        let ContentBlock::Text { text } = &blocks[0] else {
+            panic!("first block must be Text");
+        };
+        assert!(text.contains("/tmp/shot.png"));
+        assert!(text.contains("image/png"));
+        assert!(text.contains("1920x1080"));
+        // image block carries the base64 payload untouched
+        let ContentBlock::Image { source } = &blocks[1] else {
+            panic!("second block must be Image");
+        };
+        assert_eq!(source.media_type, "image/png");
+        assert_eq!(source.data, "iVBORw0KGgo=");
+    }
+
+    #[test]
+    fn tool_result_entry_image_from_content_json_convention() {
+        // Read/AnalyzeImage convention: base64 lives in a `data` field of
+        // a JSON object in `content`; metadata only carries image markers.
+        let mut meta = std::collections::HashMap::new();
+        meta.insert("type".into(), serde_json::json!("image"));
+        meta.insert("media_type".into(), serde_json::json!("image/jpeg"));
+        meta.insert("file_path".into(), serde_json::json!("pic.jpg"));
+        let entry = make_entry(r#"{"type":"image","data":"/9j/4AAQSk=="}"#, meta);
+        let out = entry
+            .to_tool_result_content()
+            .expect("image result yields content");
+        let ToolResultContent::Multiple(blocks) = out else {
+            panic!("expected Multiple");
+        };
+        assert_eq!(blocks.len(), 2);
+        let ContentBlock::Image { source } = &blocks[1] else {
+            panic!("second block must be Image");
+        };
+        assert_eq!(source.data, "/9j/4AAQSk==");
+    }
+
+    #[test]
+    fn tool_result_entry_image_without_path_uses_generic_label() {
+        let mut meta = std::collections::HashMap::new();
+        meta.insert("type".into(), serde_json::json!("image"));
+        meta.insert("media_type".into(), serde_json::json!("image/png"));
+        meta.insert("data".into(), serde_json::json!("AAA="));
+        let entry = make_entry("Screenshot captured (WxH)", meta);
+        let out = entry.to_tool_result_content().expect("ok");
+        let ToolResultContent::Multiple(blocks) = out else {
+            panic!("expected Multiple");
+        };
+        let ContentBlock::Text { text } = &blocks[0] else {
+            panic!("first block must be Text");
+        };
+        // No file_path → generic label, still descriptive
+        assert!(text.starts_with("Image (image/png)"));
+        assert!(text.contains("The image content is provided"));
+    }
+
+    #[test]
+    fn tool_result_entry_image_no_payload_falls_back_to_single() {
+        // Both conventions absent: we still want a Text fallback rather
+        // than dropping the result on the floor.
+        let mut meta = std::collections::HashMap::new();
+        meta.insert("type".into(), serde_json::json!("image"));
+        meta.insert("media_type".into(), serde_json::json!("image/png"));
+        // No data field anywhere
+        let entry = make_entry("plain text no base64", meta);
+        let out = entry.to_tool_result_content().expect("ok");
+        assert!(matches!(out, ToolResultContent::Single(_)));
+    }
+
+    #[test]
+    fn tool_result_entry_non_image_returns_single() {
+        let mut meta = std::collections::HashMap::new();
+        meta.insert("exit_code".into(), serde_json::json!(0));
+        let entry = make_entry("hello world", meta);
+        assert!(matches!(
+            entry.to_tool_result_content(),
+            Some(ToolResultContent::Single(_))
+        ));
+    }
+
+    #[test]
+    fn tool_result_entry_image_with_error_returns_single() {
+        let entry = ToolResultEntry {
+            tool_use_id: "t".into(),
+            content: "boom".into(),
+            is_error: true,
+            metadata: image_metadata(),
+        };
+        // is_error short-circuits to Single regardless of metadata type.
+        assert!(matches!(
+            entry.to_tool_result_content(),
+            Some(ToolResultContent::Single(_))
+        ));
     }
 }

@@ -229,6 +229,7 @@ fn replay_rendering_matches_live_broadcast_content_and_snaps() {
                     query_id: Uuid::new_v4(),
                     session_id: Uuid::new_v4(),
                     user_message: "list files".into(),
+                    attachments: Vec::new(),
                     metadata: QueryMetadata {
                         timestamp: chrono::Utc::now(),
                         tools_allowed: true,

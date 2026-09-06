@@ -43,6 +43,50 @@ const IGNORED_DIRS: &[&str] = &[
     ".direnv",
 ];
 
+// ── Image references ──────────────────────────────────────────────────
+
+/// Image extensions accepted by the multimodal query path (mirrors the
+/// `/image` command's supported set).
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
+
+/// Whether an `@` reference points at an image file that should ride the
+/// multimodal (base64 image block) path instead of text injection.
+pub fn is_image_reference(file_path: &str) -> bool {
+    Path::new(file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .is_some_and(|e| IMAGE_EXTENSIONS.contains(&e.as_str()))
+}
+
+/// Load an image file as a base64 content block for the multimodal query
+/// path. Returns a user-facing error message when the file cannot be read.
+pub fn load_image_block(file_path: &str) -> Result<shannon_engine::api::ContentBlock, String> {
+    use base64::Engine;
+
+    let path = Path::new(file_path);
+    let media_type = match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        _ => return Err(format!("Unsupported image format: {file_path}")),
+    };
+    let bytes = std::fs::read(path).map_err(|e| format!("Could not read {file_path}: {e}"))?;
+    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(shannon_engine::api::ContentBlock::Image {
+        source: shannon_engine::api::ImageSource::base64(media_type, data),
+    })
+}
+
 // ── Public types ──────────────────────────────────────────────────────
 
 /// The kind of @ reference that was selected.

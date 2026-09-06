@@ -461,7 +461,11 @@ fn main() {
                          skipping loopback host"
                     );
                 }
-                commands_connections::bootstrap_gateway_supervisor(&state_ref, &app_handle_for_block).await;
+                commands_connections::bootstrap_gateway_supervisor(
+                    &state_ref,
+                    &app_handle_for_block,
+                )
+                .await;
             });
 
             // P2-5 — routine scheduler: periodic due check (every 30s).

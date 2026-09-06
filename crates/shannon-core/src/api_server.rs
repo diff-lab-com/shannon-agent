@@ -447,6 +447,7 @@ async fn query_handler(
         query_id: Uuid::new_v4(),
         session_id,
         user_message: req.prompt,
+        attachments: Vec::new(),
         metadata: QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: true,
@@ -538,6 +539,7 @@ async fn query_stream_handler(
         query_id: Uuid::new_v4(),
         session_id,
         user_message: prompt,
+        attachments: Vec::new(),
         metadata: QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: true,
@@ -736,6 +738,7 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                     query_id: uuid::Uuid::new_v4(),
                     session_id: effective_session_id,
                     user_message: prompt,
+                    attachments: Vec::new(),
                     metadata: QueryMetadata {
                         timestamp: chrono::Utc::now(),
                         tools_allowed: true,

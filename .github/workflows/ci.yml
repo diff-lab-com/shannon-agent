@@ -48,8 +48,6 @@ jobs:
           tool: cargo-nextest
       - name: Build
         run: cargo build --workspace
-      - name: Build with computer-use feature
-        run: cargo build -p shannon-tools --features computer-use
       - name: Compile tests
         run: cargo test --workspace --no-run
       - name: Test
@@ -58,6 +56,18 @@ jobs:
         # load-sensitive tests (e.g. the byte-exact session-log tee mock
         # round-trip) don't fail the whole gate on a runner hiccup.
         run: cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
+      # Feature-gated build/tests (downscale_dims, click_spec, key combos).
+      # Runs AFTER the main gate, in an ISOLATED target dir: sharing
+      # `target/` with feature-OFF steps leaked the enabled feature into the
+      # workspace nextest build (the `computer` stub tests took the
+      # real-execution path and panicked on the displayless runner).
+      - name: Build with computer-use feature
+        run: |
+          CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features computer-use
+          # CLI passthrough feature (opt-in desktop automation build)
+          CARGO_TARGET_DIR=target-feature cargo build -p shannon-cli --features computer-use
+      - name: Test with computer-use feature
+        run: CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools --features computer-use --lib --no-fail-fast
       - name: Doctests
         # nextest does not execute doctests, so a doctest-only regression
         # (e.g. an example that relies on opt-in configuration) stays green

@@ -375,7 +375,11 @@ mod tests {
             assert!(name.ends_with(".local"));
             let label = name.strip_suffix(".local").unwrap();
             assert!(!label.contains('.'), "single label only, got {label:?}");
-            assert!(label.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+            assert!(
+                label
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            );
             assert!(!label.is_empty());
         }
     }

@@ -249,7 +249,10 @@ fn loopback_sandbox_providers(
     base: &shannon_tools::ToolProviders,
 ) -> Result<Option<shannon_tools::ToolProviders>, String> {
     crate::sandbox_assembly::effective_sandbox_providers(
-        desktop_config.sandbox.as_ref().and_then(|s| s.mode.as_deref()),
+        desktop_config
+            .sandbox
+            .as_ref()
+            .and_then(|s| s.mode.as_deref()),
         desktop_config.working_dir.as_deref(),
         base,
     )
@@ -262,7 +265,10 @@ fn loopback_sandbox_providers(
 /// (T9) and mobile-dispatch (T14) turns execute through this registry via
 /// the gateway, so the execution-mode switcher must hold on this path too —
 /// not only on the interactive (`AppState::new`) and goal-runner seams.
-pub fn build_server(client_config: LlmClientConfig, desktop_config: &DesktopConfig) -> ShannonApiServer {
+pub fn build_server(
+    client_config: LlmClientConfig,
+    desktop_config: &DesktopConfig,
+) -> ShannonApiServer {
     let mut tools = ToolRegistry::new();
     let assembly = shannon_remote::assembly::assemble_dynamic();
     let sandboxed_providers = match loopback_sandbox_providers(desktop_config, &assembly.providers)

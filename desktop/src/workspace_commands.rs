@@ -106,10 +106,16 @@ pub fn validate_layout(layout: &WorkspaceLayout) -> Result<(), String> {
             return Err(format!("panel {} rect fields must be >= 1", panel.id));
         }
         if r.col.saturating_add(r.w).saturating_sub(1) > GRID_COLUMNS {
-            return Err(format!("panel {} exceeds the {} grid columns", panel.id, GRID_COLUMNS));
+            return Err(format!(
+                "panel {} exceeds the {} grid columns",
+                panel.id, GRID_COLUMNS
+            ));
         }
         if r.row.saturating_add(r.h).saturating_sub(1) > GRID_ROWS {
-            return Err(format!("panel {} exceeds the {} grid rows", panel.id, GRID_ROWS));
+            return Err(format!(
+                "panel {} exceeds the {} grid rows",
+                panel.id, GRID_ROWS
+            ));
         }
     }
     Ok(())
@@ -137,19 +143,28 @@ pub fn load_store_at(path: &Path) -> BTreeMap<String, WorkspaceLayout> {
 
 /// Write the store file (creating parent dirs), pretty-printed for
 /// hand-inspectability — the same convention as `mobile-devices.json`.
-pub fn save_store_at(path: &Path, layouts: &BTreeMap<String, WorkspaceLayout>) -> Result<(), String> {
+pub fn save_store_at(
+    path: &Path,
+    layouts: &BTreeMap<String, WorkspaceLayout>,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
     }
-    let store = WorkspaceLayoutStore { layouts: layouts.clone() };
-    let json = serde_json::to_string_pretty(&store).map_err(|e| format!("serialize layouts: {e}"))?;
+    let store = WorkspaceLayoutStore {
+        layouts: layouts.clone(),
+    };
+    let json =
+        serde_json::to_string_pretty(&store).map_err(|e| format!("serialize layouts: {e}"))?;
     std::fs::write(path, json).map_err(|e| format!("write {}: {e}", path.display()))
 }
 
 /// Resolve a stored layout: `None` when absent **or version-mismatched**
 /// (version reset → the UI falls back to the default preset).
-pub fn get_layout_in(layouts: &BTreeMap<String, WorkspaceLayout>, project_key: &str) -> Option<WorkspaceLayout> {
+pub fn get_layout_in(
+    layouts: &BTreeMap<String, WorkspaceLayout>,
+    project_key: &str,
+) -> Option<WorkspaceLayout> {
     layouts
         .get(project_key)
         .filter(|layout| layout.version == SUPPORTED_LAYOUT_VERSION)
@@ -171,7 +186,10 @@ pub fn set_layout_in(
 
 fn storage_path() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
-    Ok(home.join(".shannon").join("desktop").join("workspace-layouts.json"))
+    Ok(home
+        .join(".shannon")
+        .join("desktop")
+        .join("workspace-layouts.json"))
 }
 
 /// `workspace_get_layout({ projectKey }) -> WorkspaceLayout | null`
@@ -183,7 +201,10 @@ pub async fn workspace_get_layout(project_key: String) -> Result<Option<Workspac
 
 /// `workspace_set_layout({ projectKey, layout })`
 #[tauri::command]
-pub async fn workspace_set_layout(project_key: String, layout: WorkspaceLayout) -> Result<(), String> {
+pub async fn workspace_set_layout(
+    project_key: String,
+    layout: WorkspaceLayout,
+) -> Result<(), String> {
     let path = storage_path()?;
     let mut layouts = load_store_at(&path);
     set_layout_in(&mut layouts, &project_key, layout)?;
@@ -199,7 +220,11 @@ mod tests {
     }
 
     fn panel(id: &str, kind: &str, r: WorkspacePanelRect) -> WorkspacePanelLayout {
-        WorkspacePanelLayout { id: id.to_string(), kind: kind.to_string(), rect: r }
+        WorkspacePanelLayout {
+            id: id.to_string(),
+            kind: kind.to_string(),
+            rect: r,
+        }
     }
 
     fn focus_layout() -> WorkspaceLayout {
@@ -223,7 +248,10 @@ mod tests {
         let mut layout = focus_layout();
         layout.version = 99;
         let err = validate_layout(&layout).unwrap_err();
-        assert!(err.contains("unsupported workspace layout version 99"), "{err}");
+        assert!(
+            err.contains("unsupported workspace layout version 99"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -271,7 +299,11 @@ mod tests {
         let reloaded = load_store_at(&path);
         assert_eq!(get_layout_in(&reloaded, "p-alpha"), Some(review));
         assert_eq!(get_layout_in(&reloaded, "p-beta"), Some(focus_layout()));
-        assert_eq!(get_layout_in(&reloaded, "p-gamma"), None, "unknown key → None");
+        assert_eq!(
+            get_layout_in(&reloaded, "p-gamma"),
+            None,
+            "unknown key → None"
+        );
     }
 
     #[test]
@@ -301,7 +333,10 @@ mod tests {
         let mut layouts = layouts;
         set_layout_in(&mut layouts, "p-x", focus_layout()).unwrap();
         save_store_at(&path, &layouts).unwrap();
-        assert_eq!(get_layout_in(&load_store_at(&path), "p-x"), Some(focus_layout()));
+        assert_eq!(
+            get_layout_in(&load_store_at(&path), "p-x"),
+            Some(focus_layout())
+        );
     }
 
     #[test]
@@ -327,7 +362,9 @@ mod tests {
         let mut layouts = BTreeMap::new();
         set_layout_in(&mut layouts, "p-x", focus_layout()).unwrap();
         let mut build = focus_layout();
-        build.panels.push(panel("terminal", "terminal", rect(1, 9, 12, 4)));
+        build
+            .panels
+            .push(panel("terminal", "terminal", rect(1, 9, 12, 4)));
         set_layout_in(&mut layouts, "p-x", build.clone()).unwrap();
         assert_eq!(get_layout_in(&layouts, "p-x"), Some(build));
     }
@@ -336,6 +373,9 @@ mod tests {
     fn storage_path_lives_in_shannon_desktop() {
         let path = storage_path().unwrap();
         let rendered = path.to_string_lossy().to_string();
-        assert!(rendered.contains(".shannon/desktop/workspace-layouts.json"), "{rendered}");
+        assert!(
+            rendered.contains(".shannon/desktop/workspace-layouts.json"),
+            "{rendered}"
+        );
     }
 }

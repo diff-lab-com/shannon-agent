@@ -1151,6 +1151,18 @@ impl PermissionManager {
         );
         self.tool_policies
             .insert("WebFetch".to_string(), web_policy);
+
+        // Computer tool - high risk (desktop control: screen capture plus
+        // mouse/keyboard input simulation). Competitors gate GUI control
+        // behind per-action approval by default (Cursor Auto-Run, Claude
+        // Cowork per-app approval); High risk routes it to confirmation.
+        let computer_policy = ToolPermissionPolicy::new(
+            "computer".to_string(),
+            RiskLevel::High,
+            "Control the desktop: capture the screen and simulate mouse/keyboard input".to_string(),
+        );
+        self.tool_policies
+            .insert("computer".to_string(), computer_policy);
     }
 
     /// Register or update a tool's permission policy

@@ -150,6 +150,7 @@ mod tool_use_tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: msg.to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
@@ -717,6 +718,7 @@ mod openai_trailing_usage_tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: "use the echo tool".to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
@@ -892,6 +894,7 @@ mod openai_truncation_continuation_tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: "restructure the crate".to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
@@ -1178,6 +1181,7 @@ mod zhipu_tool_use_broadcast_tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: "use the echo tool".to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,

@@ -475,6 +475,7 @@ impl AgentTool {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message,
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,

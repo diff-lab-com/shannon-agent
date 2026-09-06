@@ -1,5 +1,6 @@
 //! REPL command dispatch and handler implementations
 
+mod browser;
 mod config;
 mod cost;
 mod debug;
@@ -418,6 +419,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         "memory",
         "image",
         "img",
+        "browser",
         "screenshot",
         "mode",
         "context",
@@ -529,6 +531,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "forget" => memory::handle_forget(repl, args)?,
             "memory" => memory::handle_memory(repl, args)?,
             "image" | "img" | "screenshot" => media::handle_image(repl, args)?,
+            "browser" => browser::handle_browser(repl, args)?,
             "mode" => config::handle_mode(repl, args)?,
             "context" => config::handle_context(repl, args)?,
             "undo" => session::handle_undo(repl, args)?,

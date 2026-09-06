@@ -310,6 +310,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         query_id,
         session_id,
         user_message: input.to_string(),
+        // Images queued via `@<image>` since the last query ride along here.
+        attachments: {
+            let drained = std::mem::take(&mut repl.state.pending_attachments);
+            repl.state.attachment_bar.attachments.clear();
+            drained
+        },
         metadata: shannon_core::query_engine::QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: {
