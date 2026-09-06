@@ -65,6 +65,17 @@ pub const MAX_TERMINALS: usize = 4;
 /// per tick (brief: ≤16 ms batching).
 pub const OUTPUT_TICK: Duration = Duration::from_millis(16);
 
+/// Output backpressure cap per terminal: the pending buffer never holds
+/// more than this many unread pty bytes. A flood (`cat bigfile`, `yes`)
+/// drops the OLDEST bytes past the cap and the next emit carries an
+/// explicit in-stream truncation notice instead of growing without bound.
+pub const MAX_PENDING_BYTES: usize = 2 * 1024 * 1024;
+
+/// Maximum bytes per `terminal:output` event: a drained batch is split
+/// into consecutive chunks of at most this size so a single emit never
+/// ships multi-MB payloads to the webview.
+pub const MAX_EMIT_CHUNK: usize = 256 * 1024;
+
 /// Initial pty geometry; corrected by `terminal_resize` once the frontend
 /// fit addon measures the panel.
 const INITIAL_ROWS: u16 = 24;
@@ -170,13 +181,31 @@ impl TerminalOutputSink for TauriTerminalSink {
 struct PendingBuffer {
     bytes: StdMutex<Vec<u8>>,
     closed: AtomicBool,
+    /// Backpressure cap (bytes) and how many bytes were dropped oldest-
+    /// first when it was exceeded; the next drain prepends an explicit
+    /// truncation notice so the user sees the gap instead of silent loss.
+    cap: usize,
+    dropped: StdMutex<u64>,
+}
+
+/// In-stream notice prepended after bytes were dropped (pure ASCII so the
+/// frontend's byte-wise marker search and the terminal both render it).
+fn truncation_notice(dropped: u64) -> Vec<u8> {
+    format!("\r\n\u{1b}[2m[shannon: output truncated — {dropped} bytes dropped]\u{1b}[0m\r\n")
+        .into_bytes()
 }
 
 impl PendingBuffer {
     fn new() -> Self {
+        Self::with_cap(MAX_PENDING_BYTES)
+    }
+
+    fn with_cap(cap: usize) -> Self {
         Self {
             bytes: StdMutex::new(Vec::new()),
             closed: AtomicBool::new(false),
+            cap,
+            dropped: StdMutex::new(0),
         }
     }
 
@@ -184,21 +213,57 @@ impl PendingBuffer {
         if self.closed.load(Ordering::SeqCst) {
             return;
         }
-        if let Ok(mut buf) = self.bytes.lock() {
-            buf.extend_from_slice(chunk);
+        let Ok(mut buf) = self.bytes.lock() else {
+            return;
+        };
+        if chunk.len() >= self.cap {
+            // A single chunk at/over the cap: everything buffered is stale
+            // by definition — keep only the chunk's tail.
+            let mut dropped = self.dropped.lock().unwrap_or_else(|p| p.into_inner());
+            *dropped += (buf.len() + chunk.len() - self.cap) as u64;
+            buf.clear();
+            let tail_start = chunk.len() - self.cap;
+            buf.extend_from_slice(&chunk[tail_start..]);
+            return;
         }
+        let overflow = (buf.len() + chunk.len()).saturating_sub(self.cap);
+        if overflow > 0 {
+            let mut dropped = self.dropped.lock().unwrap_or_else(|p| p.into_inner());
+            *dropped += overflow as u64;
+            buf.drain(..overflow);
+        }
+        buf.extend_from_slice(chunk);
     }
 
     /// Take everything buffered so far (coalesced by the caller's tick).
+    /// Bytes dropped by backpressure surface as a leading truncation
+    /// notice exactly once.
     fn drain(&self) -> Vec<u8> {
-        match self.bytes.lock() {
+        let mut buf = match self.bytes.lock() {
             Ok(mut buf) => std::mem::take(&mut *buf),
             Err(_) => Vec::new(),
+        };
+        let dropped = std::mem::take(&mut *self.dropped.lock().unwrap_or_else(|p| p.into_inner()));
+        if dropped > 0 {
+            let mut out = truncation_notice(dropped);
+            out.append(&mut buf);
+            out
+        } else {
+            buf
         }
     }
 
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
+    }
+
+    /// Buffered size + dropped-so-far (test seam).
+    #[cfg(test)]
+    fn state(&self) -> (usize, u64) {
+        (
+            self.bytes.lock().map(|b| b.len()).unwrap_or(0),
+            *self.dropped.lock().unwrap_or_else(|p| p.into_inner()),
+        )
     }
 }
 
@@ -588,7 +653,7 @@ fn pump_once(inner: &TerminalInner) {
                 )
                 .as_bytes(),
             );
-            sink.emit_output(&session.info.terminal_id, &final_bytes);
+            emit_chunked(&sink, &session.info.terminal_id, &final_bytes);
             // Retire: close the reader, drop the child handle, remove the
             // session. The take_child here is just prompt cleanup — the
             // process already exited, so no kill signal is needed.
@@ -600,8 +665,17 @@ fn pump_once(inner: &TerminalInner) {
                 .unwrap_or_else(|p| p.into_inner())
                 .remove(&session.info.terminal_id);
         } else if !drained.is_empty() {
-            sink.emit_output(&session.info.terminal_id, &drained);
+            emit_chunked(&sink, &session.info.terminal_id, &drained);
         }
+    }
+}
+
+/// Emit a drained batch as consecutive events of at most
+/// [`MAX_EMIT_CHUNK`] bytes — one tick's flood must never become a
+/// multi-MB webview payload.
+fn emit_chunked(sink: &Arc<dyn TerminalOutputSink>, terminal_id: &str, bytes: &[u8]) {
+    for chunk in bytes.chunks(MAX_EMIT_CHUNK) {
+        sink.emit_output(terminal_id, chunk);
     }
 }
 
@@ -1153,6 +1227,85 @@ mod tests {
             .spawn(&PathBuf::from("/nonexistent/dir/for/terminal"), None)
             .unwrap_err();
         assert!(err.contains("project dir"), "{err}");
+    }
+
+    // ── Backpressure (fix round 1) ───────────────────────────────────────
+
+    #[test]
+    fn pending_buffer_caps_and_marks_the_overflow() {
+        let buffer = PendingBuffer::with_cap(64);
+        buffer.push(&[b'a'; 50]);
+        buffer.push(&[b'b'; 50]);
+        // Cap held, oldest 36 bytes dropped.
+        let (len, dropped) = buffer.state();
+        assert_eq!(len, 64);
+        assert_eq!(dropped, 36);
+
+        let drained = buffer.drain();
+        let text = String::from_utf8_lossy(&drained);
+        assert!(text.starts_with('\r'), "marker starts on a fresh line");
+        assert!(text.contains("output truncated"), "{text}");
+        assert!(text.contains("36 bytes dropped"), "{text}");
+        // Retained bytes are the TAIL of the stream (newest wins).
+        assert!(text.ends_with(&"b".repeat(50)), "newest bytes kept: {text}");
+
+        // The notice is emitted exactly once; the next drain is clean.
+        let (len, dropped) = buffer.state();
+        assert_eq!((len, dropped), (0, 0));
+        assert!(buffer.drain().is_empty());
+    }
+
+    #[test]
+    fn single_oversized_chunk_keeps_its_tail() {
+        let buffer = PendingBuffer::with_cap(64);
+        buffer.push(&[b'x'; 10]);
+        buffer.push(&[b'y'; 100]);
+        let (len, dropped) = buffer.state();
+        assert_eq!(len, 64);
+        // 10 buffered + 100 - 64 kept = 46 dropped.
+        assert_eq!(dropped, 46);
+        let drained = buffer.drain();
+        let text = String::from_utf8_lossy(&drained);
+        assert!(text.contains("46 bytes dropped"), "{text}");
+        assert!(text.ends_with(&"y".repeat(64)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn flood_is_capped_and_emits_are_chunked() {
+        let sink = RecordingSink::default();
+        let manager = test_manager(&sink);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let info = manager
+            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()))
+            .expect("spawn");
+        // 3 MiB in a single push: the 2 MiB cap drops the oldest 1 MiB and
+        // the pump must ship the retained 2 MiB as ≤256 KiB events.
+        let flood = vec![b'f'; 3 * 1024 * 1024];
+        manager.test_push_pending(&info.terminal_id, &flood);
+        manager.pump_once_for_test();
+
+        let emissions = sink.emissions.lock().unwrap();
+        assert!(!emissions.is_empty());
+        let total: usize = emissions.iter().map(|(_, bytes)| bytes.len()).sum();
+        for (id, bytes) in emissions.iter() {
+            assert_eq!(id, &info.terminal_id);
+            assert!(
+                bytes.len() <= MAX_EMIT_CHUNK,
+                "every event must be ≤ MAX_EMIT_CHUNK, got {}",
+                bytes.len()
+            );
+        }
+        // Retained cap (2 MiB) + the in-stream truncation notice + whatever
+        // idle prompt bytes the shell may have printed — never the full 3 MiB.
+        assert!(total < 3 * 1024 * 1024, "flood must be capped, got {total}");
+        assert!(total >= MAX_PENDING_BYTES);
+        let head = String::from_utf8_lossy(&emissions[0].1);
+        assert!(
+            head.contains("output truncated") && head.contains("bytes dropped"),
+            "truncation notice must lead the emit stream: {head}"
+        );
+        manager.kill(&info.terminal_id).expect("kill");
     }
 
     #[test]

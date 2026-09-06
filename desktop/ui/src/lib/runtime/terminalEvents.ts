@@ -34,16 +34,39 @@ function isMockMode(): boolean {
 }
 
 /**
- * Decode a `terminal:output` payload's base64 `data` into a binary-safe
- * string suitable for `xterm.write` (latin1 round-trip keeps every byte;
- * multi-byte UTF-8 sequences are reconstructed by xterm's own decoder).
+ * Decode a `terminal:output` payload's base64 `data` into the **raw PTY
+ * bytes** for `xterm.write`. Deliberately NOT decoded to a string here:
+ * the ≤16 ms pump slices the pty stream at arbitrary byte boundaries, so
+ * a multi-byte UTF-8 sequence can be split across two events — a fresh
+ * non-streaming TextDecoder per event would turn both halves into
+ * U+FFFD. xterm's write buffer accepts Uint8Array and decodes UTF-8
+ * incrementally, keeping an incomplete trailing sequence buffered until
+ * the next write completes it, so bytes must reach it untouched.
  */
-export function decodeTerminalOutput(base64: string): string {
+export function decodeTerminalOutput(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+  return bytes;
 }
+
+/**
+ * ASCII-marker search over raw pty bytes (the backend's in-stream notices
+ * — exit/truncation — are pure ASCII and always emitted contiguously
+ * within a single event, so a per-event byte search is exact).
+ */
+export function bytesContainAscii(bytes: Uint8Array, marker: string): boolean {
+  const needle = new TextEncoder().encode(marker);
+  if (needle.length === 0 || bytes.length < needle.length) return false;
+  outer: for (let i = 0; i <= bytes.length - needle.length; i += 1) {
+    for (let j = 0; j < needle.length; j += 1) {
+      if (bytes[i + j] !== needle[j]) continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
 
 /** Encode raw bytes the same way the Rust side does (test/demo helper). */
 export function encodeTerminalOutput(raw: string): string {

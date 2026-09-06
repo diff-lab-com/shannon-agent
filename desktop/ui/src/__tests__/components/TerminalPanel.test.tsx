@@ -20,7 +20,7 @@ import type { TerminalInfo } from '@/types'
 
 const h = vi.hoisted(() => ({
   terminals: [] as {
-    written: string[]
+    written: Uint8Array[]
     options: Record<string, unknown>
     element: HTMLElement | null
     dataHandler: ((data: string) => void) | null
@@ -30,13 +30,25 @@ const h = vi.hoisted(() => ({
     scrollToBottom: () => void
     focus: () => void
     dispose: () => void
-    write: (text: string) => void
+    write: (data: string | Uint8Array) => void
     onData: (cb: (data: string) => void) => { dispose: () => void }
     onResize: (cb: (size: { cols: number; rows: number }) => void) => { dispose: () => void }
   }[],
   outputHandler: null as ((payload: { terminalId: string; data: string }) => void) | null,
   unsubscribed: false,
 }))
+
+/** What xterm would render: every written chunk re-decoded as one stream. */
+function rendered(term: (typeof h.terminals)[number]): string {
+  const total = term.written.reduce((n, c) => n + c.length, 0)
+  const all = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of term.written) {
+    all.set(chunk, offset)
+    offset += chunk.length
+  }
+  return new TextDecoder('utf-8', { fatal: false }).decode(all)
+}
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
@@ -49,8 +61,8 @@ vi.mock('@xterm/xterm', () => ({
       this.options = options
       h.terminals.push(this)
     }
-    write(text: string) {
-      this.written.push(text)
+    write(data: string | Uint8Array) {
+      this.written.push(typeof data === 'string' ? new TextEncoder().encode(data) : data)
     }
     onData(cb: (data: string) => void) {
       this.dataHandler = cb
@@ -181,16 +193,38 @@ describe('TerminalPanel (open/close)', () => {
 })
 
 describe('TerminalPanel (output + input)', () => {
-  it('decodes base64 terminal:output into the xterm buffer, id-filtered', async () => {
+  it('decodes base64 terminal:output into raw bytes for xterm, id-filtered', async () => {
     await openPanel()
     await waitFor(() => expect(h.terminals.length).toBe(1))
     const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
-    // Mismatched id must be ignored; matching id decoded (base64 → text,
-    // incl. multi-byte) and written into the xterm buffer.
+    // Mismatched id must be ignored; matching id decoded (base64 → raw
+    // bytes) and written into the xterm buffer untouched.
     h.outputHandler?.({ terminalId: 'other-terminal', data: encode('not-for-you') })
     h.outputHandler?.({ terminalId: terminalId, data: encode('pty-bytes-✓') })
-    expect(h.terminals[0].written.join('')).not.toContain('not-for-you')
-    expect(h.terminals[0].written.join('')).toContain('pty-bytes-✓')
+    const seen = rendered(h.terminals[0])
+    expect(seen).not.toContain('not-for-you')
+    expect(seen).toContain('pty-bytes-✓')
+  })
+
+  it('reassembles multi-byte sequences split across events without U+FFFD', async () => {
+    // The 16 ms pump slices the pty stream at arbitrary byte boundaries:
+    // "中文输出✓" (UTF-8, 3 bytes/CJK char) is cut mid-sequence across
+    // three events. xterm must receive BYTES so its write buffer completes
+    // the partial sequences — per-event string decoding would corrupt
+    // both halves into U+FFFD.
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+    const full = new TextEncoder().encode('中文输出✓')
+    const cuts = [full.subarray(0, 2), full.subarray(2, 5), full.subarray(5)]
+    for (const piece of cuts) {
+      let binary = ''
+      piece.forEach(b => { binary += String.fromCharCode(b) })
+      h.outputHandler?.({ terminalId, data: btoa(binary) })
+    }
+    const seen = rendered(h.terminals[0])
+    expect(seen).toBe('中文输出✓')
+    expect(seen.includes('\uFFFD')).toBe(false)
   })
 
   it('routes xterm onData to terminal_write', async () => {
@@ -210,6 +244,7 @@ describe('TerminalPanel (output + input)', () => {
       terminalId,
       data: encode('\r\n\x1b[2m[shannon: process exited — done]\x1b[0m\r\n'),
     })
+    // Marker detection runs on the raw bytes of the event (ASCII-safe).
     expect(await screen.findByText(/ended/)).toBeTruthy()
   })
 })

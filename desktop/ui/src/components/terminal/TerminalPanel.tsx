@@ -28,7 +28,7 @@ import { useIntl, type PrimitiveType } from 'react-intl';
 import '@xterm/xterm/css/xterm.css';
 import * as api from '@/lib/tauri-api';
 import type { TerminalInfo } from '@/types';
-import { decodeTerminalOutput, listenTerminalOutput } from '@/lib/runtime/terminalEvents';
+import { bytesContainAscii, decodeTerminalOutput, listenTerminalOutput } from '@/lib/runtime/terminalEvents';
 import { xtermTheme } from './xtermTheme';
 import type { Terminal as XTerm } from '@xterm/xterm';
 import type { FitAddon as XTermFitAddon } from '@xterm/addon-fit';
@@ -162,9 +162,13 @@ export function TerminalPanel({ projectDir }: { projectDir?: string | null }) {
     let disposed = false;
     void listenTerminalOutput(payload => {
       if (payload.terminalId !== info.terminalId) return;
-      const text = decodeTerminalOutput(payload.data);
-      term.write(text);
-      if (text.includes('[shannon: process exited')) {
+      // Raw bytes go straight to xterm: the pump slices the pty stream at
+      // arbitrary byte boundaries, and xterm's write buffer completes
+      // multi-byte sequences split across events. Decoding per event would
+      // turn both halves of a split sequence into U+FFFD.
+      const bytes = decodeTerminalOutput(payload.data);
+      term.write(bytes);
+      if (bytesContainAscii(bytes, '[shannon: process exited')) {
         setTabs(prev => prev.map(tab => (
           tab.info.terminalId === info.terminalId ? { ...tab, exited: true } : tab
         )));
