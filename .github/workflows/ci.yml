@@ -75,7 +75,10 @@ jobs:
           # CLI passthrough feature (opt-in desktop automation build)
           CARGO_TARGET_DIR=target-feature cargo build -p shannon-cli --features computer-use
       - name: Test with computer-use feature
-        run: CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools --features computer-use --lib --no-fail-fast
+        # Only the computer module matters here (feature-off stub tests are
+        # cfg-gated out; the full lib run would drag in HOME-race git tests
+        # into a target dir without the nextest retry profile).
+        run: CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools --features computer-use --lib computer --no-fail-fast
       # T10 Phase 1: compile-check the Wayland-capable backend (libei via
       # xdg-desktop-portal). Pure-Rust deps (reis/ashpd) — no extra system
       # packages needed at build time; the portal is only a runtime dep.
