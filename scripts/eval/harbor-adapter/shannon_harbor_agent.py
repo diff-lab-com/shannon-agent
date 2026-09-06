@@ -20,6 +20,7 @@ The binary evaluated is the LOCAL dev build pointed at by SHANNON_HARBOR_BIN
 `shannon --version` output is captured into the trial's agent info.
 """
 
+import asyncio
 import os
 import shlex
 import tempfile
@@ -29,6 +30,7 @@ from typing import override
 from harbor.agents.installed.base import (
     BaseInstalledAgent,
     CliFlag,
+    NonZeroAgentExitCodeError,
     with_prompt_template,
 )
 from harbor.agents.model_connection import (
@@ -71,9 +73,39 @@ class Shannon(BaseInstalledAgent):
     def _local_bin(self) -> Path:
         return Path(os.environ.get("SHANNON_HARBOR_BIN", DEFAULT_SHANNON_BIN))
 
+    @property
+    def _local_musl_bin(self) -> Path:
+        return Path(
+            os.environ.get(
+                "SHANNON_HARBOR_MUSL_BIN",
+                str(self._local_bin.parent.parent
+                    / "x86_64-unknown-linux-musl" / "release" / "shannon"),
+            )
+        )
+
     @override
     async def install(self, environment: BaseEnvironment) -> None:
+        # Container libc probe decides which binary to ship: the default dev
+        # build is dynamically linked against the host glibc (needs >= 2.32),
+        # which dies on alpine/musl-based TB images (qemu-alpine-ssh,
+        # qemu-startup — RCA 2026-09-06, 2 tasks lost at install time). When a
+        # musl build is available locally, prefer it for musl containers.
+        try:
+            probe = await self.exec_as_root(
+                environment,
+                command=(
+                    "if [ -e /lib/ld-musl-x86_64.so.1 ]; then echo musl; "
+                    "else ldd --version 2>/dev/null | head -1; fi"
+                ),
+            )
+            libc_info = str(getattr(probe, "stdout", "") or "")
+        except Exception:
+            libc_info = ""
         local_bin = self._local_bin
+        if "musl" in libc_info:
+            musl_bin = self._local_musl_bin
+            if musl_bin.is_file():
+                local_bin = musl_bin
         if not local_bin.is_file():
             raise RuntimeError(
                 f"Shannon dev binary not found at {local_bin} — set "
@@ -140,12 +172,10 @@ class Shannon(BaseInstalledAgent):
         cli_flags = self.build_cli_flags()
         extra_flags = (cli_flags + " ") if cli_flags else ""
 
-        # Write the prompt to a temp file and upload it into the container, then
-        # feed it to `shannon -p -` via stdin. This handles prompts that:
-        #   * begin with '-' (clap mis-parses as a flag; e.g. TB pytorch-model-recovery)
-        #   * contain characters that shlex.quote or shell expansion mangles
-        # The heredoc alternative (`shannon -p -- <<EOF`) breaks clap because
-        # '--' consumes the prompt value rather than terminating flag parsing.
+        # Write the prompt to a temp file, upload it into the container, and
+        # pass it via attached `--prompt=$(cat file)`. This handles prompts
+        # that begin with '-' or contain quoting-hostile characters (clap
+        # refuses separated values starting with '-'; see RCA 2026-09-07).
         prompt_filename = "shannon_prompt.txt"
         prompt_target = f"/tmp/{prompt_filename}"
         with tempfile.NamedTemporaryFile(
@@ -158,9 +188,7 @@ class Shannon(BaseInstalledAgent):
         finally:
             tmp_path.unlink(missing_ok=True)
 
-        await self.exec_as_agent(
-            environment,
-            command=(
+        command = (
                 "shannon "
                 f"--provider {shlex.quote(provider)} "
                 f"--model {shlex.quote(model)} "
@@ -174,6 +202,20 @@ class Shannon(BaseInstalledAgent):
                 # byte-exact with leading '-', newlines, backticks and $().
                 f"--prompt=\"$(cat {shlex.quote(prompt_target)})\" "
                 "> /logs/agent/shannon.ndjson 2> /logs/agent/shannon.stderr"
-            ),
-            env=env,
         )
+        # rc=4 (rate-limit) retries at the harness layer: coding-plan windows
+        # are bursty and the engine's in-call retry cannot cover an immediate
+        # first-call rejection (RCA 2026-09-06/07). One retry after 60s.
+        for attempt in range(2):
+            try:
+                await self.exec_as_agent(environment, command=command, env=env)
+                return
+            except NonZeroAgentExitCodeError as exc:
+                if attempt == 0 and "exit 4" in str(exc):
+                    self.logger.warning(
+                        "shannon exited rc=4 (rate limit); retrying once in 60s"
+                    )
+                    await asyncio.sleep(60)
+                    continue
+                raise
+
