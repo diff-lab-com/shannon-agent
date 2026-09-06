@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect, useCallback, lazy } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
 import { ArtifactPanel } from '@/components/artifact/ArtifactPanel'
+import { LivePreview } from '@/components/artifact/LivePreview'
 import DiffDialog from '@/components/diff/DiffDialog'
 import DiffDialogMulti from '@/components/diff/DiffDialogMulti'
 import { useChat } from '@/context/ChatContext'
@@ -14,6 +16,17 @@ import { toastError } from '@/lib/errorToast'
 import { useBudgetGuard } from '@/hooks/useBudgetGuard'
 import BudgetBanner from '@/components/chat/BudgetBanner'
 import { TerminalPanel } from '@/components/terminal/TerminalPanel'
+import {
+  addPanel,
+  matchesPreset,
+  presetLayout,
+  workspaceProjectKey,
+  type PanelKind,
+} from '@/components/workspace/layout'
+import { useWorkspaceLayout } from '@/components/workspace/useWorkspaceLayout'
+import { WorkspaceGrid } from '@/components/workspace/WorkspaceGrid'
+import { WorkspaceToolbar } from '@/components/workspace/WorkspaceToolbar'
+import { SessionDiffPanel } from '@/components/workspace/SessionDiffPanel'
 import {
   ApiKeyBanner,
   ComposerPanel,
@@ -34,7 +47,7 @@ export default function Chat() {
     messages, streamingText, isQuerying, usage, activeToolCalls,
     sendMessage, contextPanelOpen, compactSession,
   } = useChat()
-  const { sessions, currentSessionId, createSession } = useSessions()
+  const { sessions, currentSessionId, windowSessionId, createSession } = useSessions()
   const { config } = useCatalog()
   const intl = useIntl()
   const t = useCallback((id: string) => intl.formatMessage({ id }), [intl])
@@ -155,6 +168,70 @@ export default function Chat() {
     !config.api_key &&
     config.provider !== 'ollama'
 
+  // ── P1-5 C-2 — workspace host ─────────────────────────────────────────
+  //
+  // Window mode (windowSessionId) keeps the slim single-chat view with no
+  // workspace at all (brief: 仅显示 chat 面板，禁用布局编辑). The main
+  // window hosts the WorkspaceGrid; the default focus preset renders the
+  // chat panel chrome-less over the full grid, so the default appearance
+  // matches the pre-workspace page.
+
+  const windowMode = windowSessionId != null
+  const workingDir = sessions.find(s => s.id === currentSessionId)?.working_dir
+    ?? config?.working_dir
+    ?? null
+  const { layout, update } = useWorkspaceLayout(windowMode ? null : (workingDir ? workspaceProjectKey(workingDir) : null))
+  const hasTerminalPanel = layout.panels.some(p => p.kind === 'terminal')
+  const showChrome = !matchesPreset(layout, 'focus')
+
+  // The terminal drawer and the terminal grid panel are the SAME
+  // TerminalPanel instance portaled between two containers (see
+  // TerminalPanelProps.variant): the xterm instance — including scrollback —
+  // survives the handoff, and the Rust-side TerminalManager keeps the PTY
+  // processes alive regardless (never re-spawned).
+  const [drawerSlot, setDrawerSlot] = useState<HTMLDivElement | null>(null)
+  const [gridTerminalSlot, setGridTerminalSlot] = useState<HTMLDivElement | null>(null)
+  const terminalTarget = hasTerminalPanel && gridTerminalSlot ? gridTerminalSlot : drawerSlot
+
+  const renderPanelContent = useCallback((kind: PanelKind) => {
+    switch (kind) {
+      case 'chat':
+        return (
+          <>
+            <MessageArea
+              scrollParentRef={scrollParentRef}
+              messagesEndRef={messagesEndRef}
+              virtualizer={virtualizer}
+              setDiffPath={setDiffPath}
+              setDiffPaths={setDiffPaths}
+            />
+            <ComposerPanel
+              setQuickFixOpen={setQuickFixOpen}
+              setEditorOpen={setEditorOpen}
+            />
+            {/* Terminal drawer slot: hosts the portaled TerminalPanel while
+                the layout has no terminal grid panel. */}
+            <div
+              ref={setDrawerSlot}
+              className={hasTerminalPanel ? 'hidden' : 'contents'}
+            />
+          </>
+        )
+      case 'diff':
+        return <SessionDiffPanel workingDir={workingDir} />
+      case 'preview':
+        return <LivePreview />
+      case 'terminal':
+        return (
+          <div
+            ref={setGridTerminalSlot}
+            data-testid="workspace-terminal-slot"
+            className="h-full min-h-0"
+          />
+        )
+    }
+  }, [virtualizer, workingDir, hasTerminalPanel])
+
   return (
     <ArtifactProvider>
       <ComposerContext.Provider value={composerValue}>
@@ -178,27 +255,51 @@ export default function Chat() {
               sessionId={currentSessionId}
             />
 
-            <MessageArea
-              scrollParentRef={scrollParentRef}
-              messagesEndRef={messagesEndRef}
-              virtualizer={virtualizer}
-              setDiffPath={setDiffPath}
-              setDiffPaths={setDiffPaths}
-            />
-
-            <ComposerPanel
-              setQuickFixOpen={setQuickFixOpen}
-              setEditorOpen={setEditorOpen}
-            />
-
-            {/* P1-5 D — integrated terminal: bottom drawer under the composer.
-                Terminal sessions live in the Rust backend (AppState), so the
-                panel survives page switches; only its mount point is here. */}
-            <TerminalPanel
-              projectDir={sessions.find(s => s.id === currentSessionId)?.working_dir
-                ?? config?.working_dir
-                ?? null}
-            />
+            {windowMode ? (
+              <>
+                {/* P1-1 window mode: slim single-chat view, no workspace. */}
+                <MessageArea
+                  scrollParentRef={scrollParentRef}
+                  messagesEndRef={messagesEndRef}
+                  virtualizer={virtualizer}
+                  setDiffPath={setDiffPath}
+                  setDiffPaths={setDiffPaths}
+                />
+                <ComposerPanel
+                  setQuickFixOpen={setQuickFixOpen}
+                  setEditorOpen={setEditorOpen}
+                />
+                <TerminalPanel projectDir={workingDir} />
+              </>
+            ) : (
+              <>
+                <WorkspaceToolbar
+                  layout={layout}
+                  onPreset={name => update(presetLayout(name))}
+                  onAdd={kind => update(addPanel(layout, kind))}
+                  onReset={() => update(presetLayout('focus'))}
+                />
+                <div className="flex-1 min-h-0">
+                  <WorkspaceGrid
+                    layout={layout}
+                    chrome={showChrome}
+                    onChange={update}
+                    renderPanelContent={renderPanelContent}
+                    ariaLabel={t('workspace.grid.aria')}
+                  />
+                </div>
+                {/* One TerminalPanel instance, portaled into whichever
+                    container the layout calls for (drawer slot inside the
+                    chat panel, or the terminal grid panel's slot). */}
+                {terminalTarget && createPortal(
+                  <TerminalPanel
+                    projectDir={workingDir}
+                    variant={hasTerminalPanel ? 'panel' : 'drawer'}
+                  />,
+                  terminalTarget,
+                )}
+              </>
+            )}
           </section>
 
           <InlinePanelModal

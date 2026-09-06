@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest'
 import {
   GRID_COLUMNS,
   GRID_ROWS,
-  PANEL_KINDS,
   addPanel,
   findPanel,
   matchesPreset,
@@ -22,7 +21,8 @@ import {
   workspaceProjectKey,
   WORKSPACE_LAYOUT_VERSION,
   type PanelRect,
-} from './layout'
+  type WorkspaceLayout,
+} from '@/components/workspace/layout'
 
 const r = (col: number, row: number, w: number, h: number): PanelRect => ({ col, row, w, h })
 
