@@ -1239,6 +1239,7 @@
   "settings.connections.mobile.statusRunning": "运行中",
   "settings.connections.mobile.statusStopped": "网关未运行",
   "settings.connections.mobile.pageHint": "在手机浏览器（同一 Wi-Fi）打开 {url}，把二维码下方的配对令牌粘贴进页面即可配对。",
+  "settings.connections.mobile.loopbackNote": "当前网关移动通道仅绑定本机回环——上方地址仅本机可用；要让手机访问，请把网关 mobile 的 host 改为可路由地址并重启网关（见移动派发指南）。",
   "settings.connections.mobile.generate": "生成配对码",
   "settings.connections.mobile.refresh": "刷新",
   "settings.connections.mobile.qrAlt": "用于将手机与本设备配对的二维码",

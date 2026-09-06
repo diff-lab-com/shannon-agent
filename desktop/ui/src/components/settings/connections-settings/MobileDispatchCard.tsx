@@ -63,10 +63,21 @@ export function MobileDispatchCard({ config, procState }: MobileDispatchCardProp
       ? { variant: 'success' as const, label: t('settings.connections.mobile.statusRunning') }
       : { variant: 'warning' as const, label: t('settings.connections.mobile.statusStopped') }
 
-  // The page URL a phone browser opens (PWA page served by the gateway itself).
-  // Prefer the LAN endpoint from a freshly minted token; fall back to the
-  // configured bind address when it is a routable one.
+  // What the gateway mobile server actually binds. The desktop-written default
+  // is 127.0.0.1 (loopback): the pairing QR / token still advertises the LAN
+  // IP, but with a loopback bind a phone cannot reach the gateway — the page
+  // URL only works on this computer until the host config is changed.
+  const loopbackBound = isLoopback(config.mobile?.host ?? '127.0.0.1')
+
+  // The page URL a browser opens (PWA page served by the gateway itself).
+  // Loopback-bound: advertise the machine-local URL + a configuration note.
+  // Routable bind: prefer the LAN endpoint from a freshly minted token, then
+  // the configured bind address.
   const pageUrl = (() => {
+    if (!mobileEnabled) return null
+    if (loopbackBound) {
+      return `http://127.0.0.1:${config.mobile?.port ?? DEFAULT_MOBILE_PORT}/`
+    }
     if (pairToken) return pairToken.lanEndpoint.replace(/^ws(s)?:\/\//, 'http$1://') + '/'
     const host = config.mobile?.host
     if (host && !isLoopback(host)) {
@@ -210,6 +221,15 @@ export function MobileDispatchCard({ config, procState }: MobileDispatchCardProp
             data-testid="mobile-dispatch-url-hint"
           >
             {tVal('settings.connections.mobile.pageHint', { url: pageUrl })}
+          </p>
+        )}
+
+        {mobileEnabled && loopbackBound && (
+          <p
+            className="font-body-sm text-on-surface-variant max-w-prose"
+            data-testid="mobile-dispatch-loopback-note"
+          >
+            {t('settings.connections.mobile.loopbackNote')}
           </p>
         )}
 
