@@ -458,6 +458,18 @@ fn main() {
                 commands_connections::bootstrap_gateway_supervisor(&state_ref, &app_handle).await;
             });
 
+            // P2-5 — routine scheduler: periodic due check (every 30s).
+            // Routines due inside their execution window (or without one)
+            // execute through the shared routine-run path; routines due
+            // outside their window are queued until the window opens.
+            {
+                let sched_state: tauri::State<'_, commands::AppState> = app.state();
+                shannon_desktop::scheduled_commands::spawn_scheduler(
+                    sched_state.inner(),
+                    app_handle.clone(),
+                );
+            }
+
             // Bundle A — Click-to-foreground: when a Shannon notification is
             // clicked, bring the main window to the foreground. On macOS and
             // Windows the OS already focuses the app automatically (native

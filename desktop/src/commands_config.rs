@@ -524,6 +524,33 @@ pub async fn configure(
 
             Ok(())
         }
+        "offpeak.model_override" => {
+            // P2-5: frozen config key `offpeak.model_override` — model used
+            // for routine executions that start inside their off-peak
+            // execution window. Empty/whitespace value = disabled (brief
+            // contract), persisted as None so the wire stays clean.
+            let trimmed = update.value.trim().to_string();
+            let mut desktop_cfg = state.desktop_config.write().await;
+            desktop_cfg.offpeak.model_override = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            };
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "offpeak.model_override".into(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
         "strategic_focus" => {
             let mut desktop_cfg = state.desktop_config.write().await;
             desktop_cfg.strategic_focus = Some(update.value.clone());

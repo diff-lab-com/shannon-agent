@@ -18,6 +18,9 @@ import type { ScheduledRoutine } from '@/types'
 interface ScheduleDAGViewProps {
   routines: ScheduledRoutine[]
   onSelectRoutine?: (id: string) => void
+  /** P2-5: routine ids whose most recent run is queued for their off-peak
+   *  execution window — those nodes render the queued status line. */
+  queuedTaskIds?: Set<string>
 }
 
 interface PositionedNode {
@@ -102,11 +105,19 @@ function triggerClasses(triggerType: string, enabled: boolean): string {
   return 'fill-surface-container stroke-outline-variant'
 }
 
-export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleDAGViewProps) {
+export default function ScheduleDAGView({ routines, onSelectRoutine, queuedTaskIds }: ScheduleDAGViewProps) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const { nodes, width, height } = useMemo(() => layout(routines), [routines])
   const nodeById = useMemo(() => new Map(nodes.map(n => [n.routine.id, n])), [nodes])
+
+  // P2-5: "22:00–06:00" label for the routine's execution window, if any.
+  const windowLabelOf = (routine: ScheduledRoutine): string | null => {
+    const w = routine.policy?.execution_window
+    if (!w) return null
+    const pad = (h: number) => String(h).padStart(2, '0')
+    return `${pad(w.start_hour)}:00–${pad(w.end_hour)}:00`
+  }
 
   const edges = useMemo(() => {
     const list: { from: PositionedNode; to: PositionedNode }[] = []
@@ -171,6 +182,8 @@ export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleD
 
           {nodes.map(n => {
             const nodeClass = triggerClasses(n.routine.trigger_type, n.routine.enabled)
+            const windowLabel = windowLabelOf(n.routine)
+            const isQueued = queuedTaskIds?.has(n.routine.id) ?? false
             return (
               <g
                 key={n.routine.id}
@@ -191,16 +204,26 @@ export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleD
                   {n.routine.name.length > 22 ? n.routine.name.slice(0, 20) + '…' : n.routine.name}
                 </text>
                 <text x={12} y={38} fontSize={10} className="fill-on-surface-variant" fontFamily="ui-monospace, monospace">
-                  {n.routine.trigger_type === 'cron'
-                    ? n.routine.cron_expr ?? '0 0 * * *'
-                    : n.routine.trigger_type === 'interval'
-                      ? t('tasks.scheduleDAGView.every', { mins: Math.round(n.routine.interval_secs / 60) })
-                      : n.routine.trigger_type}
+                  {[
+                    n.routine.trigger_type === 'cron'
+                      ? n.routine.cron_expr ?? '0 0 * * *'
+                      : n.routine.trigger_type === 'interval'
+                        ? t('tasks.scheduleDAGView.every', { mins: Math.round(n.routine.interval_secs / 60) })
+                        : n.routine.trigger_type,
+                    // P2-5: window badge inline with the trigger line.
+                    windowLabel ? `⏾ ${windowLabel}` : null,
+                  ].filter(Boolean).join(' · ')}
                 </text>
-                <text x={12} y={56} fontSize={9} className={n.routine.enabled ? 'fill-tertiary' : 'fill-outline'}>
-                  {n.routine.enabled ? '● ' + t('tasks.scheduleDAGView.active') : '○ ' + t('tasks.scheduleDAGView.disabled')}
-                  {n.routine.fire_count > 0 ? ' ' + t('tasks.scheduleDAGView.fired', { count: n.routine.fire_count }) : ''}
-                </text>
+                {isQueued ? (
+                  <text x={12} y={56} fontSize={9} className="fill-secondary">
+                    ⏳ {t('tasks.scheduleDAGView.queued', { window: windowLabel ?? '' })}
+                  </text>
+                ) : (
+                  <text x={12} y={56} fontSize={9} className={n.routine.enabled ? 'fill-tertiary' : 'fill-outline'}>
+                    {n.routine.enabled ? '● ' + t('tasks.scheduleDAGView.active') : '○ ' + t('tasks.scheduleDAGView.disabled')}
+                    {n.routine.fire_count > 0 ? ' ' + t('tasks.scheduleDAGView.fired', { count: n.routine.fire_count }) : ''}
+                  </text>
+                )}
               </g>
             )
           })}

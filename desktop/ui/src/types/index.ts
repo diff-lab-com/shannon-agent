@@ -394,11 +394,19 @@ export interface DesktopConfig {
   active_permission_profile?: string | null
   /** P1-3: command sandbox config — frozen key path `sandbox.mode`. */
   sandbox?: SandboxConfig
+  /** P2-5: off-peak execution settings — frozen key path `offpeak.model_override`. */
+  offpeak?: OffpeakConfig
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */
 export interface SandboxConfig {
   mode?: 'off' | 'local' | 'landlock' | null
+}
+
+/** P2-5: `offpeak` config payload. Empty/missing `model_override` = disabled. */
+export interface OffpeakConfig {
+  /** Model id used for routine executions inside their execution window. Empty = disabled. */
+  model_override?: string | null
 }
 
 /** P1-3: result of `activate_permission_profile`. */
@@ -760,6 +768,21 @@ export interface ExecutionPolicy {
   /// "slack:#ops", "email:ops@example.com", "notification", "log".
   /// Empty array = log only (default behavior).
   result_routing?: string[]
+  /// P2-5: off-peak execution window (frozen contract
+  /// `ExecutionPolicy.execution_window`). Hours are inclusive wall-clock
+  /// hours in `timezone`; cross-midnight windows (start > end) wrap.
+  /// null/undefined = execute immediately when due (legacy behavior).
+  execution_window?: ExecutionWindow | null
+}
+
+/// P2-5: off-peak execution window. The window covers
+/// [start_hour:00, (end_hour + 1):00) — both hours inclusive — in
+/// `timezone` (IANA name, "UTC", a fixed offset like "+08:00"; null/empty =
+/// machine-local timezone). start=0 & end=23 = the full 24-hour window.
+export interface ExecutionWindow {
+  start_hour: number
+  end_hour: number
+  timezone?: string | null
 }
 
 /// A single scheduled routine (wire-level type, matches Rust `ScheduledRoutine`).

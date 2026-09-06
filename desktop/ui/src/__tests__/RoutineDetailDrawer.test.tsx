@@ -98,4 +98,24 @@ describe('RoutineDetailDrawer', () => {
     fireEvent.click(screen.getByText('Daily Standup'))
     expect(onClose).not.toHaveBeenCalled()
   })
+
+  // P2-5: the off-peak execution window editor is embedded in the drawer.
+  it('shows the off-peak editor with the window badge when configured', () => {
+    const routine = makeRoutine({
+      policy: {
+        max_retries: 0,
+        timeout_secs: 0,
+        worktree: null,
+        notify_on_failure: false,
+        budget_usd: null,
+        auto_archive_when_empty: true,
+        execution_window: { start_hour: 22, end_hour: 6, timezone: null },
+      },
+    })
+    render(<RoutineDetailDrawer routine={routine} routines={[]} onClose={() => {}} />)
+    expect(screen.getByText('Off-peak execution')).toBeInTheDocument()
+    expect(screen.getByText('Off-peak 22:00–06:00')).toBeInTheDocument()
+    // No queued run in the (empty) history → no queued status line.
+    expect(screen.queryByText(/Queued \(off-peak/)).not.toBeInTheDocument()
+  })
 })

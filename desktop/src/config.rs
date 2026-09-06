@@ -133,6 +133,35 @@ pub struct DesktopConfig {
     /// is `sandbox.mode`; see [`SandboxConfig`].
     #[serde(default)]
     pub sandbox: Option<SandboxConfig>,
+    /// P2-5: off-peak execution settings. The frozen config key path is
+    /// `offpeak.model_override`; see [`OffpeakConfig`]. `#[serde(default)]`
+    /// keeps older `config.json` files loadable.
+    #[serde(default)]
+    pub offpeak: OffpeakConfig,
+}
+
+/// P2-5: payload of the desktop `offpeak.model_override` config key.
+///
+/// When a routine executes **inside its execution window** and this key is
+/// non-empty, the run uses the named model instead of the active one
+/// (downgrade-to-cheaper-model pattern). Empty/None = disabled — the
+/// configured model override is ignored and routines use the active model.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OffpeakConfig {
+    /// Model id for in-window routine executions. `None`/empty = disabled.
+    #[serde(default)]
+    pub model_override: Option<String>,
+}
+
+impl OffpeakConfig {
+    /// The effective override: `None` when unset or empty/whitespace
+    /// (brief contract: empty = disabled).
+    pub fn effective_model_override(&self) -> Option<&str> {
+        self.model_override
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
 }
 
 /// P1-3: payload of the desktop `sandbox.mode` config key.
@@ -526,6 +555,7 @@ impl Default for DesktopConfig {
             enabled_providers: None,
             active_permission_profile: None,
             sandbox: None,
+            offpeak: OffpeakConfig::default(),
         }
     }
 }
@@ -1016,5 +1046,53 @@ mod tests {
         let cfg_empty: DesktopConfig =
             serde_json::from_str(r#"{"mcp_servers":[],"enabled_providers":[]}"#).unwrap();
         assert_eq!(cfg_empty.enabled_providers, Some(vec![]));
+    }
+
+    // === Off-peak model override (P2-5, frozen key `offpeak.model_override`) ===
+
+    #[test]
+    fn offpeak_defaults_to_disabled() {
+        let cfg = DesktopConfig::default();
+        assert!(cfg.offpeak.model_override.is_none());
+        assert!(cfg.offpeak.effective_model_override().is_none());
+    }
+
+    #[test]
+    fn offpeak_legacy_config_without_key_loads() {
+        // config.json written before the `offpeak` key existed must keep
+        // loading, with the override disabled.
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(legacy.offpeak.model_override.is_none());
+    }
+
+    #[test]
+    fn offpeak_model_override_round_trips_and_normalizes_empty_to_disabled() {
+        let json = r#"{"mcp_servers":[],"offpeak":{"model_override":"glm-4-flash"}}"#;
+        let cfg: DesktopConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.offpeak.effective_model_override(), Some("glm-4-flash"));
+
+        let written = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            written.contains("\"offpeak\":{\"model_override\":\"glm-4-flash\"}"),
+            "{written}"
+        );
+
+        // Brief contract: empty (and whitespace-only) = disabled.
+        let mut empty = DesktopConfig::default();
+        empty.offpeak.model_override = Some(String::new());
+        assert!(empty.offpeak.effective_model_override().is_none());
+        let mut blank = DesktopConfig::default();
+        blank.offpeak.model_override = Some("   ".into());
+        assert!(blank.offpeak.effective_model_override().is_none());
+        // Whitespace around a real value is trimmed on read.
+        let mut padded = DesktopConfig::default();
+        padded.offpeak.model_override = Some("  glm-4-flash ".into());
+        assert_eq!(
+            padded.offpeak.effective_model_override(),
+            Some("glm-4-flash")
+        );
     }
 }

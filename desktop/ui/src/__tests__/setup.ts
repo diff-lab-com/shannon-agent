@@ -387,6 +387,11 @@ vi.mock('@/lib/tauri-api', () => ({
   listGoalRuns: vi.fn().mockResolvedValue([]),
   getGoalRun: vi.fn().mockResolvedValue(null),
   startGoalRun: vi.fn().mockResolvedValue({ sessionId: 'sess-goal' }),
+  // P2-5 off-peak windows — default empty history so the routine drawer's
+  // OffpeakWindowEditor renders without a queued status and without
+  // per-test mocking.
+  listTaskExecutions: vi.fn().mockResolvedValue([]),
+  updateScheduledTask: vi.fn().mockResolvedValue(null),
   stopGoalRun: vi.fn().mockResolvedValue(undefined),
   pauseGoalRun: vi.fn().mockResolvedValue(undefined),
   resumeGoalRun: vi.fn().mockResolvedValue(undefined),

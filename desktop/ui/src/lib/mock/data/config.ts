@@ -28,6 +28,9 @@ export const MOCK_CONFIG: DesktopConfig = {
   // P1-3: execution mode + command sandbox defaults for the demo.
   active_permission_profile: 'balanced',
   sandbox: { mode: 'off' },
+  // P2-5: off-peak model override (frozen key `offpeak.model_override`).
+  // Empty = disabled in the demo.
+  offpeak: { model_override: '' },
 }
 
 // Managed-providers roster for the Models P2 UI (mirrors the Rust
