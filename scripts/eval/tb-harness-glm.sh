@@ -95,15 +95,16 @@ export T_BENCH_TASK_AGENT_LOGS_PATH="$AGENT_LOGS" T_BENCH_CONTAINER_AGENT_LOGS_P
 # the build is the only way to materialize one (RCA 2026-09-06: after a
 # docker prune the cold path passed --no-build with a nonexistent image and
 # every case died at compose up).
-COMPOSE_UP=(up -d --no-build)
-if [ "$IMG_NOTE" = "cold-build" ]; then
-  COMPOSE_UP=(up -d --build)
-fi
-
+# Prefer --no-build to protect a prebaked client layer; on failure retry once
+# with --build (multi-service composes may still need to build helper images,
+# e.g. simple-sheets-put's api service). Compose output is kept for forensics.
 UP_START=$(date +%s)
-if ! docker compose -f "$TASK_DIR/docker-compose.yaml" "${COMPOSE_UP[@]}" >/dev/null 2>&1; then
-  printf '{"resolved": false, "notes": "compose up failed (image=%s)"}\n' "$IMG" > "$VERDICT_FILE"
-  exit 0
+if ! docker compose -f "$TASK_DIR/docker-compose.yaml" up -d --no-build     > "$WORK/compose-up.log" 2>&1; then
+  echo "[tb-harness] --no-build up failed; retrying with --build" >&2
+  if ! docker compose -f "$TASK_DIR/docker-compose.yaml" up -d --build       >> "$WORK/compose-up.log" 2>&1; then
+    printf '{"resolved": false, "notes": "compose up failed (image=%s; see compose-up.log)"}\n' "$IMG" > "$VERDICT_FILE"
+    exit 0
+  fi
 fi
 UP_SECS=$(( $(date +%s) - UP_START ))
 
