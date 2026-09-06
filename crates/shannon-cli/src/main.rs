@@ -83,6 +83,93 @@ impl From<HeadlessExitCode> for i32 {
     }
 }
 
+impl HeadlessExitCode {
+    /// Whether a run-level retry (A7) may restart the whole query for this
+    /// class. Only transient infra faults qualify: a timeout or a provider
+    /// rate limit says nothing about the task's difficulty, and the upstream
+    /// 6-minute gateway cutoffs observed in the TB2.1 sweep (3 of 50 tasks)
+    /// were polluted empty patches, not model failures. ContextOverflow is
+    /// deliberately excluded — re-sending the same prompt reproduces it.
+    fn is_run_retryable(self) -> bool {
+        matches!(
+            self,
+            HeadlessExitCode::Timeout | HeadlessExitCode::RateLimited
+        )
+    }
+
+    /// Whether this class belongs to the infra-failure vocabulary: combined
+    /// with an empty patch (no response text, no tool calls) it marks a run
+    /// the harness should count as infra, not as a model failure (A7).
+    fn is_infra_class(self) -> bool {
+        matches!(
+            self,
+            HeadlessExitCode::Timeout | HeadlessExitCode::RateLimited | HeadlessExitCode::Error
+        )
+    }
+}
+
+/// serde: omit boolean fields that are false (keeps the NDJSON done line
+/// byte-compatible for consumers that predate `infra_failure`).
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Classify a `QueryEvent::Failed` error string into a [`HeadlessExitCode`].
+///
+/// Extracted verbatim from the headless loop so the classification (and the
+/// retry policy built on top of it) stays unit-testable. Order matters:
+/// timeout must beat context, since the provider timeout hint
+/// ("...reduce context with /compact.") contains the substring "context"
+/// and would otherwise be mis-classified as ContextOverflow (RCA 2026-09-06).
+fn classify_headless_failure(error: &str) -> HeadlessExitCode {
+    let err_lower = error.to_lowercase();
+    if err_lower.contains("timed out") || err_lower.contains("timeout") {
+        HeadlessExitCode::Timeout
+    } else if err_lower.contains("rate limit") || err_lower.contains("429") {
+        HeadlessExitCode::RateLimited
+    } else if err_lower.contains("context")
+        || err_lower.contains("token limit")
+        || err_lower.contains("max_tokens")
+        || err_lower.contains("context_length")
+    {
+        HeadlessExitCode::ContextOverflow
+    } else if err_lower.contains("permission") || err_lower.contains("denied") {
+        HeadlessExitCode::PermissionDenied
+    } else {
+        HeadlessExitCode::Error
+    }
+}
+
+/// Parse the `SHANNON_RUN_RETRIES` run-level retry budget (A7).
+///
+/// Default 2 when unset; unparseable or negative values fall back to the
+/// default rather than silently disabling retries (a typo'd env var must not
+/// change behavior by accident); `"0"` legitimately disables retrying.
+fn parse_run_retries(raw: Option<String>) -> u32 {
+    const DEFAULT_RUN_RETRIES: u32 = 2;
+    match raw {
+        Some(value) => value.trim().parse::<u32>().unwrap_or(DEFAULT_RUN_RETRIES),
+        None => DEFAULT_RUN_RETRIES,
+    }
+}
+
+/// The run-level retry budget in force, from `SHANNON_RUN_RETRIES` (default 2).
+fn run_retry_limit() -> u32 {
+    parse_run_retries(std::env::var("SHANNON_RUN_RETRIES").ok())
+}
+
+/// A7 empty-patch marker: the run ended on an infra-class exit without any
+/// assistant output (no text, no tool calls). Such a run exercised no model
+/// capability, so eval harnesses should book it as infra instead of a model
+/// failure — the field `infra_failure` in the json-stream `done` event.
+fn is_infra_failure(
+    exit_code: HeadlessExitCode,
+    response_text: &str,
+    tool_calls: &[ToolCallSummary],
+) -> bool {
+    exit_code.is_infra_class() && response_text.trim().is_empty() && tool_calls.is_empty()
+}
+
 /// Summary of a single tool call during headless execution.
 #[derive(Debug, Clone, serde::Serialize)]
 struct ToolCallSummary {
@@ -111,6 +198,11 @@ struct HeadlessOutput {
     duration_ms: u64,
     /// Whether execution succeeded and why.
     exit_code: HeadlessExitCode,
+    /// A7: true when the run died on an infra class (timeout / rate limit /
+    /// error) with an empty patch — no response text and no tool calls.
+    /// Omitted (not `false`) on every healthy run.
+    #[serde(skip_serializing_if = "is_false")]
+    infra_failure: bool,
 }
 
 /// CI/CD event types for NDJSON streaming output.
@@ -164,6 +256,12 @@ enum CiEvent {
         tokens_in: u64,
         /// Completion (output) tokens consumed — split for ledger accounting.
         tokens_out: u64,
+        /// A7: true when the run died on an infra class (timeout / rate
+        /// limit / error) with an empty patch — no response text and no
+        /// tool calls. Eval harnesses book these as infra failures rather
+        /// than model failures. Omitted (not `false`) on every healthy run.
+        #[serde(skip_serializing_if = "is_false")]
+        infra_failure: bool,
     },
 }
 
@@ -1615,7 +1713,15 @@ enum OutputEvent {
     #[serde(rename = "error")]
     Error { message: String },
     #[serde(rename = "done")]
-    Done { exit_code: i32 },
+    Done {
+        exit_code: i32,
+        /// A7: true when the run died on an infra class (timeout / rate
+        /// limit / error) with an empty patch — no response text and no
+        /// tool calls. Eval harnesses book these as infra failures rather
+        /// than model failures. Omitted (not `false`) on every healthy run.
+        #[serde(skip_serializing_if = "is_false")]
+        infra_failure: bool,
+    },
 }
 
 impl OutputEvent {
@@ -1881,13 +1987,21 @@ fn run_headless_query(
             eprintln!("Resumed session ({count} messages loaded)");
         }
 
-        let context = QueryContext {
+        // A7: one session identity for the whole headless call; each attempt
+        // (initial + run-level retries) gets a fresh query id. Restarting the
+        // query on the same engine starts from the engine's stored
+        // conversation, so the rerun is a faithful re-execution of the same
+        // `-p` invocation — while workspace mutations from the failed attempt
+        // persist on disk and stay visible to the agent.
+        let headless_session_id = Uuid::new_v4();
+        let tools_allowed = should_enable_tools(llm_provider.clone());
+        let build_query_context = || QueryContext {
             query_id: Uuid::new_v4(),
-            session_id: Uuid::new_v4(),
+            session_id: headless_session_id,
             user_message: prompt.to_string(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
-                tools_allowed: should_enable_tools(llm_provider.clone()),
+                tools_allowed,
                 max_tokens: config.max_tokens().map(|v| v as u32),
                 model: config.model().unwrap_or_else(|| "default".to_string()),
                 temperature: config.temperature(),
@@ -1895,7 +2009,7 @@ fn run_headless_query(
             },
         };
 
-        let mut event_stream = engine.process_query(context, None).await;
+        let mut event_stream = engine.process_query(build_query_context(), None).await;
 
         // Collect execution data
         let mut response_text = String::new();
@@ -1918,6 +2032,14 @@ fn run_headless_query(
         let allowed_set: Option<std::collections::HashSet<String>> =
             allowed_tools.map(|v| v.iter().cloned().collect());
 
+        // A7: run-level retry budget. A transient infra fault (timeout /
+        // rate limit) aborts the whole `-p` call today and the empty patch
+        // gets booked as a model failure (3 of 50 sweep tasks). Instead,
+        // restart the same query from scratch — at most `SHANNON_RUN_RETRIES`
+        // times (default 2) — and take the LAST attempt's result.
+        let run_retries = run_retry_limit();
+        let mut run_attempt: u32 = 0;
+
         // Emit start event for JsonStream format
         if output_format == OutputFormat::JsonStream {
             let model_name = config.model().unwrap_or_else(|| "default".to_string());
@@ -1928,226 +2050,247 @@ fn run_headless_query(
             });
         }
 
-        while let Some(event_result) = event_stream.next().await {
-            match event_result {
-                Ok(QueryEvent::Text { content, .. }) => {
-                    if output_format == OutputFormat::Text {
-                        print!("{content}");
-                        std::io::stdout().flush().ok();
-                    } else if output_format == OutputFormat::JsonStream {
-                        emit_output_event(&OutputEvent::TextDelta { content: content.clone() });
-                    }
-                    response_text.push_str(&content);
-                }
-                Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
-                    // A tool call supersedes the preceding text as this turn's
-                    // contribution: keep only the text of the FINAL answer
-                    // turn in `response_text`. Schema validation and the
-                    // `response` output field must see that answer alone, not
-                    // the whole multi-turn transcript with intermediate
-                    // reasoning glued on (dogfood l2-deep-analysis
-                    // 2026-08-23: an unclosed turn-1 `<think>` swallowed
-                    // every later answer and validation parsed an empty
-                    // string). The delta events above still stream ALL text.
-                    response_text.clear();
-                    // A tool outside --allowed-tools is soft-denied
-                    // downstream: the registry's allowed-tools filter turns
-                    // the call into an is_error tool result ("Tool not
-                    // found: X (not in this session's allowed-tools list)")
-                    // that the model can recover from by switching tools.
-                    // Fatal-exiting here (old exit 6 / PermissionDenied)
-                    // killed otherwise recoverable runs — dogfood m3
-                    // 2026-08-23: one turn held a parallel Glob+Bash call,
-                    // Bash was never advertised, and the break discarded the
-                    // in-flight Glob after a single turn.
-                    if let Some(ref allowed) = allowed_set {
-                        if !allowed.contains(&tool_name) {
-                            eprintln!(
-                                "[headless: tool '{}' outside allowed list (soft-denied): {}]",
-                                tool_name,
-                                allowed.iter().cloned().collect::<Vec<_>>().join(",")
-                            );
+        'attempts: loop {
+            while let Some(event_result) = event_stream.next().await {
+                match event_result {
+                    Ok(QueryEvent::Text { content, .. }) => {
+                        if output_format == OutputFormat::Text {
+                            print!("{content}");
+                            std::io::stdout().flush().ok();
+                        } else if output_format == OutputFormat::JsonStream {
+                            emit_output_event(&OutputEvent::TextDelta { content: content.clone() });
                         }
+                        response_text.push_str(&content);
                     }
-                    let input_summary = match serde_json::to_string(&tool_input) {
-                        Ok(s) if s.len() > 500 => {
-                            let mut end = 500;
-                            while !s.is_char_boundary(end) { end -= 1; }
-                            format!("{}...", &s[..end])
-                        }
-                        Ok(s) => s,
-                        Err(_) => "(invalid json)".to_string(),
-                    };
-                    _pending_tool_name = Some(tool_name.clone());
-                    if !quiet {
-                        eprintln!("[headless: invoking {tool_name}]");
-                    }
-                    // Emit NDJSON event
-                    if output_format == OutputFormat::JsonStream {
-                        if let Ok(input_value) = serde_json::from_str::<serde_json::Value>(&input_summary) {
-                            emit_ci_event(&CiEvent::ToolCall {
-                                name: tool_name.clone(),
-                                input: input_value.clone(),
-                            });
-                            emit_output_event(&OutputEvent::ToolUse {
-                                name: tool_name.clone(),
-                                input: input_value,
-                            });
-                        }
-                    }
-                    // Store a placeholder; will be updated on ToolUseResult
-                    tool_calls.push(ToolCallSummary {
-                        tool: tool_name,
-                        input_summary,
-                        output_summary: String::new(),
-                        success: false,
-                    });
-                }
-                Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
-                    let output_summary = if result.len() > 500 {
-                        let mut end = 500;
-                        while !result.is_char_boundary(end) { end -= 1; }
-                        format!("{}...", &result[..end])
-                    } else {
-                        result.clone()
-                    };
-                    // Update the last matching tool call
-                    if let Some(tc) = tool_calls.iter_mut().rev().find(|tc| tc.tool == tool_name && !tc.success && tc.output_summary.is_empty()) {
-                        tc.output_summary = output_summary.clone();
-                        tc.success = !is_error;
-                    }
-                    _pending_tool_name = None;
-
-                    // Track file changes for diff-only mode
-                    if tool_name == "Edit" || tool_name == "Write" {
-                        if let Ok(tool_result) = serde_json::from_str::<serde_json::Value>(&result) {
-                            if let Some(path) = tool_result.get("path").and_then(|p| p.as_str()) {
-                                // Read current file content for diff
-                                let old_content = std::fs::read_to_string(path).unwrap_or_default();
-                                changed_files.push((path.to_string(), old_content, String::new()));
+                    Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
+                        // A tool call supersedes the preceding text as this turn's
+                        // contribution: keep only the text of the FINAL answer
+                        // turn in `response_text`. Schema validation and the
+                        // `response` output field must see that answer alone, not
+                        // the whole multi-turn transcript with intermediate
+                        // reasoning glued on (dogfood l2-deep-analysis
+                        // 2026-08-23: an unclosed turn-1 `<think>` swallowed
+                        // every later answer and validation parsed an empty
+                        // string). The delta events above still stream ALL text.
+                        response_text.clear();
+                        // A tool outside --allowed-tools is soft-denied
+                        // downstream: the registry's allowed-tools filter turns
+                        // the call into an is_error tool result ("Tool not
+                        // found: X (not in this session's allowed-tools list)")
+                        // that the model can recover from by switching tools.
+                        // Fatal-exiting here (old exit 6 / PermissionDenied)
+                        // killed otherwise recoverable runs — dogfood m3
+                        // 2026-08-23: one turn held a parallel Glob+Bash call,
+                        // Bash was never advertised, and the break discarded the
+                        // in-flight Glob after a single turn.
+                        if let Some(ref allowed) = allowed_set {
+                            if !allowed.contains(&tool_name) {
+                                eprintln!(
+                                    "[headless: tool '{}' outside allowed list (soft-denied): {}]",
+                                    tool_name,
+                                    allowed.iter().cloned().collect::<Vec<_>>().join(",")
+                                );
                             }
                         }
-                    }
-
-                    // Emit NDJSON event
-                    if output_format == OutputFormat::JsonStream {
-                        emit_ci_event(&CiEvent::ToolResult {
-                            name: tool_name.clone(),
-                            output: output_summary.clone(),
-                            success: !is_error,
-                        });
-                        emit_output_event(&OutputEvent::ToolResult {
-                            name: tool_name.clone(),
-                            output: output_summary.clone(),
-                            is_error,
-                        });
-                    }
-
-                    // Handle exit-on-error
-                    if is_error && exit_on_error {
+                        let input_summary = match serde_json::to_string(&tool_input) {
+                            Ok(s) if s.len() > 500 => {
+                                let mut end = 500;
+                                while !s.is_char_boundary(end) { end -= 1; }
+                                format!("{}...", &s[..end])
+                            }
+                            Ok(s) => s,
+                            Err(_) => "(invalid json)".to_string(),
+                        };
+                        _pending_tool_name = Some(tool_name.clone());
                         if !quiet {
-                            eprintln!("[headless: tool-error {tool_name} - exiting due to --exit-on-error]");
+                            eprintln!("[headless: invoking {tool_name}]");
                         }
-                        exit_code = HeadlessExitCode::Error;
+                        // Emit NDJSON event
                         if output_format == OutputFormat::JsonStream {
-                            emit_ci_event(&CiEvent::Error {
-                                message: format!("Tool {tool_name} failed: {output_summary}"),
-                            });
-                            emit_output_event(&OutputEvent::Error {
-                                message: format!("Tool {tool_name} failed: {output_summary}"),
-                            });
-                        }
-                        break;
-                    }
-
-                    if !quiet {
-                        if is_error {
-                            eprintln!("[headless: tool-error {tool_name}]");
-                        } else {
-                            eprintln!("[headless: tool-done {tool_name}]");
-                        }
-                    }
-                }
-                Ok(QueryEvent::TurnCompleted { turn_number, tokens_used, .. }) => {
-                    _turn_count = turn_number;
-                    total_tokens += tokens_used;
-                    eprintln!("[headless: turn {turn_number}, {tokens_used} tokens]");
-                    // (§4.6) No per-turn file checkpoint needed: every turn is
-                    // already durable in <container>/<id>/events.jsonl via the
-                    // engine tee, including crash-window tail recovery — so a
-                    // run killed mid-flight resumes with `--resume <session_id>`
-                    // without extra writes here.
-                    // Check max turns
-                    if let Some(max) = max_turns {
-                        if turn_number >= max as usize {
-                            if !quiet {
-                                eprintln!("Max turns ({max}) reached");
+                            if let Ok(input_value) = serde_json::from_str::<serde_json::Value>(&input_summary) {
+                                emit_ci_event(&CiEvent::ToolCall {
+                                    name: tool_name.clone(),
+                                    input: input_value.clone(),
+                                });
+                                emit_output_event(&OutputEvent::ToolUse {
+                                    name: tool_name.clone(),
+                                    input: input_value,
+                                });
                             }
-                            exit_code = HeadlessExitCode::TurnLimit;
+                        }
+                        // Store a placeholder; will be updated on ToolUseResult
+                        tool_calls.push(ToolCallSummary {
+                            tool: tool_name,
+                            input_summary,
+                            output_summary: String::new(),
+                            success: false,
+                        });
+                    }
+                    Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
+                        let output_summary = if result.len() > 500 {
+                            let mut end = 500;
+                            while !result.is_char_boundary(end) { end -= 1; }
+                            format!("{}...", &result[..end])
+                        } else {
+                            result.clone()
+                        };
+                        // Update the last matching tool call
+                        if let Some(tc) = tool_calls.iter_mut().rev().find(|tc| tc.tool == tool_name && !tc.success && tc.output_summary.is_empty()) {
+                            tc.output_summary = output_summary.clone();
+                            tc.success = !is_error;
+                        }
+                        _pending_tool_name = None;
+
+                        // Track file changes for diff-only mode
+                        if tool_name == "Edit" || tool_name == "Write" {
+                            if let Ok(tool_result) = serde_json::from_str::<serde_json::Value>(&result) {
+                                if let Some(path) = tool_result.get("path").and_then(|p| p.as_str()) {
+                                    // Read current file content for diff
+                                    let old_content = std::fs::read_to_string(path).unwrap_or_default();
+                                    changed_files.push((path.to_string(), old_content, String::new()));
+                                }
+                            }
+                        }
+
+                        // Emit NDJSON event
+                        if output_format == OutputFormat::JsonStream {
+                            emit_ci_event(&CiEvent::ToolResult {
+                                name: tool_name.clone(),
+                                output: output_summary.clone(),
+                                success: !is_error,
+                            });
+                            emit_output_event(&OutputEvent::ToolResult {
+                                name: tool_name.clone(),
+                                output: output_summary.clone(),
+                                is_error,
+                            });
+                        }
+
+                        // Handle exit-on-error
+                        if is_error && exit_on_error {
+                            if !quiet {
+                                eprintln!("[headless: tool-error {tool_name} - exiting due to --exit-on-error]");
+                            }
+                            exit_code = HeadlessExitCode::Error;
+                            if output_format == OutputFormat::JsonStream {
+                                emit_ci_event(&CiEvent::Error {
+                                    message: format!("Tool {tool_name} failed: {output_summary}"),
+                                });
+                                emit_output_event(&OutputEvent::Error {
+                                    message: format!("Tool {tool_name} failed: {output_summary}"),
+                                });
+                            }
                             break;
                         }
+
+                        if !quiet {
+                            if is_error {
+                                eprintln!("[headless: tool-error {tool_name}]");
+                            } else {
+                                eprintln!("[headless: tool-done {tool_name}]");
+                            }
+                        }
                     }
-                }
-                Ok(QueryEvent::Usage { input_tokens, output_tokens, .. }) => {
-                    total_tokens = total_tokens.max(input_tokens + output_tokens);
-                    // Fallback accounting only — see the engine_usage
-                    // declaration for why max-per-request undershoots
-                    // multi-request queries. Adapter skips zero-valued
-                    // usage chunks (some providers emit a `usage: {}`
-                    // sentinel alongside finish_reason).
-                    total_input_tokens = total_input_tokens.max(input_tokens);
-                    total_output_tokens = total_output_tokens.max(output_tokens);
-                }
-                Ok(QueryEvent::Cost { input_tokens, output_tokens, .. }) => {
-                    // Engine-side totals, accumulated across every request
-                    // in this query (engine.rs sums per-request usage) and
-                    // emitted exactly once at query exit, including the
-                    // max-turns path. Headless runs a single query per
-                    // process, so this IS the session total. Last-wins in
-                    // case a provider emits more than one.
-                    engine_usage = Some((input_tokens, output_tokens));
-                }
-                Ok(QueryEvent::Completed { .. }) => {
-                    if output_format == OutputFormat::Text && !response_text.is_empty() {
-                        // Text was already streamed; just ensure newline
-                        println!();
+                    Ok(QueryEvent::TurnCompleted { turn_number, tokens_used, .. }) => {
+                        _turn_count = turn_number;
+                        total_tokens += tokens_used;
+                        eprintln!("[headless: turn {turn_number}, {tokens_used} tokens]");
+                        // (§4.6) No per-turn file checkpoint needed: every turn is
+                        // already durable in <container>/<id>/events.jsonl via the
+                        // engine tee, including crash-window tail recovery — so a
+                        // run killed mid-flight resumes with `--resume <session_id>`
+                        // without extra writes here.
+                        // Check max turns
+                        if let Some(max) = max_turns {
+                            if turn_number >= max as usize {
+                                if !quiet {
+                                    eprintln!("Max turns ({max}) reached");
+                                }
+                                exit_code = HeadlessExitCode::TurnLimit;
+                                break;
+                            }
+                        }
                     }
-                }
-                Ok(QueryEvent::Failed { error, .. }) => {
-                    eprintln!("Error: {error}");
-                    let err_lower = error.to_lowercase();
-                    // Order matters: timeout must beat context, since the
-                    // provider timeout hint ("...reduce context with /compact.")
-                    // contains the substring "context" and would otherwise be
-                    // mis-classified as ContextOverflow (RCA 2026-09-06).
-                    if err_lower.contains("timed out") || err_lower.contains("timeout") {
-                        exit_code = HeadlessExitCode::Timeout;
-                    } else if err_lower.contains("rate limit") || err_lower.contains("429") {
-                        exit_code = HeadlessExitCode::RateLimited;
-                    } else if err_lower.contains("context")
-                        || err_lower.contains("token limit")
-                        || err_lower.contains("max_tokens")
-                        || err_lower.contains("context_length")
-                    {
-                        exit_code = HeadlessExitCode::ContextOverflow;
-                    } else if err_lower.contains("permission") || err_lower.contains("denied") {
-                        exit_code = HeadlessExitCode::PermissionDenied;
-                    } else {
+                    Ok(QueryEvent::Usage { input_tokens, output_tokens, .. }) => {
+                        total_tokens = total_tokens.max(input_tokens + output_tokens);
+                        // Fallback accounting only — see the engine_usage
+                        // declaration for why max-per-request undershoots
+                        // multi-request queries. Adapter skips zero-valued
+                        // usage chunks (some providers emit a `usage: {}`
+                        // sentinel alongside finish_reason).
+                        total_input_tokens = total_input_tokens.max(input_tokens);
+                        total_output_tokens = total_output_tokens.max(output_tokens);
+                    }
+                    Ok(QueryEvent::Cost { input_tokens, output_tokens, .. }) => {
+                        // Engine-side totals, accumulated across every request
+                        // in this query (engine.rs sums per-request usage) and
+                        // emitted exactly once at query exit, including the
+                        // max-turns path. Headless runs a single query per
+                        // process, so this IS the session total. Last-wins in
+                        // case a provider emits more than one.
+                        engine_usage = Some((input_tokens, output_tokens));
+                    }
+                    Ok(QueryEvent::Completed { .. }) => {
+                        if output_format == OutputFormat::Text && !response_text.is_empty() {
+                            // Text was already streamed; just ensure newline
+                            println!();
+                        }
+                    }
+                    Ok(QueryEvent::Failed { error, .. }) => {
+                        let class = classify_headless_failure(&error);
+                        // A7: transient infra faults restart the whole query
+                        // while budget remains. The failed attempt's partial
+                        // state is discarded (last attempt wins); workspace
+                        // mutations already made persist on disk, so the rerun
+                        // continues from the same external reality.
+                        if class.is_run_retryable() && run_attempt < run_retries {
+                            run_attempt += 1;
+                            let kind = if class == HeadlessExitCode::Timeout {
+                                "timeout"
+                            } else {
+                                "rate_limited"
+                            };
+                            if !quiet {
+                                eprintln!("[run-retry] attempt {run_attempt} after {kind} ({error})");
+                            }
+                            if output_format == OutputFormat::JsonStream {
+                                // Synthetic stream event so harnesses see the
+                                // restart between the failure and attempt 2.
+                                emit_output_event(&OutputEvent::Error {
+                                    message: format!("[run-retry] attempt {run_attempt} after {kind}: {error}"),
+                                });
+                            }
+                            response_text.clear();
+                            tool_calls.clear();
+                            changed_files.clear();
+                            total_tokens = 0;
+                            total_input_tokens = 0;
+                            total_output_tokens = 0;
+                            engine_usage = None;
+                            _turn_count = 0;
+                            exit_code = HeadlessExitCode::Success;
+                            event_stream = engine.process_query(build_query_context(), None).await;
+                            continue 'attempts;
+                        }
+                        eprintln!("Error: {error}");
+                        exit_code = class;
+                        if output_format == OutputFormat::JsonStream {
+                            emit_output_event(&OutputEvent::Error {
+                                message: error.clone(),
+                            });
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("Stream error: {e}");
                         exit_code = HeadlessExitCode::Error;
                     }
-                    if output_format == OutputFormat::JsonStream {
-                        emit_output_event(&OutputEvent::Error {
-                            message: error.clone(),
-                        });
-                    }
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("Stream error: {e}");
-                    exit_code = HeadlessExitCode::Error;
                 }
             }
-        }
+            // The stream for the current attempt is exhausted (Completed, Failed
+            // without retry budget, or an engine-side abort): the run is over.
+            break 'attempts;
+            }
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -2202,6 +2345,10 @@ fn run_headless_query(
             }
         }
 
+        // A7 empty-patch marker: computed once, consumed by the json and
+        // json-stream output paths.
+        let infra_failure = is_infra_failure(exit_code, &response_text, &tool_calls);
+
         // Output results based on format
         match output_format {
             OutputFormat::Text => {
@@ -2215,6 +2362,7 @@ fn run_headless_query(
                     total_tokens,
                     duration_ms,
                     exit_code,
+                    infra_failure,
                 };
                 println!("{}", serde_json::to_string_pretty(&output).unwrap_or_else(|e| {
                     format!(r#"{{"error": "serialization failed: {e}"}}"#)
@@ -2228,9 +2376,11 @@ fn run_headless_query(
                     tokens_used: total_tokens,
                     tokens_in,
                     tokens_out,
+                    infra_failure,
                 });
                 emit_output_event(&OutputEvent::Done {
                     exit_code: i32::from(exit_code),
+                    infra_failure,
                 });
             }
         }
@@ -6506,7 +6656,10 @@ profile_routes = []
 
     #[test]
     fn test_output_event_done_ndjson() {
-        let event = OutputEvent::Done { exit_code: 0 };
+        let event = OutputEvent::Done {
+            exit_code: 0,
+            infra_failure: false,
+        };
         let line = event.to_ndjson();
         let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(parsed["type"], "done");
@@ -6516,7 +6669,10 @@ profile_routes = []
     #[test]
     fn test_output_event_done_with_error_codes() {
         for code in [1, 2, 3, 4, 5, 6] {
-            let event = OutputEvent::Done { exit_code: code };
+            let event = OutputEvent::Done {
+                exit_code: code,
+                infra_failure: false,
+            };
             let line = event.to_ndjson();
             let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
             assert_eq!(parsed["exit_code"], code);
@@ -6532,7 +6688,10 @@ profile_routes = []
             OutputEvent::TextDelta {
                 content: "line2".into(),
             },
-            OutputEvent::Done { exit_code: 0 },
+            OutputEvent::Done {
+                exit_code: 0,
+                infra_failure: false,
+            },
         ];
         let output: String = events.iter().map(|e| e.to_ndjson()).collect();
         let lines: Vec<&str> = output.lines().collect();
@@ -6778,5 +6937,119 @@ profile_routes = []
         let cli = Cli::try_parse_from(args).unwrap();
         // --continue is the alias for "resume most recent"
         assert!(cli.r#continue);
+    }
+
+    // ── A7: run-level retry classification + empty-patch infra marker ──
+
+    #[test]
+    fn test_classify_headless_failure_timeout_beats_context() {
+        // "Request timed out" — the upstream 6-minute gateway cutoff seen in
+        // the TB2.1 sweep. Must stay Timeout even though the provider hint
+        // "...reduce context with /compact." contains "context"
+        // (RCA 2026-09-06).
+        assert_eq!(
+            classify_headless_failure("Request timed out: ...reduce context with /compact."),
+            HeadlessExitCode::Timeout
+        );
+        assert_eq!(
+            classify_headless_failure("connection timed out after 600s"),
+            HeadlessExitCode::Timeout
+        );
+    }
+
+    #[test]
+    fn test_classify_headless_failure_all_classes() {
+        assert_eq!(
+            classify_headless_failure("HTTP 429: rate limit exceeded"),
+            HeadlessExitCode::RateLimited
+        );
+        assert_eq!(
+            classify_headless_failure("prompt is too long: context_length exceeded"),
+            HeadlessExitCode::ContextOverflow
+        );
+        assert_eq!(
+            classify_headless_failure("permission denied for path"),
+            HeadlessExitCode::PermissionDenied
+        );
+        assert_eq!(
+            classify_headless_failure("something else went wrong"),
+            HeadlessExitCode::Error
+        );
+    }
+
+    #[test]
+    fn test_run_retryable_classes() {
+        assert!(HeadlessExitCode::Timeout.is_run_retryable());
+        assert!(HeadlessExitCode::RateLimited.is_run_retryable());
+        // A context overflow reproduces deterministically — never retried.
+        assert!(!HeadlessExitCode::ContextOverflow.is_run_retryable());
+        assert!(!HeadlessExitCode::Error.is_run_retryable());
+        assert!(!HeadlessExitCode::Success.is_run_retryable());
+    }
+
+    #[test]
+    fn test_parse_run_retries_default_and_overrides() {
+        assert_eq!(parse_run_retries(None), 2, "default budget is 2");
+        assert_eq!(parse_run_retries(Some("0".into())), 0, "0 disables retry");
+        assert_eq!(parse_run_retries(Some("3".into())), 3);
+        // Garbage falls back to the default instead of silently disabling
+        // retries (a typo'd env var must not change behavior by accident).
+        assert_eq!(parse_run_retries(Some("abc".into())), 2);
+        assert_eq!(parse_run_retries(Some("-1".into())), 2);
+        assert_eq!(parse_run_retries(Some("".into())), 2);
+        assert_eq!(parse_run_retries(Some(" 2 ".into())), 2, "trim tolerated");
+    }
+
+    #[test]
+    fn test_infra_failure_needs_infra_class_and_empty_patch() {
+        // Timeout with an empty patch: infra, not the model.
+        assert!(is_infra_failure(HeadlessExitCode::Timeout, "", &[]));
+        assert!(is_infra_failure(HeadlessExitCode::Timeout, "   \n", &[]));
+        assert!(is_infra_failure(HeadlessExitCode::RateLimited, "", &[]));
+        assert!(is_infra_failure(HeadlessExitCode::Error, "", &[]));
+        // Any assistant output or tool activity means the model worked.
+        assert!(!is_infra_failure(
+            HeadlessExitCode::Timeout,
+            "partial answer",
+            &[]
+        ));
+        assert!(!is_infra_failure(
+            HeadlessExitCode::Timeout,
+            "",
+            &[ToolCallSummary {
+                tool: "Read".into(),
+                input_summary: "{}".into(),
+                output_summary: "".into(),
+                success: true,
+            }]
+        ));
+        // Non-infra classes are never infra failures, even when empty.
+        assert!(!is_infra_failure(
+            HeadlessExitCode::ContextOverflow,
+            "",
+            &[]
+        ));
+        assert!(!is_infra_failure(HeadlessExitCode::Success, "", &[]));
+    }
+
+    #[test]
+    fn test_done_event_infra_failure_field_omitted_when_false() {
+        let healthy = OutputEvent::Done {
+            exit_code: 0,
+            infra_failure: false,
+        };
+        let json = healthy.to_ndjson();
+        assert!(
+            !json.contains("infra_failure"),
+            "healthy runs must stay byte-compatible: {json}"
+        );
+        let infra = OutputEvent::Done {
+            exit_code: 3,
+            infra_failure: true,
+        };
+        let json = infra.to_ndjson();
+        let parsed: serde_json::Value = serde_json::from_str(json.trim()).unwrap();
+        assert_eq!(parsed["infra_failure"], serde_json::Value::Bool(true));
+        assert_eq!(parsed["exit_code"], 3);
     }
 }
