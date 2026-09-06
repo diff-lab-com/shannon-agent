@@ -2738,4 +2738,17 @@
   "settings.migration.title": "Import from other tools",
   "settings.migration.desc": "Bring Claude Code / ZCode assets (MCP, skills, commands, memory, permission rules) into Shannon.",
   "settings.migration.button": "Open migration wizard"
+,
+  "terminal.title": "Terminal",
+  "terminal.panel.toggle": "Toggle terminal (Ctrl+`)",
+  "terminal.panel.label": "Integrated terminal",
+  "terminal.panel.close": "Close terminal panel",
+  "terminal.panel.fullHeight": "Toggle full-height terminal",
+  "terminal.panel.dismissHint": "Dismiss note",
+  "terminal.tab.new": "New terminal",
+  "terminal.tab.close": "Close terminal",
+  "terminal.maxReached": "Terminal limit reached ({max}) — close one first",
+  "terminal.historyWarning": "Live terminals were re-listed: output history from before a reconnect can't be recovered.",
+  "terminal.exited": "ended",
+  "terminal.empty": "No open terminals — press + to start one"
 }

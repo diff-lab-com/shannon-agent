@@ -13,6 +13,7 @@ import { parseSlashInput, type SlashCommand, type SlashResult } from '@/lib/slas
 import { toastError } from '@/lib/errorToast'
 import { useBudgetGuard } from '@/hooks/useBudgetGuard'
 import BudgetBanner from '@/components/chat/BudgetBanner'
+import { TerminalPanel } from '@/components/terminal/TerminalPanel'
 import {
   ApiKeyBanner,
   ComposerPanel,
@@ -188,6 +189,15 @@ export default function Chat() {
             <ComposerPanel
               setQuickFixOpen={setQuickFixOpen}
               setEditorOpen={setEditorOpen}
+            />
+
+            {/* P1-5 D — integrated terminal: bottom drawer under the composer.
+                Terminal sessions live in the Rust backend (AppState), so the
+                panel survives page switches; only its mount point is here. */}
+            <TerminalPanel
+              projectDir={sessions.find(s => s.id === currentSessionId)?.working_dir
+                ?? config?.working_dir
+                ?? null}
             />
           </section>
 

@@ -200,6 +200,12 @@ pub mod batch_commands;
 #[cfg(feature = "tauri")]
 pub mod preview_commands;
 
+/// P1-5 D — integrated terminal: long-lived PTY sessions (≤4, owned by
+/// AppState, killed on exit), the frozen `terminal_*` command contract and
+/// the throttled `terminal:output` event.
+#[cfg(feature = "tauri")]
+pub mod terminal_commands;
+
 /// P0-4 — cost observability: session budget, context breakdown and
 /// per-session usage aggregation commands.
 #[cfg(feature = "tauri")]
