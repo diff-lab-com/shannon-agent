@@ -459,6 +459,9 @@ pub(crate) struct BatchRunDeps {
     pub(crate) client_config: Arc<RwLock<shannon_engine::api::types::LlmClientConfig>>,
     pub(crate) desktop_config: Arc<RwLock<DesktopConfig>>,
     pub(crate) tools: Arc<shannon_core::tools::ToolRegistry>,
+    /// Shared memory store handle (P2-4b) — passed into the spawned branch
+    /// runner so its engine attaches the same store the interactive path uses.
+    pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
 }
 
 impl BatchRunDeps {
@@ -469,6 +472,7 @@ impl BatchRunDeps {
             client_config: state.client_config.clone(),
             desktop_config: state.desktop_config.clone(),
             tools: state.tools.clone(),
+            memory_store: state.memory_store.clone(),
         }
     }
 }
@@ -568,6 +572,7 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
         let model_for_usage = model.clone();
         let provider = client_config.provider.to_string();
         let usage_store = self.deps.usage_store.clone();
+        let memory_store = self.deps.memory_store.clone();
 
         let mut permissions = PermissionManager::new();
         let mode = approval_mode_str
@@ -591,11 +596,14 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
             ));
         }
 
-        let engine = QueryEngine::with_defaults_arc(
-            LlmClient::new(client_config),
-            self.deps.tools.clone(),
-            permissions,
-            StateManager::new(),
+        let engine = crate::commands_memory::attach_shared_memory(
+            QueryEngine::with_defaults_arc(
+                LlmClient::new(client_config),
+                self.deps.tools.clone(),
+                permissions,
+                StateManager::new(),
+            ),
+            &memory_store,
         );
 
         let session_id = uuid::Uuid::new_v4();
@@ -1671,6 +1679,9 @@ mod tests {
                 )),
                 desktop_config: Arc::new(RwLock::new(DesktopConfig::default())),
                 tools: Arc::new(shannon_core::tools::ToolRegistry::new()),
+                memory_store: std::sync::Arc::new(std::sync::RwLock::new(
+                    shannon_core::MemoryStore::new(dir.path().join("memories")),
+                )),
             },
             repo_root,
             app: tauri::test::mock_app().handle().clone(),

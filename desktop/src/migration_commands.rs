@@ -1088,6 +1088,8 @@ fn import_memory(
     )
     .map_err(|e| e.to_string())?;
     entry.confidence = 1.0;
+    // P2-4 provenance: imported entries are tagged "import" (no session id).
+    entry.source_kind = Some(MemoryEntry::SOURCE_IMPORT.to_string());
     // `add_or_update` merges into a near-duplicate when one exists (>0.8
     // similar, same project + category), so re-imports never duplicate rows;
     // exact duplicates were already short-circuited above.
@@ -2231,6 +2233,39 @@ mod tests {
         let contents: Vec<_> = entries.iter().map(|e| e.content.as_str()).collect();
         assert!(contents.contains(&"# Global rules\n"));
         assert!(contents.contains(&"# Project rules\n"));
+    }
+
+    #[test]
+    fn apply_memory_imports_are_tagged_import() {
+        // P2-4 provenance: migration-imported memories carry
+        // source_kind = "import" and no source session.
+        let tmp = tempfile::tempdir().expect("tmp");
+        let roots = Roots {
+            home: tmp.path().join("home"),
+            project: tmp.path().join("proj"),
+        };
+        std::fs::create_dir_all(&roots.project).expect("project dir");
+        write(&roots.project.join("CLAUDE.md"), "# rules\n");
+        let scan = scan_core(MigrationSource::ClaudeCode, &roots);
+        let items: Vec<MigrationItemInput> = scan
+            .items
+            .iter()
+            .filter(|a| a.kind == "memory")
+            .map(|a| MigrationItemInput {
+                id: a.id.clone(),
+                action: "import".into(),
+                conflict: None,
+            })
+            .collect();
+        assert_eq!(items.len(), 1);
+        let report = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        assert_eq!(report.imported, 1);
+        let mut mem = MemoryStore::new(shannon_memories_dir(&roots));
+        mem.load().expect("load");
+        let entries = mem.project_memories(&roots.project.display().to_string());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source_kind.as_deref(), Some("import"));
+        assert!(entries[0].source_session_id.is_none());
     }
 
     // ─── Frozen DTO wire shapes ────────────────────────────────────────────

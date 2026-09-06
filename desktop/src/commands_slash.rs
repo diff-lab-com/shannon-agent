@@ -50,16 +50,15 @@ pub(crate) async fn restored_engine(
     let stashed = session.query_engine.lock().await.clone();
     let mut engine = match stashed {
         Some(engine) => engine,
-        None => {
-            let client_config = state.client_config.read().await.clone();
-            let client = LlmClient::new(client_config);
+        None => crate::commands_memory::attach_shared_memory(
             QueryEngine::with_defaults_arc(
-                client,
+                LlmClient::new(state.client_config.read().await.clone()),
                 state.tools.clone(),
                 PermissionManager::new(),
                 StateManager::new(),
-            )
-        }
+            ),
+            &state.memory_store,
+        ),
     };
     engine.set_session_id(session_id);
     engine

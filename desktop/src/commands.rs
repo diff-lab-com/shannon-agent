@@ -143,6 +143,12 @@ pub struct AppState {
     pub(crate) inbox_store: std::sync::OnceLock<Arc<shannon_core::inbox_store::InboxStore>>,
     /// Usage ledger (`~/.shannon/usage.jsonl`) — append-only token/cache/cost.
     pub(crate) usage_store: Arc<crate::commands_usage::UsageStore>,
+    /// Shared memory store (`~/.shannon/memories/`, P2-4b). One instance per
+    /// process: every engine the desktop constructs attaches this handle
+    /// (`.with_memory_arc`) so memory injection and auto-extraction converge;
+    /// the Memory page commands operate on the same instance, so page edits
+    /// reach the injection path without any reload dance.
+    pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
     /// Triggered-routine enabled/disabled overrides.
     pub(crate) routine_overrides: Arc<crate::scheduled_commands::RoutineOverrideStore>,
     /// Triggered-routine registry (reloaded on demand).
@@ -407,6 +413,7 @@ impl AppState {
             preview,
             inbox_store: std::sync::OnceLock::new(),
             usage_store: Arc::new(crate::commands_usage::UsageStore::new()),
+            memory_store: crate::commands_memory::open_shared_store(),
             routine_overrides: Arc::new(crate::scheduled_commands::RoutineOverrideStore::new()),
             triggered_registry: Arc::new(tokio::sync::RwLock::new(
                 shannon_core::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
@@ -679,8 +686,10 @@ pub async fn send_message(
     let _state_mgr = state.state_manager.clone();
     let _qe_config = state.qe_config.read().await.clone();
 
-    let mut engine =
-        QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new());
+    let mut engine = crate::commands_memory::attach_shared_memory(
+        QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
+        &state.memory_store,
+    );
     // Bind the engine to the REAL session and restore prior turns. Both the
     // L0 tee (events.jsonl path) and the conversation clone at the top of
     // process_query key off engine state — a fresh engine with a random id
@@ -1363,6 +1372,9 @@ pub async fn start_background_task(
     let provider = client_config.provider.to_string();
     let usage_store = state.usage_store.clone();
     let approval_mode_str = state.desktop_config.read().await.approval_mode.clone();
+    // P2-4b: hand the shared memory handle to the spawned task — the runner
+    // attaches it to its engine instead of leaving memory: None.
+    let memory_store = state.memory_store.clone();
 
     tokio::spawn(async move {
         // Build query engine for this task
@@ -1393,8 +1405,10 @@ pub async fn start_background_task(
             ));
         }
 
-        let engine =
-            QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new());
+        let engine = crate::commands_memory::attach_shared_memory(
+            QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
+            &memory_store,
+        );
 
         let query_id = uuid::Uuid::new_v4();
         let _qid_str = query_id.to_string();

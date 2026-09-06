@@ -1673,6 +1673,8 @@ fn auto_save_memory(repl: &mut Repl, response: &str) {
         created_at: chrono::Utc::now(),
         accessed_at: chrono::Utc::now(),
         access_count: 0,
+        source_session_id: None,
+        source_kind: Some(MemoryEntry::SOURCE_AUTO_EXTRACT.to_string()),
     };
 
     let id = entry.id.clone();

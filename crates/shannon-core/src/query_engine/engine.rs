@@ -806,6 +806,19 @@ impl QueryEngine {
         self
     }
 
+    /// Attach an already-shared memory store to this query engine.
+    ///
+    /// Unlike [`with_memory`](Self::with_memory) (which wraps a store in a
+    /// fresh `Arc`), this accepts the caller's `Arc` so several engines
+    /// observe the *same* underlying store. Desktop hosts (P2-4b) hold one
+    /// shared handle in app state and thread clones of it into every engine
+    /// they construct — interactive, background, and unattended runners — so
+    /// all injection reads and extraction writes converge on one instance.
+    pub fn with_memory_arc(mut self, store: Arc<std::sync::RwLock<MemoryStore>>) -> Self {
+        self.memory = Some(store);
+        self
+    }
+
     /// Access the memory store, if configured.
     pub fn memory(&self) -> Option<&Arc<std::sync::RwLock<MemoryStore>>> {
         self.memory.as_ref()
@@ -4593,12 +4606,19 @@ impl QueryEngine {
             if let Some(ref mem_store) = memory_for_extraction {
                 let store_arc = mem_store.clone();
                 let msgs = conversation.messages.clone();
+                // P2-4 provenance: stamp extracted entries with the session
+                // that produced them so the Memory page can jump back.
+                let session_for_extraction = self_session_id.clone();
                 tokio::spawn(async move {
                     let dream = AutoDreamService::new(store_arc);
                     let project = std::env::current_dir()
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|_| "default".to_string());
-                    let _ = dream.process_conversation(&msgs, &project);
+                    let _ = dream.process_conversation_with_session(
+                        &msgs,
+                        &project,
+                        Some(&session_for_extraction),
+                    );
                     // Periodic compaction (ADR-0010 C5'): dedupe + prune + size
                     // control, gated by a persisted sidecar schedule. Each query
                     // is one session; compaction fires at ~24 h or ≥ 5 sessions.
@@ -5244,6 +5264,8 @@ mod tests {
             created_at: chrono::Utc::now(),
             accessed_at: chrono::Utc::now(),
             access_count: 0,
+            source_session_id: None,
+            source_kind: None,
         };
         store.add(entry).expect("add memory");
 
@@ -6018,6 +6040,98 @@ mod tests {
         assert!(engine.memory().is_some());
 
         // Cleanup
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_with_memory_arc_shares_one_instance_across_engines() {
+        use crate::memory::{MemoryCategory, MemoryEntry};
+        // P2-4b seam: desktop hosts hold one shared handle and thread clones
+        // of it into every engine. Both engines must observe the same store —
+        // a write through one handle is visible (and injectable) through the
+        // other's.
+        let temp_dir = env::temp_dir()
+            .join("shannon-memory-arc-test")
+            .join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&temp_dir).unwrap();
+        let project = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "default".to_string());
+
+        let shared = Arc::new(std::sync::RwLock::new(MemoryStore::new(temp_dir.clone())));
+        let engine_a = create_test_engine().with_memory_arc(shared.clone());
+        let engine_b = create_test_engine().with_memory_arc(shared.clone());
+
+        let handle_a = engine_a.memory().cloned().expect("engine a has memory");
+        let handle_b = engine_b.memory().expect("engine b has memory");
+        assert!(
+            Arc::ptr_eq(&handle_a, handle_b),
+            "both engines must reference the same Arc instance"
+        );
+
+        {
+            let mut store = handle_a.write().unwrap_or_else(|e| e.into_inner());
+            let mut entry = MemoryEntry::new(&project, MemoryCategory::Preference, "shared fact");
+            entry.source_kind = Some(MemoryEntry::SOURCE_AUTO_EXTRACT.to_string());
+            store.add(entry).expect("add through engine a's handle");
+        }
+
+        let store_b = handle_b.read().unwrap_or_else(|e| e.into_inner());
+        let injected = store_b
+            .format_for_injection(&project)
+            .expect("injection text for the cwd project");
+        assert!(
+            injected.contains("shared fact"),
+            "a write through engine a must be injectable from engine b"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_with_memory_arc_feeds_the_injection_read_path() {
+        use crate::memory::{MemoryCategory, MemoryEntry};
+        // The same read (`format_for_injection` over the cwd project key)
+        // process_query and context_breakdown perform — must produce text
+        // once the shared store carries entries for that key.
+        let temp_dir = env::temp_dir()
+            .join("shannon-memory-arc-inject-test")
+            .join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&temp_dir).unwrap();
+        let project = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "default".to_string());
+
+        let shared = Arc::new(std::sync::RwLock::new(MemoryStore::new(temp_dir.clone())));
+        {
+            let mut store = shared.write().unwrap_or_else(|e| e.into_inner());
+            store
+                .add(MemoryEntry::new(
+                    &project,
+                    MemoryCategory::Context,
+                    "engine injected this",
+                ))
+                .expect("seed memory");
+        }
+
+        let engine = create_test_engine().with_memory_arc(shared);
+        let text = engine
+            .memory()
+            .unwrap()
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .format_for_injection(&project)
+            .expect("memory text");
+        assert!(text.contains("engine injected this"));
+
+        // And the context breakdown's `memory` category (which snapshots the
+        // identical injection text) is non-zero with the store attached.
+        let breakdown = engine.context_breakdown();
+        assert!(
+            breakdown.tokens_for("memory") > 0,
+            "memory category must be non-zero with a populated shared store"
+        );
+
         let _ = fs::remove_dir_all(temp_dir);
     }
 
