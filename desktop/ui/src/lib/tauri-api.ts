@@ -1716,6 +1716,78 @@ export async function migrationApply(
   return invoke('migration_apply', { source, items })
 }
 
+// ─── Persona / profile pack (P2-2) ─────────────────────────────────────────
+//
+// Frozen contract with desktop/src/persona_pack_commands.rs: pack Shannon's
+// personalization surfaces (skills, commands, memories, routines, profiles,
+// persona) into one secret-stripped .tar.gz, preview it, and import it with a
+// user-chosen conflict strategy.
+
+/** Category selection shared by export and import; omitted = false. */
+export interface PersonaPackInclude {
+  skills: boolean
+  commands: boolean
+  memory: boolean
+  routines: boolean
+  profiles: boolean
+  persona: boolean
+}
+
+export interface PersonaPackCounts {
+  skills: number
+  commands: number
+  memories: number
+  routines: number
+  profiles: number
+  persona: number
+}
+
+export interface PersonaPackExportResult {
+  path: string
+  counts: PersonaPackCounts
+  /** Total secret redactions applied while packing. */
+  stripped: number
+}
+
+export type PersonaPackConflict = 'skip' | 'overwrite' | 'rename'
+
+export interface PersonaPackFailure {
+  item: string
+  error: string
+}
+
+export interface PersonaPackImportReport {
+  imported: PersonaPackCounts
+  skipped: PersonaPackCounts
+  failed: PersonaPackFailure[]
+}
+
+export interface PersonaPackInspectResult {
+  version: number
+  counts: PersonaPackCounts
+  createdAtMs: number
+  generator: string
+}
+
+export async function personaPackExport(
+  path: string,
+  include: PersonaPackInclude,
+): Promise<PersonaPackExportResult> {
+  return invoke('persona_pack_export', { path, include })
+}
+
+export async function personaPackImport(
+  path: string,
+  conflict: PersonaPackConflict,
+  include: PersonaPackInclude,
+): Promise<PersonaPackImportReport> {
+  return invoke('persona_pack_import', { path, conflict, include })
+}
+
+export async function personaPackInspect(path: string): Promise<PersonaPackInspectResult> {
+  return invoke('persona_pack_inspect', { path })
+}
+
 // --- Routine templates (P1.4) ---
 
 export interface RoutineTemplate {

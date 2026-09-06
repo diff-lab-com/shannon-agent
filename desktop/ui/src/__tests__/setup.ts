@@ -290,6 +290,25 @@ vi.mock('@/lib/tauri-api', () => ({
   getSessionGitDiff: vi.fn().mockResolvedValue({ is_repo: false, files: [], patch: '', truncated: false }),
   compactSession: vi.fn().mockResolvedValue({ performed: true, nothing_to_compact: false, original_tokens: 100, compacted_tokens: 20, reduction_ratio: 0.8, messages_removed: 3, kept_turns: 1, messages: [] }),
   saveTextFile: vi.fn().mockResolvedValue(undefined),
+  // P2-2 — persona/profile pack. Defaults are inert (empty counts) so the
+  // Settings section renders quietly; per-test `vi.mocked(...)` overrides
+  // cover the export / inspect / import flows.
+  personaPackExport: vi.fn().mockResolvedValue({
+    path: '/tmp/shannon-pack.tar.gz',
+    counts: { skills: 0, commands: 0, memories: 0, routines: 0, profiles: 0, persona: 0 },
+    stripped: 0,
+  }),
+  personaPackImport: vi.fn().mockResolvedValue({
+    imported: { skills: 0, commands: 0, memories: 0, routines: 0, profiles: 0, persona: 0 },
+    skipped: { skills: 0, commands: 0, memories: 0, routines: 0, profiles: 0, persona: 0 },
+    failed: [],
+  }),
+  personaPackInspect: vi.fn().mockResolvedValue({
+    version: 1,
+    counts: { skills: 0, commands: 0, memories: 0, routines: 0, profiles: 0, persona: 0 },
+    createdAtMs: 0,
+    generator: 'shannon-test',
+  }),
   respondPermission: vi.fn().mockResolvedValue(undefined),
   getFileDiff: vi.fn().mockResolvedValue({ path: '', hunks: [] }),
   applyDiff: vi.fn().mockResolvedValue(undefined),

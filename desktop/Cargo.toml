@@ -69,6 +69,11 @@ rand = "0.8"
 qrcode = "0.14"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 percent-encoding = "2"
+# P2-2 — persona/profile pack (.tar.gz). Both crates are already resolved in
+# Cargo.lock via transitive dependencies (tar 0.4.46, flate2 1.1.9), so these
+# direct deps introduce no new packages — they only reuse the locked versions.
+tar = "0.4"
+flate2 = "1"
 
 tauri = { version = "2", optional = true, features = ["tray-icon"] }
 tauri-plugin-shell = { version = "2", optional = true }

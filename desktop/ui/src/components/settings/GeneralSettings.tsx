@@ -13,6 +13,7 @@ import { toastError } from '@/lib/errorToast'
 import type { ApprovalMode } from '@/types'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 import MigrationWizard from '@/components/migration/MigrationWizard'
+import PersonaPackSettings from './PersonaPackSettings'
 import { FeedbackSummaryCard } from './FeedbackSummaryCard'
 
 type ApprovalModeKey = ApprovalMode
@@ -214,6 +215,9 @@ export default function GeneralSettings() {
             {t('settings.migration.button')}
           </Button>
         </section>
+
+        {/* P2-2 — persona/profile pack (one-file export & import) */}
+        <PersonaPackSettings />
 
         {/* Re-run setup wizard */}
         <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">

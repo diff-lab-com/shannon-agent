@@ -356,6 +356,10 @@ fn main() {
             migration_commands::migration_scan,
             migration_commands::migration_preview,
             migration_commands::migration_apply,
+            // P2-2 — persona/profile pack (frozen contract).
+            persona_pack_commands::persona_pack_export,
+            persona_pack_commands::persona_pack_import,
+            persona_pack_commands::persona_pack_inspect,
             // P1-5 D — integrated terminal (frozen contract).
             terminal_commands::terminal_spawn,
             terminal_commands::terminal_write,
