@@ -2,7 +2,8 @@
 // Tauri commands (`list_inbox_items` / `update_inbox_item_status` /
 // `get_inbox_stats` / `rerun_inbox_item` / `continue_inbox_item_session`).
 // Items are produced by scheduled routine runs (`routine`/`scheduled_task`),
-// goal events, and the external trigger endpoint — see `inbox_commands.rs`.
+// goal events, the external trigger endpoint, and parallel batch-run
+// completions (`batch`) — see `inbox_commands.rs` / `batch_commands.rs`.
 //
 // Layout: header with stats summary → filter bar (status chips + source
 // chips + sort) → bulk-action bar when items selected → list of InboxCard
@@ -48,13 +49,17 @@ function sourceMeta(source: InboxSource): { icon: string; color: string; labelKe
       return { icon: 'flag', color: 'text-secondary', labelKey: 'inbox.source.goal' }
     case 'trigger':
       return { icon: 'bolt', color: 'text-error', labelKey: 'inbox.source.trigger' }
+    case 'batch':
+      // Parallel batch run's aggregate completion record (T3) — same visual
+      // language as the batch runner panel (call_split icon, tertiary color).
+      return { icon: 'call_split', color: 'text-tertiary', labelKey: 'inbox.source.batch' }
     default:
       return { icon: 'notifications', color: 'text-on-surface-variant', labelKey: 'inbox.source.trigger' }
   }
 }
 
 const STATUS_OPTIONS: readonly (InboxItemStatus | 'all')[] = ['all', 'pending', 'read', 'archived']
-const SOURCE_OPTIONS: readonly (InboxSource | 'all')[] = ['all', 'routine', 'scheduled_task', 'goal', 'trigger']
+const SOURCE_OPTIONS: readonly (InboxSource | 'all')[] = ['all', 'routine', 'scheduled_task', 'goal', 'trigger', 'batch']
 
 function InboxCard({ item, selected, focused, onToggleSelected, onMarkRead, onArchive, onContinue, onRerun }: {
   item: InboxItem

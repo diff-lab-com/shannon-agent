@@ -30,6 +30,7 @@ const testMessages: Record<string, string> = {
   'inbox.source.scheduled_task': 'Scheduled task',
   'inbox.source.goal': 'Goal',
   'inbox.source.trigger': 'Trigger',
+  'inbox.source.batch': 'Batch',
   'inbox.sort.aria': 'Toggle sort order',
   'inbox.sort.newest': 'Newest first',
   'inbox.sort.oldest': 'Oldest first',
@@ -190,6 +191,28 @@ describe('Triage page (inbox)', () => {
     renderPage()
     fireEvent.click(screen.getByRole('button', { name: 'Goal' }))
     expect(setFilter).toHaveBeenCalledWith({ status: undefined, source: 'goal' })
+  })
+
+  // T3 contract: batch runs append aggregate inbox items (source=`batch`,
+  // batch_commands.rs). They must render with their own label/icon — not the
+  // trigger fallback — and be filterable by the batch source chip.
+  it('batch items render the Batch label and icon, not the trigger fallback', () => {
+    setItems([makeItem({ id: 7, source: 'batch', title: 'Batch #b1 finished' })])
+    renderPage()
+    const list = screen.getByRole('list')
+    expect(within(list).getByText('Batch')).toBeInTheDocument()
+    expect(within(list).queryByText('Trigger')).not.toBeInTheDocument()
+    // call_split icon (parallel-plan semantics), same as the batch runner panel.
+    expect(within(list).getByText('call_split')).toBeInTheDocument()
+    // Batch items have no rerunnable routine behind them (backend rejects).
+    expect(screen.getByRole('button', { name: 'Rerun the routine behind this item' })).toBeDisabled()
+  })
+
+  it('batch source chip pushes source=batch onto the hook filter', () => {
+    const { setFilter } = setItems([makeItem({ id: 7, source: 'batch' })])
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Batch' }))
+    expect(setFilter).toHaveBeenCalledWith({ status: undefined, source: 'batch' })
   })
 
   it('mark read button on a pending item calls hook markRead with the id', async () => {

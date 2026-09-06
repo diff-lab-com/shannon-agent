@@ -887,8 +887,9 @@ export interface TriageStats {
 
 /// Where an inbox item came from. `routine`/`scheduled_task` are produced by
 /// scheduled-task runs (and are the only rerunnable sources); `goal` and
-/// `trigger` come from goal events / the external trigger endpoint.
-export type InboxSource = 'routine' | 'scheduled_task' | 'goal' | 'trigger'
+/// `trigger` come from goal events / the external trigger endpoint; `batch`
+/// is the aggregate completion record of a parallel batch run (T3).
+export type InboxSource = 'routine' | 'scheduled_task' | 'goal' | 'trigger' | 'batch'
 
 /// Lifecycle status of an inbox item (`pending` → `read` → `archived`).
 export type InboxItemStatus = 'pending' | 'read' | 'archived'

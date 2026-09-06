@@ -1894,6 +1894,7 @@
   "inbox.source.scheduled_task": "计划任务",
   "inbox.source.goal": "目标",
   "inbox.source.trigger": "触发器",
+  "inbox.source.batch": "并行方案",
   "inbox.sort.aria": "切换排序顺序",
   "inbox.sort.newest": "最新优先",
   "inbox.sort.oldest": "最早优先",

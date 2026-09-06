@@ -1894,6 +1894,7 @@
   "inbox.source.scheduled_task": "Scheduled task",
   "inbox.source.goal": "Goal",
   "inbox.source.trigger": "Trigger",
+  "inbox.source.batch": "Batch",
   "inbox.sort.aria": "Toggle sort order",
   "inbox.sort.newest": "Newest first",
   "inbox.sort.oldest": "Oldest first",
