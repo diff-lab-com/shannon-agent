@@ -205,6 +205,13 @@ pub mod preview_commands;
 #[cfg(feature = "tauri")]
 pub mod cost_commands;
 
+/// P1-6 — migration wizard: scan / preview / apply imports from a Claude
+/// Code or ZCode install (settings rules, MCP servers, skills, commands,
+/// project memory). Read-scan + user-approved import only; known source
+/// paths, never arbitrary ones.
+#[cfg(feature = "tauri")]
+pub mod migration_commands;
+
 #[cfg(feature = "tauri")]
 pub mod commands_routine_templates;
 

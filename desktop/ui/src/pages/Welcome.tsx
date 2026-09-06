@@ -15,6 +15,7 @@ import { TaskStep } from './welcome/TaskStep'
 import { ModelStep } from './welcome/ModelStep'
 import { ToolsStep } from './welcome/ToolsStep'
 import { DoneStep } from './welcome/DoneStep'
+import MigrationWizard from '@/components/migration/MigrationWizard'
 import { TASKS, type TaskId, type DocumentsSkill } from './welcome/constants'
 import type { ProvidersFile } from '@/types'
 
@@ -53,6 +54,9 @@ export default function Welcome() {
   const [skillState, setSkillState] = useState<
     Record<string, { status: 'idle' | 'installing' | 'installed' | 'failed'; error?: string }>
   >({})
+  // P1-6 — migration wizard overlay (import from Claude Code / ZCode),
+  // reachable from the final Welcome step.
+  const [migrationOpen, setMigrationOpen] = useState(false)
 
   // task is always one of the TaskId union, so the lookup can only miss on
   // programmer error — fall back to the first task instead of asserting.
@@ -255,10 +259,15 @@ export default function Welcome() {
               onFinish={finish}
               onInstallSkill={installDocumentsSkill}
               onBrowseFeaturedSkills={openFeaturedSkills}
+              onOpenMigration={() => setMigrationOpen(true)}
             />
           )}
         </div>
       </main>
+
+      {migrationOpen && (
+        <MigrationWizard open={migrationOpen} onClose={() => setMigrationOpen(false)} />
+      )}
 
       {showAddProviderModal && (
         <AddProviderModal

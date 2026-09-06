@@ -1629,6 +1629,92 @@ export async function seedSampleData(): Promise<SeedReport> {
   return invoke('seed_sample_data')
 }
 
+// ─── Migration wizard (P1-6) ───────────────────────────────────────────────
+//
+// Frozen contract with desktop/src/migration_commands.rs: scan a Claude Code
+// or ZCode install, preview per-item conflicts, then apply the user-approved
+// imports. Read-scan + copy/merge only — nothing from the source side is
+// ever executed, and the backend only ever reads its known source paths.
+
+export type MigrationSourceId = 'claude-code' | 'zcode'
+
+export type MigrationAssetKind = 'mcp' | 'skill' | 'command' | 'memory' | 'settings-rules'
+
+export type MigrationConflictState = 'none' | 'overwrite' | 'skip-existing'
+
+export interface MigrationAsset {
+  /** Stable `<source>:<kind>:<slug>` id — deterministic across scans. */
+  id: string
+  kind: MigrationAssetKind
+  name: string
+  sourcePath: string
+  targetPath: string
+  /** `none` (target free) | `overwrite` (exists, differs) | `skip-existing` (identical). */
+  conflict: MigrationConflictState
+  /** Approximate source size in bytes. */
+  sizeHint: number
+}
+
+export interface MigrationScanError {
+  path: string
+  error: string
+}
+
+export interface MigrationScanResult {
+  source: MigrationSourceId
+  items: MigrationAsset[]
+  /** Well-known slots probed but absent (「未发现」). */
+  notFound: string[]
+  /** Non-fatal per-file problems (corrupted JSON, unsupported servers…). */
+  errors: MigrationScanError[]
+}
+
+export interface MigrationPreviewItem {
+  id: string
+  diffSummary: string
+}
+
+export interface MigrationPreviewResult {
+  perItem: MigrationPreviewItem[]
+}
+
+/** `action` is frozen; `conflict` is an additive hint for existing, differing
+ *  targets (default `rename`, i.e. write `<name>-imported`). */
+export interface MigrationItemInput {
+  id: string
+  action: 'import' | 'skip'
+  conflict?: 'overwrite' | 'rename' | 'skip'
+}
+
+export interface MigrationApplyFailure {
+  id: string
+  error: string
+}
+
+export interface MigrationApplyReport {
+  imported: number
+  skipped: number
+  failed: MigrationApplyFailure[]
+}
+
+export async function migrationScan(source: MigrationSourceId): Promise<MigrationScanResult> {
+  return invoke('migration_scan', { source })
+}
+
+export async function migrationPreview(
+  source: MigrationSourceId,
+  items: MigrationItemInput[],
+): Promise<MigrationPreviewResult> {
+  return invoke('migration_preview', { source, items })
+}
+
+export async function migrationApply(
+  source: MigrationSourceId,
+  items: MigrationItemInput[],
+): Promise<MigrationApplyReport> {
+  return invoke('migration_apply', { source, items })
+}
+
 // --- Routine templates (P1.4) ---
 
 export interface RoutineTemplate {
