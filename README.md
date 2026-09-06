@@ -435,6 +435,53 @@ Bypass for WIP pushes: `git push --no-verify` or `PRE_PUSH_QUICK=1 git push` (fm
 
 Artifacts go to `target/dist/` as `.tar.gz` (Linux/macOS) or `.zip` (Windows).
 
+### Static / musl Builds (GLIBC-free)
+
+For environments where the target system has no glibc (e.g. the TB2.1
+evaluation harness sometimes ran into GLIBC incompatibilities on older
+images), build `shannon-cli` as a fully static binary against musl:
+
+```bash
+# 1. Install the musl C cross-toolchain (one-time, root).
+sudo apt-get install -y musl-tools        # Debian/Ubuntu
+#   or
+sudo apk add musl-dev                     # Alpine
+#   or
+brew install FiloSottile/musl-cross/musl-cross  # macOS
+
+# 2. Add the Rust target (one-time, user).
+rustup target add x86_64-unknown-linux-musl
+
+# 3. Build the static binary.
+#    `-D_FORTIFY_SOURCE=0` is required because gcc's `_FORTIFY_SOURCE=2`
+#    default wraps `snprintf` calls in `tree-sitter`'s generated parser
+#    code with `__snprintf_chk`, which does not exist on musl. Without
+#    this flag the release link fails with `undefined reference to
+#    '__snprintf_chk'`. Debug builds do not trigger the wrapping, so
+#    they succeed without the override.
+CFLAGS_x86_64_unknown_linux_musl="-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0" \
+    cargo build --release --target x86_64-unknown-linux-musl -p shannon-cli
+```
+
+The result is `target/x86_64-unknown-linux-musl/release/shannon`, a single
+self-contained executable (~ 30 MB stripped) with no runtime dependency
+on glibc. All crypto goes through `rustls` + `ring` so the binary does
+not pull in `openssl` or any other native TLS dependency.
+
+Verification:
+
+```bash
+file target/x86_64-unknown-linux-musl/release/shannon       # ELF, static-pie linked, stripped
+ldd target/x86_64-unknown-linux-musl/release/shannon        # "statically linked"
+```
+
+Note: `ring` requires a C compiler at build time. With `rustls` and
+`ring` only, the musl build needs a C cross-toolchain even though the
+runtime is pure-Rust. `aws-lc-sys` would let us skip the C dependency
+entirely but the upstream TLS feature on reqwest does not currently
+expose it. This is the only requirement for musl — `shannon-cli` itself
+has no musl-specific cfg gating.
+
 ---
 
 ## Reliability & Test Coverage
