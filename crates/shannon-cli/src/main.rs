@@ -1797,22 +1797,15 @@ fn run_headless_query(
     // points SHANNON_CRASH_DIR at a scratch directory; no-op otherwise.
     crash_hook::install_from_env();
 
-    // B.7: turn on the headless auto-enable for `auto_test.no_progress_strikes`.
-    // The CLI sets the env var to the output-format string ("text" / "json" /
-    // "json-stream") — anything non-empty and non-"0" enables the guard, so a
-    // CI harness that explicitly passes "0" can still opt out. The default
-    // value is `unset`, so the previous behavior is preserved when this
-    // function isn't reached.
-    if matches!(output_format, OutputFormat::JsonStream | OutputFormat::Json) {
-        // SAFETY: process-global env mutation before tokio runtime is
-        // constructed; no other thread is reading this var at this point.
-        unsafe {
-            std::env::set_var(
-                shannon_core::auto_test::HEADLESS_AUTO_TEST_STRIKES_ENV,
-                "json-stream",
-            );
-        }
-    }
+    // B.7 (revised R2, 2026-09-07): the headless auto-enable for
+    // `auto_test.no_progress_strikes` is OPT-IN only. The original B.7 turned
+    // the guard on for every headless run; the P4 v3 run then showed
+    // premature termination is a bigger real-world risk than loitering for
+    // thinking-heavy models (20 previously-passing controls regressed).
+    // Correctness asymmetry: a killed session loses work (severe); extra
+    // turns cost tokens (mild). Opt in explicitly with
+    // SHANNON_HEADLESS_AUTO_TEST_STRIKES=1; "0" or unset keeps the
+    // historical behavior.
 
     let rt = tokio::runtime::Runtime::new()?;
     let exit_code: HeadlessExitCode = rt.block_on(async {
