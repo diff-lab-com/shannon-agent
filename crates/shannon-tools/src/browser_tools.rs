@@ -510,24 +510,27 @@ mod tests {
         // Repo invariant (tool_trait_compliance): destructive ⇒ not
         // concurrency-safe. Read-only browser tools may run parallel;
         // state-changing ones serialize.
-        let destructive: Vec<&dyn Tool> = vec![
-            &BrowserClickTool,
-            &BrowserTypeTool,
-            &BrowserCloseTool,
-        ];
+        let destructive: Vec<&dyn Tool> =
+            vec![&BrowserClickTool, &BrowserTypeTool, &BrowserCloseTool];
         for tool in &destructive {
-            assert!(tool.is_destructive(), "{} should be destructive", tool.name());
+            assert!(
+                tool.is_destructive(),
+                "{} should be destructive",
+                tool.name()
+            );
             assert!(
                 !tool.is_concurrency_safe(),
                 "{} must not be concurrency-safe",
                 tool.name()
             );
         }
-        // Navigate flips page state but is not flagged destructive
-        // (matching `is_destructive() == false`); it is still serialized
-        // by the destructive check only when flagged.
+        // Navigate flips page state but is flagged neither destructive
+        // nor read-only (a navigation discards form state yet is routinely
+        // reversible); it still serializes because concurrent navigations
+        // race the same tab.
+        assert!(!BrowserNavigateTool.is_destructive());
+        assert!(!BrowserNavigateTool.is_read_only());
         let readonly: Vec<&dyn Tool> = vec![
-            &BrowserNavigateTool,
             &BrowserSnapshotTool,
             &BrowserScreenshotTool,
             &BrowserTabsTool,
