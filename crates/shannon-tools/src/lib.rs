@@ -39,6 +39,8 @@ pub mod agent;
 pub mod applescript;
 pub mod ask_user;
 pub mod brief;
+pub mod browser_tools;
+pub mod chrome_session;
 pub mod computer_use;
 pub mod config;
 pub mod cron;
@@ -433,6 +435,16 @@ fn register_all_tools(
 
     // ── AppleScript / Shortcuts (macOS app automation, T13 Tier 1) ───────
     registry.register(Box::new(applescript::AppleScriptTool::new()))?;
+
+    // ── Built-in browser tools (T14 Phase 1, local-browser) ──────────────
+    registry.register(Box::new(browser_tools::BrowserNavigateTool))?;
+    registry.register(Box::new(browser_tools::BrowserClickTool))?;
+    registry.register(Box::new(browser_tools::BrowserTypeTool))?;
+    registry.register(Box::new(browser_tools::BrowserSnapshotTool))?;
+    registry.register(Box::new(browser_tools::BrowserScreenshotTool))?;
+    registry.register(Box::new(browser_tools::BrowserTabsTool))?;
+    registry.register(Box::new(browser_tools::BrowserCloseTool))?;
+    registry.register(Box::new(browser_tools::BrowserConsoleTool))?;
 
     // ── MCP resource tools ─────────────────────────────────────────────
     registry.register(Box::new(McpResourceTool::new()))?;

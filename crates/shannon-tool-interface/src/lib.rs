@@ -72,6 +72,14 @@ pub enum ToolError {
     },
 }
 
+// Chromiumoxide session helpers may produce String errors; let `?` work
+// uniformly across builtin tool implementations.
+impl From<String> for ToolError {
+    fn from(s: String) -> Self {
+        ToolError::ExecutionFailed(s)
+    }
+}
+
 /// Result type for tool execution
 pub type ToolResult<T> = Result<T, ToolError>;
 

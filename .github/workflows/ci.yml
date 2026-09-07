@@ -84,6 +84,11 @@ jobs:
       # packages needed at build time; the portal is only a runtime dep.
       - name: Build with computer-use-libei feature
         run: CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features computer-use-libei
+      # T14 Phase 1: compile-check the live browser tools. No browser is
+      # installed on the runner, so only the compile gate runs here; the
+      # E2E integration test self-skips when no browser is detected.
+      - name: Build with local-browser feature
+        run: CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features local-browser
       - name: Doctests
         # nextest does not execute doctests, so a doctest-only regression
         # (e.g. an example that relies on opt-in configuration) stays green

@@ -1175,6 +1175,27 @@ impl PermissionManager {
         );
         self.tool_policies
             .insert("applescript".to_string(), applescript_policy);
+
+        // Browser tools - high risk (drives a real browser, fills forms,
+        // navigates, can read sensitive data on any visited page).
+        for name in [
+            "browser_navigate",
+            "browser_click",
+            "browser_type",
+            "browser_screenshot",
+            "browser_snapshot",
+            "browser_tabs",
+            "browser_close",
+        ] {
+            self.tool_policies.insert(
+                name.to_string(),
+                ToolPermissionPolicy::new(
+                    name.to_string(),
+                    RiskLevel::High,
+                    "Drive the local system browser via CDP".to_string(),
+                ),
+            );
+        }
     }
 
     /// Register or update a tool's permission policy
