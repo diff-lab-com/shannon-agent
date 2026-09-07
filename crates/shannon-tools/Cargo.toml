@@ -88,6 +88,23 @@ computer-use-libei = ["xcap", "enigo", "enigo/libei", "image"]
 computer-use-wayland = ["xcap", "enigo", "enigo/wayland", "image"]
 computer-use-x11rb = ["xcap", "enigo", "enigo/x11rb", "image"]
 
+# T14 Phase 1: live browser tools backed by chromiumoxide. The
+# chromiumoxide dep lives here (in the consumer) rather than in
+# shannon-remote to avoid a tools↔remote cyclic feature dependency;
+# the chromiumoxide-cdp generation it pulls in is large enough that
+# we want it gated on this single opt-in. shannon-remote/detect.rs is
+# used to locate the user's installed Chrome — it has no chromiumoxide
+# dependency.
+local-browser = ["dep:chromiumoxide"]
+
+# chromiumoxide pulls tokio + futures via its own manifest; declare them
+# under the feature so workspace-wide --all-features works.
+[target.'cfg(not(target_os = "android"))'.dependencies.chromiumoxide]
+version = "0.9"
+optional = true
+default-features = false
+
+
 [dependencies.xcap]
 version = "0.0.13"
 optional = true
