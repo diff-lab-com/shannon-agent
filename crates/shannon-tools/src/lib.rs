@@ -445,13 +445,6 @@ fn register_all_tools(
     registry.register(Box::new(browser_tools::BrowserTabsTool))?;
     registry.register(Box::new(browser_tools::BrowserCloseTool))?;
     registry.register(Box::new(browser_tools::BrowserConsoleTool))?;
-    registry.register(Box::new(browser_tools::BrowserClickTool))?;
-    registry.register(Box::new(browser_tools::BrowserTypeTool))?;
-    registry.register(Box::new(browser_tools::BrowserSnapshotTool))?;
-    registry.register(Box::new(browser_tools::BrowserScreenshotTool))?;
-    registry.register(Box::new(browser_tools::BrowserTabsTool))?;
-    registry.register(Box::new(browser_tools::BrowserCloseTool))?;
-    registry.register(Box::new(browser_tools::BrowserConsoleTool))?;
 
     // ── MCP resource tools ─────────────────────────────────────────────
     registry.register(Box::new(McpResourceTool::new()))?;
