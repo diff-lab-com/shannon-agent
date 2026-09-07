@@ -115,7 +115,7 @@ impl Tool for BrowserClickTool {
         true
     }
     fn is_concurrency_safe(&self) -> bool {
-        true
+        false
     }
 
     async fn execute(&self, input: Value) -> crate::ToolResult<crate::ToolOutput> {
@@ -174,7 +174,7 @@ impl Tool for BrowserTypeTool {
         true
     }
     fn is_concurrency_safe(&self) -> bool {
-        true
+        false
     }
 
     async fn execute(&self, input: Value) -> crate::ToolResult<crate::ToolOutput> {
@@ -368,7 +368,7 @@ impl Tool for BrowserCloseTool {
         true
     }
     fn is_concurrency_safe(&self) -> bool {
-        true
+        false
     }
 
     async fn execute(&self, input: Value) -> crate::ToolResult<crate::ToolOutput> {
@@ -506,23 +506,36 @@ mod tests {
     }
 
     #[test]
-    fn test_concurrency_safety_annotations() {
-        let tools: Vec<&dyn Tool> = vec![
-            &BrowserNavigateTool,
+    fn test_destructive_tools_are_serialized() {
+        // Repo invariant (tool_trait_compliance): destructive ⇒ not
+        // concurrency-safe. Read-only browser tools may run parallel;
+        // state-changing ones serialize.
+        let destructive: Vec<&dyn Tool> = vec![
             &BrowserClickTool,
             &BrowserTypeTool,
+            &BrowserCloseTool,
+        ];
+        for tool in &destructive {
+            assert!(tool.is_destructive(), "{} should be destructive", tool.name());
+            assert!(
+                !tool.is_concurrency_safe(),
+                "{} must not be concurrency-safe",
+                tool.name()
+            );
+        }
+        // Navigate flips page state but is not flagged destructive
+        // (matching `is_destructive() == false`); it is still serialized
+        // by the destructive check only when flagged.
+        let readonly: Vec<&dyn Tool> = vec![
+            &BrowserNavigateTool,
             &BrowserSnapshotTool,
             &BrowserScreenshotTool,
             &BrowserTabsTool,
-            &BrowserCloseTool,
             &BrowserConsoleTool,
         ];
-        for tool in &tools {
-            assert!(
-                tool.is_concurrency_safe(),
-                "{} should be concurrency-safe",
-                tool.name()
-            );
+        for tool in &readonly {
+            assert!(tool.is_read_only(), "{} should be read-only", tool.name());
+            assert!(tool.is_concurrency_safe());
         }
     }
 }
