@@ -21,6 +21,7 @@ toml = "0.8"
 thiserror = { workspace = true }
 tracing = { workspace = true }
 dirs = { workspace = true }
+reqwest = { workspace = true }
 shannon-tool-interface = { path = "../shannon-tool-interface" }
 shannon-core = { path = "../shannon-core" }
 shannon-tools = { path = "../shannon-tools" }

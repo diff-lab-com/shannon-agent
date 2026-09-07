@@ -311,6 +311,21 @@ pub trait BrowserProvider: Send + Sync + 'static {
     /// Whether a usable browser executable/context is available right now.
     /// Cheap, non-spawning check (path probe / config lookup).
     fn available(&self) -> bool;
+
+    /// Where this provider's pages live: local process, or a remote
+    /// endpoint reached over a forwarded connection.
+    fn locality(&self) -> BrowserLocality {
+        BrowserLocality::Local
+    }
+}
+
+/// Where a [`BrowserProvider`]'s pages live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserLocality {
+    /// Browser runs on the same host as Shannon.
+    Local,
+    /// Browser runs behind an SSH tunnel / remote endpoint.
+    Remote,
 }
 
 #[cfg(test)]
