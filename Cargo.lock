@@ -7063,6 +7063,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chromiumoxide",
+ "chromiumoxide_cdp",
  "chrono",
  "criterion",
  "dirs 5.0.1",

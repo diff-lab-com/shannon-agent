@@ -253,7 +253,7 @@ impl Tool for BrowserScreenshotTool {
         "browser_screenshot"
     }
     fn description(&self) -> &str {
-        "Capture a PNG screenshot of the given tab. PNG bytes are returned in tool-result metadata under `image/png`; the TUI also renders an inline preview."
+        "Capture a PNG screenshot of the given tab (viewport or full page). PNG bytes are returned in tool-result metadata under `image/png`."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -285,8 +285,7 @@ impl Tool for BrowserScreenshotTool {
             .unwrap_or(false);
         let session = ChromeSession::global().await?;
         let p = session.get_page(&tab).await?;
-        let _ = full_page; // phase 1 only viewport screenshots
-        let png = chrome_session::screenshot_png(&p).await?;
+        let png = chrome_session::screenshot_png(&p, full_page).await?;
         let mut m = HashMap::new();
         m.insert("media_type".into(), json!("image/png"));
         m.insert("bytes".into(), json!(png.len()));
@@ -404,6 +403,58 @@ impl Tool for BrowserCloseTool {
     }
 }
 
+// ── browser_console ─────────────────────────────────────────────────────
+pub struct BrowserConsoleTool;
+
+#[async_trait]
+impl Tool for BrowserConsoleTool {
+    fn name(&self) -> &str {
+        "browser_console"
+    }
+    fn description(&self) -> &str {
+        "Return the buffered console messages (log/debug/info/error/warning) for the given tab, oldest first. Messages are captured from the moment the tab was opened; the buffer holds the most recent 500 entries."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {"tab_id": {"type": "string"}},
+            "required": ["tab_id"]
+        })
+    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self) -> bool {
+        true
+    }
+
+    async fn execute(&self, input: Value) -> crate::ToolResult<crate::ToolOutput> {
+        let tab = TabId(
+            input["tab_id"]
+                .as_str()
+                .ok_or_else(|| ToolError::InvalidInput("missing field \"tab_id\"".into()))?
+                .to_string(),
+        );
+        let session = ChromeSession::global().await?;
+        // Touch the page first so an unknown tab surfaces as an error
+        // instead of an empty list.
+        let _ = session.get_page(&tab).await?;
+        let msgs = session.console_messages(&tab).await;
+        if msgs.is_empty() {
+            return Ok(crate::ToolOutput {
+                content: "(no console messages captured for this tab)".to_string(),
+                is_error: false,
+                metadata: HashMap::new(),
+            });
+        }
+        Ok(crate::ToolOutput {
+            content: msgs.join("\n"),
+            is_error: false,
+            metadata: HashMap::new(),
+        })
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -448,6 +499,7 @@ mod tests {
             (&BrowserScreenshotTool, "browser_screenshot"),
             (&BrowserTabsTool, "browser_tabs"),
             (&BrowserCloseTool, "browser_close"),
+            (&BrowserConsoleTool, "browser_console"),
         ] {
             assert_eq!(tool.name(), expected);
         }
@@ -463,6 +515,7 @@ mod tests {
             &BrowserScreenshotTool,
             &BrowserTabsTool,
             &BrowserCloseTool,
+            &BrowserConsoleTool,
         ];
         for tool in &tools {
             assert!(

@@ -28,6 +28,9 @@ use std::path::PathBuf;
 #[cfg(feature = "local-browser")]
 mod live {
     use chromiumoxide::browser::{Browser, BrowserConfig};
+    use chromiumoxide_cdp::cdp::browser_protocol::input::{
+        DispatchKeyEventParams, DispatchKeyEventType,
+    };
     use futures::StreamExt;
     use serde::Serialize;
     use std::collections::HashMap;
@@ -47,8 +50,15 @@ mod live {
         browser: Browser,
         _handler_task: tokio::task::JoinHandle<()>,
         pages: Arc<Mutex<HashMap<TabId, chromiumoxide::Page>>>,
+        /// Per-tab console message buffer (tail-capped at
+        /// [`CONSOLE_BUFFER_CAP`] entries). Filled by a listener task
+        /// spawned with each tab.
+        console_logs: Arc<Mutex<HashMap<TabId, Vec<String>>>>,
         user_data_dir: PathBuf,
     }
+
+    /// Maximum console messages retained per tab (oldest dropped).
+    const CONSOLE_BUFFER_CAP: usize = 500;
 
     // ── browser detection (inlined) ──────────────────────────────
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,9 +184,15 @@ mod live {
 
         async fn launch() -> Result<Arc<Self>, String> {
             let exe = detect_system_browser()?;
+            // Unique per Shannon process: Chrome refuses to start twice on
+            // the same user-data-dir (SingletonLock), and two Shannon
+            // windows sharing a profile would fight over it. Cross-session
+            // persistence is opt-in via SHANNON_BROWSER_USER_DATA_DIR.
             let user_data_dir = std::env::var_os("SHANNON_BROWSER_USER_DATA_DIR")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| std::env::temp_dir().join("shannon-browser"));
+                .unwrap_or_else(|| {
+                    std::env::temp_dir().join(format!("shannon-browser-{}", uuid::Uuid::new_v4()))
+                });
             std::fs::create_dir_all(&user_data_dir)
                 .map_err(|e| format!("create user-data-dir {user_data_dir:?}: {e}"))?;
             let mut config = BrowserConfig::builder()
@@ -201,11 +217,13 @@ mod live {
             }
             let config = config.build().map_err(|e| format!("build config: {e}"))?;
             let (browser, mut handler) = Browser::launch(config).await.map_err(|e| {
-                format!(
-                    "failed to launch {} ({}). Run `/browser doctor` for install hints.",
-                    exe.path.display(),
-                    e
-                )
+                let detail = e.to_string();
+                let hint = if detail.contains("SingletonLock") {
+                    "\nHint: the profile directory has a stale SingletonLock from a Chrome                      process that did not exit cleanly. Remove the lock file or set                      SHANNON_BROWSER_USER_DATA_DIR to a fresh directory."
+                } else {
+                    "\nRun `/browser doctor` for install hints."
+                };
+                format!("failed to launch {} ({}).{hint}", exe.path.display(), e)
             })?;
             let handler_task = tokio::spawn(async move {
                 while let Some(h) = handler.next().await {
@@ -218,6 +236,7 @@ mod live {
                 browser,
                 _handler_task: handler_task,
                 pages: Arc::new(Mutex::new(HashMap::new())),
+                console_logs: Arc::new(Mutex::new(HashMap::new())),
                 user_data_dir,
             }))
         }
@@ -233,6 +252,38 @@ mod live {
                 .await
                 .map_err(|e| format!("new_page({url}): {e}"))?;
             let id = TabId(uuid::Uuid::new_v4().to_string());
+            // Attach a console listener so `browser_console` can read the
+            // page's messages after the fact. Best-effort: a dropped
+            // listener only means missed messages, never a failed session.
+            if let Ok(mut stream) = page
+                .event_listener::<chromiumoxide_cdp::cdp::js_protocol::runtime::EventConsoleApiCalled>()
+                .await
+            {
+                let logs = Arc::clone(&self.console_logs);
+                let tab = id.clone();
+                tokio::spawn(async move {
+                    while let Some(ev) = stream.next().await {
+                        let mut guard = logs.lock().await;
+                        let buf = guard.entry(tab.clone()).or_default();
+                        for arg in &ev.args {
+                            let kind = format!("{:?}", ev.r#type).to_lowercase();
+                            let text = arg
+                                .value
+                                .as_ref()
+                                .map(|v| match v {
+                                    serde_json::Value::String(s) => s.clone(),
+                                    other => other.to_string(),
+                                })
+                                .or_else(|| arg.description.clone())
+                                .unwrap_or_else(|| "<unserializable>".to_string());
+                            buf.push(format!("[{kind}] {text}"));
+                        }
+                        while buf.len() > CONSOLE_BUFFER_CAP {
+                            buf.remove(0);
+                        }
+                    }
+                });
+            }
             self.pages.lock().await.insert(id.clone(), page);
             Ok(id)
         }
@@ -266,6 +317,16 @@ mod live {
                 .get(id)
                 .cloned()
                 .ok_or_else(|| format!("unknown tab: {}", id.0))
+        }
+
+        /// Return the buffered console messages for a tab (oldest first).
+        pub async fn console_messages(&self, id: &TabId) -> Vec<String> {
+            self.console_logs
+                .lock()
+                .await
+                .get(id)
+                .cloned()
+                .unwrap_or_default()
         }
     }
 
@@ -309,10 +370,34 @@ mod live {
         }
     }
 
-    pub async fn press_key(_page: &Page, key: &str) -> Result<(), String> {
-        Err(format!(
-            "press_key({key}): not yet wired — T14 Phase 2 adds CDP key events"
-        ))
+    pub async fn press_key(page: &Page, key: &str) -> Result<(), String> {
+        use chromiumoxide_cdp::cdp::browser_protocol::input::{
+            DispatchKeyEventParams, DispatchKeyEventType,
+        };
+        let dispatch = |t: DispatchKeyEventType| DispatchKeyEventParams {
+            r#type: t,
+            key: Some(key.to_string()),
+            code: Some(key.to_string()),
+            text: None,
+            unmodified_text: None,
+            auto_repeat: None,
+            location: None,
+            is_keypad: None,
+            is_system_key: None,
+            windows_virtual_key_code: Some(0),
+            native_virtual_key_code: Some(0),
+            modifiers: None,
+            timestamp: None,
+            key_identifier: None,
+            commands: None,
+        };
+        page.execute(dispatch(DispatchKeyEventType::RawKeyDown))
+            .await
+            .map_err(|e| format!("key down: {e}"))?;
+        page.execute(dispatch(DispatchKeyEventType::KeyUp))
+            .await
+            .map_err(|e| format!("key up: {e}"))?;
+        Ok(())
     }
 
     pub async fn scroll_at(page: &Page, delta_y: f64) -> Result<(), String> {
@@ -354,14 +439,13 @@ mod live {
         Ok(format!("{title}\n{url}\n\n{truncated}"))
     }
 
-    pub async fn screenshot_png(page: &Page) -> Result<Vec<u8>, String> {
-        page.screenshot(chromiumoxide::page::ScreenshotParams::default())
+    pub async fn screenshot_png(page: &Page, full_page: bool) -> Result<Vec<u8>, String> {
+        let params = chromiumoxide::page::ScreenshotParams::builder()
+            .full_page(full_page)
+            .build();
+        page.screenshot(params)
             .await
             .map_err(|e| format!("screenshot: {e}"))
-    }
-
-    pub async fn console_messages(_page: &Page) -> Vec<String> {
-        Vec::new()
     }
 }
 
@@ -403,6 +487,9 @@ Rebuild with `--features local-browser` (or the CLI/desktop passthrough) to use 
         pub async fn get_page(&self, _id: &TabId) -> Result<Page, String> {
             Err(BROWSER_DISABLED.to_string())
         }
+        pub async fn console_messages(&self, _id: &TabId) -> Vec<String> {
+            Vec::new()
+        }
     }
 
     pub fn install_hint() -> &'static str {
@@ -432,22 +519,19 @@ Rebuild with `--features local-browser` to use the built-in browser tools."
     pub async fn page_text(_p: &Page) -> Result<String, String> {
         Err(BROWSER_DISABLED.to_string())
     }
-    pub async fn screenshot_png(_p: &Page) -> Result<Vec<u8>, String> {
+    pub async fn screenshot_png(_p: &Page, _full_page: bool) -> Result<Vec<u8>, String> {
         Err(BROWSER_DISABLED.to_string())
-    }
-    pub async fn console_messages(_p: &Page) -> Vec<String> {
-        Vec::new()
     }
 }
 
 #[cfg(feature = "local-browser")]
 pub use live::{
-    ChromeSession, Page, TabId, click_at, console_messages, detect_system_browser, install_hint,
-    navigate, page_text, press_key, screenshot_png, scroll_at, type_text,
+    ChromeSession, Page, TabId, click_at, detect_system_browser, install_hint, navigate, page_text,
+    press_key, screenshot_png, scroll_at, type_text,
 };
 
 #[cfg(not(feature = "local-browser"))]
 pub use stub::{
-    ChromeSession, Page, StubPage, TabId, click_at, console_messages, detect_system_browser,
-    install_hint, navigate, page_text, press_key, screenshot_png, scroll_at, type_text,
+    ChromeSession, Page, StubPage, TabId, click_at, detect_system_browser, install_hint, navigate,
+    page_text, press_key, screenshot_png, scroll_at, type_text,
 };

@@ -30,12 +30,13 @@ pub(crate) fn handle_browser(repl: &mut Repl, args: &str) -> Result<()> {
         "setup" => handle_setup(repl),
         "uninstall" | "remove" | "rm" => handle_uninstall(repl),
         "doctor" => handle_doctor(repl),
+        url if url.starts_with("http://") || url.starts_with("https://") => handle_open(repl, url),
         "" | "status" => handle_status(repl),
         other => {
             repl.chat.add_message(
                 ChatRole::System,
                 format!(
-                    "Unknown /browser subcommand: {other}\n\nUsage: /browser [setup|status|uninstall|doctor]"
+                    "Unknown /browser subcommand: {other}\n\nUsage: /browser [setup|status|uninstall|doctor|<url>]"
                 ),
             );
             Ok(())
@@ -158,6 +159,67 @@ fn handle_doctor(repl: &mut Repl) -> Result<()> {
     lines.push('\n');
     lines.push_str(shannon_remote::browser::install_hint());
     repl.chat.add_message(ChatRole::System, lines);
+    Ok(())
+}
+
+/// T14 Phase 1: open a URL in the built-in browser, capture a viewport
+/// screenshot, and render it inline via the terminal image pipeline
+/// (Kitty/Sixel/iTerm2/HalfBlocks depending on the terminal).
+///
+/// Requires the `local-browser` feature; without it, points the user at
+/// the Playwright MCP path.
+#[cfg(feature = "local-browser")]
+fn handle_open(repl: &mut Repl, url: &str) -> Result<()> {
+    use shannon_tools::chrome_session::ChromeSession;
+
+    repl.chat.add_message(
+        ChatRole::System,
+        format!("Opening {url} in the system browser..."),
+    );
+
+    let result = repl.runtime.block_on(async {
+        let session = ChromeSession::global().await?;
+        let tab = session.open_page(url).await?;
+        let page = session.get_page(&tab).await?;
+        // Give the page a moment to paint before capturing.
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        let png = shannon_tools::chrome_session::screenshot_png(&page, false).await?;
+        let title = page.get_title().await.ok().flatten().unwrap_or_default();
+        Ok::<_, String>((png, title))
+    });
+
+    match result {
+        Ok((png, title)) => {
+            let config = crate::terminal_image::ImageRenderConfig::default();
+            let preview_lines =
+                crate::terminal_image::render_image_bytes(&png, &config, &repl.state.theme);
+            let label = if title.is_empty() {
+                format!("[Browser: {url}]")
+            } else {
+                format!("[Browser: {url} — {title}]")
+            };
+            repl.chat
+                .add_message_with_image(ChatRole::User, label, preview_lines);
+        }
+        Err(e) => {
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Failed to open {url}: {e}\n\nRun `/browser doctor` for diagnostics."),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Stub for builds without the `local-browser` feature.
+#[cfg(not(feature = "local-browser"))]
+fn handle_open(repl: &mut Repl, url: &str) -> Result<()> {
+    repl.chat.add_message(
+        ChatRole::System,
+        format!(
+            "Opening {url} requires the `local-browser` feature (rebuild with `--features local-browser`). The Playwright MCP path via `/browser setup` works without it."
+        ),
+    );
     Ok(())
 }
 
