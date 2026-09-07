@@ -2205,9 +2205,7 @@ impl QueryEngine {
                     // in the current turn's user-context.
                     let budget = token_budget_limit();
                     if budget > 0 && total_input_tokens > budget {
-                        if let Some(text) =
-                            token_budget_nudge_for(total_input_tokens, budget)
-                        {
+                        if let Some(text) = token_budget_nudge_for(total_input_tokens, budget) {
                             let synth_msg = Message {
                                 role: "user".to_string(),
                                 content: MessageContent::Text(text.clone()),
@@ -5380,11 +5378,7 @@ mod tests {
         unsafe {
             env::set_var("SHANNON_TOKEN_BUDGET", "bogus");
         }
-        assert_eq!(
-            token_budget_limit(),
-            0,
-            "garbage must fall back to default"
-        );
+        assert_eq!(token_budget_limit(), 0, "garbage must fall back to default");
 
         match saved {
             Some(v) => unsafe { env::set_var("SHANNON_TOKEN_BUDGET", v) },
@@ -5434,7 +5428,10 @@ mod tests {
             if let Some(text) = token_budget_nudge_for(cumulative, budget) {
                 nudge_count += 1;
                 last_nudge = Some(text);
-                eprintln!("turn {} nudge fired (cumulative={cumulative})", turn_idx + 1);
+                eprintln!(
+                    "turn {} nudge fired (cumulative={cumulative})",
+                    turn_idx + 1
+                );
             }
         }
 

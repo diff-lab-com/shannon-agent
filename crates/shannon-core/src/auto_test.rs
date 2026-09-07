@@ -668,9 +668,7 @@ mod tests {
         assert_eq!(cfg.no_progress_strikes, 3);
 
         match saved {
-            Some(v) => unsafe {
-                std::env::set_var(HEADLESS_AUTO_TEST_STRIKES_ENV, v)
-            },
+            Some(v) => unsafe { std::env::set_var(HEADLESS_AUTO_TEST_STRIKES_ENV, v) },
             None => unsafe { std::env::remove_var(HEADLESS_AUTO_TEST_STRIKES_ENV) },
         }
     }
@@ -697,9 +695,7 @@ mod tests {
         );
 
         match saved {
-            Some(v) => unsafe {
-                std::env::set_var(HEADLESS_AUTO_TEST_STRIKES_ENV, v)
-            },
+            Some(v) => unsafe { std::env::set_var(HEADLESS_AUTO_TEST_STRIKES_ENV, v) },
             None => unsafe { std::env::remove_var(HEADLESS_AUTO_TEST_STRIKES_ENV) },
         }
     }
@@ -722,9 +718,7 @@ mod tests {
         assert_eq!(cfg.no_progress_strikes, 0);
 
         match saved {
-            Some(v) => unsafe {
-                std::env::set_var(HEADLESS_AUTO_TEST_STRIKES_ENV, v)
-            },
+            Some(v) => unsafe { std::env::set_var(HEADLESS_AUTO_TEST_STRIKES_ENV, v) },
             None => unsafe { std::env::remove_var(HEADLESS_AUTO_TEST_STRIKES_ENV) },
         }
     }
