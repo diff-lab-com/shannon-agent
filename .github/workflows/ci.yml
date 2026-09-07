@@ -9,6 +9,13 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
   pull_request:
     branches: [main, dev]
+  workflow_dispatch:
+    inputs:
+      run-browser-e2e:
+        description: "Run the real-Chrome browser E2E test (installs headless Chrome)"
+        type: boolean
+        default: false
+        required: false
 
 # Cancel in-progress runs for the same ref when a new commit is pushed.
 # Keeps CI queue short on active branches (e.g. dev) without affecting main.
@@ -89,6 +96,18 @@ jobs:
       # E2E integration test self-skips when no browser is detected.
       - name: Build with local-browser feature
         run: CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features local-browser
+      # T14 Phase 3: REAL end-to-end browser test — installs headless
+      # Chrome, then drives the session layer (launch → navigate →
+      # screenshot → key press → console buffer → close) exactly as the
+      # builtin tools do. Manual trigger from the Actions tab.
+      - name: E2E with local-browser feature (real Chrome)
+        if: inputs.run-browser-e2e == true
+        continue-on-error: true
+        run: |
+          # Headless Chrome needs its deps; the runner image already has
+          # most. `--no-sandbox` is set by the session layer.
+          CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools \
+            --features local-browser --test browser_e2e -- --nocapture
       - name: Doctests
         # nextest does not execute doctests, so a doctest-only regression
         # (e.g. an example that relies on opt-in configuration) stays green

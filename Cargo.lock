@@ -6953,6 +6953,7 @@ dependencies = [
  "dirs 5.0.1",
  "openssh",
  "openssh-sftp-client",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "shannon-core",
