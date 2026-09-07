@@ -44,3 +44,15 @@ full rebuild; runner binaries likewise via `--eval-runner` /
 - Results, ledger and the aggregate output are in the batch report; the
   citable conclusion is the aggregate's STABLE pass-rate interval only
   (flaky tasks are quarantined, never averaged in).
+
+## Runbook rules (hard-won, 2026-09 cycle — see docs/backlog.md §一)
+
+1. **One variable per acceptance run.** Never change binary + adapter +
+   concurrency in the same sweep; a multi-variable result cannot be attributed.
+2. **Content-idle watchdog threshold must exceed the model's max thinking
+   silence.** GLM-5.3-flash: 312 s measured. 180 s killed healthy streams and
+   the engine retry re-thought from scratch (rc=3 death spiral).
+3. **Launch verification asserts the start event's `prompt` field**, not
+   response existence. (`-p - < file` assigns the literal "-" as prompt.)
+4. **No prompt wording changes from single-task evidence.**
+   (docs/backlog.md §五 records the reverted counterexample.)
