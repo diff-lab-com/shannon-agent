@@ -87,6 +87,16 @@ v3 的 17/89 不构成「改进有害」的证据（6 并发限流 + A2 措辞�
 
 ## 四、待办任务
 
+### T1 验收结果（2026-09-08，全量 89 题，P1d 等条件，含 R1/R2）
+**28/89 = 31.5%——未通过验收**（P1d 40.4%，-8；control 层 3/6 失败）。
+已确认生效的修复：pytorch-model-recovery（CLI bug）✓、distribution-search（流超时层）✓、
+sanitize-git-repo（A2 门禁）✓、mteb-retrieve ✓。但 AgentTimeout 24（P1d 15）+ control 翻红
+表明**改进批中存在至少一项净负向改动**（候选：A2 提示改动改变 agent 行为节奏、A3 别名在
+TB 容器内误触发、A4 放行改变探索路径、A1 nudge 干扰）。
+**T1b 二分定位（最高优先）**：当前二进制 + 逐项关闭新行为（A1 off=nudge max 0、
+A3/A4 待定 env、A2 提示回退 P1d 文本需代码回退）逼近 P1d 行为，定位回归项后再二分放大。
+在二分定位前，**不再做全量跑批**。
+
 ### T0（进行中）
 - [ ] **dev 合并（延后，需协作）**：feat/agent-eval-bench 与 dev 已深度分叉
       （branch 领先 ~951 / dev 领先 ~1048 提交，含 desktop 导入、schema 迁移等并行重构），
