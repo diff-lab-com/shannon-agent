@@ -247,6 +247,33 @@ describe("startRelayHost", () => {
     phoneWs.close();
   });
 
+  it("invokes onContext when the phone pairs (dispatch-hub parity)", async () => {
+    const relay = new MockRelay();
+    const relayPort = await relay.start(0);
+    const relayUrl = `ws://127.0.0.1:${relayPort}`;
+    const sid = "test-sid-oncontext";
+    const pairToken = "oncontext-token";
+    const sessionKey = deriveSessionKey(pairToken);
+
+    const seen: Array<{ sessionId: string | null }> = [];
+    hostHandle = startRelayHost({
+      relayUrl,
+      sid,
+      sessionKey,
+      handlers: healthHandlers(),
+      logger,
+      pairTimeout: 5000,
+      onContext: (ctx) => seen.push({ sessionId: ctx.sessionId }),
+    });
+
+    const { ws: phoneWs } = await connectPhone(relayUrl, sid);
+    await expect(hostHandle.paired).resolves.toBeUndefined();
+    // One context per pairing; sessionId is null until shannon/pair sets it.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.sessionId).toBeNull();
+    phoneWs.close();
+  });
+
   it("dispatches E2E messages bidirectionally (phone→host→phone)", async () => {
     const relay = new MockRelay();
     const relayPort = await relay.start(0);

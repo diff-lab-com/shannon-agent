@@ -9,7 +9,6 @@
 //! as the final non-empty line). Completion is mutually exclusive with
 //! `/ralph` and `/loop`, which own their own auto-continuation loops.
 
-
 use super::set_error;
 use crate::Result;
 use crate::repl::Repl;
@@ -51,8 +50,7 @@ impl shannon_tools::goal::GoalStateAccess for ReplGoalAccess {
 
 pub(crate) use crate::repl::loop_guard::turn_had_tool_calls;
 pub(crate) use shannon_core::goal::{
-    GoalContinuation, TurnFacts,
-    goal_continuation_decision_with_facts, parse_progress_report,
+    GoalContinuation, TurnFacts, goal_continuation_decision_with_facts, parse_progress_report,
 };
 
 /// Parsed `/goal` subcommand.
@@ -183,9 +181,7 @@ pub(crate) fn maybe_fire_check_in(repl: &mut Repl) -> bool {
     save_goal_sidecar(repl);
     repl.chat.add_message(
         ChatRole::System,
-        format!(
-            "Goal check-in {checkins}/{MAX_GOAL_CHECKINS}: re-testing the blocker."
-        ),
+        format!("Goal check-in {checkins}/{MAX_GOAL_CHECKINS}: re-testing the blocker."),
     );
     // We are called from the run loop (not inside handle_query), so
     // submitting here is recursion-safe.
@@ -634,9 +630,7 @@ mod tests {
 mod handler_tests {
     use super::*;
     use crate::repl::state::GoalState;
-    use shannon_core::goal::{
-        ProgressReport, continuation_prompt, goal_continuation_decision,
-    };
+    use shannon_core::goal::{ProgressReport, continuation_prompt, goal_continuation_decision};
     use shannon_core::query_engine::{GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER};
 
     /// Point HOME at a scratch dir so any state writes never touch the real

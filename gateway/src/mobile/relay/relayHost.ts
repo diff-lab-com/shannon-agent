@@ -34,6 +34,12 @@ export interface RelayHostOptions {
   logger: Logger;
   /** ms to wait for phone to join (default 75_000). */
   pairTimeout?: number;
+  /**
+   * Invoked when the phone pairs and the session's MethodContext is created
+   * (parity with MobileServer's `onContext`). The dispatch hub uses it to
+   * register the connection so pushes can reach the phone over the relay.
+   */
+  onContext?: (ctx: MethodContext) => void;
 }
 
 export interface RelayHostHandle {
@@ -184,6 +190,7 @@ export function startRelayHost(opts: RelayHostOptions): RelayHostHandle {
           sessionId: null,
           logger,
         };
+        opts.onContext?.(sessionCtx);
         if (pairResolve) pairResolve();
         break;
       }

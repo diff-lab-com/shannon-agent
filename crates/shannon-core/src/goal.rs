@@ -13,7 +13,6 @@
 //! queueing) in `shannon-ui`; server/desktop clients can drive the same
 //! machine through [`GoalApi`] without any UI dependency.
 
-
 use crate::query_engine::{GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER};
 
 /// Lifecycle of a session goal (`/goal`).
