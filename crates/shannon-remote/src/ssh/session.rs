@@ -16,6 +16,8 @@ use crate::target::RemoteTarget;
 // The openssh transport is unix-only; non-unix builds get the `SshRuntime`
 // stub at the bottom of this file and every call reports `Unsupported`.
 #[cfg(unix)]
+use shannon_tool_interface::{PipedChild, ProcessExit};
+#[cfg(unix)]
 use std::future::Future;
 #[cfg(unix)]
 use std::path::Path;
@@ -23,8 +25,6 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU8, Ordering};
 #[cfg(unix)]
 use std::time::{Duration, Instant};
-#[cfg(unix)]
-use shannon_tool_interface::{PipedChild, ProcessExit};
 #[cfg(unix)]
 use tokio::io::AsyncWriteExt;
 #[cfg(unix)]

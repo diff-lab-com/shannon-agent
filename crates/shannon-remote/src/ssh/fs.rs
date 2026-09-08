@@ -17,15 +17,15 @@ use super::session::SshRuntime;
 // SFTP transport is unix-only; non-unix builds get the `SshFs` stub at the
 // bottom of this file and every call reports `Unsupported`.
 #[cfg(unix)]
+use super::session::block_on_anywhere;
+#[cfg(unix)]
+use openssh_sftp_client::{Sftp, SftpOptions};
+#[cfg(unix)]
 use std::future::Future;
 #[cfg(unix)]
 use std::time::Duration;
 #[cfg(unix)]
-use openssh_sftp_client::{Sftp, SftpOptions};
-#[cfg(unix)]
 use tokio_stream::StreamExt;
-#[cfg(unix)]
-use super::session::block_on_anywhere;
 
 /// File world executing every operation over SFTP on the SSH target.
 #[cfg(unix)]
