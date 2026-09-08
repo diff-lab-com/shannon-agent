@@ -93,9 +93,18 @@ v3 的 17/89 不构成「改进有害」的证据（6 并发限流 + A2 措辞�
 sanitize-git-repo（A2 门禁）✓、mteb-retrieve ✓。但 AgentTimeout 24（P1d 15）+ control 翻红
 表明**改进批中存在至少一项净负向改动**（候选：A2 提示改动改变 agent 行为节奏、A3 别名在
 TB 容器内误触发、A4 放行改变探索路径、A1 nudge 干扰）。
-**T1b 二分定位（最高优先）**：当前二进制 + 逐项关闭新行为（A1 off=nudge max 0、
-A3/A4 待定 env、A2 提示回退 P1d 文本需代码回退）逼近 P1d 行为，定位回归项后再二分放大。
-在二分定位前，**不再做全量跑批**。
+**根因已定位（2026-09-08，推翻二分假设）**：对 T1 全部 61 个失败逐题分类——
+**30 个是宿主机网络基础设施故障**（18 个第一调连接失败 `error sending request`，
+A7 正确标记 infra_failure；12 个 verifier uv bootstrap 下载失败），与产品改动无关；
+其余为 AgentTimeout 24（harbor 900s 墙钟，thinking 延迟所致）+ turn_limit 等。
+四个嫌疑特性（A1/A2/A3/A4）经轨迹取证**全部排除致害**：A3 零 /workspace 误回显、
+A1 nudge 零误触发、A4 放行无异常路径、A2 门禁靶题 sanitize ✓。
+净效应重估：T1 排除 infra 后 28/77 ≈ 36.4% vs P1d 排除后 36/77 ≈ 46.8%——差异的主部
+是**两次跑批撞上不同的网络窗口 + 各不相同的 verifier 受害题集**（非确定性噪声），
+其次才是模型方差。**宿主机 egress 劣化（uv CDN 不通、docker hub EOF）是本评测环境
+最大的测量噪声源**（已两次毒化验收），后续验收必须：①先测网络窗口；②infra 失败题
+自动重跑一轮再聚合；③报告 infra 分离口径。
+**T1-retry**（28 个 infra 受害题重跑）已发车；结果聚合后更新本节数字。
 
 ### T0（进行中）
 - [ ] **dev 合并（延后，需协作）**：feat/agent-eval-bench 与 dev 已深度分叉
