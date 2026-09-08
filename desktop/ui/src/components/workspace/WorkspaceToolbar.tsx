@@ -66,7 +66,7 @@ export function WorkspaceToolbar({ layout, onPreset, onAdd, onReset }: Workspace
               className={cn(
                 'rounded-full px-sm py-0.5 font-label-sm text-label-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
                 active
-                  ? 'bg-primary/10 text-primary'
+                  ? 'bg-primary-container text-on-primary-container'
                   : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface',
               )}
             >
