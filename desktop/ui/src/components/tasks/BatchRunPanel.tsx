@@ -71,15 +71,19 @@ function batchStatusBadge(status: BatchRunStatus): {
 }
 
 function branchChipClasses(status: BatchBranch['status']): string {
+  // Text is always `text-on-surface`: these chips sit on a translucent
+  // glass card, and low-margin pairs (on-primary-container on
+  // primary-container is only ~4.6:1 in material; `.opacity-80` drops any
+  // pair below AA) passed the sweep locally but failed on CI's compositor.
+  // Status lives in the dot + border color; the text keeps the
+  // maximum-margin surface pair.
   switch (status) {
     case 'running':
-      // Container-token pair: primary-on-primary-tint fails AA for the
-      // chip's label-size text (axe color-contrast, themes sweep).
-      return 'bg-primary-container text-on-primary-container border-primary-container'
+      return 'bg-primary/10 text-on-surface border-primary/30'
     case 'completed':
-      return 'bg-green-600/10 text-green-600 border-green-600/20'
+      return 'bg-green-600/10 text-on-surface border-green-600/20'
     case 'failed':
-      return 'bg-error/10 text-error border-error/20'
+      return 'bg-error/10 text-on-surface border-error/20'
   }
 }
 
@@ -154,7 +158,7 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
             ) : (
               <span>…</span>
             )}
-            <span className="tabular-nums opacity-80">
+            <span className="tabular-nums">
               {intl.formatNumber(branch.spentUsd, { style: 'currency', currency: 'USD' })}
             </span>
           </li>
