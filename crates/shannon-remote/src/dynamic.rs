@@ -36,8 +36,6 @@ struct CurrentWorld {
     /// Browser world (T14 Phase 3): `None` unless a browser provider was
     /// attached to this world. Lives beside fs/process because a browser
     /// is a peer execution surface, not a filesystem or a process.
-    // KEEP: T14 Phase 3 forward-deploy — read once remote browser endpoints land.
-    #[allow(dead_code)]
     browser: Option<Arc<dyn BrowserProvider>>,
 }
 
