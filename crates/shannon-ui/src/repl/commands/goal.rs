@@ -500,8 +500,7 @@ mod tests {
     use super::*;
     // The lib-side import of these was pruned (lib code no longer touches
     // them directly); tests exercise them via the core API.
-    use shannon_core::goal::{GoalMarker, continuation_prompt, goal_completion_marker};
-    use shannon_core::query_engine::{GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER};
+    use shannon_core::goal::{GoalMarker, goal_completion_marker};
 
     // ── parse_goal_args ────────────────────────────────────────────────
 
@@ -631,7 +630,6 @@ mod handler_tests {
     use super::*;
     use crate::repl::state::GoalState;
     use shannon_core::goal::{ProgressReport, continuation_prompt, goal_continuation_decision};
-    use shannon_core::query_engine::{GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER};
 
     /// Point HOME at a scratch dir so any state writes never touch the real
     /// one. nextest runs each test in its own process, so the env swap is
