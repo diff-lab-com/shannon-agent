@@ -492,7 +492,7 @@ pub struct ActiveProfileStatus {
     /// custom name), or `null` when no profile is active.
     pub active: Option<String>,
     /// The `approval_mode` config value that ships with this activation
-    /// (see [`profile_approval_mode`]), or the pre-existing value when
+    /// (see `profile_approval_mode`), or the pre-existing value when
     /// deactivated.
     pub approval_mode: Option<String>,
 }

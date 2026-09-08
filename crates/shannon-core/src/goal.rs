@@ -214,7 +214,7 @@ pub fn continuation_prompt(goal: &GoalState) -> String {
 }
 
 /// What should happen to the goal after a turn ends. Pure decision — all
-/// state mutations and side effects live in [`check_goal_continuation`].
+/// state mutations and side effects live in `check_goal_continuation`.
 /// Every non-`Inactive`/non-`Completed` verdict carries `next`: the fully
 /// advanced goal state (counters, streaks) the caller must persist, so the
 /// strike/streak math lives in exactly one place (this function).
@@ -240,7 +240,7 @@ pub enum GoalContinuation {
 }
 
 /// What a turn actually did, in terms the guard rails can compare. Filled
-/// in by the impure [`check_goal_continuation`] path from REPL state.
+/// in by the impure `check_goal_continuation` path from REPL state.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TurnFacts {
     /// True iff at least one tool message was produced since the last
@@ -292,7 +292,7 @@ fn normalize_reason(r: &str) -> String {
 }
 
 /// Turns the same blocker must persist before the goal pauses
-/// (Codex: "the same blocking condition [for] at least 3 goal turns").
+/// (Codex: "the same blocking condition \[for\] at least 3 goal turns").
 pub const BLOCKED_AUDIT_TURNS: usize = 3;
 
 /// Prompt block appended to a task prompt when an eval task declares a

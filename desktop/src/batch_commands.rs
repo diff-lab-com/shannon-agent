@@ -8,10 +8,10 @@
 //! branches side by side, adopts one (merged back into the base, the rest
 //! cleaned up) or discards the whole batch.
 //!
-//! Architecture mirrors the P0-3 [`crate::inbox_commands::spawn_routine_run`]
+//! Architecture mirrors the P0-3 `crate::inbox_commands::spawn_routine_run`
 //! executor and the P0-2 goal runner, including their discipline:
 //!
-//! - a single [`finalize_branch`] choke point writes each branch's terminal
+//! - a single `finalize_branch` choke point writes each branch's terminal
 //!   state (summary computed from the worktree diff, DTO + `batch:updated`
 //!   emit); every exit path — engine failure, panic, discard-mid-run — flows
 //!   through it, so a branch can never stay `running` in a live process;
@@ -23,7 +23,7 @@
 //! Persistence: each batch run is a JSON record under
 //! `~/.shannon/batch-runs/<batchId>.json`. After an app restart
 //! `list_batch_runs` reconciles records with no live runner: branches still
-//! marked `running` become `failed` with the [`RESTART_INTERRUPTED_ERROR`]
+//! marked `running` become `failed` with the `RESTART_INTERRUPTED_ERROR`
 //! error, their worktrees are preserved for manual inspection.
 //!
 //! Concurrency: a process-wide [`tokio::sync::Semaphore`] (4 permits) caps
@@ -342,7 +342,7 @@ impl BatchRunRegistry {
 
     /// All runs (live + disk), newest first. Disk records with no live
     /// runner go through restart reconciliation first: branches still
-    /// `running` become `failed` ([`RESTART_INTERRUPTED_ERROR`]); their
+    /// `running` become `failed` (`RESTART_INTERRUPTED_ERROR`); their
     /// worktrees are preserved for manual inspection.
     pub(crate) async fn list(&self) -> Vec<BatchRunDto> {
         let mut dtos: Vec<BatchRunDto> = Vec::new();

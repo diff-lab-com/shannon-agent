@@ -3,7 +3,7 @@
 //! The SFTP session runs as a dedicated `ssh ... -s sftp` subsystem child
 //! spawned on the [`SshRuntime`]'s private runtime (works with or without
 //! ControlMaster mux, so Windows gets file ops too). Every call marshals onto
-//! that runtime; blocking faces use [`block_on_anywhere`].
+//! that runtime; blocking faces use `block_on_anywhere`.
 
 use std::io;
 use std::path::{Path, PathBuf};

@@ -25,7 +25,7 @@
 //! - **Secret stripping is hard**: every textual asset (`.md/.toml/.json/
 //!   .jsonl/.yml/.yaml/.txt`) is scanned before it enters the pack; secret-
 //!   shaped lines / tokens / webhook credentials are replaced with
-//!   `[stripped: secret]` and counted (see [`strip_text`] for the rule list).
+//!   `[stripped: secret]` and counted (see `strip_text` for the rule list).
 //!   Memory entries export content fields only — never `source_session_id`
 //!   and never the source machine's project paths.
 //! - **Path safety on import**: manifest paths must be relative, `..`-free,

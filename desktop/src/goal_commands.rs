@@ -9,7 +9,7 @@
 //! the pure decision in [`shannon_core::goal_loop`] (shared verbatim with
 //! the TUI) decides: continue, or finish.
 //!
-//! Architecture mirrors the P0-3 [`crate::inbox_commands::spawn_routine_run`]
+//! Architecture mirrors the P0-3 `crate::inbox_commands::spawn_routine_run`
 //! executor, including its final-state discipline:
 //!
 //! - a single `finalize` choke point writes the terminal status (sidecar +

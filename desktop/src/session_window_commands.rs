@@ -308,7 +308,7 @@ pub async fn cleanup_destroyed_window(state: &AppState, label: &str) {
 /// Main window destroyed (global `on_window_event` hook in `main.rs`):
 /// preserve「关闭主窗口 = 退出应用」— persist the current session-window list
 /// (so it restores next launch) and close the remaining session windows.
-/// Their cleanup is suppressed via [`APP_EXITING`].
+/// Their cleanup is suppressed via `APP_EXITING`.
 pub fn handle_main_window_destroyed(app: &tauri::AppHandle) {
     APP_EXITING.store(true, Ordering::SeqCst);
     let state = app.state::<AppState>();

@@ -14,9 +14,9 @@
 //!
 //! # Process discipline (mirrors `preview_commands.rs`)
 //!
-//! PTY sessions are owned by the [`TerminalManager`] on `AppState`:
+//! PTY sessions are owned by the `TerminalManager` on `AppState`:
 //!
-//! * at most [`MAX_TERMINALS`] (4) concurrent sessions — a fifth
+//! * at most `MAX_TERMINALS` (4) concurrent sessions — a fifth
 //!   `terminal_spawn` is rejected with an error;
 //! * each child is spawned on its own pty; portable-pty's unix backend
 //!   runs `setsid()` + `TIOCSCTTY` in the child, so the shell is a

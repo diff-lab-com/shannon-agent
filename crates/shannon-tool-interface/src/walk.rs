@@ -1,6 +1,6 @@
 //! Provider-based directory walking with simplified gitignore support.
 //!
-//! The default [`FileSystemProvider::walk_blocking`] implementation lives
+//! The default [`FileSystemProvider::walk_blocking`](crate::FileSystemProvider::walk_blocking) implementation lives
 //! here so every execution world (local, SSH, Docker) inherits it; `LocalFs`
 //! overrides the trait method with an `ignore::WalkBuilder`-backed version
 //! that keeps today's local traversal byte-for-byte.

@@ -235,7 +235,7 @@ impl SshRuntime {
     }
 
     /// Blocking capture bridge for sync call sites (git helpers). Marshals
-    /// onto the dedicated runtime via [`block_on_anywhere`].
+    /// onto the dedicated runtime via `block_on_anywhere`.
     pub fn exec_blocking(self: &Arc<Self>, argv: Vec<String>) -> io::Result<CapturedOutput> {
         block_on_anywhere(&self.handle, {
             let this = self.clone();
