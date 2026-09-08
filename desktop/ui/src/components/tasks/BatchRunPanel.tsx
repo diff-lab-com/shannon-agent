@@ -24,38 +24,42 @@ function batchStatusBadge(status: BatchRunStatus): {
   icon: string
   labelId: string
 } {
+  // Badge text is always `text-on-surface`: status-tinted text on its own
+  // 10% tint (e.g. green-600 on green-600/10 ≈ 2.9:1) is far below AA for
+  // the 11px uppercase label, and the card itself sits on a translucent
+  // glass panel. Status stays encoded in the dot + border tint.
   switch (status) {
     case 'running':
       return {
-        bg: 'bg-primary/10 text-primary border-primary/20',
+        bg: 'bg-primary/10 text-on-surface border-primary/20',
         dot: 'bg-primary animate-pulse',
         icon: 'autorenew',
         labelId: 'batch.status.running',
       }
     case 'completed':
       return {
-        bg: 'bg-green-600/10 text-green-600 border-green-600/20',
+        bg: 'bg-green-600/10 text-on-surface border-green-600/20',
         dot: 'bg-green-600',
         icon: 'check_circle',
         labelId: 'batch.status.completed',
       }
     case 'partially_failed':
       return {
-        bg: 'bg-tertiary/10 text-tertiary border-tertiary/20',
+        bg: 'bg-tertiary/10 text-on-surface border-tertiary/20',
         dot: 'bg-tertiary',
         icon: 'report',
         labelId: 'batch.status.partially_failed',
       }
     case 'failed':
       return {
-        bg: 'bg-error/10 text-error border-error/20',
+        bg: 'bg-error/10 text-on-surface border-error/20',
         dot: 'bg-error',
         icon: 'error',
         labelId: 'batch.status.failed',
       }
     case 'adopted':
       return {
-        bg: 'bg-green-600/10 text-green-600 border-green-600/20',
+        bg: 'bg-green-600/10 text-on-surface border-green-600/20',
         dot: 'bg-green-600',
         icon: 'call_merge',
         labelId: 'batch.status.adopted',
@@ -71,13 +75,19 @@ function batchStatusBadge(status: BatchRunStatus): {
 }
 
 function branchChipClasses(status: BatchBranch['status']): string {
+  // Text is always `text-on-surface`: these chips sit on a translucent
+  // glass card, and low-margin pairs (on-primary-container on
+  // primary-container is only ~4.6:1 in material; `.opacity-80` drops any
+  // pair below AA) passed the sweep locally but failed on CI's compositor.
+  // Status lives in the dot + border color; the text keeps the
+  // maximum-margin surface pair.
   switch (status) {
     case 'running':
-      return 'bg-primary/10 text-primary border-primary/20'
+      return 'bg-primary/10 text-on-surface border-primary/30'
     case 'completed':
-      return 'bg-green-600/10 text-green-600 border-green-600/20'
+      return 'bg-green-600/10 text-on-surface border-green-600/20'
     case 'failed':
-      return 'bg-error/10 text-error border-error/20'
+      return 'bg-error/10 text-on-surface border-error/20'
   }
 }
 
@@ -152,7 +162,7 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
             ) : (
               <span>…</span>
             )}
-            <span className="tabular-nums opacity-80">
+            <span className="tabular-nums">
               {intl.formatNumber(branch.spentUsd, { style: 'currency', currency: 'USD' })}
             </span>
           </li>
