@@ -38,7 +38,7 @@ pub(crate) fn turn_had_tool_calls(chat: &ChatWidget) -> bool {
 
 /// Mutable guard counters carried by each loop's state.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct GuardCounters {
+pub struct GuardCounters {
     pub no_tool_turns: usize,
     pub stall_strikes: usize,
 }

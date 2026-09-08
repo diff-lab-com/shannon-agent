@@ -270,7 +270,7 @@ impl RetryPolicy {
 ///
 /// The closure `f` is called up to `max_retries + 1` times.
 /// On retryable errors, waits with exponential backoff before retrying.
-pub async fn retry_request<F, Fut, T>(config: &RetryConfig, mut f: F) -> Result<T, ApiError>
+pub async fn retry_request<F, Fut, T>(config: &RetryConfig, f: F) -> Result<T, ApiError>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, ApiError>>,

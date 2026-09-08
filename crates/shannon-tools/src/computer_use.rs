@@ -381,6 +381,9 @@ impl Tool for ComputerUseTool {
             });
         }
 
+        // `mut` is only exercised by the computer-use session-hint append
+        // below; plain builds would warn on it.
+        #[cfg_attr(not(feature = "computer-use"), allow(unused_mut))]
         let mut result = match computer_input.action {
             ComputerAction::Screenshot => self.execute_screenshot().await,
             ComputerAction::Click
