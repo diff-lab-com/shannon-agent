@@ -1,0 +1,17 @@
+[package]
+name = "shannon-plugin-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Content-transform middleware contract for Shannon plugins (secret-guard blueprint artifact c)"
+
+# Blueprint: docs/research/llm-secret-redaction-research-2026-09.md §9.
+# Deliberately tiny: the contract must be stable and cheap for external
+# plugin crates to depend on. Types are self-contained (no engine types) so
+# out-of-process implementations can adopt the same shape later.
+
+[dependencies]
+serde_json = { workspace = true }

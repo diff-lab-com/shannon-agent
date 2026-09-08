@@ -6788,6 +6788,7 @@ dependencies = [
  "sha2 0.10.9",
  "shannon-api-protocol",
  "shannon-engine",
+ "shannon-plugin-api",
  "shannon-repomap",
  "shannon-tool-interface",
  "shannon-types",
@@ -6959,6 +6960,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "shannon-plugin-api"
+version = "0.11.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

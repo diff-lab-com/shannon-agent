@@ -1838,6 +1838,9 @@ impl QueryEngine {
                 let header_provider = client_provider.to_string();
                 let snapshot = header_config_snapshot.clone();
                 std::sync::Arc::new(move |wire: &serde_json::Value| {
+                    // Phase-0 secret-guard audit: read-only, no-op unless a
+                    // transform is installed via `secret_guard::set_context_transform`.
+                    crate::secret_guard::audit_wire_and_log(wire);
                     tee.record_request_header(
                         wire,
                         &header_model,

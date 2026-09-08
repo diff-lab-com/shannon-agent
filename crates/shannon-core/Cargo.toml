@@ -33,6 +33,7 @@ shannon-api-protocol = { path = "../shannon-api-protocol" }
 
 # Engine (extracted modules — api/, testing/record_replay)
 shannon-engine = { path = "../shannon-engine" }
+shannon-plugin-api = { path = "../shannon-plugin-api" }
 
 # Repo map (P1-4): tree-sitter based symbol map injected into the system
 # prompt. Always built — the integration is gated by a config toggle on

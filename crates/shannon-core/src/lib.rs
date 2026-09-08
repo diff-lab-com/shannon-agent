@@ -75,6 +75,7 @@ pub mod query_engine;
 pub mod rate_limit;
 pub mod rate_limit_messages;
 pub mod remote_settings;
+pub mod secret_guard;
 pub mod settings;
 pub mod settings_sync;
 pub mod signals;
