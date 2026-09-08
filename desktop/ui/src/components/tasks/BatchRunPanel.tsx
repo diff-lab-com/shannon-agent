@@ -24,38 +24,42 @@ function batchStatusBadge(status: BatchRunStatus): {
   icon: string
   labelId: string
 } {
+  // Badge text is always `text-on-surface`: status-tinted text on its own
+  // 10% tint (e.g. green-600 on green-600/10 ≈ 2.9:1) is far below AA for
+  // the 11px uppercase label, and the card itself sits on a translucent
+  // glass panel. Status stays encoded in the dot + border tint.
   switch (status) {
     case 'running':
       return {
-        bg: 'bg-primary/10 text-primary border-primary/20',
+        bg: 'bg-primary/10 text-on-surface border-primary/20',
         dot: 'bg-primary animate-pulse',
         icon: 'autorenew',
         labelId: 'batch.status.running',
       }
     case 'completed':
       return {
-        bg: 'bg-green-600/10 text-green-600 border-green-600/20',
+        bg: 'bg-green-600/10 text-on-surface border-green-600/20',
         dot: 'bg-green-600',
         icon: 'check_circle',
         labelId: 'batch.status.completed',
       }
     case 'partially_failed':
       return {
-        bg: 'bg-tertiary/10 text-tertiary border-tertiary/20',
+        bg: 'bg-tertiary/10 text-on-surface border-tertiary/20',
         dot: 'bg-tertiary',
         icon: 'report',
         labelId: 'batch.status.partially_failed',
       }
     case 'failed':
       return {
-        bg: 'bg-error/10 text-error border-error/20',
+        bg: 'bg-error/10 text-on-surface border-error/20',
         dot: 'bg-error',
         icon: 'error',
         labelId: 'batch.status.failed',
       }
     case 'adopted':
       return {
-        bg: 'bg-green-600/10 text-green-600 border-green-600/20',
+        bg: 'bg-green-600/10 text-on-surface border-green-600/20',
         dot: 'bg-green-600',
         icon: 'call_merge',
         labelId: 'batch.status.adopted',
