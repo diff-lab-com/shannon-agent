@@ -38,12 +38,27 @@ interface TgUser {
   first_name?: string;
   username?: string;
 }
+interface TgPhotoSize {
+  file_id?: string;
+  width?: number;
+  height?: number;
+  file_size?: number;
+}
+interface TgDocument {
+  file_id?: string;
+  file_name?: string;
+  mime_type?: string;
+}
 interface TgMessage {
   message_id: number;
   date?: number;
   chat?: TgChat;
   from?: TgUser;
   text?: string;
+  caption?: string;
+  /** Present on photo messages — an array of resolutions, largest last. */
+  photo?: TgPhotoSize[];
+  document?: TgDocument;
 }
 interface TgCallbackQuery {
   id: string;
@@ -59,12 +74,55 @@ export interface TgUpdate {
 
 // ── pure transforms (unit-tested) ───────────────────────────────────────
 
-/** A Telegram Update → NormalizedInbound, or null if it isn't a text message. */
+/** A downloadable media reference extracted from a message (B4). */
+export interface TgMediaRef {
+  fileId: string;
+  /** MIME the engine accepts; photo messages are always JPEG. */
+  mimeType: string;
+  /** Document file name, when present. */
+  name: string | null;
+}
+
+/**
+ * Pull image media refs from a message (B4): photo messages (largest
+ * resolution wins; Telegram re-encodes photos as JPEG) and image documents.
+ * Non-image documents are ignored — the engine's multimodal path is
+ * image-only.
+ */
+export function extractTelegramMedia(message: unknown): TgMediaRef[] {
+  if (typeof message !== "object" || message === null) return [];
+  const m = message as TgMessage;
+  const out: TgMediaRef[] = [];
+  if (Array.isArray(m.photo) && m.photo.length > 0) {
+    // Pick the largest variant by pixel count.
+    const best = m.photo
+      .filter((p): p is TgPhotoSize & { file_id: string } => typeof p.file_id === "string")
+      .sort((a, b) => (b.width ?? 0) * (b.height ?? 0) - (a.width ?? 0) * (a.height ?? 0))[0];
+    if (best) out.push({ fileId: best.file_id, mimeType: "image/jpeg", name: null });
+  }
+  const doc = m.document;
+  if (
+    doc &&
+    typeof doc.file_id === "string" &&
+    typeof doc.mime_type === "string" &&
+    doc.mime_type.startsWith("image/")
+  ) {
+    out.push({ fileId: doc.file_id, mimeType: doc.mime_type, name: doc.file_name ?? null });
+  }
+  return out;
+}
+
+/** A Telegram Update → NormalizedInbound, or null if it carries nothing we
+ * can act on (no text, no caption, no image media). Media download is the
+ * adapter's job — see `extractTelegramMedia` + `buildGetFileRequest`. */
 export function normalizeTelegramUpdate(update: unknown): NormalizedInbound | null {
   if (typeof update !== "object" || update === null) return null;
   const u = update as TgUpdate;
   const msg = u.message;
-  if (!msg || typeof msg.text !== "string") return null;
+  if (!msg) return null;
+  const hasText = typeof msg.text === "string";
+  const hasCaption = typeof msg.caption === "string";
+  if (!hasText && !hasCaption && extractTelegramMedia(msg).length === 0) return null;
   const chat = msg.chat;
   const from = msg.from;
   if (!chat || !from) return null;
@@ -73,7 +131,7 @@ export function normalizeTelegramUpdate(update: unknown): NormalizedInbound | nu
     chatId: String(chat.id),
     senderId: String(from.id),
     senderName: from.first_name ?? from.username ?? String(from.id),
-    text: msg.text,
+    text: msg.text ?? msg.caption ?? "",
     timestamp: typeof msg.date === "number" ? msg.date * 1000 : Date.now(),
     threadId: String(msg.message_id),
     isDirect: chat.type === "private",
@@ -106,6 +164,28 @@ export function buildSendMessageRequest(args: SendMessageArgs): HttpRequest {
     method: "POST",
     body: JSON.stringify(body),
   };
+}
+
+/** Build the getFile request (resolves a file_id → local file_path). Pure. */
+export function buildGetFileRequest(args: {
+  token: string;
+  apiBaseUrl: string;
+  fileId: string;
+}): HttpRequest {
+  return {
+    url: `${args.apiBaseUrl}/bot${args.token}/getFile`,
+    method: "POST",
+    body: JSON.stringify({ file_id: args.fileId }),
+  };
+}
+
+/** Build the download URL for a file_path from getFile. Pure. */
+export function buildTelegramFileDownloadUrl(args: {
+  token: string;
+  apiBaseUrl: string;
+  filePath: string;
+}): string {
+  return `${args.apiBaseUrl}/file/bot${args.token}/${args.filePath}`;
 }
 
 /** Build the editMessageText request (streaming edit-in-place). Pure. */
@@ -220,12 +300,49 @@ export function createTelegramAdapter(
           continue;
         }
         const n = normalizeTelegramUpdate(upd);
-        if (n) onMessage?.(n);
+        if (n) {
+          // B4: photo/document messages ride as engine attachments. A
+          // failed download degrades to a text-only turn (warn, never drop).
+          const refs = extractTelegramMedia(upd.message);
+          if (refs.length > 0) {
+            const media = await downloadTelegramMedia(refs);
+            if (media.length > 0) n.media = media;
+          }
+          onMessage?.(n);
+        }
       }
     } catch (err) {
       ctx.logger.warn(`telegram poll failed: ${(err as Error).message}`);
     }
     if (running) pollTimer = setTimeout(() => void poll(), pollInterval);
+  }
+
+  /** Download image media via getFile + file URL. Failures per item are
+   * logged and skipped; the turn continues with whatever succeeded. */
+  async function downloadTelegramMedia(
+    refs: TgMediaRef[],
+  ): Promise<import("../types.js").MediaAttachment[]> {
+    if (!token) return [];
+    const out: import("../types.js").MediaAttachment[] = [];
+    for (const ref of refs) {
+      try {
+        const fileReq = buildGetFileRequest({ token, apiBaseUrl, fileId: ref.fileId });
+        const res = await fetchImpl(fileReq.url, { method: fileReq.method, body: fileReq.body });
+        if (!res.ok) throw new Error(`getFile failed: HTTP ${res.status}`);
+        const data = (await res.json()) as { result?: { file_path?: string } };
+        const filePath = data.result?.file_path;
+        if (typeof filePath !== "string" || filePath.length === 0) {
+          throw new Error("getFile returned no file_path");
+        }
+        const bin = await fetchImpl(buildTelegramFileDownloadUrl({ token, apiBaseUrl, filePath }));
+        if (!bin.ok) throw new Error(`file download failed: HTTP ${bin.status}`);
+        const bytes = new Uint8Array(await bin.arrayBuffer());
+        out.push({ kind: "image", mimeType: ref.mimeType, data: bytes, caption: ref.name ?? undefined });
+      } catch (err) {
+        ctx.logger.warn(`telegram media download failed: ${(err as Error).message}`);
+      }
+    }
+    return out;
   }
 
   async function doSend(
@@ -263,6 +380,7 @@ export function createTelegramAdapter(
       pairing: false,
       approvalButtons: true,
       streaming: "partial",
+      mediaIn: ["image/jpeg", "image/png", "image/gif", "image/webp"],
     },
     async start(): Promise<void> {
       token = await ctx.getSecret(tokenKey);

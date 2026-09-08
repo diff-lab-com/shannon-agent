@@ -1,6 +1,7 @@
 import { type EngineEvent } from "../engine/runtime.js";
 import { newAccumulator, sendReply } from "./reply.js";
 import { canStream, StreamingReply } from "./streaming.js";
+import { toEngineAttachments } from "./media.js";
 import { type TurnContext, type TurnHandler } from "./types.js";
 
 /**
@@ -40,6 +41,10 @@ export function createDefaultTurnHandler(
       const { client, adapter, replyTarget, inbound, logger } = ctx;
       // P1-4 lifecycle: announce the start, then completed/failed at the end.
       ctx.reporter?.started();
+      // B4: inbound platform media (photos etc.) → engine attachments.
+      // Broken/unsupported items are skipped inside the pipeline; the turn
+      // proceeds text-only.
+      const attachments = await toEngineAttachments(inbound.media, { logger });
       const acc = newAccumulator();
       const stream = canStream(adapter)
         ? new StreamingReply(adapter, replyTarget, {
@@ -48,7 +53,8 @@ export function createDefaultTurnHandler(
           })
         : null;
 
-      for await (const ev of client.runQuery(inbound.text) as AsyncIterable<EngineEvent>) {
+      const query = client.runQuery(inbound.text, { attachments }) as AsyncIterable<EngineEvent>;
+      for await (const ev of query) {
         switch (ev.type) {
           case "text":
             if (stream) await stream.ingestText(ev.content);
