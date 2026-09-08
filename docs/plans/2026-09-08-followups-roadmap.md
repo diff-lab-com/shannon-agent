@@ -17,12 +17,23 @@
 
 ## B. 工程量大，按排期延后（有就绪的底座）
 
+> **2026-09-08 更新**：B1-B / B2 / B3 / B4-inbound 已在本轮实施（`feat/followups-b1-b4`，提交 d4f1a183 / c8d7c7f5 / fedf2659）。B1 的自动编排尾巴与 B4 的出站尾巴保留在清单中，触发条件不变。
+
+### 已实施（2026-09-08，待合并）
+
+| # | 项 | 实施内容 | 提交 |
+|---|---|---|---|
+| B1-B | **`SHANNON_BROWSER_CDP` CDP 附加模式**（评审选定方案 B） | 设置 env 即 connect 远端 CDP 端点（chromiumoxide 自动解析 /json/version），ssh -L 隧道即可用远端浏览器；`/browser doctor` 显示 attach 优先级，CDP 配置时本地浏览器降级为信息项 | d4f1a183 |
+| B2 | **浏览器会话层下沉** | 新叶子 crate `shannon-browser`：detect + providers（自 shannon-remote）与 chromiumoxide 会话（自 shannon-tools）合一，消除三份重复；remote/tools 消费同一实现，chromiumoxide 归属唯一化。注：未按原计划做 tools→remote 边翻转（`ToolProviders`/`DenialClassifier` 深植 tools 无法搬移），改提取共享叶 crate，效果等同 | d4f1a183 |
+| B3 | **T10-Phase2 Wayland 截图栈** | `computer-use-wayland-capture` feature：wlr-screencopy（wlroots 系，SHM 零拷贝直读）→ xdg-desktop-portal（GNOME/KDE，ashpd）→ xcap（XWayland 回退）；buffer 转换单测覆盖，真机 compositor 矩阵见 QA-5 | c8d7c7f5 |
+| B4-in | **gateway 入站媒体管线** | `MessageAttachment` 上收 api-protocol；`QueryRequest`/WS query 帧带 `attachments`，校验逻辑三路合一（core `attachments_to_blocks`）；gateway `router/media.ts` 镜像同规则（image-only、≤8、≤10MiB）；telegram（照片+图片文档，getFile 下载）/ discord（CDN url）/ slack（token 下载）入站媒体 → 引擎附件。出站（引擎图片→IM）未做 | fedf2659 |
+
+### 仍然延后
+
 | # | 项 | 已就位的底座 | 剩余工作 | 触发条件 |
 |---|---|---|---|---|
-| B1 | **T14-Phase3 收尾：SSH 远端浏览器完整链路**（远端自动启动 Chrome + `ssh -L` 端口转发编排 + 断线重连） | `RemoteBrowserProvider`（CDP 端点 + reachable 探测）+ `chromiumoxide::Browser::connect` 均已合并 | openssh 会话编排、远端环境探测、转发生命周期管理 | 2027 H1；用户提出远端浏览器需求 |
-| B2 | **chrome_session 会话层下沉 shannon-remote**（消除 tools↔remote 的 detect 实现重复） | 双侧实现已 1:1 对齐（provider.rs 文档注明） | chromiumoxide 依赖归属重构 + shannon-tools 改为消费 remote 的会话类型 | 与 B1 同批做（B1 必然触及） |
-| B3 | **T10-Phase2 Wayland 截图栈**（wlr-screencopy / KDE portal 自实现） | 与 B1 合并执行可共享 Wayland 依赖 | 截图后端替换 + compositor 兼容矩阵测试 | 2027 H1 |
-| B4 | **gateway `MediaAttachment`**（IM 渠道收发媒体 → 会话附件） | wire 类型 stub 已存在 | adapter 填充 + 附件管线复用 | 有 IM 渠道用户需求时 |
+| B1-tail | **远端浏览器自动编排**（B1 方案 A 残余：远端自动启动 Chrome + `ssh -L` 转发生命周期 + 断线重连） | CDP attach 通道已通（B1-B）；`SshRuntime` exec/piped/控制套接字齐备；手动 `ssh -L` + `SHANNON_BROWSER_CDP` 已可用 | openssh 会话编排、远端环境探测、转发进程生命周期、Degraded 联动重连 | 2027 H1；用户提出远端浏览器需求且手动转发嫌麻烦 |
+| B4-out | **引擎出站图片 → IM 渠道**（B4 残余） | `SendOpts.attachments` 类型已存在；入站管线已建 | 引擎事件携带图片块 → adapter send 附件（sendPhoto/上传/Block Kit）；各渠道 mediaOut 能力表 | 有 IM 渠道用户需求时 |
 
 ## C. 明确不做（留档防重提）
 

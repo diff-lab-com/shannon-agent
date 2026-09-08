@@ -65,6 +65,12 @@ pub mod pty;
 pub mod remote_trigger;
 pub mod repl_tool;
 pub mod schedule_wakeup;
+/// B3 / T10-Phase2: native Wayland screen capture (wlr-screencopy +
+/// xdg-desktop-portal). Compiled only on Linux builds with the
+/// `computer-use-wayland-capture` feature; on other builds the xcap
+/// path in `computer_use` handles (or rejects) screenshots.
+#[cfg(all(target_os = "linux", feature = "computer-use-wayland-capture"))]
+pub mod screen_capture;
 pub mod skill;
 pub mod synthetic_output;
 pub mod system;

@@ -55,6 +55,31 @@
 
 ---
 
+## QA-5 Wayland 截图栈（B3 / T10-Phase2，computer-use-wayland-capture）
+
+前置：`cargo build --features computer-use-wayland-capture`；REPL 中让模型调 `computer` 工具的 `screenshot` 动作。
+
+| 环境 | 步骤 | 预期 |
+|---|---|---|
+| sway / Hyprland（wlroots 系） | `WAYLAND_DISPLAY` 原生会话执行 screenshot | 走 wlr-screencopy 成功；PNG 与屏幕一致；无 portal 弹窗 |
+| GNOME / KDE Wayland | 同上 | wlr 失败后回退 xdg-desktop-portal；首次执行出现授权弹窗，允许后成功 |
+| XWayland 会话（DISPLAY 也存在） | 同上 | 原生栈失败时回退 xcap，仍能出图 |
+| TTY / 无显示 | 同上 | 返回可读错误（两后端失败原因串联），不 panic |
+
+> 布局顺序：wlr-screencopy → portal → xcap，见 `screen_capture.rs` 模块文档。多显示器 v1 只取第一个 wl_output（与 xcap 首显示器行为一致），多屏指定为 roadmap 延后项。
+
+## QA-6 `SHANNON_BROWSER_CDP` 远端浏览器附加（B1-方案B）
+
+前置：一台可 SSH 的远端机，装有 chromium。
+
+1. 远端：`chromium --headless --remote-debugging-port=9222 --user-data-dir=/tmp/shannon-cdp`
+2. 本地：`ssh -L 9222:127.0.0.1:9222 user@host`
+3. 本地：`SHANNON_BROWSER_CDP=http://127.0.0.1:9222 shannon`
+4. 预期：`/browser doctor` 显示 `✓ CDP attach …`，且本地无浏览器时不再报 ✗；`/browser <url>` 与 browser_* 工具经隧道渲染远端页面；端点不可达时报错含 `ssh -L` 提示。
+5. 反向：unset `SHANNON_BROWSER_CDP` 后回到本地 launch 路径。
+
+---
+
 ## 通过标准
 
 QA-1/2/3 全部打钩 → 对应验证债关闭（P3 文档 §评审决策 2/3 的实施视为完整）。

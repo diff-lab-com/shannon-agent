@@ -466,17 +466,10 @@ impl ComputerUseTool {
             });
         }
 
-        let monitors = xcap::Monitor::all()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get monitors: {e}")))?;
-
-        let monitor = monitors
-            .into_iter()
-            .next()
-            .ok_or_else(|| ToolError::ExecutionFailed("No monitors found".to_string()))?;
-
-        let image = monitor
-            .capture_image()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Screenshot failed: {e}")))?;
+        let image = self
+            .capture_screen()
+            .await
+            .map_err(ToolError::ExecutionFailed)?;
 
         // Downscale to the configured maximum so the payload matches the
         // 1024x768 reference coordinate space and stays within the
@@ -514,6 +507,33 @@ impl ComputerUseTool {
             is_error: false,
             metadata,
         })
+    }
+
+    /// Screen capture backend dispatch (B3 / T10-Phase2). On a Wayland
+    /// session with the native capture feature, wlr-screencopy runs first,
+    /// then the xdg-desktop-portal; anything else — including a failed
+    /// native attempt (logged) — falls back to xcap, which still works
+    /// under XWayland.
+    #[cfg(feature = "computer-use")]
+    async fn capture_screen(&self) -> Result<image::RgbaImage, String> {
+        #[cfg(all(target_os = "linux", feature = "computer-use-wayland-capture"))]
+        if crate::screen_capture::wayland_session_active() {
+            match crate::screen_capture::capture_screen_wayland().await {
+                Ok(img) => return Ok(img.to_rgba8()),
+                Err(e) => {
+                    tracing::warn!(error = %e, "native Wayland capture failed; falling back to xcap")
+                }
+            }
+        }
+
+        let monitors = xcap::Monitor::all().map_err(|e| format!("Failed to get monitors: {e}"))?;
+        let monitor = monitors
+            .into_iter()
+            .next()
+            .ok_or_else(|| "No monitors found".to_string())?;
+        monitor
+            .capture_image()
+            .map_err(|e| format!("Screenshot failed: {e}"))
     }
 
     #[cfg(not(feature = "computer-use"))]

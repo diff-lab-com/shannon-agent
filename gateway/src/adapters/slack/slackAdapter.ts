@@ -79,6 +79,13 @@ export function isFreshTimestamp(
 
 // ── inbound normalization (pure) ───────────────────────────────────────
 
+interface SlackEventFile {
+  name?: string;
+  mimetype?: string;
+  /** Authed download URL — fetched with the bot token (B4). */
+  url_private_download?: string;
+  size?: number;
+}
 interface SlackEventMessage {
   type?: string; // "message"
   text?: string;
@@ -88,6 +95,7 @@ interface SlackEventMessage {
   thread_ts?: string;
   bot_id?: string; // skip bot echoes
   subtype?: string;
+  files?: SlackEventFile[];
 }
 interface SlackEventCallback {
   type?: string; // "event_callback"
@@ -107,6 +115,35 @@ interface SlackInteractivePayload {
   channel?: { id?: string };
   message?: { ts?: string; thread_ts?: string };
   user?: { id?: string };
+}
+
+/** A downloadable image file reference (B4). */
+export interface SlackMediaRef {
+  url: string;
+  mimeType: string;
+  name: string | null;
+}
+
+/**
+ * Image files on a message event (B4). Slack file URLs are authed — the
+ * adapter downloads with the bot token; only image mimetypes surface.
+ */
+export function extractSlackMedia(event: unknown): SlackMediaRef[] {
+  if (typeof event !== "object" || event === null) return [];
+  const ev = event as SlackEventMessage;
+  if (!Array.isArray(ev.files)) return [];
+  return ev.files
+    .filter(
+      (f): f is SlackEventFile & { url_private_download: string; mimetype: string } =>
+        typeof f.url_private_download === "string" &&
+        typeof f.mimetype === "string" &&
+        f.mimetype.startsWith("image/"),
+    )
+    .map((f) => ({
+      url: f.url_private_download,
+      mimeType: f.mimetype,
+      name: typeof f.name === "string" ? f.name : null,
+    }));
 }
 
 export type SlackInboundResult =
@@ -144,7 +181,10 @@ export function normalizeSlackEvent(payload: unknown): SlackInboundResult {
     const ev = env.event;
     if (!ev || ev.type !== "message") return { kind: "ignore" };
     if (ev.bot_id || ev.subtype) return { kind: "ignore" }; // skip bots/aliases
-    if (typeof ev.text !== "string" || ev.text.length === 0) return { kind: "ignore" };
+    const hasMedia = extractSlackMedia(ev).length > 0;
+    if ((typeof ev.text !== "string" || ev.text.length === 0) && !hasMedia) {
+      return { kind: "ignore" };
+    }
     if (!ev.channel || !ev.user || !ev.ts) return { kind: "ignore" };
     const tsNum = Number.parseFloat(ev.ts);
     return {
@@ -156,7 +196,7 @@ export function normalizeSlackEvent(payload: unknown): SlackInboundResult {
         threadId: typeof ev.thread_ts === "string" ? ev.thread_ts : ev.ts,
         senderId: ev.user,
         senderName: ev.user,
-        text: ev.text,
+        text: typeof ev.text === "string" ? ev.text : "",
         timestamp: Number.isFinite(tsNum) ? tsNum * 1000 : Date.now(),
         isDirect: ev.channel.startsWith("D"),
         raw: payload,
@@ -379,9 +419,29 @@ export function createSlackAdapter(cfg: AdapterConfig, ctx: AdapterContext): Cha
         res.statusCode = 200;
         res.end(JSON.stringify({ challenge: result.challenge }));
         return;
-      case "message":
+      case "message": {
+        // B4: authed file download (url_private_download needs the bot
+        // token); failures degrade to a text-only turn.
+        const mediaRefs = extractSlackMedia((payload as SlackEventCallback).event);
+        if (mediaRefs.length > 0 && botToken) {
+          const media: import("../types.js").MediaAttachment[] = [];
+          for (const ref of mediaRefs) {
+            try {
+              const fileRes = await fetchImpl(ref.url, {
+                headers: { authorization: `Bearer ${botToken}` },
+              });
+              if (!fileRes.ok) throw new Error(`HTTP ${fileRes.status}`);
+              const bytes = new Uint8Array(await fileRes.arrayBuffer());
+              media.push({ kind: "image", mimeType: ref.mimeType, data: bytes, caption: ref.name ?? undefined });
+            } catch (err) {
+              ctx.logger.warn(`slack media download failed: ${(err as Error).message}`);
+            }
+          }
+          if (media.length > 0) result.message.media = media;
+        }
         onMessage?.(result.message);
         break;
+      }
       case "button":
         if (result.actionId) resolveButton(result.actionId);
         break;
@@ -446,6 +506,7 @@ export function createSlackAdapter(cfg: AdapterConfig, ctx: AdapterContext): Cha
       pairing: false,
       approvalButtons: true, // Block Kit action buttons
       streaming: "partial",
+      mediaIn: ["image/png", "image/jpeg", "image/gif", "image/webp"],
     },
     async start(): Promise<void> {
       botToken = await ctx.getSecret(botTokenKey);

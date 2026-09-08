@@ -8,6 +8,7 @@ use axum::{
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use shannon_core::api_server::{MessageAttachment, attachments_to_blocks};
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -27,12 +28,15 @@ pub struct MessageRequest {
     /// Images are carried to the LLM as base64 content blocks (Anthropic /
     /// OpenAI vision); anything else is rejected with a 400.
     #[serde(default)]
+    #[schema(value_type = Vec<MessageAttachmentSchema>)]
     pub attachments: Option<Vec<MessageAttachment>>,
 }
 
-/// A single base64-encoded attachment on a message.
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct MessageAttachment {
+/// OpenAPI mirror of `shannon_api_protocol::MessageAttachment` (the
+/// protocol crate stays a pure serde leaf, so the request schema derives
+/// here and `value_type` points the doc at it). Fields must stay 1:1.
+#[derive(Debug, utoipa::ToSchema)]
+pub struct MessageAttachmentSchema {
     /// File name (informational; shown to the model in the message text).
     pub name: Option<String>,
     /// MIME type. Supported: image/png, image/jpeg, image/gif, image/webp.
@@ -81,58 +85,6 @@ impl ApiError {
 }
 
 /// Largest decoded attachment (10 MB), mirroring the desktop app limit.
-const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
-/// Maximum attachments per message (Anthropic accepts up to 100; this keeps
-/// a single request's multimodal payload bounded).
-const MAX_ATTACHMENTS: usize = 8;
-/// MIME types the multimodal adapters can serialize.
-const SUPPORTED_MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
-
-/// Validate attachments and convert them to provider-agnostic content
-/// blocks. Returns a user-facing error message on the first violation.
-fn attachments_to_blocks(
-    attachments: &[MessageAttachment],
-) -> Result<Vec<shannon_engine::api::ContentBlock>, String> {
-    use base64::Engine;
-
-    if attachments.len() > MAX_ATTACHMENTS {
-        return Err(format!(
-            "too many attachments: {} (max {MAX_ATTACHMENTS})",
-            attachments.len()
-        ));
-    }
-
-    let mut blocks = Vec::with_capacity(attachments.len());
-    for (i, att) in attachments.iter().enumerate() {
-        let label = att
-            .name
-            .clone()
-            .unwrap_or_else(|| format!("attachment-{i}"));
-        if !SUPPORTED_MEDIA_TYPES.contains(&att.media_type.as_str()) {
-            return Err(format!(
-                "attachment \"{label}\": unsupported media_type \"{}\" (supported: {})",
-                att.media_type,
-                SUPPORTED_MEDIA_TYPES.join(", ")
-            ));
-        }
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(att.data.as_bytes())
-            .map_err(|_| format!("attachment \"{label}\": data is not valid base64"))?;
-        if decoded.len() > MAX_ATTACHMENT_BYTES {
-            return Err(format!(
-                "attachment \"{label}\": {} bytes exceeds the {MAX_ATTACHMENT_BYTES} byte limit",
-                decoded.len()
-            ));
-        }
-        blocks.push(shannon_engine::api::ContentBlock::Image {
-            source: shannon_engine::api::ImageSource::base64(
-                att.media_type.clone(),
-                att.data.clone(),
-            ),
-        });
-    }
-    Ok(blocks)
-}
 
 #[utoipa::path(post, path = "/v1/sessions", request_body = CreateSessionRequest, responses((status = 200, body = CreateSessionResponse)))]
 pub async fn create_session(
@@ -362,74 +314,6 @@ mod tests {
     fn png_b64(len: usize) -> String {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD.encode(vec![0x89u8; len])
-    }
-
-    #[test]
-    fn test_valid_image_attachments_convert_to_blocks() {
-        let atts = vec![
-            MessageAttachment {
-                name: Some("shot.png".into()),
-                media_type: "image/png".into(),
-                data: png_b64(16),
-            },
-            MessageAttachment {
-                name: None,
-                media_type: "image/jpeg".into(),
-                data: png_b64(16),
-            },
-        ];
-        let blocks = attachments_to_blocks(&atts).unwrap();
-        assert_eq!(blocks.len(), 2);
-        assert!(matches!(
-            blocks[0],
-            shannon_engine::api::ContentBlock::Image { .. }
-        ));
-    }
-
-    #[test]
-    fn test_unsupported_media_type_rejected() {
-        let atts = vec![MessageAttachment {
-            name: Some("doc.pdf".into()),
-            media_type: "application/pdf".into(),
-            data: png_b64(16),
-        }];
-        let err = attachments_to_blocks(&atts).unwrap_err();
-        assert!(err.contains("unsupported media_type"), "got: {err}");
-    }
-
-    #[test]
-    fn test_invalid_base64_rejected() {
-        let atts = vec![MessageAttachment {
-            name: None,
-            media_type: "image/png".into(),
-            data: "not!base64!".into(),
-        }];
-        let err = attachments_to_blocks(&atts).unwrap_err();
-        assert!(err.contains("not valid base64"), "got: {err}");
-    }
-
-    #[test]
-    fn test_oversized_attachment_rejected() {
-        let atts = vec![MessageAttachment {
-            name: Some("big.png".into()),
-            media_type: "image/png".into(),
-            data: png_b64(MAX_ATTACHMENT_BYTES + 1),
-        }];
-        let err = attachments_to_blocks(&atts).unwrap_err();
-        assert!(err.contains("exceeds"), "got: {err}");
-    }
-
-    #[test]
-    fn test_too_many_attachments_rejected() {
-        let atts: Vec<MessageAttachment> = (0..=MAX_ATTACHMENTS)
-            .map(|_| MessageAttachment {
-                name: None,
-                media_type: "image/png".into(),
-                data: png_b64(4),
-            })
-            .collect();
-        let err = attachments_to_blocks(&atts).unwrap_err();
-        assert!(err.contains("too many attachments"), "got: {err}");
     }
 
     #[test]

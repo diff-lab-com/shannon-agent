@@ -6,7 +6,7 @@ import {
   type EngineEventType,
   isTerminalEvent,
 } from "./runtime.js";
-import type { WsClientMessageQuery } from "./types.gen.js";
+import { type MessageAttachment, type WsClientMessageQuery } from "./types.gen.js";
 
 /**
  * Typed WebSocket client for the Shannon engine's `/api/ws`.
@@ -118,7 +118,12 @@ export class EngineWsClient {
    */
   async *runQuery(
     prompt: string,
-    opts: { model?: string | null; sessionId?: string | null } = {},
+    opts: {
+      model?: string | null;
+      sessionId?: string | null;
+      /** B4: multimodal attachments (engine validates MIME/size). */
+      attachments?: MessageAttachment[];
+    } = {},
   ): AsyncGenerator<EngineEvent> {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -133,6 +138,11 @@ export class EngineWsClient {
       prompt,
       model: opts.model ?? this.defaultModel,
       session_id: opts.sessionId ?? this.defaultSessionId,
+      // Omit on the wire when the turn is text-only (server treats absent
+      // and empty identically via serde(default)).
+      ...(opts.attachments && opts.attachments.length > 0
+        ? { attachments: opts.attachments }
+        : {}),
     };
 
     const queue = new PushQueue<EngineEvent>();
