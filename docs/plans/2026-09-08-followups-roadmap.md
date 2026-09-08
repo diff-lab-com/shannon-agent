@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | A1 | **T13-T2 macOS AX 适配器完整实现** | 无 Mac 开发机；AXUIElement 行为（TCC 授权流、AXObserver、Electron 树差异）无法在 Linux 验证，盲写风险高 | ① 一台 Mac；② telemetry 显示 macOS 用户占比可观 | `platform_adapter.rs` 的 `MacosAxAdapter` 骨架已合并，实现即插即用 |
 | A2 | **applescript 工具 macOS 真机 QA**（T13-T1 的 TCC 授权流 + 真实 osascript 执行） | 同上（无 Mac） | 同上；步骤已备于 [docs/qa/2026-09-07-computer-use-browser-qa-checklist.md](./2026-09-07-computer-use-browser-qa-checklist.md) QA-1 | T13-T1 代码已合并 |
-| A3 | **chromiumoxide / computer-use 在 Windows 与 macOS 的编译与运行验证** | 无对应环境 | CI windows/macos job 已覆盖编译（Cross-platform Check windows 项为 dev 基线红、与上游 openssh 依赖相关）；运行验证需真机 | T14 / T10 |
+| A3 | **chromiumoxide / computer-use 在 Windows 与 macOS 的编译与运行验证** | 无对应环境 | CI windows/macos job 已覆盖编译（2026-09-08 起 windows 编译门全绿：openssh 依赖按 `cfg(unix)` 门控，ssh 远程在 Windows 运行时报 `Unsupported`，见 `shannon-remote/src/ssh/mod.rs`）；运行验证需真机 | T14 / T10 |
 | A4 | **computer-use libei 后端的 Wayland 真机会话验证**（Portal 授权流 + 原生 Wayland 点击） | 本机无原生 Wayland 会话可自动化；Portal 授权需人工点击 | 带 GNOME-Wayland 的测试机或自托管 runner；步骤见 QA 清单 QA-2 | T10-Phase1 已合并（编译门在 CI） |
 
 ## B. 工程量大，按排期延后（有就绪的底座）
@@ -34,6 +34,7 @@
 |---|---|---|---|---|
 | B1-tail | **远端浏览器自动编排**（B1 方案 A 残余：远端自动启动 Chrome + `ssh -L` 转发生命周期 + 断线重连） | CDP attach 通道已通（B1-B）；`SshRuntime` exec/piped/控制套接字齐备；手动 `ssh -L` + `SHANNON_BROWSER_CDP` 已可用 | openssh 会话编排、远端环境探测、转发进程生命周期、Degraded 联动重连 | 2027 H1；用户提出远端浏览器需求且手动转发嫌麻烦 |
 | B4-out | **引擎出站图片 → IM 渠道**（B4 残余） | `SendOpts.attachments` 类型已存在；入站管线已建 | 引擎事件携带图片块 → adapter send 附件（sendPhoto/上传/Block Kit）；各渠道 mediaOut 能力表 | 有 IM 渠道用户需求时 |
+| B5 | **Windows 平台的 ssh 远程世界**（openssh 栈 unix-only；2026-09-08 起类型/trait 全平台编译、运行时报 `Unsupported`） | 类型/trait 表面全平台编译（`SshRuntime`/`SshFs`/`SshProcess` stub + provider trait）；Windows 内置 OpenSSH 的 per-command 模式 + 非 mux sftp 子进程的路线在 `ssh/session.rs` 注释已有雏形 | 非 mux 传输实现（逐命令 ssh 子进程）、SFTP 子进程等价物、真机验证 | Windows 桌面用户提出 `/remote use` 需求 |
 
 ## C. 明确不做（留档防重提）
 
@@ -47,8 +48,8 @@
 
 | # | 项 | 现状 |
 |---|---|---|
-| D1 | **dev 前端 overlay lint 红**（`MigrationWizard.tsx:193` 白名单外 `fixed inset-0`，dev CI "Desktop Unit Tests" job） | dev 上游提交引入；建议转前端 owner（加白名单或改用规范组件） |
-| D2 | **goal.rs 的 clippy 告警**（unused imports ×3、unused_mut、never_loop）与 `shannon-ui` 两处 private-interface 告警 | dev 基线预存；15 分钟清理即可 |
+| D1 | **dev 前端 overlay lint 红**（`MigrationWizard.tsx:193` 白名单外 `fixed inset-0`，dev CI "Desktop Unit Tests" job） | **已修复（2026-09-08）**：MigrationWizard 迁移至 Modal 原语（与 CancelTaskModal 的 T1.2 路径一致），`ui/modal.tsx` 增加可选 `testId` prop；未动白名单 |
+| D2 | **goal.rs 的 clippy 告警**（unused imports ×3、unused_mut、never_loop）与 `shannon-ui` 两处 private-interface 告警 | **已修复（2026-09-08）**：全 workspace 25 处 clippy 告警清零（含 `GuardCounters` 提为 pub、applescript 后端按 `cfg(target_os)` 门控）；Clippy job 转绿 |
 
 ---
 

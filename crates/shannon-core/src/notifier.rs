@@ -677,6 +677,7 @@ impl DesktopNotifier {
         cfg!(target_os = "linux") || cfg!(target_os = "macos") || cfg!(target_os = "windows")
     }
 
+    #[allow(dead_code)] // KEEP: cross-platform stub
     fn send_linux(&self, notification: &Notification) -> Result<(), NotifierError> {
         let icon = match notification.level {
             NotificationLevel::Info => "dialog-information",

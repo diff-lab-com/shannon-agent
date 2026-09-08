@@ -506,6 +506,32 @@ jobs:
         # other matrix legs.
         if: runner.os == 'Linux'
         run: cargo check -p shannon-core --features landlock
+      - name: Check all features (Linux only)
+        # Feature-universe compile: --all-features unions optional deps no
+        # default-features gate ever sees, so feature-cfg'd drift passes
+        # every other job. shannon-tools is excluded here because its
+        # computer-use input backends are mutually exclusive by design
+        # (compile_error! guards) — they get their own legs below.
+        if: runner.os == 'Linux'
+        run: cargo check --workspace --all-features --exclude shannon-desktop --exclude shannon-tools
+      - name: Check computer-use feature builds (Linux only)
+        # One leg per shannon-tools feature shape: the umbrella backend
+        # existing builds use, each alternative Linux input backend, the
+        # Wayland capture composition, and the local-browser forward. The
+        # plain `computer-use` build broke unseen for weeks before the #81
+        # hotfix — these legs keep every shape compiling.
+        # libxdo-dev: enigo's default Linux backend needs libxdo headers on
+        # a fresh runner (cargo check type-checks the FFI surface).
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libxdo-dev
+          cargo check -p shannon-tools --features computer-use
+          cargo check -p shannon-tools --features computer-use-libei
+          cargo check -p shannon-tools --features computer-use-wayland
+          cargo check -p shannon-tools --features computer-use-x11rb
+          cargo check -p shannon-tools --features computer-use-wayland-capture
+          cargo check -p shannon-tools --features computer-use-wayland,computer-use-wayland-capture
+          cargo check -p shannon-tools --features local-browser
 
   check-linux-musl:
     # Linux-only musl smoke test. Renamed from `check-cross-platform` so
