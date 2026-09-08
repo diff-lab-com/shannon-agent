@@ -348,3 +348,104 @@ gitleaks 用于出站检测：**规则语料必要且直接可用（MIT、RE2 �
 - 风险框架：OWASP GenAI LLM07：<https://genai.owasp.org/llmrisk/llm07-insecure-plugin-design/>
 
 > 未核实项备忘：DeepSeek 现行定价表（官方页改版，数字来自搜索快照 + 第三方交叉）、Gemini 2.5 Pro 显式缓存存储费率、OpenAI 缓存隔离 scope（org vs project）、Cloudflare DLP 在流量中的改写语义。对外引用前应复核。
+
+---
+
+## 9. 附录：架构决策——三制品拆分蓝图（2026-09-09 评审定稿）
+
+评审结论：采用**三部分拆分**——功能（a）、集成机制（b）、集成契约（c）各自独立演进；并附两条关键约束。本节为 a/b/c 三个制品的立项依据。
+
+### 9.1 决策记录
+
+- **采纳**：三制品拆分。a = 独立 repo 纯函数库；b = 实现 c 契约、包装 a 的插件层 crate；c = shannon-mono 发布的插件接口（内容变换中间件契约）+ 引擎接线。
+- **两条约束**：
+  1. **b 的"插件"是契约形态，不是进程形态**——shannon 以 cargo git 依赖在进程内消费 b；进程外实现（hook 命令、未来的 daemon/WASM）是同一契约的后续演化形态，不是 v1。现有 hook 命令通道保留给社区/企业的警告与阻断自定义（延迟容忍路径）。
+  2. **依赖方向**——契约先行：c 作为薄 trait 包从 shannon-mono 发布（semver 严格），b 在外部 repo 依赖 c 并包装 a；a 保持零 shannon 依赖。
+- **否决的备选**：全放 shannon-mono 内部 crate（牺牲复用与规则语料独立版本化）；进程外 daemon 插件从第一天（安全路径引入 IPC 失败模式与密钥过进程边界暴露面）；推迟插件化、仅进程内直连（本方案 C 形态，保留为 c 延期时的降级路径）。
+
+### 9.2 制品划分与依赖图
+
+```
+a: secret-guard（独立 repo；纯函数库：无状态、无 I/O、无策略）
+        ↑                        ↑
+b: secret-guard-plugin       其他消费者（CI CLI / pre-commit / 网关直接用 a）
+   （实现 c 的 trait，包装 a）
+        ↑
+c: shannon-plugin-api（shannon-mono 发布；ContextTransform 契约 + 引擎接线点）
+        ↑
+shannon-mono 引擎（三个接线点接线 + 策略/主密钥/注册表持久化 + 配置面）
+```
+
+| 制品 | 所在 repo | 形态 | 职责 | 版本策略 |
+|---|---|---|---|---|
+| a secret-guard | 独立 repo | Rust lib + 薄 CLI | 检测、HMAC 占位符派生、还原原语；gitleaks 规则语料 vendor（MIT + NOTICE） | 占位符格式跨版本兼容是其 semver 核心承诺 |
+| b secret-guard-plugin | 独立 crate（可与 a 同 repo 分包） | Rust lib | 实现 c 契约；策略解释读宿主传入配置；自身近似无状态 | 跟随 c 的契约版本 |
+| c shannon-plugin-api | shannon-mono | 薄 trait crate + 引擎接线 | 内容变换中间件契约；失败语义；不变量测试套件 | 契约变更需重大版本 |
+| 宿主接线与状态 | shannon-mono | 引擎内 | 三接线点调用、master key 存储、surrogate→secret 注册表（可重建缓存）、Phase 分档策略、与 `RedactionPolicy` 配置统一 | 产品节奏 |
+
+### 9.3 制品 a：API 草案
+
+```rust
+/// 检测：gitleaks 规则移植 + 关键词预过滤 + 熵检查（构建期编译全部规则，不兼容规则跳过并报告）
+pub struct Finding { rule_id: String, class: SecretClass, span: Range<usize>, /* ... */ }
+pub fn scan(text: &str, cfg: &ScanConfig) -> Vec<Finding>;
+
+/// 占位符：HMAC-SHA256(master_key, secret) 截断 48–64 bit，按 SecretShape 做格式保持
+/// 格式版本化，如 `SG1:<base32>`——写进历史即永久承诺可识别
+pub fn surrogate(secret: &[u8], master_key: &[u8], shape: SecretShape) -> String;
+
+/// 还原：精确匹配反查 + 编辑距离 ≤2 模糊修复建议；返回未解析的密钥形状串（F3/F4 兜底告警输入）
+pub fn restore(text: &str, pairs: &[(String, String)]) -> RestoreOutcome;
+```
+
+设计不变量：无状态（派生确定性）；注册表（surrogate→secret）是**可重建缓存**而非权威状态——丢失可从本地密钥源（env 快照、`redaction.toml` 声明值、路径策略命中文件）重扫重建；权威持久状态只有 master key。修正 rdx 先例的内存态映射缺陷。
+
+### 9.4 制品 c：契约草案与不变量
+
+```rust
+pub trait ContextTransform: Send + Sync {
+    /// 接线点 1：内容入库（用户消息 / 工具结果 / 注入文件 / compaction 输入）
+    fn transform_ingest(&self, block: &mut ContentBlock, ctx: &IngestCtx) -> TransformAction;
+    /// 接线点 2：工具参数执行前还原（Write/Edit/MultiEdit/Bash/Notebook 完整参数，天然规避流式撕裂）
+    fn restore_tool_args(&self, tool: &str, args: &mut serde_json::Value) -> RestoreAction;
+    /// 接线点 3：显示面还原（渲染层/IM 推送）；还原值绝不回写历史
+    fn restore_display(&self, text: &mut String) -> RestoreAction;
+    /// 只读 wire 审计（Phase 0 载荷，量化入库层漏检率）
+    fn audit_wire(&self, wire: &serde_json::Value) -> Vec<Finding>;
+}
+/// 失败语义显式化：Closed = 插件不可用即阻断并明确报错；Open = 放行 + 记录（对齐 GitGuardian fail-open 先例）
+pub enum FailMode { Closed, Open }
+```
+
+**契约级一致性测试（任何实现必须通过，含跨版本矩阵）**：
+- I1 同一会话连续请求的前缀字节一致（缓存安全，§4 的落地形式）；
+- I2 改写结果进入对话历史，还原值绝不回写历史（单向性，§5.5）；
+- I3 变换幂等：对已替换文本再 scan 无新命中（HMAC 派生 + 占位符不命中检测规则的字符集设计）；
+- I4 FailMode 语义：Closed 下插件不可用必须阻断；Open 下必须放行且留痕。
+
+### 9.5 hook 事件覆盖表（Phase 0/1 即刻可用路径）
+
+| 内容入口 | 现有 hook 事件（已验证存在） | 覆盖情况 |
+|---|---|---|
+| 用户输入 | `UserPromptSubmit` | ✓ 可检测/阻断/modify |
+| 工具参数（执行前，还原点） | `PreToolUse` | ✓ 检测/阻断；modify 需 spike |
+| 工具结果（入库前） | `PostToolUse` | ✓ 检测/阻断；modify 需 spike |
+| 系统/注入文件构建、compaction 输入、wire 审计 | 无对应事件 | c 要新增的接线能力 |
+
+已验证：hook 系统为命令式（JSON stdin/stdout），具备 allow/deny/**modify** 语义（`hooks/manager.rs` 的 `modified_input`/`modified_output`、deny 覆盖 modify 解析）。**待 spike**：PreToolUse/PostToolUse 的 modify 改写是否落入对话历史且逐轮字节稳定（即既有接口上的 I1/I2）——决定 Phase 0/1 能否完全走 hook 形态，还是直接从 c 接线点起步。
+
+### 9.6 分阶段实施映射
+
+| 阶段 | 载荷 | 制品依赖 | 接口路径 |
+|---|---|---|---|
+| Phase 0 审计 | 只读检测 + 本地命中/误报统计 | a | c 的 `audit_wire` + ingest 检测（首个接口载荷，零风险验证契约设计） |
+| Phase 1 警告/阻断 | 高危类别（私钥/云根凭证）提醒 | a | hook 通道（社区可用）或 c 接线点 |
+| Phase 2 可逆替换 | env/token 类 HMAC 占位符 + 执行面还原 | a + b + c 全链路 | c 契约 + I1–I4 测试锁定 |
+| Phase 3 策略化 | 路径策略、企业下发、IM/远程对齐 | 宿主侧 | 配置统一（`redaction.toml` 一份规则、日志与出站两个消费面） |
+
+### 9.7 风险与机制
+
+- **版本漂移**（shannon ↔ c ↔ b ↔ a）：lockfile 钉版本 + I1–I4 的跨版本矩阵 CI；占位符格式 `SG1` 版本化承诺。
+- **规则语料自持**：gitleaks 已 feature-frozen，建立对 Betterleaks/Kingfisher 规则目录的定期同步流程；构建期逐条编译校验，不兼容规则显式报告降级。
+- **既有 hook modify 语义未验证**：§9.5 spike 先行，结论决定 Phase 0/1 的接口路径。
+- **多 repo 工作流成本**：以 c 的契约测试套件作为两个 repo 的共同 CI 门禁，接口漂移在 PR 阶段暴露。
