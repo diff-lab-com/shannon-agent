@@ -13,9 +13,6 @@
 //! queueing) in `shannon-ui`; server/desktop clients can drive the same
 //! machine through [`GoalApi`] without any UI dependency.
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-
 use crate::query_engine::{GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER};
 
 /// Lifecycle of a session goal (`/goal`).
@@ -355,7 +352,7 @@ pub fn goal_continuation_decision_with_facts(
             let same = goal
                 .last_block_reason
                 .as_deref()
-                .map(|r| r == &normalize_reason(&reason))
+                .map(|r| r == normalize_reason(&reason))
                 .unwrap_or(false);
             let streak = if same { goal.blocked_streak + 1 } else { 1 };
             next.blocked_streak = streak;
@@ -367,8 +364,7 @@ pub fn goal_continuation_decision_with_facts(
             // to the continuation prompt.
             let mut prompt = continuation_prompt(&next);
             prompt.push_str(&format!(
-                "\n\n[blocked audit] You reported the same blocker {streak}/{} turns.                  Try an alternative approach or gather evidence; the goal pauses only                  after the blocker persists {} consecutive turns. If it is truly                  immovable, report GOAL_BLOCKED again with evidence.",
-                BLOCKED_AUDIT_TURNS, BLOCKED_AUDIT_TURNS
+                "\n\n[blocked audit] You reported the same blocker {streak}/{BLOCKED_AUDIT_TURNS} turns.                  Try an alternative approach or gather evidence; the goal pauses only                  after the blocker persists {BLOCKED_AUDIT_TURNS} consecutive turns. If it is truly                  immovable, report GOAL_BLOCKED again with evidence."
             ));
             return GoalContinuation::Continue { next, prompt };
         }
@@ -428,8 +424,7 @@ pub fn goal_continuation_decision_with_facts(
         return GoalContinuation::PausedNoProgress {
             next,
             reason: format!(
-                "Two consecutive turns with no tool calls (stall strikes {strikes_now}/{}).",
-                GOAL_DEFAULT_MAX_STALL_STRIKES
+                "Two consecutive turns with no tool calls (stall strikes {strikes_now}/{GOAL_DEFAULT_MAX_STALL_STRIKES})."
             ),
         };
     }
@@ -562,7 +557,7 @@ impl GoalApi {
                 self.store(next.clone());
                 GoalContinuation::BudgetLimited { next, reason }
             }
-            GoalContinuation::Continue { mut next, prompt } => {
+            GoalContinuation::Continue { next, prompt } => {
                 self.store(next.clone());
                 GoalContinuation::Continue { next, prompt }
             }

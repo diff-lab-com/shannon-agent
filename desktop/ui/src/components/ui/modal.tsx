@@ -35,6 +35,8 @@ export interface ModalProps {
   closeLabel?: string
   busy?: boolean
   className?: string
+  /** data-testid for the popup element (test seam). */
+  testId?: string
   children?: React.ReactNode
 }
 
@@ -51,6 +53,7 @@ export function Modal({
   closeLabel,
   busy = false,
   className,
+  testId,
   children,
 }: ModalProps) {
   const intl = useIntl()
@@ -82,6 +85,7 @@ export function Modal({
           role={role}
           aria-modal="true"
           aria-label={title}
+          data-testid={testId}
           className={cn(
             "fixed top-1/2 left-1/2 z-flash -translate-x-1/2 -translate-y-1/2 w-full max-w-[calc(100%-2rem)] bg-surface-container-lowest rounded-2xl shadow-[var(--shadow-e5)] border border-outline-variant/30 outline-none p-md duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
             modalSizes({ size }),
