@@ -737,6 +737,7 @@ mod tests {
                 provider: Some("anthropic".into()),
                 cwd: Some("/proj".into()),
                 app_version: None,
+                ..Default::default()
             },
         ));
         w.record(SessionEventBody::TurnStart(TurnStartPayload {
@@ -815,6 +816,7 @@ mod tests {
                 provider: Some("anthropic".into()),
                 cwd: Some("/proj".into()),
                 app_version: None,
+                ..Default::default()
             },
         ));
         for turn in 0..3u64 {

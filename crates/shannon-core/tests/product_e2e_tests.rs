@@ -785,6 +785,7 @@ fn test_session_persistence_round_trip() {
                     provider: Some("anthropic".into()),
                     cwd: None,
                     app_version: None,
+                    ..Default::default()
                 },
             ),
         );

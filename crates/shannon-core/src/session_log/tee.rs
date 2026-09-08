@@ -343,7 +343,15 @@ impl SessionTee {
             Ok(mut writer) => {
                 let fresh = writer.next_seq() == 0;
                 if fresh {
-                    // First event of the log: model / provider / cwd / version.
+                    // First event of the log: model / provider / cwd / version
+                    // plus the telemetry decision signals (roadmap 2026-09-08):
+                    // platform share (T13 priority) and remote-CDP usage
+                    // (B1-tail priority). The CDP env var name must stay in
+                    // sync with shannon-browser's cdp_endpoint reader — core
+                    // deliberately does not depend on that crate.
+                    let browser_cdp = std::env::var("SHANNON_BROWSER_CDP")
+                        .map(|v| !v.trim().is_empty())
+                        .unwrap_or(false);
                     writer.record(SessionEventBody::SessionStart(SessionStartPayload {
                         model: model.to_string(),
                         provider: provider.map(String::from),
@@ -351,6 +359,9 @@ impl SessionTee {
                             .ok()
                             .map(|p| p.display().to_string()),
                         app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                        os: Some(std::env::consts::OS.to_string()),
+                        arch: Some(std::env::consts::ARCH.to_string()),
+                        browser_cdp: Some(browser_cdp),
                     }));
                 }
                 Self {
