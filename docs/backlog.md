@@ -104,7 +104,13 @@ A1 nudge 零误触发、A4 放行无异常路径、A2 门禁靶题 sanitize ✓�
 其次才是模型方差。**宿主机 egress 劣化（uv CDN 不通、docker hub EOF）是本评测环境
 最大的测量噪声源**（已两次毒化验收），后续验收必须：①先测网络窗口；②infra 失败题
 自动重跑一轮再聚合；③报告 infra 分离口径。
-**T1-retry**（28 个 infra 受害题重跑）已发车；结果聚合后更新本节数字。
+**T1-retry 结果（2026-09-08）**：4 题被救回（cancel-async-tasks、db-wal-recovery、
+large-scale-text-editing、pypi-server——确认网络窗口噪声），11 个 uv-CDN 类 verifier
+失败依旧（该 CDN 在本网络不可达，非瞬态）。**最终修正口径**：32/87 = 36.8%
+（2 题 qemu glibc DNF 另计）；排除 verifier-infra 后 T1-final 32/76 = 42.1% vs
+P1d 36/70 = 51.4%——**排除 infra 后仍有 ~9pp 差距，主嫌疑是 A2 正确性优先措辞使
+agent 更彻底但更慢（AgentTimeout 15→24），需 A2 原版 vs R1 版的对照二分定谳**（T1b）。
+在 T1b 定谳前，TB2.1 上本批改进记为「质量换取速度、净分数未证实」。
 
 ### T0（进行中）
 - [ ] **dev 合并（延后，需协作）**：feat/agent-eval-bench 与 dev 已深度分叉
