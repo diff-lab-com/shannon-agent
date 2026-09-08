@@ -5,20 +5,30 @@
 //! ControlMaster mux, so Windows gets file ops too). Every call marshals onto
 //! that runtime; blocking faces use [`block_on_anywhere`].
 
-use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
-use openssh_sftp_client::{Sftp, SftpOptions};
 use shannon_tool_interface::{DirEntryInfo, FileMeta, FileSystemProvider};
-use tokio_stream::StreamExt;
 
-use super::session::{SshRuntime, block_on_anywhere};
+use super::session::SshRuntime;
+
+// SFTP transport is unix-only; non-unix builds get the `SshFs` stub at the
+// bottom of this file and every call reports `Unsupported`.
+#[cfg(unix)]
+use std::future::Future;
+#[cfg(unix)]
+use std::time::Duration;
+#[cfg(unix)]
+use openssh_sftp_client::{Sftp, SftpOptions};
+#[cfg(unix)]
+use tokio_stream::StreamExt;
+#[cfg(unix)]
+use super::session::block_on_anywhere;
 
 /// File world executing every operation over SFTP on the SSH target.
+#[cfg(unix)]
 pub struct SshFs {
     rt: Arc<SshRuntime>,
     sftp: Arc<tokio::sync::Mutex<Sftp>>,
@@ -28,6 +38,7 @@ pub struct SshFs {
     posix_rename: bool,
 }
 
+#[cfg(unix)]
 impl SshFs {
     /// Attach an SFTP session to `rt`'s existing ssh connection.
     pub async fn connect(rt: Arc<SshRuntime>) -> io::Result<Arc<Self>> {
@@ -166,6 +177,7 @@ impl SshFs {
 }
 
 /// Drain whatever the child wrote to stderr (capped) for error reporting.
+#[cfg(unix)]
 fn ignore_missing(e: openssh_sftp_client::Error) -> Result<(), openssh_sftp_client::Error> {
     // Missing target is success for our purposes; anything else propagates.
     if let openssh_sftp_client::Error::IOError(io) = &e {
@@ -183,6 +195,7 @@ fn ignore_missing(e: openssh_sftp_client::Error) -> Result<(), openssh_sftp_clie
     Err(e)
 }
 
+#[cfg(unix)]
 fn to_io(e: openssh_sftp_client::Error) -> io::Error {
     match e {
         openssh_sftp_client::Error::IOError(io) => io,
@@ -190,6 +203,7 @@ fn to_io(e: openssh_sftp_client::Error) -> io::Error {
     }
 }
 
+#[cfg(unix)]
 fn meta_to_filemeta(md: &openssh_sftp_client::metadata::MetaData) -> FileMeta {
     FileMeta {
         len: md.len().unwrap_or(0),
@@ -199,6 +213,7 @@ fn meta_to_filemeta(md: &openssh_sftp_client::metadata::MetaData) -> FileMeta {
 }
 
 /// Shared body for the async + blocking faces of `create_dir_all`.
+#[cfg(unix)]
 async fn create_dir_all_body(
     sftp: &Arc<tokio::sync::Mutex<Sftp>>,
     path: PathBuf,
@@ -221,6 +236,7 @@ async fn create_dir_all_body(
     }
 }
 
+#[cfg(unix)]
 #[async_trait]
 impl FileSystemProvider for SshFs {
     async fn read_text(&self, path: &Path) -> io::Result<String> {
@@ -470,6 +486,7 @@ mod tests {
         assert!(fm.modified.is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn ignore_missing_tolerates_absent_targets() {
         let absent =
@@ -481,6 +498,7 @@ mod tests {
 
     // Ignored integration test: requires a reachable sshd (see
     // session::tests::test_ssh_target for the env knobs).
+    #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires a reachable sshd (SHANNON_TEST_SSH_HOST/PORT/USER)"]
     async fn sftp_full_roundtrip_on_localhost() {
@@ -519,5 +537,92 @@ mod tests {
         fs.remove_file_blocking(&file).unwrap();
         // Best-effort cleanup of the unique workspace subdir.
         let _ = fs.remove_file_blocking(&dst);
+    }
+}
+
+// Non-unix stand-in: same type/trait surface, every operation reports
+// `Unsupported` (see `ssh::unsupported_transport`).
+#[cfg(not(unix))]
+pub struct SshFs {
+    _priv: (),
+}
+
+#[cfg(not(unix))]
+impl SshFs {
+    /// Fails fast: the SFTP transport does not build on this platform.
+    pub async fn connect(_rt: Arc<SshRuntime>) -> io::Result<Arc<Self>> {
+        Err(super::unsupported_transport())
+    }
+}
+
+#[cfg(not(unix))]
+#[async_trait]
+impl FileSystemProvider for SshFs {
+    async fn read_text(&self, _path: &Path) -> io::Result<String> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn read_bytes(&self, _path: &Path) -> io::Result<Vec<u8>> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn metadata(&self, _path: &Path) -> io::Result<FileMeta> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn create_dir_all(&self, _path: &Path) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn write_bytes(&self, _path: &Path, _contents: &[u8]) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn rename(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn canonicalize(&self, _path: &Path) -> io::Result<PathBuf> {
+        Err(super::unsupported_transport())
+    }
+
+    fn read_text_blocking(&self, _path: &Path) -> io::Result<String> {
+        Err(super::unsupported_transport())
+    }
+
+    fn write_bytes_blocking(&self, _path: &Path, _contents: &[u8]) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    fn create_dir_all_blocking(&self, _path: &Path) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    fn remove_file_blocking(&self, _path: &Path) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    fn canonicalize_blocking(&self, _path: &Path) -> io::Result<PathBuf> {
+        Err(super::unsupported_transport())
+    }
+
+    fn metadata_blocking(&self, _path: &Path) -> io::Result<FileMeta> {
+        Err(super::unsupported_transport())
+    }
+
+    fn read_prefix_blocking(&self, _path: &Path, _max_bytes: usize) -> io::Result<Vec<u8>> {
+        Err(super::unsupported_transport())
+    }
+
+    fn walk_blocking(
+        &self,
+        _root: &Path,
+        _cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+    ) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    fn list_dir_blocking(&self, _path: &Path) -> io::Result<Vec<DirEntryInfo>> {
+        Err(super::unsupported_transport())
     }
 }

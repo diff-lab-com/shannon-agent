@@ -6,18 +6,29 @@
 //! it — `JoinHandle` await is runtime-independent, so callers on the
 //! application runtime can simply `.await`.
 
-use std::future::Future;
 use std::io;
-use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::time::{Duration, Instant};
 
-use shannon_tool_interface::{CapturedOutput, PipedChild, ProcessExit};
-use tokio::io::AsyncWriteExt;
-use tokio::runtime::Handle;
+use shannon_tool_interface::CapturedOutput;
 
 use crate::target::RemoteTarget;
+
+// The openssh transport is unix-only; non-unix builds get the `SshRuntime`
+// stub at the bottom of this file and every call reports `Unsupported`.
+#[cfg(unix)]
+use std::future::Future;
+#[cfg(unix)]
+use std::path::Path;
+#[cfg(unix)]
+use std::sync::atomic::{AtomicU8, Ordering};
+#[cfg(unix)]
+use std::time::{Duration, Instant};
+#[cfg(unix)]
+use shannon_tool_interface::{PipedChild, ProcessExit};
+#[cfg(unix)]
+use tokio::io::AsyncWriteExt;
+#[cfg(unix)]
+use tokio::runtime::Handle;
 
 /// Liveness of the SSH transport behind a world.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -47,6 +58,7 @@ pub struct HealthReport {
     pub latency_ms: u64,
 }
 
+#[cfg(unix)]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[allow(dead_code)] // KEEP: names the 0 state in the status mapping for readability
@@ -54,9 +66,11 @@ const STATUS_LOCAL: u8 = 0;
 const STATUS_CONNECTED: u8 = 1;
 const STATUS_DEGRADED: u8 = 2;
 
+#[cfg(unix)]
 type ArcChild = openssh::Child<Arc<openssh::Session>>;
 
 /// Owns the SSH session for one target plus the runtime that drives it.
+#[cfg(unix)]
 pub struct SshRuntime {
     dest: String,
     port: Option<u16>,
@@ -66,6 +80,7 @@ pub struct SshRuntime {
     status: AtomicU8,
 }
 
+#[cfg(unix)]
 impl std::fmt::Debug for SshRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SshRuntime")
@@ -75,6 +90,7 @@ impl std::fmt::Debug for SshRuntime {
     }
 }
 
+#[cfg(unix)]
 impl SshRuntime {
     /// Connect to `target`'s host. BatchMode is always on (openssh enforces
     /// it), so a missing agent/key fails fast instead of hanging on a
@@ -359,6 +375,7 @@ impl SshRuntime {
 /// Streams are `tokio::io::duplex` halves — runtime-agnostic in-memory pipes
 /// — while the actual ssh channel is pumped on the owning runtime, so callers
 /// may poll from the application runtime without crossing runtime boundaries.
+#[cfg(unix)]
 struct SshPipedChild {
     owner: Handle,
     child_slot: Arc<tokio::sync::Mutex<Option<ArcChild>>>,
@@ -367,6 +384,7 @@ struct SshPipedChild {
     stderr: tokio::io::DuplexStream,
 }
 
+#[cfg(unix)]
 #[async_trait::async_trait]
 impl PipedChild for SshPipedChild {
     fn take_stdin(&mut self) -> Option<Box<dyn tokio::io::AsyncWrite + Send + Unpin>> {
@@ -416,6 +434,7 @@ impl PipedChild for SshPipedChild {
 }
 
 /// Run `fut` on runtime `rt` and await the result from any runtime.
+#[cfg(unix)]
 async fn spawn_on<T, F>(handle: &Handle, fut: F) -> io::Result<T>
 where
     F: Future<Output = io::Result<T>> + Send + 'static,
@@ -430,6 +449,7 @@ where
 /// `block_on` from any thread, including threads already inside another
 /// tokio runtime (spawn_blocking workers): hop to a plain OS thread when
 /// necessary. Blocking ssh helpers call this.
+#[cfg(unix)]
 pub(crate) fn block_on_anywhere<T, F>(handle: &Handle, fut: F) -> T
 where
     F: Future<Output = T> + Send,
@@ -448,11 +468,55 @@ where
 
 /// Connect with the default process-mux session: ControlMaster multiplexing
 /// on Unix, per-command ssh processes on Windows (no ControlMaster there).
+#[cfg(unix)]
 async fn connect_with(
     builder: &openssh::SessionBuilder,
     dest: &str,
 ) -> Result<openssh::Session, openssh::Error> {
     builder.connect(dest).await
+}
+
+/// Non-unix stand-in: the type exists so the remote-exec surface (worlds,
+/// providers, `/remote use`) compiles everywhere, while every transport call
+/// reports `Unsupported` — `SshRuntime::connect` fails fast, so no stub
+/// instance can ever be observed through the normal flow.
+#[cfg(not(unix))]
+#[derive(Debug)]
+pub struct SshRuntime {
+    _priv: (),
+}
+
+#[cfg(not(unix))]
+impl SshRuntime {
+    /// Fails fast: the openssh transport does not build on this platform.
+    pub async fn connect(_target: &RemoteTarget) -> io::Result<Arc<Self>> {
+        Err(super::unsupported_transport())
+    }
+
+    /// The ssh destination this runtime is bound to (stub: always empty).
+    pub fn dest(&self) -> &str {
+        ""
+    }
+
+    /// Current transport status (stub: no transport, no world).
+    pub fn status(&self) -> WorldStatus {
+        WorldStatus::Local
+    }
+
+    /// Run one captured command (stub: unsupported platform).
+    pub async fn exec(self: &Arc<Self>, _argv: Vec<String>) -> io::Result<CapturedOutput> {
+        Err(super::unsupported_transport())
+    }
+
+    /// Blocking capture bridge (stub: unsupported platform).
+    pub fn exec_blocking(self: &Arc<Self>, _argv: Vec<String>) -> io::Result<CapturedOutput> {
+        Err(super::unsupported_transport())
+    }
+
+    /// Probe platform/home/bash/workspace (stub: unsupported platform).
+    pub async fn health(self: &Arc<Self>) -> io::Result<HealthReport> {
+        Err(super::unsupported_transport())
+    }
 }
 
 #[cfg(test)]
@@ -487,6 +551,7 @@ mod tests {
         assert!(!flags.contains("b1"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn block_on_anywhere_works_outside_and_inside_runtimes() {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -507,6 +572,7 @@ mod tests {
 
     // Ignored integration test: requires a reachable sshd. Configure via
     // SHANNON_TEST_SSH_HOST / _PORT / _USER (defaults: localhost:22).
+    #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires a reachable sshd (SHANNON_TEST_SSH_HOST/PORT/USER)"]
     async fn exec_roundtrip_on_localhost() {

@@ -9,8 +9,6 @@ repository.workspace = true
 description = "Remote execution worlds (SSH hosts, Docker containers) for Shannon tools"
 
 [dependencies]
-openssh = "0.11"
-openssh-sftp-client = "0.15"
 bytes = "1"
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
@@ -31,3 +29,10 @@ shannon-browser = { path = "../shannon-browser" }
 
 [dev-dependencies]
 tempfile = "3"
+
+# The openssh stack self-identifies as unix-only ("This crate can only be
+# used on unix") — the Windows check compiles this crate against the ssh
+# stubs in `ssh/mod.rs` instead.
+[target.'cfg(unix)'.dependencies]
+openssh = "0.11"
+openssh-sftp-client = "0.15"
