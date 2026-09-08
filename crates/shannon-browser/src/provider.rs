@@ -12,7 +12,7 @@
 //!   itself is `chromiumoxide::Browser::connect`; this provider owns the
 //!   reachability probe.
 
-use crate::browser::detect::{BrowserExecutable, detect_system_browser};
+use crate::detect::{BrowserExecutable, detect_system_browser};
 use shannon_tool_interface::providers::{BrowserLocality, BrowserProvider};
 
 /// The user's locally installed browser.

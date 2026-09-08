@@ -126,12 +126,31 @@ fn handle_uninstall(repl: &mut Repl) -> Result<()> {
 fn handle_doctor(repl: &mut Repl) -> Result<()> {
     let mut lines = String::from("Browser diagnostics:\n");
 
+    // B1-方案B: a CDP endpoint takes precedence — when set, the built-in
+    // tools attach to that Chrome instead of launching a local one, so a
+    // missing local browser stops being an error.
+    let cdp = shannon_tools::chrome_session::cdp_endpoint();
+    let cdp_set = cdp.is_some();
+    match cdp {
+        Some(ep) => lines.push_str(&format!(
+            "  ✓ CDP attach (SHANNON_BROWSER_CDP): {ep}\n     → built-in tools connect here; local launch is skipped\n"
+        )),
+        None => lines.push_str(
+            "  · CDP attach: not configured (set SHANNON_BROWSER_CDP to attach to a running Chrome, e.g. via ssh -L)\n",
+        ),
+    }
+
     match shannon_remote::browser::detect_system_browser() {
         Ok(exe) => lines.push_str(&format!(
-            "  ✓ System browser ({}): {}\n     → used by the upcoming built-in CDP path;\n       launch env override: SHANNON_BROWSER_PATH\n",
+            "  ✓ System browser ({}): {}\n     → launch env override: SHANNON_BROWSER_PATH\n",
             exe.source,
             exe.path.display()
         )),
+        Err(_) if cdp_set => {
+            lines.push_str(
+                "  · System browser: not found locally (unused while CDP attach is configured)\n",
+            );
+        }
         Err(err) => {
             lines.push_str("  ✗ System browser: not found\n");
             for p in &err.searched {

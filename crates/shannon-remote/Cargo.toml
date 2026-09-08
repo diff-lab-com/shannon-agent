@@ -25,6 +25,9 @@ reqwest = { workspace = true }
 shannon-tool-interface = { path = "../shannon-tool-interface" }
 shannon-core = { path = "../shannon-core" }
 shannon-tools = { path = "../shannon-tools" }
+# B2: shared browser foundation (detect + providers). No chromiumoxide —
+# the session stays behind shannon-browser's local-browser feature.
+shannon-browser = { path = "../shannon-browser" }
 
 [dev-dependencies]
 tempfile = "3"

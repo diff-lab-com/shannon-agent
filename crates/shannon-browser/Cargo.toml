@@ -1,0 +1,56 @@
+[package]
+name = "shannon-browser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "System-browser detection, browser providers, and the chromiumoxide session shared by tools and remote worlds"
+
+[dependencies]
+# BrowserProvider trait + BrowserLocality
+shannon-tool-interface = { path = "../shannon-tool-interface" }
+
+# Async runtime (chromiumoxide drives its own handler task here)
+tokio = { workspace = true }
+futures = { workspace = true }
+
+# Serialization (TabId carries Serialize for tool payloads)
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+tracing = { workspace = true }
+
+# Reachability probe for http CDP endpoints
+reqwest = { workspace = true }
+
+# Tab ids / per-process user-data-dir suffixes
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# B2: the chromiumoxide dependency lives here (in the session owner) rather
+# than in shannon-tools, so exactly one crate in the workspace owns the large
+# generated CDP module. Detection (detect.rs) has no chromiumoxide dependency
+# and stays available without the feature.
+[target.'cfg(not(target_os = "android"))'.dependencies.chromiumoxide]
+version = "0.9"
+optional = true
+default-features = false
+
+# Key-event dispatch (press_key) — re-exported types from the generated
+# CDP crate; kept as a direct optional dep so `Page::execute` can name
+# the command types. Same version pin as chromiumoxide.
+[target.'cfg(not(target_os = "android"))'.dependencies.chromiumoxide_cdp]
+version = "0.9"
+optional = true
+default-features = false
+
+[features]
+default = []
+# Live browser session backed by chromiumoxide: `Browser::launch` of the
+# user's installed Chrome/Chromium/Edge, or `Browser::connect` to a CDP
+# endpoint (SHANNON_BROWSER_CDP) reached e.g. through an `ssh -L` forward.
+local-browser = ["dep:chromiumoxide", "dep:chromiumoxide_cdp"]
+
+[dev-dependencies]
+tempfile = "3"

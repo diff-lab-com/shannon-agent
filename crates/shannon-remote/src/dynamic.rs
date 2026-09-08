@@ -145,9 +145,11 @@ impl DynamicWorld {
         )
     }
 
-    /// The attached browser world, if any (T14 Phase 3).
+    /// The active world's browser, if any (T14 Phase 3). Reads the
+    /// snapshot so the accessor follows target switches — the browser
+    /// rides along inside `CurrentWorld` when `/remote use` swaps worlds.
     pub fn browser(&self) -> Option<Arc<dyn BrowserProvider>> {
-        self.browser.clone()
+        self.snapshot().browser.clone()
     }
 
     /// Shared state handle (UI status pill, dashboards).

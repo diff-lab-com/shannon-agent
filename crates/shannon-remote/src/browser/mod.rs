@@ -1,14 +1,17 @@
-//! Browser automation world (T14).
+//! Browser automation world (T14 + B2).
 //!
 //! Decision 2026-09-06: Shannon never bundles a Chromium binary — browser
-//! automation reuses the user's system Chrome/Chromium/Edge. This module
-//! provides system-browser detection plus the [`BrowserProvider`]
-//! implementations (local system browser; remote CDP endpoint behind an
-//! SSH forward). The chromiumoxide session layer that consumes them lives
-//! in `shannon-tools::chrome_session`.
+//! automation reuses the user's system Chrome/Chromium/Edge. Detection and
+//! the [`BrowserProvider`](shannon_tool_interface::providers::BrowserProvider)
+//! implementations moved to the `shannon-browser` leaf crate (B2) so
+//! `shannon-tools`' session layer and this crate's providers share one
+//! implementation; the paths below are kept stable for `shannon-ui` and
+//! the world assembly. The chromiumoxide session that consumes the
+//! providers lives in `shannon-browser::session` behind its
+//! `local-browser` feature.
 
-pub mod detect;
-pub mod provider;
+pub use shannon_browser::detect;
+pub use shannon_browser::provider;
 
 pub use detect::{
     BrowserExecutable, DetectError, candidate_paths, detect_system_browser, install_hint,
