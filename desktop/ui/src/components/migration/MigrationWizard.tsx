@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
+import { Modal, ModalBody } from '@/components/ui/modal'
 import { Spinner } from '@/components/ui/loading-state'
 import * as api from '@/lib/tauri-api'
 import type {
@@ -60,7 +61,6 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
   const [conflictChoices, setConflictChoices] = useState<Record<string, 'overwrite' | 'rename' | 'skip'>>({})
   const [report, setReport] = useState<api.MigrationApplyReport | null>(null)
 
-  const dialogRef = useRef<HTMLDivElement>(null)
   const requestIdRef = useRef(0)
 
   // Reset whenever the dialog closes so reopening starts at the source step.
@@ -76,22 +76,6 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
       setReport(null)
     }
   }, [open])
-
-  // Focus the dialog on open + Escape closes (basic a11y: the dialog is
-  // reachable by keyboard and dismissible without a pointer).
-  useEffect(() => {
-    if (open) dialogRef.current?.focus()
-  }, [open])
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Escape' && phase !== 'scanning' && phase !== 'applying') {
-        e.stopPropagation()
-        onClose()
-      }
-    },
-    [onClose, phase],
-  )
 
   const runScan = useCallback(
     async (src: MigrationSourceId) => {
@@ -189,42 +173,18 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
     intl.formatMessage({ id }, values)
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-lg"
-      data-testid="migration-wizard-backdrop"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && phase !== 'scanning' && phase !== 'applying') onClose()
-      }}
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={t('welcome.migration.title')}
+      description={t('welcome.migration.subtitle')}
+      closeLabel={t('welcome.migration.close')}
+      busy={phase === 'scanning' || phase === 'applying'}
+      size="2xl"
+      testId="migration-wizard"
+      className="flex flex-col max-h-[85vh]"
     >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={t('welcome.migration.title')}
-        tabIndex={-1}
-        onKeyDown={handleKeyDown}
-        data-testid="migration-wizard"
-        className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl shadow-lg w-full max-w-2xl max-h-[85vh] flex flex-col outline-none p-xl"
-      >
-        <header className="flex items-start justify-between mb-lg">
-          <div>
-            <h2 className="font-headline-lg text-on-surface">{t('welcome.migration.title')}</h2>
-            <p className="font-body-sm text-on-surface-variant mt-xs">
-              {t('welcome.migration.subtitle')}
-            </p>
-          </div>
-          <Button
-            variant="ghost"
-            onClick={onClose}
-            disabled={phase === 'scanning' || phase === 'applying'}
-            aria-label={t('welcome.migration.close')}
-            className="text-on-surface-variant hover:text-primary cursor-pointer rounded px-xs"
-          >
-            <span className="material-symbols-outlined text-[20px]" aria-hidden="true">close</span>
-          </Button>
-        </header>
-
-        <div className="flex-1 overflow-y-auto min-h-0" aria-live="polite">
+      <ModalBody className="flex-1 overflow-y-auto min-h-0" aria-live="polite">
           {phase === 'source' && (
             <div role="radiogroup" aria-label={t('welcome.migration.source.label')} className="space-y-md">
               {SOURCES.map(s => (
@@ -457,9 +417,9 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
               <p className="font-body-sm text-on-surface-variant">{t('welcome.migration.result.unverified')}</p>
             </div>
           )}
-        </div>
+      </ModalBody>
 
-        <footer className="flex justify-between items-center mt-xl">
+      <footer className="flex justify-between items-center px-xl pb-xl pt-md">
           <Button
             variant="ghost"
             onClick={onClose}
@@ -498,8 +458,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
               </Button>
             )}
           </div>
-        </footer>
-      </div>
-    </div>
+      </footer>
+    </Modal>
   )
 }
