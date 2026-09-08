@@ -106,6 +106,10 @@ pub struct ReplState {
     pub fuzzy_picker: Option<crate::widgets::select::FuzzyPickerWidget>,
     /// Active file selector for /browse command
     pub file_selector: Option<crate::widgets::select::FileSelectorWidget>,
+    /// Multimodal attachments queued for the next query (e.g. images picked
+    /// via `@screenshot.png`). Drained into `QueryContext.attachments` when
+    /// the query is submitted.
+    pub pending_attachments: Vec<shannon_engine::api::ContentBlock>,
     /// Multi-progress widget for tracking parallel tool execution
     pub multi_progress: MultiProgressWidget,
     /// Whether multi-progress is visible (tools running in parallel)
@@ -260,6 +264,8 @@ pub struct ReplState {
     pub effort_level: Option<String>,
     /// Context focus area to limit model attention (set via /focus)
     pub focus_area: Option<String>,
+    /// Session goal to keep working toward (set via /goal)
+    pub goal: Option<GoalState>,
     /// Whether LLM tool calling is enabled (false = no tools sent to model)
     pub tools_enabled: bool,
     /// Custom statusline command (shell script receiving JSON via stdin)
@@ -338,6 +344,8 @@ pub struct LoopState {
     pub iteration: usize,
     /// Whether the loop is active
     pub active: bool,
+    /// P2.1/P2.2 progress guards (see `repl::loop_guard`).
+    pub guard: crate::repl::loop_guard::GuardCounters,
 }
 
 /// State for the Ralph Wiggum completion-based loop.
@@ -357,6 +365,60 @@ pub struct RalphState {
     pub iteration: usize,
     /// Whether the loop is active
     pub active: bool,
+    /// P2.1/P2.2 progress guards (see `repl::loop_guard`).
+    pub guard: crate::repl::loop_guard::GuardCounters,
+}
+
+impl LoopState {
+    pub fn to_stored(&self) -> shannon_core::session_log::StoredLoop {
+        shannon_core::session_log::StoredLoop {
+            task: self.task.clone(),
+            max_iterations: self.max_iterations,
+            iteration: self.iteration,
+            active: self.active,
+            no_tool_turns: self.guard.no_tool_turns,
+            stall_strikes: self.guard.stall_strikes,
+        }
+    }
+    pub fn from_stored(stored: shannon_core::session_log::StoredLoop) -> Self {
+        Self {
+            task: stored.task,
+            max_iterations: stored.max_iterations,
+            iteration: stored.iteration,
+            active: stored.active,
+            guard: crate::repl::loop_guard::GuardCounters {
+                no_tool_turns: stored.no_tool_turns,
+                stall_strikes: stored.stall_strikes,
+            },
+        }
+    }
+}
+
+impl RalphState {
+    pub fn to_stored(&self) -> shannon_core::session_log::StoredRalph {
+        shannon_core::session_log::StoredRalph {
+            task: self.task.clone(),
+            completion_keywords: self.completion_keywords.clone(),
+            max_iterations: self.max_iterations,
+            iteration: self.iteration,
+            active: self.active,
+            no_tool_turns: self.guard.no_tool_turns,
+            stall_strikes: self.guard.stall_strikes,
+        }
+    }
+    pub fn from_stored(stored: shannon_core::session_log::StoredRalph) -> Self {
+        Self {
+            task: stored.task,
+            completion_keywords: stored.completion_keywords,
+            max_iterations: stored.max_iterations,
+            iteration: stored.iteration,
+            active: stored.active,
+            guard: crate::repl::loop_guard::GuardCounters {
+                no_tool_turns: stored.no_tool_turns,
+                stall_strikes: stored.stall_strikes,
+            },
+        }
+    }
 }
 
 /// Persisted UI state saved across sessions for restore.
@@ -494,6 +556,7 @@ impl Default for ReplState {
             input_dialog_action: None,
             fuzzy_picker: None,
             file_selector: None,
+            pending_attachments: Vec::new(),
             multi_progress: MultiProgressWidget::new(),
             multi_progress_visible: false,
             multi_select: None,
@@ -578,6 +641,7 @@ impl Default for ReplState {
             git_branch: None,
             effort_level: None,
             focus_area: None,
+            goal: None,
             tools_enabled: true,
             statusline_command: None,
             cached_statusline: None,
@@ -603,6 +667,73 @@ impl Default for ReplState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn goal_status_serde_roundtrip() {
+        for (status, tag) in [
+            (GoalStatus::Active, "\"active\""),
+            (GoalStatus::Paused, "\"paused\""),
+            (GoalStatus::Complete, "\"complete\""),
+        ] {
+            let json = serde_json::to_string(&status).unwrap();
+            assert_eq!(json, tag);
+            let back: GoalStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, status);
+        }
+    }
+
+    #[test]
+    fn goal_state_default_max_is_unlimited() {
+        let g = GoalState::new("ship it");
+        assert_eq!(g.max_iterations, GOAL_DEFAULT_MAX_ITERATIONS);
+        assert_eq!(g.max_iterations, 0, "R15: default is unlimited");
+        assert_eq!(g.status, GoalStatus::Active);
+        assert_eq!(g.iterations, 0);
+    }
+
+    #[test]
+    fn to_spec_maps_active_paused_complete() {
+        let mut g = GoalState::new("ship it");
+        assert_eq!(
+            g.to_spec(),
+            Some(shannon_core::query_engine::GoalSpec {
+                objective: "ship it".into(),
+                paused: false,
+            })
+        );
+        g.status = GoalStatus::Paused;
+        assert_eq!(
+            g.to_spec(),
+            Some(shannon_core::query_engine::GoalSpec {
+                objective: "ship it".into(),
+                paused: true,
+            })
+        );
+        g.status = GoalStatus::Complete;
+        assert_eq!(g.to_spec(), None, "completed goal must not be injected");
+    }
+
+    #[test]
+    fn from_stored_unknown_status_degrades_to_paused() {
+        let stored = shannon_core::session_log::StoredGoal {
+            objective: "x".into(),
+            status: "bogus".into(),
+            iterations: 2,
+            max_iterations: 25,
+            checkins: 0,
+        };
+        let g = GoalState::from_stored(stored);
+        assert_eq!(g.status, GoalStatus::Paused);
+        assert_eq!(g.objective, "x");
+        assert_eq!(g.iterations, 2);
+    }
+
+    #[test]
+    fn goal_state_stored_roundtrip() {
+        let g = GoalState::new("all green");
+        let back = GoalState::from_stored(g.to_stored());
+        assert_eq!(back, g);
+    }
 
     #[test]
     fn view_mode_cycle_default_to_verbose() {
@@ -695,6 +826,7 @@ mod tests {
             max_iterations: 5,
             iteration: 2,
             active: true,
+            guard: Default::default(),
         };
         assert_eq!(ls.task, "fix bugs");
         assert!(ls.active);
@@ -708,5 +840,158 @@ mod tests {
         assert_eq!(s.selected_category_idx, 0);
         assert_eq!(s.selected_command_idx, 0);
         assert!(s.search_query.is_empty());
+    }
+}
+
+// The goal state machine moved to `shannon_core::goal` (P2.5/#4) so
+// server/desktop clients can drive it; re-exported here to keep the
+// established `crate::repl::state::*` paths working.
+pub use shannon_core::goal::{
+    GOAL_DEFAULT_MAX_ITERATIONS, GOAL_DEFAULT_MAX_STALL_STRIKES, GoalState, GoalStatus,
+};
+
+/// Shared, live handle to the session goal (P2.5 wiring).
+///
+/// The `goal_get` / `goal_update` tools execute inside the engine's agent
+/// loop, on a different task than the REPL — but `ReplState.goal` is plain
+/// data the REPL owns. This handle is registered with the tools and synced
+/// at two boundaries:
+///
+/// * query entry: `sync_from(&repl.state.goal)` snapshots the current goal
+///   so the tools observe it;
+/// * query completion: `take_transition()` returns the goal (possibly
+///   mutated by `goal_update`) plus the transition, which the REPL replays
+///   onto `ReplState.goal`, persists to the sidecar, and surfaces to the
+///   user. Between the boundaries the handle is authoritative.
+#[derive(Clone)]
+pub struct GoalShared {
+    inner: std::sync::Arc<std::sync::Mutex<Option<GoalState>>>,
+    transition: std::sync::Arc<std::sync::Mutex<Option<shannon_tools::goal::GoalUpdateOutcome>>>,
+}
+
+impl Default for GoalShared {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GoalShared {
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            transition: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    /// Query-entry sync: mirror the REPL-owned goal and forget any stale
+    /// transition from a previous turn.
+    pub fn sync_from(&self, goal: &Option<GoalState>) {
+        if let Ok(mut inner) = self.inner.lock() {
+            *inner = goal.clone();
+        }
+        if let Ok(mut t) = self.transition.lock() {
+            *t = None;
+        }
+    }
+
+    /// Current snapshot (what the tools observe).
+    pub fn current(&self) -> Option<GoalState> {
+        self.inner.lock().ok().and_then(|g| g.clone())
+    }
+
+    /// Query-completion pull: returns the (possibly tool-mutated) goal and
+    /// the transition only when a `goal_update` actually fired this turn.
+    pub fn take_transition(&self) -> Option<(GoalState, shannon_tools::goal::GoalUpdateOutcome)> {
+        let mut guard = self.transition.lock().ok()?;
+        let t = guard.take()?;
+        drop(guard);
+        let g = self.inner.lock().ok()?.clone()?;
+        Some((g, t))
+    }
+
+    /// Apply a `goal_update` outcome to the live goal. Rejected outcomes
+    /// leave the state untouched. Returns `None` when no goal is set.
+    pub(crate) fn apply(&self, outcome: shannon_tools::goal::GoalUpdateOutcome) -> Option<()> {
+        let mut inner = self.inner.lock().ok()?;
+        let g = inner.as_mut()?;
+        match outcome {
+            shannon_tools::goal::GoalUpdateOutcome::Completed => {
+                g.status = GoalStatus::Complete;
+            }
+            shannon_tools::goal::GoalUpdateOutcome::Paused(_) => {
+                g.status = GoalStatus::Paused;
+            }
+            shannon_tools::goal::GoalUpdateOutcome::Rejected(_) => return Some(()),
+        }
+        if let Ok(mut t) = self.transition.lock() {
+            *t = Some(outcome);
+        }
+        Some(())
+    }
+}
+
+#[cfg(test)]
+mod goal_shared_tests {
+    use super::*;
+
+    #[test]
+    fn goal_shared_roundtrip_and_transition() {
+        let shared = GoalShared::new();
+        assert!(shared.current().is_none());
+        assert!(shared.take_transition().is_none(), "no transition yet");
+
+        shared.sync_from(&Some(GoalState::new("ship it")));
+        let g = shared.current().expect("synced");
+        assert_eq!(g.objective, "ship it");
+        assert!(
+            shared.take_transition().is_none(),
+            "sync is not a transition"
+        );
+
+        shared.apply(shannon_tools::goal::GoalUpdateOutcome::Paused(
+            "no creds".into(),
+        ));
+        let (g, t) = shared.take_transition().expect("transition recorded");
+        assert_eq!(g.status, GoalStatus::Paused);
+        assert!(matches!(
+            t,
+            shannon_tools::goal::GoalUpdateOutcome::Paused(_)
+        ));
+        // Transition is consumed.
+        assert!(shared.take_transition().is_none());
+    }
+
+    #[test]
+    fn goal_shared_complete_transition() {
+        let shared = GoalShared::new();
+        shared.sync_from(&Some(GoalState::new("ship it")));
+        shared.apply(shannon_tools::goal::GoalUpdateOutcome::Completed);
+        let (g, t) = shared.take_transition().expect("transition recorded");
+        assert_eq!(g.status, GoalStatus::Complete);
+        assert!(matches!(
+            t,
+            shannon_tools::goal::GoalUpdateOutcome::Completed
+        ));
+    }
+
+    #[test]
+    fn goal_shared_apply_without_goal_is_noop() {
+        let shared = GoalShared::new();
+        assert!(
+            shared
+                .apply(shannon_tools::goal::GoalUpdateOutcome::Completed)
+                .is_none()
+        );
+        assert!(shared.take_transition().is_none());
+    }
+
+    #[test]
+    fn goal_shared_sync_clears_stale_transition() {
+        let shared = GoalShared::new();
+        shared.sync_from(&Some(GoalState::new("ship it")));
+        shared.apply(shannon_tools::goal::GoalUpdateOutcome::Completed);
+        // A new turn syncs from REPL state — stale transition must be dropped.
+        shared.sync_from(&Some(GoalState::new("ship it")));
+        assert!(shared.take_transition().is_none());
     }
 }

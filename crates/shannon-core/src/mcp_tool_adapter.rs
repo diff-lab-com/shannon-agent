@@ -11,6 +11,10 @@ use async_trait::async_trait;
 use serde_json::Value;
 use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult};
 use shannon_types::recover_lock;
+
+use crate::plugin::manifest::PluginPermission;
+use crate::plugin::permissions::{PermissionDecision, PluginPermissionPolicy, emit_decision};
+use crate::plugin::spawn_sandbox::PluginSpawnGuard;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -43,6 +47,85 @@ pub struct McpToolAdapter {
     headers: HashMap<String, String>,
     /// OAuth scopes required by this server (for 403 re-auth).
     oauth_scopes: Vec<String>,
+    /// Manifest-derived permission policy, attached only for plugin-sourced
+    /// adapters. `None` keeps plain `.mcp.json` servers ungated.
+    policy: Option<Arc<PluginPermissionPolicy>>,
+    /// Execution-world boundary installed around this plugin's stdio server
+    /// spawns (write_files enforcement, "declaration IS sandbox"). `None` —
+    /// the default — spawns byte-identically to the pre-sandbox path.
+    spawn_guard: Option<Arc<PluginSpawnGuard>>,
+}
+
+impl McpToolAdapter {
+    /// Attach the manifest-derived policy (plugin loading path only).
+    ///
+    /// With a policy present, every execution re-checks the declaration at the
+    /// Shannon-side faces it performs: routing to this MCP tool (`mcp_tools`),
+    /// the stdio server spawn (`execute_commands`) and remote transport
+    /// connections (`network`). `None` (the default) means ungated.
+    pub fn with_policy(mut self, policy: Arc<PluginPermissionPolicy>) -> Self {
+        self.policy = Some(policy);
+        self
+    }
+
+    /// Same as [`with_policy`](Self::with_policy) for already-built adapters.
+    pub fn set_policy(&mut self, policy: Arc<PluginPermissionPolicy>) {
+        self.policy = Some(policy);
+    }
+
+    /// The attached manifest policy, if this adapter came from a plugin.
+    pub fn policy(&self) -> Option<&Arc<PluginPermissionPolicy>> {
+        self.policy.as_ref()
+    }
+
+    /// Attach the execution-world boundary for this plugin's stdio spawns
+    /// (plugin loading path only; write_files-declaring manifests).
+    pub fn with_spawn_guard(mut self, guard: Arc<PluginSpawnGuard>) -> Self {
+        self.spawn_guard = Some(guard);
+        self
+    }
+
+    /// Same as [`with_spawn_guard`](Self::with_spawn_guard) for already-built
+    /// adapters.
+    pub fn set_spawn_guard(&mut self, guard: Option<Arc<PluginSpawnGuard>>) {
+        self.spawn_guard = guard;
+    }
+
+    /// The attached spawn boundary, if this plugin declared `write_files`.
+    pub fn spawn_guard(&self) -> Option<&Arc<PluginSpawnGuard>> {
+        self.spawn_guard.as_ref()
+    }
+
+    /// Unified gate: refuse when the owning manifest denies `required`.
+    fn check_permission(&self, required: PluginPermission, point: &str) -> Result<(), ToolError> {
+        let Some(policy) = &self.policy else {
+            return Ok(());
+        };
+        match policy.check(&self.server_name, required) {
+            Ok(()) => {
+                emit_decision(
+                    &self.server_name,
+                    required,
+                    PermissionDecision::Allowed,
+                    point,
+                    policy.permissions(),
+                );
+                Ok(())
+            }
+            Err(err) => {
+                emit_decision(
+                    &self.server_name,
+                    required,
+                    PermissionDecision::Denied,
+                    point,
+                    policy.permissions(),
+                );
+                // The unified denial text travels verbatim inside the
+                // channel's own error shape.
+                Err(ToolError::ExecutionFailed(err.to_string()))
+            }
+        }
+    }
 }
 
 impl McpToolAdapter {
@@ -69,6 +152,8 @@ impl McpToolAdapter {
             url: None,
             headers: HashMap::new(),
             oauth_scopes: Vec::new(),
+            policy: None,
+            spawn_guard: None,
         }
     }
 
@@ -94,6 +179,8 @@ impl McpToolAdapter {
             url: Some(url),
             headers,
             oauth_scopes: Vec::new(),
+            policy: None,
+            spawn_guard: None,
         }
     }
 
@@ -248,8 +335,13 @@ impl Tool for McpToolAdapter {
     }
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
-        // Remote HTTP/SSE transport path
+        // Manifest gate: routing a call into this plugin's MCP namespace.
+        self.check_permission(PluginPermission::McpTools, "mcp tool call")?;
+
+        // Remote HTTP/SSE transport path (gate: network — opening the
+        // connection on the plugin's behalf)
         if let Some(ref url) = self.url {
+            self.check_permission(PluginPermission::Network, "remote transport connect")?;
             return self.execute_remote(url, input).await;
         }
 
@@ -309,9 +401,34 @@ impl Tool for McpToolAdapter {
 
         let args = &parts[1..];
 
-        // Spawn the server process
-        let mut cmd = tokio::process::Command::new(program);
-        cmd.args(args)
+        // Manifest gate: spawning the plugin's binary is command execution
+        // Shannon performs on its behalf. Checked per call — the adapter
+        // cold-spawns on every invocation, and this gate must not assume a
+        // spawn count either way.
+        self.check_permission(
+            PluginPermission::ExecuteCommands,
+            "stdio server spawn (tool call)",
+        )?;
+
+        // Spawn the server process. A write_files-declaring plugin carries an
+        // execution-world boundary here: the argv prep step runs first (the
+        // Seatbelt bridge may rewrite program/args), then the fork-time world
+        // installer is hooked onto the command — the child can never start
+        // without its boundary. `None` guard ⇒ exact legacy spawn shape.
+        let (spawn_program, spawn_args) = match &self.spawn_guard {
+            Some(guard) => guard
+                .prepare_program_args(program, args, &self.env)
+                .map_err(|e| {
+                    ToolError::ExecutionFailed(format!(
+                        "MCP server '{}' spawn sandbox failed: {e}",
+                        self.server_name
+                    ))
+                })?,
+            None => (program.clone(), args.to_vec()),
+        };
+
+        let mut cmd = tokio::process::Command::new(&spawn_program);
+        cmd.args(&spawn_args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -319,6 +436,10 @@ impl Tool for McpToolAdapter {
         // Set environment variables
         for (key, value) in &self.env {
             cmd.env(key, value);
+        }
+
+        if let Some(guard) = &self.spawn_guard {
+            guard.install_fork_init(&mut cmd);
         }
 
         let mut child = cmd.spawn().map_err(|e| {
@@ -442,6 +563,23 @@ pub async fn discover_tools(
     env: &HashMap<String, String>,
     timeout_secs: Option<u64>,
 ) -> Result<DiscoveryResult, String> {
+    discover_tools_guarded(server_name, command, args, env, timeout_secs, None).await
+}
+
+/// [`discover_tools`] with an optional execution-world boundary.
+///
+/// When `spawn_guard` is `Some` (write_files-declaring plugin), the
+/// discovery spawn itself runs inside the boundary **and** every returned
+/// adapter carries a clone so its per-call cold spawns are equally enforced.
+/// `None` keeps the exact legacy path.
+pub async fn discover_tools_guarded(
+    server_name: &str,
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+    timeout_secs: Option<u64>,
+    spawn_guard: Option<Arc<PluginSpawnGuard>>,
+) -> Result<DiscoveryResult, String> {
     // Build the full command
     let mut parts: Vec<String> = command.split_whitespace().map(|s| s.to_string()).collect();
     parts.extend(args.iter().cloned());
@@ -453,15 +591,28 @@ pub async fn discover_tools(
     let program = &parts[0];
     let cmd_args = &parts[1..];
 
-    // Spawn the server process
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(cmd_args)
+    // Spawn the server process. Guard prep runs before the command exists so
+    // argv-level bridges can rewrite the invocation; fork-time worlds hook
+    // onto the command itself (fail-closed).
+    let (spawn_program, spawn_args) = match &spawn_guard {
+        Some(guard) => guard
+            .prepare_program_args(program, cmd_args, env)
+            .map_err(|e| format!("MCP server '{server_name}' spawn sandbox failed: {e}"))?,
+        None => ((*program).to_string(), cmd_args.to_vec()),
+    };
+
+    let mut cmd = tokio::process::Command::new(&spawn_program);
+    cmd.args(&spawn_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     for (key, value) in env {
         cmd.env(key, value);
+    }
+
+    if let Some(guard) = &spawn_guard {
+        guard.install_fork_init(&mut cmd);
     }
 
     let mut child = cmd
@@ -565,7 +716,7 @@ pub async fn discover_tools(
                             .cloned()
                             .unwrap_or(serde_json::json!({"type": "object"}));
 
-                        discovered_tools.push(McpToolAdapter::new(
+                        let mut adapter = McpToolAdapter::new(
                             server_name.to_string(),
                             tool_name,
                             Some(command.to_string()),
@@ -573,7 +724,11 @@ pub async fn discover_tools(
                             env.clone(),
                             description,
                             input_schema,
-                        ));
+                        );
+                        if let Some(guard) = &spawn_guard {
+                            adapter.set_spawn_guard(Some(Arc::clone(guard)));
+                        }
+                        discovered_tools.push(adapter);
                     }
                 }
             }
@@ -952,6 +1107,7 @@ impl Tool for DeferredSchemaSearchTool {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::plugin::permissions::DENY_PREFIX;
 
     #[test]
     fn test_mcp_tool_adapter_name() {
@@ -1059,5 +1215,112 @@ mod tests {
         let debug_str = format!("{adapter:?}");
         assert!(debug_str.contains("test"));
         assert!(debug_str.contains("mcp__test"));
+    }
+
+    fn gated_adapter(permissions: &[PluginPermission]) -> McpToolAdapter {
+        McpToolAdapter::new(
+            "probe".to_string(),
+            "call".to_string(),
+            Some("sh".to_string()),
+            vec![],
+            HashMap::new(),
+            "desc".to_string(),
+            serde_json::json!({"type": "object"}),
+        )
+        .with_policy(Arc::new(PluginPermissionPolicy::from_permissions(
+            permissions.to_vec(),
+        )))
+    }
+
+    /// A manifest declaring `mcp_tools` lets the call route; one without it
+    /// is refused before any spawn, carrying the unified denial.
+    #[tokio::test]
+    async fn execute_gates_on_mcp_tools_declaration() {
+        let granted = gated_adapter(&[PluginPermission::McpTools]);
+        // Granted mcp_tools but no execute_commands: the refusal must come
+        // from the *spawn* gate (proves check ordering and that routing
+        // itself passed).
+        let err = granted
+            .execute(serde_json::json!({}))
+            .await
+            .expect_err("no execute_commands -> spawn gate refuses");
+        let text = err.to_string();
+        assert!(text.contains(DENY_PREFIX), "{text}");
+        assert!(text.contains("execute_commands"), "{text}");
+
+        let missing = gated_adapter(&[PluginPermission::ExecuteCommands]);
+        let err = missing
+            .execute(serde_json::json!({}))
+            .await
+            .expect_err("no mcp_tools -> routing refused");
+        let text = err.to_string();
+        assert!(text.contains("mcp_tools"), "{text}");
+    }
+
+    /// An unspecified policy never gates — the compatibility default.
+    #[tokio::test]
+    async fn unspecified_policy_keeps_calls_open() {
+        let adapter = McpToolAdapter::new(
+            "srv".to_string(),
+            "tool".to_string(),
+            None, // would fail on "no command or URL" if gates passed it on
+            vec![],
+            HashMap::new(),
+            "desc".to_string(),
+            serde_json::json!({"type": "object"}),
+        )
+        .with_policy(Arc::new(PluginPermissionPolicy::unspecified()));
+        let result = adapter.execute(serde_json::json!({})).await;
+        assert!(result.is_err());
+        let text = result.unwrap_err().to_string();
+        assert!(
+            !text.contains(DENY_PREFIX),
+            "unspecified manifest must not deny: {text}"
+        );
+    }
+
+    /// Remote transports refuse at the network face when not declared.
+    #[tokio::test]
+    async fn remote_execution_gates_on_network() {
+        let build = |permissions: Vec<PluginPermission>| {
+            McpToolAdapter::new_remote(
+                "remote-plugin".to_string(),
+                "call".to_string(),
+                "http://127.0.0.1:9/sse".to_string(),
+                HashMap::new(),
+                "desc".to_string(),
+                serde_json::json!({"type": "object"}),
+            )
+            .with_policy(Arc::new(PluginPermissionPolicy::from_permissions(
+                permissions,
+            )))
+        };
+
+        // mcp_tools is granted in both fixtures so the refusal surfaces at
+        // the *network* face, not at routing.
+        let err = build(vec![PluginPermission::McpTools, PluginPermission::LlmApi])
+            .execute(serde_json::json!({}))
+            .await
+            .expect_err("network undeclared -> refused before connecting");
+        let text = err.to_string();
+        assert!(text.contains(DENY_PREFIX), "{text}");
+        assert!(text.contains("network"), "{text}");
+
+        // With network declared the transport gate opens; the call proceeds
+        // toward the dead socket and fails as an ordinary execution error,
+        // never as a permission refusal.
+        match build(vec![PluginPermission::Network, PluginPermission::McpTools])
+            .execute(serde_json::json!({}))
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                let text = e.to_string();
+                assert!(
+                    !text.contains(DENY_PREFIX),
+                    "declared network must not be denied: {text}"
+                );
+            }
+        }
     }
 }

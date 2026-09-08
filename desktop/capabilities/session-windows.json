@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/capability/2",
+  "identifier": "session-windows",
+  "description": "P1-1 session multi-window. Grants the core JS event API (plugin:event|listen/unlisten/emit) to the main and all session-* windows so streaming query:* events reach the webviews, and window title updates (plugin:window|set_title) to the same set so a session window's title tracks its session. Deliberately minimal: application commands are not ACL-gated (no __app-acl__ manifest) and are unaffected; no other plugin (dialog, notification, shell, ...) is granted here.",
+  "windows": ["main", "session-*"],
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-set-title"
+  ]
+}

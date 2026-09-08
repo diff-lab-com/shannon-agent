@@ -18,12 +18,17 @@
 // legacy background-task / agent data still comes from useCatalog().
 
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { toastError } from '@/lib/errorToast'
 import { useIntl } from 'react-intl'
 import { useCatalog } from '@/context/CatalogContext'
+import { useSessions } from '@/context/SessionContext'
 import * as api from '@/lib/tauri-api'
-import { useScheduledTasks } from '@/hooks/scheduled-tasks'
+import { useScheduledTasks, useTaskExecutions } from '@/hooks/scheduled-tasks'
+import { useBatchRuns } from '@/hooks/batchRuns'
 import type { CreateTaskPayload } from '@/types'
 import { type FilterStatus, statusMatchesFilter, TASKS_PER_PAGE } from '@/components/tasks/shared'
 import { Banner } from '@/components/ui/banner'
@@ -44,14 +49,29 @@ import EfficiencyCard from '@/components/tasks/EfficiencyCard'
 import AgentAllocation from '@/components/tasks/AgentAllocation'
 import HistoryView from '@/components/tasks/HistoryView'
 import WorktreePanel from '@/components/tasks/WorktreePanel'
+import GoalRunPanel from '@/components/tasks/GoalRunPanel'
+import BatchRunPanel from '@/components/tasks/BatchRunPanel'
+import BatchForm from '@/components/tasks/BatchForm'
 import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
 import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
 
-type Tab = 'active' | 'history' | 'worktrees'
+// IA (2026-09): tabs map to user jobs, not implementation panels —
+// active work / recurring routines / execution pipelines / history / worktrees.
+// Previously every panel (DAG, templates, hook pipeline, execution log)
+// stacked on one scrolling page.
+type Tab = 'active' | 'routines' | 'pipelines' | 'history' | 'worktrees'
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useCatalog()
+  const { switchSession, currentSessionId } = useSessions()
+  const navigate = useNavigate()
   const { tasks: scheduledTasks, create: createScheduled, refresh: refreshScheduled } = useScheduledTasks()
+  // P2-5: recent executions across all routines — drives the "queued for
+  // off-peak window" status chip on the routines DAG nodes.
+  const { executions } = useTaskExecutions()
+  // P1-2: start action for the batch form (the live cards in BatchRunPanel
+  // keep their own subscription, mirroring the goal-run split).
+  const { start: startBatch } = useBatchRuns()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
@@ -70,6 +90,8 @@ export default function Tasks() {
   const [teamFilter, setTeamFilter] = useState<string>('all')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [showNewTask, setShowNewTask] = useState(false)
+  // P1-2: best-of-N batch creation form + its data panel (live cards below).
+  const [showBatchForm, setShowBatchForm] = useState(false)
   const [showSchedule, setShowSchedule] = useState(false)
   const [newTaskPrompt, setNewTaskPrompt] = useState('')
   const [taskPage, setTaskPage] = useState(1)
@@ -81,6 +103,19 @@ export default function Tasks() {
   const selectedRoutine = selectedRoutineId
     ? scheduledTasks.find(r => r.id === selectedRoutineId) ?? null
     : null
+
+  // P2-5: ids of routines whose latest run is queued for their off-peak
+  // execution window (list_task_executions returns newest first).
+  const queuedRoutineIds = useMemo(() => {
+    const seen = new Set<string>()
+    const queued = new Set<string>()
+    for (const e of executions) {
+      if (seen.has(e.task_id)) continue
+      seen.add(e.task_id)
+      if (e.status === 'queued') queued.add(e.task_id)
+    }
+    return queued
+  }, [executions])
 
   // G11: derive unique team list from tasks (multi-session aggregated view).
   const teams = useMemo(() => {
@@ -161,6 +196,17 @@ export default function Tasks() {
     setTimeout(() => setRunning(null), 1500)
   }
 
+  // P0-2: open the session a goal run is driving in the chat page.
+  const handleViewGoalSession = async (sessionId: string) => {
+    try {
+      await switchSession(sessionId)
+    } catch (e) {
+      toastError(t('goal.toast.failed.viewSession'), e)
+      return
+    }
+    navigate('/chat')
+  }
+
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
       <div className="max-w-[1200px] mx-auto px-lg py-xl">
@@ -172,6 +218,7 @@ export default function Tasks() {
           dagView={dagView}
           onToggleDag={() => { setDagView(!dagView); if (!dagView) setCalendarView(false) }}
           onToggleNewTask={() => setShowNewTask(!showNewTask)}
+          onToggleBatch={() => setShowBatchForm(!showBatchForm)}
           onToggleSchedule={() => setShowSchedule(!showSchedule)}
           teams={teams}
           teamFilter={teamFilter}
@@ -180,20 +227,22 @@ export default function Tasks() {
 
         {/* P2.2: Active / History / Worktrees tab switcher */}
         <div role="tablist" aria-label={t('tasks.tabs.aria')} className="flex gap-xs mb-lg border-b border-outline-variant/30">
-          {(['active', 'history', 'worktrees'] as const).map(tabId => {
+          {(['active', 'routines', 'pipelines', 'history', 'worktrees'] as const).map(tabId => {
             const selected = tab === tabId
             return (
-              <button
+              <Button
                 key={tabId}
                 role="tab"
+                variant="ghost"
                 aria-selected={selected}
                 onClick={() => setTab(tabId)}
-                className={`px-md py-sm font-label-md text-[13px] font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
-                  selected ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-on-surface'
-                }`}
+                className={cn(
+                  'h-auto px-md py-sm font-label-md text-[13px] font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-none',
+                  selected ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-on-surface',
+                )}
               >
                 {t(`tasks.tab.${tabId}`)}
-              </button>
+              </Button>
             )
           })}
         </div>
@@ -202,8 +251,37 @@ export default function Tasks() {
           <HistoryView onGoToActive={() => setTab('active')} />
         ) : tab === 'worktrees' ? (
           <WorktreePanel />
+        ) : tab === 'routines' ? (
+          <div className="space-y-gutter">
+            <ScheduleDAGView routines={scheduledTasks} onSelectRoutine={setSelectedRoutineId} queuedTaskIds={queuedRoutineIds} />
+            <RoutineTemplatesBrowser onInstantiated={() => void refreshScheduled()} />
+          </div>
+        ) : tab === 'pipelines' ? (
+          <div className="space-y-gutter">
+            <HookTaskPipeline />
+            <TaskExecutionLog tasks={backgroundTasks} onCancel={setCancelTarget} />
+          </div>
         ) : (
           <>
+        {/* P1-2: best-of-N batch cards (live per-branch chips) + form. */}
+        <BatchRunPanel />
+
+        {showBatchForm && (
+          <BatchForm
+            sessionId={currentSessionId}
+            onSubmit={async ({ title, prompt, count, sessionId }) => {
+              const ok = await startBatch({ title, prompt, count, baseSessionId: sessionId })
+              if (ok !== null) {
+                setShowBatchForm(false)
+              }
+            }}
+            onCancel={() => setShowBatchForm(false)}
+          />
+        )}
+
+        {/* P0-2: live goal-run cards sit above the regular task list. */}
+        <GoalRunPanel onViewSession={handleViewGoalSession} />
+
         {errorMsg && (
           <Banner
             variant="card"
@@ -277,22 +355,11 @@ export default function Tasks() {
               />
               <EfficiencyCard percentage={efficiencyPct} variant="full" />
               <AgentAllocation agents={agents} />
-              <HookTaskPipeline />
-            </div>
-            <div className="col-span-12">
-              <ScheduleDAGView routines={scheduledTasks} onSelectRoutine={setSelectedRoutineId} />
-            </div>
-            <div className="col-span-12">
-              <TaskExecutionLog tasks={backgroundTasks} onCancel={setCancelTarget} />
             </div>
           </div>
         )}
           </>
         )}
-      </div>
-
-      <div className="mt-xl">
-        <RoutineTemplatesBrowser onInstantiated={() => void refreshScheduled()} />
       </div>
 
       <TaskDetailDrawer

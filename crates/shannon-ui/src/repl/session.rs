@@ -4,13 +4,16 @@ use crate::widgets::ChatRole;
 use shannon_core::{ContentBlock, MessageContent};
 
 impl super::Repl {
-    /// Restore conversation history from a previously persisted session.
+    /// Restore conversation history from an L0-projected session (§4.6).
     ///
-    /// Loads messages from the given `SessionData` and injects them into the
-    /// query engine so the next user message continues the prior conversation.
-    /// Also populates the chat widget so the user can see the restored history.
-    /// Returns the number of messages restored.
-    pub fn restore_session(&mut self, session_data: shannon_engine::state::SessionData) -> usize {
+    /// Takes the projected [`StoredSession`](shannon_core::session_log::StoredSession) and injects it into the query
+    /// engine so the next user message continues the prior conversation.
+    /// Also populates the chat widget so the user can see the restored
+    /// history. Returns the number of messages restored.
+    pub fn restore_session(
+        &mut self,
+        session_data: shannon_core::session_log::StoredSession,
+    ) -> usize {
         let msg_count = session_data.messages.len();
         if msg_count == 0 {
             return 0;
@@ -31,14 +34,32 @@ impl super::Repl {
             }
         }
 
+        // Restore the session goal (/goal) from the sidecar so an active
+        // goal re-anchors on the next message after a resume. Restoring only
+        // re-arms the anchor — auto-continuation resumes after the next
+        // query completes, keeping the user in control.
+        let sidecar = self.l0_store().sidecar(&session_data.session_id);
+        if let Some(stored_goal) = sidecar.goal {
+            self.state.goal = Some(crate::repl::state::GoalState::from_stored(stored_goal));
+        }
+        // Restore active loop/ralph state (P2.0) — same anchor-only policy
+        // as goal: re-arm on resume, do not auto-continue until the next
+        // query completes so the user keeps control.
+        if let Some(stored_loop) = sidecar.loop_state {
+            self.state.loop_state = Some(crate::repl::state::LoopState::from_stored(stored_loop));
+        }
+        if let Some(stored_ralph) = sidecar.ralph_state {
+            self.state.ralph_state =
+                Some(crate::repl::state::RalphState::from_stored(stored_ralph));
+        }
+
         if let Some(ref mut engine) = self.query_engine {
-            let preview = session_data.first_user_message_preview(60);
+            let preview = session_data.metadata.title.clone();
             engine.replace_conversation(session_data.messages);
             tracing::info!(
-                "Resumed session {} ({} messages, preview: {:?})",
+                "Resumed session {} ({} messages, title: {preview:?})",
                 session_data.session_id,
                 msg_count,
-                preview,
             );
         }
         msg_count
@@ -65,12 +86,7 @@ impl super::Repl {
         let project = self.state.working_directory.clone();
         let show_all = self.state.session_picker_show_all;
 
-        let sessions = if show_all {
-            self.state_manager.list_persisted_sessions()
-        } else {
-            self.state_manager.list_sessions_for_project(&project)
-        };
-        let sessions = match sessions {
+        let mut sessions = match self.l0_store().list() {
             Ok(s) => s,
             Err(e) => {
                 self.chat
@@ -80,6 +96,9 @@ impl super::Repl {
                 return Ok(());
             }
         };
+        if !show_all {
+            sessions.retain(|s| s.project_path.as_deref() == Some(project.as_str()));
+        }
 
         if sessions.is_empty() {
             let msg = if show_all {
@@ -218,7 +237,7 @@ fn truncate_for_display(s: &str, max_len: usize) -> String {
 ///
 /// The `⤵ ` prefix marks a branch (session with a parent) so branches are
 /// visually distinguishable from roots.
-fn format_session_picker_row(s: &shannon_engine::state::SessionInfo) -> String {
+fn format_session_picker_row(s: &shannon_core::session_log::StoredSessionInfo) -> String {
     let first = s
         .title
         .clone()
@@ -264,9 +283,9 @@ fn format_relative_time(ts: chrono::DateTime<chrono::Utc>) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    use shannon_core::session_log::StoredSessionInfo;
     use shannon_core::{ContentBlock, MessageContent};
     use shannon_engine::api::ToolResultContent;
-    use shannon_engine::state::SessionInfo;
 
     #[test]
     fn test_render_message_content_text() {
@@ -390,7 +409,7 @@ mod tests {
 
     #[test]
     fn test_format_session_picker_row_shape() {
-        let info = SessionInfo {
+        let info = StoredSessionInfo {
             session_id: uuid::Uuid::new_v4(),
             title: None,
             preview: Some("How do I parse JSON?".to_string()),
@@ -418,7 +437,7 @@ mod tests {
     #[test]
     fn test_format_session_picker_row_branch_marker() {
         // A branch session (parent_session_id set) is prefixed with ⤵.
-        let info = SessionInfo {
+        let info = StoredSessionInfo {
             session_id: uuid::Uuid::new_v4(),
             title: None,
             preview: Some("Root idea".to_string()),
@@ -440,7 +459,7 @@ mod tests {
 
     #[test]
     fn test_format_session_picker_row_falls_back_when_empty() {
-        let info = SessionInfo {
+        let info = StoredSessionInfo {
             session_id: uuid::Uuid::new_v4(),
             title: None,
             preview: None,

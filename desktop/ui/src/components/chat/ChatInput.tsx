@@ -8,8 +8,10 @@ import { useVoice } from '@/hooks/useVoice'
 import { MicButton } from '@/components/voice/MicButton'
 import { VoiceOrb } from '@/components/voice/VoiceOrb'
 import AttachmentChip from '@/components/chat/AttachmentChip'
+import { isSlashQuery, filterSlashCommands, type SlashCommand } from '@/lib/slash/commands'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { cn } from '@/lib/utils'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 
@@ -25,39 +27,60 @@ interface ChatInputProps {
   value: string
   onChange: (value: string) => void
   onSend: () => void
+  /** Runs a picked slash command (clears the input itself afterwards). */
+  onExecuteSlash: (cmd: SlashCommand) => void
   attachedFiles: string[]
   onAttach: (files: string[]) => void
   onDetachAll: () => void
   disabled: boolean
   isQuerying: boolean
   onCancelQuery: () => void
-  currentSessionId: string | null
-  sessionWorkingDir: string
   onOpenQuickFix: () => void
   onOpenEditor: () => void
 }
 
+// U2: the model Select and the working-directory chip were removed — the
+// global Header owns model switching, and the composer footer (ComposerPanel)
+// is the single working-directory entry point.
 export default function ChatInput({
   value,
   onChange,
   onSend,
+  onExecuteSlash,
   attachedFiles,
   onAttach,
   onDetachAll,
   disabled,
   isQuerying,
   onCancelQuery,
-  currentSessionId,
-  sessionWorkingDir,
   onOpenQuickFix,
   onOpenEditor,
 }: ChatInputProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { config, models, refreshConfig } = useCatalog()
-  const modelList = models ?? []
+  const { config, refreshConfig } = useCatalog()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isDragging, setIsDragging] = useState(false)
+
+  // Slash-command autocomplete: open while the input is a single `/token`.
+  // Escape hides it until the query changes again; a space or newline closes
+  // it naturally (the query regex stops matching), turning the text back
+  // into a regular prompt.
+  const [slashDismissed, setSlashDismissed] = useState(false)
+  const [slashActive, setSlashActive] = useState(0)
+  const slashQuery = isSlashQuery(value) && !isQuerying ? value.trim() : null
+  const slashMatches = slashQuery && !slashDismissed ? filterSlashCommands(slashQuery) : []
+
+  useEffect(() => {
+    setSlashActive(0)
+    if (!isSlashQuery(value)) setSlashDismissed(false)
+  }, [value])
+
+  const executeSlash = (cmd: SlashCommand) => {
+    onChange('')
+    setSlashDismissed(false)
+    onExecuteSlash(cmd)
+  }
   const voice = useVoice({
     onTranscript: (text) => {
       const merged = value ? `${value} ${text}` : text
@@ -76,18 +99,6 @@ export default function ChatInput({
       : undefined,
   })
 
-  const handleChangeWorkingDir = async () => {
-    if (!currentSessionId) return
-    try {
-      const selected = await open({ directory: true, multiple: false })
-      if (!selected || Array.isArray(selected)) return
-      await api.setSessionWorkingDir(currentSessionId, selected as string)
-      await refreshConfig()
-    } catch (err) {
-      toastError(t('chat.input.wd.failed'), err)
-    }
-  }
-
   const handleModeChange = async (mode: string | null) => {
     if (!mode) return
     try {
@@ -95,19 +106,6 @@ export default function ChatInput({
       await refreshConfig()
     } catch (err) {
       toastError(t('chat.input.mode.failed'), err)
-    }
-  }
-
-  const handleModelChange = async (modelId: string | null) => {
-    if (!modelId) return
-    const model = modelList.find(m => m.id === modelId)
-    if (!model) return
-    try {
-      await api.configure({ key: 'model', value: model.name })
-      await api.configure({ key: 'provider', value: model.provider })
-      await refreshConfig()
-    } catch (err) {
-      toastError(t('chat.input.model.failed'), err)
     }
   }
 
@@ -155,6 +153,25 @@ export default function ChatInput({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Slash menu captures the navigation keys while it is open.
+    if (slashMatches.length > 0) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const delta = e.key === 'ArrowDown' ? 1 : -1
+        setSlashActive(i => (i + delta + slashMatches.length) % slashMatches.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        executeSlash(slashMatches[slashActive] ?? slashMatches[0])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashDismissed(true)
+        return
+      }
+    }
     // Enter -> send; Shift/Ctrl+Enter -> newline. Matches VS Code's
     // Ctrl+Enter convention; preserves the legacy Enter-to-send UX.
     if (e.key === 'Enter' && !e.shiftKey && !(e.ctrlKey || e.metaKey)) {
@@ -188,8 +205,6 @@ export default function ChatInput({
   }
 
   const currentMode = config?.approval_mode || 'suggest'
-  const currentModelId = modelList.find(m => m.name === config?.model && m.provider === config?.provider)?.id || ''
-  const workingDirBasename = sessionWorkingDir ? sessionWorkingDir.split('/').pop() || sessionWorkingDir.split('\\').pop() || '' : ''
   const planModeActive = currentMode === 'plan'
 
   const handlePlanToggle = async () => {
@@ -251,15 +266,48 @@ export default function ChatInput({
 
   return (
     <div
-      className={`relative group transition-all ${isDragging ? 'ring-2 ring-primary/50 rounded-2xl' : ''}`}
+      className={cn('relative group transition-all', isDragging ? 'ring-2 ring-primary/50 rounded-2xl' : '')}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       role="region"
       aria-label={t('chat.input.ariaLabel')}
     >
+      {slashMatches.length > 0 && (
+        <div
+          role="listbox"
+          aria-label={t('slash.menu.aria')}
+          className="absolute left-0 right-0 bottom-full mb-sm z-modal rounded-2xl border border-outline-variant/30 bg-surface-container-low shadow-lg overflow-hidden"
+        >
+          <ul className="max-h-64 overflow-y-auto py-xs">
+            {slashMatches.map((cmd, i) => (
+              <li key={cmd.name}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={i === slashActive}
+                  onMouseDown={e => { e.preventDefault(); executeSlash(cmd) }}
+                  onMouseEnter={() => setSlashActive(i)}
+                  className={cn(
+                    'w-full flex items-center gap-sm px-md py-xs text-left cursor-pointer transition-colors',
+                    i === slashActive ? 'bg-surface-container-high' : 'hover:bg-surface-container',
+                  )}
+                >
+                  <span className="material-symbols-outlined icon-sm text-primary shrink-0">{cmd.icon}</span>
+                  <span className="font-mono text-label-md text-on-surface shrink-0">/{cmd.name}</span>
+                  <span className="font-label-sm text-on-surface-variant truncate flex-1">{t(cmd.descriptionKey)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="px-md py-xs border-t border-outline-variant/20 text-label-xs text-on-surface-variant">
+            {t('slash.menu.hint')}
+          </div>
+        </div>
+      )}
+
       {isDragging && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm pointer-events-none">
+        <div className="absolute inset-0 z-raised flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm pointer-events-none">
           <div className="flex flex-col items-center gap-sm text-primary">
             <span className="material-symbols-outlined icon-xl">cloud_upload</span>
             <p className="font-label-md">{t('chat.input.attach.dropHint')}</p>
@@ -274,15 +322,16 @@ export default function ChatInput({
         >
           <span className="material-symbols-outlined icon-sm shrink-0">route</span>
           <span className="font-label-sm truncate flex-1">{t('chat.input.planMode.banner')}</span>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-xs"
             onClick={handlePlanToggle}
             aria-label={t('chat.input.planMode.exit')}
             title={t('chat.input.planMode.exit')}
-            className="p-xs rounded hover:bg-tertiary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0"
+            className="rounded hover:bg-tertiary/20 shrink-0"
           >
             <span className="material-symbols-outlined icon-sm">close</span>
-          </button>
+          </Button>
         </div>
       )}
 
@@ -299,9 +348,9 @@ export default function ChatInput({
               <AttachmentChip key={path} path={path} onRemove={() => onAttach(attachedFiles.filter((_, idx) => idx !== i))} />
             ))}
             {attachedFiles.length > 1 && (
-              <button type="button" className="text-xs text-on-surface-variant hover:text-error cursor-pointer underline ml-xs" onClick={onDetachAll}>
+              <Button variant="link" size="sm" className="text-xs h-auto px-0 text-on-surface-variant hover:text-error ml-xs" onClick={onDetachAll}>
                 {t('chat.input.attach.detachAll')}
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -312,7 +361,7 @@ export default function ChatInput({
           </span>
           <textarea
             ref={textareaRef}
-            className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-outline-variant/80 text-on-surface resize-none min-h-[24px] max-h-[200px]"
+            className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-on-surface-variant/70 text-on-surface resize-none min-h-[24px] max-h-[200px]"
             placeholder={isQuerying ? t('chat.input.processing') : t('chat.input.placeholder')}
             aria-label={t('chat.input.ariaLabel')}
             value={value}
@@ -325,46 +374,28 @@ export default function ChatInput({
 
         <div className="flex items-center justify-between gap-xs px-sm py-xs border-t border-outline-variant/20">
           <div className="flex items-center gap-xs flex-wrap min-w-0">
-            <button
-              type="button"
-              onClick={handleChangeWorkingDir}
-              disabled={!currentSessionId}
-              aria-label={t('chat.input.wd.aria')}
-              title={sessionWorkingDir || t('chat.input.wd.title')}
-              className={`group/wd flex items-center gap-xs px-sm py-xs rounded-full text-label-sm border transition-all shrink-0 ${
-                sessionWorkingDir
-                  ? 'border-primary/30 bg-primary/5 text-on-surface hover:bg-primary/10 hover:border-primary/50'
-                  : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
-              } disabled:opacity-50 disabled:cursor-not-allowed`}
-            >
-              <span className="material-symbols-outlined icon-sm">folder_open</span>
-              <span className="max-w-[120px] truncate font-mono">
-                {workingDirBasename || t('chat.input.wd.title')}
-              </span>
-              <span className="material-symbols-outlined text-[14px] opacity-50 group-hover/wd:opacity-100 group-hover/wd:text-primary transition-opacity">change_folder</span>
-            </button>
-
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={handlePlanToggle}
               aria-pressed={planModeActive}
               aria-label={t('chat.input.planMode.aria')}
               title={t('chat.input.planMode.tooltip')}
-              className={`flex items-center gap-xs px-sm py-xs rounded-full text-label-sm border transition-all shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
+              className={cn('h-auto gap-xs px-sm py-xs rounded-full text-label-sm shrink-0',
                 planModeActive
                   ? 'border-primary bg-primary/10 text-primary'
                   : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
-              }`}
+              )}
             >
               <span className="material-symbols-outlined icon-sm">route</span>
               <span>{t('chat.input.planMode.label')}</span>
-            </button>
+            </Button>
 
             <Select value={currentMode} onValueChange={handleModeChange}>
               <SelectTrigger
                 size="sm"
                 aria-label={t('chat.input.mode.label')}
-                className={`border ${selectedMode.color} bg-transparent hover:bg-surface-container-low/50 transition-colors`}
+                className={cn('border', selectedMode.color, 'bg-transparent hover:bg-surface-container-low/50 transition-colors')}
               >
                 <span className="material-symbols-outlined icon-sm">{selectedMode.icon}</span>
                 <SelectValue placeholder={t('chat.input.mode.label')} />
@@ -375,30 +406,6 @@ export default function ChatInput({
                     <div className="flex items-center gap-xs">
                       <span className="material-symbols-outlined icon-sm">{mode.icon}</span>
                       <span>{mode.label}</span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <Select value={currentModelId} onValueChange={handleModelChange}>
-              <SelectTrigger
-                size="sm"
-                aria-label={t('chat.input.model.label')}
-                className="border border-outline-variant/30 bg-transparent hover:bg-surface-container-low/50 transition-colors"
-              >
-                <span className="material-symbols-outlined icon-sm">auto_awesome</span>
-                <SelectValue placeholder={t('chat.input.model.label')} />
-              </SelectTrigger>
-              <SelectContent>
-                {modelList.map(model => (
-                  <SelectItem key={model.id} value={model.id}>
-                    <div className="flex items-center gap-xs">
-                      <span className="material-symbols-outlined icon-sm">auto_awesome</span>
-                      <div className="flex flex-col">
-                        <span className="text-sm">{model.name}</span>
-                        <span className="text-xs text-on-surface-variant">{model.provider}</span>
-                      </div>
                     </div>
                   </SelectItem>
                 ))}
@@ -448,7 +455,7 @@ export default function ChatInput({
               <span
                 role="status"
                 aria-live="polite"
-                className={`font-mono text-label-xs tabular-nums px-xs ${isOverSoftWarn ? 'text-error' : 'text-on-surface-variant/70'}`}
+                className={cn('font-mono text-label-xs tabular-nums px-xs', isOverSoftWarn ? 'text-error' : 'text-on-surface-variant/70')}
               >
                 {charCount.toLocaleString()}
               </span>

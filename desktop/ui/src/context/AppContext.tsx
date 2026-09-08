@@ -10,8 +10,12 @@
 // high-frequency chat streaming to chat consumers only.
 
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
+import { messageFor } from '@/i18n'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
 import * as api from '@/lib/tauri-api'
+import { toastError } from '@/lib/errorToast'
+import type { CheckpointInfo, FeedbackRating } from '@/lib/tauri-api'
 import {
   EVENT_NAMES,
   type ChatMessage,
@@ -43,6 +47,17 @@ export function useApp(): AppContextValue {
   return { ...useCatalog(), ...useSessions(), ...useChat() }
 }
 
+
+/**
+ * Background refreshes fail soft on purpose: several of them fire after a
+ * single user action, so a toast per failure would spam during backend
+ * hiccups. The app keeps its last-known state; startup failures surface
+ * through `initError` instead. One helper keeps the policy grep-able.
+ */
+function logSoftFailure(what: string, e: unknown) {
+  console.warn(`[shannon] ${what} failed:`, e)
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streamingText, setStreamingText] = useState('')
@@ -50,18 +65,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isQuerying, setIsQuerying] = useState(false)
   const [activeToolCalls, setActiveToolCalls] = useState<ToolCall[]>([])
   const [usage, setUsage] = useState<UsagePayload | null>(null)
+  // U2: ContextPanel visibility — owned here (not in the /chat page) so the
+  // global Header can host the toggle while Chat renders the panel.
+  const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  // P1-1 window mode: this webview was opened as a dedicated session window
+  // (`/?windowSession=<id>`). In-memory only — parsed from the URL once,
+  // never persisted, so the main window is unaffected.
+  const [windowSessionId] = useState<string | null>(() => parseWindowSession())
   const [status, setStatus] = useState<StatusResponse | null>(null)
   const [config, setConfig] = useState<DesktopConfig | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null)
+  // /rewind: checkpoints for the current session (turn indices + previews).
+  const [checkpoints, setCheckpoints] = useState<CheckpointInfo[]>([])
+  // PM-12: persisted 👍/👎 for the current session's messages.
+  const [feedback, setFeedback] = useState<Record<string, FeedbackRating>>({})
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskInfo[]>([])
   const [tasks, setTasks] = useState<TaskItem[]>([])
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([])
   const [error, setError] = useState<string | null>(null)
+  // P0-2: sessions currently owned by a desktop goal run (running/paused).
+  // Manual sends to these are blocked — goal and manual input are mutually
+  // exclusive; the backend `send_message` guard is the backstop.
+  const [goalOwnedSessionIds, setGoalOwnedSessionIds] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
+  // First paint of the app depends on these loads succeeding; a silent
+  // failure here used to leave the user on an empty UI with only a generic
+  // chat-canvas error and no retry. initError is surfaced by the Layout
+  // banner; retryInit re-runs the whole load.
+  const [initError, setInitError] = useState<string | null>(null)
   const [_currentQueryId, setCurrentQueryId] = useState<string | null>(null)
 
   // Mirror streamingText into a ref so the QUERY_COMPLETED handler can read
@@ -73,38 +108,51 @@ export function AppProvider({ children }: { children: ReactNode }) {
   streamingTextRef.current = streamingText
 
   const refreshSessions = useCallback(async () => {
-    try { setSessions(await api.listSessions()) } catch (e) { console.warn('refreshSessions failed:', e) }
+    try { setSessions(await api.listSessions()) } catch (e) { logSoftFailure('refresh sessions', e) }
+  }, [])
+
+  const toggleContextPanel = useCallback(() => {
+    setContextPanelOpen(v => !v)
   }, [])
 
   const refreshStatus = useCallback(async () => {
-    try { setStatus(await api.getStatus()) } catch (e) { console.warn('refreshStatus failed:', e) }
+    try { setStatus(await api.getStatus()) } catch (e) { logSoftFailure('refresh status', e) }
   }, [])
 
   const refreshConfig = useCallback(async () => {
-    try { setConfig(await api.getConfig()) } catch (e) { console.warn('refreshConfig failed:', e) }
+    try { setConfig(await api.getConfig()) } catch (e) { logSoftFailure('refresh config', e) }
   }, [])
 
   const refreshModels = useCallback(async () => {
-    try { setModels(await api.listModels()) } catch (e) { console.warn('refreshModels failed:', e) }
+    try { setModels(await api.listModels()) } catch (e) { logSoftFailure('refresh models', e) }
   }, [])
 
   const refreshTasks = useCallback(async () => {
-    try { setTasks(await api.listTasks()) } catch (e) { console.warn('refreshTasks failed:', e) }
+    try { setTasks(await api.listTasks()) } catch (e) { logSoftFailure('refresh tasks', e) }
   }, [])
 
   const refreshAgents = useCallback(async () => {
-    try { setAgents(await api.listAgents()) } catch (e) { console.warn('refreshAgents failed:', e) }
+    try { setAgents(await api.listAgents()) } catch (e) { logSoftFailure('refresh agents', e) }
   }, [])
 
   const refreshMcpServers = useCallback(async () => {
-    try { setMcpServers(await api.listMcpServers()) } catch (e) { console.warn('refreshMcpServers failed:', e) }
+    try { setMcpServers(await api.listMcpServers()) } catch (e) { logSoftFailure('refresh mcp servers', e) }
   }, [])
 
   const refreshBackgroundTasks = useCallback(async () => {
-    try { setBackgroundTasks(await api.getBackgroundTasks()) } catch (e) { console.warn('refreshBackgroundTasks failed:', e) }
+    try { setBackgroundTasks(await api.getBackgroundTasks()) } catch (e) { logSoftFailure('refresh background tasks', e) }
   }, [])
 
-  const sendMessage = useCallback(async (message: string, filePaths?: string[]) => {
+  const sendMessage = useCallback(async (
+    message: string,
+    filePaths?: string[],
+    options?: { budgetBypass?: boolean },
+  ) => {
+    if (currentSessionId && goalOwnedSessionIds.includes(currentSessionId)) {
+      setError(messageFor('goal.composer.blocked'))
+      setIsQuerying(false)
+      return
+    }
     setError(null)
     setStreamingText('')
     setThinkingText('')
@@ -112,17 +160,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIsQuerying(true)
     setMessages(prev => [...prev, { role: 'user', content: message, timestamp: Date.now() }])
     try {
-      const resp = await api.sendMessage(message, filePaths)
+      // P1-1 fix: explicit session routing — the window targets its own
+      // session, the main window its current one; the backend never routes
+      // via the shared active pointer for these calls. `null` (no session
+      // yet) keeps the backend's legacy active fallback.
+      const targetSessionId = windowSessionId ?? currentSessionId
+      const resp = await api.sendMessage(
+        message,
+        filePaths,
+        options?.budgetBypass,
+        targetSessionId ?? undefined,
+      )
       setCurrentQueryId(resp.query_id)
     } catch (e) {
+      // P0-4 fix: the backend rejected the send BEFORE recording the user
+      // message (budget-exceeded pre-turn guard, goal-owned guard,
+      // concurrent-query guard — see `send_message`), so roll back the
+      // optimistic append above. Without this, "Continue (ignore once)"
+      // re-sends the same text and the rejected message renders twice.
+      setMessages(prev => {
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].role === 'user' && prev[i].content === message) {
+            const next = [...prev]
+            next.splice(i, 1)
+            return next
+          }
+        }
+        return prev
+      })
       setError(String(e))
       setIsQuerying(false)
     }
-  }, [])
+  }, [currentSessionId, goalOwnedSessionIds, windowSessionId])
 
+  // P1-1 fix: cancelQuery's targetSessionId mirrors sendMessage's — both
+  // route explicitly instead of re-pointing the shared pointer.
   const cancelQuery = useCallback(async () => {
-    try { await api.cancelQuery() } catch (e) { console.warn("AppContext error:", e) }
-  }, [])
+    const targetSessionId = windowSessionId ?? currentSessionId
+    try {
+      await api.cancelQuery(targetSessionId ?? undefined)
+    } catch (e) { toastError('Failed to cancel query', e) }
+  }, [windowSessionId, currentSessionId])
 
   const createSession = useCallback(async () => {
     try {
@@ -190,12 +268,94 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e) { setError(String(e)) }
   }, [refreshSessions])
 
-  const respondPermissionAction = useCallback(async (requestId: string, allow: boolean, note?: string) => {
+  const respondPermissionAction = useCallback(async (
+    requestId: string,
+    allow: boolean,
+    options?: { note?: string; scope?: 'once' | 'always_tool' },
+  ) => {
     try {
-      await api.respondPermission(requestId, allow, note)
+      await api.respondPermission(requestId, allow, options)
       setPermissionRequest(null)
     } catch (e) { setError(String(e)) }
   }, [])
+
+  const refreshCheckpoints = useCallback(async () => {
+    if (!currentSessionId) {
+      setCheckpoints([])
+      return
+    }
+    try {
+      setCheckpoints(await api.listCheckpoints(currentSessionId))
+    } catch (e) { logSoftFailure('refresh checkpoints', e) }
+  }, [currentSessionId])
+
+  // Checkpoints are recorded when a query completes — refresh when the
+  // querying flag settles and when the session changes.
+  useEffect(() => {
+    if (!isQuerying) void refreshCheckpoints()
+  }, [isQuerying, refreshCheckpoints])
+
+  const refreshFeedback = useCallback(async () => {
+    if (!currentSessionId) {
+      setFeedback({})
+      return
+    }
+    try {
+      setFeedback(await api.listMessageFeedback(currentSessionId))
+    } catch (e) { logSoftFailure('refresh feedback', e) }
+  }, [currentSessionId])
+
+  useEffect(() => {
+    void refreshFeedback()
+  }, [refreshFeedback])
+
+  const recordFeedbackAction = useCallback(async (key: string, rating: FeedbackRating | null) => {
+    if (!currentSessionId) return
+    setFeedback(prev => {
+      const next = { ...prev }
+      if (rating == null) delete next[key]
+      else next[key] = rating
+      return next
+    })
+    try {
+      await api.recordMessageFeedback(currentSessionId, key, rating)
+    } catch (e) {
+      console.warn('recordMessageFeedback failed:', e)
+      void refreshFeedback()
+    }
+  }, [currentSessionId, refreshFeedback])
+
+  const rewindSessionAction = useCallback(async (turnIndex: number) => {
+    if (!currentSessionId) return
+    try {
+      const msgs = await api.rewindSession(currentSessionId, turnIndex)
+      setMessages(msgs)
+      setStreamingText('')
+      setThinkingText('')
+      setActiveToolCalls([])
+      await refreshSessions()
+      await refreshCheckpoints()
+    } catch (e) {
+      setError(String(e))
+      throw e
+    }
+  }, [currentSessionId, refreshSessions, refreshCheckpoints])
+  const compactSessionAction = useCallback(async () => {
+    if (!currentSessionId) throw new Error('no active session')
+    try {
+      const result = await api.compactSession(currentSessionId)
+      setMessages(result.messages)
+      setStreamingText('')
+      setThinkingText('')
+      setActiveToolCalls([])
+      await refreshSessions()
+      await refreshCheckpoints()
+      return result
+    } catch (e) {
+      setError(String(e))
+      throw e
+    }
+  }, [currentSessionId, refreshSessions, refreshCheckpoints])
 
   // Register Tauri event listeners
   useEffect(() => {
@@ -205,11 +365,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async function register() {
       const handlers = [
         listen(EVENT_NAMES.QUERY_TEXT, (e) => {
-          const p = e.payload as { content: string }
+          const p = e.payload as { content: string; session_id?: string }
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           setStreamingText(prev => prev + p.content)
         }),
         listen(EVENT_NAMES.QUERY_TOOL_START, (e) => {
-          const p = e.payload as { tool_use_id: string; tool_name: string; tool_input: unknown }
+          const p = e.payload as { tool_use_id: string; tool_name: string; tool_input: unknown; session_id?: string }
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           setActiveToolCalls(prev => [...prev, {
             tool_use_id: p.tool_use_id,
             tool_name: p.tool_name,
@@ -218,7 +380,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }])
         }),
         listen(EVENT_NAMES.QUERY_TOOL_RESULT, (e) => {
-          const p = e.payload as { tool_use_id: string; result: string; is_error: boolean }
+          const p = e.payload as { tool_use_id: string; result: string; is_error: boolean; session_id?: string }
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           setActiveToolCalls(prev => prev.map(tc =>
             tc.tool_use_id === p.tool_use_id
               ? { ...tc, result: p.result, is_error: p.is_error, status: p.is_error ? 'error' : 'completed' }
@@ -226,7 +389,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           ))
         }),
         listen(EVENT_NAMES.QUERY_TOOL_PROGRESS, (e) => {
-          const p = e.payload as { tool_use_id: string; progress: number; message: string }
+          const p = e.payload as { tool_use_id: string; progress: number; message: string; session_id?: string }
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           setActiveToolCalls(prev => prev.map(tc =>
             tc.tool_use_id === p.tool_use_id
               ? { ...tc, progress: p.progress, progress_message: p.message }
@@ -234,13 +398,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
           ))
         }),
         listen(EVENT_NAMES.QUERY_THINKING, (e) => {
-          const p = e.payload as { content: string }
+          const p = e.payload as { content: string; session_id?: string }
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           setThinkingText(prev => prev + p.content)
         }),
         listen(EVENT_NAMES.QUERY_USAGE, (e) => {
-          setUsage(e.payload as UsagePayload)
+          const p = e.payload as UsagePayload
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          setUsage(p)
         }),
-        listen(EVENT_NAMES.QUERY_COMPLETED, () => {
+        listen(EVENT_NAMES.QUERY_COMPLETED, (e) => {
+          if (!isEventForCurrentWindow((e.payload as { session_id?: string }).session_id, windowSessionId)) return
           setIsQuerying(false)
           // Commit the streamed text as a finished assistant message. Read
           // via the ref (kept in sync on every render) instead of nesting
@@ -255,21 +423,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
           refreshStatus()
         }),
         listen(EVENT_NAMES.QUERY_FAILED, (e) => {
-          const p = e.payload as { error: string }
+          const p = e.payload as { error: string; session_id?: string }
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           setError(p.error)
           setIsQuerying(false)
           setCurrentQueryId(null)
         }),
-        listen(EVENT_NAMES.QUERY_CANCELLED, () => {
+        listen(EVENT_NAMES.QUERY_CANCELLED, (e) => {
+          if (!isEventForCurrentWindow((e.payload as { session_id?: string }).session_id, windowSessionId)) return
           setIsQuerying(false)
           setCurrentQueryId(null)
         }),
         listen(EVENT_NAMES.PERMISSION_REQUEST, (e) => {
-          setPermissionRequest(e.payload as PermissionRequest)
+          const p = e.payload as PermissionRequest
+          // Window mode: only prompt for this window's own session — a
+          // foreign session's approval dialog must not pop up here.
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          setPermissionRequest(p)
         }),
         listen(EVENT_NAMES.SESSIONS_UPDATED, () => { refreshSessions() }),
         listen(EVENT_NAMES.CONFIG_UPDATED, () => { refreshConfig() }),
         listen(EVENT_NAMES.BACKGROUND_TASKS_UPDATED, () => { refreshBackgroundTasks() }),
+        // P0-2: track which sessions a goal run owns, so the composer can
+        // block manual sends while a run is driving the conversation.
+        listen(EVENT_NAMES.GOAL_UPDATED, () => {
+          void api.listGoalRuns()
+            .then(runs => {
+              if (cancelled) return
+              setGoalOwnedSessionIds(runs.filter(r => r.status === 'running' || r.status === 'paused').map(r => r.sessionId))
+            })
+            .catch((e) => { logSoftFailure('refresh goal runs', e) })
+        }),
       ]
 
       const results = await Promise.all(handlers)
@@ -287,38 +471,64 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Initial data load
+  // Initial data load. Each surface's failure is recorded (the refresh*
+  // wrappers still console.warn for the log) and the first failure is raised
+  // as initError so the UI can offer a retry instead of rendering empty.
+  const loadInitialData = useCallback(async () => {
+    setLoading(true)
+    setInitError(null)
+    const failures: string[] = []
+    const record = (label: string, p: Promise<unknown>) =>
+      p.catch((e: unknown) => {
+        console.warn(`${label} failed:`, e)
+        failures.push(`${label}: ${String(e)}`)
+      })
+    await Promise.all([
+      record('refreshStatus', refreshStatus()),
+      record('refreshConfig', refreshConfig()),
+      record('refreshSessions', refreshSessions()),
+      record('refreshModels', refreshModels()),
+      record('refreshTasks', refreshTasks()),
+      record('refreshAgents', refreshAgents()),
+      record('refreshMcpServers', refreshMcpServers()),
+      record('refreshBackgroundTasks', refreshBackgroundTasks()),
+      // P1-1 window mode: auto-switch to the window's own session (instead
+      // of the backend's global active session) and load its messages.
+      record('getConversation', windowSessionId != null
+        ? switchToSession(windowSessionId)
+        : api.getConversation().then(setMessages)),
+      record('goalOwnedSessions', api.listGoalRuns().then(runs =>
+        setGoalOwnedSessionIds(runs.filter(r => r.status === 'running' || r.status === 'paused').map(r => r.sessionId))
+      )),
+    ])
+    if (failures.length > 0) setInitError(failures[0])
+    setLoading(false)
+  }, [refreshStatus, refreshConfig, refreshSessions, refreshModels, refreshTasks,
+    refreshAgents, refreshMcpServers, refreshBackgroundTasks, windowSessionId, switchToSession])
+
   useEffect(() => {
-    Promise.all([
-      refreshStatus(),
-      refreshConfig(),
-      refreshSessions(),
-      refreshModels(),
-      refreshTasks(),
-      refreshAgents(),
-      refreshMcpServers(),
-      refreshBackgroundTasks(),
-      api.getConversation().then(setMessages).catch(e => console.warn('Failed to load conversation:', e)),
-    ]).finally(() => setLoading(false))
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    void loadInitialData()
+  }, [loadInitialData])
 
   const chatValue = useMemo<ChatContextValue>(() => ({
     messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage,
-    sendMessage, cancelQuery,
-  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery])
+    sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel,
+    checkpoints, rewindSession: rewindSessionAction, compactSession: compactSessionAction,
+    feedback, recordFeedback: recordFeedbackAction,
+  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 
   const sessionValue = useMemo<SessionContextValue>(() => ({
-    sessions, currentSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,
+    sessions, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,
     deleteSession: deleteSessionAction, renameSession: renameSessionAction, refreshSessions,
-  }), [sessions, currentSessionId, createSession, createSessionInWorktree, switchToSession,
+  }), [sessions, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchToSession,
     deleteSessionAction, renameSessionAction, refreshSessions])
 
   const catalogValue = useMemo<CatalogContextValue>(() => ({
     status, config, models, agents, tasks, mcpServers, backgroundTasks, permissionRequest,
-    error, loading, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
+    error, loading, initError, retryInit: loadInitialData, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
     refreshMcpServers, refreshBackgroundTasks, respondPermission: respondPermissionAction,
   }), [status, config, models, agents, tasks, mcpServers, backgroundTasks, permissionRequest,
-    error, loading, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
+    error, loading, initError, loadInitialData, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
     refreshMcpServers, refreshBackgroundTasks, respondPermissionAction])
 
   return (

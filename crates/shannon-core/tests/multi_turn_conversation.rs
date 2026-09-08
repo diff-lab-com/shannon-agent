@@ -3074,6 +3074,7 @@ mod integration_tests {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let client = shannon_engine::api::LlmClient::new(config);
         let tools = ToolRegistry::new();
@@ -3093,6 +3094,7 @@ mod integration_tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: user_message.to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,

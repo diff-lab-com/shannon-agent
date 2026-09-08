@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { type AdapterContext, type ChannelAdapter, type Logger } from "./adapters/types.js";
 import { AdapterRegistry } from "./adapters/registry.js";
@@ -15,12 +16,21 @@ import { createChainedSecretProvider } from "./secrets/chain.js";
 import { createConsoleLogger } from "./logger.js";
 import { GATEWAY_VERSION } from "./version.js";
 import { MobileServer } from "./mobile/server.js";
+import { advertiseMobileServer, type MdnsHandle } from "./mobile/mdns.js";
 import {
   createMobileHandlers,
   DeviceRegistry,
   PairTokenStore,
 } from "./mobile/pairing.js";
 import type { EngineClientFactory as MobileEngineClientFactory } from "./mobile/engineBridge.js";
+import { MobileDispatchHub } from "./mobile/hub.js";
+import { createMobileChannelAdapter } from "./mobile/channel.js";
+import { createTaskHandlers } from "./mobile/taskHandlers.js";
+import { deriveSessionKey } from "./mobile/relay/e2e.js";
+import { startRelayHost, type RelayHostHandle } from "./mobile/relay/relayHost.js";
+import { generateQrV2Payload, generateRelaySessionId } from "./mobile/relay/qrV2.js";
+import { evaluateTrigger, resolveTriggerConfig } from "./router/trigger.js";
+import { withTaskLifecycle } from "./router/lifecycle.js";
 
 /**
  * Turns an `AdapterConfig` + secret-backed `AdapterContext` into a live
@@ -69,7 +79,8 @@ export interface BootstrapHandle {
  * 2. instantiate each enabled adapter from `factories` and register it,
  * 3. build a per-session `EngineWsClient` factory (each lane pins its own
  *    connection + `session_id`, consuming the engine's P0-d/e persistence),
- * 4. wire `adapter.onMessage → router.handleInbound`,
+ * 4. wire `adapter.onMessage → trigger gate → router.handleInbound` (P1-4:
+ *    DMs answer directly; group chats need @mention or `/shannon`),
  * 5. `startAll` the adapters.
  *
  * The default engine client factory only *constructs* `EngineWsClient`s; the
@@ -104,20 +115,53 @@ export async function bootstrap(
     registry.register(adapter);
   }
 
+  // P2-1 mobile dispatch: when the mobile channel is enabled, the paired-phone
+  // channel becomes a first-class platform adapter ("mobile") so dispatched
+  // tasks ride the same lane/approval/lifecycle pipeline as the IM adapters.
+  const dispatchHub = config.mobile?.enabled
+    ? new MobileDispatchHub({ logger })
+    : null;
+  if (dispatchHub) {
+    registry.register(createMobileChannelAdapter({ hub: dispatchHub }));
+  }
+
   const clientFactory: EngineClientFactory =
     opts.engineClientFactory ?? ((sessionKey: string) => createEngineClient(config, sessionKey));
 
-  const turnHandler: TurnHandler =
+  // P1-4: report 任务开始/完成/失败 back to the IM channel around every
+  // adapter-routed turn (opt-out via config.im.taskLifecycle = false). The
+  // mobile shannon/* path keeps its own engine bridge and is unaffected.
+  const baseTurnHandler: TurnHandler =
     opts.turnHandler ?? createApprovalTurnHandler({ engineBaseUrl: config.engine.httpBaseUrl });
+  const turnHandler: TurnHandler =
+    config.im?.taskLifecycle === false ? baseTurnHandler : withTaskLifecycle(baseTurnHandler);
 
   const router = new SessionRouter({ registry, clientFactory, turnHandler, logger });
 
-  // Inbound → router. The lane serializes per session; turn errors are logged
-  // in the router. onMessage is sync-void by contract, so handleInbound is
-  // fire-and-forget here.
+  // P2-1: dispatched tasks enter the router here — the same trigger-free,
+  // lane-serialized, lifecycle-wrapped pipeline the IM adapters feed.
+  dispatchHub?.setSubmit((inbound) => router.handleInbound(inbound));
+
+  // Inbound → trigger gate (P1-4) → router. The lane serializes per session;
+  // turn errors are logged in the router. onMessage is sync-void by contract,
+  // so handleInbound is fire-and-forget here. The trigger gate implements the
+  // v1 policy — DMs answer directly, group chats need @mention or /shannon —
+  // and rewrites the text so trigger syntax never reaches the engine prompt.
+  const triggerByPlatform = new Map(
+    config.adapters.map((cfg) => [cfg.platform, resolveTriggerConfig(cfg.options)]),
+  );
   for (const adapter of registry.all()) {
+    const triggerCfg = triggerByPlatform.get(adapter.platform) ?? {};
     adapter.onMessage((m) => {
-      void router.handleInbound(m);
+      const verdict = evaluateTrigger(m, triggerCfg);
+      if (!verdict.triggered) {
+        logger.debug(
+          `inbound on ${m.platform}:${m.chatId} ignored by trigger policy (${verdict.via})`,
+        );
+        return;
+      }
+      const routed = verdict.text === m.text ? m : { ...m, text: verdict.text };
+      void router.handleInbound(routed);
     });
   }
 
@@ -125,11 +169,11 @@ export async function bootstrap(
   logger.info(`shannon-gateway up: ${registry.size} adapter(s) started`);
 
   const mobile = config.mobile?.enabled
-    ? await startMobileServer(config, logger, opts)
+    ? await startMobileServer(config, logger, opts, dispatchHub!)
     : null;
   if (mobile) {
     logger.info(
-      `mobile shannon/* server listening on ${config.mobile?.host ?? "127.0.0.1"}:${mobile.port}`,
+      `mobile shannon/* server listening on ${config.mobile?.host ?? "0.0.0.0"}:${mobile.port}`,
     );
   }
 
@@ -160,14 +204,21 @@ export async function bootstrap(
  * both processes read/write the device registry at `devicesFile`. The engine
  * bridge enforces `requireSession` (query/cancel/approval are gated behind a
  * paired device) and mandates an Ed25519 signature on every approval decision.
+ *
+ * P2-1: the same server also serves the built-in PWA page on GET / and hands
+ * every accepted connection to the dispatch hub, so `shannon/task.dispatch`
+ * can route texts through the IM pipeline and lifecycle stamps / approval
+ * requests can be pushed back to the paired phone. The same handlers serve the
+ * relay-E2E transport.
  */
 async function startMobileServer(
   config: GatewayConfig,
   logger: Logger,
   opts: BootstrapOptions,
+  dispatchHub: MobileDispatchHub,
 ): Promise<{ handle: { stop(): Promise<void> }; port: number }> {
   const mobileCfg = config.mobile!;
-  const host = mobileCfg.host ?? "127.0.0.1";
+  const host = mobileCfg.host ?? "0.0.0.0";
   const port = mobileCfg.port ?? 33430;
   const tokensFile = mobileCfg.tokensFile ?? join(homedir(), ".shannon", "mobile-pair-tokens.jsonl");
   const devicesFile = mobileCfg.devicesFile ?? join(homedir(), ".shannon", "mobile-devices.json");
@@ -187,11 +238,91 @@ async function startMobileServer(
     tokens,
     registry,
     logger,
+    tasks: createTaskHandlers({ hub: dispatchHub }),
   });
 
-  const server = new MobileServer({ host, port, logger, handlers });
+  const server = new MobileServer({
+    host,
+    port,
+    logger,
+    handlers,
+    onContext: (ctx) => dispatchHub.registerConnection(ctx),
+  });
   const handle = await server.start();
-  return { handle, port: handle.port };
+
+  // §A8/§A8b (cross-repo-adaptation-spec): advertise _shannon._tcp while the
+  // pairing server is up. iOS ATS rejects raw-IP ws:// endpoints outright, so
+  // LAN direct-connect requires the phone to reach a .local hostname — this
+  // advertisement is that scenario's hard prerequisite. Loopback-only binds
+  // cannot serve phones anyway, so skip (and flag) instead of advertising an
+  // unreachable endpoint — also keeps test boots (127.0.0.1) mDNS-free.
+  let mdns: MdnsHandle | null = null;
+  if (host === "127.0.0.1" || host === "localhost" || host === "::1") {
+    logger.warn(
+      `mobile server bound to loopback (${host}) — LAN direct-connect is ` +
+        "unreachable from phones; set mobile.host to 0.0.0.0",
+    );
+  } else {
+    mdns = advertiseMobileServer({ port: handle.port, version: GATEWAY_VERSION, logger });
+  }
+  const stopServerAndMdns = async (): Promise<void> => {
+    await mdns?.stop().catch(() => {});
+    await handle.stop();
+  };
+
+  // Relay host mode: also connect outbound to shannon-relay so phones can
+  // pair without LAN access. The same MethodHandlers are reused — the relay
+  // host wraps messages in E2E encryption over the relay's binary transport.
+  if (mobileCfg.relay?.enabled && mobileCfg.relay.url) {
+    const relayUrl = mobileCfg.relay.url;
+    const relaySid = generateRelaySessionId();
+    const pairRecord = tokens.issue();
+    const sessionKey = deriveSessionKey(pairRecord.token);
+
+    const relayHandle: RelayHostHandle = startRelayHost({
+      relayUrl,
+      sid: relaySid,
+      sessionKey,
+      handlers,
+      logger,
+      onContext: (ctx) => dispatchHub.registerConnection(ctx),
+    });
+
+    // Generate the QR v2 payload for the phone to scan.
+    const scheme = relayUrl.startsWith("wss") ? "wss" : "ws";
+    const qrPayload = generateQrV2Payload({
+      scheme,
+      host,
+      port: handle.port,
+      pairToken: pairRecord.token,
+      expiresAt: pairRecord.expiresAt,
+      relayUrl,
+      relaySessionId: relaySid,
+    });
+
+    const qrJson = JSON.stringify(qrPayload);
+    logger.info(`relay host: QR v2 payload: ${qrJson}`);
+
+    if (mobileCfg.qrPayloadFile) {
+      mkdirSync(dirname(mobileCfg.qrPayloadFile), { recursive: true });
+      writeFileSync(mobileCfg.qrPayloadFile, qrJson, "utf8");
+      logger.info(`relay host: QR payload written to ${mobileCfg.qrPayloadFile}`);
+    }
+
+    // Extend the stop handle to also stop the relay host (and the mDNS
+    // advertisement, via stopServerAndMdns).
+    return {
+      handle: {
+        stop: async () => {
+          await relayHandle.stop().catch(() => {});
+          await stopServerAndMdns();
+        },
+      },
+      port: handle.port,
+    };
+  }
+
+  return { handle: { stop: stopServerAndMdns }, port: handle.port };
 }
 
 function createEngineClient(config: GatewayConfig, sessionKey: string): EngineWsClient {

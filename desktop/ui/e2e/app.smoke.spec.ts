@@ -17,9 +17,11 @@ test.describe('Shannon Desktop UI', () => {
   test('chat page renders input area or welcome state', async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
-    // Either shows chat input (if sessions exist) or welcome state (if no sessions)
+    // Either shows chat input (if sessions exist) or welcome state (if no sessions).
+    // Do NOT fall back to getByText(/Shannon/i): that also matches the hidden
+    // mobile-header logo, which .first() would pick and fail visibility.
     const input = page.getByPlaceholder(/Ask Shannon anything\.\.\./i)
-    const welcome = page.getByText(/Welcome/i).or(page.getByText(/Shannon/i))
+    const welcome = page.getByText(/Welcome/i)
     await expect(input.or(welcome).first()).toBeVisible()
   })
 

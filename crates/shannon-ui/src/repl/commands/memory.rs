@@ -43,7 +43,7 @@ pub(crate) fn handle_remember(repl: &mut Repl, args: &str) -> Result<()> {
     let mut store = recover_lock(memory.write());
     let entry = MemoryEntry::new(&project, MemoryCategory::Context, content);
     let id = entry.id.clone();
-    let _ = store.add(entry);
+    let _ = store.add_or_update(entry);
     if let Err(e) = store.save() {
         drop(store);
         super::set_error(repl, &format!("saving memory: {e}"));

@@ -176,6 +176,7 @@ impl AgentDefinition {
             allowed_tools: self.allowed_tools.clone(),
             permission_mode: None,
             isolation: None,
+            disallowed_tools: None,
         }
     }
 

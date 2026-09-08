@@ -9,12 +9,12 @@ cask "shannon-desktop" do
 
   name "Shannon Desktop"
   desc "Desktop app for the Shannon Agent (shannon-desktop)"
-  homepage "https://github.com/shannon-agent/shannon-agent"
+  homepage "https://github.com/diff-lab-com/shannon-agent"
 
   # macOS Intel disk image.
-  url "https://github.com/shannon-agent/shannon-agent/releases/download/v#{version}/shannon-desktop_#{version}_x64.dmg"
+  url "https://github.com/diff-lab-com/shannon-agent/releases/download/v#{version}/shannon-desktop_#{version}_x64.dmg"
   # macOS Apple Silicon variant (replace the file name at release time):
-  # url "https://github.com/shannon-agent/shannon-agent/releases/download/v#{version}/shannon-desktop_#{version}_aarch64.dmg"
+  # url "https://github.com/diff-lab-com/shannon-agent/releases/download/v#{version}/shannon-desktop_#{version}_aarch64.dmg"
 
   # sha256 "" # REPLACE AT RELEASE TIME with the real sha256 of the .dmg asset.
 
@@ -22,7 +22,7 @@ cask "shannon-desktop" do
   #   Linux:   shannon-desktop_#{version}_amd64.deb / shannon-desktop-#{version}-1.x86_64.rpm
   #   Windows: shannon-desktop_#{version}_x64-setup.exe
   livecheck do
-    url "https://github.com/shannon-agent/shannon-agent/releases/latest"
+    url "https://github.com/diff-lab-com/shannon-agent/releases/latest"
     regex(/v?(\d+(?:\.\d+)+)/i)
   end
 

@@ -54,10 +54,16 @@ impl<T> EventEnvelope<T> {
 }
 
 /// A streaming text chunk from the LLM.
+///
+/// `session_id` (P1-1): optional owner session so multi-window shells can
+/// filter streams per window. Additive — older consumers ignore it (serde
+/// default), older events fill `None` on the receiving side.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryTextPayload {
     pub query_id: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// A tool call has started.
@@ -67,6 +73,8 @@ pub struct ToolStartPayload {
     pub tool_use_id: String,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// A tool call has completed.
@@ -77,6 +85,8 @@ pub struct ToolResultPayload {
     pub tool_name: String,
     pub result: String,
     pub is_error: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Tool progress update (e.g., bash command output).
@@ -87,6 +97,8 @@ pub struct ToolProgressPayload {
     pub tool_name: String,
     pub progress: f32,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Extended thinking content.
@@ -94,6 +106,8 @@ pub struct ToolProgressPayload {
 pub struct ThinkingPayload {
     pub query_id: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Background task status and update.
@@ -125,12 +139,16 @@ pub struct UsagePayload {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cost_usd: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Query completed successfully.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryCompletedPayload {
     pub query_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Query failed.
@@ -138,6 +156,30 @@ pub struct QueryCompletedPayload {
 pub struct QueryFailedPayload {
     pub query_id: String,
     pub error: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+/// P1-3: explanation of why a permission prompt was raised. Field names are a
+/// frozen contract (camelCase on the wire): `{ source, ruleName, confidence }`.
+///
+/// `source` is one of `"rule"` (a settings/profile permission rule matched),
+/// `"llm"` (the LLM safety classifier was consulted), or `"default"`
+/// (approval-mode / policy default — nothing more specific is known).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionReason {
+    /// `"rule"` | `"llm"` | `"default"` — kept as a plain string so older
+    /// forward-compatible producers may add sources without breaking parsers.
+    pub source: String,
+    /// Matched rule pattern (e.g. `Bash(git *)`), when the decision came from
+    /// a named rule. `null` when not applicable.
+    #[serde(default)]
+    pub rule_name: Option<String>,
+    /// Classifier confidence in `0.0..=1.0`, when a classifier produced the
+    /// verdict. `null` when not applicable.
+    #[serde(default)]
+    pub confidence: Option<f64>,
 }
 
 /// Permission request for tool execution.
@@ -147,6 +189,14 @@ pub struct PermissionRequest {
     pub input: serde_json::Value,
     pub risk: String,
     pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// P1-3: why this prompt was raised. Optional + additive — payloads from
+    /// engines that predate this field must keep parsing (`serde(default)`),
+    /// and `None` is skipped on serialize so the wire shape is unchanged
+    /// when no reason is available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<PermissionReason>,
 }
 
 /// Session information for session list.
@@ -182,6 +232,22 @@ pub struct ChatMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryCancelledPayload {
     pub query_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+/// P0-4 session-budget status payload, shared by the `budget:warning`
+/// (>= 80% of the cap, fired once per turn) and `budget:exceeded` (cap
+/// reached — pre-turn reject or mid-turn cancel) events. Field names are a
+/// frozen contract (camelCase on the wire).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetStatusPayload {
+    pub session_id: String,
+    /// Cumulative session spend in USD at the time of the event.
+    pub spent_usd: f64,
+    /// The configured cap in USD.
+    pub budget_usd: f64,
 }
 
 /// Config updated event payload.
@@ -302,6 +368,36 @@ pub mod event_names {
     pub const DIFF_REVIEW_AVAILABLE: &str = "diff-review-available";
     pub const BACKGROUND_TASK_UPDATE: &str = "background-task-update";
     pub const BACKGROUND_TASKS_UPDATED: &str = "background-tasks-updated";
+    /// Emitted whenever a record is written to the agent-message history.
+    /// Frontend: AgentMessagesPanel reloads on this instead of polling.
+    pub const AGENT_MESSAGES_UPDATED: &str = "agent-messages-updated";
+    /// Emitted whenever triage items change (new item, read, archive).
+    /// Frontend: sidebar triage badge refreshes on this instead of polling.
+    pub const TRIAGE_UPDATED: &str = "triage-updated";
+    /// P0-3: emitted whenever the SQLite inbox changes — a run finished and
+    /// appended an item, an item status changed, or a trigger endpoint
+    /// recorded a run. Frontend: inbox badge/list refreshes on this instead
+    /// of polling.
+    pub const INBOX_UPDATED: &str = "inbox-updated";
+    /// P0-2: emitted whenever a desktop goal run changes — started, a turn
+    /// completed, paused/resumed/stopped, or a restart reconciled an
+    /// interrupted run. Payload: `GoalRunDto` (see
+    /// `desktop/src/goal_commands.rs`). Frontend: Tasks-page goal run cards
+    /// refresh on this instead of polling.
+    pub const GOAL_UPDATED: &str = "goal:updated";
+    /// P1-2: emitted whenever a desktop batch (best-of-N) run changes —
+    /// started, a branch finished (including live spend updates), adopted or
+    /// discarded. Payload: `BatchRunDto` (see `desktop/src/batch_commands.rs`).
+    /// Frontend: Tasks-page batch cards refresh on this instead of polling.
+    pub const BATCH_UPDATED: &str = "batch:updated";
+    /// P0-4: the session's cumulative spend crossed 80% of its budget cap.
+    /// Payload: [`BudgetStatusPayload`]. Frontend: yellow advisory bar.
+    pub const BUDGET_WARNING: &str = "budget:warning";
+    /// P0-4: the session's budget cap was reached — a send was rejected
+    /// pre-turn or a running turn was cancelled mid-stream. Payload:
+    /// [`BudgetStatusPayload`]. Frontend: red choice bar (continue once with
+    /// bypass / raise the budget / stop).
+    pub const BUDGET_EXCEEDED: &str = "budget:exceeded";
     pub const UPDATE_AVAILABLE: &str = "update-available";
     pub const UPDATE_PROGRESS: &str = "update-progress";
     pub const UPDATE_COMPLETED: &str = "update-completed";
@@ -312,6 +408,13 @@ pub mod event_names {
     /// P2-5e local STT — progress events for whisper-rs model downloads.
     /// Subscribe in the frontend to drive the Settings → Voice download bar.
     pub const VOICE_MODEL_DOWNLOAD_PROGRESS: &str = "voice:model-download-progress";
+    /// P1-5 D: PTY output pushed from the integrated terminal's shell to the
+    /// xterm.js panel. Payload: `{ terminalId, data }` where `data` is the
+    /// raw PTY byte stream **base64-encoded** (byte-preserving — the
+    /// frontend decodes with TextDecoder/atob before writing to xterm).
+    /// Emitted by `desktop/src/terminal_commands.rs`; coalesced to at most
+    /// one event per 16 ms per terminal.
+    pub const TERMINAL_OUTPUT: &str = "terminal:output";
 }
 
 #[cfg(test)]
@@ -324,6 +427,89 @@ mod tests {
         assert!(event_names::QUERY_TEXT.contains(':'));
         assert!(event_names::TASK_STEP.contains(':'));
         assert!(event_names::TASK_RETRY.contains(':'));
+        assert!(event_names::BUDGET_WARNING.contains(':'));
+        assert!(event_names::BUDGET_EXCEEDED.contains(':'));
+    }
+
+    #[test]
+    fn budget_status_payload_is_frozen_camel_case() {
+        let p = BudgetStatusPayload {
+            session_id: "s1".into(),
+            spent_usd: 1.25,
+            budget_usd: 5.0,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"sessionId\""), "{json}");
+        assert!(json.contains("\"spentUsd\""), "{json}");
+        assert!(json.contains("\"budgetUsd\""), "{json}");
+        let back: BudgetStatusPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.session_id, "s1");
+        assert!((back.spent_usd - 1.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn legacy_permission_request_without_reason_parses() {
+        // P1-3 backward compat: payloads emitted before the `reason` field
+        // existed must keep deserializing (serde default), and `reason` must
+        // stay absent from the wire when unset.
+        let legacy = r#"{"tool":"bash","input":{"command":"ls"},"risk":"medium",
+            "request_id":"req-1","session_id":"s1"}"#;
+        let req: PermissionRequest = serde_json::from_str(legacy).unwrap();
+        assert_eq!(req.tool, "bash");
+        assert!(req.reason.is_none(), "missing reason must default to None");
+
+        let without_session = r#"{"tool":"bash","input":null,"risk":"low","request_id":"r"}"#;
+        let req: PermissionRequest = serde_json::from_str(without_session).unwrap();
+        assert!(req.reason.is_none());
+        assert!(req.session_id.is_none());
+    }
+
+    #[test]
+    fn permission_reason_is_frozen_camel_case() {
+        let reason = PermissionReason {
+            source: "rule".into(),
+            rule_name: Some("Bash(git *)".into()),
+            confidence: Some(0.82),
+        };
+        let json = serde_json::to_string(&reason).unwrap();
+        assert!(json.contains("\"source\":\"rule\""), "{json}");
+        assert!(json.contains("\"ruleName\""), "{json}");
+        assert!(json.contains("\"confidence\""), "{json}");
+        // Null inner fields stay on the wire (frozen shape: string|null,
+        // number|null) rather than being skipped.
+        let nulls = PermissionReason {
+            source: "default".into(),
+            rule_name: None,
+            confidence: None,
+        };
+        let json = serde_json::to_string(&nulls).unwrap();
+        assert!(json.contains("\"ruleName\":null"), "{json}");
+        assert!(json.contains("\"confidence\":null"), "{json}");
+        let back: PermissionReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.source, "default");
+        assert!(back.rule_name.is_none());
+    }
+
+    #[test]
+    fn permission_request_with_reason_round_trips() {
+        let req = PermissionRequest {
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "git status"}),
+            risk: "medium".into(),
+            request_id: "req-9".into(),
+            session_id: None,
+            reason: Some(PermissionReason {
+                source: "llm".into(),
+                rule_name: None,
+                confidence: Some(0.74),
+            }),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"reason\""), "{json}");
+        let back: PermissionRequest = serde_json::from_str(&json).unwrap();
+        let reason = back.reason.expect("reason survives the round trip");
+        assert_eq!(reason.source, "llm");
+        assert!((reason.confidence.unwrap() - 0.74).abs() < 1e-9);
     }
 
     #[test]
@@ -331,6 +517,7 @@ mod tests {
         let payload = QueryTextPayload {
             query_id: "q1".into(),
             content: "hello".into(),
+            session_id: None,
         };
         let env = EventEnvelope::new(event_names::QUERY_TEXT, payload);
         let json = serde_json::to_string(&env).unwrap();
@@ -395,6 +582,7 @@ mod tests {
         let payload = QueryTextPayload {
             query_id: "test-q123".into(),
             content: "Hello, world!".into(),
+            session_id: None,
         };
         let envelope = EventEnvelope::new("query:text", payload);
 

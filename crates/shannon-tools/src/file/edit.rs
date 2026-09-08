@@ -500,6 +500,7 @@ enum MergeFallbackResult {
 ///
 /// If the base version is available and contains `old_string`, we can construct
 /// `theirs` and perform the three-way merge.
+#[cfg(test)] // KEEP: legacy 5-arg shape retained for existing tests only
 async fn attempt_merge_fallback(
     file_path: &str,
     current_content: &str,
@@ -507,8 +508,28 @@ async fn attempt_merge_fallback(
     new_string: &str,
     replace_all: bool,
 ) -> MergeFallbackResult {
+    attempt_merge_fallback_with(
+        file_path,
+        current_content,
+        old_string,
+        new_string,
+        replace_all,
+        crate::defaults::process().as_ref(),
+    )
+    .await
+}
+
+/// Provider-injected three-way merge fallback (§4.11).
+async fn attempt_merge_fallback_with(
+    file_path: &str,
+    current_content: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+    process: &dyn shannon_tool_interface::ProcessProvider,
+) -> MergeFallbackResult {
     // Get the git HEAD version of the file
-    let base = match merge::get_git_head_version(file_path).await {
+    let base = match merge::get_git_head_version_with(file_path, process).await {
         Some(content) => content,
         None => {
             return MergeFallbackResult::NotAvailable(
@@ -547,18 +568,35 @@ async fn attempt_merge_fallback(
 }
 
 pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
-    use tokio::fs;
+    execute_with(
+        input,
+        crate::defaults::fs().as_ref(),
+        crate::defaults::process().as_ref(),
+    )
+    .await
+}
 
+/// Provider-injected entry point (§4.11): edits flow through the injected
+/// filesystem and process worlds instead of direct async filesystem APIs /
+/// async process-spawn APIs calls.
+pub async fn execute_with(
+    input: EditInput,
+    fs: &dyn shannon_tool_interface::FileSystemProvider,
+    process: &dyn shannon_tool_interface::ProcessProvider,
+) -> Result<ToolOutput, ToolError> {
     // --- Check file existence ---
-    let metadata = fs::metadata(&input.file_path).await.map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            ToolError::InvalidInput(format!("File not found: {}", input.file_path))
-        } else {
-            ToolError::ExecutionFailed(format!("Failed to access file: {e}"))
-        }
-    })?;
+    let metadata = fs
+        .metadata(std::path::Path::new(&input.file_path))
+        .await
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                ToolError::InvalidInput(format!("File not found: {}", input.file_path))
+            } else {
+                ToolError::ExecutionFailed(format!("Failed to access file: {e}"))
+            }
+        })?;
 
-    if metadata.is_dir() {
+    if metadata.is_dir {
         return Err(ToolError::InvalidInput(format!(
             "Path is a directory, not a file: {}",
             input.file_path
@@ -567,18 +605,20 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
 
     // Check file size before reading to prevent memory exhaustion
     const MAX_EDIT_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
-    if metadata.len() > MAX_EDIT_FILE_SIZE {
+    if metadata.len > MAX_EDIT_FILE_SIZE {
         return Err(ToolError::InvalidInput(format!(
             "File too large to edit: {} bytes (max {} bytes). Use terminal commands for large files.",
-            metadata.len(),
-            MAX_EDIT_FILE_SIZE
+            metadata.len, MAX_EDIT_FILE_SIZE
         )));
     }
 
     // --- Read file ---
-    let content = fs::read_to_string(&input.file_path).await.map_err(|e| {
-        ToolError::ExecutionFailed(format!("Failed to read file '{}': {}", input.file_path, e))
-    })?;
+    let content = fs
+        .read_text(std::path::Path::new(&input.file_path))
+        .await
+        .map_err(|e| {
+            ToolError::ExecutionFailed(format!("Failed to read file '{}': {}", input.file_path, e))
+        })?;
 
     // --- Perform the edit (with three-way merge fallback) ---
     let edit_result = perform_edit(
@@ -592,12 +632,13 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
         Ok((nc, reps, locs)) => (nc, reps, locs, vec![]),
         Err(EditError::NotFound(_)) => {
             // old_string not found — try three-way merge fallback
-            let merge_result = attempt_merge_fallback(
+            let merge_result = attempt_merge_fallback_with(
                 &input.file_path,
                 &content,
                 &input.old_string,
                 &input.new_string,
                 input.replace_all,
+                process,
             )
             .await;
 
@@ -681,18 +722,23 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
         input.file_path,
         uuid::Uuid::new_v4().as_simple()
     );
-    fs::write(&temp_path, &new_content).await.map_err(|e| {
-        ToolError::ExecutionFailed(format!("Failed to write file '{}': {}", input.file_path, e))
-    })?;
-    fs::rename(&temp_path, &input.file_path)
+    fs.write_bytes(std::path::Path::new(&temp_path), new_content.as_bytes())
         .await
         .map_err(|e| {
-            let _ = std::fs::remove_file(&temp_path);
-            ToolError::ExecutionFailed(format!(
-                "Failed to rename temp file for '{}': {}",
-                input.file_path, e
-            ))
+            ToolError::ExecutionFailed(format!("Failed to write file '{}': {}", input.file_path, e))
         })?;
+    fs.rename(
+        std::path::Path::new(&temp_path),
+        std::path::Path::new(&input.file_path),
+    )
+    .await
+    .map_err(|e| {
+        let _ = fs.remove_file_blocking(std::path::Path::new(&temp_path));
+        ToolError::ExecutionFailed(format!(
+            "Failed to rename temp file for '{}': {}",
+            input.file_path, e
+        ))
+    })?;
 
     // If there are merge conflicts, report them as an error with the conflict info
     if !merge_conflicts.is_empty() {

@@ -10,6 +10,7 @@ mod custom_commands;
 mod diagnostic_watcher;
 mod helpers;
 mod input;
+pub mod loop_guard;
 mod mcp_completion;
 pub(crate) mod preferences;
 mod query;
@@ -55,9 +56,7 @@ use shannon_commands::{
     Command, CommandBase, CommandParser, CommandRegistry, ExecutionContext, PromptCommand,
     SharedExecutor, builtin_commands,
 };
-use shannon_core::{
-    PromptInfo, query_engine::QueryEngine, recording::SessionRecorder, tools::ToolRegistry,
-};
+use shannon_core::{PromptInfo, query_engine::QueryEngine, tools::ToolRegistry};
 use shannon_engine::{api::LlmClientConfig, permissions::PermissionManager, state::StateManager};
 
 // Tool registration
@@ -65,7 +64,7 @@ use crate::skill_bridge::register_skills_as_tools;
 use shannon_mcp::{
     HeaderSource, McpProcessPool, discover_pooled_remote_tools, discover_pooled_tools,
 };
-use shannon_tools::register_default_tools_with_project_dir_ex;
+use shannon_tools::register_default_tools_with_project_dir_ex_with_providers;
 
 // Re-export public types from state submodule
 pub use state::{
@@ -95,7 +94,11 @@ pub struct Repl {
     pub(crate) running: bool,
     /// Query engine for AI processing
     pub(crate) query_engine: Option<QueryEngine>,
-    /// State manager for session persistence (separate from QueryEngine's internal one)
+    /// Live goal handle shared with the `goal_get` / `goal_update` tools
+    /// (P2.5 wiring). Synced from `ReplState.goal` at query entry; tool
+    /// transitions are pulled back at query completion.
+    pub(crate) goal_shared: crate::repl::state::GoalShared,
+    /// State manager (process-lifetime registry; its sessions dir anchors the L0 store)
     pub(crate) state_manager: StateManager,
     /// Command registry with all built-in commands
     pub(crate) command_registry: CommandRegistry,
@@ -112,7 +115,7 @@ pub struct Repl {
     pub(crate) permission_req_tx:
         tokio::sync::mpsc::UnboundedSender<shannon_core::query_engine::PermissionRequest>,
     /// Last session listing cache (for /resume by number)
-    pub(crate) last_session_list: Vec<shannon_engine::state::SessionInfo>,
+    pub(crate) last_session_list: Vec<shannon_core::session_log::StoredSessionInfo>,
     /// Command history with cursor navigation
     pub(crate) command_history: ReplHistory,
     /// Saved input before history navigation (to restore on down-to-bottom)
@@ -178,8 +181,12 @@ pub struct Repl {
     pub(crate) update_check_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     /// Shared plan-mode flag (clone of the one in QueryEngine)
     pub(crate) plan_mode_flag: std::sync::Arc<std::sync::RwLock<bool>>,
-    /// Session recorder for deterministic replay testing
-    pub(crate) session_recorder: Option<SessionRecorder>,
+    /// Provider-wired file history shared with the file tools, so `/rewind`
+    /// reads and restores the same snapshots (and the same execution world).
+    pub(crate) file_history:
+        Option<std::sync::Arc<std::sync::Mutex<shannon_tools::FileHistoryManager>>>,
+    /// Swappable execution world + shared sandbox handle (`/remote`).
+    pub(crate) remote_assembly: Option<std::sync::Arc<shannon_remote::assembly::DynamicAssembly>>,
 }
 
 /// State for tab completion cycling
@@ -296,6 +303,15 @@ fn extract_domain_from_tool(tool_name: &str, tool_input: &serde_json::Value) -> 
 }
 
 impl Repl {
+    /// The L0 session store over this REPL's sessions directory.
+    ///
+    /// Every listing, resume projection, and sidecar write goes through it —
+    /// `events.jsonl` is the single authoritative record (§4.6).
+    pub(crate) fn l0_store(&self) -> shannon_core::session_log::SessionStore {
+        shannon_core::session_log::SessionStore::new(
+            self.state_manager.sessions_dir().to_path_buf(),
+        )
+    }
     /// Minimal REPL for test mode — skips MCP, skills, memory, project instructions,
     /// but includes a lightweight query_engine with an unauthenticated LLM client.
     fn new_minimal(runtime: Runtime) -> Result<Self> {
@@ -320,6 +336,7 @@ impl Repl {
         let client = shannon_engine::api::LlmClient::new_unauthenticated(client_config);
         let permission_manager = PermissionManager::new();
         let state_manager = StateManager::new();
+        let goal_shared = crate::repl::state::GoalShared::new();
         let query_engine = QueryEngine::with_defaults_arc(
             client,
             tool_registry.clone(),
@@ -336,6 +353,7 @@ impl Repl {
             running: false,
             query_engine: Some(query_engine),
             state_manager: StateManager::new(),
+            goal_shared: goal_shared.clone(),
             command_registry,
             command_parser: CommandParser::new(),
             shared_executor,
@@ -378,7 +396,8 @@ impl Repl {
             diagnostic_rx: None,
             update_check_rx: None,
             plan_mode_flag: std::sync::Arc::new(std::sync::RwLock::new(false)),
-            session_recorder: None,
+            file_history: None,
+            remote_assembly: None,
         };
 
         // Wire provider/model/tier into chat welcome StatusCard via the single
@@ -405,13 +424,34 @@ impl Repl {
             return Self::new_minimal(runtime);
         }
 
-        // Create tool registry and register all tools (sandboxed to project dir)
+        // Create tool registry and register all tools (sandboxed to project
+        // dir). The providers live behind a DynamicWorld decorator so
+        // `/remote use` can swap execution worlds at runtime without a
+        // registry rebuild.
+        let remote_assembly = shannon_remote::assembly::assemble_dynamic();
         let project_dir = std::env::current_dir().unwrap_or_default();
         let mut tool_registry = ToolRegistry::new();
-        let reg_result =
-            register_default_tools_with_project_dir_ex(&mut tool_registry, &project_dir)
-                .map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
+        let reg_result = register_default_tools_with_project_dir_ex_with_providers(
+            &mut tool_registry,
+            &project_dir,
+            &remote_assembly.providers,
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
+
+        // P2.5 wiring — register the `goal_get` / `goal_update` tools so the
+        // model can report completion/blockers through the structured tool
+        // contract. The handle is created here and stored on the Repl; the
+        // accessors proxy into ReplState.goal at the query boundaries.
+        let goal_shared = crate::repl::state::GoalShared::new();
+        if let Err(e) = shannon_tools::goal::register_goal_tools(
+            &mut tool_registry,
+            std::sync::Arc::new(crate::repl::commands::ReplGoalAccess {
+                shared: goal_shared.clone(),
+            }),
+        ) {
+            tracing::warn!("goal tools registration failed: {e}");
+        }
         let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
         // Load and register skills from shannon-skills as tools.
@@ -674,23 +714,54 @@ impl Repl {
                 .join(".shannon")
                 .join("plugins");
             let mut plugin_registry = shannon_core::plugin::PluginRegistry::new(plugins_dir);
-            if runtime.block_on(plugin_registry.load_all()).is_ok() {
+            // §4.10: report broken manifests instead of silently skipping;
+            // valid siblings still load and proceed.
+            if let Err(e) = runtime.block_on(plugin_registry.load_all()) {
+                tracing::warn!("some plugins failed to load and were skipped:\n{e}");
+            }
+            {
                 let enabled = plugin_registry.list_enabled();
                 if !enabled.is_empty() {
                     tracing::info!("Loaded {} plugin(s)", enabled.len());
                     for plugin in &enabled {
+                        // §4.9: gate every Shannon-side execution point on
+                        // the manifest allow-set; empty declarations keep the
+                        // pre-enforcement lenient default.
+                        let policy = std::sync::Arc::new(
+                            shannon_core::plugin::PluginPermissionPolicy::from_manifest(
+                                &plugin.manifest,
+                            ),
+                        );
+                        // write_files enforcement ("declaration IS sandbox"):
+                        // a declared write_files face installs a manifest-
+                        // derived execution world around every stdio spawn
+                        // (discovery + per-call); anything else stays a
+                        // zero-overhead passthrough.
+                        let spawn_guard = shannon_tools::sandbox::plugin_spawn_guard_for_manifest(
+                            &policy,
+                            &plugin.manifest.name,
+                            &plugin.path,
+                        );
                         match plugin.manifest.kind() {
                             Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
                                 if let Some(command) = transport.command() {
                                     let args = transport.args().to_vec();
-                                    match runtime.block_on(shannon_core::discover_tools(
-                                        &plugin.manifest.name,
-                                        command,
-                                        &args,
-                                        &std::collections::HashMap::new(),
-                                        None,
-                                    )) {
+                                    match runtime.block_on(
+                                        shannon_core::plugin::gated_discover_tools_stdio_guarded(
+                                            &policy,
+                                            &plugin.manifest.name,
+                                            command,
+                                            &args,
+                                            &std::collections::HashMap::new(),
+                                            None,
+                                            spawn_guard,
+                                        ),
+                                    ) {
                                         Ok(result) => {
+                                            tool_registry.attach_plugin_policy(
+                                                &plugin.manifest.name,
+                                                std::sync::Arc::clone(&policy),
+                                            );
                                             let tool_count = result.tools.len();
                                             for tool in result.tools {
                                                 if let Err(e) =
@@ -1141,23 +1212,50 @@ impl Repl {
                     .join(".shannon")
                     .join("plugins");
                 let mut plugin_registry = shannon_core::plugin::PluginRegistry::new(plugins_dir);
-                if plugin_registry.load_all().await.is_ok() {
+                // §4.10: report broken manifests instead of silently
+                // skipping; valid siblings still load and proceed.
+                if let Err(e) = plugin_registry.load_all().await {
+                    tracing::warn!("some plugins failed to load and were skipped:\n{e}");
+                }
+                {
                     let enabled = plugin_registry.list_enabled();
                     if !enabled.is_empty() {
                         tracing::info!("Loaded {} plugin(s)", enabled.len());
                         for plugin in &enabled {
+                            // §4.9: gate every Shannon-side execution point on
+                            // the manifest allow-set; empty declarations keep
+                            // the pre-enforcement lenient default.
+                            let policy = std::sync::Arc::new(
+                                shannon_core::plugin::PluginPermissionPolicy::from_manifest(
+                                    &plugin.manifest,
+                                ),
+                            );
+                            // write_files enforcement: declared write_files ⇒
+                            // stdio spawns run inside the manifest-derived
+                            // execution world; otherwise passthrough.
+                            let spawn_guard = shannon_tools::sandbox::plugin_spawn_guard_for_manifest(
+                                &policy,
+                                &plugin.manifest.name,
+                                &plugin.path,
+                            );
                             match plugin.manifest.kind() {
                                 Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
                                     if let Some(command) = transport.command() {
                                         let args = transport.args().to_vec();
-                                        match shannon_core::discover_tools(
+                                        match shannon_core::plugin::gated_discover_tools_stdio_guarded(
+                                            &policy,
                                             &plugin.manifest.name,
                                             command,
                                             &args,
                                             &std::collections::HashMap::new(),
                                             None,
+                                            spawn_guard,
                                         ).await {
                                             Ok(result) => {
+                                                tool_registry.attach_plugin_policy(
+                                                    &plugin.manifest.name,
+                                                    std::sync::Arc::clone(&policy),
+                                                );
                                                 let tool_count = result.tools.len();
                                                 for tool in result.tools {
                                                     if let Err(e) = tool_registry.register(Box::new(tool)) {
@@ -1177,6 +1275,19 @@ impl Repl {
                                     }
                                 }
                                 Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
+                                    // Prompt-driven extension: the host reads
+                                    // the entry file and the prompt drives
+                                    // model turns — both faces must be granted.
+                                    if let Err(e) = shannon_core::plugin::admit_prompt_based_extension(
+                                        &policy,
+                                        &plugin.manifest.name,
+                                    ) {
+                                        tracing::warn!(
+                                            "Command plugin '{}' not registered: {e}",
+                                            plugin.manifest.name
+                                        );
+                                        continue;
+                                    }
                                     let plugin_dir = plugin.path.parent()
                                         .map(|p| p.to_path_buf())
                                         .unwrap_or_default();
@@ -1218,6 +1329,18 @@ impl Repl {
                                     tracing::info!("Registered command '/plugin:{}' from plugin '{}'", name, plugin.manifest.name);
                                 }
                                 Ok(shannon_core::plugin::PluginKind::Skill { trigger, template }) => {
+                                    // Same prompt-extension faces as commands:
+                                    // entry read + model turns must be granted.
+                                    if let Err(e) = shannon_core::plugin::admit_prompt_based_extension(
+                                        &policy,
+                                        &plugin.manifest.name,
+                                    ) {
+                                        tracing::warn!(
+                                            "Skill plugin '{}' not registered: {e}",
+                                            plugin.manifest.name
+                                        );
+                                        continue;
+                                    }
                                     let plugin_dir = plugin.path.parent()
                                         .map(|p| p.to_path_buf())
                                         .unwrap_or_default();
@@ -1310,6 +1433,7 @@ impl Repl {
             running: false,
             query_engine: Some(query_engine),
             state_manager: StateManager::new(),
+            goal_shared,
             command_registry,
             command_parser: CommandParser::new(),
             shared_executor,
@@ -1371,7 +1495,8 @@ impl Repl {
             diagnostic_rx: None,
             update_check_rx: None,
             plan_mode_flag: plan_mode_flag.clone(),
-            session_recorder: None,
+            file_history: reg_result.file_history.clone(),
+            remote_assembly: Some(std::sync::Arc::new(remote_assembly)),
         };
 
         // Wire provider/model/tier into chat welcome StatusCard via the single
@@ -1759,6 +1884,13 @@ impl Repl {
                 }
             }
 
+            // P2.4 — fire a due blocked-goal check-in (idle-time hook; we
+            // are NOT inside handle_query here, so submitting is safe).
+            if commands::maybe_fire_check_in(self) {
+                // The check-in submitted a query — fall through to the event
+                // loop; handle_query drives it to completion.
+            }
+
             render::draw_frame(&mut terminal, self)?;
 
             // Handle events
@@ -1788,29 +1920,18 @@ impl Repl {
                 }
             });
 
-            // Auto-save session for --resume support
+            // Persist user-curation metadata (§4.6 cutover): the
+            // conversation already lives in events.jsonl — only a /rename
+            // title needs writing, merged onto existing branch lineage.
             if self.current_turn > 0 {
-                let messages = engine.conversation_history();
-                let metadata = shannon_engine::state::SessionPersistMetadata {
-                    model: self.state.model.clone().unwrap_or_default(),
-                    created_at: self.session_started_at.unwrap_or_else(chrono::Utc::now),
-                    updated_at: chrono::Utc::now(),
-                    total_input_tokens: self.state.tokens_used,
-                    total_output_tokens: 0,
-                    turn_count: messages.iter().filter(|m| m.role == "user").count(),
-                    // Persist any /rename title; save_session merges with the
-                    // existing on-disk metadata so this won't clobber branch
-                    // lineage or the original creation time.
-                    title: self.state.session_title.clone(),
-                    parent_session_id: None,
-                    branch_point_message_index: None,
-                    project_path: Some(self.state.working_directory.clone()),
-                };
-                if let Err(e) =
-                    self.state_manager
-                        .save_session(&engine.session_id(), &messages, &metadata)
-                {
-                    tracing::debug!("Auto-save session error: {e}");
+                if let Err(e) = self.l0_store().save_sidecar(
+                    &engine.session_id(),
+                    &shannon_core::session_log::SessionSidecar {
+                        title: self.state.session_title.clone(),
+                        ..Default::default()
+                    },
+                ) {
+                    tracing::debug!("Session sidecar save error: {e}");
                 }
             }
         }

@@ -1,0 +1,82 @@
+# Dogfood loop configuration — plan §5.3/§6. CLI flags override these values.
+paths:
+  shannon_bin: target/release/shannon
+
+matrix:
+  # Progressive ramp (plan §5.2): [S] -> [S,M] -> [S,M,L]. Graduation and
+  # rollback are judged by the supervisor from summary history; bump manually
+  # until the auto-ramp lands.
+  #
+  # Promotion history (artifacts/2026-08-22T194847+0800/iter-*):
+  #   2026-08-21  [S]            2× all-green full-S, 0 new sigs
+  #   2026-08-22  [S, M]         3× consecutive all-green over 4 iters
+  #                              (iter-02/03/04 = 11/11 pass each), zero
+  #                              new signatures; ledger in/out split now
+  #                              accumulates correctly (Bug A/B/C fixed
+  #                              in commit 47e94a94), so the day-total
+  #                              reached 1.65M tokens without the
+  #                              previous zero-pollution masking.
+  # L-tier gate: P2-6 perf channel landed (7761e4d2); only P2-5 (the L
+  # task set) remains. Cost policy (plan §6.2, decided 2026-08-22):
+  #   - first live L run is a CALIBRATION run — read ledger in/out +
+  #     cache_read share before any budget tuning;
+  #   - if still tight after calibration, add l_cadence (live-L every N
+  #     iters, default 3) rather than replay substitution;
+  #   - replay is the regression channel only (local replay_agent-style
+  #     suite + leak bench + chaos injection); it NEVER counts toward
+  #     the §6 all-green-with-L graduation evidence, and gate reruns ×2
+  #     stay live.
+  task_tiers: [S, M, L]
+  parallel_s: 3
+  parallel_m: 1
+
+build:
+  command: [cargo, build, --release, -p, shannon-cli]
+
+budget:                       # token three-layer gate (plan §6)
+  # Recalibrated 2026-08-23 against EXACT metering (engine fix 2beb17b6):
+  # the pre-2beb17b6 ledger under-counted MiniMax ~48x, so the old 4M/10M
+  # numbers were calibrated to a fiction. Measured gross (95% cache-read,
+  # ~10x cheaper than billable): S+M = 5.85M (run 2026-08-23T034558 — L
+  # starved at the old 4M gate), L = ~3M, fixer <=3x0.8M, gate ×2 reruns
+  # ~4.7M → worst-case iteration ~16M. Day 35M ≈ two full iterations
+  # including gates; month is a runaway backstop only (loop is manual).
+  per_iteration_tokens: 16000000
+  daily_tokens: 35000000
+  monthly_tokens: 200000000
+
+timing:
+  hang_no_output_s: 900
+
+perf:
+  enabled: true               # P1b graduation 2026-08-21 (baseline: 77 green)
+  baseline_file: artifacts/perf-baseline.json
+  timeout_s: 1800
+
+fixer:
+  max_sessions_per_iter: 3
+  # Calibration history:
+  #   2026-08-22 (231159 run): 40 cap — both briefs 41 turns, zero commits.
+  #   2026-08-23 (003130 run): 80 cap — BOTH briefs again exhausted at 81
+  #     turns ($5.5 / $5.1, 22.5 / 23 min). brief-01 had fully delivered
+  #     (fix + report + tests committed by ~turn 80) but committed under a
+  #     generic message; brief-02 died mid-implementation of an engine
+  #     change. The cap, not time/cost, remains the binding constraint for
+  #     P0-grade engine bugs. 150 turns: worst case ~42 min (< 3600s
+  #     timeout) and ~$10/brief.
+  max_turns: 150
+  session_timeout_s: 3600
+  tier_models:                # provider_tier -> SHANNON_MODEL (null = default)
+    fast: null
+    standard: null
+
+gate:
+  rerun_count: 2
+
+stop:
+  consecutive_all_green: 3
+  consecutive_no_new: 2
+  max_iters: 50
+
+artifacts:
+  keep_runs: 10

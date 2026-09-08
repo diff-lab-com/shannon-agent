@@ -1712,6 +1712,7 @@ mod tests {
                 allowed_tools: vec!["bash".into()],
                 permission_mode: Some("auto".into()),
                 isolation: Some("worktree".into()),
+                disallowed_tools: None,
             },
         );
 
@@ -2158,6 +2159,7 @@ mod tests {
                     allowed_tools: vec!["bash".into()],
                     permission_mode: None,
                     isolation: None,
+                    disallowed_tools: None,
                 },
             );
         }

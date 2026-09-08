@@ -6,7 +6,10 @@
 // File mtime is the time-series proxy — task JSON has no created_at field.
 
 import { useEffect, useState, useCallback } from 'react'
+import StatCard from '@/components/ui/stat-card'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import * as api from '@/lib/tauri-api'
 import type { OpcMetrics } from '@/types'
 import LoadingState from '@/components/ui/loading-state'
@@ -17,7 +20,7 @@ const STATUS_TONES: Record<string, string> = {
   done: 'bg-tertiary/15 text-tertiary border-tertiary/40',
   in_progress: 'bg-primary/15 text-primary border-primary/40',
   running: 'bg-primary/15 text-primary border-primary/40',
-  pending: 'bg-secondary/15 text-secondary border-secondary/40',
+  pending: 'bg-secondary-container text-on-secondary-container border-outline-variant/40',
   todo: 'bg-outline/15 text-on-surface-variant border-outline/40',
   deprecated: 'bg-error/15 text-error border-error/40',
 }
@@ -82,16 +85,17 @@ export default function OpcAnalyticsDashboard() {
           <span className="material-symbols-outlined icon-md text-primary">monitoring</span>
           <h3 className="font-headline-md text-[16px] font-bold text-on-surface">{t('opc.analytics.title')}</h3>
         </div>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={refresh}
           disabled={loading}
-          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40"
           aria-label={t('opc.analytics.refreshAria')}
+          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs gap-1"
         >
           <span className="material-symbols-outlined text-[14px]">{loading ? 'hourglass_top' : 'refresh'}</span>
           {t('opc.analytics.refresh')}
-        </button>
+        </Button>
       </header>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
@@ -109,7 +113,10 @@ export default function OpcAnalyticsDashboard() {
         />
       </div>
 
-      <div>
+      {/* First-screen density: daily chart (2/3) beside the status/priority
+          breakdowns (right column) so both read without scrolling. */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-md items-start">
+        <div className="lg:col-span-2">
         <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
           <span className="material-symbols-outlined text-[14px] text-on-surface-variant">bar_chart</span>
           {t('opc.analytics.dailyActivity')}
@@ -117,13 +124,37 @@ export default function OpcAnalyticsDashboard() {
         {metrics.daily.length === 0 ? (
           <p className="font-label-sm text-on-surface-variant italic">{t('opc.analytics.noActivity')}</p>
         ) : (
-          <div className="flex items-end justify-between gap-sm h-32" role="img" aria-label={t('opc.analytics.dailyChartAria')}>
+          <div className="flex gap-sm" role="img" aria-label={t('opc.analytics.dailyChartAria')}>
+            {/* Y axis: scale ticks so bar heights are readable without hover. */}
+            <div className="relative h-32 w-8 shrink-0" aria-hidden="true">
+              {[1, 0.5, 0].map(f => (
+                <span
+                  key={f}
+                  className="absolute right-0 -translate-y-1/2 font-label-sm text-[9px] text-on-surface-variant tabular-nums"
+                  style={{ top: `${(1 - f) * 100}%` }}
+                >
+                  {Math.round(maxDaily * f)}
+                </span>
+              ))}
+            </div>
+            <div className="relative flex-1 h-32">
+              {/* Gridlines at 0 / half / max of the shared scale. */}
+              <div className="absolute inset-0" aria-hidden="true">
+                {[0, 0.5, 1].map(f => (
+                  <div
+                    key={f}
+                    className={cn('absolute inset-x-0 border-t', f === 0 ? 'border-outline-variant/40' : 'border-outline-variant/20')}
+                    style={{ top: `${f * 100}%` }}
+                  />
+                ))}
+              </div>
+              <div className="absolute inset-0 flex items-end justify-between gap-sm">
             {metrics.daily.map(d => {
               const createdH = (d.created / maxDaily) * 100
               const completedH = (d.completed / maxDaily) * 100
               const shortDay = d.date.slice(5) // MM-DD
               return (
-                <div key={d.date} className="flex-1 flex flex-col items-center gap-xs">
+                <div key={d.date} className="flex-1 flex flex-col items-center gap-xs h-full justify-end">
                   <div className="w-full flex items-end justify-center gap-0.5 h-24">
                     <div
                       className="w-3 bg-primary/70 rounded-t hover:bg-primary transition-colors"
@@ -140,6 +171,8 @@ export default function OpcAnalyticsDashboard() {
                 </div>
               )
             })}
+              </div>
+            </div>
           </div>
         )}
         <div className="flex items-center gap-md mt-sm font-label-sm text-[11px] text-on-surface-variant">
@@ -148,7 +181,7 @@ export default function OpcAnalyticsDashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
+        <div className="flex flex-col gap-md">
         <div>
           <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
             <span className="material-symbols-outlined text-[14px] text-on-surface-variant">bubble_chart</span>
@@ -160,7 +193,7 @@ export default function OpcAnalyticsDashboard() {
             <ul className="flex flex-col gap-xs">
               {metrics.by_status.map(s => (
                 <li key={s.status} className="flex items-center gap-sm">
-                  <span className={`inline-flex items-center px-xs py-1 rounded-full border font-label-sm text-[10px] font-bold uppercase tracking-wide w-32 justify-center ${toneFor(s.status)}`}>
+                  <span className={cn("inline-flex items-center px-xs py-1 rounded-full border font-label-sm text-[10px] font-bold uppercase tracking-wide w-32 justify-center", toneFor(s.status))}>
                     {s.status}
                   </span>
                   <div className="flex-1 bg-surface-container-low rounded-full h-2 overflow-hidden">
@@ -200,6 +233,7 @@ export default function OpcAnalyticsDashboard() {
             </ul>
           )}
         </div>
+        </div>
       </div>
 
       <div>
@@ -229,14 +263,4 @@ export default function OpcAnalyticsDashboard() {
   )
 }
 
-function StatCard({ label, value, icon }: { label: string; value: string | number; icon: string }) {
-  return (
-    <div className="bg-surface-container-low rounded-xl p-md flex items-center gap-sm border border-outline-variant/20">
-      <span className="material-symbols-outlined icon-md text-primary">{icon}</span>
-      <div className="min-w-0">
-        <div className="font-headline-md text-[20px] font-bold text-on-surface leading-none">{value}</div>
-        <div className="font-label-sm text-[11px] text-on-surface-variant mt-1">{label}</div>
-      </div>
-    </div>
-  )
-}
+

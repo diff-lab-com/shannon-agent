@@ -1,5 +1,8 @@
 import { useIntl } from 'react-intl'
 import type { SkillCatalogEntry } from '@/lib/tauri-api'
+import { SidePanel, SidePanelBody, SidePanelCloseButton, SidePanelHeader, SidePanelTitle } from '@/components/ui/side-panel'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 interface SkillDetailDrawerProps {
   entry: SkillCatalogEntry | null
@@ -34,8 +37,8 @@ function describeSource(entry: SkillCatalogEntry): string {
 }
 
 const TRUST_LABELS: Record<SkillCatalogEntry['trust'], { cls: string }> = {
-  verified: { cls: 'bg-primary-container/50 text-on-primary-container' },
-  official: { cls: 'bg-secondary-container/50 text-on-secondary-container' },
+  verified: { cls: 'bg-primary-container text-on-primary-container' },
+  official: { cls: 'bg-secondary-container text-on-secondary-container' },
   community: { cls: 'bg-tertiary-container/50 text-on-tertiary-container' },
   unknown: { cls: 'bg-surface-container-highest text-on-surface-variant' },
 }
@@ -57,36 +60,23 @@ export default function SkillDetailDrawer({
   const lastUpdated = formatLastUpdated(entry.last_updated)
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-end"
-      onClick={onClose}
-      onKeyDown={e => { if (e.key === 'Escape') onClose() }}
-      role="dialog"
-      aria-modal="true"
-      aria-label={intl.formatMessage({ id: 'extensions.skills.drawer.ariaLabel' }, { name: entry.name })}
+    <SidePanel
+      open={!!entry}
+      onClose={onClose}
+      ariaLabel={intl.formatMessage({ id: 'extensions.skills.drawer.ariaLabel' }, { name: entry.name })}
+      width="440px"
     >
-      <div className="bg-black/20 absolute inset-0" />
-      <div
-        className="relative w-[440px] max-w-full bg-surface-container-lowest shadow-2xl border-l border-outline-variant/20 p-xl overflow-y-auto"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between mb-lg gap-sm">
-          <div className="min-w-0">
-            <h3 className="font-headline-md text-on-surface font-bold truncate">{entry.name}</h3>
-            <span className={`inline-block mt-xs text-label-xs px-sm py-[2px] rounded-full font-bold ${trust.cls}`}>
-              {intl.formatMessage({ id: trustTextKey })}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('extensions.skills.drawer.close')}
-            className="p-xs rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface shrink-0"
-          >
-            <span className="material-symbols-outlined text-[20px]">close</span>
-          </button>
+      <SidePanelHeader className="items-start">
+        <div className="min-w-0 flex-1">
+          <SidePanelTitle>{entry.name}</SidePanelTitle>
+          <span className={cn("inline-block mt-xs text-label-xs px-sm py-[2px] rounded-full font-bold", trust.cls)}>
+            {intl.formatMessage({ id: trustTextKey })}
+          </span>
         </div>
+        <SidePanelCloseButton onClick={onClose} label={t('extensions.skills.drawer.close')} />
+      </SidePanelHeader>
 
+      <SidePanelBody>
         <dl className="space-y-md">
           <div>
             <dt className="text-label-sm text-on-surface-variant mb-xs">
@@ -176,7 +166,7 @@ export default function SkillDetailDrawer({
                     href={entry.homepage_url}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-label-md text-primary hover:underline break-all inline-flex items-center gap-xs"
+                    className="text-label-md text-link hover:underline break-all inline-flex items-center gap-xs"
                   >
                     <span className="material-symbols-outlined text-[14px]">open_in_new</span>
                     {entry.homepage_url}
@@ -188,16 +178,16 @@ export default function SkillDetailDrawer({
         </dl>
 
         <div className="mt-xl flex gap-sm">
-          <button
+          <Button
             type="button"
             onClick={onInstall}
             disabled={busy || installed}
-            className="flex-1 px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 px-md py-sm rounded-lg hover:bg-primary/90 disabled:cursor-not-allowed"
           >
             {busy ? '…' : installed ? t('extensions.skills.installedBtn') : t('extensions.skills.installBtn')}
-          </button>
+          </Button>
         </div>
-      </div>
-    </div>
+      </SidePanelBody>
+    </SidePanel>
   )
 }

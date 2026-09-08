@@ -125,6 +125,29 @@ fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
     Regex::new(&regex_str)
 }
 
+/// Extract the L0-mirrorable portion of a tool's metadata (§4.12 W3-3b).
+///
+/// Returns the structured denial record when a tool labeled its result as
+/// `sandbox_denied`; `Null` otherwise. The value flows into
+/// `QueryEvent::ToolUseResult.meta` and from
+/// there into the session log's `tool/result.meta` — no new event kind, per
+/// the §4.1 vocabulary contract.
+pub fn sandbox_meta_from(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> serde_json::Value {
+    let classified = metadata
+        .get("classification")
+        .and_then(|v| v.as_str())
+        .is_some_and(|c| c == shannon_tool_interface::SANDBOX_DENIED_CLASSIFICATION);
+    if !classified {
+        return serde_json::Value::Null;
+    }
+    serde_json::json!({
+        "classification": shannon_tool_interface::SANDBOX_DENIED_CLASSIFICATION,
+        "sandbox": metadata.get("sandbox").cloned().unwrap_or(serde_json::Value::Null),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // ToolRegistry
 // ---------------------------------------------------------------------------
@@ -162,6 +185,10 @@ pub struct ToolRegistry {
     /// tool call with `tokio::time::timeout` and returns `ToolError::Timeout`
     /// on expiry.
     execution_timeout: Option<std::time::Duration>,
+    /// Manifest-derived permission policies for plugin-owned MCP namespaces
+    /// (`mcp__<plugin>__*`). Empty by default — plain `.mcp.json` servers are
+    /// never gated; only plugin loading attaches entries.
+    plugin_policies: std::sync::RwLock<crate::plugin::permissions::PluginToolPolicies>,
 }
 
 impl ToolRegistry {
@@ -186,6 +213,55 @@ impl ToolRegistry {
             version: std::sync::atomic::AtomicU64::new(0),
             streaming_cache: None,
             execution_timeout: None,
+            plugin_policies: std::sync::RwLock::new(
+                crate::plugin::permissions::PluginToolPolicies::new(),
+            ),
+        }
+    }
+
+    /// Attach (or replace) the manifest policy governing a plugin's MCP tool
+    /// namespace. Called by the plugin loaders; see
+    /// [`crate::plugin::permissions`] for the enforcement semantics.
+    pub fn attach_plugin_policy(
+        &self,
+        owner: &str,
+        policy: std::sync::Arc<crate::plugin::permissions::PluginPermissionPolicy>,
+    ) {
+        Self::recover_lock(self.plugin_policies.write()).attach(owner, policy);
+    }
+
+    /// Manifest gate for the `mcp_tools` face, applied where a call is routed
+    /// into a plugin-owned namespace. Policies are derived from declarations,
+    /// so an empty index or an undeclared manifest lets everything through.
+    fn check_plugin_permission(&self, name: &str) -> Result<(), ToolError> {
+        let guard = Self::recover_lock(self.plugin_policies.read());
+        if guard.is_empty() {
+            return Ok(());
+        }
+        let Some((owner, policy)) = guard.policy_for_tool(name) else {
+            return Ok(());
+        };
+        match policy.check(owner, crate::plugin::PluginPermission::McpTools) {
+            Ok(()) => {
+                crate::plugin::permissions::emit_decision(
+                    owner,
+                    crate::plugin::PluginPermission::McpTools,
+                    crate::plugin::permissions::PermissionDecision::Allowed,
+                    "tool registry routing",
+                    policy.permissions(),
+                );
+                Ok(())
+            }
+            Err(err) => {
+                crate::plugin::permissions::emit_decision(
+                    owner,
+                    crate::plugin::PluginPermission::McpTools,
+                    crate::plugin::permissions::PermissionDecision::Denied,
+                    "tool registry routing",
+                    policy.permissions(),
+                );
+                Err(ToolError::ExecutionFailed(err.to_string()))
+            }
         }
     }
 
@@ -255,6 +331,20 @@ impl ToolRegistry {
         match &self.tool_filter {
             Some(filter) => filter.is_allowed(name),
             None => true,
+        }
+    }
+
+    /// Lookup error distinguishing "no such tool" from "registered but
+    /// filtered out by the allowed-tools list". The latter message tells the
+    /// model to switch to an allowed tool instead of retrying what looks
+    /// like a broken tool (dogfood m3 2026-08-23: a hallucinated `Bash`
+    /// call inside a Read/Grep/Glob-restricted session).
+    fn lookup_error(&self, name: &str) -> ToolError {
+        let registered = Self::recover_lock(self.tools.read()).contains_key(name);
+        if registered && !self.is_allowed(name) {
+            ToolError::NotFound(format!("{name} (not in this session's allowed-tools list)"))
+        } else {
+            ToolError::NotFound(name.to_string())
         }
     }
 
@@ -417,9 +507,8 @@ impl ToolRegistry {
     /// will return the cached result without re-executing the tool,
     /// as long as the entry has not expired.
     pub async fn execute(&self, name: &str, input: Value) -> ToolResult<ToolOutput> {
-        let tool = self
-            .get(name)
-            .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
+        self.check_plugin_permission(name)?;
+        let tool = self.get(name).ok_or_else(|| self.lookup_error(name))?;
 
         let is_read_only = tool.is_read_only();
 
@@ -536,9 +625,8 @@ impl ToolRegistry {
         input: Value,
         progress: shannon_tool_interface::BoxedProgressSender,
     ) -> ToolResult<ToolOutput> {
-        let tool = self
-            .get(name)
-            .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
+        self.check_plugin_permission(name)?;
+        let tool = self.get(name).ok_or_else(|| self.lookup_error(name))?;
 
         let is_read_only = tool.is_read_only();
 
@@ -809,6 +897,77 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.content, "Executed");
+    }
+
+    /// §4.9: a plugin namespace with `mcp_tools` declared routes calls;
+    /// without it the registry refuses before reaching the tool, and tools
+    /// outside any governed namespace stay untouched.
+    #[tokio::test]
+    async fn registry_gate_enforces_mcp_tools_declaration() {
+        use crate::plugin::{
+            PluginPermission,
+            permissions::{DENY_PREFIX, PluginPermissionPolicy},
+        };
+        use std::sync::Arc;
+
+        let registry = ToolRegistry::new();
+        registry
+            .register(Box::new(DummyTool {
+                name: "mcp__probe__write".to_string(),
+            }))
+            .unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "mcp__open__read".to_string(),
+            }))
+            .unwrap();
+        registry.attach_plugin_policy(
+            "probe",
+            Arc::new(PluginPermissionPolicy::from_permissions(vec![
+                PluginPermission::ExecuteCommands,
+            ])),
+        );
+
+        let err = registry
+            .execute("mcp__probe__write", json!({}))
+            .await
+            .expect_err("mcp_tools undeclared -> refused");
+        // ToolError::ExecutionFailed wraps the denial with channel wording;
+        // the unified text must appear verbatim.
+        let text = err.to_string();
+        assert!(text.contains(DENY_PREFIX), "{text}");
+        assert!(text.contains("mcp_tools"), "{text}");
+        assert!(text.contains("'probe'"), "attribution: {text}");
+
+        // Namespaces without an attached policy are not affected.
+        let ok = registry
+            .execute("mcp__open__read", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(ok.content, "Executed");
+    }
+
+    /// An unspecified policy behaves exactly like no policy at all.
+    #[tokio::test]
+    async fn registry_gate_is_noop_for_unspecified_manifests() {
+        use crate::plugin::permissions::{DENY_PREFIX, PluginPermissionPolicy};
+        use std::sync::Arc;
+
+        let registry = ToolRegistry::new();
+        registry
+            .register(Box::new(DummyTool {
+                name: "mcp__legacy__tool".to_string(),
+            }))
+            .unwrap();
+        registry.attach_plugin_policy("legacy", Arc::new(PluginPermissionPolicy::unspecified()));
+
+        let result = registry.execute("mcp__legacy__tool", json!({})).await;
+        match result {
+            Ok(output) => assert_eq!(output.content, "Executed"),
+            Err(e) => panic!("undeclared manifest must pass: {e}"),
+        }
+        let text = "plugin permission denied".to_string();
+        assert_eq!(text, DENY_PREFIX);
     }
 
     // ── Tool Registry Integration Tests ───────────────────────────────────
@@ -1170,6 +1329,42 @@ mod tests {
         registry.set_allowed_tools(Some(vec!["Bash".into()]));
         assert!(registry.get("Bash").is_some());
         assert!(registry.get("Read").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_filtered_tool_error_names_the_allowed_tools_list() {
+        // A registered-but-filtered tool must say so: the model then switches
+        // to an allowed tool instead of retrying what looks broken (dogfood
+        // m3 2026-08-23 — hallucinated Bash inside a Read/Grep/Glob session).
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Box::new(DummyTool {
+                name: "Bash".into(),
+            }))
+            .unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "Read".into(),
+            }))
+            .unwrap();
+        registry.set_allowed_tools(Some(vec!["Read".into()]));
+
+        let err = registry
+            .execute("Bash", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)));
+        assert!(
+            err.to_string().contains("allowed-tools list"),
+            "message should name the restriction: {err}"
+        );
+
+        // A genuinely unknown tool keeps the plain message.
+        let err = registry
+            .execute("NoSuchTool", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Tool not found: NoSuchTool");
     }
 
     #[tokio::test]

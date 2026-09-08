@@ -6,12 +6,13 @@ import { I18nProvider } from '@/i18n'
 import { MemoryRouter } from 'react-router-dom'
 import { Sidebar } from '@/components/Sidebar'
 
+// The /triage badge reads `get_inbox_stats().pending` via useInboxStats (P0-3).
 const statsMock = vi.hoisted(() => ({
-  current: { unread: 3, total: 5 },
+  current: { pending: 3, today: 5 },
 }))
 
-vi.mock('@/hooks/scheduled-tasks', () => ({
-  useTriageStats: () => ({
+vi.mock('@/hooks/inbox', () => ({
+  useInboxStats: () => ({
     stats: statsMock.current,
     refresh: vi.fn(),
   }),
@@ -29,10 +30,10 @@ function wrap(ui: React.ReactElement) {
 
 describe('Sidebar Badge', () => {
   beforeEach(() => {
-    statsMock.current = { unread: 3, total: 5 }
+    statsMock.current = { pending: 3, today: 5 }
   })
 
-  it('shows unread count badge when > 0', async () => {
+  it('shows pending count badge when > 0', async () => {
     render(wrap(<Sidebar />))
     await waitFor(() => {
       const badge = screen.getByText('3')
@@ -40,8 +41,8 @@ describe('Sidebar Badge', () => {
     })
   })
 
-  it('hides badge when unread count is 0', async () => {
-    statsMock.current = { unread: 0, total: 0 }
+  it('hides badge when pending count is 0', async () => {
+    statsMock.current = { pending: 0, today: 0 }
     render(wrap(<Sidebar />))
     await waitFor(() => {
       expect(screen.queryByText('0')).not.toBeInTheDocument()

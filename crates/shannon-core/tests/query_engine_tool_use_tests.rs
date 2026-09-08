@@ -134,6 +134,7 @@ mod tool_use_tests {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let client = shannon_engine::api::LlmClient::new(config);
         QueryEngine::new(
@@ -150,6 +151,7 @@ mod tool_use_tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: msg.to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
@@ -581,6 +583,699 @@ mod tool_use_tests {
         assert!(
             all_text.contains("hello world"),
             "Tool result from turn 1 must survive into turn 2"
+        );
+    }
+}
+
+// ── OpenAI-compat trailing usage frame regression (dogfood 2026-08-23) ──
+
+mod openai_trailing_usage_tests {
+    //! MiniMax/DeepSeek-style SSE: the real usage arrives in a separate
+    //! `choices: []` frame AFTER the `finish_reason` chunk. On tool turns
+    //! the engine breaks out of the stream to execute tools, so that frame
+    //! must be drained before abandoning the stream — otherwise the whole
+    //! request is metered as zero tokens (dogfood 2026-08-23 l1 lost 62 of
+    //! 63 requests this way).
+
+    use async_trait::async_trait;
+    use futures::StreamExt;
+    use mockito::Server;
+    use serde_json::{Value, json};
+    use shannon_core::query_engine::{
+        QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
+    };
+    use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
+    use shannon_engine::api::{LlmClientConfig, LlmProvider};
+    use shannon_engine::permissions::PermissionManager;
+    use shannon_engine::state::StateManager;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    struct EchoTool;
+    #[async_trait]
+    impl Tool for EchoTool {
+        async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+            Ok(ToolOutput::success("echo-ok".to_string()))
+        }
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn description(&self) -> &str {
+            "echo test tool"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object", "properties": {}})
+        }
+    }
+
+    /// Tool-call turn: tool_calls chunk, then a `finish_reason: "tool_calls"`
+    /// chunk WITHOUT usage, then the trailing usage-only frame (empty
+    /// `choices`), then [DONE]. This is the recorded MiniMax M-series shape.
+    fn openai_sse_tool_then_usage(prompt: u64, completion: u64) -> String {
+        let chunks = [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"echo","arguments":"{}"}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ];
+        let usage = format!(
+            r#"{{"choices":[],"usage":{{"prompt_tokens":{},"completion_tokens":{},"total_tokens":{},"prompt_tokens_details":{{"cached_tokens":0}}}}}}"#,
+            prompt,
+            completion,
+            prompt + completion
+        );
+        let mut body = String::new();
+        for c in chunks.iter().chain(std::iter::once(&usage.as_str())) {
+            body.push_str("data: ");
+            body.push_str(c);
+            body.push_str("\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    /// Final text turn: content delta, `finish_reason: "stop"` chunk without
+    /// usage, then the trailing usage-only frame, then [DONE].
+    fn openai_sse_text_then_usage(prompt: u64, completion: u64) -> String {
+        let chunks = [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":"all done"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+        ];
+        let usage = format!(
+            r#"{{"choices":[],"usage":{{"prompt_tokens":{},"completion_tokens":{},"total_tokens":{},"prompt_tokens_details":{{"cached_tokens":0}}}}}}"#,
+            prompt,
+            completion,
+            prompt + completion
+        );
+        let mut body = String::new();
+        for c in chunks.iter().chain(std::iter::once(&usage.as_str())) {
+            body.push_str("data: ");
+            body.push_str(c);
+            body.push_str("\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    async fn setup_openai_engine(bodies: Vec<String>) -> (QueryEngine, mockito::ServerGuard) {
+        let mut server = Server::new_async().await;
+        for body in bodies {
+            server
+                .mock("POST", "/v1/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(body)
+                .expect(1)
+                .create();
+        }
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.url(),
+            model: "test-model".to_string(),
+            max_tokens: 4096,
+            timeout_seconds: 10,
+            api_version: "2023-06-01".to_string(),
+            provider: LlmProvider::OpenAI,
+            extra_headers: HashMap::new(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 0,
+            budget_tokens: None,
+            reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
+        };
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool)).unwrap();
+        let engine = QueryEngine::new(
+            shannon_engine::api::LlmClient::new(config),
+            registry,
+            PermissionManager::new(),
+            StateManager::new(),
+            QueryEngineConfig::default(),
+        );
+        (engine, server)
+    }
+
+    async fn run_query(engine: &QueryEngine) -> Vec<QueryEvent> {
+        let ctx = QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message: "use the echo tool".to_string(),
+            attachments: Vec::new(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: Some(4096),
+                model: "test-model".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        };
+        let stream = engine.process_query(ctx, None).await;
+        let mut events = Vec::new();
+        let mut s = Box::pin(stream);
+        while let Some(Ok(event)) = s.next().await {
+            events.push(event);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn test_openai_trailing_usage_frame_counted_on_tool_turn() {
+        let (engine, _server) = setup_openai_engine(vec![
+            openai_sse_tool_then_usage(100, 10),
+            openai_sse_text_then_usage(200, 20),
+        ])
+        .await;
+        let events = run_query(&engine).await;
+
+        // Tool turn must count the trailing frame, not zero.
+        let turn_tokens: Vec<u64> = events
+            .iter()
+            .filter_map(|e| match e {
+                QueryEvent::TurnCompleted { tokens_used, .. } => Some(*tokens_used),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            turn_tokens.first(),
+            Some(&110),
+            "tool turn tokens must come from the trailing usage frame"
+        );
+
+        // Cost must accumulate BOTH requests: 100+200 in, 10+20 out.
+        let cost = events.iter().rev().find_map(|e| match e {
+            QueryEvent::Cost {
+                input_tokens,
+                output_tokens,
+                ..
+            } => Some((*input_tokens, *output_tokens)),
+            _ => None,
+        });
+        assert_eq!(
+            cost,
+            Some((300, 30)),
+            "Cost totals must include the tool request's trailing usage frame"
+        );
+    }
+}
+
+mod openai_truncation_continuation_tests {
+    //! Regression (dogfood 2026-08-23 l1-bulk-migrate, outcome_fail): the
+    //! model spent the entire 4096-token output budget on `<think>`
+    //! reasoning; the stream closed with `finish_reason: "length"`, zero
+    //! visible answer and no tool calls. The engine treated that truncated
+    //! no-op message as a final turn — the headless run exited 0 without
+    //! writing any of the expected artifacts. A truncation stop with no
+    //! tool calls must re-prompt the model to continue instead of
+    //! completing the query.
+
+    use futures::StreamExt;
+    use mockito::{Mock, Server};
+    use shannon_core::query_engine::{
+        QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
+    };
+    use shannon_core::tools::ToolRegistry;
+    use shannon_engine::api::{LlmClientConfig, LlmProvider, MessageContent};
+    use shannon_engine::permissions::PermissionManager;
+    use shannon_engine::state::StateManager;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    /// Truncated turn: `<think>` reasoning in content, then a
+    /// `finish_reason: "length"` chunk WITHOUT usage, then the trailing
+    /// usage-only frame (empty `choices`), then [DONE]. This is the
+    /// recorded MiniMax-M3 wire shape: 4095 reasoning tokens, no visible
+    /// answer, no tool calls.
+    fn openai_sse_think_truncated_then_usage(prompt: u64, completion: u64) -> String {
+        let chunks = [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":"<think>Now I have a complete picture. Let me plan the restructure: move customer.rs into src/people/, pricing.rs into src/sales/, update the module declarations"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}"#,
+        ];
+        let usage = format!(
+            r#"{{"choices":[],"usage":{{"prompt_tokens":{},"completion_tokens":{},"total_tokens":{},"prompt_tokens_details":{{"cached_tokens":0}}}}}}"#,
+            prompt,
+            completion,
+            prompt + completion
+        );
+        let mut body = String::new();
+        for c in chunks.iter().chain(std::iter::once(&usage.as_str())) {
+            body.push_str("data: ");
+            body.push_str(c);
+            body.push_str("\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    /// Completed text turn after the continuation re-prompt.
+    fn openai_sse_text_then_usage(prompt: u64, completion: u64) -> String {
+        let chunks = [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":"all done"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+        ];
+        let usage = format!(
+            r#"{{"choices":[],"usage":{{"prompt_tokens":{},"completion_tokens":{},"total_tokens":{},"prompt_tokens_details":{{"cached_tokens":0}}}}}}"#,
+            prompt,
+            completion,
+            prompt + completion
+        );
+        let mut body = String::new();
+        for c in chunks.iter().chain(std::iter::once(&usage.as_str())) {
+            body.push_str("data: ");
+            body.push_str(c);
+            body.push_str("\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    async fn setup_openai_engine(
+        bodies: Vec<String>,
+    ) -> (QueryEngine, Vec<Mock>, mockito::ServerGuard) {
+        let mut server = Server::new_async().await;
+        let mut mocks = Vec::new();
+        for body in bodies {
+            mocks.push(
+                server
+                    .mock("POST", "/v1/chat/completions")
+                    .with_status(200)
+                    .with_header("content-type", "text/event-stream")
+                    .with_body(body)
+                    .expect(1)
+                    .create(),
+            );
+        }
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.url(),
+            model: "test-model".to_string(),
+            max_tokens: 4096,
+            timeout_seconds: 10,
+            api_version: "2023-06-01".to_string(),
+            provider: LlmProvider::OpenAI,
+            extra_headers: HashMap::new(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 0,
+            budget_tokens: None,
+            reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
+        };
+        let engine = QueryEngine::new(
+            shannon_engine::api::LlmClient::new(config),
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+            QueryEngineConfig::default(),
+        );
+        (engine, mocks, server)
+    }
+
+    async fn run_query(engine: &QueryEngine) -> Vec<QueryEvent> {
+        let ctx = QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message: "restructure the crate".to_string(),
+            attachments: Vec::new(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: Some(4096),
+                model: "test-model".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        };
+        let stream = engine.process_query(ctx, None).await;
+        let mut events = Vec::new();
+        let mut s = Box::pin(stream);
+        while let Some(Ok(event)) = s.next().await {
+            events.push(event);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn truncated_think_only_uses_truncation_not_nudge() {
+        // Precedence (A1 vs truncation continuation): a `length`-cut
+        // response whose `<think>` never closes looks like a think-only
+        // response, but the truncation machinery owns it. The think-only
+        // nudge must stay silent so the truncation bound remains a bound.
+        let (engine, mocks, _server) = setup_openai_engine(vec![
+            openai_sse_think_truncated_then_usage(300, 4096),
+            openai_sse_text_then_usage(400, 120),
+        ])
+        .await;
+        let events = run_query(&engine).await;
+
+        for m in &mocks {
+            m.assert();
+        }
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                QueryEvent::Warning { message, .. } if message.contains("output token limit")
+            )),
+            "the truncation continuation must own the re-prompt"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                QueryEvent::Warning { message, .. } if message.contains("re-prompting")
+            )),
+            "the think-only nudge must not fire on an output-limit truncation"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, QueryEvent::Completed { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn length_truncation_without_tool_calls_continues_instead_of_completing() {
+        let (engine, mocks, _server) = setup_openai_engine(vec![
+            openai_sse_think_truncated_then_usage(300, 4096),
+            openai_sse_text_then_usage(400, 120),
+        ])
+        .await;
+        let events = run_query(&engine).await;
+
+        // The truncated response must NOT have ended the query: a second
+        // request (the continuation re-prompt) went out and completed it.
+        for m in &mocks {
+            m.assert();
+        }
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, QueryEvent::Completed { .. })),
+            "query must complete via the continuation, not the truncation"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, QueryEvent::Failed { .. })),
+            "continuation is not a failure"
+        );
+
+        // The truncation is surfaced to the user, not silent.
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                QueryEvent::Warning { message, .. } if message.contains("output token limit")
+            )),
+            "expected a truncation warning event"
+        );
+
+        // Metering covers BOTH requests (trailing usage frames drained).
+        let cost = events.iter().rev().find_map(|e| match e {
+            QueryEvent::Cost {
+                input_tokens,
+                output_tokens,
+                ..
+            } => Some((*input_tokens, *output_tokens)),
+            _ => None,
+        });
+        assert_eq!(cost, Some((700, 4216)));
+
+        // Conversation keeps the truncated reasoning for context, the
+        // continuation re-prompt, and the final answer.
+        let history: Vec<_> = events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                QueryEvent::ConversationUpdate { messages, .. } => Some(messages.clone()),
+                _ => None,
+            })
+            .expect("at least one ConversationUpdate event");
+        assert!(
+            history
+                .iter()
+                .any(|m| matches!(&m.content, MessageContent::Text(t) if t.contains("<think>"))),
+            "truncated reasoning must stay in context"
+        );
+        assert!(
+            history
+                .iter()
+                .any(|m| m.role == "user" && matches!(&m.content, MessageContent::Text(t) if t.contains("cut off by the output token limit"))),
+            "continuation re-prompt must be in the conversation"
+        );
+        assert!(
+            history
+                .iter()
+                .any(|m| matches!(&m.content, MessageContent::Text(t) if t.contains("all done"))),
+            "final answer must be in the conversation"
+        );
+    }
+
+    #[tokio::test]
+    async fn perpetual_truncation_is_bounded_and_still_completes() {
+        // A model that overruns its output budget on EVERY response must
+        // not loop forever: after MAX_TRUNCATION_CONTINUATIONS re-prompts
+        // the query ends as a normal (truncated) completion.
+        let bodies: Vec<String> = (0..6)
+            .map(|i| openai_sse_think_truncated_then_usage(100 * (i + 1), 4096))
+            .collect();
+        let (engine, mocks, _server) = setup_openai_engine(bodies).await;
+        let events = run_query(&engine).await;
+
+        for m in &mocks {
+            m.assert();
+        }
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, QueryEvent::Completed { .. })),
+            "query must terminate with Completed once continuations are exhausted"
+        );
+    }
+}
+
+// ── Zhipu/GLM coding-plan tool-use broadcast regression (2026-08-27) ──
+
+mod zhipu_tool_use_broadcast_tests {
+    //! Zhipu's OpenAI-compatible endpoint (`/api/coding/paas/v4`, glm-4.7 /
+    //! glm-5.3-flash) splits `delta.tool_calls` across frames and repeats the
+    //! SAME call id on EVERY frame while streaming argument fragments, then
+    //! packs `finish_reason: "tool_calls"` AND the real usage into ONE
+    //! terminal chunk. That terminal chunk used to take the usage early-return
+    //! in `normalize_openai_event`, skipping the finish_reason branch that
+    //! synthesizes `ContentBlockStop` — so the engine executed the tools via
+    //! its silent post-MessageDelta flush and `QueryEvent::ToolUseRequest`
+    //! was never broadcast (dogfood 2026-08-27: glm-5.3-flash 20/20 tasks,
+    //! L0 tool/call rows = 0, NDJSON tool_call lines = 0, while the wire
+    //! layer showed the model emitting dozens of tool calls per task).
+    //!
+    //! MiniMax never hit this because its real usage arrives in a separate
+    //! `choices: []` frame AFTER the finish chunk, so its tool turns always
+    //! reached the finish_reason branch. These tests pin the zhipu shape.
+
+    use async_trait::async_trait;
+    use futures::StreamExt;
+    use mockito::Server;
+    use serde_json::{Value, json};
+    use shannon_core::query_engine::{
+        QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
+    };
+    use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
+    use shannon_engine::api::{LlmClientConfig, LlmProvider};
+    use shannon_engine::permissions::PermissionManager;
+    use shannon_engine::state::StateManager;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    struct EchoTool;
+    #[async_trait]
+    impl Tool for EchoTool {
+        async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+            Ok(ToolOutput::success("echo-ok".to_string()))
+        }
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn description(&self) -> &str {
+            "echo test tool"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object", "properties": {}})
+        }
+    }
+
+    /// Zhipu-shaped tool turn: tool-call frames (same id repeated), then the
+    /// terminal chunk carrying `finish_reason: "tool_calls"` + real usage
+    /// TOGETHER, then [DONE].
+    fn zhipu_sse_tool_turn() -> String {
+        let chunks = [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_z1","type":"function","function":{"name":"echo","arguments":""}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_z1","function":{"arguments":"{\"task\":"}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_z1","function":{"arguments":"\"write tests\"}"}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}"#,
+        ];
+        let mut body = String::new();
+        for c in &chunks {
+            body.push_str("data: ");
+            body.push_str(c);
+            body.push_str("\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    /// Zhipu-shaped text turn: content delta, then terminal chunk with
+    /// `finish_reason: "stop"` + usage together, then [DONE].
+    fn zhipu_sse_text_turn() -> String {
+        let chunks = [
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":"all done"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":200,"completion_tokens":30,"total_tokens":230}}"#,
+        ];
+        let mut body = String::new();
+        for c in &chunks {
+            body.push_str("data: ");
+            body.push_str(c);
+            body.push_str("\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    async fn setup_zhipu_engine(bodies: Vec<String>) -> (QueryEngine, mockito::ServerGuard) {
+        let mut server = Server::new_async().await;
+        for body in bodies {
+            server
+                .mock("POST", "/v1/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(body)
+                .expect(1)
+                .create();
+        }
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.url(),
+            model: "glm-5.3-flash".to_string(),
+            max_tokens: 4096,
+            timeout_seconds: 10,
+            api_version: "2023-06-01".to_string(),
+            provider: LlmProvider::OpenAI,
+            extra_headers: HashMap::new(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 0,
+            budget_tokens: None,
+            reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
+        };
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool)).unwrap();
+        let engine = QueryEngine::new(
+            shannon_engine::api::LlmClient::new(config),
+            registry,
+            PermissionManager::new(),
+            StateManager::new(),
+            QueryEngineConfig::default(),
+        );
+        (engine, server)
+    }
+
+    async fn run_query(engine: &QueryEngine) -> Vec<QueryEvent> {
+        let ctx = QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message: "use the echo tool".to_string(),
+            attachments: Vec::new(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: Some(4096),
+                model: "glm-5.3-flash".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        };
+        let stream = engine.process_query(ctx, None).await;
+        let mut events = Vec::new();
+        let mut s = Box::pin(stream);
+        while let Some(Ok(event)) = s.next().await {
+            events.push(event);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn zhipu_tool_turn_broadcasts_tool_use_request_exactly_once_with_full_input() {
+        let (engine, _server) =
+            setup_zhipu_engine(vec![zhipu_sse_tool_turn(), zhipu_sse_text_turn()]).await;
+        let events = run_query(&engine).await;
+
+        // Exactly ONE ToolUseRequest, with the FULLY PARSED input assembled
+        // from the split argument fragments.
+        let requests: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                QueryEvent::ToolUseRequest {
+                    tool_use_id,
+                    tool_name,
+                    tool_input,
+                    ..
+                } => Some((tool_use_id.clone(), tool_name.clone(), tool_input.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            requests.len(),
+            1,
+            "ToolUseRequest must broadcast exactly once, got {requests:?}"
+        );
+        let (tool_use_id, tool_name, tool_input) = &requests[0];
+        assert_eq!(tool_use_id, "call_z1");
+        assert_eq!(tool_name, "echo");
+        assert_eq!(
+            tool_input,
+            &json!({"task": "write tests"}),
+            "tool_input must be the complete JSON assembled from multi-frame fragments"
+        );
+
+        // The tool must have executed exactly once (no double-run), after
+        // the request was broadcast.
+        let results: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                QueryEvent::ToolUseResult {
+                    tool_name,
+                    is_error,
+                    ..
+                } => Some((tool_name.clone(), *is_error)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            results.len(),
+            1,
+            "tool must execute exactly once, got {results:?}"
+        );
+        assert!(!results[0].1, "tool result must not be an error");
+
+        let req_idx = events
+            .iter()
+            .position(|e| matches!(e, QueryEvent::ToolUseRequest { .. }))
+            .expect("ToolUseRequest present");
+        let res_idx = events
+            .iter()
+            .position(|e| matches!(e, QueryEvent::ToolUseResult { .. }))
+            .expect("ToolUseResult present");
+        assert!(
+            req_idx < res_idx,
+            "ToolUseRequest must precede ToolUseResult"
+        );
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, QueryEvent::Completed { .. })),
+            "query must complete after the tool turn"
         );
     }
 }

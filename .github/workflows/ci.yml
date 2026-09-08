@@ -2,8 +2,20 @@ name: CI
 on:
   push:
     branches: [main, dev]
+    # Release tags must pass the full CI gate too — release.yml itself only
+    # typechecks/tests the gateway, so without this a tag on an un-CI'd
+    # commit ships straight to production.
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
   pull_request:
     branches: [main, dev]
+  workflow_dispatch:
+    inputs:
+      run-browser-e2e:
+        description: "Run the real-Chrome browser E2E test (installs headless Chrome)"
+        type: boolean
+        default: false
+        required: false
 
 # Cancel in-progress runs for the same ref when a new commit is pushed.
 # Keeps CI queue short on active branches (e.g. dev) without affecting main.
@@ -30,6 +42,11 @@ jobs:
         with:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Bump to invalidate caches that predate the feature-isolated
+          # target dir (a stale cache carried feature-ON shannon-tools test
+          # binaries into the feature-OFF workspace run).
+          prefix-key: ci-v2
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -43,12 +60,102 @@ jobs:
           tool: cargo-nextest
       - name: Build
         run: cargo build --workspace
-      - name: Build with computer-use feature
-        run: cargo build -p shannon-tools --features computer-use
       - name: Compile tests
         run: cargo test --workspace --no-run
       - name: Test
-        run: cargo nextest run --workspace --config-file .config/nextest.toml
+        # `--profile ci` activates the `.config/nextest.toml` [profile.ci]
+        # settings: per-test retries (2, exponential backoff) so known
+        # load-sensitive tests (e.g. the byte-exact session-log tee mock
+        # round-trip) don't fail the whole gate on a runner hiccup.
+        run: |
+          # Guard against stale cached binaries with unexpected feature sets.
+          cargo clean -p shannon-tools
+          cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
+      # Feature-gated builds/tests (downscale_dims, click_spec, key combos,
+      # libei backend). Runs AFTER the main gate, in an ISOLATED target dir:
+      # sharing `target/` with feature-OFF steps leaked the enabled feature
+      # into the workspace nextest build (the `computer` stub tests took the
+      # real-execution path on the displayless runner).
+      - name: Build with computer-use feature
+        run: |
+          CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features computer-use
+          # CLI passthrough feature (opt-in desktop automation build)
+          CARGO_TARGET_DIR=target-feature cargo build -p shannon-cli --features computer-use
+      - name: Test with computer-use feature
+        # Only the computer module matters here (feature-off stub tests are
+        # cfg-gated out; the full lib run would drag in HOME-race git tests
+        # into a target dir without the nextest retry profile).
+        run: CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools --features computer-use --lib computer --no-fail-fast
+      # T10 Phase 1: compile-check the Wayland-capable backend (libei via
+      # xdg-desktop-portal). Pure-Rust deps (reis/ashpd) — no extra system
+      # packages needed at build time; the portal is only a runtime dep.
+      - name: Build with computer-use-libei feature
+        run: CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features computer-use-libei
+      # T14 Phase 1: compile-check the live browser tools. No browser is
+      # installed on the runner, so only the compile gate runs here; the
+      # E2E integration test self-skips when no browser is detected.
+      - name: Build with local-browser feature
+        run: CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features local-browser
+      # T14 Phase 3: REAL end-to-end browser test — installs headless
+      # Chrome, then drives the session layer (launch → navigate →
+      # screenshot → key press → console buffer → close) exactly as the
+      # builtin tools do. Manual trigger from the Actions tab.
+      - name: E2E with local-browser feature (real Chrome)
+        if: inputs.run-browser-e2e == true
+        continue-on-error: true
+        run: |
+          # Headless Chrome needs its deps; the runner image already has
+          # most. `--no-sandbox` is set by the session layer.
+          CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools \
+            --features local-browser --test browser_e2e -- --nocapture
+      - name: Doctests
+        # nextest does not execute doctests, so a doctest-only regression
+        # (e.g. an example that relies on opt-in configuration) stays green
+        # in `Test` and only fails here. Lib targets are already compiled by
+        # the steps above; this only builds the doctest binaries.
+        run: cargo test --workspace --doc
+
+  eval-dry-run:
+    # W1 §7① PR quick gate (design: docs/plans/2026-08-28-eval-system-design.md):
+    # the zero-API-key dry-run rehearsal of the L1 suite (`just eval`) plus
+    # the eval-harness unit tests. This gates the EVAL ASSETS themselves —
+    # task TOMLs parse/validate, the runner + assertion vocabulary + rule
+    # table don't regress, dry_run stubs stay in sync. Real-model capability
+    # is deliberately NEVER a PR gate (cost, variance, flakiness).
+    # Standalone on purpose: no `needs:` coupling and a bounded timeout, so
+    # a GHA cold-cache stall (known runner flake) can be retried in
+    # isolation without re-running the rest of CI.
+    name: Eval Dry-Run Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+      - name: Install just
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: just
+      - name: Install nextest
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-nextest
+      - name: Eval dry-run suite (no API key)
+        # `just eval` = cargo run -p shannon-core --example eval_runner
+        # (dry-run stub executor over the full tests/eval/tasks suite;
+        # exits non-zero when any rehearsal fails).
+        run: just eval
+      - name: Eval CLI entry
+        # The user-facing `shannon eval` subcommand (crates/shannon-cli) must
+        # stay in sync with the suite: list parses every task, and a single
+        # dry-run task rehearses the full CLI run path.
+        run: |
+          cargo run -q -p shannon-cli -- eval run --list
+          cargo run -q -p shannon-cli -- eval run --task read_01
+      - name: Eval harness tests
+        run: cargo nextest run -p shannon-core -E 'test(eval)' --profile ci
 
   vscode:
     name: VS Code Extension
@@ -64,6 +171,120 @@ jobs:
         run: cd editors/vscode && npm run compile
       - name: Test
         run: cd editors/vscode && npm test
+
+  desktop-e2e:
+    name: Desktop E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
+        with:
+          node-version: "24"
+      # pnpm/action-setup v6.0.10, pinned by commit SHA (see header note).
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
+        with:
+          version: 10
+      - name: Install UI deps
+        working-directory: desktop/ui
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright browsers
+        working-directory: desktop/ui
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run e2e tests
+        # playwright.config.ts starts the dev server via `pnpm demo`
+        # (VITE_MOCK_MODE=1) so the suite runs without the Tauri backend.
+        # CI=1 keeps Playwright from reusing a local server instance.
+        working-directory: desktop/ui
+        env:
+          CI: "1"
+        run: pnpm exec playwright test
+
+  desktop-visual-audit:
+    name: Desktop Visual Audit (walkthrough)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
+        with:
+          version: 10
+      - name: Install UI deps
+        working-directory: desktop/ui
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright browsers
+        working-directory: desktop/ui
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Build UI (mock mode)
+        working-directory: desktop/ui
+        env:
+          VITE_MOCK_MODE: "1"
+        run: pnpm build
+      - name: Full-page axe walkthrough (13 routes x 2 themes)
+        # e2e/walkthrough.spec.ts screenshots every main route under
+        # material + tokyo-night and fails on any critical/serious axe
+        # violation. Serves the production build via `vite preview`
+        # (playwright.walkthrough.config.ts) — no dev server needed.
+        working-directory: desktop/ui
+        env:
+          WALKTHROUGH: "1"
+          VITE_MOCK_MODE: "1"
+          CI: "1"
+        run: pnpm exec playwright test -c playwright.walkthrough.config.ts
+
+  desktop-unit:
+    name: Desktop Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
+        with:
+          node-version: "24"
+      # pnpm/action-setup v6.0.10, pinned by commit SHA (see header note).
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
+        with:
+          version: 10
+      - name: Install UI deps
+        working-directory: desktop/ui
+        run: pnpm install --frozen-lockfile
+      - name: Lint (tsc + eslint)
+        # `pnpm lint` is tsc --noEmit + eslint --max-warnings 0 — the
+        # cap is the frozen ESLint budget (ratcheted 72→71→46→23→0 across
+        # the 2026-08-26 audit, R10, R11 and B1; all consistent-type-imports
+        # have been migrated to top-level `import type`); raise only with
+        # ed sign-off.
+        working-directory: desktop/ui
+        run: pnpm lint
+      - name: Overlay whitelist check
+        # R2's tripwire against hand-rolled `fixed inset-0` overlays —
+        # see desktop/ui/scripts/check-overlays.sh for the whitelist.
+        working-directory: desktop/ui
+        run: bash scripts/check-overlays.sh
+      - name: Theme source drift check
+        # src/theme/generated/{themes.css,registry.ts} must match
+        # scripts/theme-source.json — blocks hand-edits to generated files.
+        working-directory: desktop/ui
+        run: node scripts/generate-themes.mjs --check
+      - name: Theme contrast audit
+        # WCAG 2.x AA check over every [data-theme] token block in the
+        # generated themes.css (scripts/contrast-audit.mjs) — fails on any
+        # pair below 4.5:1 (text) / 3:1 (UI).
+        working-directory: desktop/ui
+        run: node scripts/contrast-audit.mjs
+      - name: Run unit tests
+        # `pnpm test` is vitest in watch mode; `vitest run` is the one-shot
+        # form. CI=1 keeps workers deterministic. --coverage enforces the
+        # vitest.config.ts thresholds (80/75/60/80; actual 83.28/80.64/
+        # 69.44/83.28 after D1 excluded the demo mock layer) — before D1
+        # these thresholds were checked only by a local `pnpm test:coverage`.
+        working-directory: desktop/ui
+        env:
+          CI: "1"
+        run: pnpm exec vitest run --coverage
 
   clippy:
     name: Clippy
@@ -106,6 +327,20 @@ jobs:
           components: rustfmt
       - name: Format check
         run: cargo fmt --all -- --check
+
+  # ADR-0011 red line 1: the headless `shannon` CLI must never link GUI
+  # libraries. Metadata-only check (no compile) — fails the moment
+  # shannon-cli grows a tauri/webkit dependency edge.
+  guard-headless:
+    name: Headless purity (ADR-0011)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - name: Headless purity check
+        run: scripts/check-headless-purity.sh
 
   audit:
     name: Dependency Audit
@@ -153,20 +388,15 @@ jobs:
         run: cargo audit --deny warnings
 
   doc:
-    # Required-for-merge gate TARGET. The workspace's pre-existing
-    # intra-doc-link errors (~96 across 11 crates: broken links, private-
-    # item refs, bare URLs, unclosed HTML tags, redundant explicit targets)
-    # were fixed in the P2-4 CI cleanup, so this job now passes clean.
-    # `continue-on-error: true` is intentionally kept for one more cycle:
-    # `cargo doc` is not run locally by most contributors, so a newly-
-    # introduced doc-link error could surprise a PR author. Flip to a hard
-    # gate (remove `continue-on-error` + add to branch-protection required
-    # checks) once the team confirms. Catches broken doc links, missing
-    # examples, and unresolved intra-doc references before they ship to
-    # docs.rs.
+    # Required-for-merge gate. The workspace's intra-doc-link debt (~96
+    # errors across 11 crates) was fixed in the P2-4 CI cleanup; the job
+    # then ran one more cycle with `continue-on-error: true` while the
+    # eval-era doc comments landed, was repaired again (2026-09-04, commit
+    # 95d90224), and the team confirmed the flip. Keep new doc comments
+    # link-clean: broken intra-doc links fail the build here before they
+    # ship to docs.rs.
     name: Doc Build
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -269,6 +499,13 @@ jobs:
         # test of the public Rust API surface. shannon-desktop is
         # built fully in release.yml under each platform's matrix leg.
         run: cargo check --workspace --exclude shannon-desktop
+      - name: Check landlock feature (Linux only)
+        # The optional landlock feature is off by default, so nothing else
+        # compiles it — it rotted for months with 12 errors before #71.
+        # landlock is a Linux-only LSM; the feature is meaningless on the
+        # other matrix legs.
+        if: runner.os == 'Linux'
+        run: cargo check -p shannon-core --features landlock
 
   check-linux-musl:
     # Linux-only musl smoke test. Renamed from `check-cross-platform` so
@@ -323,7 +560,7 @@ jobs:
       # Bump this when cutting a new baseline release. It feeds both
       # `baseline-rev` and the cache `prefix-key`, so a baseline bump always
       # invalidates the cached baseline rustdoc and never serves a stale one.
-      SEMVER_BASELINE: v0.8.0
+      SEMVER_BASELINE: v0.10.0
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
@@ -376,7 +613,9 @@ jobs:
         # Arch-invariants tests are guarded by `cargo test` integration
         # discovery; running nextest covers the same set in addition to
         # the bin/lib unit tests, so a single invocation is enough.
-        run: cargo nextest run --workspace --config-file .config/nextest.toml
+        # `--profile ci` mirrors the Test job (retries for load-sensitive
+        # tests; a retried-then-passing snapshot test leaves no .snap.new).
+        run: cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
       - name: Reject pending snapshots
         # If any `.snap.new` file exists, the snapshot test recorded a
         # diff the contributor did not accept. Fail the build so the PR

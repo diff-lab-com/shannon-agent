@@ -1,6 +1,8 @@
 # Shannon Agent — 安装 / 发布架构方案（高级架构师版）
 
-> 状态：**待审核**（2026-07-18）
+> 状态：**已落地收尾**（2026-07-18 方案;单一 release.yml / productName / gateway 服务化均已实施。
+> 单产品多表面定稿与"桌面产物捆绑 CLI"后续见 [ADR-0011](adr/0011-single-product-multi-surface-distribution.md)
+> 与 [docs/plans/single-product-phase-b-distribution.md](plans/single-product-phase-b-distribution.md)）
 > 对标：[hermes-agent](https://github.com/NousResearch/hermes-agent)（统一 `hermes` 命令 + `serve`/`desktop`/`gateway` 子命令 + systemd/launchd 服务）
 > 已确认决策（用户拍板）：
 > 1. **伞命令归属**：`shannon`(Rust) 壳到 `shannon-gateway` 二进制做 gateway 控制（gateway 保持独立进程，契合 README 架构）。
@@ -157,7 +159,7 @@ Doctor,
 
 - **`shannon desktop`**：解析桌面二进制（顺序：PATH `shannon-desktop` → 已知安装目录 → 若无且非 `--no-build` 则 `cargo tauri build`）。启动之。桌面端**保持进程内嵌 engine**（与现状一致，不依赖独立 `serve`）。
 - **`shannon gateway <sub>`**：构造 argv 并 `spawn` 外部 `shannon-gateway` 二进制（决策 #1）。`GatewaySubcommand` 镜像 hermes：`Run`/`Start`/`Stop`/`Restart`/`Status`/`List`/`Install`/`Uninstall`/`Setup`/`MigrateLegacy`/`Enroll`。
-- **`shannon update`**：`GET api.github.com/repos/shannon-agent/shannon-agent/releases/latest` → 比对 tag 与本地 `shannon --version` → 下载平台资产并重装（或重跑 install.sh）。
+- **`shannon update`**：`GET api.github.com/repos/diff-lab-com/shannon-agent/releases/latest` → 比对 tag 与本地 `shannon --version` → 下载平台资产并重装（或重跑 install.sh）。
 - **`shannon doctor`**：检查清单（Rust/node/bun 存在性、config 合法性、`:33420` 端口占用、engine 连通性、gateway 可达、TLS/证书）。
 
 ---

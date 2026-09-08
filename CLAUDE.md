@@ -41,6 +41,13 @@ Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` ha
 | `shannon-tool-interface` | Tool trait definitions | n/a |
 | `shannon-codegen` | Code generation utilities | n/a |
 | `shannon-agent` | Single agent runtime (binary crate) | n/a |
+| `shannon-engine` | LLM API client, streaming adapter, context compression (extracted from shannon-core D1 Phase 2; new home of `api/`) | [metrics.md](./docs/metrics.md) |
+| `shannon-api-protocol` | Stable wire types for the `api_server` REST/SSE/WS contract — single source of truth consumed by gateway (via gen-ts), desktop, and future clients | [metrics.md](./docs/metrics.md) |
+| `shannon-mcp-saas` | SaaS MCP servers (GitHub/Slack/Jira/Notion/Linear) — P1-3 | [metrics.md](./docs/metrics.md) |
+| `shannon-repomap` | Tree-sitter repo symbol map for LLM context (Rust + TS + Python + Go) — P1-4 Phase B | [metrics.md](./docs/metrics.md) |
+| `shannon-server` | axum-based HTTP API server exposing Shannon sessions (REST + SSE) | [metrics.md](./docs/metrics.md) |
+| `shannon-stability-attr` | Proc-macro `#[stable_api]` / `#[unstable_api]` attribute markers feeding `docs/STABILITY.md` | n/a |
+| `shannon-remote` | Remote execution worlds: SSH hosts (system ssh + SFTP) and Docker containers (`docker exec`) as `ProcessProvider`/`FileSystemProvider` implementations; `DynamicWorld` hot-swap; `/remote` TUI command, `--target` CLI flag, Settings→Remotes desktop page | [design](./docs/plans/2026-09-04-remote-connections-design.md) |
 
 ### First-Screen UX
 
@@ -78,6 +85,16 @@ The StatusBar shows a compact `[provider/model · tier]` pill that updates in re
 - **Integration tests**: `crates/shannon-*/tests/` directories for cross-module testing.
 - **Mockito**: For HTTP API tests. Server matchers are order-dependent with `.expect(N)`.
 - **Test helpers**: `CollectingSender` (progress sender), `tempfile::TempDir` (file tests), `mockito::Server` (HTTP tests).
+
+### Session persistence (§4.6 L0)
+
+Sessions are event-sourced: `<SHANNON_HOME>/sessions/<uuid>/events.jsonl` is
+the single authoritative record; message history, token totals, listings and
+branches are projections (`shannon-core/src/session_log/projections.rs`,
+`session_store.rs`). Legacy `sessions/<uuid>.json` snapshots,
+`~/.shannon/transcripts/*`, and `shannon-core/src/recording|vcr` capture are
+removed — `shannon trace show/replay/diff/export` replaces their read paths.
+Titles / branch lineage persist in a `<uuid>/meta.json` sidecar.
 
 ### Test Commands (justfile)
 
@@ -133,11 +150,16 @@ just replay
 - **LSP integration**: 6 LSP tools + `DiagnosticRegistry` + two client implementations. `DiagnosticStore.mark_stale()` called on source file changes. Background `cargo check` diagnostics auto-run via `DiagnosticWatcher` when source files change — debounce, parse, display in UI.
 - **Plugin system**: `PluginRegistry` with manifest parsing. Tool plugins fully wired (MCP discovery). Command plugins register as `PromptCommand` in `CommandRegistry` (source: `Plugin`). Skill plugins register as `PromptCommand` with trigger as slash command name and entry file as template. Loading in both REPL (`new()`) and CLI headless mode.
 - **Notifications**: `Notifier` pipeline in `shannon-core::notifier` with `Cooldown` (DashMap-backed per-source dedup), `NotificationsConfig` (interactive/headless defaults), and pluggable `NotificationHandler` trait. Built-in handlers: `LogNotifier`, `FileNotifier`, `CallbackNotifier`, `DesktopNotifier`, `ShellNotifier` (CLI), `TauriNotificationHandler` (desktop), and `WebhookHandler` (six templates: Slack/Discord/Feishu/WeChat Work/custom/raw — optional HMAC-SHA256 signing). CLI `--notify` flag for headless mode; desktop auto-fires on query completion/error.
-- **Desktop app**: Substantial Tauri app (workspace member `desktop/`, crate `shannon-desktop`, ~25K Rust LOC) with command modules for chat/config/connections/billing/agents/mcp/memory. Provider/credential UX parity with the CLI (connect/model/tier/refresh) is being verified. Full engine re-platforming onto the shared `ProviderProfile`/credential store is ADR-0005 Phase 2 (deferred).
+- **Desktop app**: Substantial Tauri app (workspace member `desktop/`, crate `shannon-desktop`, ~25K Rust LOC) with command modules for chat/config/connections/billing/agents/mcp/memory. Provider/credential read+write paths are unified with the CLI via the engine `ProviderConfigService` (ADR-0005 Phase 2 ✅ done) + `ProviderReadSnapshot` (ADR-0009) + TD-4 `ProviderConnection` DTO alignment; `has_api_key` is derived from the shared credential store. Remaining tail: none — ADR-0005 G4 (per-tier/per-fallback editors), G5 (`SHANNON_*_PROVIDERS` allowlist surfaced as the ModelsSettings enabled-providers editor, not in the Add Provider modal — kind and slug are separate namespaces), and the legacy `providers.json` migration-code removal (PR #61) all shipped in v0.10.0.
+
+- **Remote targets (SSH / Docker)**: shipped (see `shannon-remote`). Tools (Bash, file ops, Grep/Glob) route to the active target through the provider seam. Known limitations: remote PTY interactive commands and git worktrees are local-only; LSP servers launch on the target (needs the binary there); remote targets need bash; remote Windows targets unsupported; REPL-layer conveniences (@-attachments, diff viewer git, status-card branch) still read the local machine. Design + review trail: [docs/plans/2026-09-04-remote-connections-design.md](./docs/plans/2026-09-04-remote-connections-design.md).
 
 ### MEDIUM — Quality-of-life gaps
 
-- **Computer use**: Claude Code can click, type, see screen on macOS. Shannon has no equivalent.
+- **Computer use**: Claude Code can click, type, see screen on macOS. Shannon ships the equivalent as an **opt-in build** (`--features computer-use` passthrough on `shannon-cli`/`shannon-desktop`): `ComputerUseTool` (Anthropic `computer` schema, 12 actions incl. right/double/triple-click), screenshot downscale to the 1024×768 reference, High-risk permission policy, and a fixed screenshot→model return path (`metadata["data"]`). Linux input backend is selectable at compile time: `computer-use` (xdo/X11 default), `computer-use-libei` (Wayland via xdg-desktop-portal — recommended for native-Wayland sessions), `computer-use-wayland`, `computer-use-x11rb`; failing actions on a Wayland-only session carry a rebuild hint. Without the feature the tool registers as a stub. Desktop control sits behind a `PlatformAdapter` seam (`shannon-tools::platform_adapter`) so the macOS AX backend (Tier 2) drops in.
+- **Browser automation**: `/browser setup|status|uninstall|doctor` — setup merges the official Playwright MCP (`npx @playwright/mcp@latest`) into the project `.mcp.json`; browser tools then register as `mcp__playwright__browser_*` and the engine injects the browser-control workflow prompt. `browser_setup_hint` guides the model to suggest `/browser setup` when a browser task arrives with no browser tool. `doctor` reports system-browser detection (`shannon-remote::browser`, honors `SHANNON_BROWSER_PATH`; Shannon never bundles a browser binary) plus MCP state with install hints. With `SHANNON_ANTHROPIC_TOOLSETS=1`, Anthropic requests on Claude 4.x/5.x Opus/Sonnet instead carry the server-executed `browser_toolset_20260801` (superseding local browser tools) — provider-aware dispatch, other providers keep MCP.
+- **macOS app automation**: the `applescript` builtin tool runs `osascript` (AppleScript/JXA) and `shortcuts run` against scriptable apps (Mail/Calendar/Reminders/Messages/Finder/…). macOS-only execution (stub elsewhere); High-risk permission policy; first call per app triggers Apple's standard Automation TCC prompt.
+- **File attachments**: `QueryContext.attachments` carries images from all entry points — TUI `/image` + Ctrl+V + `@image`, desktop attach/drag-drop (images as vision blocks; PDFs as pdftotext-extracted text blocks with a 50 KiB cap), REST `POST /v1/sessions/:id/messages` `attachments` (base64 png/jpeg/gif/webp, structured `ApiError` bodies on 400/404), and headless `--attach <PATH>...`. Session log records per-turn `attachment_count`; bmp/svg attachments warn that vision models may not render them.
 
 (Resolved features moved to [CHANGELOG.md](CHANGELOG.md).)
 
@@ -162,7 +184,7 @@ Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensio
 - **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output, `--schema` for JSON schema validation, and `StructuredOutputConfig` for programmatic use.
 - **VS Code extension**: Scaffolded extension with WebView chat panel, NDJSON subprocess communication with `shannon --prompt`.
 
-- **Computer use**: `ComputerUseTool` with Anthropic-compatible `computer` tool schema (screenshot, click, type, scroll, key_press, wait, mouse_move, left_click_drag). Feature-gated behind `computer-use = ["xcap", "enigo", "image"]`. Without the feature, tool registers but returns helpful error messages. Coordinate scaling from 1024x768 reference resolution to actual screen resolution. Browser control system prompt injection when Playwright/Chrome DevTools MCP tools detected (`browser_control_prompt`).
+- **Computer use**: `ComputerUseTool` with Anthropic-compatible `computer` tool schema (screenshot, click, right/middle/double/triple_click, type, scroll, key_press, wait, mouse_move, left_click_drag). Feature-gated behind `computer-use = ["xcap", "enigo", "image"]`, with `computer-use` passthrough features on `shannon-cli` and `shannon-desktop`. Without the feature, tool registers but returns helpful error messages. Coordinate scaling from 1024x768 reference resolution to actual screen resolution; screenshots auto-downscale to the configured maximum. Screenshot results reach the model as image blocks via `metadata["data"]`. Registered permission policy: High risk (per-action confirmation). Browser control system prompt injection when Playwright/Chrome DevTools MCP tools detected (`browser_control_prompt`), plus `browser_setup_hint` and the `/browser` REPL command for one-command Playwright MCP setup.
 
 ### Tier 3 — Quality of Life
 Computer use (desktop automation via `computer-use` feature flag). Browser automation via MCP Playwright integration.

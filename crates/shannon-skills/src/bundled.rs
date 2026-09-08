@@ -22,7 +22,59 @@ pub fn init_bundled_skills(registry: &BundledSkills) -> SkillResult<()> {
     // Help skill
     registry.register(create_help_skill()?)?;
 
+    // Office skills (P2-3): content lives in skills/<id>/SKILL.md and is
+    // embedded at compile time, so bundled registration and the on-disk
+    // runbooks cannot drift.
+    registry.register(create_docx_report_skill()?)?;
+    registry.register(create_xlsx_table_skill()?)?;
+    registry.register(create_ppt_outline_skill()?)?;
+
     Ok(())
+}
+
+/// Build a bundled skill from a SKILL.md file (YAML frontmatter + Markdown
+/// runbook), reusing the same frontmatter parser as the on-disk loader.
+fn bundled_skill_from_markdown(raw: &'static str, id: &str) -> SkillResult<Skill> {
+    let parsed = crate::frontmatter::parse_skill_frontmatter(raw, id)?;
+    let fm = parsed.frontmatter;
+    let mut skill = BundledSkillBuilder::new(
+        id.to_string(),
+        fm.name.clone().unwrap_or_else(|| id.to_string()),
+        fm.description.unwrap_or_default(),
+    )
+    .content(parsed.body)
+    .build();
+    skill.aliases = fm.aliases.unwrap_or_default();
+    skill.when_to_use = fm.when_to_use;
+    skill.argument_hint = fm.argument_hint;
+    skill.allowed_tools = fm.allowed_tools.unwrap_or_default();
+    skill.user_invocable = fm.user_invocable.unwrap_or(true);
+    skill.is_hidden = !skill.user_invocable;
+    Ok(skill)
+}
+
+/// Create the docx-report skill (source: skills/docx-report/SKILL.md)
+fn create_docx_report_skill() -> SkillResult<Skill> {
+    bundled_skill_from_markdown(
+        include_str!("../../../skills/docx-report/SKILL.md"),
+        "docx-report",
+    )
+}
+
+/// Create the xlsx-table skill (source: skills/xlsx-table/SKILL.md)
+fn create_xlsx_table_skill() -> SkillResult<Skill> {
+    bundled_skill_from_markdown(
+        include_str!("../../../skills/xlsx-table/SKILL.md"),
+        "xlsx-table",
+    )
+}
+
+/// Create the ppt-outline skill (source: skills/ppt-outline/SKILL.md)
+fn create_ppt_outline_skill() -> SkillResult<Skill> {
+    bundled_skill_from_markdown(
+        include_str!("../../../skills/ppt-outline/SKILL.md"),
+        "ppt-outline",
+    )
 }
 
 /// Create the git commit skill
@@ -369,6 +421,9 @@ Use these skills by typing `/skill-name` in the REPL:
 | `/review-pr` | Review pull requests |
 | `/diff` | View git differences |
 | `/status` | Check git repository status |
+| `/docx-report` | Generate Word (.docx) reports (zero-dependency OOXML) |
+| `/xlsx-table` | Generate Excel (.xlsx) tables (zero-dependency OOXML) |
+| `/ppt-outline` | Build slide outlines with optional minimal PPTX export |
 | `/help` | Show this help message |
 
 ## Git Commands Reference
@@ -666,8 +721,8 @@ mod tests {
         let registry = BundledSkills::new();
         init_bundled_skills(&registry).unwrap();
 
-        // Should have 5 bundled skills
-        assert_eq!(registry.len(), 5);
+        // 5 core bundled skills + 3 office skills (P2-3)
+        assert_eq!(registry.len(), 8);
 
         let skills = registry.list();
         let ids: Vec<_> = skills.iter().map(|s| s.id.as_str()).collect();
@@ -677,6 +732,9 @@ mod tests {
         assert!(ids.contains(&"diff"));
         assert!(ids.contains(&"status"));
         assert!(ids.contains(&"help"));
+        assert!(ids.contains(&"docx-report"));
+        assert!(ids.contains(&"xlsx-table"));
+        assert!(ids.contains(&"ppt-outline"));
     }
 
     #[test]
@@ -719,5 +777,37 @@ mod tests {
         assert_eq!(skill.name, "Help");
         assert!(skill.aliases.iter().any(|a| a == "?"));
         assert!(skill.aliases.iter().any(|a| a == "h"));
+    }
+
+    #[test]
+    fn test_office_skills_frontmatter_fields() {
+        for skill in [
+            create_docx_report_skill().unwrap(),
+            create_xlsx_table_skill().unwrap(),
+            create_ppt_outline_skill().unwrap(),
+        ] {
+            assert!(!skill.name.is_empty(), "{}: name", skill.id);
+            assert!(!skill.description.is_empty(), "{}: description", skill.id);
+            assert!(skill.when_to_use.is_some(), "{}: when_to_use", skill.id);
+            assert!(skill.argument_hint.is_some(), "{}: argument-hint", skill.id);
+            assert!(skill.user_invocable, "{}: user-invocable", skill.id);
+            assert!(
+                !skill.content.contains("---\nname:"),
+                "{}: frontmatter must not leak into content",
+                skill.id
+            );
+        }
+    }
+
+    #[test]
+    fn test_office_skills_allowed_tools() {
+        let allowed = ["Bash", "Read", "Write"];
+        for skill in [
+            create_docx_report_skill().unwrap(),
+            create_xlsx_table_skill().unwrap(),
+            create_ppt_outline_skill().unwrap(),
+        ] {
+            assert_eq!(skill.allowed_tools, allowed.to_vec(), "{}", skill.id);
+        }
     }
 }

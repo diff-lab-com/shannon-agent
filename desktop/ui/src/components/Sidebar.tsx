@@ -1,22 +1,48 @@
-import { useState, useCallback, useEffect, useRef, useMemo, memo } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { useState, useCallback, useEffect, useRef, memo } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import EmptyState from './ui/empty-state';
+import { WELCOME_EXAMPLES } from './welcomeExamples';
 import { cn } from '../lib/utils';
 import { useSessions } from '@/context/SessionContext';
 import { useCatalog } from '@/context/CatalogContext';
-import type { SessionInfo } from '@/types';
+import { SessionsSection } from './SidebarSessions';
 import { useSidebar } from './Layout';
-import { useTriageStats } from '@/hooks/scheduled-tasks';
+import { useInboxStats } from '@/hooks/inbox';
 import { formatShortcut } from '@/lib/platform';
 
 const MIN_W = 200
 const MAX_W = 400
 const DEFAULT_W = 280
 const STORAGE_KEY = 'shannon-sidebar-width'
+const NAV_OPEN_KEY = 'shannon-nav-open'
 export const SIDEBAR_MODE_KEY = 'shannon-sidebar-mode'
 export type SidebarMode = 'simple' | 'dev'
+
+// U6: nav IA groups — Work / Resources / Experiments (+ the nested
+// Extensions and Settings disclosure). All expansion states persist to
+// localStorage under one key so a reload keeps the user's sidebar shape.
+type NavGroupId = 'work' | 'resources' | 'experiments' | 'extensions' | 'settings'
+type NavOpenMap = Record<NavGroupId, boolean>
+
+function readNavOpen(mode: SidebarMode): NavOpenMap {
+  const fallback: NavOpenMap = {
+    work: true,
+    // Simple mode starts with Resources folded (U6: only Work + Extensions
+    // visible); dev mode unfolds it.
+    resources: mode === 'dev',
+    experiments: true,
+    extensions: true,
+    settings: false,
+  }
+  if (typeof window === 'undefined') return fallback
+  try {
+    const raw = window.localStorage.getItem(NAV_OPEN_KEY)
+    return raw ? { ...fallback, ...JSON.parse(raw) } : fallback
+  } catch { return fallback }
+}
 
 export function useSidebarMode(): [SidebarMode, () => void] {
   const [mode, setMode] = useState<SidebarMode>(() => {
@@ -57,165 +83,103 @@ function SubNavLink({ to, labelId }: { to: string; labelId: string }) {
   )
 }
 
-interface SessionsSectionProps {
-  sessions: SessionInfo[]
-  currentSessionId: string | null
-  switchSession: (id: string) => Promise<void>
-  closeMobile?: () => void
-}
-
-const SESSIONS_ORDER_KEY = 'shannon-sessions-order'
-const SESSIONS_LIMIT = 8
-
-function SessionsSection({ sessions, currentSessionId, switchSession, closeMobile }: SessionsSectionProps) {
+// U6: nav group — small uppercase disclosure header + full nav links
+// underneath. Expansion state is owned by the caller (persisted).
+function NavGroup({ labelId, open, onToggle, children }: {
+  labelId: string
+  open: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
   const intl = useIntl()
-  const [query, setQuery] = useState('')
-  const [draggedId, setDraggedId] = useState<string | null>(null)
-  const [orderOverride, setOrderOverride] = useState<Record<string, number>>(() => {
-    if (typeof window === 'undefined') return {}
-    try {
-      const raw = window.localStorage.getItem(SESSIONS_ORDER_KEY)
-      return raw ? JSON.parse(raw) : {}
-    } catch { return {} }
-  })
-
-  // Sort: explicit order override first (ascending), then by created_at desc
-  const sorted = useMemo(() => {
-    const withOrder = sessions.filter(s => orderOverride[s.id] !== undefined)
-      .sort((a, b) => orderOverride[a.id] - orderOverride[b.id])
-    const withoutOrder = sessions.filter(s => orderOverride[s.id] === undefined)
-      .sort((a, b) => b.created_at - a.created_at)
-    return [...withOrder, ...withoutOrder]
-  }, [sessions, orderOverride])
-
-  const filtered = useMemo(() => {
-    if (!query.trim()) return sorted
-    const q = query.toLowerCase()
-    return sorted.filter(s => (s.title || '').toLowerCase().includes(q))
-  }, [sorted, query])
-
-  const visible = filtered.slice(0, SESSIONS_LIMIT)
-
-  const persistOrder = useCallback((next: Record<string, number>) => {
-    setOrderOverride(next)
-    try { window.localStorage.setItem(SESSIONS_ORDER_KEY, JSON.stringify(next)) } catch { /* noop */ }
-  }, [])
-
-  const handleDrop = useCallback((targetId: string) => {
-    if (!draggedId || draggedId === targetId) return
-    setDraggedId(null)
-    const ids = sorted.map(s => s.id)
-    const fromIdx = ids.indexOf(draggedId)
-    const toIdx = ids.indexOf(targetId)
-    if (fromIdx === -1 || toIdx === -1) return
-    // Rebuild order map based on new sequence
-    const reordered = [...ids]
-    reordered.splice(fromIdx, 1)
-    reordered.splice(toIdx, 0, draggedId)
-    const next: Record<string, number> = {}
-    reordered.forEach((id, idx) => { next[id] = idx })
-    persistOrder(next)
-  }, [draggedId, sorted, persistOrder])
-
   return (
-    <div className="mb-lg">
-      <div className="flex items-center justify-between px-2 mb-xs">
-        <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
-          {intl.formatMessage({ id: 'sidebar.sessions.title' })}
-        </span>
-        <span className="font-label-sm text-label-sm text-outline-variant">
-          {filtered.length}{filtered.length !== sessions.length ? `/${sessions.length}` : ''}
-        </span>
-      </div>
-      <input
-        type="search"
-        value={query}
-        onChange={e => setQuery(e.target.value)}
-        placeholder={intl.formatMessage({ id: 'sidebar.sessions.search.placeholder' })}
-        aria-label={intl.formatMessage({ id: 'sidebar.sessions.search.aria' })}
-        className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-outline-variant focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
-      />
-      {visible.length === 0 ? (
-        <div className="px-2 py-3 text-center font-label-sm text-label-sm text-outline-variant">
-          {intl.formatMessage({ id: 'sidebar.sessions.noResults' })}
-        </div>
-      ) : (
-        <div className="space-y-0.5" role="list" aria-label={intl.formatMessage({ id: 'sidebar.sessions.list.aria' })}>
-          {visible.map((session) => {
-            const isActive = session.id === currentSessionId
-            const isDragging = session.id === draggedId
-            return (
-              <div
-                key={session.id}
-                role="listitem"
-                draggable
-                onDragStart={() => setDraggedId(session.id)}
-                onDragOver={e => e.preventDefault()}
-                onDrop={() => handleDrop(session.id)}
-                onClick={() => {
-                  switchSession(session.id)
-                  if (closeMobile) closeMobile()
-                }}
-                className={cn(
-                  'w-full text-left px-3 py-2 rounded-lg font-label-md text-label-md transition-all duration-200 flex items-center gap-2 cursor-pointer select-none',
-                  isActive
-                    ? 'bg-primary/10 text-primary font-bold'
-                    : 'text-on-surface-variant hover:bg-surface-container-low hover:text-primary',
-                  isDragging && 'opacity-40'
-                )}
-                title={session.title}
-              >
-                <span
-                  className="material-symbols-outlined text-[14px] text-outline-variant shrink-0"
-                  aria-hidden="true"
-                >drag_indicator</span>
-                <span className="flex-1 truncate">{session.title || intl.formatMessage({ id: 'sidebar.sessions.untitled' })}</span>
-              </div>
-            )
-          })}
-        </div>
-      )}
+    <div className="space-y-1">
+      <Button
+        variant="ghost"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="w-full justify-between px-4 py-1.5 rounded-lg font-label-sm text-[11px] uppercase tracking-wider text-on-surface-variant hover:text-primary transition-all h-auto"
+      >
+        {intl.formatMessage({ id: labelId })}
+        <span className="material-symbols-outlined icon-sm transition-transform duration-200" style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+      </Button>
+      {open && <div className="space-y-1">{children}</div>}
     </div>
   )
 }
 
 export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   const { close: closeMobile } = useSidebar();
-  const [opcOpen, setOpcOpen] = useState(true);
-  const [extensionsOpen, setExtensionsOpen] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [mode, toggleMode] = useSidebarMode();
+  const [navOpen, setNavOpen] = useState<NavOpenMap>(() => readNavOpen(mode));
+  const toggleNav = useCallback((key: NavGroupId) => {
+    setNavOpen(prev => {
+      const next = { ...prev, [key]: !prev[key] }
+      try { window.localStorage.setItem(NAV_OPEN_KEY, JSON.stringify(next)) } catch { /* noop */ }
+      return next
+    })
+  }, []);
+  // Mode switches reset group folding to that mode's defaults — a fresh dev
+  // session opens Resources instead of inheriting the simple-mode fold.
+  // (Skipped on mount so a stored custom shape survives reloads.)
+  const mountedMode = useRef(mode)
+  useEffect(() => {
+    if (mountedMode.current === mode) return
+    mountedMode.current = mode
+    const next = readNavOpen(mode)
+    setNavOpen(next)
+    try { window.localStorage.setItem(NAV_OPEN_KEY, JSON.stringify(next)) } catch { /* noop */ }
+  }, [mode]);
   const [width, setWidth] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
     return stored ? Math.min(MAX_W, Math.max(MIN_W, parseInt(stored, 10) || DEFAULT_W)) : DEFAULT_W
   });
   const dragging = useRef(false);
   const location = useLocation();
-  const { createSession, sessions, currentSessionId, switchSession, createSessionInWorktree } = useSessions();
+  const navigate = useNavigate();
+  const { createSession, sessions, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree } = useSessions();
   const { status } = useCatalog();
   const intl = useIntl();
-  const { stats: triageStats, refresh: refreshTriageStats } = useTriageStats();
+  const { stats: inboxStats, refresh: refreshInboxStats } = useInboxStats();
 
-  // Refresh triage stats every 30s, but only while the window is visible —
-  // no point polling a desktop app that's backgrounded. Resumes + immediately
-  // refreshes on focus. (Full event-driven refresh would need a backend
-  // triage-updated emission; see claudedocs/comprehensive-audit-2026-06-29.md P2-6.)
+  // P2-6 history: the badge count used to poll every 30s, then moved to the
+  // backend `triage-updated` event. The P0-3 inbox badge reads
+  // `get_inbox_stats().pending` and `useInboxStats` already refreshes on the
+  // `inbox-updated` event internally; the window-focus refresh below still
+  // catches external changes (e.g. the DB edited while backgrounded).
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    let interval: ReturnType<typeof setInterval> | undefined;
-    const stop = () => { if (interval) { clearInterval(interval); interval = undefined; } };
-    const start = () => { stop(); refreshTriageStats(); interval = setInterval(refreshTriageStats, 30000); };
-    const onVisibility = () => { document.hidden ? stop() : start(); };
-    start();
+    const onVisibility = () => { if (!document.hidden) refreshInboxStats(); };
+    refreshInboxStats();
     document.addEventListener('visibilitychange', onVisibility);
-    return () => { stop(); document.removeEventListener('visibilitychange', onVisibility); };
-  }, [refreshTriageStats]);
+    return () => { document.removeEventListener('visibilitychange', onVisibility); };
+  }, [refreshInboxStats]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     dragging.current = true
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
+  }, [])
+
+  // U5: double-click resets to the default width; arrow keys resize by 16px
+  // (the handle is a focusable separator so keyboard users can widen the
+  // sidebar too — P3-1).
+  const resetWidth = useCallback(() => {
+    setWidth(DEFAULT_W)
+    localStorage.setItem(STORAGE_KEY, String(DEFAULT_W))
+    document.documentElement.style.setProperty('--sidebar-w', `${DEFAULT_W}px`)
+  }, [])
+
+  const handleResizeKey = useCallback((e: React.KeyboardEvent) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    e.preventDefault()
+    const delta = e.key === 'ArrowLeft' ? -16 : 16
+    setWidth(prev => {
+      const next = Math.min(MAX_W, Math.max(MIN_W, prev + delta))
+      localStorage.setItem(STORAGE_KEY, String(next))
+      return next
+    })
   }, [])
 
   useEffect(() => {
@@ -244,7 +208,6 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
     document.documentElement.style.setProperty('--sidebar-w', `${width}px`)
   }, [width])
 
-  const isOpcActive = location.pathname.includes('/opc') && !location.pathname.includes('/extensions');
   const isExtensionsActive = location.pathname.includes('/extensions');
   const isSettingsActive = location.pathname.includes('/settings');
 
@@ -252,30 +215,56 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
     cn(
       "flex items-center gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300",
       isActive
-        ? "text-primary bg-primary/10 font-bold shadow-sm"
+        ? "text-on-surface bg-primary/10 font-bold shadow-sm"
         : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5"
     );
 
   const handleNavClick = () => { if (mobile) closeMobile() }
 
+  // U7: sidebar starter prompt — creates the first session when none exists,
+  // then hands the prompt to the composer via /chat navigation state (the
+  // same channel the Editor's "Ask AI" button uses).
+  const startWithPrompt = async (prompt: string) => {
+    if (!currentSessionId) await createSession()
+    navigate('/chat', { state: { prefill: prompt } })
+    if (mobile) closeMobile()
+  }
+
   return (
     <aside data-sidebar className={cn(
       "fixed left-0 top-0 h-full bg-surface-container-lowest/70 backdrop-blur-[20px] border-r border-outline-variant/30 flex flex-col py-lg px-md shadow-[4px_0_24px_-12px_color-mix(in_srgb,var(--color-inverse-surface)_15%,transparent)] transition-transform duration-300",
-      mobile ? "z-[70] w-[280px]" : "z-50",
+      mobile ? "z-drawer w-[280px]" : "z-modal",
     )} style={mobile ? undefined : { width }}>
-      {/* Drag handle */}
+      {/* Drag handle — 8px hot zone with a 4px visual bar (U5/P3-1: the old
+          4px zone was nearly un-hittable). Focusable separator: ←/→ resize,
+          double-click resets to 280px. */}
       <div
-        className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10"
+        role="separator"
+        aria-orientation="vertical"
+        tabIndex={0}
+        aria-valuenow={width}
+        aria-valuemin={MIN_W}
+        aria-valuemax={MAX_W}
+        className="group absolute right-0 top-0 bottom-0 w-2 cursor-col-resize z-raised"
         aria-label={intl.formatMessage({ id: 'nav.resize.aria' })}
         title={intl.formatMessage({ id: 'nav.resize.title' })}
         onMouseDown={handleMouseDown}
-      />
+        onDoubleClick={resetWidth}
+        onKeyDown={handleResizeKey}
+      >
+        <div className="absolute right-0 top-0 bottom-0 w-1 transition-colors group-hover:bg-primary/30 group-focus-visible:bg-primary/30 group-active:bg-primary/50" />
+      </div>
       <div className="flex items-center gap-3 mb-xl px-2">
+        {/* U8: brand mark `cognitive` (filled) — a knowledge-graph knot reads as
+            "connected intelligence" and nods to Shannon's information theory;
+            the old `hub` read as generic networking. Confirmed final 2026-08-26;
+            alternates considered and closed: blur_on (abstract mesh), neurology
+            (organic nodes). */}
         <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-on-primary shadow-lg shadow-primary/30">
-          <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>hub</span>
+          <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>cognitive</span>
         </div>
         <div>
-          <h1 className="font-headline-md text-[20px] font-bold text-primary leading-tight">Shannon</h1>
+          <h1 className="font-headline-md text-[20px] font-bold text-on-surface leading-tight">Shannon</h1>
           <p className="font-body-sm text-[12px] text-on-surface-variant leading-none">
             {intl.formatMessage({ id: 'nav.tagline' })}
           </p>
@@ -303,52 +292,68 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
       </Button>
       )}
 
-      {sessions.length > 0 && (
-        <SessionsSection
-          sessions={sessions}
-          currentSessionId={currentSessionId}
-          switchSession={switchSession}
-          closeMobile={mobile ? closeMobile : undefined}
-        />
-      )}
+      {/* U1: the session rail is the app's only session list. It takes the
+          remaining vertical space (own scroll); nav below gets its own scroll
+          region capped at 60% so a long session list can't push it out.
+          U7: zero-session users get a guide card instead of a blank rail.
+          It shares example copy with WelcomeState (first two of the same
+          list) but stays compact — the canvas welcome card owns the full
+          four-card pitch, so the two never duplicate. */}
+      <div className="flex-1 min-h-0 mb-lg">
+        {sessions.length === 0 ? (
+          <EmptyState
+            icon="forum"
+            title={intl.formatMessage({ id: 'sidebar.sessions.empty.title' })}
+            description={intl.formatMessage({ id: 'sidebar.sessions.empty.description' })}
+            suggestions={WELCOME_EXAMPLES.slice(0, 2).map(ex => ({
+              label: intl.formatMessage({ id: ex.titleKey }),
+              icon: ex.icon,
+              onClick: () => void startWithPrompt(ex.prompt),
+            }))}
+          />
+        ) : (
+          <SessionsSection
+            sessions={sessions}
+            currentSessionId={currentSessionId}
+            switchSession={switchSession}
+            renameSession={renameSession}
+            deleteSession={deleteSession}
+            closeMobile={mobile ? closeMobile : undefined}
+          />
+        )}
+      </div>
 
-      <nav aria-label={intl.formatMessage({ id: 'nav.mainNav.aria' })} className="flex-1 space-y-1">
+      <nav aria-label={intl.formatMessage({ id: 'nav.mainNav.aria' })} className="shrink-0 min-h-0 max-h-[60%]">
         <ScrollArea className="h-full">
-        <NavLink to="/chat" className={getNavClass} onClick={handleNavClick}>
-           <span className="material-symbols-outlined">chat_bubble</span>
-           <span className="flex-1">{intl.formatMessage({ id: 'nav.chat' })}</span>
-           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">{formatShortcut('1')}</kbd>
-        </NavLink>
-        <NavLink to="/tasks" className={getNavClass} onClick={handleNavClick}>
-           <span className="material-symbols-outlined">task_alt</span>
-           <span className="flex-1">{intl.formatMessage({ id: 'nav.scheduled' })}</span>
-           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">{formatShortcut('2')}</kbd>
-        </NavLink>
-        <NavLink to="/memory" className={getNavClass} onClick={handleNavClick}>
-           <span className="material-symbols-outlined">psychology</span>
-           <span className="flex-1">{intl.formatMessage({ id: 'nav.memory' })}</span>
-        </NavLink>
-
-        <NavLink to="/usage" className={getNavClass} onClick={handleNavClick}>
-           <span className="material-symbols-outlined">monitoring</span>
-           <span className="flex-1">{intl.formatMessage({ id: 'nav.usage' })}</span>
-        </NavLink>
-
-        {/* Triage full-page navigation */}
-        <NavLink
-          to="/triage"
-          aria-label={intl.formatMessage({ id: 'nav.triage.aria' })}
-          className={getNavClass}
-          onClick={handleNavClick}
-        >
-          <span className="material-symbols-outlined">inbox</span>
-          <span className="flex-1">{intl.formatMessage({ id: 'nav.triage' })}</span>
-          {triageStats.unread > 0 && (
-            <span className="bg-error text-on-error text-[11px] font-bold px-1.5 py-0.5 rounded-full">
-              {triageStats.unread}
-            </span>
-          )}
-        </NavLink>
+        {/* U6: nav grouped by mental model — Work (workflow) / Resources
+            (data & extensions) / Experiments (dev-only). */}
+        <NavGroup labelId="nav.group.work" open={navOpen.work} onToggle={() => toggleNav('work')}>
+          <NavLink to="/chat" className={getNavClass} onClick={handleNavClick}>
+             <span className="material-symbols-outlined">chat_bubble</span>
+             <span className="flex-1">{intl.formatMessage({ id: 'nav.chat' })}</span>
+             <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface font-mono">{formatShortcut('1')}</kbd>
+          </NavLink>
+          <NavLink to="/tasks" className={getNavClass} onClick={handleNavClick}>
+             <span className="material-symbols-outlined">task_alt</span>
+             <span className="flex-1">{intl.formatMessage({ id: 'nav.scheduled' })}</span>
+             <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface font-mono">{formatShortcut('2')}</kbd>
+          </NavLink>
+          {/* Triage full-page navigation */}
+          <NavLink
+            to="/triage"
+            aria-label={intl.formatMessage({ id: 'nav.triage.aria' })}
+            className={getNavClass}
+            onClick={handleNavClick}
+          >
+            <span className="material-symbols-outlined">inbox</span>
+            <span className="flex-1">{intl.formatMessage({ id: 'nav.triage' })}</span>
+            {inboxStats.pending > 0 && (
+              <span className="bg-error text-on-error text-[11px] font-bold px-1.5 py-0.5 rounded-full">
+                {inboxStats.pending}
+              </span>
+            )}
+          </NavLink>
+        </NavGroup>
 
         {/* Simple mode: flat Extensions entry so普通用户 can reach the
             Extensions Hub without switching to dev mode (dev mode keeps the
@@ -360,61 +365,67 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
           </NavLink>
         )}
 
+        <NavGroup labelId="nav.group.resources" open={navOpen.resources} onToggle={() => toggleNav('resources')}>
+          <NavLink to="/memory" className={getNavClass} onClick={handleNavClick}>
+             <span className="material-symbols-outlined">psychology</span>
+             <span className="flex-1">{intl.formatMessage({ id: 'nav.memory' })}</span>
+          </NavLink>
+
+          <NavLink to="/usage" className={getNavClass} onClick={handleNavClick}>
+             <span className="material-symbols-outlined">monitoring</span>
+             <span className="flex-1">{intl.formatMessage({ id: 'nav.usage' })}</span>
+          </NavLink>
+
+          {mode === 'dev' && (
+          <div className="space-y-1">
+            <Button
+              variant="ghost"
+              onClick={() => toggleNav('extensions')}
+              aria-expanded={navOpen.extensions}
+              className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isExtensionsActive ? "bg-primary/10 text-on-surface font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
+            >
+              <div className="flex items-center gap-3">
+                <span className="material-symbols-outlined">grid_view</span>
+                <span>{intl.formatMessage({ id: 'nav.extensions' })}</span>
+              </div>
+              <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: navOpen.extensions ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+            </Button>
+
+            {navOpen.extensions && (
+              <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label={intl.formatMessage({ id: 'nav.extensions.section.aria' })}>
+                 <SubNavLink to="/extensions/skills" labelId="nav.skills" />
+                 <SubNavLink to="/extensions/agents" labelId="nav.myAgents" />
+                 <SubNavLink to="/extensions/datasources" labelId="nav.dataSources" />
+              </div>
+            )}
+          </div>
+          )}
+        </NavGroup>
+
         {mode === 'dev' && (
-        <>
-        <div className="space-y-1">
-          <Button
-            variant="ghost"
-            onClick={() => setExtensionsOpen(!extensionsOpen)}
-            className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isExtensionsActive ? "bg-primary/10 text-primary font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
-          >
-            <div className="flex items-center gap-3">
-              <span className="material-symbols-outlined">grid_view</span>
-              <span>{intl.formatMessage({ id: 'nav.extensions' })}</span>
-            </div>
-            <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: extensionsOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
-          </Button>
-
-          {extensionsOpen && (
-            <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label={intl.formatMessage({ id: 'nav.extensions.section.aria' })}>
-               <SubNavLink to="/extensions/skills" labelId="nav.skills" />
-               <SubNavLink to="/extensions/agents" labelId="nav.myAgents" />
-               <SubNavLink to="/extensions/datasources" labelId="nav.dataSources" />
-            </div>
-          )}
-        </div>
-
-        <div className="space-y-1">
-          <Button
-            variant="ghost"
-            onClick={() => setOpcOpen(!opcOpen)}
-            className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg font-label-md text-label-md transition-all duration-200", isOpcActive ? "bg-primary/10 text-primary font-bold" : "text-on-surface-variant hover:bg-surface-container-high/50 hover:text-primary")}
-          >
-            <div className="flex items-center gap-3">
-              <span>{intl.formatMessage({ id: 'nav.opc' })}</span>
-              <span className="text-[9px] bg-primary text-on-primary px-1.5 py-0.5 rounded uppercase font-bold tracking-wider">
-                {intl.formatMessage({ id: 'nav.experiment' })}
-              </span>
-            </div>
-            <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: opcOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
-          </Button>
-
-          {opcOpen && (
-            <div className="pl-4 pr-2 space-y-1 mt-1 transition-all">
-               <SubNavLink to="/opc" labelId="nav.onePersonCompany" />
-            </div>
-          )}
-        </div>
-
-        </>
+        <NavGroup labelId="nav.group.experiments" open={navOpen.experiments} onToggle={() => toggleNav('experiments')}>
+          {/* U6: OPC flattened to a direct link — its old disclosure held a
+              single sub-link, and a disclosure inside a group is two levels
+              of folding for one destination. */}
+          <NavLink to="/opc" className={getNavClass} onClick={handleNavClick}>
+             <span className="material-symbols-outlined">auto_awesome</span>
+             <span className="flex-1 flex items-center gap-2">
+               {intl.formatMessage({ id: 'nav.opc' })}
+               <span className="text-[9px] bg-primary text-on-primary px-1.5 py-0.5 rounded uppercase font-bold tracking-wider">
+                 {intl.formatMessage({ id: 'nav.experiment' })}
+               </span>
+             </span>
+          </NavLink>
+        </NavGroup>
         )}
         </ScrollArea>
       </nav>
 
       <div className="mt-auto pt-lg border-t border-outline-variant/20 space-y-1">
-        <button
+        <Button
+          variant="ghost"
           onClick={toggleMode}
-          className="w-full flex items-center justify-between gap-3 px-4 py-2 rounded-lg font-label-md text-[12px] text-on-surface-variant hover:bg-surface-container-low hover:text-primary cursor-pointer transition-all"
+          className="w-full justify-between gap-3 px-4 py-2 rounded-lg font-label-md text-[12px] text-on-surface-variant hover:bg-surface-container-low hover:text-primary cursor-pointer transition-all h-auto"
           aria-label={intl.formatMessage({ id: mode === 'simple' ? 'nav.simpleMode.aria' : 'nav.devMode.aria' })}
           aria-pressed={mode === 'dev'}
           title={intl.formatMessage({ id: mode === 'simple' ? 'nav.simpleMode.title' : 'nav.devMode.title' })}
@@ -425,35 +436,35 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
               {intl.formatMessage({ id: mode === 'simple' ? 'nav.modeLabel.simple' : 'nav.modeLabel.dev' })}
             </span>
           </div>
-          <span className="text-[10px] uppercase tracking-wider text-outline-variant">
+          <span className="text-[10px] uppercase tracking-wider text-on-surface-variant">
             {intl.formatMessage({ id: mode === 'simple' ? 'nav.simpleMode.badge' : 'nav.devMode.badge' })}
           </span>
-        </button>
+        </Button>
         <Button
           variant="ghost"
-          onClick={() => setSettingsOpen(!settingsOpen)}
-          className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isSettingsActive ? "bg-primary/10 text-primary font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
+          onClick={() => toggleNav('settings')}
+          aria-expanded={navOpen.settings}
+          className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isSettingsActive ? "bg-primary/10 text-on-surface font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
         >
           <div className="flex items-center gap-3">
             <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>settings</span>
             <span>{intl.formatMessage({ id: 'nav.settings' })}</span>
           </div>
-          <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: settingsOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+          <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: navOpen.settings ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
         </Button>
 
-        {settingsOpen && (
+        {navOpen.settings && (
           <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label={intl.formatMessage({ id: 'nav.settings.section.aria' })}>
              <SubNavLink to="/settings/general" labelId="nav.general" />
              <SubNavLink to="/settings/theme" labelId="nav.theme" />
              <SubNavLink to="/settings/models" labelId="nav.models" />
+             <SubNavLink to="/settings/permissions" labelId="nav.permissions" />
              {mode === 'dev' && (
-               <>
-                 <SubNavLink to="/settings/billing" labelId="nav.usageBilling" />
-                 <SubNavLink to="/settings/advanced" labelId="nav.advanced" />
-               </>
+               <SubNavLink to="/settings/advanced" labelId="nav.advanced" />
              )}
              <SubNavLink to="/settings/notifications" labelId="nav.notifications" />
              <SubNavLink to="/settings/connections" labelId="nav.connections" />
+             <SubNavLink to="/settings/remotes" labelId="nav.remotes" />
           </div>
         )}
 

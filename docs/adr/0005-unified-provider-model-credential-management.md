@@ -272,18 +272,58 @@ paths unchanged.
 > is the source of truth; `providers.json` is a read-side cache the
 > desktop UI rebuilds on demand.
 >
-> **Deferred** (intentionally — the engine runtime path only consumes
-> `extra_headers` + `default_max_tokens` end-to-end, and the Welcome
-> wizard still uses the legacy singular `configure` flow):
-> - `AppState::build_client_config` still reads from `DesktopConfig`
->   singular fields rather than `build_client_from_resolved` — the
->   refactor is mechanical but the value is zero until the engine
->   runtime path consumes more of the v2 fields.
-> - The `DesktopConfig.provider/api_key/base_url/model` singular
->   fields are kept as a write-through cache for the Welcome flow.
-> - Adding per-tier and per-fallback UI editors in the Add Provider
->   modal (the data round-trips through the engine store already, but
->   there's no UI surface to author it from).
+> **Deferred → 2026-08-11 re-audit** (items 1 & 2 have since landed via
+> PR #41 / #54; only item 3 + a small frontend tail remain):
+> - ✅ **DONE** — `AppState::build_client_config` now routes through
+>   `resolve_active_target(store.config())` + `build_client_from_resolved`
+>   (`desktop/src/commands.rs:399-407`); no longer reads `DesktopConfig`
+>   singular fields.
+> - ✅ **DONE** — `DesktopConfig.provider/api_key/base_url/model` singular
+>   fields **removed** (`desktop/src/config.rs:13-16` documents the
+>   removal; the struct no longer carries provider mirror fields).
+> - ✅ **DONE (G4, 2026-08-12)** — per-tier and per-fallback UI editors
+>   in the Add Provider modal (`TierEditor` + the `fallback_models` list
+>   editor in the advanced section).
+>
+> **Phase 2 收尾 tail (2026-08-11 code audit).** The re-platforming is
+> ~90% complete; the `docs/spikes/p2-2-adr0005-phase2.md` claim that the
+> desktop write-path bypasses `ProviderConfigService` is **stale** —
+> `with_engine_store` (`commands_config.rs:85`) hands every write closure
+> a `&mut ProviderConfigService` and the arms call `LockedService::upsert`
+> / `disconnect_by_slug` / `set_active`. Remaining tail (do **not**
+> remove prematurely):
+> - **G1** — `ProviderConnection` wire DTO still a separate type from
+>   `ProviderProfile`. **Frozen by ADR-0009 D3** (gated by the Welcome.tsx
+>   rewrite; `ProviderProfile` carries `#[serde(deny_unknown_fields)]` +
+>   a `credential` backend detail the UI never consumes, so the thin DTO
+>   is kept intentionally). Do not retire unilaterally.
+> - **G2/G3** — ✅ **DONE** (2026-08-12) — `LegacyProviderConnection` /
+>   `migrate_providers_to_toml` / `providers_path()` one-shot migration code
+>   **removed**. Shannon had not shipped a release carrying the
+>   `providers.json` wire format to external users, so the deferral
+>   condition ("strand `v0.8.0 → v0.9.1` skip-upgraders; revisit after
+>   v0.10.0") never obtained. Removal is total: the legacy wire types, the
+>   `AppState::new` startup-migration call, the `list_providers`
+>   empty-store stale-check, and the `IsolatedHome` test fixture are all
+>   gone; no code path reads or writes `providers.json` now.
+> - **G4** — per-tier / per-fallback editors in the Add Provider modal.
+>   ✅ DONE (2026-08-12): `TierEditor` shipped earlier; the
+>   `fallback_models` list editor was added to the advanced section
+>   (`AddProviderModal.tsx`), wired through `ProviderInput` →
+>   `apply_provider_update` + the `save_provider` insert branch.
+> - **G5** — `SHANNON_*_PROVIDERS` allowlist surfaced in the desktop
+>   settings UI. ✅ DONE: `getProviderAllowlist()` wrapper + the
+>   `enabled_providers` config field in `ModelsSettings`.
+> - **G6** — `switch_provider` vestigial shim. ✅ DONE (2026-08-12):
+>   deleted (`commands_config::switch_provider` + `ProviderSwitchRequest`
+>   + the `main.rs` registration); the three frontend call sites
+>   (`Header.tsx`, `CommandPalette.tsx`, `ModelsSettings.tsx`) now route
+>   to `configure({ key: 'model', value })`, the canonical
+>   store-mutating model-switch path (writes the engine store via
+>   `set_active`, rebuilds `client_config`, emits `CONFIG_UPDATED`).
+>   This also fixes a latent bug — `switch_provider` ignored its
+>   `request` arg, so model-picking from those dropdowns had been a
+>   no-op since P1.2-B.
 >
 > **Parity assessment (P2-9, 2026-07-30).** Audited the Desktop provider/model
 > surface against the CLI's P0–P2 work. Desktop **already covers** connection

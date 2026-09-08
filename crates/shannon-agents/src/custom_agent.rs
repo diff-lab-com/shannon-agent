@@ -264,6 +264,7 @@ impl CustomAgentDef {
             allowed_tools: self.allowed_tools.clone().unwrap_or_default(),
             permission_mode: None,
             isolation: None,
+            disallowed_tools: None,
         }
     }
 

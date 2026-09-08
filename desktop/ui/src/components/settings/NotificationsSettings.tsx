@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { useIntl } from 'react-intl'
+import LoadingState from '@/components/ui/loading-state'
+import { useT } from '@/i18n'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
@@ -13,6 +14,7 @@ import {
 } from '@/components/ui/select'
 import { validateWebhookUrl } from '@/lib/packageValidation'
 import * as api from '@/lib/tauri-api'
+import { cn } from '@/lib/utils'
 /** Channel preset id — stored as the webhook `template` discriminator. */
 type WebhookPreset = 'feishu' | 'dingtalk' | 'wechat' | 'slack' | 'custom'
 
@@ -62,8 +64,7 @@ function presetFromTemplate(template: string | undefined): WebhookPreset {
 }
 
 function WebhookSection() {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -166,10 +167,7 @@ function WebhookSection() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12" role="status" aria-live="polite">
-        <span className="material-symbols-outlined icon-xl text-primary animate-spin" aria-hidden="true">progress_activity</span>
-        <span className="sr-only">{t('settings.notifications.loading')}</span>
-      </div>
+      <LoadingState size="lg" label={t('settings.notifications.loading')} />
     )
   }
 
@@ -223,9 +221,12 @@ function WebhookSection() {
           onChange={(e) => setUrl(e.target.value)}
           placeholder={presetMeta.urlPlaceholder}
           aria-describedby="webhook-url-hint webhook-url-status"
-          className={`w-full px-md py-sm rounded-md border bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-2 focus-visible:ring-primary/20 ${
-            url.trim() ? (validateWebhookUrl(url.trim()).ok ? 'border-tertiary/50' : 'border-error/50') : 'border-outline'
-          }`}
+          className={cn(
+            "w-full px-md py-sm rounded-md border bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-2 focus-visible:ring-primary/20",
+            url.trim()
+              ? (validateWebhookUrl(url.trim()).ok ? 'border-tertiary/50' : 'border-error/50')
+              : 'border-outline',
+          )}
         />
         <div className="mt-xs flex items-center gap-xs">
           <p id="webhook-url-hint" className="text-on-surface-variant font-body-sm flex-1">
@@ -234,7 +235,7 @@ function WebhookSection() {
           {url.trim() && (
             <span
               id="webhook-url-status"
-              className={`text-label-sm font-bold ${validateWebhookUrl(url.trim()).ok ? 'text-tertiary' : 'text-error'}`}
+              className={cn("text-label-sm font-bold", validateWebhookUrl(url.trim()).ok ? 'text-tertiary' : 'text-error')}
             >
               {validateWebhookUrl(url.trim()).ok ? t('settings.notifications.urlStatus.valid') : t('settings.notifications.urlStatus.invalid')}
             </span>
@@ -271,8 +272,7 @@ function WebhookSection() {
 /** Desktop-notification master switch + Do-Not-Disturb quiet-hours window.
  * Desktop-local: webhooks still deliver while DND suppresses OS popups. */
 function DndSection() {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [master, setMaster] = useState(true)
@@ -446,8 +446,7 @@ function DndSection() {
 }
 
 export default function NotificationsSettings() {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
 
   return (
     <div className="pb-xl">

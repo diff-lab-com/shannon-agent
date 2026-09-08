@@ -1,0 +1,11 @@
+{"seq":0,"ts_ns":1700000000000000000,"session_id":"fx-error_recovery","turn":1,"kind":"session/start","model":"test-model"}
+{"seq":1,"ts_ns":1700000000001000000,"session_id":"fx-error_recovery","turn":1,"kind":"user/message","content":"the build is broken, fix it","source":"user"}
+{"seq":2,"ts_ns":1700000000002000000,"session_id":"fx-error_recovery","turn":1,"kind":"request/header","model":"test","adapter_defaults":{},"tools":[],"config_snapshot":{},"reason":"turn"}
+{"seq":3,"ts_ns":1700000000003000000,"session_id":"fx-error_recovery","turn":1,"kind":"assistant/message","content":"Let me check the build error.","interrupted":false}
+{"seq":4,"ts_ns":1700000000004000000,"session_id":"fx-error_recovery","turn":1,"kind":"assistant/message","content":"Let me check the build error.","interrupted":false}
+{"seq":5,"ts_ns":1700000000005000000,"session_id":"fx-error_recovery","turn":1,"kind":"tool/call","tool_use_id":"toolu_0005","tool_name":"Bash","arguments":"{\"command\":\"cargo check\"}"}
+{"seq":6,"ts_ns":1700000000006000000,"session_id":"fx-error_recovery","turn":1,"kind":"tool/result","tool_use_id":"toolu_0005","tool_name":"Bash","output":"error[E0425]: cannot find value `y` in src/main.rs:2","is_error":true,"meta":{},"duration_ms":2500}
+{"seq":7,"ts_ns":1700000000007000000,"session_id":"fx-error_recovery","turn":1,"kind":"tool/call","tool_use_id":"toolu_0007","tool_name":"Read","arguments":"{\"path\":\"src/main.rs\"}"}
+{"seq":8,"ts_ns":1700000000008000000,"session_id":"fx-error_recovery","turn":1,"kind":"tool/result","tool_use_id":"toolu_0007","tool_name":"Read","output":"fn main() { let x = 1 }","is_error":false,"meta":{},"duration_ms":4}
+{"seq":9,"ts_ns":1700000000009000000,"session_id":"fx-error_recovery","turn":1,"kind":"tool/call","tool_use_id":"toolu_0009","tool_name":"Edit","arguments":"{\"path\":\"src/main.rs\",\"old\":\"let x = 1\",\"new\":\"let y = 1\"}"}
+{"seq":10,"ts_ns":1700000000010000000,"session_id":"fx-error_recovery","turn":1,"kind":"tool/result","tool_use_id":"toolu_0009","tool_name":"Edit","output":"ok","is_error":false,"meta":{},"duration_ms":3}

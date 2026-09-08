@@ -280,6 +280,7 @@ fn scene_permission() -> SceneData {
         ),
         is_destructive: false,
         risk_reason: "File write operation".to_string(),
+        reason: Default::default(),
     });
 
     SceneData {

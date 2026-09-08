@@ -4,7 +4,7 @@
 // in one unified form. All four trigger types are selectable; policy fields
 // are optional with MD3-styled inputs. Live cron preview uses preview_cron.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import ResultRoutingEditor from './ResultRoutingEditor'
@@ -12,6 +12,7 @@ import ScheduleTemplates from './ScheduleTemplates'
 import { weekdayName } from './shared'
 import { parseNlCron, type CronDescription } from '@/lib/nl-cron'
 import * as api from '@/lib/tauri-api'
+import { cn } from '@/lib/utils'
 import type {
   TriggerType,
   ExecutionPolicy,
@@ -30,6 +31,8 @@ type TriggerOption = {
   icon: string
   hint: string
 }
+
+const clampHour = (v: number): number => Math.min(23, Math.max(0, Math.round(v) || 0))
 
 const TRIGGER_OPTIONS: TriggerOption[] = [
   { value: 'interval', label: 'Interval', icon: 'timer', hint: 'Run every N seconds' },
@@ -60,6 +63,15 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
   const [maxFires, setMaxFires] = useState<number | ''>('')
   const [showPolicy, setShowPolicy] = useState(false)
   const [policy, setPolicy] = useState<ExecutionPolicy>(DEFAULT_POLICY)
+  // P2-5: off-peak execution window. Disabled by default — a routine
+  // without a window executes immediately when due (legacy behavior).
+  const [offpeakEnabled, setOffpeakEnabled] = useState(false)
+  const [windowStart, setWindowStart] = useState(22)
+  const [windowEnd, setWindowEnd] = useState(6)
+  const [windowTz, setWindowTz] = useState('')
+  const localTimeZone = useMemo(() => {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { return 'UTC' }
+  }, [])
   const [cronPreview, setCronPreview] = useState<CronPreview | null>(null)
   const [cronLoading, setCronLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -91,6 +103,19 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
     (triggerType === 'cron' && cronExpr.trim() && cronPreview?.valid)
   )
 
+  // P2-5: clamp the window hours into 0..=23 and null out the timezone when
+  // the user left it empty (= machine-local timezone, per the contract).
+  const buildPolicy = (): ExecutionPolicy => ({
+    ...policy,
+    execution_window: offpeakEnabled
+      ? {
+          start_hour: clampHour(windowStart),
+          end_hour: clampHour(windowEnd),
+          timezone: windowTz.trim() ? windowTz.trim() : null,
+        }
+      : null,
+  })
+
   const submit = () => {
     if (!valid) {
       setError(t('tasks.scheduleForm.requiredFields'))
@@ -104,7 +129,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
       ...(triggerType === 'interval' ? { interval_secs: intervalSecs } : {}),
       ...(triggerType === 'cron' ? { cron_expr: cronExpr.trim() } : {}),
       ...(maxFires !== '' ? { max_fires: maxFires } : {}),
-      policy,
+      policy: buildPolicy(),
     }
     onSubmit(payload)
   }
@@ -142,16 +167,18 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
     <div className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="font-body-lg font-bold text-on-surface">{t('tasks.scheduleForm.title')}</h3>
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           type="button"
-          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs gap-1"
           onClick={() => setShowPolicy(!showPolicy)}
           aria-expanded={showPolicy}
           aria-controls="schedule-policy"
         >
           <span className="material-symbols-outlined text-[14px]">{showPolicy ? 'remove' : 'settings'}</span>
           {showPolicy ? t('tasks.scheduleForm.hidePolicy') : t('tasks.scheduleForm.policyOptions')}
-        </button>
+        </Button>
       </div>
 
       <ScheduleTemplates onApply={applyTemplate} />
@@ -173,14 +200,14 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); tryParseNl() } }}
             className="flex-1 bg-surface-container-lowest rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
-          <button
+          <Button
             type="button"
             onClick={tryParseNl}
             disabled={!nlInput.trim()}
-            className="px-md py-sm rounded-lg border border-primary/40 bg-primary text-on-primary font-label-md text-[12px] hover:bg-primary/90 disabled:opacity-40 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            className="px-md py-sm rounded-lg font-label-md text-[12px] hover:bg-primary/90"
           >
             {t('tasks.scheduleForm.parse')}
-          </button>
+          </Button>
         </div>
         {nlError ? (
           <div className="font-label-sm text-[11px] text-error flex items-center gap-xs">
@@ -223,24 +250,25 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
           {TRIGGER_OPTIONS.map(opt => {
             const selected = triggerType === opt.value
             return (
-              <button
+              <Button
                 key={opt.value}
+                variant="outline"
                 type="button"
                 role="radio"
                 aria-checked={selected}
                 onClick={() => setTriggerType(opt.value)}
-                className={`flex flex-col items-start gap-xs p-sm rounded-lg border text-left cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
+                className={cn('h-auto flex-col items-start gap-xs p-sm rounded-lg text-left whitespace-normal',
                   selected
-                    ? 'border-primary bg-primary/10 text-on-surface'
+                    ? 'border-primary bg-primary/10 text-on-surface hover:bg-primary/10'
                     : 'border-outline-variant/30 bg-surface-container-low text-on-surface-variant hover:bg-surface-container-low/60'
-                }`}
+                )}
               >
                 <span className="flex items-center gap-xs">
                   <span className="material-symbols-outlined icon-sm">{opt.icon}</span>
                   <span className="font-label-md font-bold">{opt.label}</span>
                 </span>
                 <span className="font-label-sm text-[11px] text-on-surface-variant">{opt.hint}</span>
-              </button>
+              </Button>
             )
           })}
         </div>
@@ -385,6 +413,77 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
             />
             <span className="font-label-md text-on-surface">{t('tasks.scheduleForm.autoArchive')}</span>
           </label>
+
+          {/* P2-5: off-peak execution window. When enabled, a due routine
+              outside the window is queued (status "Queued") and runs at the
+              first due check inside the window. Hours are inclusive; a
+              start > end wraps past midnight (e.g. 22→6). */}
+          <div className="md:col-span-2 flex flex-col gap-xs p-sm bg-secondary/5 border border-secondary/20 rounded-lg">
+            <label className="flex items-center gap-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={offpeakEnabled}
+                onChange={e => setOffpeakEnabled(e.target.checked)}
+                className="cursor-pointer"
+                aria-label={t('tasks.scheduleForm.offpeak.toggleAria')}
+              />
+              <span className="font-label-md text-on-surface font-semibold">
+                {t('tasks.scheduleForm.offpeak.toggle')}
+              </span>
+            </label>
+            <span className="font-label-sm text-[11px] text-on-surface-variant">
+              {t('tasks.scheduleForm.offpeak.hint')}
+            </span>
+            {offpeakEnabled ? (
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-sm mt-xs">
+                <label className="flex flex-col gap-xs">
+                  <span className="font-label-sm text-[11px] text-on-surface-variant">
+                    {t('tasks.scheduleForm.offpeak.startHour')}
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={23}
+                    value={windowStart}
+                    onChange={e => setWindowStart(clampHour(Number(e.target.value)))}
+                    className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    aria-label={t('tasks.scheduleForm.offpeak.startHour')}
+                  />
+                </label>
+                <label className="flex flex-col gap-xs">
+                  <span className="font-label-sm text-[11px] text-on-surface-variant">
+                    {t('tasks.scheduleForm.offpeak.endHour')}
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={23}
+                    value={windowEnd}
+                    onChange={e => setWindowEnd(clampHour(Number(e.target.value)))}
+                    className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    aria-label={t('tasks.scheduleForm.offpeak.endHour')}
+                  />
+                </label>
+                <label className="flex flex-col gap-xs md:col-span-2 md:grid-cols-0">
+                  <span className="font-label-sm text-[11px] text-on-surface-variant">
+                    {t('tasks.scheduleForm.offpeak.timezone')}
+                  </span>
+                  <input
+                    type="text"
+                    placeholder={localTimeZone}
+                    value={windowTz}
+                    onChange={e => setWindowTz(e.target.value)}
+                    className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    aria-label={t('tasks.scheduleForm.offpeak.timezone')}
+                  />
+                  <span className="font-label-sm text-[10px] text-on-surface-variant">
+                    {intl.formatMessage({ id: 'tasks.scheduleForm.offpeak.timezoneHint' }, { zone: localTimeZone })}
+                  </span>
+                </label>
+              </div>
+            ) : null}
+          </div>
+
           <div className="md:col-span-2">
             <ResultRoutingEditor
               value={policy.result_routing ?? []}

@@ -21,7 +21,7 @@ const MAX_ATTACHMENT_COUNT: usize = 10;
 /// if installed, otherwise fall back to the raw UTF-8 decode. This keeps
 /// the dependency surface flat while still giving real content for the
 /// common case where poppler is available on the user's PATH.
-async fn extract_pdf_text_best_effort(path: &Path) -> String {
+pub(crate) async fn extract_pdf_text_best_effort(path: &Path) -> String {
     use std::process::Command;
 
     let path_str = path.to_string_lossy().into_owned();

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -11,7 +12,8 @@ import { VoiceSttSettings } from '@/components/settings/VoiceSttSettings'
 import { VoiceLocalSettings } from '@/components/settings/VoiceLocalSettings'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
-import type { SkillCandidate } from '@/lib/tauri-api'
+import type { SkillCandidate, CliInstallStatus, AppUpdateInfo } from '@/lib/tauri-api'
+import { cn } from '@/lib/utils'
 
 export default function AdvancedSettings() {
   const intl = useIntl()
@@ -23,6 +25,10 @@ export default function AdvancedSettings() {
   const [debugConsole, setDebugConsole] = useState(config?.debug_console ?? false)
   const [skillLoopEnabled, setSkillLoopEnabled] = useState(config?.skill_loop_enabled ?? false)
   const [skillDetectionEnabled, setSkillDetectionEnabled] = useState(config?.skill_detection_enabled ?? true)
+  // P2-5: `offpeak.model_override` — model used for routine executions that
+  // start inside their off-peak execution window. Empty input = disabled.
+  const [offpeakModel, setOffpeakModel] = useState(config?.offpeak?.model_override ?? '')
+  const [savingOffpeak, setSavingOffpeak] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
@@ -34,9 +40,20 @@ export default function AdvancedSettings() {
   const [candidateIndex, setCandidateIndex] = useState(0)
   const [approvalOpen, setApprovalOpen] = useState(false)
 
+  // ADR-0011 B3 — bundled `shannon` CLI exposure (non-shadowing install).
+  const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null)
+  const [installingCli, setInstallingCli] = useState(false)
+
+  // C1① — semi-automatic update check (GitHub latest → open download page).
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+
   useEffect(() => {
     let cancelled = false
     listSkillCandidatesSafe(!cancelled)
+    api.getCliInstallStatus()
+      .then((s) => { if (!cancelled) setCliStatus(s) })
+      .catch(() => { if (!cancelled) setCliStatus(null) })
     return () => { cancelled = true }
 
     function listSkillCandidatesSafe(active: boolean) {
@@ -45,6 +62,11 @@ export default function AdvancedSettings() {
         .catch(() => { if (active) setCandidates([]) })
     }
   }, [])
+
+  // P2-5: keep the input in sync when the persisted config refreshes.
+  useEffect(() => {
+    setOffpeakModel(config?.offpeak?.model_override ?? '')
+  }, [config?.offpeak?.model_override])
 
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
@@ -66,6 +88,59 @@ export default function AdvancedSettings() {
     try { await api.configure({ key: 'factory_reset', value: 'true' }); toast.success(t('settings.advanced.resetComplete')) } catch (e) { toastError(t('settings.advanced.resetFailed'), e) }
     setResetting(false)
     setShowResetConfirm(false)
+  }
+
+  const handleInstallCli = async () => {
+    setInstallingCli(true)
+    try {
+      const result = await api.installCliToPath()
+      setCliStatus(result.status)
+      if (result.installedLink) {
+        toast.success(intl.formatMessage({ id: 'settings.advanced.cliInstalledToast' }, { link: result.installedLink }))
+      } else {
+        toast.message(result.message)
+      }
+    } catch (e) {
+      toastError(t('settings.advanced.cliInstallFailed'), e)
+    }
+    setInstallingCli(false)
+  }
+
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true)
+    try {
+      const info = await api.checkAppUpdate()
+      setUpdateInfo(info)
+      if (info.updateAvailable && info.latestVersion) {
+        toast.success(intl.formatMessage({ id: 'settings.advanced.updateAvailableBadge' }, { version: info.latestVersion }))
+      }
+    } catch (e) {
+      toastError(t('settings.advanced.updateCheckFailed'), e)
+    }
+    setCheckingUpdate(false)
+  }
+
+  const handleOpenReleasePage = async () => {
+    if (!updateInfo) return
+    try {
+      await api.openReleasePage(updateInfo.releaseUrl)
+    } catch (e) {
+      toastError(t('settings.advanced.updateOpenFailed'), e)
+    }
+  }
+
+  // P2-5: persist `offpeak.model_override` (frozen config key). An empty
+  // value disables the override — routines then use the active model.
+  const handleSaveOffpeakModel = async () => {
+    setSavingOffpeak(true)
+    try {
+      await api.configure({ key: 'offpeak.model_override', value: offpeakModel.trim() })
+      await refreshConfig()
+      toast.success(t('settings.advanced.offpeak.saved'))
+    } catch (e) {
+      toastError(t('settings.advanced.offpeak.saveFailed'), e)
+    }
+    setSavingOffpeak(false)
   }
 
   function advanceCandidate() {
@@ -146,7 +221,7 @@ export default function AdvancedSettings() {
               onClick={() => setShowClearConfirm(true)}
               disabled={clearing}
             >
-              {clearing ? <span className="material-symbols-outlined animate-spin mr-sm text-[18px]">progress_activity</span> : null}
+              {clearing ? <Spinner className="mr-sm text-[18px]" /> : null}
               {clearing ? t('settings.advanced.clearing') : t('settings.advanced.clearSessionCache')}
             </Button>
           </div>
@@ -179,11 +254,143 @@ export default function AdvancedSettings() {
           </div>
         </div>
 
+        {/* Off-peak model override (P2-5, frozen key `offpeak.model_override`) */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-2 bg-secondary/10 rounded-lg text-secondary flex items-center justify-center">
+              <span className="material-symbols-outlined">bedtime</span>
+            </div>
+            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.offpeak.title')}</h3>
+          </div>
+          <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.offpeak.desc')}</p>
+          <div className="flex flex-col md:flex-row md:items-end gap-sm">
+            <label className="flex flex-col gap-xs flex-1">
+              <span className="font-label-sm text-[12px] text-on-surface-variant">
+                {t('settings.advanced.offpeak.inputLabel')}
+              </span>
+              <input
+                type="text"
+                value={offpeakModel}
+                onChange={e => setOffpeakModel(e.target.value)}
+                placeholder={t('settings.advanced.offpeak.placeholder')}
+                aria-label={t('settings.advanced.offpeak.inputLabel')}
+                className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+              <span className="font-label-sm text-[11px] text-on-surface-variant">
+                {offpeakModel.trim() ? t('settings.advanced.offpeak.enabledHint') : t('settings.advanced.offpeak.disabledHint')}
+              </span>
+            </label>
+            <Button
+              className="px-xl py-md bg-primary text-on-primary rounded-lg font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-sm active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer disabled:opacity-50"
+              onClick={handleSaveOffpeakModel}
+              disabled={savingOffpeak}
+              aria-label={t('settings.advanced.offpeak.saveAria')}
+            >
+              {savingOffpeak ? t('settings.advanced.offpeak.saving') : t('settings.advanced.offpeak.save')}
+            </Button>
+          </div>
+        </div>
+
         {/* Voice / Speech-to-text (D4 cloud STT) */}
         <VoiceSttSettings />
 
         {/* Voice / Local (P2-5e whisper-rs) — opt-in offline STT */}
         <VoiceLocalSettings />
+
+        {/* Command line — expose the bundled `shannon` CLI (ADR-0011 B3) */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+              <span className="material-symbols-outlined">terminal</span>
+            </div>
+            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.cliTitle')}</h3>
+            <span
+              className={cn(
+                "ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold whitespace-nowrap",
+                cliStatus?.onPath
+                  ? 'bg-tertiary-container text-on-tertiary-container'
+                  : 'bg-error/10 text-error',
+              )}
+            >
+              {cliStatus?.onPath
+                ? (cliStatus.onPathVersion ?? t('settings.advanced.cliInstalled'))
+                : t('settings.advanced.cliNotOnPath')}
+            </span>
+          </div>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-lg">
+            <div className="flex-1">
+              <p className="text-on-surface-variant text-body-sm mb-md">{t('settings.advanced.cliDesc')}</p>
+              {cliStatus?.handledByInstaller && !cliStatus?.onPath && (
+                <p className="text-on-surface-variant text-label-sm">{t('settings.advanced.cliInstallerHint')}</p>
+              )}
+            </div>
+            <Button
+              className="px-xl py-md bg-primary text-on-primary rounded-xl font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-md active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
+              onClick={handleInstallCli}
+              disabled={installingCli || !cliStatus || cliStatus.onPath}
+            >
+              {installingCli ? t('settings.advanced.cliInstalling') : t('settings.advanced.cliInstallButton')}
+            </Button>
+          </div>
+        </div>
+
+        {/* Version & updates — semi-automatic update check (C1①) */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+              <span className="material-symbols-outlined">system_update_alt</span>
+            </div>
+            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.updateTitle')}</h3>
+            {updateInfo && (
+              <span
+                className={cn(
+                  "ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold whitespace-nowrap",
+                  updateInfo.updateAvailable
+                    ? 'bg-tertiary-container text-on-tertiary-container'
+                    : 'bg-surface-container-high text-on-surface-variant',
+                )}
+              >
+                {updateInfo.error
+                  ? t('settings.advanced.updateCheckFailed')
+                  : updateInfo.updateAvailable && updateInfo.latestVersion
+                    ? intl.formatMessage({ id: 'settings.advanced.updateAvailableBadge' }, { version: updateInfo.latestVersion })
+                    : t('settings.advanced.updateUpToDate')}
+              </span>
+            )}
+          </div>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-lg">
+            <div className="flex-1">
+              <p className="text-on-surface-variant text-body-sm mb-md">{t('settings.advanced.updateDesc')}</p>
+              {updateInfo && (
+                <p className="text-on-surface-variant text-label-sm">
+                  {intl.formatMessage({ id: 'settings.advanced.updateCurrent' }, { version: updateInfo.currentVersion })}
+                </p>
+              )}
+              {updateInfo?.error && (
+                <p className="text-error text-label-sm mt-xs">{updateInfo.error}</p>
+              )}
+            </div>
+            <div className="flex items-center gap-md shrink-0">
+              {updateInfo && !updateInfo.error && (
+                <Button
+                  variant="ghost"
+                  className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer"
+                  onClick={handleOpenReleasePage}
+                >
+                  <span className="material-symbols-outlined icon-sm">open_in_new</span>
+                  {t('settings.advanced.updateOpenPage')}
+                </Button>
+              )}
+              <Button
+                className="px-xl py-md bg-primary text-on-primary rounded-xl font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-md active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
+                onClick={handleCheckUpdate}
+                disabled={checkingUpdate}
+              >
+                {checkingUpdate ? t('settings.advanced.updateChecking') : t('settings.advanced.updateCheckButton')}
+              </Button>
+            </div>
+          </div>
+        </div>
 
         {/* Developer Options */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">
@@ -197,12 +404,12 @@ export default function AdvancedSettings() {
             <div className="flex-1">
               <p className="text-on-surface-variant text-body-sm mb-md">{t('settings.advanced.devOptionsDesc')}</p>
               <div className="flex items-center gap-md">
-                <Button variant="ghost" className="flex items-center gap-xs text-primary font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowLogs(true)}>
+                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowLogs(true)}>
                   <span className="material-symbols-outlined icon-sm">description</span>
                   {t('settings.advanced.viewLogs')}
                 </Button>
                 <span className="text-outline-variant">|</span>
-                <Button variant="ghost" className="flex items-center gap-xs text-primary font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowApiKeys(true)}>
+                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowApiKeys(true)}>
                   <span className="material-symbols-outlined icon-sm">api</span>
                   {t('settings.advanced.manageApiKeys')}
                 </Button>
@@ -217,7 +424,7 @@ export default function AdvancedSettings() {
 
         {/* Critical System Reset */}
         <div className="lg:col-span-2 border-2 border-error/20 bg-error/5 p-lg rounded-xl mt-sm relative overflow-hidden">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-lg relative z-10">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-lg relative z-raised">
             <div className="flex items-start gap-md">
               <div className="p-2 bg-error/10 rounded-lg text-error shrink-0 flex items-center justify-center">
                 <span className="material-symbols-outlined">warning</span>

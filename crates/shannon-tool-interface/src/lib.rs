@@ -24,6 +24,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 
+pub mod providers;
+pub mod sandbox;
+pub mod walk;
+
+pub use providers::{
+    CapturedOutput, ChainedSpawnRewrite, DirEntryInfo, ExecCaps, FileMeta, FileSystemProvider,
+    PipedChild, PipedSpawn, ProcessExit, ProcessProvider, ProcessRequest, SpawnRewrite,
+};
+pub use sandbox::{
+    ChildWorldInit, DegradeNotice, ForkInitHost, SANDBOX_DENIED_CLASSIFICATION,
+    SANDBOX_DENIED_PREFIX, SandboxDenialInfo, SandboxError, SandboxMode, SandboxPolicy,
+    SandboxProvider, path_within,
+};
+pub use walk::{BUILTIN_EXCLUDES, GitignoreMatcher};
+
 /// Sender for streaming tool progress updates.
 /// Tools call `send(line)` to emit partial output during execution.
 pub trait ProgressSender: Send + Sync {
@@ -55,6 +70,14 @@ pub enum ToolError {
         /// Duration that elapsed before the timeout.
         duration: std::time::Duration,
     },
+}
+
+// Chromiumoxide session helpers may produce String errors; let `?` work
+// uniformly across builtin tool implementations.
+impl From<String> for ToolError {
+    fn from(s: String) -> Self {
+        ToolError::ExecutionFailed(s)
+    }
 }
 
 /// Result type for tool execution

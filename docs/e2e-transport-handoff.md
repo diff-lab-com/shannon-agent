@@ -388,5 +388,41 @@ cargo clippy -p shannon-e2e -- -D warnings
 
 ---
 
-**Author**: Generated from WIP `2f39f9b` (preserved in branch `wip/shannon-e2e-transport`)
-**Last updated**: 2026-07-13
+## 14. Decision Record: Production Keying Formalized as pairToken HKDF (2026-09-06)
+
+> Status update on §3.3 above: the X25519 shared-secret input described there
+> was **never shipped**. What production actually does today (gateway TS +
+> shannon-mobile Dart, byte-identical) is:
+
+```
+session_key = HKDF-SHA256(
+                  salt = b"shannon-relay",
+                  info = b"shannon-e2e-v1",
+                  ikm  = UTF8(pairToken),   # NOT an X25519 shared secret
+                  L    = 32,
+              )
+```
+
+This formalizes the status quo as a deliberate (interim) decision, per the
+2026-09-06 product call on the shannon-mobile feedback (review-followups
+P0 #2 / cross-repo-adaptation-spec §G-rev):
+
+1. **Adopted now**: document the pairToken derivation as the production KDF
+   and pin it with frozen vectors. `gateway/src/mobile/relay/__tests__/e2e.test.ts`
+   now carries (a) the RFC 5869 Test Case 1 official vector proving the
+   HKDF construction, and (b) a production golden vector:
+   `deriveSessionKey("shannon-e2e-golden-vector")` =
+   `8fc2767fba0fe4c0a2d99331282c16e12ceaff9e7cdc7147db45320e3366bb1d`.
+   The Dart twin must pin the same token→key mapping (cross-repo handoff).
+2. **Accepted risk (unchanged)**: the pair token is the channel trust root.
+   QR-enforced `hostE2EPubKey` is validated for presence but unused in
+   derivation, so anyone holding a QR screenshot can derive the key and
+   decrypt the whole pairing's relay traffic. Pair token TTL (75s) +
+   single-use consumption are the only mitigations until item 3.
+3. **Deferred to v0.3 (per D-1 schedule)**: replace the token input with the
+   X25519 handshake described in §3.3 — static-static first (QR-carried
+   `hostE2EPubKey` becomes live), then ephemeral per-connection keys for
+   forward secrecy. Mobile-side primitives (`E2eKeyPair`) already exist and
+   are tested; the gap is gateway-side X25519 + QR assembly.
+
+**Last updated**: 2026-09-06

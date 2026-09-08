@@ -22,7 +22,7 @@ should consume instead of hardcoding hex codes, pixel sizes, or timings.
 | ------------ | ------------------- | -------------------------------------- | -------------------------------------------- |
 | Color        | `--color-*`         | `--color-primary`, `--color-on-surface | Material 3 roles; auto-switched by theme     |
 | Spacing      | `--spacing-*`       | `--spacing-sm` (8px)                   | 4-pixel scale; use over `p-{n}` in components |
-| Type         | `--font-*`          | `--font-label-md`                      | Variable: Inter Variable, Geist Variable     |
+| Type         | `--font-*`          | `--font-label-md`                      | Variable: Inter Variable (labels + body); monospace via font-mono opt-in     |
 | Type size    | `--text-{role}-{n}` | `--text-body-md` (16px)                | Tailwind compiles to `text-body-md` utility |
 | Radius       | `--radius-*`        | `--radius-2xl` (18px)                  | Message bubbles, modals                       |
 | Shadow       | `--shadow-e{1..5}`  | `--shadow-e1`                          | Elevation levels (1..5)                       |

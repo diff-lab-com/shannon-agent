@@ -21,9 +21,9 @@
 use schemars::JsonSchema;
 use schemars::schema::{InstanceType, RootSchema, Schema, SchemaObject, SingleOrVec};
 use shannon_api_protocol::{
-    ApprovalDecision, ApprovalRespondRequest, HealthResponse, ModelInfo, ModelsResponse,
-    PROTOCOL_VERSION, QueryRequest, QueryResponse, ToolEntry, ToolsListResponse, UsageInfo,
-    WsClientMessage, WsServerMessage,
+    ApprovalDecision, ApprovalRespondRequest, HealthResponse, MessageAttachment, ModelInfo,
+    ModelsResponse, PROTOCOL_VERSION, QueryRequest, QueryResponse, ToolEntry, ToolsListResponse,
+    UsageInfo, WsClientMessage, WsServerMessage,
 };
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -69,6 +69,7 @@ struct Ctx<'a> {
 
 fn collect_entries() -> Vec<TypeEntry> {
     vec![
+        entry_struct::<MessageAttachment>("MessageAttachment"),
         entry_struct::<QueryRequest>("QueryRequest"),
         entry_struct::<QueryResponse>("QueryResponse"),
         entry_struct::<UsageInfo>("UsageInfo"),
@@ -445,6 +446,33 @@ fn ts_type_for_object(obj: &SchemaObject, ctx: &Ctx<'_>) -> Result<String, GenEr
         }
     }
     if let Some(it) = &obj.instance_type {
+        // `Option<Vec<T>>` renders as `"type": ["array", "null"]` with
+        // `items` — render the items type and make it nullable, rather than
+        // falling into the permissive `primitive_type` map.
+        if let SingleOrVec::Vec(multi) = it {
+            let is_array = multi.iter().any(|t| matches!(t, InstanceType::Array));
+            let is_null = multi.iter().any(|t| matches!(t, InstanceType::Null));
+            if is_array {
+                if let Some(items) = obj.array.as_ref().and_then(|a| a.items.as_ref()) {
+                    let inner = match items {
+                        SingleOrVec::Single(s) => ts_type_for_schema(s.as_ref(), false, ctx)?,
+                        SingleOrVec::Vec(v) => {
+                            let parts: Vec<String> = v
+                                .iter()
+                                .map(|s| ts_type_for_schema(s, false, ctx))
+                                .collect::<Result<_, _>>()?;
+                            parts.join(" | ")
+                        }
+                    };
+                    let base = format!("{inner}[]");
+                    return Ok(if is_null {
+                        format!("{base} | null")
+                    } else {
+                        base
+                    });
+                }
+            }
+        }
         return Ok(primitive_type(it));
     }
     // anyOf with one null variant → nullable shorthand.

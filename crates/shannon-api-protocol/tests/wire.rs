@@ -32,6 +32,7 @@ fn query_request_serialization() {
         prompt: "hello world".to_string(),
         model: Some("gpt-4o".to_string()),
         session_id: None,
+        attachments: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     assert!(json.contains("hello world"));
@@ -226,6 +227,7 @@ fn ws_client_message_query_serialization() {
         prompt: "hello".to_string(),
         model: Some("gpt-4o".to_string()),
         session_id: None,
+        attachments: None,
     };
     let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
     assert_eq!(parsed["type"], "query");
@@ -239,6 +241,7 @@ fn ws_client_message_query_without_model_emits_null() {
         prompt: "test".to_string(),
         model: None,
         session_id: None,
+        attachments: None,
     };
     let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
     assert_eq!(parsed["type"], "query");
@@ -281,6 +284,7 @@ fn ws_client_message_roundtrip_all_variants() {
             prompt: "test prompt".to_string(),
             model: Some("llama3".to_string()),
             session_id: None,
+            attachments: None,
         },
         WsClientMessage::Clear,
         WsClientMessage::Info,

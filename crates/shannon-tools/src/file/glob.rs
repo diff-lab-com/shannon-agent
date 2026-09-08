@@ -10,6 +10,7 @@
 use crate::{ToolError, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_tool_interface::FileSystemProvider;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -65,6 +66,14 @@ const MATCH_OPTS: glob::MatchOptions = glob::MatchOptions {
     require_literal_leading_dot: false,
 };
 
+/// Whether a glob pattern addresses outside its base directory. Absolute
+/// patterns can never match (matching runs on base-relative paths) and `..`
+/// segments only ever produce empty results; both previously surfaced as a
+/// silent "No files found".
+fn pattern_is_escaping(pattern: &str) -> bool {
+    Path::new(pattern).is_absolute() || pattern.split(['/', '\\']).any(|seg| seg == "..")
+}
+
 /// Check whether `candidate` (a relative path) matches any of the given
 /// exclude patterns.
 fn matches_any_exclude(candidate: &Path, excludes: &[String]) -> bool {
@@ -89,12 +98,12 @@ fn format_modified_time(time: std::time::SystemTime) -> Option<String> {
 }
 
 /// Build a `GlobResult` from a file path, returning `None` on I/O errors.
-fn build_result(path: &Path) -> Option<GlobResult> {
-    let meta = std::fs::metadata(path).ok()?;
-    let modified = meta.modified().ok().and_then(format_modified_time);
+fn build_result(fs: &dyn FileSystemProvider, path: &Path) -> Option<GlobResult> {
+    let meta = fs.metadata_blocking(path).ok()?;
+    let modified = meta.modified.and_then(format_modified_time);
     Some(GlobResult {
         path: path.display().to_string(),
-        size: meta.len(),
+        size: meta.len,
         modified,
     })
 }
@@ -113,23 +122,37 @@ fn sort_results(results: &mut [GlobResult]) {
 /// Execute a glob search using the `ignore` crate for .gitignore-aware traversal
 /// and the `glob` crate for pattern matching.
 pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
+    execute_with(input, crate::defaults::fs().as_ref()).await
+}
+
+/// Provider-injected entry point (§4.11): metadata and canonicalization flow
+/// through the injected filesystem world.
+pub async fn execute_with(
+    input: GlobInput,
+    fs: &dyn FileSystemProvider,
+) -> Result<ToolOutput, ToolError> {
     let base_path = input.path.as_deref().unwrap_or(".");
     let base = PathBuf::from(base_path);
 
-    // Prevent path traversal (e.g. "../../etc") by checking components
+    // Prevent path traversal (e.g. "../../etc") by checking components.
+    // Confinement compares against the *world's* canonical root: on a remote
+    // target both the path and its resolution live on the other machine, and
+    // the local cwd is meaningless there.
     for component in base.components() {
         if matches!(component, std::path::Component::ParentDir) {
-            // Allow if path resolves within cwd after canonicalization
-            if let Ok(canonical) = std::fs::canonicalize(&base) {
-                let cwd = std::env::current_dir().unwrap_or_default();
-                if !canonical.starts_with(&cwd) {
-                    return Ok(ToolOutput {
-                        content: format!(
-                            "Path traversal blocked: '{base_path}' resolves outside project"
-                        ),
-                        is_error: true,
-                        metadata: HashMap::new(),
-                    });
+            // Allow if path resolves within the world's canonical base after
+            // canonicalization (symlinks resolved remotely via SFTP).
+            if let Ok(canonical) = fs.canonicalize_blocking(&base) {
+                if let Ok(base_canonical) = fs.canonicalize_blocking(Path::new(".")) {
+                    if !canonical.starts_with(&base_canonical) {
+                        return Ok(ToolOutput {
+                            content: format!(
+                                "Path traversal blocked: '{base_path}' resolves outside project"
+                            ),
+                            is_error: true,
+                            metadata: HashMap::new(),
+                        });
+                    }
                 }
             }
             break;
@@ -137,7 +160,8 @@ pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
     }
 
     // If the base directory does not exist, return early with empty results.
-    if !base.exists() {
+    // (Provider-checked so the probe hits the active world's disk.)
+    if !fs.exists_blocking(&base) {
         return Ok(ToolOutput {
             content: format!("Directory not found: {base_path}"),
             is_error: true,
@@ -148,55 +172,62 @@ pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
     let excludes = input.exclude_pattern.as_deref().unwrap_or(&[]);
     let pattern = &input.pattern;
 
+    // A pattern that addresses outside its base directory can never match:
+    // matching runs against paths RELATIVE to the base, so absolute or
+    // `..`-containing patterns silently returned "No files found" — which
+    // reads as "wrong pattern" and invites the model to keep guessing escape
+    // depths (dogfood l2 2026-08-23: ../../../../../../ tried at two wrong
+    // depths, then the task gave up without producing its answer). Report
+    // the confinement so the model can switch to a relative pattern.
+    if pattern_is_escaping(pattern) {
+        return Ok(ToolOutput {
+            content: format!(
+                "Glob pattern '{pattern}' cannot match here: patterns are \
+                 applied to paths relative to the search directory, and this \
+                 one addresses outside it. Use a relative pattern (e.g. \
+                 'src/**/*.rs') or set the 'path' parameter to a \
+                 subdirectory."
+            ),
+            is_error: true,
+            metadata: HashMap::new(),
+        });
+    }
+
     // Compile the glob pattern once.
     let glob_pattern = glob::Pattern::new(pattern)
         .map_err(|e| ToolError::InvalidInput(format!("Invalid glob pattern '{pattern}': {e}")))?;
 
-    // Use `ignore::WalkBuilder` for .gitignore-aware traversal.
-    let mut builder = ignore::WalkBuilder::new(&base);
-    builder.hidden(true); // skip hidden files
-    builder.git_ignore(true); // respect .gitignore
-    builder.git_global(true); // respect global gitignore
-    builder.git_exclude(true); // respect .git/info/exclude
-
+    // .gitignore-aware traversal through the injected filesystem world, so
+    // matching runs against the same machine the files live on.
     let mut results: Vec<GlobResult> = Vec::new();
 
-    for entry in builder.build() {
-        match entry {
-            Ok(dir_entry) => {
-                if let Some(file_type) = dir_entry.file_type() {
-                    if !file_type.is_file() {
-                        continue;
-                    }
-                }
+    fs.walk_blocking(&base, &mut |entry| {
+        if !entry.is_dir {
+            let path = entry.path.as_path();
 
-                let path = dir_entry.path();
+            // Match the path *relative* to the base directory. This ensures
+            // `*.rs` only matches files in the root, not `src/mod.rs`.
+            let rel = match path.strip_prefix(&base) {
+                Ok(r) => r,
+                Err(_) => return true,
+            };
 
-                // Match the path *relative* to the base directory. This ensures
-                // `*.rs` only matches files in the root, not `src/mod.rs`.
-                let rel = match path.strip_prefix(&base) {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
-
-                if !glob_pattern.matches_path_with(rel, MATCH_OPTS) {
-                    continue;
-                }
-
-                // Apply user-supplied exclude patterns.
-                if matches_any_exclude(rel, excludes) {
-                    continue;
-                }
-
-                if let Some(result) = build_result(path) {
-                    results.push(result);
-                }
+            if !glob_pattern.matches_path_with(rel, MATCH_OPTS) {
+                return true;
             }
-            Err(err) => {
-                tracing::debug!("glob walk error: {}", err);
+
+            // Apply user-supplied exclude patterns.
+            if matches_any_exclude(rel, excludes) {
+                return true;
+            }
+
+            if let Some(result) = build_result(fs, path) {
+                results.push(result);
             }
         }
-    }
+        true
+    })
+    .map_err(|e| ToolError::ExecutionFailed(format!("glob walk failed: {e}")))?;
 
     sort_results(&mut results);
     let count = results.len();
@@ -234,6 +265,131 @@ pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    /// Remote-semantics test: the base directory lives only in the injected
+    /// world (fake fs), so traversal, existence probe and metadata all come
+    /// from the provider — never from the local disk.
+    #[tokio::test]
+    async fn glob_traverses_through_injected_world() {
+        use shannon_tool_interface::{DirEntryInfo, FileMeta, FileSystemProvider};
+        use std::io;
+        use std::path::{Path, PathBuf};
+
+        use async_trait::async_trait;
+
+        struct RemoteFakeFs;
+
+        impl RemoteFakeFs {
+            fn entries(root: &Path) -> Vec<DirEntryInfo> {
+                vec![
+                    DirEntryInfo {
+                        path: root.to_path_buf(),
+                        len: 0,
+                        is_dir: true,
+                    },
+                    DirEntryInfo {
+                        path: root.join("lib.rs"),
+                        len: 32,
+                        is_dir: false,
+                    },
+                    DirEntryInfo {
+                        path: root.join("notes.txt"),
+                        len: 8,
+                        is_dir: false,
+                    },
+                ]
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl FileSystemProvider for RemoteFakeFs {
+            async fn read_text(&self, _p: &Path) -> io::Result<String> {
+                unimplemented!()
+            }
+            async fn read_bytes(&self, _p: &Path) -> io::Result<Vec<u8>> {
+                unimplemented!()
+            }
+            async fn metadata(&self, p: &Path) -> io::Result<FileMeta> {
+                Ok(self.metadata_blocking(p).unwrap())
+            }
+            async fn create_dir_all(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn write_bytes(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn rename(&self, _f: &Path, _t: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn read_text_blocking(&self, _p: &Path) -> io::Result<String> {
+                unimplemented!()
+            }
+            fn write_bytes_blocking(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn create_dir_all_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn remove_file_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn canonicalize_blocking(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn metadata_blocking(&self, p: &Path) -> io::Result<FileMeta> {
+                Ok(FileMeta {
+                    len: if p.extension().is_some_and(|e| e == "rs") {
+                        32
+                    } else {
+                        8
+                    },
+                    is_dir: p.extension().is_none(),
+                    modified: None,
+                })
+            }
+            fn read_prefix_blocking(&self, _p: &Path, _m: usize) -> io::Result<Vec<u8>> {
+                unimplemented!()
+            }
+            fn list_dir_blocking(&self, _p: &Path) -> io::Result<Vec<DirEntryInfo>> {
+                Ok(Vec::new())
+            }
+            fn exists_blocking(&self, _p: &Path) -> bool {
+                true
+            }
+            fn walk_blocking(
+                &self,
+                root: &Path,
+                cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+            ) -> io::Result<()> {
+                for entry in Self::entries(root) {
+                    cb(&entry);
+                }
+                Ok(())
+            }
+        }
+
+        let output = execute_with(
+            GlobInput {
+                pattern: "*.rs".into(),
+                path: Some("/remote-host/proj".into()),
+                exclude_pattern: None,
+            },
+            &RemoteFakeFs,
+        )
+        .await
+        .unwrap();
+
+        assert!(!output.is_error);
+        assert!(
+            output.content.contains("/remote-host/proj/lib.rs"),
+            "results must come from the injected world, got: {}",
+            output.content
+        );
+        assert!(!output.content.contains("notes.txt"));
+    }
+
     use super::*;
     use std::fs;
     use tempfile::TempDir;
@@ -284,6 +440,48 @@ mod tests {
             .iter()
             .map(|v| v["path"].as_str().unwrap().to_string())
             .collect()
+    }
+
+    #[tokio::test]
+    async fn test_escaping_pattern_reports_confinement_not_silence() {
+        let tmp = TempDir::new().unwrap();
+        let root = setup_test_tree(&tmp);
+
+        // `..` prefix: previously a silent "No files found", which the model
+        // read as "wrong pattern" and kept guessing escape depths (dogfood
+        // l2 2026-08-23). Must surface as a confinement error instead.
+        let input = GlobInput {
+            pattern: "../../**/*.rs".to_string(),
+            path: Some(root.display().to_string()),
+            exclude_pattern: None,
+        };
+        let output = execute(input).await.unwrap();
+        assert!(output.is_error, "escape pattern must be an error");
+        assert!(
+            output.content.contains("relative pattern"),
+            "error must point at the recovery: {}",
+            output.content
+        );
+
+        // Absolute pattern: matching is base-relative, so it can never match
+        // either — same confinement error, not silence.
+        let input = GlobInput {
+            pattern: format!("{}/*.rs", root.display()),
+            path: None,
+            exclude_pattern: None,
+        };
+        let output = execute(input).await.unwrap();
+        assert!(output.is_error, "absolute pattern must be an error");
+
+        // Sanity: ordinary relative patterns are unaffected.
+        let input = GlobInput {
+            pattern: "*.rs".to_string(),
+            path: Some(root.display().to_string()),
+            exclude_pattern: None,
+        };
+        let output = execute(input).await.unwrap();
+        assert!(!output.is_error);
+        assert_eq!(extract_paths(&output).len(), 2);
     }
 
     #[tokio::test]
@@ -568,6 +766,29 @@ mod tests {
         assert!(files.iter().any(|f| f.ends_with("lib.rs")));
     }
 
+    /// An escaping pattern (`..`) deterministically returns the same
+    /// error-shaped output with no "count" key — pins the contract the
+    /// determinism proptest relies on (proptest-regressions seeds).
+    #[tokio::test]
+    async fn glob_escaping_pattern_error_contract_is_stable() {
+        let tmp = TempDir::new().unwrap();
+        let input = GlobInput {
+            pattern: "..".to_string(),
+            path: Some(tmp.path().display().to_string()),
+            exclude_pattern: None,
+        };
+        let out = execute(input.clone())
+            .await
+            .expect("error-shaped Ok output");
+        assert!(out.is_error);
+        assert!(out.content.contains("cannot match here"));
+        assert!(!out.metadata.contains_key("count"));
+
+        let again = execute(input).await.expect("second call");
+        assert_eq!(out.is_error, again.is_error);
+        assert_eq!(out.content, again.content);
+    }
+
     // ======================================================================
     // Property-based tests (proptest)
     // ======================================================================
@@ -622,7 +843,17 @@ mod tests {
             match (out1, out2) {
                 (Ok(o1), Ok(o2)) => {
                     assert_eq!(o1.is_error, o2.is_error);
-                    assert_eq!(o1.metadata["count"], o2.metadata["count"]);
+                    assert_eq!(o1.content, o2.content);
+                    // Error-shaped outputs (traversal blocked, escaping pattern,
+                    // missing directory) carry no "count" metadata by contract —
+                    // only compare it when both calls succeeded.
+                    if !o1.is_error {
+                        assert_eq!(
+                            o1.metadata.get("count"),
+                            o2.metadata.get("count"),
+                            "count differs between identical calls"
+                        );
+                    }
                 }
                 (Err(e1), Err(e2)) => {
                     assert_eq!(e1.to_string(), e2.to_string());

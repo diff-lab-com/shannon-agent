@@ -6,6 +6,7 @@ import rehypeHighlight from 'rehype-highlight'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Chart, parseChartSpec } from '@/components/chat/Chart'
+import { CodeBlock as SharedCodeBlock } from '@/components/code/CodeBlock'
 
 // Extend the default sanitize schema so syntax-highlight classes from
 // rehype-highlight (e.g. `hljs-keyword`) survive sanitization. Keep the
@@ -65,6 +66,7 @@ export const Markdown = memo(function Markdown({ children, className }: Markdown
 /** Dispatches `language-chart` to the chart renderer; everything else
  *  goes to the generic CodeBlock. */
 function PreOrChart(props: React.HTMLAttributes<HTMLPreElement>) {
+  const intl = useIntl()
   const child = Array.isArray(props.children) ? props.children[0] : props.children
   if (child && typeof child === 'object' && 'props' in child) {
     const codeProps = (child as { props: { className?: string; children?: ReactNode } }).props
@@ -75,7 +77,7 @@ function PreOrChart(props: React.HTMLAttributes<HTMLPreElement>) {
       return (
         <div className="my-md p-sm rounded-lg bg-error-container/20 border border-error/30 text-label-sm text-error">
           <span className="material-symbols-outlined text-[14px] align-middle mr-xs">error</span>
-          Invalid chart spec — expected JSON with type and data[].
+          {intl.formatMessage({ id: 'chat.chart.invalidSpec' })}
         </div>
       )
     }
@@ -114,76 +116,17 @@ function extractLanguage(className?: string): string | null {
 }
 
 function CodeBlock(props: { children?: ReactNode } & React.HTMLAttributes<HTMLPreElement>) {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
   const codeProps = getCodeChildProps(props.children)
   const code = extractText(codeProps?.children)
   const language = extractLanguage(codeProps?.className)
-  const [copied, setCopied] = useState(false)
-  const [showLines, setShowLines] = useState(false)
-  const lineCount = code ? code.split('\n').length : 0
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    }).catch(() => {})
-  }
-
+  // The shared primitive owns the header (language · line-number toggle ·
+  // copy) and the gutter; the already-highlighted <code> from rehype passes
+  // through as children so streaming re-renders stay cheap.
   return (
-    <div className="relative group/code my-md rounded-lg overflow-hidden border border-outline-variant/20 bg-surface-container-lowest">
-      {/* Header — language label + line-number toggle + copy button */}
-      <div className="flex items-center justify-between gap-xs px-sm py-xs bg-surface-container/60 border-b border-outline-variant/15 text-label-xs">
-        <span className="font-mono uppercase text-on-surface-variant tracking-wide" aria-label={t('chat.code.language.aria')}>
-          {language ?? t('chat.code.language.text')}
-        </span>
-        <div className="flex items-center gap-xs">
-          {lineCount > 5 && (
-            <button
-              type="button"
-              onClick={() => setShowLines(v => !v)}
-              aria-pressed={showLines}
-              aria-label={t(showLines ? 'chat.code.lineNumbers.hide' : 'chat.code.lineNumbers.show')}
-              className="px-xs py-[2px] rounded text-on-surface-variant hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-            >
-              <span className="material-symbols-outlined text-[14px] align-middle">format_list_numbered</span>
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={handleCopy}
-            aria-label={t('chat.copyCode.aria')}
-            className="px-xs py-[2px] rounded text-on-surface-variant hover:text-primary flex items-center gap-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 transition-colors"
-          >
-            <span className="material-symbols-outlined text-[14px]">{copied ? 'check' : 'content_copy'}</span>
-            <span>{copied ? t('chat.copyCode.copied') : t('chat.copyCode.copy')}</span>
-          </button>
-        </div>
-      </div>
-      <pre {...props} className={`hljs text-body-sm overflow-x-auto p-md bg-surface-container-lowest ${showLines ? 'line-numbers' : ''}`}>
-        {props.children}
-      </pre>
-    </div>
+    <SharedCodeBlock code={code} language={language} lineNumbers="toggle">
+      {props.children}
+    </SharedCodeBlock>
   )
-}
-
-/* Optional line-number gutter — applies when `.line-numbers` is set. */
-function injectLineNumbers() {
-  if (typeof document === 'undefined') return
-  document.querySelectorAll('pre.hljs.line-numbers').forEach(pre => {
-    if (pre.querySelector('.line-number-row')) return
-    const lines = (pre.textContent ?? '').split('\n').length
-    const gutter = document.createElement('div')
-    gutter.setAttribute('aria-hidden', 'true')
-    gutter.className = 'line-number-row select-none text-right pr-sm text-on-surface-variant/40 font-mono'
-    for (let i = 1; i <= Math.max(lines, 1); i++) {
-      const span = document.createElement('span')
-      span.className = 'block'
-      span.textContent = String(i)
-      gutter.appendChild(span)
-    }
-    pre.insertBefore(gutter, pre.firstChild)
-  })
 }
 
 /* ────────────────────  Tables  ──────────────────── */
@@ -249,7 +192,7 @@ function ExternalLink(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
       href={href}
       target={isExternal ? '_blank' : undefined}
       rel={isExternal ? 'noopener noreferrer' : undefined}
-      className="text-primary hover:underline inline-flex items-baseline gap-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
+      className="text-link hover:underline inline-flex items-baseline gap-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
       onMouseEnter={handleEnter}
       onFocus={handleEnter}
       onPointerEnter={handleEnter}
@@ -292,14 +235,8 @@ function LocalImage({ src, alt, ...rest }: React.ImgHTMLAttributes<HTMLImageElem
     return () => { mounted = false }
   }, [src])
 
-  // Side-effect: decorate code blocks with line numbers after mount
-  useEffect(() => {
-    if (resolved) {
-      // Defer to next frame so DOM children are present
-      const id = requestAnimationFrame(injectLineNumbers)
-      return () => cancelAnimationFrame(id)
-    }
-  }, [resolved])
-
+  // The line-number gutter used to be injected from this effect via a
+  // document-wide scan — it now lives in the shared code-block primitive,
+  // scoped per block (components/code/CodeBlock.tsx).
   return <img src={resolved} alt={alt} className="max-w-full rounded-lg my-sm" {...rest} />
 }

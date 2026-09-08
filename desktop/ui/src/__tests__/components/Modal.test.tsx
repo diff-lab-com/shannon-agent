@@ -31,12 +31,40 @@ describe('Modal', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
-  it('calls onClose when clicking backdrop', () => {
+  // Backdrop-click close runs through Base UI's dismiss layer (useDismiss
+  // in @base-ui/react/floating-ui-react), which registers pointerdown +
+  // click listeners on `document` (capture phase) and detects outside
+  // presses via the event target. The pointer/click pair below on
+  // document.body is the outside-press shape; the same interaction is
+  // additionally locked in e2e/modals.spec.ts against a real Chromium.
+  it('closes when pressing outside the popup (backdrop)', () => {
     const onClose = vi.fn()
-    const { container } = render(<Modal open={true} onClose={onClose} title="X"><p>y</p></Modal>)
-    const backdrop = container.firstElementChild as HTMLElement
-    fireEvent.click(backdrop)
-    expect(onClose).toHaveBeenCalled()
+    render(<Modal open={true} onClose={onClose} title="X"><p>y</p></Modal>)
+    fireEvent.pointerDown(document.body)
+    fireEvent.pointerUp(document.body)
+    fireEvent.click(document.body)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not close on outside press when closeOnBackdrop is false', () => {
+    const onClose = vi.fn()
+    render(<Modal open={true} onClose={onClose} title="X" closeOnBackdrop={false}><p>y</p></Modal>)
+    fireEvent.pointerDown(document.body)
+    fireEvent.pointerUp(document.body)
+    fireEvent.click(document.body)
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('does not close on escape when closeOnEscape is false', () => {
+    const onClose = vi.fn()
+    render(<Modal open={true} onClose={onClose} title="X" closeOnEscape={false}><p>y</p></Modal>)
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('renders role alertdialog when specified', () => {
+    render(<Modal open={true} onClose={() => {}} title="X" role="alertdialog"><p>y</p></Modal>)
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
   })
 
   it('does not close when clicking inside', () => {

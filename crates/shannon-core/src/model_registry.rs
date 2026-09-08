@@ -221,6 +221,7 @@ fn provider_order(p: &LlmProvider) -> u8 {
         LlmProvider::Zhipu => 6,
         LlmProvider::ZhipuInternational => 7,
         LlmProvider::ZhipuCoding => 7,
+        LlmProvider::ZhipuCodingPlan => 7,
         LlmProvider::Moonshot => 8,
         LlmProvider::Minimax => 9,
         LlmProvider::DashScope => 10,
@@ -266,6 +267,7 @@ pub fn provider_display_name(p: &LlmProvider) -> &'static str {
         LlmProvider::Zhipu => "GLM (Zhipu)",
         LlmProvider::ZhipuInternational => "GLM (Zhipu Int'l)",
         LlmProvider::ZhipuCoding => "GLM (Zhipu Coding)",
+        LlmProvider::ZhipuCodingPlan => "GLM (Zhipu Coding Plan)",
         LlmProvider::Moonshot => "Kimi (Moonshot)",
         LlmProvider::Minimax => "MiniMax",
         LlmProvider::DashScope => "Qwen (DashScope)",
@@ -618,6 +620,16 @@ mod tests {
     /// `SHANNON_DISABLED_PROVIDERS` on construction and restores them on
     /// drop — keeps the env-mutating tests from leaking state into
     /// siblings.
+
+    /// Serializes the env-mutating allowlist tests: set_var/remove_var are
+    /// process-global and parallel siblings race otherwise.
+    fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     struct EnvGuard {
         saved_enabled: Option<String>,
         saved_disabled: Option<String>,
@@ -666,6 +678,7 @@ mod tests {
     fn effective_provider_allowlist_explicit_empty_returns_empty() {
         // `Some(&[])` is the desktop's "hide every provider" state —
         // must short-circuit to the same empty vec, ignoring env vars.
+        let _env = env_test_lock();
         let _g = EnvGuard::new();
         clear_allowlist_env();
         unsafe {
@@ -680,6 +693,7 @@ mod tests {
         // User-set non-empty allowlist beats the env. A shell exporting
         // a stale `SHANNON_ENABLED_PROVIDERS` must NOT clobber the
         // desktop's persisted choice.
+        let _env = env_test_lock();
         let _g = EnvGuard::new();
         clear_allowlist_env();
         unsafe {
@@ -693,6 +707,7 @@ mod tests {
     #[test]
     fn effective_provider_allowlist_env_only_returns_parsed() {
         // No explicit slice → fall through to env-var allowlist parsing.
+        let _env = env_test_lock();
         let _g = EnvGuard::new();
         clear_allowlist_env();
         unsafe {
@@ -708,6 +723,7 @@ mod tests {
     fn effective_provider_allowlist_neither_returns_none() {
         // No explicit slice, no env vars → `None` (no restriction). The
         // picker then shows every catalog provider.
+        let _env = env_test_lock();
         let _g = EnvGuard::new();
         clear_allowlist_env();
         assert_eq!(effective_provider_allowlist(None), None);
@@ -717,6 +733,7 @@ mod tests {
     fn effective_provider_allowlist_disabled_only_returns_remaining() {
         // `SHANNON_DISABLED_PROVIDERS` without `SHANNON_ENABLED_PROVIDERS`
         // produces the full provider list minus the disabled slugs.
+        let _env = env_test_lock();
         let _g = EnvGuard::new();
         clear_allowlist_env();
         unsafe {
@@ -733,6 +750,7 @@ mod tests {
         // `env_provider_allowlist` is the same logic but with no
         // explicit override. Sanity-check that the helper itself
         // returns `None` when both env vars are empty.
+        let _env = env_test_lock();
         let _g = EnvGuard::new();
         clear_allowlist_env();
         assert!(env_provider_allowlist().is_none());
@@ -1267,6 +1285,7 @@ mod tests {
             "moonshot-v1-8k",
             "moonshot-v1-32k",
             "moonshot-v1-128k",
+            "MiniMax-M3",
             "MiniMax-M2.7",
             "MiniMax-M2.5",
             "MiniMax-M2.7-highspeed",
@@ -1443,6 +1462,14 @@ mod tests {
     }
 
     // ── MiniMax tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_minimax_m3_registered() {
+        let info = model_info_for("MiniMax-M3").expect("MiniMax-M3 should be registered");
+        assert_eq!(info.context_window, 1_000_000);
+        assert!(info.capabilities.has(ModelCapabilities::coding()));
+        assert!(info.capabilities.has(ModelCapabilities::reasoning()));
+    }
 
     #[test]
     fn test_minimax_m27_registered() {

@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react'
+import { Spinner } from '@/components/ui/loading-state'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { useCatalog } from '@/context/CatalogContext'
 import { useI18n, SUPPORTED_LOCALES, type Locale } from '@/i18n'
 import { useNotification } from '@/hooks/useNotification'
@@ -9,6 +12,9 @@ import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type { ApprovalMode } from '@/types'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
+import MigrationWizard from '@/components/migration/MigrationWizard'
+import PersonaPackSettings from './PersonaPackSettings'
+import { FeedbackSummaryCard } from './FeedbackSummaryCard'
 
 type ApprovalModeKey = ApprovalMode
 
@@ -30,6 +36,8 @@ export default function GeneralSettings() {
   const [approvalMode, setApprovalMode] = useState<number>(2) // default to "plan"
   const [saving, setSaving] = useState(false)
   const [testingNotification, setTestingNotification] = useState(false)
+  // P1-6 — migration wizard (import from Claude Code / ZCode).
+  const [migrationOpen, setMigrationOpen] = useState(false)
 
   const handleRerunWizard = () => {
     window.localStorage.removeItem(WELCOME_SEEN_KEY)
@@ -89,7 +97,7 @@ export default function GeneralSettings() {
           <div className="flex items-center gap-md mb-xs">
             <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>auto_awesome</span>
             <h3 className="font-headline-md text-headline-md">{t('settings.general.approvalMode.title')}</h3>
-            {saving && <span className="material-symbols-outlined text-primary animate-spin text-[18px]">progress_activity</span>}
+            {saving && <Spinner className="text-primary text-[18px]" />}
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">
             {intl.formatMessage({ id: 'settings.general.approvalMode.current' }, {
@@ -101,19 +109,24 @@ export default function GeneralSettings() {
             <input
               className="w-full appearance-none bg-outline-variant/30 h-1 rounded-full cursor-pointer outline-none slider-thumb-primary"
               max={APPROVAL_MODE_KEYS.length - 1} min={0} type="range" value={approvalMode}
+              aria-label={intl.formatMessage({ id: 'settings.general.approvalMode.sliderAria' })}
               aria-valuenow={approvalMode} aria-valuemin={0} aria-valuemax={APPROVAL_MODE_KEYS.length - 1}
               onChange={e => handleModeChange(Number(e.target.value))}
             />
-            <div className="flex justify-between font-label-sm text-outline px-1">
+            <div className="flex justify-between font-label-sm text-on-surface-variant px-1">
               {APPROVAL_MODE_KEYS.map((m, i) => (
-                <button
+                <Button
                   key={m.value}
+                  variant="ghost"
                   onClick={() => handleModeChange(i)}
-                  className={`text-center cursor-pointer transition-colors ${i === approvalMode ? 'text-primary font-bold' : 'text-on-surface-variant hover:text-primary'}`}
+                  className={cn(
+                    'h-auto px-0 text-center cursor-pointer transition-colors whitespace-normal',
+                    i === approvalMode ? 'text-primary font-bold' : 'text-on-surface-variant hover:text-primary',
+                  )}
                 >
                   <p className="font-bold">{t(m.labelKey)}</p>
                   <p className="text-[10px]">{t(m.descriptionKey)}</p>
-                </button>
+                </Button>
               ))}
             </div>
           </div>
@@ -128,18 +141,20 @@ export default function GeneralSettings() {
           <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.language.help' })}</p>
           <div className="flex gap-sm">
             {SUPPORTED_LOCALES.map(opt => (
-              <button
+              <Button
                 key={opt.id}
+                variant={locale === opt.id ? 'default' : 'outline'}
                 onClick={() => handleLocaleChange(opt.id)}
                 aria-pressed={locale === opt.id}
-                className={`px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${
+                className={cn(
+                  'px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
                   locale === opt.id
                     ? 'bg-primary text-on-primary'
-                    : 'bg-surface-container-low text-on-surface hover:bg-surface-container-high border border-outline-variant/50'
-                }`}
+                    : 'bg-surface-container-low text-on-surface hover:bg-surface-container-high border border-outline-variant/50',
+                )}
               >
                 {intl.formatMessage({ id: opt.labelKey })}
-              </button>
+              </Button>
             ))}
           </div>
         </section>
@@ -170,7 +185,7 @@ export default function GeneralSettings() {
             <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.notifications.label' })}</h3>
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.notifications.help' })}</p>
-          <button
+          <Button
             onClick={handleTestNotification}
             disabled={testingNotification}
             className="px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all bg-primary text-on-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
@@ -178,8 +193,31 @@ export default function GeneralSettings() {
             {testingNotification
               ? intl.formatMessage({ id: 'settings.notifications.sending' })
               : intl.formatMessage({ id: 'settings.notifications.testButton' })}
-          </button>
+          </Button>
         </section>
+
+        {/* PM-12: persisted message ratings, aggregated per session */}
+        <FeedbackSummaryCard />
+
+        {/* P1-6 — migration wizard entry (import from Claude Code / ZCode) */}
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>move_in</span>
+            <h3 className="font-headline-md text-headline-md">{t('settings.migration.title')}</h3>
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.migration.desc')}</p>
+          <Button
+            variant="outline"
+            onClick={() => setMigrationOpen(true)}
+            data-testid="settings-migration-open"
+            className="px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          >
+            {t('settings.migration.button')}
+          </Button>
+        </section>
+
+        {/* P2-2 — persona/profile pack (one-file export & import) */}
+        <PersonaPackSettings />
 
         {/* Re-run setup wizard */}
         <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
@@ -188,14 +226,19 @@ export default function GeneralSettings() {
             <h3 className="font-headline-md text-headline-md">{t('settings.general.rerunWizard.title')}</h3>
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.general.rerunWizard.description')}</p>
-          <button
+          <Button
+            variant="outline"
             onClick={handleRerunWizard}
             className="px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
           >
             {t('settings.general.rerunWizard.button')}
-          </button>
+          </Button>
         </section>
       </div>
+
+      {migrationOpen && (
+        <MigrationWizard open={migrationOpen} onClose={() => setMigrationOpen(false)} />
+      )}
     </div>
   )
 }

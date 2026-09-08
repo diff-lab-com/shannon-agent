@@ -63,6 +63,9 @@ pub struct QueryRequest {
     /// history persistence is wired up in P0-e (the contract lands here).
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Optional multimodal attachments delivered alongside `prompt`.
+    #[serde(default)]
+    pub attachments: Option<Vec<MessageAttachment>>,
 }
 
 /// Aggregated JSON response returned by `POST /api/query`.
@@ -152,6 +155,21 @@ pub struct ApprovalRespondRequest {
 
 // ── WebSocket protocol messages ─────────────────────────────────────────
 
+/// A base64-encoded media attachment delivered alongside a message
+/// (REST `/v1/sessions/:id/messages`, `POST /api/query`, and the
+/// `WsClientMessage::Query` frame). B4: the gateway maps IM media onto
+/// this shape; the server validates MIME/size identically on every path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct MessageAttachment {
+    /// File name (informational; shown to the model in the message text).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// MIME type. Supported: image/png, image/jpeg, image/gif, image/webp.
+    pub media_type: String,
+    /// Base64-encoded file bytes.
+    pub data: String,
+}
+
 /// Incoming message from a WebSocket client.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(tag = "type")]
@@ -166,6 +184,10 @@ pub enum WsClientMessage {
         /// several conversations over a single socket.
         #[serde(default)]
         session_id: Option<String>,
+        /// Optional multimodal attachments (B4) — validated and attached to
+        /// the query exactly like the REST paths.
+        #[serde(default)]
+        attachments: Option<Vec<MessageAttachment>>,
     },
     /// Clear conversation history for this session.
     #[serde(rename = "clear")]

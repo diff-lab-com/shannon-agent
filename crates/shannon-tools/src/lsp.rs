@@ -14,12 +14,14 @@ use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_tool_interface::{
+    FileSystemProvider, PipedChild, PipedSpawn, ProcessProvider, ProcessRequest,
+};
 use shannon_types::recover_lock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
 
 /// Validate a file path against the sandbox security rules.
 fn validate_path(path: &Path) -> Result<PathBuf, ToolError> {
@@ -95,45 +97,79 @@ pub struct DocumentSymbolItem {
 // ---------------------------------------------------------------------------
 
 /// Manages communication with a language server process via JSON-RPC.
+///
+/// The server is spawned through the injected [`ProcessProvider`] (§4.11);
+/// streams are taken from the provider handle once and owned by the client.
 pub struct LspClient {
-    child: Child,
+    #[allow(dead_code)] // KEEP: ownership carries kill-on-drop semantics; never read
+    child: Box<dyn PipedChild>,
+    stdin: Option<Box<dyn tokio::io::AsyncWrite + Send + Unpin>>,
+    stdout_reader: Option<BufReader<Box<dyn tokio::io::AsyncRead + Send + Unpin>>>,
     request_id: Arc<Mutex<i64>>,
     root_uri: String,
 }
 
 impl LspClient {
-    /// Launch a language server process.
+    /// Launch a language server in the default execution world.
     pub async fn launch(
         server_command: &str,
         server_args: &[&str],
         root_path: &Path,
     ) -> Result<Self, String> {
-        let child = Command::new(server_command)
-            .args(server_args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+        Self::launch_with(
+            crate::defaults::process().as_ref(),
+            crate::defaults::fs().as_ref(),
+            server_command,
+            server_args,
+            root_path,
+        )
+        .await
+    }
+
+    /// Launch a language server through the injected worlds (§4.11).
+    pub async fn launch_with(
+        process: &dyn ProcessProvider,
+        fs: &dyn FileSystemProvider,
+        server_command: &str,
+        server_args: &[&str],
+        root_path: &Path,
+    ) -> Result<Self, String> {
+        // Mirror the previous spawn shape exactly: all three streams piped,
+        // kill-on-drop so dropping the client terminates the server.
+        let spec = PipedSpawn {
+            request: ProcessRequest::new(server_command, server_args),
+            pipe_stdin: true,
+            pipe_stdout: true,
+            pipe_stderr: true,
+            kill_on_drop: true,
+        };
+        let mut child = process
+            .spawn_piped(&spec)
+            .await
             .map_err(|e| format!("Failed to launch language server '{server_command}': {e}"))?;
+
+        let stdin = child.take_stdin();
+        let stdout_reader = child.take_stdout().map(BufReader::new);
 
         let root_uri = path_to_uri(root_path);
 
         let mut client = Self {
             child,
+            stdin,
+            stdout_reader,
             request_id: Arc::new(Mutex::new(1)),
             root_uri,
         };
 
-        client.initialize().await?;
+        client.initialize_with(fs).await?;
 
         Ok(client)
     }
 
-    /// Send the LSP `initialize` request.
-    async fn initialize(&mut self) -> Result<(), String> {
+    /// Send the LSP `initialize` request through the didOpen filesystem world.
+    async fn initialize_with(&mut self, _fs: &dyn FileSystemProvider) -> Result<(), String> {
         let params = json!({
-            "processId": std::process::id(),
+            "processId": shannon_core::providers::host_process_id(),
             "rootUri": self.root_uri,
             "capabilities": {
                 "textDocument": {
@@ -184,13 +220,12 @@ impl LspClient {
 
         self.send_message(&message.to_string()).await?;
 
-        // Read response
-        let stdout = self
-            .child
-            .stdout
+        // Read response — the client owns a persistent buffered reader over
+        // the provider-issued stdout handle (§4.11).
+        let reader = self
+            .stdout_reader
             .as_mut()
             .ok_or_else(|| "stdout not available".to_string())?;
-        let mut reader = BufReader::new(stdout);
 
         loop {
             let mut header_line = String::new();
@@ -267,7 +302,6 @@ impl LspClient {
     /// Write a JSON-RPC message to the server's stdin.
     async fn send_message(&mut self, content: &str) -> Result<(), String> {
         let stdin = self
-            .child
             .stdin
             .as_mut()
             .ok_or_else(|| "stdin not available".to_string())?;
@@ -293,7 +327,8 @@ impl LspClient {
 
     /// Send `textDocument/didOpen` so the server knows about the file.
     async fn open_document(&mut self, file_path: &Path, language_id: &str) -> Result<(), String> {
-        let content = tokio::fs::read_to_string(file_path)
+        let content = crate::defaults::fs()
+            .read_text(file_path)
             .await
             .map_err(|e| format!("Failed to read file for LSP: {e}"))?;
 
@@ -601,11 +636,17 @@ fn lsp_config_paths() -> Vec<PathBuf> {
 
 /// Load and merge all `.lsp.json` configs found on disk.
 pub fn load_lsp_config() -> Option<LspConfig> {
+    load_lsp_config_with(crate::defaults::fs().as_ref())
+}
+
+/// Provider-injected variant (§4.11): config discovery reads flow through
+/// the injected filesystem world.
+pub fn load_lsp_config_with(fs: &dyn FileSystemProvider) -> Option<LspConfig> {
     let mut merged = HashMap::new();
 
     for path in lsp_config_paths() {
         if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(content) = fs.read_text_blocking(&path) {
                 if let Ok(config) = serde_json::from_str::<LspConfig>(&content) {
                     merged.extend(config.servers);
                 }
@@ -946,6 +987,10 @@ pub struct DocumentSymbolOutput {
 /// Go to definition tool
 pub struct GoToDefinitionTool {
     description: String,
+    /// Process world backing server spawn + availability probes (§4.11).
+    process: Arc<dyn ProcessProvider>,
+    /// Filesystem world backing document reads for didOpen (§4.11).
+    fs: Arc<dyn FileSystemProvider>,
 }
 
 impl Default for GoToDefinitionTool {
@@ -957,6 +1002,8 @@ impl Default for GoToDefinitionTool {
 impl GoToDefinitionTool {
     pub fn new() -> Self {
         Self {
+            process: crate::defaults::process(),
+            fs: crate::defaults::fs(),
             description: "Find the definition of the symbol at a given position in a file. \
                 Uses the language server (e.g., rust-analyzer) to locate where a symbol is defined."
                 .to_string(),
@@ -978,7 +1025,8 @@ impl GoToDefinitionTool {
         })?;
 
         // Check if language server is available
-        let which_result = Command::new("which").arg(&server_cmd).output().await;
+        let which_request = ProcessRequest::new("which", &[&server_cmd]);
+        let which_result = self.process.run_async(&which_request).await;
 
         let which_ok = match which_result {
             Ok(output) => output,
@@ -988,7 +1036,7 @@ impl GoToDefinitionTool {
                 )));
             }
         };
-        if !which_ok.status.success() {
+        if !which_ok.exit.success {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it to use code intelligence features."
             )));
@@ -997,11 +1045,15 @@ impl GoToDefinitionTool {
         let root_path = find_workspace_root(&file_path);
         let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
 
-        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
-            .await
-            .map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
-            })?;
+        let mut client = LspClient::launch_with(
+            self.process.as_ref(),
+            self.fs.as_ref(),
+            &server_cmd,
+            &args,
+            &root_path,
+        )
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
         let result = client
             .goto_definition(&file_path, input.line, input.character, language_id)
@@ -1087,6 +1139,10 @@ impl Tool for GoToDefinitionTool {
 /// Find references tool
 pub struct FindReferencesTool {
     description: String,
+    /// Process world backing server spawn + availability probes (§4.11).
+    process: Arc<dyn ProcessProvider>,
+    /// Filesystem world backing document reads for didOpen (§4.11).
+    fs: Arc<dyn FileSystemProvider>,
 }
 
 impl Default for FindReferencesTool {
@@ -1098,6 +1154,8 @@ impl Default for FindReferencesTool {
 impl FindReferencesTool {
     pub fn new() -> Self {
         Self {
+            process: crate::defaults::process(),
+            fs: crate::defaults::fs(),
             description: "Find all references to the symbol at a given position in a file. \
                 Uses the language server to locate all usages of a symbol across the codebase."
                 .to_string(),
@@ -1117,7 +1175,8 @@ impl FindReferencesTool {
             ))
         })?;
 
-        let which_result = Command::new("which").arg(&server_cmd).output().await;
+        let which_request = ProcessRequest::new("which", &[&server_cmd]);
+        let which_result = self.process.run_async(&which_request).await;
 
         let which_ok = match which_result {
             Ok(output) => output,
@@ -1127,7 +1186,7 @@ impl FindReferencesTool {
                 )));
             }
         };
-        if !which_ok.status.success() {
+        if !which_ok.exit.success {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
             )));
@@ -1136,11 +1195,15 @@ impl FindReferencesTool {
         let root_path = find_workspace_root(&file_path);
         let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
 
-        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
-            .await
-            .map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
-            })?;
+        let mut client = LspClient::launch_with(
+            self.process.as_ref(),
+            self.fs.as_ref(),
+            &server_cmd,
+            &args,
+            &root_path,
+        )
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
         let result = client
             .find_references(
@@ -1235,6 +1298,10 @@ impl Tool for FindReferencesTool {
 /// Hover information tool
 pub struct HoverTool {
     description: String,
+    /// Process world backing server spawn + availability probes (§4.11).
+    process: Arc<dyn ProcessProvider>,
+    /// Filesystem world backing document reads for didOpen (§4.11).
+    fs: Arc<dyn FileSystemProvider>,
 }
 
 impl Default for HoverTool {
@@ -1246,6 +1313,8 @@ impl Default for HoverTool {
 impl HoverTool {
     pub fn new() -> Self {
         Self {
+            process: crate::defaults::process(),
+            fs: crate::defaults::fs(),
             description:
                 "Get type information and documentation for the symbol at a given position. \
                 Uses the language server to provide hover information such as type signatures, \
@@ -1264,7 +1333,8 @@ impl HoverTool {
             ))
         })?;
 
-        let which_result = Command::new("which").arg(&server_cmd).output().await;
+        let which_request = ProcessRequest::new("which", &[&server_cmd]);
+        let which_result = self.process.run_async(&which_request).await;
 
         let which_ok = match which_result {
             Ok(output) => output,
@@ -1274,7 +1344,7 @@ impl HoverTool {
                 )));
             }
         };
-        if !which_ok.status.success() {
+        if !which_ok.exit.success {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
             )));
@@ -1283,11 +1353,15 @@ impl HoverTool {
         let root_path = find_workspace_root(&file_path);
         let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
 
-        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
-            .await
-            .map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
-            })?;
+        let mut client = LspClient::launch_with(
+            self.process.as_ref(),
+            self.fs.as_ref(),
+            &server_cmd,
+            &args,
+            &root_path,
+        )
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
         let result = client
             .hover(&file_path, input.line, input.character, language_id)
@@ -1369,6 +1443,10 @@ impl Tool for HoverTool {
 /// Document symbol tool
 pub struct DocumentSymbolTool {
     description: String,
+    /// Process world backing server spawn + availability probes (§4.11).
+    process: Arc<dyn ProcessProvider>,
+    /// Filesystem world backing document reads for didOpen (§4.11).
+    fs: Arc<dyn FileSystemProvider>,
 }
 
 impl Default for DocumentSymbolTool {
@@ -1380,6 +1458,8 @@ impl Default for DocumentSymbolTool {
 impl DocumentSymbolTool {
     pub fn new() -> Self {
         Self {
+            process: crate::defaults::process(),
+            fs: crate::defaults::fs(),
             description: "List all symbols (functions, classes, methods, variables, etc.) \
                 in a file. Uses the language server to provide a hierarchical view of the \
                 document's symbol structure."
@@ -1400,7 +1480,8 @@ impl DocumentSymbolTool {
             ))
         })?;
 
-        let which_result = Command::new("which").arg(&server_cmd).output().await;
+        let which_request = ProcessRequest::new("which", &[&server_cmd]);
+        let which_result = self.process.run_async(&which_request).await;
 
         let which_ok = match which_result {
             Ok(output) => output,
@@ -1410,7 +1491,7 @@ impl DocumentSymbolTool {
                 )));
             }
         };
-        if !which_ok.status.success() {
+        if !which_ok.exit.success {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
             )));
@@ -1419,11 +1500,15 @@ impl DocumentSymbolTool {
         let root_path = find_workspace_root(&file_path);
         let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
 
-        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
-            .await
-            .map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
-            })?;
+        let mut client = LspClient::launch_with(
+            self.process.as_ref(),
+            self.fs.as_ref(),
+            &server_cmd,
+            &args,
+            &root_path,
+        )
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
         let result = client.document_symbols(&file_path, language_id).await;
 
@@ -1536,6 +1621,10 @@ pub struct WorkspaceSymbolItem {
 /// Workspace symbol tool
 pub struct WorkspaceSymbolTool {
     description: String,
+    /// Process world backing server spawn + availability probes (§4.11).
+    process: Arc<dyn ProcessProvider>,
+    /// Filesystem world backing document reads for didOpen (§4.11).
+    fs: Arc<dyn FileSystemProvider>,
 }
 
 impl Default for WorkspaceSymbolTool {
@@ -1547,6 +1636,8 @@ impl Default for WorkspaceSymbolTool {
 impl WorkspaceSymbolTool {
     pub fn new() -> Self {
         Self {
+            process: crate::defaults::process(),
+            fs: crate::defaults::fs(),
             description: "Search for symbols across the entire workspace by name. \
                 Uses the language server to find functions, classes, structs, etc. \
                 matching a query pattern across all files in the project."
@@ -1582,7 +1673,8 @@ impl WorkspaceSymbolTool {
             ))
         })?;
 
-        let which_result = Command::new("which").arg(&server_cmd).output().await;
+        let which_request = ProcessRequest::new("which", &[&server_cmd]);
+        let which_result = self.process.run_async(&which_request).await;
         let which_ok = match which_result {
             Ok(output) => output,
             Err(_) => {
@@ -1591,18 +1683,22 @@ impl WorkspaceSymbolTool {
                 )));
             }
         };
-        if !which_ok.status.success() {
+        if !which_ok.exit.success {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
             )));
         }
 
         let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
-        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
-            .await
-            .map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
-            })?;
+        let mut client = LspClient::launch_with(
+            self.process.as_ref(),
+            self.fs.as_ref(),
+            &server_cmd,
+            &args,
+            &root_path,
+        )
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
         let params = json!({
             "query": input.query
@@ -1790,6 +1886,10 @@ pub struct RenameSymbolOutput {
 /// Rename symbol tool
 pub struct RenameSymbolTool {
     description: String,
+    /// Process world backing server spawn + availability probes (§4.11).
+    process: Arc<dyn ProcessProvider>,
+    /// Filesystem world backing document reads for didOpen (§4.11).
+    fs: Arc<dyn FileSystemProvider>,
 }
 
 impl Default for RenameSymbolTool {
@@ -1801,6 +1901,8 @@ impl Default for RenameSymbolTool {
 impl RenameSymbolTool {
     pub fn new() -> Self {
         Self {
+            process: crate::defaults::process(),
+            fs: crate::defaults::fs(),
             description: "Rename a symbol (variable, function, class, etc.) across the entire \
                 codebase. Uses the language server to find all occurrences and compute the \
                 correct edits for renaming."
@@ -1827,7 +1929,8 @@ impl RenameSymbolTool {
             ))
         })?;
 
-        let which_result = Command::new("which").arg(&server_cmd).output().await;
+        let which_request = ProcessRequest::new("which", &[&server_cmd]);
+        let which_result = self.process.run_async(&which_request).await;
         let which_ok = match which_result {
             Ok(output) => output,
             Err(_) => {
@@ -1836,7 +1939,7 @@ impl RenameSymbolTool {
                 )));
             }
         };
-        if !which_ok.status.success() {
+        if !which_ok.exit.success {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
             )));
@@ -1844,11 +1947,15 @@ impl RenameSymbolTool {
 
         let root_path = find_workspace_root(&file_path);
         let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
-        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
-            .await
-            .map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
-            })?;
+        let mut client = LspClient::launch_with(
+            self.process.as_ref(),
+            self.fs.as_ref(),
+            &server_cmd,
+            &args,
+            &root_path,
+        )
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
         let uri = path_to_uri(&file_path);
         let params = json!({
@@ -2013,6 +2120,10 @@ pub struct CodeActionItem {
 /// Code actions tool
 pub struct CodeActionsTool {
     description: String,
+    /// Process world backing server spawn + availability probes (§4.11).
+    process: Arc<dyn ProcessProvider>,
+    /// Filesystem world backing document reads for didOpen (§4.11).
+    fs: Arc<dyn FileSystemProvider>,
 }
 
 impl Default for CodeActionsTool {
@@ -2024,6 +2135,8 @@ impl Default for CodeActionsTool {
 impl CodeActionsTool {
     pub fn new() -> Self {
         Self {
+            process: crate::defaults::process(),
+            fs: crate::defaults::fs(),
             description: "Get available code actions (quick fixes, refactorings) for a range in a file. \
                 Uses the language server to suggest fixes for diagnostics and available refactorings."
                 .to_string(),
@@ -2040,7 +2153,8 @@ impl CodeActionsTool {
             ))
         })?;
 
-        let which_result = Command::new("which").arg(&server_cmd).output().await;
+        let which_request = ProcessRequest::new("which", &[&server_cmd]);
+        let which_result = self.process.run_async(&which_request).await;
         let which_ok = match which_result {
             Ok(output) => output,
             Err(_) => {
@@ -2049,7 +2163,7 @@ impl CodeActionsTool {
                 )));
             }
         };
-        if !which_ok.status.success() {
+        if !which_ok.exit.success {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
             )));
@@ -2057,11 +2171,15 @@ impl CodeActionsTool {
 
         let root_path = find_workspace_root(&file_path);
         let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
-        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
-            .await
-            .map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
-            })?;
+        let mut client = LspClient::launch_with(
+            self.process.as_ref(),
+            self.fs.as_ref(),
+            &server_cmd,
+            &args,
+            &root_path,
+        )
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
         // Open the document first
         client
@@ -2266,6 +2384,46 @@ fn find_workspace_root(file_path: &Path) -> PathBuf {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/// Assembly-time injection of execution worlds for the LSP tool family
+/// (§4.11 W3-3a). Each tool forwards server spawns, availability probes and
+/// didOpen reads to the injected providers instead of crate-local defaults.
+pub trait LspToolWorlds: Sized {
+    /// Replace the process/filesystem worlds backing this tool.
+    fn with_worlds(
+        self,
+        process: Arc<dyn ProcessProvider>,
+        fs: Arc<dyn FileSystemProvider>,
+    ) -> Self;
+}
+
+macro_rules! impl_lsp_worlds {
+    ($($t:ty),+ $(,)?) => {
+        $(
+            impl LspToolWorlds for $t {
+                fn with_worlds(
+                    mut self,
+                    process: Arc<dyn ProcessProvider>,
+                    fs: Arc<dyn FileSystemProvider>,
+                ) -> Self {
+                    self.process = process;
+                    self.fs = fs;
+                    self
+                }
+            }
+        )+
+    };
+}
+
+impl_lsp_worlds!(
+    GoToDefinitionTool,
+    FindReferencesTool,
+    HoverTool,
+    DocumentSymbolTool,
+    WorkspaceSymbolTool,
+    RenameSymbolTool,
+    CodeActionsTool,
+);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]

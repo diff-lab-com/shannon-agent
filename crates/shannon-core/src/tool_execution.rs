@@ -2947,6 +2947,7 @@ mod tests {
             diff_preview: None,
             is_destructive: false,
             risk_reason: String::new(),
+            reason: Default::default(),
         };
 
         let result = service.process_permission_choice(
@@ -2979,6 +2980,7 @@ mod tests {
             diff_preview: None,
             is_destructive: false,
             risk_reason: String::new(),
+            reason: Default::default(),
         };
 
         let result = service.process_permission_choice(
@@ -3004,6 +3006,7 @@ mod tests {
             diff_preview: None,
             is_destructive: false,
             risk_reason: String::new(),
+            reason: Default::default(),
         };
 
         let result = service.process_permission_choice(
@@ -3029,6 +3032,7 @@ mod tests {
             diff_preview: None,
             is_destructive: false,
             risk_reason: String::new(),
+            reason: Default::default(),
         };
 
         let result = service.process_permission_choice(

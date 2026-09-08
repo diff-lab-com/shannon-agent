@@ -5,6 +5,7 @@
 mod browser_control_prompt;
 mod context_injector;
 mod engine;
+pub mod guard_nodes;
 pub mod litellm;
 mod repo_map_injector;
 mod streaming;
@@ -13,14 +14,15 @@ mod types;
 
 // Re-export all public types to maintain the same public API as the original flat file.
 pub use browser_control_prompt::browser_control_prompt;
+pub use browser_control_prompt::browser_setup_hint;
 pub use context_injector::ContextInjector;
 pub use engine::{ProviderHealth, ProviderHealthStatus, QueryEngine};
 pub use repo_map_injector::RepoMapInjector;
 pub use team_prompt::teammate_instructions;
 pub use types::{
-    CompressionStrategy, ConversationStats, CostEstimate, CostTracker, PermissionRequest,
-    QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryMetadata, QueryStream,
-    pricing_for_model_opt,
+    CompressionStrategy, ConversationStats, CostEstimate, CostTracker, GOAL_BLOCKED_MARKER,
+    GOAL_COMPLETE_MARKER, GoalSpec, PermissionRequest, QueryContext, QueryEngineConfig, QueryError,
+    QueryEvent, QueryMetadata, QueryStream, pricing_for_model_opt,
 };
 
 #[cfg(test)]
@@ -75,6 +77,7 @@ mod tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: "Hello".to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
@@ -499,6 +502,7 @@ mod tests {
             tool_name: "read".to_string(),
             result: "file contents".to_string(),
             is_error: false,
+            meta: Box::new(serde_json::Value::Null),
         };
         match event {
             QueryEvent::ToolUseResult {
@@ -519,6 +523,7 @@ mod tests {
             tool_name: "bash".to_string(),
             result: "permission denied".to_string(),
             is_error: true,
+            meta: Box::new(serde_json::Value::Null),
         };
         match event {
             QueryEvent::ToolUseResult { is_error, .. } => assert!(is_error),
@@ -923,13 +928,17 @@ mod tests {
             auto_commit: false,
             effort_level: None,
             focus_area: None,
+            goal: None,
             fast_model: None,
             plan_model: None,
             max_parallel_tools: 10,
             repo_map_enabled: true,
             repo_map_budget_tokens: 2_000,
             repo_map_root: None,
+            auto_context_enabled: true,
             auto_test: None,
+            turn_checkpoint_turn: None,
+            token_budget_warning: true,
         };
         assert_eq!(config.max_turns, 5);
         assert_eq!(config.max_budget_usd, Some(1.0));
@@ -938,6 +947,152 @@ mod tests {
         assert!(!config.enable_thinking);
         assert_eq!(config.max_context_tokens, Some(50_000));
         assert!((config.compression_threshold - 0.6).abs() < 0.001);
+        assert!(config.token_budget_warning);
+    }
+
+    // P-B / P-M: env var → QueryEngineConfig wiring.
+    //
+    // These tests must run serially because `std::env::set_var` mutates a
+    // process-global table; under `cargo test` parallelism they would race.
+    // A Mutex gates the entire Phase-B env-var test block.
+    //
+    // Rust edition 2024 marks `env::set_var` / `env::remove_var` as `unsafe`
+    // (thread-safety guarantee changed). Wrap each call in `unsafe { … }`.
+    //
+    // Implementation contract:
+    //   - Empty string is a no-op (matches wrapper `${VAR-default}` convention:
+    //     only non-empty values are intentional overrides).
+    //   - Garbage / zero / negative-parses for SHANNON_TURN_CHECKPOINT are
+    //     silently ignored.
+    //   - Truthy values for SHANNON_TOKEN_BUDGET_WARNING are: "true" / "yes" /
+    //     "on" / "1"; falsy: "false" / "no" / "off" / "0". Case-insensitive.
+    #[test]
+    fn test_apply_env_overrides_phase_b() {
+        use std::sync::Mutex;
+        // `OnceLock` so the lock is shared across all tests in this module
+        // (env::set_var is process-wide; only one test can mutate it at a time).
+        static ENV_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env-var test mutex poisoned");
+
+        // `set_var` / `remove_var` are unsafe under edition 2024 — wrap each call
+        // in `unsafe { ... }` inline. The closures didn't compile (unsafe
+        // blocks inside non-`unsafe` closures).
+
+        // Save current values so we can restore at the end.
+        let saved_tc = std::env::var("SHANNON_TURN_CHECKPOINT").ok();
+        let saved_tbw = std::env::var("SHANNON_TOKEN_BUDGET_WARNING").ok();
+
+        // P-B (turn_checkpoint_turn) ----------------------------------------------------
+        // 1. Unset → default (None).
+        unsafe {
+            std::env::remove_var("SHANNON_TURN_CHECKPOINT");
+        };
+        let mut cfg = QueryEngineConfig::default();
+        assert_eq!(cfg.turn_checkpoint_turn, None);
+        QueryEngine::apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.turn_checkpoint_turn, None);
+
+        // 2. Valid "15" → Some(15).
+        unsafe {
+            std::env::set_var("SHANNON_TURN_CHECKPOINT", "15");
+        };
+        cfg = QueryEngineConfig::default();
+        QueryEngine::apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.turn_checkpoint_turn, Some(15));
+
+        // 3. Larger valid value → Some(80).
+        unsafe {
+            std::env::set_var("SHANNON_TURN_CHECKPOINT", "80");
+        };
+        cfg = QueryEngineConfig::default();
+        QueryEngine::apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.turn_checkpoint_turn, Some(80));
+
+        // 4. Empty string → no-op (cfg stays at None).
+        unsafe {
+            std::env::set_var("SHANNON_TURN_CHECKPOINT", "");
+        };
+        cfg = QueryEngineConfig::default();
+        QueryEngine::apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.turn_checkpoint_turn, None, "empty is no-op");
+
+        // 5. Garbage value → no-op.
+        unsafe {
+            std::env::set_var("SHANNON_TURN_CHECKPOINT", "not-a-number");
+        };
+        cfg = QueryEngineConfig::default();
+        QueryEngine::apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.turn_checkpoint_turn, None);
+
+        // 6. "0" → no-op (a checkpoint of 0 is meaningless).
+        unsafe {
+            std::env::set_var("SHANNON_TURN_CHECKPOINT", "0");
+        };
+        cfg = QueryEngineConfig::default();
+        QueryEngine::apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.turn_checkpoint_turn, None, "0 should not enable");
+
+        // P-M (token_budget_warning) ------------------------------------------------
+        // Default = true.
+        unsafe {
+            std::env::remove_var("SHANNON_TOKEN_BUDGET_WARNING");
+        };
+        cfg = QueryEngineConfig::default();
+        assert!(cfg.token_budget_warning);
+        QueryEngine::apply_env_overrides(&mut cfg);
+        assert!(cfg.token_budget_warning);
+
+        // False-ish values disable.
+        for falsy in ["false", "FALSE", "False", "0", "no", "NO", "off", "OFF"] {
+            unsafe {
+                std::env::set_var("SHANNON_TOKEN_BUDGET_WARNING", falsy);
+            };
+            cfg = QueryEngineConfig::default();
+            QueryEngine::apply_env_overrides(&mut cfg);
+            assert!(
+                !cfg.token_budget_warning,
+                "token_budget_warning should be false for {:?}",
+                falsy
+            );
+        }
+
+        // Truthy values (anything not matching false-ish) keep it true.
+        for truthy in ["true", "TRUE", "yes", "1", "on", "anything-else"] {
+            unsafe {
+                std::env::set_var("SHANNON_TOKEN_BUDGET_WARNING", truthy);
+            };
+            cfg = QueryEngineConfig::default();
+            QueryEngine::apply_env_overrides(&mut cfg);
+            assert!(
+                cfg.token_budget_warning,
+                "token_budget_warning should be true for {:?}",
+                truthy
+            );
+        }
+
+        // Empty string is no-op — preserves default (true).
+        unsafe {
+            std::env::set_var("SHANNON_TOKEN_BUDGET_WARNING", "");
+        };
+        cfg = QueryEngineConfig::default();
+        QueryEngine::apply_env_overrides(&mut cfg);
+        assert!(
+            cfg.token_budget_warning,
+            "empty is no-op, keeps default true"
+        );
+
+        // Restore saved values so this test doesn't leak into others.
+        match saved_tc {
+            Some(v) => unsafe { std::env::set_var("SHANNON_TURN_CHECKPOINT", &v) },
+            None => unsafe { std::env::remove_var("SHANNON_TURN_CHECKPOINT") },
+        }
+        match saved_tbw {
+            Some(v) => unsafe { std::env::set_var("SHANNON_TOKEN_BUDGET_WARNING", &v) },
+            None => unsafe { std::env::remove_var("SHANNON_TOKEN_BUDGET_WARNING") },
+        }
     }
 
     // ConversationStats tests
@@ -977,6 +1132,7 @@ mod tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: "test query".to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: false,
@@ -1192,13 +1348,17 @@ mod tests {
             auto_commit: false,
             effort_level: None,
             focus_area: None,
+            goal: None,
             fast_model: None,
             plan_model: None,
             max_parallel_tools: 10,
             repo_map_enabled: true,
             repo_map_budget_tokens: 2_000,
             repo_map_root: None,
+            auto_context_enabled: true,
             auto_test: None,
+            turn_checkpoint_turn: None,
+            token_budget_warning: true,
         };
         assert_eq!(config.max_turns, 1);
         assert_eq!(config.max_budget_usd, Some(0.01));
@@ -1208,6 +1368,7 @@ mod tests {
         assert_eq!(config.max_context_tokens, Some(1000));
         assert!((config.compression_threshold - 0.9).abs() < 0.001);
         assert_eq!(config.keep_recent_messages, 1);
+        assert!(config.token_budget_warning);
     }
 
     #[test]

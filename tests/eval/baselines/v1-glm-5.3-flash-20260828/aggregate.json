@@ -1,0 +1,421 @@
+{
+  "run_ids": [
+    "20260828113352-caf9461d",
+    "20260828115003-254e91ba",
+    "20260828115952-f597a2b3"
+  ],
+  "n_runs": 3,
+  "anchors": {
+    "model_id": "glm-5.3-flash",
+    "provider": "zhipu-coding-plan",
+    "profile_digest": "789ca0b964e27af2"
+  },
+  "failure_rules_fingerprint": "dfcbe82fb06c6c87",
+  "app_versions": [
+    "0.11.0",
+    "0.11.0",
+    "0.11.0"
+  ],
+  "tasks_total": 20,
+  "tasks": [
+    {
+      "id": "edit_01",
+      "tier": "edit",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "edit_02",
+      "tier": "edit",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "edit_03",
+      "tier": "edit",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "edit_04",
+      "tier": "edit",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "edit_05",
+      "tier": "edit",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "multi_01",
+      "tier": "multi_step",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "multi_02",
+      "tier": "multi_step",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "multi_03",
+      "tier": "multi_step",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "multi_04",
+      "tier": "multi_step",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "multi_05",
+      "tier": "multi_step",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "multi_06",
+      "tier": "multi_step",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "read_01",
+      "tier": "read",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "read_02",
+      "tier": "read",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "read_03",
+      "tier": "read",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "rec_01",
+      "tier": "recovery",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "rec_02",
+      "tier": "recovery",
+      "statuses": [
+        "failed",
+        "passed",
+        "failed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 1,
+      "n": 3,
+      "flaky": true,
+      "bucket": "flaky"
+    },
+    {
+      "id": "rec_03",
+      "tier": "recovery",
+      "statuses": [
+        "failed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 2,
+      "n": 3,
+      "flaky": true,
+      "bucket": "flaky"
+    },
+    {
+      "id": "search_01",
+      "tier": "search",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "search_02",
+      "tier": "search",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    },
+    {
+      "id": "search_03",
+      "tier": "search",
+      "statuses": [
+        "passed",
+        "passed",
+        "passed"
+      ],
+      "contributing_runs": [
+        "20260828113352-caf9461d",
+        "20260828115003-254e91ba",
+        "20260828115952-f597a2b3"
+      ],
+      "resolved_k": 3,
+      "n": 3,
+      "flaky": false,
+      "bucket": "stable_pass"
+    }
+  ],
+  "stable_pass": [
+    "edit_01",
+    "edit_02",
+    "edit_03",
+    "edit_04",
+    "edit_05",
+    "multi_01",
+    "multi_02",
+    "multi_03",
+    "multi_04",
+    "multi_05",
+    "multi_06",
+    "read_01",
+    "read_02",
+    "read_03",
+    "rec_01",
+    "search_01",
+    "search_02",
+    "search_03"
+  ],
+  "flaky_tasks": [
+    "rec_02",
+    "rec_03"
+  ],
+  "stable_fail": [],
+  "task_set_consistent": true,
+  "per_run_pass_rates": [
+    0.9,
+    1.0,
+    0.95
+  ],
+  "pass_rate_interval": [
+    0.9,
+    1.0
+  ],
+  "stable_pass_rate_interval": [
+    1.0,
+    1.0
+  ]
+}

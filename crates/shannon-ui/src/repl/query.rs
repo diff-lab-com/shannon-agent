@@ -297,6 +297,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     // Sync effort_level and focus_area from REPL state into the query engine
     query_engine.set_effort_level(repl.state.effort_level.clone());
     query_engine.set_focus_area(repl.state.focus_area.clone());
+    // Sync the session goal (/goal) so its system block is injected this query
+    query_engine.set_goal(repl.state.goal.as_ref().and_then(|g| g.to_spec()));
+    // P2.5 wiring — mirror the goal into the tool-facing live handle so
+    // goal_get / goal_update observe (and can transition) this turn's goal.
+    repl.goal_shared.sync_from(&repl.state.goal);
 
     let query_id = Uuid::new_v4();
     let session_id = Uuid::new_v4();
@@ -305,6 +310,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         query_id,
         session_id,
         user_message: input.to_string(),
+        // Images queued via `@<image>` since the last query ride along here.
+        attachments: {
+            let drained = std::mem::take(&mut repl.state.pending_attachments);
+            repl.state.attachment_bar.attachments.clear();
+            drained
+        },
         metadata: shannon_core::query_engine::QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: {
@@ -1394,15 +1405,6 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             repl.state.tokens_used = pre_stream_tokens + tokens;
             repl.tools_invoked = pre_stream_tools + tools;
 
-            // Record LLM exchange if session recording is active
-            if let Some(ref mut recorder) = repl.session_recorder {
-                use serde_json::json;
-                recorder.record_llm_exchange(
-                    &json!({"message": input}),
-                    &json!({"text": response, "tokens": tokens}),
-                );
-            }
-
             // Record billing for this turn
             let turn_cost = repl.state.total_cost_usd - pre_stream_cost;
             if turn_cost > 0.0 {
@@ -1479,29 +1481,18 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             // patterns, persist them to the memory store automatically.
             auto_save_memory(repl, &response);
 
-            // Auto-save session state after each turn
+            // Sidecar persistence after each turn (§4.6): the turn's data is
+            // already durable in events.jsonl via the engine tee — only a
+            // /rename / auto-title needs writing, merged onto lineage.
             if let Some(ref engine) = repl.query_engine {
-                let messages = engine.conversation_history();
-                let metadata = shannon_engine::state::SessionPersistMetadata {
-                    model: repl.state.model.clone().unwrap_or_default(),
-                    created_at: repl.session_started_at.unwrap_or_else(chrono::Utc::now),
-                    updated_at: chrono::Utc::now(),
-                    total_input_tokens: repl.state.tokens_used,
-                    total_output_tokens: 0,
-                    turn_count: repl.current_turn,
-                    // Persist any /rename title; save_session also merges with
-                    // existing on-disk metadata so this won't clobber branch
-                    // lineage or creation time.
-                    title: repl.state.session_title.clone(),
-                    parent_session_id: None,
-                    branch_point_message_index: None,
-                    project_path: Some(repl.state.working_directory.clone()),
-                };
-                if let Err(e) =
-                    repl.state_manager
-                        .save_session(&engine.session_id(), &messages, &metadata)
-                {
-                    tracing::debug!("Auto-save session error: {e}");
+                if let Err(e) = repl.l0_store().save_sidecar(
+                    &engine.session_id(),
+                    &shannon_core::session_log::SessionSidecar {
+                        title: repl.state.session_title.clone(),
+                        ..Default::default()
+                    },
+                ) {
+                    tracing::debug!("Session sidecar save error: {e}");
                 }
             }
 
@@ -1525,8 +1516,15 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 &repl.state.status,
             );
 
-            // Check if loop/ralph iteration should continue
-            let loop_continued = super::commands::check_loop_iteration(repl);
+            // P2.5 wiring — pull mid-turn goal_update transitions into the
+            // REPL-owned state before the continuation check replays them.
+            if let Some((pulled, _)) = repl.goal_shared.take_transition() {
+                repl.state.goal = Some(pulled);
+            }
+            // Check if the session goal auto-continues; if it did, skip the
+            // ralph/loop checks so only one auto-continuation loop runs.
+            let goal_continued = super::commands::check_goal_continuation(repl);
+            let loop_continued = goal_continued || super::commands::check_loop_iteration(repl);
             if !loop_continued {
                 super::commands::check_ralph_iteration(repl);
             }
@@ -1689,10 +1687,12 @@ fn auto_save_memory(repl: &mut Repl, response: &str) {
         created_at: chrono::Utc::now(),
         accessed_at: chrono::Utc::now(),
         access_count: 0,
+        source_session_id: None,
+        source_kind: Some(MemoryEntry::SOURCE_AUTO_EXTRACT.to_string()),
     };
 
     let id = entry.id.clone();
-    if let Err(e) = store.add(entry) {
+    if let Err(e) = store.add_or_update(entry) {
         tracing::warn!("Auto-memory add failed: {e}");
         return;
     }
@@ -1803,6 +1803,7 @@ mod tests {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let client = shannon_engine::api::LlmClient::new(config);
         let tools = ToolRegistry::new();

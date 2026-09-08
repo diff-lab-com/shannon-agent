@@ -1,4 +1,5 @@
 import { convertFileSrc } from '@tauri-apps/api/core'
+import { Button } from '@/components/ui/button'
 
 interface AttachmentChipProps {
   path: string
@@ -21,9 +22,16 @@ export function AttachmentChip({ path, size, onRemove }: AttachmentChipProps) {
       {image ? <img src={convertFileSrc(path)} alt={name} className="h-5 w-5 shrink-0 rounded object-cover" /> : <span className="material-symbols-outlined text-[14px]">description</span>}
       <span className="truncate">{name}</span>
       {size != null && <span className="shrink-0 text-on-surface-variant">{formatSize(size)}</span>}
-      <button type="button" aria-label={`Remove ${name}`} onClick={onRemove} className="rounded hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label={`Remove ${name}`}
+        onClick={onRemove}
+        className="hover:text-error"
+      >
         <span className="material-symbols-outlined text-[14px]">close</span>
-      </button>
+      </Button>
     </span>
   )
 }

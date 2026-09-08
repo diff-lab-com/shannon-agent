@@ -105,6 +105,24 @@ export function validateConfig(parsed: unknown, path = "<inline>"): GatewayConfi
   if (typeof e.model === "string" && e.model.length > 0) result.engine.model = e.model;
   if (typeof logLevel === "string") result.logLevel = logLevel as LogLevel;
 
+  // Optional P1-4 IM-channel block. Validates shape only; defaults (lifecycle
+  // push on, mentionOrPrefix groups) resolve in bootstrap/trigger.ts.
+  const im = obj.im;
+  if (im !== undefined) {
+    if (typeof im !== "object" || im === null) {
+      throw new Error(`gateway config ${path}: "im" must be an object`);
+    }
+    const m = im as Record<string, unknown>;
+    const parsedIm: GatewayConfig["im"] = {};
+    if (m.taskLifecycle !== undefined) {
+      if (typeof m.taskLifecycle !== "boolean") {
+        throw new Error(`gateway config ${path}: im.taskLifecycle must be boolean`);
+      }
+      parsedIm.taskLifecycle = m.taskLifecycle;
+    }
+    result.im = parsedIm;
+  }
+
   // Optional inbound mobile `shannon/*` server (P1.3). Validates shape only;
   // defaults (host/port/file paths) are resolved in bootstrap.
   const mobile = obj.mobile;

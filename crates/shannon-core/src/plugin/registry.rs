@@ -22,6 +22,35 @@ pub struct InstalledPlugin {
     pub enabled: bool,
 }
 
+/// Trust decision for a **remote (git)** plugin install (review 2026-08-28
+/// SEC-1).
+///
+/// A remote manifest that declares no `permissions` would run under the
+/// runtime's default-allow compat contract — undeclared = every capability
+/// face (`execute_commands`, `network`, `mcp_tools`, …) open. Cloning an
+/// arbitrary URL with one call must not silently acquire that surface, so
+/// the default [`RemoteInstallConsent::default`] refuses it with
+/// [`PluginError::UnverifiedRemote`]; interactive callers set
+/// [`RemoteInstallConsent::allow_unverified`] only after the user
+/// explicitly accepted the risk.
+///
+/// Local-path installs (`install_from_path`) are the developer flow and
+/// deliberately keep the legacy behavior.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RemoteInstallConsent {
+    /// Install despite an undeclared (default-allow-all) permission surface.
+    pub allow_unverified: bool,
+}
+
+impl RemoteInstallConsent {
+    /// Explicit opt-in for an unverified (permissions-less) remote manifest.
+    pub fn allow_unverified() -> Self {
+        Self {
+            allow_unverified: true,
+        }
+    }
+}
+
 /// Plugin registry
 #[derive(Debug)]
 pub struct PluginRegistry {
@@ -66,15 +95,23 @@ impl PluginRegistry {
         Ok(())
     }
 
-    /// Load all plugins from the plugins directory.
+    /// Load all plugins from the plugins directory (§4.10 semantics).
     ///
     /// Each subdirectory is probed for `plugin.toml` first, then
-    /// `.claude-plugin/plugin.json`. Directories with neither are skipped
-    /// silently (matching the previous behavior for malformed plugins).
+    /// `.claude-plugin/plugin.json`. Two outcomes are distinct:
+    ///
+    /// - a directory carrying **no manifest at all** is not a plugin and is
+    ///   skipped (unchanged lenient behavior — the plugins dir may hold
+    ///   unrelated scratch folders);
+    /// - a directory whose manifest **exists but fails to parse or validate**
+    ///   is collected and reported. Every valid sibling still loads; the call
+    ///   then returns [`PluginError::LoadFailures`] enumerating each bad path
+    ///   plus its reason, so broken manifests can no longer vanish silently.
     pub async fn load_all(&mut self) -> PluginResult<()> {
         self.ensure_dir().await?;
 
         let mut entries = fs::read_dir(&self.plugins_dir).await?;
+        let mut failures: Vec<String> = Vec::new();
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
@@ -84,27 +121,54 @@ impl PluginRegistry {
                 continue;
             }
 
-            // Try to load manifest (Shannon TOML first, then Claude JSON)
-            if let Ok(manifest) = self.load_manifest_from_dir(&path).await {
-                let name = manifest.name.clone();
-                let enabled = self.config.is_enabled(&name);
+            match self.try_load_manifest_from_dir(&path).await {
+                Ok(Some(manifest)) => {
+                    // Load-time completeness is warning-only: already-
+                    // installed legacy plugins must keep loading.
+                    if let Ok(warnings) = super::validate::validate_for_install(&manifest) {
+                        super::validate::warn_about(&warnings);
+                    }
+                    let name = manifest.name.clone();
+                    let enabled = self.config.is_enabled(&name);
 
-                self.plugins.insert(
-                    name,
-                    InstalledPlugin {
-                        manifest,
-                        path,
-                        enabled,
-                    },
-                );
+                    self.plugins.insert(
+                        name,
+                        InstalledPlugin {
+                            manifest,
+                            path,
+                            enabled,
+                        },
+                    );
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    failures.push(format!("{}: {e}", path.display()));
+                }
             }
         }
 
-        Ok(())
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(PluginError::LoadFailures(failures.join("\n")))
+        }
     }
 
-    /// Install a plugin from a git repository
-    pub async fn install_from_git(&mut self, repo_url: &str) -> PluginResult<String> {
+    /// Install a plugin from a git repository.
+    ///
+    /// `consent` carries the trust decision for manifests that declare no
+    /// [`PluginManifest::permissions`]: by default such a **remote** install
+    /// is refused ([`PluginError::UnverifiedRemote`]) because the runtime's
+    /// default-allow contract would grant every capability face to whatever
+    /// the URL serves (review 2026-08-28 SEC-1). Pass
+    /// [`RemoteInstallConsent::allow_unverified()`] only after an explicit
+    /// user confirmation; the half-cloned directory is removed on refusal so
+    /// a later `load_all` scan cannot resurrect the plugin from disk.
+    pub async fn install_from_git(
+        &mut self,
+        repo_url: &str,
+        consent: RemoteInstallConsent,
+    ) -> PluginResult<String> {
         self.ensure_dir().await?;
 
         // Extract plugin name from repo URL
@@ -135,8 +199,28 @@ impl PluginRegistry {
             )));
         }
 
-        // Load manifest
+        // Load manifest and gate installation on it (§4.10 install-time checks)
         let manifest = self.load_manifest_from_dir(&target_dir).await?;
+        Self::admit_for_install(&manifest)?;
+
+        // SEC-1 gate: an *undeclared* remote manifest would run allow-all at
+        // runtime (declaration = allow-set; empty = every face open). Unlike
+        // a local path the user pointed at, a one-shot `git clone` of an
+        // arbitrary URL must not acquire that surface silently. Refuse unless
+        // explicitly opted in — and drop the clone, because a leftover
+        // manifest-carrying directory would be picked up by `load_all` on the
+        // next scan and effectively self-install.
+        if manifest.permissions.is_empty() && !consent.allow_unverified {
+            let name = manifest.name.clone();
+            if let Err(cleanup_err) = fs::remove_dir_all(&target_dir).await {
+                tracing::warn!(
+                    path = %target_dir.display(),
+                    error = %cleanup_err,
+                    "refused unverified plugin install; failed to remove the cloned directory"
+                );
+            }
+            return Err(PluginError::UnverifiedRemote(name));
+        }
 
         let name = manifest.name.clone();
 
@@ -162,8 +246,9 @@ impl PluginRegistry {
             return Err(PluginError::InvalidDirectory(path.to_path_buf()));
         }
 
-        // Load manifest
+        // Load manifest and gate installation on it (§4.10 install-time checks)
         let manifest = self.load_manifest_from_dir(path).await?;
+        Self::admit_for_install(&manifest)?;
 
         let plugin_name = manifest.name.clone();
 
@@ -250,8 +335,10 @@ impl PluginRegistry {
                 return Err(PluginError::GitFailed(format!("Failed to update {name}")));
             }
 
-            // Reload manifest
+            // Reload manifest; the refreshed bytes must still pass install
+            // validation before they replace what is registered.
             let manifest = self.load_manifest_from_dir(&plugin.path).await?;
+            Self::admit_for_install(&manifest)?;
             if let Some(p) = self.plugins.get_mut(name) {
                 p.manifest = manifest;
             }
@@ -319,10 +406,21 @@ impl PluginRegistry {
     /// Claude Code ecosystem format at `.claude-plugin/plugin.json`. This
     /// lets Shannon load plugins authored for Claude Code directly.
     async fn load_manifest_from_dir(&self, dir: &Path) -> PluginResult<PluginManifest> {
+        match self.try_load_manifest_from_dir(dir).await? {
+            Some(manifest) => Ok(manifest),
+            None => Self::absent_manifest_error(dir),
+        }
+    }
+
+    /// Probe a directory for a manifest without treating absence as failure:
+    /// `Ok(None)` = no manifest present (not a plugin directory),
+    /// `Err` = a manifest exists but could not be parsed.
+    async fn try_load_manifest_from_dir(&self, dir: &Path) -> PluginResult<Option<PluginManifest>> {
         let toml_path = dir.join("plugin.toml");
         if toml_path.exists() {
             let manifest_bytes = fs::read(&toml_path).await?;
             return PluginManifest::from_toml_bytes(&manifest_bytes)
+                .map(Some)
                 .map_err(PluginError::InvalidManifest);
         }
 
@@ -330,9 +428,15 @@ impl PluginRegistry {
         if claude_json_path.exists() {
             let manifest_bytes = fs::read(&claude_json_path).await?;
             return PluginManifest::from_json_bytes(&manifest_bytes)
+                .map(Some)
                 .map_err(PluginError::InvalidManifest);
         }
 
+        Ok(None)
+    }
+
+    /// The canonical error when neither manifest location exists.
+    fn absent_manifest_error(dir: &Path) -> PluginResult<PluginManifest> {
         Err(PluginError::InvalidManifest(format!(
             "neither plugin.toml nor .claude-plugin/plugin.json found in {}",
             dir.display()
@@ -351,6 +455,15 @@ impl PluginRegistry {
             .ok_or_else(|| PluginError::InvalidManifest(format!("Invalid URL: {url}")))?;
 
         Ok(name.to_string())
+    }
+
+    /// Install-time gate shared by git/path/update flows (§4.10):
+    /// schema validation must pass outright; completeness gaps on legacy
+    /// dialects downgrade to logged warnings.
+    fn admit_for_install(manifest: &PluginManifest) -> PluginResult<()> {
+        let warnings = super::validate::validate_for_install(manifest)?;
+        super::validate::warn_about(&warnings);
+        Ok(())
     }
 
     /// Copy directory contents recursively
@@ -391,7 +504,7 @@ impl PluginRegistry {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::plugin::PluginKind;
+    use crate::plugin::{ManifestVersion, PluginKind};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -645,6 +758,132 @@ permissions = [\"read_files\"]\n";
         assert_eq!(plugin.manifest.description, "from toml");
     }
 
+    // ---------- §4.10 W3-2: strict scanning + install-time gating ----------
+
+    const VALID_V2_SKILL_TOML: &str = r#"
+manifest_version = "2"
+name = "greeting"
+version = "1.0.0"
+description = "complete v2 skill"
+type = "skill"
+entry = "template.md"
+trigger = "/greet"
+template = "Hello!"
+permissions = ["read_files", "llm_api"]
+"#;
+
+    /// Broken manifests no longer disappear: `load_all` keeps every valid
+    /// sibling and returns one aggregated error naming each bad path.
+    #[tokio::test]
+    async fn load_all_reports_every_broken_manifest_but_keeps_valid_plugins() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let good_dir = temp_dir.path().join("good");
+        fs::create_dir_all(&good_dir).await.unwrap();
+        fs::write(good_dir.join("plugin.toml"), VALID_V2_SKILL_TOML)
+            .await
+            .unwrap();
+
+        for bad in ["broken-one", "broken-two"] {
+            let dir = temp_dir.path().join(bad);
+            fs::create_dir_all(&dir).await.unwrap();
+            fs::write(dir.join("plugin.toml"), "name = \"unterminated")
+                .await
+                .unwrap();
+        }
+
+        let mut registry = PluginRegistry::new(temp_dir.path().to_path_buf());
+        let err = registry.load_all().await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("broken-one") && msg.contains("broken-two"),
+            "{msg}"
+        );
+        assert!(matches!(err, PluginError::LoadFailures(_)));
+
+        // the good plugin still registered despite the aggregated failure
+        assert_eq!(registry.len(), 1);
+        assert!(registry.contains("greeting"));
+    }
+
+    #[tokio::test]
+    async fn manifestless_directories_still_skip_silently() {
+        let temp_dir = TempDir::new().unwrap();
+        let scratch = temp_dir.path().join("scratch-notes");
+        fs::create_dir_all(&scratch).await.unwrap();
+        fs::write(scratch.join("todo.txt"), "not a plugin")
+            .await
+            .unwrap();
+
+        let mut registry = PluginRegistry::new(temp_dir.path().to_path_buf());
+        registry.load_all().await.expect("no failures");
+        assert!(registry.is_empty());
+    }
+
+    #[tokio::test]
+    async fn install_rejects_v2_manifest_missing_implied_permissions() {
+        let temp_dir = TempDir::new().unwrap();
+        let source_dir = temp_dir.path().join("overreaching-v2");
+        fs::create_dir_all(&source_dir).await.unwrap();
+        // v2 command/skill implies read_files + llm_api; declares neither.
+        fs::write(
+            source_dir.join("plugin.toml"),
+            r#"
+manifest_version = "2"
+name = "overreach"
+version = "1.0.0"
+description = "incomplete v2 declaration"
+type = "skill"
+entry = "t.md"
+trigger = "/o"
+template = "t"
+"#,
+        )
+        .await
+        .unwrap();
+
+        let plugins_dir = temp_dir.path().join("plugins");
+        let mut registry = PluginRegistry::new(plugins_dir);
+        let err = registry
+            .install_from_path(&source_dir)
+            .await
+            .expect_err("v2 completeness must block install");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("v2 permission completeness")
+                && msg.contains("read_files")
+                && msg.contains("llm_api"),
+            "{msg}"
+        );
+        // nothing copied into the plugins dir on refusal
+        assert!(!temp_dir.path().join("plugins/overreach").exists());
+    }
+
+    #[tokio::test]
+    async fn install_accepts_complete_v2_manifest() {
+        let temp_dir = TempDir::new().unwrap();
+        let source_dir = temp_dir.path().join("complete-v2-src");
+        fs::create_dir_all(&source_dir).await.unwrap();
+        fs::write(source_dir.join("plugin.toml"), VALID_V2_SKILL_TOML)
+            .await
+            .unwrap();
+        fs::write(source_dir.join("template.md"), "Hello!")
+            .await
+            .unwrap();
+
+        let plugins_dir = temp_dir.path().join("plugins");
+        let mut registry = PluginRegistry::new(plugins_dir.clone());
+        let name = registry.install_from_path(&source_dir).await.unwrap();
+        assert_eq!(name, "greeting");
+
+        let installed = registry.get("greeting").unwrap();
+        assert_eq!(installed.manifest.schema_version(), ManifestVersion::V2);
+        // post-install reload via load_all also succeeds cleanly now
+        let mut fresh = PluginRegistry::new(plugins_dir);
+        fresh.load_all().await.expect("reload clean");
+        assert!(fresh.contains("greeting"));
+    }
+
     #[tokio::test]
     async fn test_load_manifest_from_dir_errors_when_neither_exists() {
         let temp_dir = TempDir::new().unwrap();
@@ -656,5 +895,150 @@ permissions = [\"read_files\"]\n";
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("neither plugin.toml nor .claude-plugin/plugin.json"));
+    }
+
+    // ---------- SEC-1: remote installs need a declared permission set ----
+
+    const UNDECLARED_V1_SKILL_TOML: &str = r#"
+name = "shady"
+version = "1.0.0"
+description = "declares nothing"
+type = "skill"
+entry = "t.md"
+trigger = "/shady"
+template = "hi"
+"#;
+
+    const DECLARED_V1_SKILL_TOML: &str = r#"
+name = "honest"
+version = "1.0.0"
+description = "declares its faces"
+type = "skill"
+entry = "t.md"
+trigger = "/honest"
+template = "hi"
+permissions = ["read_files", "llm_api"]
+"#;
+
+    /// Materialize a local git repo as an offline stand-in remote
+    /// (`git clone <path>` works against plain paths). Every git invocation
+    /// pins `current_dir` and a null global config so the test neither
+    /// touches nor depends on the surrounding checkout.
+    fn init_git_plugin_repo(dir: &Path, manifest_toml: &str) -> String {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("plugin.toml"), manifest_toml).unwrap();
+        std::fs::write(dir.join("t.md"), "Hello!").unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_AUTHOR_NAME", "test")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_NAME", "test")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com")
+                .output()
+                .expect("git is available")
+        };
+        run(&["init", "-q"]);
+        run(&["add", "-A"]);
+        let commit = run(&["commit", "-q", "-m", "init"]);
+        assert!(
+            commit.status.success(),
+            "git commit failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+        dir.to_string_lossy().to_string()
+    }
+
+    /// Undeclared permissions + remote source + default (non-interactive)
+    /// consent = refused, with no half-clone left for `load_all` to
+    /// resurrect on the next scan.
+    #[tokio::test]
+    async fn remote_install_without_permissions_refused_and_clone_removed() {
+        let temp_dir = TempDir::new().unwrap();
+        let remote = init_git_plugin_repo(
+            &temp_dir.path().join("remote-no-perms"),
+            UNDECLARED_V1_SKILL_TOML,
+        );
+
+        let plugins_dir = temp_dir.path().join("plugins");
+        let mut registry = PluginRegistry::new(plugins_dir.clone());
+        let err = registry
+            .install_from_git(&remote, RemoteInstallConsent::default())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, PluginError::UnverifiedRemote(_)), "{err}");
+        assert!(
+            err.to_string().contains("allow_unverified"),
+            "refusal must name the explicit opt-in: {err}"
+        );
+        assert!(!registry.contains("shady"));
+        assert!(
+            !plugins_dir.join("remote-no-perms").exists(),
+            "the refused clone must be removed"
+        );
+
+        // A fresh scan must not find the refused plugin on disk either.
+        let mut fresh = PluginRegistry::new(plugins_dir);
+        fresh.load_all().await.expect("scan clean");
+        assert!(fresh.is_empty());
+    }
+
+    /// The explicit opt-in unlocks the same install.
+    #[tokio::test]
+    async fn remote_install_unverified_with_explicit_opt_in_installs() {
+        let temp_dir = TempDir::new().unwrap();
+        let remote = init_git_plugin_repo(
+            &temp_dir.path().join("remote-no-perms"),
+            UNDECLARED_V1_SKILL_TOML,
+        );
+
+        let mut registry = PluginRegistry::new(temp_dir.path().join("plugins"));
+        let name = registry
+            .install_from_git(&remote, RemoteInstallConsent::allow_unverified())
+            .await
+            .expect("opt-in installs the unverified remote plugin");
+        assert_eq!(name, "shady");
+        assert!(registry.contains("shady"));
+    }
+
+    /// A remote manifest that *declares* its permission set installs with
+    /// the default consent — the gate targets only the undeclared case.
+    #[tokio::test]
+    async fn remote_install_with_declared_permissions_needs_no_opt_in() {
+        let temp_dir = TempDir::new().unwrap();
+        let remote = init_git_plugin_repo(
+            &temp_dir.path().join("remote-declared"),
+            DECLARED_V1_SKILL_TOML,
+        );
+
+        let mut registry = PluginRegistry::new(temp_dir.path().join("plugins"));
+        let name = registry
+            .install_from_git(&remote, RemoteInstallConsent::default())
+            .await
+            .expect("declared remote manifest installs without opt-in");
+        assert_eq!(name, "honest");
+    }
+
+    /// Local-path installs are the developer flow and keep the legacy
+    /// behavior: an undeclared manifest still installs (red line — the
+    /// SEC-1 gate never touches `install_from_path`).
+    #[tokio::test]
+    async fn local_path_install_of_unverified_plugin_still_works() {
+        let temp_dir = TempDir::new().unwrap();
+        let source = temp_dir.path().join("dev-plugin");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("plugin.toml"), UNDECLARED_V1_SKILL_TOML).unwrap();
+        std::fs::write(source.join("t.md"), "Hello!").unwrap();
+
+        let mut registry = PluginRegistry::new(temp_dir.path().join("plugins"));
+        let name = registry
+            .install_from_path(&source)
+            .await
+            .expect("local undeclared plugin keeps installing");
+        assert_eq!(name, "shady");
     }
 }

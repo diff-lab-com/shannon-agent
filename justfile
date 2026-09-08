@@ -94,6 +94,24 @@ perf:
 scenarios:
     cargo nextest run --workspace -E 'test(scenario_)'
 
+# ---------- Eval (L1 任务集,§4.4) ----------
+
+# 全量评测。默认 dry-run:免 API key 演练管线(加载→沙箱→limits→NDJSON→verify→双报告);
+# 真实模型跑分用 `just eval-real`。参数透传,例:
+#   just eval --task edit_01            # 单题演练
+#   just eval --tier recovery           # 整层演练
+#   just eval --list                    # 只列任务清单
+eval *args:
+    cargo run -q -p shannon-core --example eval_runner -- --tasks "{{justfile_directory()}}/tests/eval/tasks" {{args}}
+
+# 真实模型跑分(需 API key):SHANNON_API_KEY=<key> just eval-real [--task <id>]
+eval-real *args:
+    SHANNON_EVAL_REAL=1 cargo run -q -p shannon-core --example eval_runner -- --real --tasks "{{justfile_directory()}}/tests/eval/tasks" {{args}}
+
+# 对比两次 run 的指标稳定性:`just eval-diff ~/.shannon/eval/runs/<a>/report.json ~/.shannon/eval/runs/<b>/report.json`
+eval-diff a b:
+    cargo run -q -p shannon-core --example eval_runner -- diff {{a}} {{b}}
+
 # ---------- Test ----------
 
 test-rust:
@@ -112,6 +130,12 @@ test: test-rust test-ui test-gateway
 deny:
     cargo deny check
 
+# ADR-0011 red line 1: the CLI must never link GUI libs (tauri/webkit2gtk).
+# Optional arg: path to a built linux `shannon` binary to also ldd-check,
+#   just guard-headless target/release/shannon
+guard-headless *args:
+    scripts/check-headless-purity.sh {{args}}
+
 # ---------- Full CI gate ----------
 
 ci: fmt lint deny gen-protocol test
@@ -126,6 +150,20 @@ ci: fmt lint deny gen-protocol test
 # for the (opt-in) automated weekly refresh.
 metrics:
     bash scripts/gen-metrics.sh
+
+# ---------- Dogfood loop (docs/plans/autonomous-improvement-loop.md) ----------
+
+# Autonomous improvement loop supervisor. Common invocations:
+#   just dogfood --once --task-filter S          # single iteration, S tier
+#   just dogfood --once --fix-mode manual        # briefs + worktree, human fixes
+#   just dogfood --gate iter-01                  # gate a manually-fixed worktree
+#   just dogfood --refresh-perf-baseline
+dogfood *args:
+    python3 scripts/dogfood/run.py {{args}}
+
+# Supervisor machinery unit tests (no LLM, no network).
+dogfood-selftest:
+    python3 -m unittest discover -s scripts/dogfood/tests -v
 
 # ── Recording / Replay (ADR 0003, Phase 1 本地 harness) ──
 #
@@ -257,7 +295,7 @@ kpi-clean-build:
 # ---------- Release prep: bump every version source, commit, tag ----------
 # Usage: just release-prep 0.7.0
 #   then: git push && git push origin v0.7.0   (triggers release.yml)
-# Bumps the 4 independent version sources so cargo-dist + tauri + gateway
+# Bumps the 4 independent version sources so tauri + gateway
 # + `shannon --version` all agree with the tag:
 #   1) Cargo.toml workspace.package.version  (crates with version.workspace=true inherit)
 #   2) desktop/tauri.conf.json  "version"  (Tauri does NOT read the cargo workspace)
@@ -289,3 +327,27 @@ release-prep version:
     git commit -m "chore(release): v{{version}}"
     git tag v{{version}}
     echo "✅ tagged v{{version}} — run: git push origin dev && git push origin v{{version}}"
+
+# ---------- Release rollback: re-point the R2 `latest/` mirror at a good version ----------
+# Usage: just release-rollback 0.10.0
+# Requires: gh (authenticated), wrangler, and env R2_BUCKET / CLOUDFLARE_API_TOKEN /
+# CLOUDFLARE_ACCOUNT_ID (same secrets the release.yml publish job uses).
+# GitHub's releases/latest pointer needs a manual step — see
+# docs/RELEASE-ROLLBACK.md for the full runbook.
+release-rollback version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${R2_BUCKET:?set R2_BUCKET=<bucket> (repo variables → R2_BUCKET)}"
+    command -v wrangler >/dev/null 2>&1 || npm install -g wrangler@4.98.0
+    TAG="v{{version}}"
+    TMP="$(mktemp -d)"
+    trap 'rm -rf "$TMP"' EXIT
+    echo "downloading all assets of $TAG from GitHub..."
+    gh release download "$TAG" -D "$TMP" --repo diff-lab-com/shannon-agent --clobber
+    echo "re-uploading $(ls "$TMP" | wc -l) assets to R2 latest/ ..."
+    for f in "$TMP"/*; do
+        [ -f "$f" ] || continue
+        wrangler r2 object put "$R2_BUCKET/latest/$(basename "$f")" --file "$f"
+    done
+    echo "✅ R2 latest/ now mirrors $TAG"
+    echo "next (manual): draft-or-delete the bad GitHub release so releases/latest moves back — see docs/RELEASE-ROLLBACK.md"

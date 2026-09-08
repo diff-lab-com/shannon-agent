@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useIntl } from 'react-intl'
+import { useT } from '@/i18n'
 import { toast } from 'sonner'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { Button } from '@/components/ui/button'
@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/select'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { cn } from '@/lib/utils'
 
 interface VoiceLocalSettingsProps {
   /** Force-disable the card (e.g. when the desktop was built without
@@ -44,15 +45,11 @@ interface DownloadProgress {
  * render.
  */
 export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettingsProps) {
-  const intl = useIntl()
   // `t` is a small wrapper that mirrors the `formatMessage({ id },
   // values)` signature used elsewhere in the UI; the Settings
   // cards in this codebase lean on the shorthand so a missing
   // translation is a single grep away.
-  const t = (
-    id: string,
-    values?: Record<string, string | number>,
-  ): string => intl.formatMessage({ id }, values)
+  const t = useT()
   const [models, setModels] = useState<api.WhisperModelInfo[]>([])
   const [config, setConfig] = useState<api.VoiceLocalConfig | null>(null)
   const [saving, setSaving] = useState(false)
@@ -188,11 +185,12 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
           {t('settings.voiceLocal.title')}
         </h3>
         <span
-          className={`ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold ${
+          className={cn(
+            "ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold",
             config?.enabled
               ? 'bg-primary-container text-on-primary-container'
-              : 'bg-surface-container-high text-on-surface-variant'
-          }`}
+              : 'bg-surface-container-high text-on-surface-variant',
+          )}
         >
           {config?.enabled ? t('settings.voiceLocal.on') : t('settings.voiceLocal.off')}
         </span>

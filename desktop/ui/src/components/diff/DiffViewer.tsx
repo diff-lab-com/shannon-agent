@@ -10,6 +10,8 @@
 
 import { Fragment, useMemo } from 'react'
 import { useIntl } from 'react-intl'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import type { FileDiff } from '@/types'
 import { computeHunks, type HunkDecision } from '@/lib/diff-merge'
 import { highlightLines, resolveDiffLang } from '@/lib/diff-highlight'
@@ -147,7 +149,7 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
   }
 
   return (
-    <div className={`rounded-xl border border-outline-variant/30 overflow-hidden bg-surface-container-lowest ${className ?? ''}`}>
+    <div className={cn("rounded-xl border border-outline-variant/30 overflow-hidden bg-surface-container-lowest", className)}>
       <header className="flex items-center justify-between px-md py-sm border-b border-outline-variant/30 bg-surface-container-low">
         <div className="flex items-center gap-md min-w-0">
           <span className="material-symbols-outlined text-[18px] text-on-surface-variant">difference</span>
@@ -183,11 +185,11 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
                     {renderHeader && hunkId !== null && (
                       <tr className={decisionHeaderStyle(decision)}>
                         <td colSpan={4} className="px-md py-xs">
-                          <button
-                            type="button"
+                          <Button
+                            variant="ghost"
                             onClick={() => onToggleHunk?.(hunkId)}
                             disabled={!onToggleHunk}
-                            className="flex items-center gap-sm w-full text-left cursor-pointer disabled:cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded"
+                            className="justify-start gap-sm w-full text-left cursor-pointer disabled:cursor-default h-auto"
                             aria-label={intl.formatMessage(
                               { id: 'diff.review.hunk.aria' },
                               { state: stateLabel(decision) },
@@ -200,12 +202,12 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
                             <span className="font-label-sm opacity-60 ml-auto">
                               {hunks.find(h => h.id === hunkId)?.lines.length ?? 0} lines
                             </span>
-                          </button>
+                          </Button>
                         </td>
                       </tr>
                     )}
-                    <tr className={`${bgClass} ${line.hunkId !== null ? decisionBorderStyle(decision) : ''}`}>
-                      <td className={`w-[1ch] px-xs text-center select-none ${style.signColor}`}>{style.sign}</td>
+                    <tr className={cn(bgClass, line.hunkId !== null && decisionBorderStyle(decision))}>
+                      <td className={cn("w-[1ch] px-xs text-center select-none", style.signColor)}>{style.sign}</td>
                       <td className="px-xs text-right text-outline select-none" style={{ width: `${gutterWidth + 1}ch` }}>
                         {line.oldNo ?? ''}
                       </td>

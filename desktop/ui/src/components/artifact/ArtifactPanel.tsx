@@ -3,6 +3,8 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { save } from '@tauri-apps/plugin-dialog'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import 'highlight.js/styles/github.css'
 import * as api from '@/lib/tauri-api'
 import { useArtifact } from './ArtifactContext'
@@ -12,8 +14,9 @@ import { SvgRenderer } from './SvgRenderer'
 import { MermaidRenderer } from './MermaidRenderer'
 import { DocumentRenderer } from './DocumentRenderer'
 import { CodeBlock } from './CodeBlock'
+import { LivePreview } from './LivePreview'
 
-type Tab = 'preview' | 'code'
+type Tab = 'preview' | 'code' | 'live'
 
 const FILE_EXT: Record<string, string> = {
   html: 'html',
@@ -114,7 +117,7 @@ export function ArtifactPanel() {
     ? { width: '100vw', height: '100vh' }
     : { width: `${Math.min(width, Math.floor(window.innerWidth * 0.6))}px` }
   const panelClass = fullscreen
-    ? 'fixed inset-0 z-50 bg-surface-container-lowest flex flex-col'
+    ? 'fixed inset-0 z-modal bg-surface-container-lowest flex flex-col'
     : 'shrink-0 overflow-hidden border-l border-outline-variant/20 bg-surface-container-lowest flex flex-col relative'
 
   return (
@@ -127,7 +130,7 @@ export function ArtifactPanel() {
       {!fullscreen && (
         <div
           onPointerDown={startResize}
-          className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 transition-colors z-10"
+          className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 transition-colors z-raised"
           aria-label={t('chat.artifact.resize.aria')}
         />
       )}
@@ -137,99 +140,116 @@ export function ArtifactPanel() {
         <span className="font-label-xs text-on-surface-variant px-xs py-[2px] rounded bg-surface-container-high shrink-0">
           {artifactKindLabel(active.kind)}
         </span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-sm"
           onClick={() => setAutoOpen(!autoOpen)}
           aria-pressed={autoOpen}
           aria-label={t('chat.artifact.autoOpen.aria')}
           title={t('chat.artifact.autoOpen.aria')}
-          className={`p-xs rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
-            autoOpen ? 'text-primary bg-primary/10' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container'
-          }`}
+          className={cn(
+            autoOpen ? 'text-primary bg-primary/10 hover:bg-primary/10' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container',
+          )}
         >
           <span className="material-symbols-outlined icon-sm">{autoOpen ? 'flash_auto' : 'auto_mode'}</span>
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-sm"
           onClick={() => setFullscreen(f => !f)}
           aria-pressed={fullscreen}
           aria-label={t(fullscreen ? 'chat.artifact.exitFullscreen.aria' : 'chat.artifact.fullscreen.aria')}
           title={t(fullscreen ? 'chat.artifact.exitFullscreen.aria' : 'chat.artifact.fullscreen.aria')}
-          className="p-xs rounded text-on-surface-variant hover:text-on-surface hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          className="text-on-surface-variant hover:text-on-surface hover:bg-surface-container"
         >
           <span className="material-symbols-outlined icon-sm">{fullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-sm"
           onClick={closeAll}
           aria-label={t('chat.artifact.close.aria')}
           title={t('chat.artifact.close.aria')}
-          className="p-xs rounded text-on-surface-variant hover:text-on-surface hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          className="text-on-surface-variant hover:text-on-surface hover:bg-surface-container"
         >
           <span className="material-symbols-outlined icon-sm">close</span>
-        </button>
+        </Button>
       </header>
 
       {artifacts.length > 1 && (
         <div role="tablist" aria-label={t('chat.artifact.tabs.aria')} className="flex gap-xs px-md py-xs overflow-x-auto border-b border-outline-variant/10 bg-surface-container-low/50">
           {artifacts.map(a => (
-            <button
+            <Button
               key={a.id}
               type="button"
+              variant="ghost"
+              size="sm"
               role="tab"
               aria-selected={a.id === active.id}
               onClick={() => setActive(a.id)}
-              className={`shrink-0 px-sm py-xs rounded-md text-label-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
+              className={cn(
+                'shrink-0 gap-0',
                 a.id === active.id
-                  ? 'bg-primary/10 text-primary'
-                  : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
-              }`}
+                  ? 'bg-primary/10 text-primary hover:bg-primary/10'
+                  : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface',
+              )}
             >
               <span className="material-symbols-outlined icon-sm align-middle mr-xs">{artifactIcon(a.kind)}</span>
               <span className="align-middle">{a.title.slice(0, 30)}</span>
-            </button>
+            </Button>
           ))}
         </div>
       )}
 
       <div className="flex items-center gap-xs px-md py-xs border-b border-outline-variant/10 bg-surface-container-lowest">
-        {(['preview', 'code'] as Tab[]).map(tb => (
-          <button
+        {(['preview', 'code', 'live'] as Tab[]).map(tb => (
+          <Button
             key={tb}
             type="button"
+            variant="ghost"
+            size="sm"
             role="tab"
             aria-selected={tab === tb}
             onClick={() => setTab(tb)}
-            className={`px-sm py-xs rounded-md text-label-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
+            className={cn(
               tab === tb
-                ? 'bg-primary/10 text-primary'
-                : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
-            }`}
+                ? 'bg-primary/10 text-primary hover:bg-primary/10'
+                : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface',
+            )}
           >
             {t(`chat.artifact.tab.${tb}`)}
-          </button>
+          </Button>
         ))}
         <div className="flex-1" />
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={handleCopy}
-          className="flex items-center gap-xs px-sm py-xs rounded-md text-label-sm text-on-surface-variant hover:bg-surface-container hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          className="text-on-surface-variant hover:bg-surface-container hover:text-on-surface"
         >
           <span className="material-symbols-outlined icon-sm">content_copy</span>
           {t('chat.artifact.copy')}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={handleExport}
-          className="flex items-center gap-xs px-sm py-xs rounded-md text-label-sm text-on-surface-variant hover:bg-surface-container hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          className="text-on-surface-variant hover:bg-surface-container hover:text-on-surface"
         >
           <span className="material-symbols-outlined icon-sm">download</span>
           {t('chat.artifact.export')}
-        </button>
+        </Button>
       </div>
 
-      <div className="flex-1 overflow-auto">
-        {tab === 'preview' ? (
+      <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+        {tab === 'live' ? (
+          <LivePreview />
+        ) : tab === 'preview' ? (
           active.kind === 'html' ? <HtmlRenderer source={active.source} title={active.title} />
           : active.kind === 'svg' ? <SvgRenderer source={active.source} title={active.title} />
           : active.kind === 'mermaid' ? <MermaidRenderer source={active.source} title={active.title} />

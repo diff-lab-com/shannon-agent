@@ -94,6 +94,9 @@ pub enum LlmProvider {
     ZhipuInternational,
     /// Zhipu Coding Plan (Anthropic-compatible wire format at open.bigmodel.cn/api/anthropic)
     ZhipuCoding,
+    /// GLM Coding Plan subscription quota — OpenAI-compatible endpoint at
+    /// /api/coding/paas/v4 with a plain Bearer API key.
+    ZhipuCodingPlan,
     /// Moonshot / Kimi (api.moonshot.cn)
     Moonshot,
     /// MiniMax (api.minimax.chat)
@@ -156,6 +159,8 @@ impl LlmProvider {
             LlmProvider::ZhipuInternational
         } else if url.contains("bigmodel.cn/api/anthropic") {
             LlmProvider::ZhipuCoding
+        } else if url.contains("bigmodel.cn/api/coding") {
+            LlmProvider::ZhipuCodingPlan
         } else if url.contains("bigmodel.cn") || url.contains("zhipuai.cn") {
             LlmProvider::Zhipu
         } else if url.contains("moonshot.cn") || url.contains("kimi") {
@@ -197,6 +202,7 @@ impl LlmProvider {
             LlmProvider::Zhipu => "/api/paas/v4/chat/completions",
             LlmProvider::ZhipuInternational => "/api/paas/v4/chat/completions",
             LlmProvider::ZhipuCoding => "/v1/messages",
+            LlmProvider::ZhipuCodingPlan => "/chat/completions",
             LlmProvider::Moonshot => "/v1/chat/completions",
             LlmProvider::Minimax => "/v1/chat/completions",
             LlmProvider::DashScope => "/compatible-mode/v1/chat/completions",
@@ -228,6 +234,7 @@ impl LlmProvider {
             LlmProvider::Zhipu => "https://open.bigmodel.cn",
             LlmProvider::ZhipuInternational => "https://open.international.bigmodel.cn",
             LlmProvider::ZhipuCoding => "https://open.bigmodel.cn/api/anthropic",
+            LlmProvider::ZhipuCodingPlan => "https://open.bigmodel.cn/api/coding/paas/v4",
             LlmProvider::Moonshot => "https://api.moonshot.cn",
             LlmProvider::Minimax => "https://api.minimax.chat",
             LlmProvider::DashScope => "https://dashscope.aliyuncs.com",
@@ -245,7 +252,8 @@ impl LlmProvider {
             Self::Anthropic | Self::Custom | Self::Bedrock | Self::ZhipuCoding => {
                 WireFormat::Anthropic
             }
-            Self::OpenAI
+            Self::ZhipuCodingPlan
+            | Self::OpenAI
             | Self::Azure
             | Self::Mistral
             | Self::DeepSeek
@@ -298,7 +306,7 @@ impl LlmProvider {
             Self::Xai => Some("XAI_API_KEY"),
             Self::Ai21 => Some("AI21_API_KEY"),
             Self::SiliconFlow => Some("SILICONFLOW_API_KEY"),
-            Self::Zhipu | Self::ZhipuCoding => Some("ZHIPU_API_KEY"),
+            Self::Zhipu | Self::ZhipuCoding | Self::ZhipuCodingPlan => Some("ZHIPU_API_KEY"),
             Self::ZhipuInternational => Some("ZHIPU_INTL_API_KEY"),
             Self::Moonshot => Some("MOONSHOT_API_KEY"),
             Self::Minimax => Some("MINIMAX_API_KEY"),
@@ -348,6 +356,7 @@ impl std::fmt::Display for LlmProvider {
             LlmProvider::Zhipu => write!(f, "zhipu"),
             LlmProvider::ZhipuInternational => write!(f, "zhipu-international"),
             LlmProvider::ZhipuCoding => write!(f, "zhipu-coding"),
+            LlmProvider::ZhipuCodingPlan => write!(f, "zhipu-coding-plan"),
             LlmProvider::Moonshot => write!(f, "moonshot"),
             LlmProvider::Minimax => write!(f, "minimax"),
             LlmProvider::DashScope => write!(f, "dashscope"),
@@ -366,6 +375,12 @@ pub struct LlmClientConfig {
     pub base_url: String,
     pub model: String,
     pub max_tokens: u32,
+    /// Non-streaming requests: total request deadline (connect → body read,
+    /// applied per-request by `send_message`). Streaming requests: the
+    /// read-**idle** bound — the maximum gap between two body chunks; a
+    /// stream that keeps producing is never cut, no matter how long the
+    /// total transfer runs (review 2026-08-28 PERF-2 — see
+    /// `LlmClient::build_client`).
     pub timeout_seconds: u64,
     pub api_version: String,
     pub provider: LlmProvider,
@@ -377,6 +392,10 @@ pub struct LlmClientConfig {
     pub fallback_base_url: Option<String>,
     /// Maximum number of automatic stream reconnection attempts (default: 3).
     pub max_stream_reconnects: u32,
+    /// T12 Option C: inject the Anthropic browser toolset on supported
+    /// models, superseding local browser tools. Opt-in (default false);
+    /// typically set from `SHANNON_ANTHROPIC_TOOLSETS=1`.
+    pub enable_anthropic_toolsets: bool,
     /// Budget tokens for extended thinking mode (Anthropic-specific).
     /// When set, enables extended thinking with the given token budget.
     pub budget_tokens: Option<u32>,
@@ -446,6 +465,7 @@ impl Default for LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 }
@@ -531,6 +551,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -555,6 +576,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -580,6 +602,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -604,6 +627,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -629,6 +653,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -652,6 +677,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -674,6 +700,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -697,6 +724,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -720,6 +748,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 }
@@ -1067,6 +1096,18 @@ pub enum ContentDelta {
     /// Thinking delta for extended thinking mode (Anthropic-specific)
     #[serde(rename = "thinking_delta")]
     ThinkingDelta { thinking: String },
+
+    /// Thinking signature delta (Anthropic extended thinking). Follows
+    /// `thinking_delta` in the block stream. Anthropic-compatible providers
+    /// (e.g. MiniMax) emit these; the signature is not consumed yet, but the
+    /// stream must parse through it instead of dying on an unknown variant.
+    #[serde(rename = "signature_delta")]
+    SignatureDelta { signature: String },
+
+    /// Unknown delta type from a future API revision — tolerated so one new
+    /// event kind cannot kill an in-flight stream.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Message delta event data
@@ -1103,6 +1144,25 @@ fn default_num_ctx() -> usize {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_zhipu_coding_plan_endpoint_composition() {
+        // The Coding Plan subscription quota lives at /api/coding/paas/v4;
+        // recognition must WIN over the generic bigmodel.cn branch and the
+        // composed URL must be exactly the plan's chat-completions path.
+        let provider = LlmProvider::from_base_url("https://open.bigmodel.cn/api/coding/paas/v4");
+        assert_eq!(provider, LlmProvider::ZhipuCodingPlan);
+        assert_eq!(
+            format!("{}{}", provider.default_base_url(), provider.endpoint()),
+            "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
+        );
+        // The generic-domain fallback still classifies the classic endpoint.
+        assert_eq!(
+            LlmProvider::from_base_url("https://open.bigmodel.cn"),
+            LlmProvider::Zhipu
+        );
+        assert_eq!(provider.canonical_api_key_env(), Some("ZHIPU_API_KEY"));
+    }
 
     #[test]
     fn test_image_source_base64_constructor() {
@@ -1928,6 +1988,7 @@ mod tests {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         };
         assert!(cfg.validate().is_ok());
         assert!(cfg.is_configured());
@@ -1957,6 +2018,7 @@ mod tests {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         };
         let err = cfg.validate().unwrap_err();
         assert!(
@@ -1983,6 +2045,7 @@ mod tests {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         };
         let err = cfg.validate().unwrap_err();
         assert!(
@@ -2013,6 +2076,7 @@ mod tests {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         };
         let err = cfg.validate().unwrap_err();
         assert!(err.contains("model"), "error should mention model: {err}");

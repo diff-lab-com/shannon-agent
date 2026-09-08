@@ -1,0 +1,17 @@
+{"seq":0,"ts_ns":1700000000000000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"session/start","model":"test-model"}
+{"seq":1,"ts_ns":1700000000001000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"user/message","content":"find and fix the bug in the add function","source":"user"}
+{"seq":2,"ts_ns":1700000000002000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"request/header","model":"test","adapter_defaults":{},"tools":[],"config_snapshot":{},"reason":"turn"}
+{"seq":3,"ts_ns":1700000000003000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"assistant/message","content":"Let me search for the add function.","interrupted":false}
+{"seq":4,"ts_ns":1700000000004000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"assistant/message","content":"Let me search for the add function.","interrupted":false}
+{"seq":5,"ts_ns":1700000000005000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"tool/call","tool_use_id":"toolu_0005","tool_name":"Grep","arguments":"{\"pattern\":\"fn add\",\"output_mode\":\"files_with_matches\"}"}
+{"seq":6,"ts_ns":1700000000006000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"tool/result","tool_use_id":"toolu_0005","tool_name":"Grep","output":"src/math.rs","is_error":false,"meta":{},"duration_ms":10}
+{"seq":7,"ts_ns":1700000000007000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"request/header","model":"test","adapter_defaults":{},"tools":[],"config_snapshot":{},"reason":"turn"}
+{"seq":8,"ts_ns":1700000000008000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"assistant/message","content":"Let me read the file.","interrupted":false}
+{"seq":9,"ts_ns":1700000000009000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"tool/call","tool_use_id":"toolu_0009","tool_name":"Read","arguments":"{\"path\":\"src/math.rs\"}"}
+{"seq":10,"ts_ns":1700000000010000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"tool/result","tool_use_id":"toolu_0009","tool_name":"Read","output":"pub fn add(a: i32, b: i32) -> i32 {\n    a - b\n}","is_error":false,"meta":{},"duration_ms":3}
+{"seq":11,"ts_ns":1700000000011000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"assistant/message","content":"Found the bug: it uses subtraction instead of addition.","interrupted":false}
+{"seq":12,"ts_ns":1700000000012000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"tool/call","tool_use_id":"toolu_0012","tool_name":"Edit","arguments":"{\"path\":\"src/math.rs\",\"old\":\"a - b\",\"new\":\"a + b\"}"}
+{"seq":13,"ts_ns":1700000000013000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"tool/result","tool_use_id":"toolu_0012","tool_name":"Edit","output":"edited successfully","is_error":false,"meta":{},"duration_ms":2}
+{"seq":14,"ts_ns":1700000000014000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"assistant/message","content":"Now let me verify the fix compiles.","interrupted":false}
+{"seq":15,"ts_ns":1700000000015000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"tool/call","tool_use_id":"toolu_0015","tool_name":"Bash","arguments":"{\"command\":\"cargo check\"}"}
+{"seq":16,"ts_ns":1700000000016000000,"session_id":"fx-search_driven_fix","turn":1,"kind":"tool/result","tool_use_id":"toolu_0015","tool_name":"Bash","output":"Finished dev [unoptimized] target(s) in 0.5s","is_error":false,"meta":{},"duration_ms":500}

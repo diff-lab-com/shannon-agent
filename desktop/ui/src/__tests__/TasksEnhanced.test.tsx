@@ -15,6 +15,14 @@ vi.mock('@/context/CatalogContext', () => ({
   useCatalog: () => mockContext,
 }))
 
+// P0-2: Tasks opens a goal run's session via useSessions().switchSession.
+const mockSessions: any = {
+  switchSession: vi.fn().mockResolvedValue([]),
+}
+vi.mock('@/context/SessionContext', () => ({
+  useSessions: () => mockSessions,
+}))
+
 vi.mock('@/lib/tauri-api', async () => {
   const actual = await vi.importActual('@/lib/tauri-api')
   return {
@@ -139,6 +147,8 @@ describe('Tasks Enhanced', () => {
   it('renders background tasks in execution log', () => {
     setContext({ tasks: [], backgroundTasks: [{ task_id: 'bt1', prompt: 'test prompt', status: 'completed', started_at: Date.now(), completed_at: Date.now(), output: 'done' }], agents: [] })
     renderTasks()
+    // IA regroup: the execution log lives on the Pipelines tab now.
+    fireEvent.click(screen.getByRole('tab', { name: 'Pipelines' }))
     expect(screen.getByText('Task Execution Log')).toBeInTheDocument()
     expect(screen.getByText('test prompt')).toBeInTheDocument()
   })
@@ -181,6 +191,8 @@ describe('Tasks Enhanced', () => {
   it('shows running background task with cancel button', () => {
     setContext({ tasks: [], backgroundTasks: [{ task_id: 'bt2', prompt: 'running bg', status: 'running', started_at: Date.now(), completed_at: null, output: '' }], agents: [] })
     renderTasks()
+    // IA regroup: the execution log (with its cancel buttons) is on Pipelines.
+    fireEvent.click(screen.getByRole('tab', { name: 'Pipelines' }))
     expect(screen.getByLabelText('Cancel background task')).toBeInTheDocument()
   })
 

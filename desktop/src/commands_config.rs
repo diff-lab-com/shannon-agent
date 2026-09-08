@@ -1,4 +1,4 @@
-//! Configuration commands — configure, switch_provider, get_config.
+//! Configuration commands — configure, get_config.
 //!
 //! Extracted from `commands.rs` as part of S2 P1.1 (commands.rs split).
 
@@ -246,13 +246,21 @@ pub struct ConfigUpdate {
     pub value: String,
 }
 
-/// Provider switch request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderSwitchRequest {
-    pub provider: String,
-    pub api_key: Option<String>,
-    pub base_url: Option<String>,
-    pub model: String,
+/// P1-3: validate + normalize a `sandbox.mode` config value.
+///
+/// Accepts the engine sandbox vocabulary (`off` | `local` | `landlock`,
+/// case-insensitive) plus `""` to clear the override. Returns the
+/// canonical token to persist — `None` clears — or an error listing the
+/// allowed values.
+pub(crate) fn validate_sandbox_mode(value: &str) -> Result<Option<String>, String> {
+    let mode = value.trim().to_ascii_lowercase();
+    match mode.as_str() {
+        "" => Ok(None),
+        "off" | "local" | "landlock" => Ok(Some(mode)),
+        other => Err(format!(
+            "Invalid sandbox.mode: `{other}` (expected off | local | landlock)"
+        )),
+    }
 }
 
 /// Update a single desktop config key. The frontend uses this for every
@@ -490,6 +498,59 @@ pub async fn configure(
 
             Ok(())
         }
+        "sandbox.mode" => {
+            // P1-3: frozen config key `sandbox.mode` — engine sandbox
+            // vocabulary (`off` | `local` | `landlock`). Takes effect on the
+            // next app launch (the tool registry is assembled once at
+            // startup); the UI copy says so.
+            let mode = validate_sandbox_mode(&update.value)?;
+            let mut desktop_cfg = state.desktop_config.write().await;
+            let sandbox = desktop_cfg
+                .sandbox
+                .get_or_insert_with(crate::config::SandboxConfig::default);
+            sandbox.mode = mode;
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "sandbox.mode".into(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
+        "offpeak.model_override" => {
+            // P2-5: frozen config key `offpeak.model_override` — model used
+            // for routine executions that start inside their off-peak
+            // execution window. Empty/whitespace value = disabled (brief
+            // contract), persisted as None so the wire stays clean.
+            let trimmed = update.value.trim().to_string();
+            let mut desktop_cfg = state.desktop_config.write().await;
+            desktop_cfg.offpeak.model_override = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            };
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "offpeak.model_override".into(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
         "strategic_focus" => {
             let mut desktop_cfg = state.desktop_config.write().await;
             desktop_cfg.strategic_focus = Some(update.value.clone());
@@ -695,56 +756,6 @@ pub async fn configure(
         }
         _ => Err(format!("Unknown config key: {}", update.key)),
     }
-}
-
-/// Switch to a different LLM provider.
-///
-/// P1.2-B (ADR-0005): with the singular `DesktopConfig.provider` /
-/// `api_key` / `base_url` / `model` fields removed, this command is a
-/// thin shim that simply rebuilds the live client config from the
-/// engine `ProviderConfigStore` (which has already been updated by the
-/// caller via [`save_provider`] / [`set_active_provider`]) and emits
-/// `CONFIG_UPDATED` so the tray refreshes its label.
-///
-/// Pre-P1.2 callers wrote `state.model` / `state.provider` mutexes and
-/// mirrored the new fields into `DesktopConfig`. Those targets are gone,
-/// so the function now does almost nothing on its own — it exists
-/// primarily so the frontend `switchProvider` invoke keeps its existing
-/// wire contract.
-#[tauri::command]
-pub async fn switch_provider(
-    state: tauri::State<'_, AppState>,
-    app_handle: tauri::AppHandle,
-    request: ProviderSwitchRequest,
-) -> Result<(), String> {
-    let _ = request;
-
-    let desktop_cfg = state.desktop_config.read().await.clone();
-    let shannon_overrides = shannon_core::unified_config::ShannonConfig {
-        max_tokens: desktop_cfg.max_tokens.map(|v| v as usize),
-        temperature: desktop_cfg.temperature,
-        ..Default::default()
-    };
-    let new_client_config = {
-        let store_guard = state.provider_store.lock().await;
-        AppState::build_client_config(&store_guard, &shannon_overrides).unwrap_or_default()
-    };
-
-    let new_provider_label = new_client_config.provider.to_string();
-    {
-        let mut c = state.client_config.write().await;
-        *c = new_client_config;
-    }
-
-    let _ = app_handle.emit(
-        event_names::CONFIG_UPDATED,
-        events::ConfigUpdatedPayload {
-            key: "provider".into(),
-            value: new_provider_label,
-        },
-    );
-
-    Ok(())
 }
 
 /// Get the current desktop config (for settings panel).
@@ -1121,9 +1132,9 @@ fn engine_kind_str(k: &shannon_types::provider_config::ProviderKind) -> String {
 /// v2 ProviderProfile fields. `extra_headers`, `default_max_tokens`, and
 /// `tiers` are mirrored into the connection and passed through to the
 /// engine's `ProviderConfigStore` (see `connection_to_profile`). The
-/// remaining three v2 fields (`models_url`, `fallback_models`, `quirks`)
-/// are read-only on the wire today — the modal doesn't edit them yet —
-/// so they stay out of this input shape.
+/// remaining two v2 fields (`models_url`, `quirks`) are read-only on the
+/// wire today — the modal doesn't edit them yet — so they stay out of
+/// this input shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderInput {
     #[serde(default)]
@@ -1151,6 +1162,10 @@ pub struct ProviderInput {
     /// so the wire shape stays canonical.
     #[serde(default)]
     pub tiers: Option<ProviderTiers>,
+    /// Ordered fallback model ids the engine tries when the primary
+    /// model is unavailable. `None` means "don't change" on edit.
+    #[serde(default)]
+    pub fallback_models: Option<Vec<String>>,
 }
 
 fn is_known_kind(kind: &str) -> bool {
@@ -1254,6 +1269,9 @@ fn apply_provider_update(
     if let Some(tiers) = input.tiers.as_ref() {
         conn.tiers = tiers.clone();
     }
+    if let Some(fm) = input.fallback_models.as_ref() {
+        conn.fallback_models = fm.clone();
+    }
 }
 
 /// Remove a provider by id, clearing the active pointer when it matched.
@@ -1310,17 +1328,6 @@ pub async fn list_providers(state: tauri::State<'_, AppState>) -> Result<Provide
     let file = ProviderReadSnapshot::capture(&state.provider_store)
         .await
         .to_providers_file();
-    // Corrupted-state guard: the engine store is empty (after Phase 2
-    // task 4's one-shot migration ran) but a legacy `providers.json`
-    // still exists on disk. Don't silently re-migrate; surface the
-    // inconsistency so a user investigating the empty list knows what
-    // to look at.
-    if file.providers.is_empty() && config::providers_path().exists() {
-        tracing::warn!(
-            "engine ProviderConfigStore is empty but legacy providers.json exists; \
-             not re-migrating — check Phase 2 task 4 migration logs"
-        );
-    }
     Ok(file)
 }
 
@@ -1400,6 +1407,7 @@ pub async fn save_provider(
             extra_headers: input.extra_headers.clone().unwrap_or_default(),
             default_max_tokens: input.default_max_tokens.unwrap_or(None),
             tiers: input.tiers.clone().unwrap_or_default(),
+            fallback_models: input.fallback_models.clone().unwrap_or_default(),
             ..Default::default()
         };
         let label = conn.display_name.clone();
@@ -1558,17 +1566,31 @@ mod tests {
     }
 
     #[test]
-    fn provider_switch_request_round_trips_through_serde() {
-        let req = ProviderSwitchRequest {
-            provider: "openai".to_string(),
-            api_key: Some("sk-test".to_string()),
-            base_url: None,
-            model: "gpt-4.1".to_string(),
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        let back: ProviderSwitchRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.provider, "openai");
-        assert_eq!(back.api_key, Some("sk-test".to_string()));
+    fn validate_sandbox_mode_accepts_engine_vocabulary() {
+        assert_eq!(validate_sandbox_mode("off").unwrap(), Some("off".into()));
+        assert_eq!(
+            validate_sandbox_mode("local").unwrap(),
+            Some("local".into())
+        );
+        assert_eq!(
+            validate_sandbox_mode("landlock").unwrap(),
+            Some("landlock".into())
+        );
+        // Case-insensitive + trim.
+        assert_eq!(
+            validate_sandbox_mode(" Landlock ").unwrap(),
+            Some("landlock".into())
+        );
+        // Empty clears the override.
+        assert_eq!(validate_sandbox_mode("").unwrap(), None);
+        assert_eq!(validate_sandbox_mode("   ").unwrap(), None);
+    }
+
+    #[test]
+    fn validate_sandbox_mode_rejects_unknown_tokens() {
+        let err = validate_sandbox_mode("banana").unwrap_err();
+        assert!(err.contains("off | local | landlock"), "{err}");
+        assert!(validate_sandbox_mode("full").is_err());
     }
 
     #[test]
@@ -1698,6 +1720,7 @@ mod tests {
             extra_headers: None,
             default_max_tokens: None,
             tiers: None,
+            fallback_models: None,
         }
     }
 
@@ -1739,6 +1762,7 @@ mod tests {
             extra_headers: None,
             default_max_tokens: None,
             tiers: None,
+            fallback_models: None,
         };
         apply_provider_update(
             &mut conn,
@@ -1776,6 +1800,7 @@ mod tests {
                 standard: Some("sonnet-model".into()),
                 pro: Some("opus-model".into()),
             }),
+            fallback_models: Some(vec!["fb-a".into(), "fb-b".into()]),
         };
         apply_provider_update(&mut conn, &input, None);
         assert_eq!(conn.extra_headers, headers);
@@ -1783,6 +1808,7 @@ mod tests {
         assert_eq!(conn.tiers.fast.as_deref(), Some("haiku-model"));
         assert_eq!(conn.tiers.standard.as_deref(), Some("sonnet-model"));
         assert_eq!(conn.tiers.pro.as_deref(), Some("opus-model"));
+        assert_eq!(conn.fallback_models, vec!["fb-a", "fb-b"]);
     }
 
     #[test]
@@ -1793,6 +1819,7 @@ mod tests {
         conn.extra_headers.insert("X-Existing".into(), "yes".into());
         conn.default_max_tokens = Some(4096);
         conn.tiers.standard = Some("prev".into());
+        conn.fallback_models = vec!["prev-fb".into()];
 
         let input = ProviderInput {
             id: Some("anthropic".into()),
@@ -1804,6 +1831,7 @@ mod tests {
             extra_headers: None,
             default_max_tokens: None,
             tiers: None,
+            fallback_models: None,
         };
         apply_provider_update(&mut conn, &input, None);
         assert_eq!(conn.display_name, "Renamed");
@@ -1813,6 +1841,7 @@ mod tests {
         );
         assert_eq!(conn.default_max_tokens, Some(4096));
         assert_eq!(conn.tiers.standard.as_deref(), Some("prev"));
+        assert_eq!(conn.fallback_models, vec!["prev-fb"]);
     }
 
     /// `Some(None)` on `default_max_tokens` is the explicit "clear the
@@ -1834,6 +1863,7 @@ mod tests {
             extra_headers: None,
             default_max_tokens: Some(None),
             tiers: None,
+            fallback_models: None,
         };
         apply_provider_update(&mut conn, &input, None);
         assert!(conn.default_max_tokens.is_none());

@@ -1,17 +1,11 @@
 import type { IncomingMessage } from "node:http";
+import { createServer, type RequestListener, type Server } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 
 import type { Logger } from "../adapters/types.js";
-import {
-  JSONRPC_VERSION,
-  ShannonError,
-  parseNdjson,
-  serializeFrame,
-  type JsonRpcRequest,
-  type JsonRpcResponse,
-  type ShannonEvent,
-  type ShannonEventNotification,
-} from "./protocol.js";
+import type { ShannonEvent } from "./protocol.js";
+import { dispatchNdjson } from "./dispatch.js";
+import { MOBILE_PAGE_HTML } from "./web/page.js";
 
 /**
  * The inbound mobile server — a WebSocket endpoint speaking NDJSON `shannon/*`
@@ -28,6 +22,16 @@ import {
  *
  * Auth is an optional `authenticator` hook; P1.1 leaves it unset and P1.2
  * injects Ed25519 verification (every approval decision is signed).
+ *
+ * Dispatch logic is shared with the relay host transport via `dispatchNdjson`
+ * (see dispatch.ts) so both transports — direct WebSocket and E2E relay — route
+ * messages through the same JSON-RPC pipeline.
+ *
+ * P2-1: the same port also serves the built-in PWA page (GET /) so a phone
+ * browser can act as the client — no native app required. The page speaks the
+ * identical `shannon/*` protocol over this WebSocket. `onContext` hands every
+ * accepted connection's `MethodContext` to the dispatch hub (P2-1) so paired
+ * devices can receive gateway-side pushes.
  */
 
 export interface MethodContext {
@@ -39,6 +43,12 @@ export interface MethodContext {
    */
   sessionId: string | null;
   readonly logger: Logger;
+  /**
+   * P2-1: set by the dispatch hub via `registerConnection`. Called by the
+   * pairing handlers when `shannon/pair` / `shannon/device.resume` binds (or
+   * re-binds) this connection to a device, so pushes can reach it.
+   */
+  onSessionBound?: (deviceId: string) => void;
 }
 
 /** Discriminated handler outcome — unambiguous vs. duck-typing the result. */
@@ -71,6 +81,17 @@ export interface MobileServerOptions {
    * with code 4001 and dispatches no methods.
    */
   authenticator?: (ctx: AuthenticatorContext) => boolean | Promise<boolean>;
+  /**
+   * P2-1: notified for every accepted connection (after the authenticator).
+   * The dispatch hub uses this to track sockets so it can push events to
+   * paired devices. The returned detach function (if any) is called on stop.
+   */
+  onContext?: (ctx: MethodContext) => void | (() => void);
+  /**
+   * P2-1: serve the built-in PWA page on GET / (default true). Set false in
+   * tests that want the old bare-WS behavior.
+   */
+  servePage?: boolean;
 }
 
 export interface MobileServerHandle {
@@ -81,6 +102,8 @@ export interface MobileServerHandle {
 
 export class MobileServer {
   private wss: WebSocketServer | null = null;
+  private httpServer: Server | null = null;
+  private readonly detachers: Array<() => void> = [];
   private readonly opts: MobileServerOptions;
 
   constructor(opts: MobileServerOptions) {
@@ -89,15 +112,30 @@ export class MobileServer {
 
   /** Bind and wait for the listener. */
   async start(): Promise<MobileServerHandle> {
-    const wss = new WebSocketServer({
-      host: this.opts.host,
-      port: this.opts.port,
-      path: this.opts.path ?? "/",
-    });
+    // P2-1: serve the built-in PWA page on plain GETs; WS upgrades are routed
+    // by the WebSocketServer attached to the same HTTP server.
+    const servePage = this.opts.servePage !== false;
+    const requestListener: RequestListener = (req, res) => {
+      if (servePage && req.method === "GET" && (req.url ?? "/").split("?")[0] === "/") {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end(MOBILE_PAGE_HTML);
+        return;
+      }
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      res.end("not found");
+    };
+    const httpServer = createServer(requestListener);
+    this.httpServer = httpServer;
+    const wss = new WebSocketServer({ server: httpServer, path: this.opts.path ?? "/" });
     this.wss = wss;
-    await new Promise<void>((resolve) => wss.once("listening", resolve));
+    await new Promise<void>((resolve, reject) => {
+      httpServer.once("listening", resolve);
+      httpServer.once("error", reject);
+      httpServer.listen(this.opts.port, this.opts.host);
+    });
+    const address = httpServer.address();
     const boundPort =
-      this.opts.port === 0 ? (wss.address() as { port: number }).port : this.opts.port;
+      this.opts.port === 0 && address && typeof address === "object" ? address.port : this.opts.port;
 
     wss.on("connection", (socket, req) => {
       void this.onConnection(socket, req);
@@ -115,10 +153,16 @@ export class MobileServer {
   }
 
   async stop(): Promise<void> {
-    const wss = this.wss;
-    if (!wss) return;
+    while (this.detachers.length > 0) this.detachers.pop()?.();
+    // Terminate live clients so close() resolves promptly (the page may keep
+    // the socket open indefinitely).
+    for (const client of this.wss?.clients ?? []) client.terminate();
+    this.wss?.close();
     this.wss = null;
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    const httpServer = this.httpServer;
+    this.httpServer = null;
+    if (!httpServer) return;
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   }
 
   // ── connection lifecycle ──────────────────────────────────────────────
@@ -137,6 +181,8 @@ export class MobileServer {
       }
     }
     const ctx: MethodContext = { socket, sessionId: null, logger: this.opts.logger };
+    const detach = this.opts.onContext?.(ctx);
+    if (typeof detach === "function") this.detachers.push(detach);
 
     socket.on("message", (data) => {
       const text = frameToString(data);
@@ -148,60 +194,22 @@ export class MobileServer {
   }
 
   private async onMessage(text: string, ctx: MethodContext): Promise<void> {
-    for (const record of parseNdjson(text)) {
-      if (record === null) {
-        this.send(ctx, errorResponse(null, ShannonError.PARSE_ERROR, "malformed JSON"));
-        continue;
-      }
-      await this.dispatch(record, ctx);
-    }
+    await dispatchNdjson(
+      text,
+      ctx,
+      this.opts.handlers,
+      (data) => this.send(ctx, data),
+      this.opts.logger,
+    );
   }
 
-  private async dispatch(raw: unknown, ctx: MethodContext): Promise<void> {
-    if (!isRequest(raw)) {
-      this.send(
-        ctx,
-        errorResponse(null, ShannonError.INVALID_REQUEST, "not a valid JSON-RPC request"),
-      );
-      return;
-    }
-    const handler = this.opts.handlers[raw.method];
-    if (!handler) {
-      this.send(
-        ctx,
-        errorResponse(raw.id, ShannonError.METHOD_NOT_FOUND, `no handler for ${raw.method}`),
-      );
-      return;
-    }
-    try {
-      const outcome = await handler(raw.params, ctx);
-      if (outcome.kind === "error") {
-        this.send(
-          ctx,
-          errorResponse(raw.id, outcome.code, outcome.message, outcome.data),
-        );
-        return;
-      }
-      if (outcome.kind === "stream") {
-        for await (const ev of outcome.stream) {
-          if (ctx.socket.readyState !== WebSocket.OPEN) return;
-          this.send(ctx, notification(ev));
-        }
-      }
-      this.send(ctx, successResponse(raw.id, outcome.result));
-    } catch (err) {
-      const message = (err as Error).message ?? "handler error";
-      this.send(ctx, errorResponse(raw.id, ShannonError.ENGINE_ERROR, message));
-    }
-  }
-
-  private send(ctx: MethodContext, value: unknown): void {
+  private send(ctx: MethodContext, data: string): void {
     if (ctx.socket.readyState !== WebSocket.OPEN) return;
-    ctx.socket.send(serializeFrame(value));
+    ctx.socket.send(data);
   }
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────
+// ── helpers ──────────────────────────────────────────────────────────────────
 
 function frameToString(data: unknown): string {
   if (typeof data === "string") return data;
@@ -210,33 +218,4 @@ function frameToString(data: unknown): string {
   if (Array.isArray(data)) return Buffer.concat(data as Buffer[]).toString("utf8");
   if (ArrayBuffer.isView(data)) return new TextDecoder().decode(data as Uint8Array);
   return String(data);
-}
-
-function isRequest(v: unknown): v is JsonRpcRequest {
-  if (typeof v !== "object" || v === null) return false;
-  const r = v as Record<string, unknown>;
-  return (
-    r.jsonrpc === JSONRPC_VERSION &&
-    typeof r.method === "string" &&
-    (typeof r.id === "string" || typeof r.id === "number")
-  );
-}
-
-function successResponse(id: string | number, result: unknown): JsonRpcResponse<unknown> {
-  return { jsonrpc: JSONRPC_VERSION, id, result };
-}
-
-function errorResponse(
-  id: string | number | null,
-  code: number,
-  message: string,
-  data?: unknown,
-): JsonRpcResponse<unknown> {
-  const error: { code: number; message: string; data?: unknown } = { code, message };
-  if (data !== undefined) error.data = data;
-  return { jsonrpc: JSONRPC_VERSION, id, error };
-}
-
-function notification(event: ShannonEvent): ShannonEventNotification {
-  return { jsonrpc: JSONRPC_VERSION, method: "shannon/event", params: event };
 }

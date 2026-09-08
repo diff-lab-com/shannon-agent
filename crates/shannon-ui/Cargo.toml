@@ -9,6 +9,7 @@ shannon-core = { path = "../shannon-core" }
 shannon-engine = { path = "../shannon-engine" }
 shannon-agents = { path = "../shannon-agents" }
 shannon-commands = { path = "../shannon-commands" }
+shannon-remote = { path = "../shannon-remote" }
 shannon-tools = { path = "../shannon-tools" }
 shannon-mcp = { path = "../shannon-mcp" }
 shannon-skills = { path = "../shannon-skills" }
@@ -42,3 +43,7 @@ parking_lot = "0.12"
 tempfile = "3"
 insta = { workspace = true }
 serial_test = { version = "3", features = ["file_locks"] }
+
+[features]
+# T14 Phase 1: live browser tools (chromiumoxide + system browser).
+local-browser = ["shannon-tools/local-browser"]

@@ -4,16 +4,68 @@
 //! - Bash: Execute shell commands on Unix-like systems
 //! - PowerShell: Execute commands on Windows systems
 
+use crate::sandbox::DenialClassifier;
 use crate::{BoxedProgressSender, Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_core::providers::{LocalProcess, SandboxExecutorRewrite};
 use shannon_core::sandbox::{SandboxConfig, SandboxExecutor, SandboxType};
+use shannon_tool_interface::{ProcessProvider, ProcessRequest};
 use std::collections::HashMap;
-use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+
+/// Shared captured-run helper: builds the request, applies the optional
+/// timeout, and projects the provider result onto [`CommandOutput`].
+async fn run_shell_captured(
+    world: &dyn ProcessProvider,
+    program: &str,
+    shell_flag: &str,
+    command: &str,
+    cwd: Option<&str>,
+    env: Option<&std::collections::HashMap<String, String>>,
+    timeout_ms: Option<u64>,
+) -> Result<CommandOutput, std::io::Error> {
+    let mut request = ProcessRequest::new(program, &[shell_flag, command]);
+    if let Some(dir) = cwd {
+        request.cwd = Some(dir.into());
+    }
+    if let Some(env_vars) = env {
+        for (key, value) in env_vars {
+            request.env.push((key.clone(), value.clone()));
+        }
+    }
+
+    // Execute with timeout if specified
+    let output = if let Some(timeout) = timeout_ms {
+        let duration = Duration::from_millis(timeout);
+        tokio::time::timeout(duration, world.run_async(&request))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("Command timed out after {timeout}ms"),
+                )
+            })?
+            .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
+    } else {
+        world
+            .run_async(&request)
+            .await
+            .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    Ok(CommandOutput {
+        stdout,
+        stderr,
+        exit_code: output.exit.code.unwrap_or(-1),
+        success: output.exit.success,
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -127,7 +179,9 @@ const READ_ONLY_PATTERNS: &[&str] = &[
     "du", // File info
     "echo",
     "pwd",
-    "whoami", // System info
+    "whoami",     // System info
+    "which",      // Toolchain availability probes
+    "command -v", // Toolchain availability probes
     "git status",
     "git log",  // Git read ops
     "git diff", // Git diff
@@ -178,6 +232,28 @@ const SHELL_EXPANSION_PATTERNS: &[&str] = &[
     "$[",  // Legacy arithmetic expansion
 ];
 
+/// Dangerous verb patterns (A4): when shell expansion syntax appears in a
+/// command that also matches one of these, the expansion is treated as a
+/// genuine bypass attempt and the command stays critical. Expansion syntax
+/// alone (read-only probes such as `$(command -v shasum)`) is downgraded to
+/// a warning instead of a rejection.
+const DANGEROUS_VERB_PATTERNS: &[&str] = &[
+    "rm -rf /",    // Recursive force delete of absolute paths
+    "rm -fr /",    // Same, flag order swapped
+    "mkfs",        // Format filesystem
+    "fdisk",       // Partition table manipulation
+    "dd of=/dev/", // Raw write to a device node
+    "chmod 777 /", // World-writable root
+    "chown -r",    // Recursive ownership change
+    "sudo",        // Privilege escalation
+    "| sh",        // Pipe into shell
+    "|sh",         // Pipe into shell (no space)
+    "| bash",      // Pipe into bash
+    "|bash",       // Pipe into bash (no space)
+    "-delete",     // find(1) bulk deletion
+    "-exec rm",    // find(1) delegated deletion
+];
+
 /// Sensitive system paths that should never be accessed
 const SENSITIVE_PATHS: &[&str] = &[
     "/etc/passwd",  // Password database
@@ -200,36 +276,58 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
 
     let lower_command = command.to_lowercase();
 
-    // FIRST: Check for shell expansion bypass attempts
-    // These patterns indicate attempts to hide dangerous commands
-    for pattern in SHELL_EXPANSION_PATTERNS {
-        if command.contains(pattern) {
+    // FIRST: classify shell expansion syntax (eval finding A4: every command
+    // containing `$(`, `${}` or backticks used to be rejected as a critical
+    // "bypass", which stranded read-only probes such as
+    // `$(command -v shasum)`). Now:
+    //   - ANSI-C quoting (`$'...'`) stays critical: hex escapes can encode
+    //     payloads that the textual checks below cannot see.
+    //   - Plain expansion escalates only when a dangerous verb rides along
+    //     (see `DANGEROUS_VERB_PATTERNS`); the dedicated checks below
+    //     (sensitive paths, destructive patterns, pipe-to-shell, ...) still
+    //     escalate on their own. Otherwise the command runs with warnings.
+    let has_ansi_c_quoting = command.contains("$'");
+    let has_command_substitution = command.contains("$(") || command.contains('`');
+    let has_param_expansion = command.contains("${");
+    let has_arith_expansion = command.contains("$[") || command.contains("$((");
+    let has_expansion = SHELL_EXPANSION_PATTERNS.iter().any(|p| command.contains(p));
+
+    if has_ansi_c_quoting {
+        risk_level = SecurityLevel::Critical;
+        warnings.push(
+            "ANSI-C quoting detected: Can encode dangerous commands as hex escapes".to_string(),
+        );
+        is_destructive = true;
+    }
+
+    if has_expansion {
+        // Informational: expansion syntax alone is no longer a rejection
+        // reason, but the surface stays visible in the analysis output.
+        if has_command_substitution {
+            warnings
+                .push("Command substitution detected: Can execute arbitrary commands".to_string());
+        }
+
+        if has_param_expansion {
+            warnings.push("Parameter expansion detected: Can be used for obfuscation".to_string());
+        }
+
+        if has_arith_expansion {
+            warnings
+                .push("Arithmetic expansion detected: Review the computed expression".to_string());
+        }
+
+        // Escalate only when the expansion hides a genuinely dangerous verb.
+        if DANGEROUS_VERB_PATTERNS
+            .iter()
+            .any(|p| lower_command.contains(p))
+        {
             risk_level = SecurityLevel::Critical;
-            warnings.push(format!("Shell expansion bypass detected: {pattern} - variable expansion or command substitution can hide dangerous commands"));
-
-            // Check if it contains ANSI-C quoting (common bypass technique)
-            if command.contains("$'") {
-                warnings.push(
-                    "ANSI-C quoting detected: Can encode dangerous commands as hex escapes"
-                        .to_string(),
-                );
-            }
-
-            // Check for command substitution
-            if command.contains("$(") || command.contains('`') {
-                warnings.push(
-                    "Command substitution detected: Can execute arbitrary commands".to_string(),
-                );
-            }
-
-            // Check for parameter expansion
-            if command.contains("${") {
-                warnings
-                    .push("Parameter expansion detected: Can be used for obfuscation".to_string());
-            }
-
+            warnings.push(
+                "Dangerous verb combined with shell expansion: rewrite without expansion for review"
+                    .to_string(),
+            );
             is_destructive = true;
-            break;
         }
     }
 
@@ -388,6 +486,41 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
         is_read_only,
         contains_path_traversal,
         requires_confirmation,
+    }
+}
+
+/// One-line, executable remediation advice for a rejected command (A4).
+/// Without it, a headless agent retries a near-identical command instead of
+/// rewriting the approach.
+fn security_rejection_hint(command: &str) -> &'static str {
+    if SHELL_EXPANSION_PATTERNS.iter().any(|p| command.contains(p)) {
+        "Suggestion: avoid command substitution/expansion - split the command into two steps (run the inner command first and use its output) or use absolute paths."
+    } else {
+        "Suggestion: rewrite with a safer equivalent - scope destructive operations to specific files, drop elevated privileges, or use read-only flags."
+    }
+}
+
+/// Build the structured rejection output for a critical-risk command,
+/// including the remediation hint (A4). Shared by the blocking and the
+/// streaming Bash paths so both rejections carry the same contract.
+fn security_rejected_output(command: &str, analysis: &SecurityAnalysis) -> ToolOutput {
+    let error_msg = format!(
+        "Command rejected due to critical security risk:\n{}\n\nRisk Level: {}\n\nWarnings:\n  - {}\n\n{}",
+        command,
+        describe_risk_level(analysis.risk_level),
+        analysis.warnings.join("\n  - "),
+        security_rejection_hint(command),
+    );
+    ToolOutput {
+        content: error_msg,
+        is_error: true,
+        metadata: {
+            let mut map = HashMap::new();
+            map.insert("security_rejected".to_string(), json!(true));
+            map.insert("risk_level".to_string(), json!(analysis.risk_level as i32));
+            map.insert("warnings".to_string(), json!(analysis.warnings));
+            map
+        },
     }
 }
 
@@ -555,17 +688,15 @@ impl DockerSandbox {
         if cfg!(test) {
             return false;
         }
+        // Probe docker availability through the default process world (§4.11).
+        let request = ProcessRequest::new("docker", &["info"]);
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(3),
-            Command::new("docker")
-                .arg("info")
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output(),
+            crate::defaults::process().run_async(&request),
         )
         .await;
         match result {
-            Ok(Ok(o)) => o.status.success(),
+            Ok(Ok(o)) => o.exit.success,
             _ => false,
         }
     }
@@ -646,15 +777,13 @@ impl DockerSandbox {
     ) -> Result<CommandOutput, std::io::Error> {
         let docker_args = self.build_args(command, cwd, env);
 
-        let mut cmd = Command::new("docker");
-        cmd.args(&docker_args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+        let args: Vec<&str> = docker_args.iter().map(String::as_str).collect();
+        let request = ProcessRequest::new("docker", &args);
+        let world = crate::defaults::process();
 
         let output = if let Some(timeout) = timeout_ms {
             let duration = std::time::Duration::from_millis(timeout);
-            tokio::time::timeout(duration, cmd.output())
+            tokio::time::timeout(duration, world.run_async(&request))
                 .await
                 .map_err(|_| {
                     std::io::Error::new(
@@ -664,15 +793,16 @@ impl DockerSandbox {
                 })?
                 .map_err(|e| std::io::Error::other(format!("Docker execution failed: {e}")))?
         } else {
-            cmd.output()
+            world
+                .run_async(&request)
                 .await
                 .map_err(|e| std::io::Error::other(format!("Docker execution failed: {e}")))?
         };
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code().unwrap_or(-1);
-        let success = output.status.success();
+        let exit_code = output.exit.code.unwrap_or(-1);
+        let success = output.exit.success;
 
         Ok(CommandOutput {
             stdout,
@@ -768,8 +898,17 @@ pub struct CommandOutput {
 pub struct BashTool {
     description: String,
     sandbox: Option<DockerSandbox>,
-    /// Platform sandbox (bwrap on Linux, Seatbelt on macOS)
-    process_sandbox: Option<SandboxExecutor>,
+    /// Direct (unsandboxed) execution world.
+    direct_process: Arc<dyn ProcessProvider>,
+    /// Execution world with argv-level platform sandbox wrapping installed
+    /// through the §4.11 spawn hook (`SandboxExecutorRewrite` over bwrap /
+    /// Seatbelt / Docker). `None` when no backend was detected.
+    process_sandbox: Option<Arc<dyn ProcessProvider>>,
+    /// §4.12 sandbox denial classifier: inspects a failed captured run of an
+    /// enforcing world and, when it looks kernel-denied, yields structured
+    /// `sandbox_denied` metadata for the L0 record. `None` = no enforcing
+    /// world (the historical shape).
+    denial_classifier: Option<crate::sandbox::DenialClassifier>,
 }
 
 impl Default for BashTool {
@@ -778,12 +917,47 @@ impl Default for BashTool {
     }
 }
 
+/// One-line sandbox orientation appended to failed command output when a
+/// process sandbox is active (§ sandbox self-description).
+///
+/// Without it the model sees a bare "Command failed with exit code 2" and
+/// burns turns probing the filesystem or installing toolchains: it does not
+/// know that paths outside the project are invisible inside the sandbox, or
+/// that host toolchains (node, ...) may not exist there at all. Heuristics
+/// stay conservative — only failures that look like a path/environment miss
+/// get the note, so ordinary command failures stay clean.
+fn sandbox_failure_note(sandboxed: bool, output: &CommandOutput) -> Option<String> {
+    if !sandboxed || output.success {
+        return None;
+    }
+    let stderr = output.stderr.to_lowercase();
+    let looks_like_env_miss = stderr.contains("no such file")
+        || stderr.contains("cannot access")
+        || stderr.contains("permission denied")
+        || stderr.contains("command not found")
+        || stderr.contains("not found")
+        || output.exit_code == 127;
+    if !looks_like_env_miss {
+        return None;
+    }
+    Some(
+        "[sandbox] Commands run inside a sandbox with limited visibility: the project \
+         root is available (Docker sandboxes mount it at /workspace) and /tmp is \
+         writable, but paths outside the project are not visible and host toolchains \
+         may be absent — probe with `command -v <tool>` and adapt instead of \
+         installing packages."
+            .to_string(),
+    )
+}
+
 impl BashTool {
     pub fn new() -> Self {
         Self {
             description: "Executes bash commands and returns output".to_string(),
             sandbox: None,
+            direct_process: crate::defaults::process(),
             process_sandbox: None,
+            denial_classifier: None,
         }
     }
 
@@ -792,28 +966,74 @@ impl BashTool {
         Self {
             description: "Executes bash commands in Docker sandbox".to_string(),
             sandbox: Some(DockerSandbox::new(config)),
+            direct_process: crate::defaults::process(),
             process_sandbox: None,
+            denial_classifier: None,
         }
     }
 
-    /// Create a BashTool with a platform process sandbox (bwrap/Seatbelt).
+    /// Inject the execution worlds used for non-Docker spawns.
+    ///
+    /// `direct_process` handles plain `bash -c` runs; `sandboxed_process`
+    /// (when supplied) is consulted for sandboxed runs — typically a
+    /// [`shannon_core::providers::LocalProcess`] carrying a `SpawnRewrite`.
+    pub fn with_worlds(mut self, direct_process: Arc<dyn ProcessProvider>) -> Self {
+        self.direct_process = direct_process;
+        self
+    }
+
+    /// Create a BashTool with a platform process sandbox (bwrap/Seatbelt/Docker).
     ///
     /// The `SandboxExecutor` is auto-detected from the current platform.
     /// If no sandbox backend is available, commands run unsandboxed.
+    ///
+    /// `SHANNON_SANDBOX_EXTRA_RO_MOUNTS` (colon-separated host directories) is
+    /// added as extra read-only mounts on the Docker backend — the escape
+    /// hatch for making host toolchains (e.g. `/usr/local`, a nvm checkout)
+    /// visible inside the sandbox without changing code.
     pub fn with_process_sandbox(project_dir: impl Into<std::path::PathBuf>) -> Self {
-        let config = SandboxConfig::new(project_dir);
+        let mut config = SandboxConfig::new(project_dir);
+        if let Ok(extra) = std::env::var("SHANNON_SANDBOX_EXTRA_RO_MOUNTS") {
+            for dir in extra.split(':').filter(|s| !s.is_empty()) {
+                config = config.readonly_mount(dir);
+            }
+        }
         let executor = SandboxExecutor::new(config);
         let sandbox_type = executor.sandbox_type();
         let has_sandbox = !matches!(sandbox_type, SandboxType::None);
+        // The legacy argv-level sandbox becomes a §4.11 SpawnRewrite installed
+        // on a LocalProcess — identical wrapping, one seam further down.
+        let sandboxed_process: Option<Arc<dyn ProcessProvider>> = if has_sandbox {
+            Some(Arc::new(LocalProcess::with_rewrite(Arc::new(
+                SandboxExecutorRewrite::new(Arc::new(executor)),
+            ))))
+        } else {
+            None
+        };
         Self {
             description: if has_sandbox {
-                format!("Executes bash commands (sandboxed via {sandbox_type})")
+                format!(
+                    "Executes bash commands (sandboxed via {sandbox_type}). Inside the \
+                     sandbox the project is available at its mounted path (Docker: \
+                     /workspace) and only the project plus /tmp are writable; paths \
+                     outside the project are not visible and host toolchains may be \
+                     absent — probe availability with `command -v <tool>` and adapt \
+                     instead of installing packages."
+                )
             } else {
                 "Executes bash commands and returns output".to_string()
             },
             sandbox: None,
-            process_sandbox: if has_sandbox { Some(executor) } else { None },
+            direct_process: crate::defaults::process(),
+            process_sandbox: sandboxed_process,
+            denial_classifier: None,
         }
+    }
+
+    /// Attach a §4.12 sandbox-denial classifier (assembly-time seam).
+    pub fn with_denial_classifier(mut self, classifier: DenialClassifier) -> Self {
+        self.denial_classifier = Some(classifier);
+        self
     }
 
     /// Update the sandbox mode
@@ -832,124 +1052,31 @@ impl BashTool {
         }
     }
 
-    /// Execute a command through the platform process sandbox (bwrap/Seatbelt).
+    /// Execute a command through the sandboxed execution world.
     ///
-    /// Creates a `std::process::Command`, wraps it via `SandboxExecutor`,
-    /// then converts to `tokio::process::Command` for async execution.
+    /// The platform wrap (bwrap/Seatbelt/Docker argv rewriting) happens
+    /// inside the injected [`ProcessProvider`] via its §4.11 `SpawnRewrite`
+    /// seam (`SandboxExecutorRewrite`) — this layer only describes intent.
     async fn execute_command_sandboxed(
         command: &str,
         cwd: Option<&str>,
         env: Option<&std::collections::HashMap<String, String>>,
         timeout_ms: Option<u64>,
-        executor: &SandboxExecutor,
+        world: &dyn ProcessProvider,
     ) -> Result<CommandOutput, std::io::Error> {
-        let mut cmd = std::process::Command::new("bash");
-        cmd.arg("-c")
-            .arg(command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
-        }
-
-        if let Some(env_vars) = env {
-            for (key, value) in env_vars {
-                cmd.env(key, value);
-            }
-        }
-
-        // Wrap the command with the platform sandbox (bwrap/Seatbelt).
-        executor
-            .wrap_command(&mut cmd)
-            .map_err(|e| std::io::Error::other(format!("Sandbox wrap failed: {e}")))?;
-
-        // Convert std::process::Command → tokio::process::Command
-        let mut cmd = Command::from(cmd);
-        cmd.kill_on_drop(true);
-
-        let output = if let Some(timeout) = timeout_ms {
-            let duration = std::time::Duration::from_millis(timeout);
-            tokio::time::timeout(duration, cmd.output())
-                .await
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        format!("Command timed out after {timeout}ms"),
-                    )
-                })?
-                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-        } else {
-            cmd.output()
-                .await
-                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-        };
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code().unwrap_or(-1);
-        let success = output.status.success();
-
-        Ok(CommandOutput {
-            stdout,
-            stderr,
-            exit_code,
-            success,
-        })
+        run_shell_captured(world, "bash", "-c", command, cwd, env, timeout_ms).await
     }
 
-    async fn execute_command(
+    /// Provider-injected captured run (§4.11): executes through the given
+    /// process world instead of building a spawn locally.
+    async fn execute_command_with_world(
+        world: &dyn ProcessProvider,
         command: &str,
         cwd: Option<&str>,
         env: Option<&std::collections::HashMap<String, String>>,
         timeout_ms: Option<u64>,
     ) -> Result<CommandOutput, std::io::Error> {
-        let mut cmd = Command::new("bash");
-        cmd.arg("-c")
-            .arg(command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
-        }
-
-        if let Some(env_vars) = env {
-            for (key, value) in env_vars {
-                cmd.env(key, value);
-            }
-        }
-
-        // Execute with timeout if specified
-        let output = if let Some(timeout) = timeout_ms {
-            let duration = std::time::Duration::from_millis(timeout);
-            tokio::time::timeout(duration, cmd.output())
-                .await
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        format!("Command timed out after {timeout}ms"),
-                    )
-                })?
-                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-        } else {
-            cmd.output()
-                .await
-                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-        };
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code().unwrap_or(-1);
-        let success = output.status.success();
-
-        Ok(CommandOutput {
-            stdout,
-            stderr,
-            exit_code,
-            success,
-        })
+        run_shell_captured(world, "bash", "-c", command, cwd, env, timeout_ms).await
     }
 }
 
@@ -1008,23 +1135,7 @@ impl Tool for BashTool {
 
         // Reject critical risk commands
         if analysis.risk_level >= SecurityLevel::Critical {
-            let error_msg = format!(
-                "Command rejected due to critical security risk:\n{}\n\nRisk Level: {}\n\nWarnings:\n  - {}",
-                bash_input.command,
-                describe_risk_level(analysis.risk_level),
-                analysis.warnings.join("\n  - ")
-            );
-            return Ok(ToolOutput {
-                content: error_msg,
-                is_error: true,
-                metadata: {
-                    let mut map = HashMap::new();
-                    map.insert("security_rejected".to_string(), json!(true));
-                    map.insert("risk_level".to_string(), json!(analysis.risk_level as i32));
-                    map.insert("warnings".to_string(), json!(analysis.warnings));
-                    map
-                },
-            });
+            return Ok(security_rejected_output(&bash_input.command, &analysis));
         }
 
         // For medium/high risk commands, add security warnings to the output
@@ -1039,8 +1150,17 @@ impl Tool for BashTool {
             String::new()
         };
 
+        // World capability gate: the PTY path and the two local argv-sandbox
+        // branches hold *local* providers that would silently shadow an
+        // injected remote world (Bash would run locally while file tools run
+        // remotely). On remote worlds everything routes through the injected
+        // world; the local-only features degrade with an explicit note.
+        let remote_world = self.direct_process.capabilities().is_remote;
+        let local_only_requested =
+            bash_input.use_pty || self.sandbox.is_some() || self.process_sandbox.is_some();
+
         // Execute the command (PTY mode for interactive, otherwise sandboxed/direct)
-        let output_result = if bash_input.use_pty {
+        let output_result = if bash_input.use_pty && !remote_world {
             let cmd = bash_input.command.clone();
             let cwd = bash_input.cwd.clone();
             let env = bash_input.env.clone();
@@ -1058,7 +1178,7 @@ impl Tool for BashTool {
             })
             .await
             .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())))
-        } else if let Some(ref sandbox) = self.sandbox {
+        } else if let Some(sandbox) = self.sandbox.as_ref().filter(|_| !remote_world) {
             sandbox
                 .execute(
                     &bash_input.command,
@@ -1067,17 +1187,18 @@ impl Tool for BashTool {
                     bash_input.timeout,
                 )
                 .await
-        } else if let Some(ref ps) = self.process_sandbox {
+        } else if let Some(ps) = self.process_sandbox.as_ref().filter(|_| !remote_world) {
             Self::execute_command_sandboxed(
                 &bash_input.command,
                 bash_input.cwd.as_deref(),
                 bash_input.env.as_ref(),
                 bash_input.timeout,
-                ps,
+                ps.as_ref(),
             )
             .await
         } else {
-            Self::execute_command(
+            Self::execute_command_with_world(
+                self.direct_process.as_ref(),
                 &bash_input.command,
                 bash_input.cwd.as_deref(),
                 bash_input.env.as_ref(),
@@ -1087,7 +1208,16 @@ impl Tool for BashTool {
         };
 
         let output = match output_result {
-            Ok(output) => output,
+            Ok(mut output) => {
+                if remote_world && local_only_requested {
+                    output.stdout = format!(
+                        "[remote target] PTY and local sandbox modes are unavailable; \
+                         executed as a piped command on the remote target.\n{}",
+                        output.stdout
+                    );
+                }
+                output
+            }
             Err(e) => {
                 return Ok(ToolOutput {
                     content: format!("Command execution failed: {e}"),
@@ -1100,8 +1230,9 @@ impl Tool for BashTool {
         let content = if output.success {
             format!("{}{}", output.stdout, command_description)
         } else {
+            let sandbox_note = sandbox_failure_note(self.process_sandbox.is_some(), &output);
             format!(
-                "{}Command failed with exit code {}: {}{}",
+                "{}Command failed with exit code {}: {}{}{}",
                 command_description,
                 output.exit_code,
                 output.stderr,
@@ -1109,7 +1240,10 @@ impl Tool for BashTool {
                     "\n"
                 } else {
                     ""
-                }
+                },
+                sandbox_note
+                    .map(|note| format!("\n{note}"))
+                    .unwrap_or_default(),
             )
         };
 
@@ -1127,6 +1261,18 @@ impl Tool for BashTool {
                 }
                 if !output.stderr.is_empty() {
                     map.insert("stderr".to_string(), json!(output.stderr));
+                }
+                // §4.12: kernel-denied operations of an enforcing world get
+                // the canonical classification so the L0 `tool/result.meta`
+                // records them.
+                if !output.success {
+                    if let Some(classifier) = self.denial_classifier.as_ref() {
+                        if let Some(denial) = classifier(&output) {
+                            for (key, value) in crate::sandbox::denial_metadata(&denial) {
+                                map.insert(key, value);
+                            }
+                        }
+                    }
                 }
                 map
             },
@@ -1172,23 +1318,7 @@ impl BashTool {
         let analysis = analyze_command_security(&bash_input.command);
 
         if analysis.risk_level >= SecurityLevel::Critical {
-            let error_msg = format!(
-                "Command rejected due to critical security risk:\n{}\n\nRisk Level: {}\n\nWarnings:\n  - {}",
-                bash_input.command,
-                describe_risk_level(analysis.risk_level),
-                analysis.warnings.join("\n  - ")
-            );
-            return Ok(ToolOutput {
-                content: error_msg,
-                is_error: true,
-                metadata: {
-                    let mut map = HashMap::new();
-                    map.insert("security_rejected".to_string(), json!(true));
-                    map.insert("risk_level".to_string(), json!(analysis.risk_level as i32));
-                    map.insert("warnings".to_string(), json!(analysis.warnings));
-                    map
-                },
-            });
+            return Ok(security_rejected_output(&bash_input.command, &analysis));
         }
 
         let command_description = if analysis.risk_level >= SecurityLevel::Medium {
@@ -1202,10 +1332,12 @@ impl BashTool {
             String::new()
         };
 
-        // Only stream direct (non-PTY, non-sandbox) commands.
-        // PTY and sandbox modes fall back to blocking execute().
-        let use_streaming =
-            !bash_input.use_pty && self.sandbox.is_none() && self.process_sandbox.is_none();
+        // Only stream direct (non-PTY, non-sandbox) commands; a remote world
+        // has no local PTY/sandbox branches (capability-gated below), so it
+        // always streams.
+        let remote_world = self.direct_process.capabilities().is_remote;
+        let use_streaming = remote_world
+            || (!bash_input.use_pty && self.sandbox.is_none() && self.process_sandbox.is_none());
 
         if !use_streaming {
             // Delegate to blocking execute — wraps in a helper to reuse
@@ -1216,33 +1348,38 @@ impl BashTool {
         }
 
         // Streaming path: spawn the process and read stdout line-by-line.
-        let mut cmd = Command::new("bash");
-        cmd.arg("-c")
-            .arg(&bash_input.command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
+        // The child comes from the injected process world via the §4.11
+        // piped-spawn seam; the provider keeps kill-on-drop semantics so a
+        // cancelled future cannot leave orphans behind.
+        let mut request = ProcessRequest::new("bash", &["-c", &bash_input.command]);
         if let Some(ref dir) = bash_input.cwd {
-            cmd.current_dir(dir);
+            request.cwd = Some(dir.clone().into());
         }
         if let Some(ref env_vars) = bash_input.env {
             for (key, value) in env_vars {
-                cmd.env(key, value);
+                request.env.push((key.clone(), value.clone()));
             }
         }
 
-        let mut child = cmd
-            .spawn()
+        let spec = shannon_tool_interface::PipedSpawn {
+            request,
+            pipe_stdin: false,
+            pipe_stdout: true,
+            pipe_stderr: true,
+            kill_on_drop: true,
+        };
+
+        let mut child = self
+            .direct_process
+            .spawn_piped(&spec)
+            .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn command: {e}")))?;
 
         let stdout = child
-            .stdout
-            .take()
+            .take_stdout()
             .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stdout".to_string()))?;
         let stderr = child
-            .stderr
-            .take()
+            .take_stderr()
             .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stderr".to_string()))?;
 
         let mut stdout_lines = BufReader::new(stdout).lines();
@@ -1336,14 +1473,23 @@ impl BashTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to wait for command: {e}")))?;
 
-        let exit_code = status.code().unwrap_or(-1);
-        let success = status.success();
+        let exit_code = status.code.unwrap_or(-1);
+        let success = status.success;
 
         let content = if success {
             format!("{stdout_buf}{command_description}")
         } else {
+            let sandbox_note = sandbox_failure_note(
+                self.process_sandbox.is_some(),
+                &CommandOutput {
+                    stdout: stdout_buf.clone(),
+                    stderr: stderr_buf.clone(),
+                    exit_code,
+                    success,
+                },
+            );
             format!(
-                "{}Command failed with exit code {}: {}{}",
+                "{}Command failed with exit code {}: {}{}{}",
                 command_description,
                 exit_code,
                 stderr_buf,
@@ -1351,7 +1497,10 @@ impl BashTool {
                     "\n"
                 } else {
                     ""
-                }
+                },
+                sandbox_note
+                    .map(|note| format!("\n{note}"))
+                    .unwrap_or_default(),
             )
         };
 
@@ -1379,6 +1528,8 @@ impl BashTool {
 /// PowerShell tool implementation
 pub struct PowerShellTool {
     description: String,
+    /// Process world backing powershell invocations (§4.11).
+    process: Arc<dyn ProcessProvider>,
 }
 
 impl Default for PowerShellTool {
@@ -1391,60 +1542,33 @@ impl PowerShellTool {
     pub fn new() -> Self {
         Self {
             description: "Executes PowerShell commands and returns output".to_string(),
+            process: crate::defaults::process(),
         }
     }
 
+    /// Inject a process-world override (sandbox/remote assemblies).
+    pub fn with_process(mut self, process: Arc<dyn ProcessProvider>) -> Self {
+        self.process = process;
+        self
+    }
+
     async fn execute_command(
+        &self,
         command: &str,
         cwd: Option<&str>,
         env: Option<&std::collections::HashMap<String, String>>,
         timeout_ms: Option<u64>,
     ) -> Result<CommandOutput, std::io::Error> {
-        let mut cmd = Command::new("powershell");
-        cmd.arg("-Command")
-            .arg(command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
-        }
-
-        if let Some(env_vars) = env {
-            for (key, value) in env_vars {
-                cmd.env(key, value);
-            }
-        }
-
-        // Execute with timeout if specified
-        let output = if let Some(timeout) = timeout_ms {
-            let duration = std::time::Duration::from_millis(timeout);
-            tokio::time::timeout(duration, cmd.output())
-                .await
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        format!("Command timed out after {timeout}ms"),
-                    )
-                })?
-                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-        } else {
-            cmd.output()
-                .await
-                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-        };
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code().unwrap_or(-1);
-        let success = output.status.success();
-
-        Ok(CommandOutput {
-            stdout,
-            stderr,
-            exit_code,
-            success,
-        })
+        run_shell_captured(
+            self.process.as_ref(),
+            "powershell",
+            "-Command",
+            command,
+            cwd,
+            env,
+            timeout_ms,
+        )
+        .await
     }
 }
 
@@ -1528,14 +1652,15 @@ impl Tool for PowerShellTool {
             }
         }
 
-        let output = Self::execute_command(
-            &ps_input.command,
-            ps_input.cwd.as_deref(),
-            ps_input.env.as_ref(),
-            ps_input.timeout,
-        )
-        .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("Command failed: {e}")))?;
+        let output = self
+            .execute_command(
+                &ps_input.command,
+                ps_input.cwd.as_deref(),
+                ps_input.env.as_ref(),
+                ps_input.timeout,
+            )
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Command failed: {e}")))?;
 
         let content = if output.success {
             output.stdout
@@ -1679,6 +1804,131 @@ impl Tool for SleepTool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use super::{CommandOutput, sandbox_failure_note};
+
+    #[test]
+    fn sandbox_failure_note_only_fires_for_sandboxed_env_misses() {
+        let miss = CommandOutput {
+            stdout: String::new(),
+            stderr: "ls: cannot access '/opt/x': No such file or directory".to_string(),
+            exit_code: 2,
+            success: false,
+        };
+        let note = sandbox_failure_note(true, &miss).expect("env-miss failure gets a note");
+        assert!(note.contains("[sandbox]"));
+        assert!(note.contains("command -v"));
+
+        // Ordinary command failure (e.g. grep no-match: exit 1, empty
+        // stderr) stays clean — the note must not add noise to every
+        // non-zero exit.
+        let ordinary = CommandOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 1,
+            success: false,
+        };
+        assert!(sandbox_failure_note(true, &ordinary).is_none());
+
+        // Successful runs never get the note.
+        let ok = CommandOutput {
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            success: true,
+        };
+        assert!(sandbox_failure_note(true, &ok).is_none());
+
+        // Without an active sandbox: never.
+        assert!(sandbox_failure_note(false, &miss).is_none());
+    }
+
+    #[test]
+    fn sandbox_failure_note_covers_command_not_found() {
+        let miss = CommandOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 127,
+            success: false,
+        };
+        let note = sandbox_failure_note(true, &miss).expect("127 gets a note");
+        assert!(note.contains("[sandbox]"));
+    }
+
+    /// Remote-capable fake process world: records the last program it was
+    /// asked to run and reports `is_remote`.
+    #[derive(Default)]
+    struct RemoteProbeProcess {
+        last_program: std::sync::Mutex<Option<String>>,
+    }
+
+    #[async_trait]
+    impl shannon_tool_interface::ProcessProvider for RemoteProbeProcess {
+        fn run_blocking(
+            &self,
+            request: &ProcessRequest,
+        ) -> std::io::Result<shannon_tool_interface::CapturedOutput> {
+            *self.last_program.lock().unwrap() = Some(request.program.clone());
+            Ok(shannon_tool_interface::CapturedOutput {
+                stdout: format!("ran:{}", request.program).into_bytes(),
+                stderr: Vec::new(),
+                exit: shannon_tool_interface::ProcessExit::from_code(0),
+            })
+        }
+
+        async fn run_async(
+            &self,
+            request: &ProcessRequest,
+        ) -> std::io::Result<shannon_tool_interface::CapturedOutput> {
+            self.run_blocking(request)
+        }
+
+        async fn spawn_piped(
+            &self,
+            _spec: &shannon_tool_interface::PipedSpawn,
+        ) -> std::io::Result<Box<dyn shannon_tool_interface::PipedChild>> {
+            Err(std::io::Error::other("remote probe has no children"))
+        }
+
+        fn capabilities(&self) -> shannon_tool_interface::ExecCaps {
+            shannon_tool_interface::ExecCaps { is_remote: true }
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_world_bypasses_local_pty_and_sandbox_branches() {
+        let probe = Arc::new(RemoteProbeProcess::default());
+        // PTY requested + local argv sandbox installed: both local-only
+        // branches must be skipped on a remote world.
+        let tool = BashTool::with_process_sandbox("/tmp").with_worlds(probe.clone() as _);
+        let input = serde_json::json!({
+            "command": "echo hi",
+            "use_pty": true,
+        });
+        let output = Tool::execute(&tool, input).await.unwrap();
+        assert!(
+            output.content.contains("[remote target]"),
+            "remote fallback must be announced, got: {}",
+            output.content
+        );
+        assert!(
+            output.content.contains("ran:bash"),
+            "command must run through the injected remote world, got: {}",
+            output.content
+        );
+        let last = probe.last_program.lock().unwrap().clone();
+        assert_eq!(last.as_deref(), Some("bash"));
+    }
+
+    #[tokio::test]
+    async fn local_world_keeps_pty_and_sandbox_preference() {
+        // On the local world the sandbox description is preserved and no
+        // remote note is emitted.
+        let tool = BashTool::with_process_sandbox("/tmp");
+        let input = serde_json::json!({ "command": "echo hi" });
+        let output = Tool::execute(&tool, input).await.unwrap();
+        assert!(!output.content.contains("[remote target]"));
+    }
+
     use super::*;
 
     // ── SandboxMode tests ──────────────────────────────────────────────
@@ -1892,6 +2142,114 @@ fn test_shell_expansion_bypass_detection() {
             .warnings
             .iter()
             .any(|w| w.contains("Parameter expansion"))
+    );
+}
+
+// ── A4: shell expansion risk grading ─────────────────────────────────────
+//
+// Eval finding A4 (docs/eval-findings-2026-09-glm.md): the analyzer used to
+// reject every command containing `$(`, `${}` or backticks as a critical
+// security risk, stranding read-only probes such as `$(command -v shasum)`
+// and making headless agents retry near-identical commands.
+
+#[test]
+fn test_read_only_expansion_downgraded_from_critical() {
+    // Expansion syntax in an otherwise read-only/harmless command must not
+    // be rejected anymore.
+    for cmd in [
+        "$(command -v shasum)",
+        "echo $(pwd)",
+        "ls $(pwd)",
+        "echo ${HOME}",
+        "cat `pwd`/README.md",
+        "grep foo $(pwd)/bar.txt",
+        "which $(echo cargo)",
+    ] {
+        let analysis = analyze_command_security(cmd);
+        assert!(
+            analysis.risk_level < SecurityLevel::Critical,
+            "read-only expansion must be allowed to execute: {cmd} -> {:?}",
+            analysis.risk_level
+        );
+    }
+}
+
+#[test]
+fn test_expansion_with_dangerous_verb_still_critical() {
+    // Expansion combined with a genuinely dangerous verb keeps the critical
+    // rating and is rejected.
+    for cmd in [
+        "echo $(rm -rf /)",
+        "`rm -rf /`",
+        "echo $(sudo ls /root)",
+        "echo $(dd if=/dev/zero of=/dev/sda)",
+        "echo $(chmod 777 /)",
+        "echo $(mkfs.ext4 /dev/sda1)",
+        "find $(pwd) -name '*.tmp' -delete",
+        "find $(pwd) -exec rm {} \\;",
+        "echo $(pwd) | bash",
+    ] {
+        let analysis = analyze_command_security(cmd);
+        assert_eq!(
+            analysis.risk_level,
+            SecurityLevel::Critical,
+            "expansion combined with a dangerous verb must stay critical: {cmd}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_read_only_expansion_command_executes_end_to_end() {
+    let tool = BashTool::new();
+    let output = Tool::execute(&tool, json!({"command": "echo $(pwd)"}))
+        .await
+        .unwrap();
+    assert!(
+        !output.is_error,
+        "read-only expansion must execute, got: {}",
+        output.content
+    );
+    assert!(
+        !output.content.contains("security risk"),
+        "allowed expansion must not look like a rejection, got: {}",
+        output.content
+    );
+}
+
+#[tokio::test]
+async fn test_security_rejection_includes_remediation_hint() {
+    let tool = BashTool::new();
+    let output = Tool::execute(&tool, json!({"command": "$(rm -rf /)"}))
+        .await
+        .unwrap();
+    assert!(output.is_error);
+    assert!(
+        output.content.contains("Suggestion:"),
+        "rejection must carry an actionable remediation hint, got: {}",
+        output.content
+    );
+    assert!(
+        output.content.contains("absolute paths"),
+        "expansion rejection must suggest the two-step/absolute-path rewrite, got: {}",
+        output.content
+    );
+}
+
+#[tokio::test]
+async fn test_streaming_security_rejection_includes_remediation_hint() {
+    let tool = BashTool::new();
+    let sender = std::sync::Arc::new(CollectSender {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    let result = tool
+        .execute_streaming(json!({"command": "rm -rf /"}), sender)
+        .await
+        .unwrap();
+    assert!(result.is_error);
+    assert!(
+        result.content.contains("Suggestion:"),
+        "streaming rejection must carry a remediation hint, got: {}",
+        result.content
     );
 }
 

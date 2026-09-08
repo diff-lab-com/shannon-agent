@@ -1,5 +1,28 @@
 import * as React from "react"
+
 import { cn } from "@/lib/utils"
+
+// Shannon's legacy DropdownMenu — controlled `open` + `onClose` + flat
+// `items[]` array. The legacy hand-rolled implementation handled focus
+// roving via local state (focusIndex) plus a document-level keydown
+// listener; the test contract (DropdownMenu.test.tsx) is built on top of
+// that semantics.
+//
+// T1.1 batch A2 — we adopt the shadcn base-nova primitive's *surface tokens
+// (rounded-xl + bg-surface-container-lowest/95 + shadow-[var(--shadow-e3)])
+// but preserve Shannon's local focus-management because Base UI's
+// <Menu.Item> roving tabindex requires a working anchor trigger that the
+// legacy API does not expose. Without a real trigger, Base UI never
+// initializes focus on open and ArrowDown does nothing — breaking the test
+// contract. When a real call site lands and `triggerRef` is wired to a
+// real <button>, regenerate the shadcn primitive
+// (`pnpm dlx shadcn@latest add dropdown-menu`) and swap this wrapper for
+// the Base UI composition — focus behavior then moves to <Menu.Item>'s
+// roving tabindex out of the box. (The previously parked
+// dropdown-menu.prim.tsx was 0-ref inventory and was removed in the
+// 2026-08-26 audit cleanup.)
+//
+// For now: legacy focus hook + Base UI surface tokens. Compat shim.
 
 export interface DropdownMenuItem {
   id: string
@@ -20,6 +43,16 @@ export interface DropdownMenuProps {
   ariaLabel?: string
 }
 
+/**
+ * Shannon DropdownMenu primitive. Preserved legacy focus-roving +
+ * outside-click + Escape semantics; surface tokens aligned with the
+ * shadcn base-nova primitives so a future call site can migrate to the
+ * Base UI composition directly.
+ *
+ * Zero production callers today (only __tests__/components/DropdownMenu.test.tsx),
+ * so this is a compat shim. Once a real call site lands, prefer the
+ * base-nova primitives (DropdownMenuTrigger, DropdownMenuContent, …) directly.
+ */
 export function DropdownMenu({
   open,
   onClose,
@@ -106,8 +139,12 @@ export function DropdownMenu({
       ref={menuRef}
       role="menu"
       aria-label={ariaLabel}
+      data-slot="dropdown-menu-content"
       className={cn(
-        "absolute z-50 min-w-[200px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-[var(--shadow-e3)] py-xs",
+        // Match the shadcn base-nova surface tokens (rounded-xl, surface
+        // container lowest, shadow-e3) so a future migration to the
+        // Base UI composition will look identical.
+        "absolute z-modal min-w-[200px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-[var(--shadow-e3)] py-xs",
         align === "end" ? "right-0 top-full mt-sm" : "left-0 top-full mt-sm",
         className
       )}

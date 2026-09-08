@@ -27,7 +27,7 @@ pnpm demo                      # same, but VITE_MOCK_MODE=1 — Tauri invoke()
                                #   is swapped for ui/src/lib/mock/coreMock.ts
                                #   so the UI runs without the Rust backend
 pnpm build                     # tsc --noEmit then vite build → ui/dist
-pnpm lint                      # tsc --noEmit (the only "lint" step)
+pnpm lint                      # tsc --noEmit + eslint --max-warnings 0 (frozen budget)
 pnpm test                      # vitest (jsdom)
 pnpm test -- path/to/file      # single vitest file
 pnpm test -- -t "name"         # single test by name
@@ -220,3 +220,27 @@ behavior is delegated to the engine crates.
 - **CHANGELOG.md** is per-sprint, grouped by category (Features, Fixes,
   Accessibility, i18n, Dependencies). When bumping the engine pin, record
   what changed in the engine and why.
+- **Icon policy**: every icon uses Material Symbols (outlined). Size uses the
+  `icon-xs|sm|md|lg|xl|2xl` utility classes (12/16/20/24/32/48 px) defined
+  in `ui/src/index.css`. The font (`@fontsource-variable/material-symbols-outlined`)
+  is loaded once at `src/index.css`.
+  - **Hard rule (never violate):** never `import` from the `lucide` package.
+  - **Preferred:** the `<Icon name="..." />` wrapper at
+    `ui/src/components/ui/icon.tsx` — gives default `aria-hidden`, the
+    lucide→Material name mapping table, and a uniform `size` token.
+  - **Also compliant:** hand-written `<span class="material-symbols-outlined">`
+    — that is what the 100+ existing call sites (and shadcn-generated base
+    components like `dialog.tsx`) already use. Mix per file as long as it's
+    consistent within that file. Policy revised 2026-08-24 to formalize this
+    de-facto standard (the rationale is this paragraph itself; it does not
+    depend on plan files that stay local to a workstation).
+  - **FILL axis (U8, 2026-08-26):** outlined is the default. FILL
+    (`style={{fontVariationSettings: "'FILL' 1"}}`) marks an active/selected
+    state or a brand/section anchor — expanded settings gear, active
+    extension tile, pinned session row, sidebar brand mark. Don't fill icons
+    purely for decoration.
+  - **Semantic conventions (U8):** pin = `push_pin` for both states (filled
+    marks the pinned row; the menu action stays outlined) — never `keep`;
+    grip affordances = `drag_indicator`, revealed on hover/focus only; brand
+    mark = `cognitive` (filled). When naming icons, prefer a glyph whose
+    meaning survives without its tooltip.

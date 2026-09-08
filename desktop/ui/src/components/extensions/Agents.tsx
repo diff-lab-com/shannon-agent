@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Spinner } from '@/components/ui/loading-state'
 import { useOutletContext } from "react-router-dom";
 import { useIntl } from 'react-intl'
 import {
@@ -12,6 +13,8 @@ import {
 } from "@/lib/tauri-api";
 import { SecurityBadge } from "./SecurityBadge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 /**
  * P4 Agents tab — federated catalog + install/remove.
@@ -132,7 +135,7 @@ export default function Agents() {
 
       {catalogLoading && (
         <div className="text-center py-lg text-on-surface-variant">
-          <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
+          <Spinner className="align-middle mr-xs" />
           {t('extensions.agents.loading')}
         </div>
       )}
@@ -184,7 +187,10 @@ export default function Agents() {
             {installed.map((agent, i) => (
               <div
                 key={agent.name}
-                className={`flex items-center gap-md px-md py-sm ${i === installed.length - 1 ? "" : "border-b border-outline-variant/15"}`}
+                className={cn(
+                  "flex items-center gap-md px-md py-sm",
+                  i !== installed.length - 1 && "border-b border-outline-variant/15",
+                )}
               >
                 <span className="material-symbols-outlined text-primary text-[20px]">smart_toy</span>
                 <div className="flex-1 min-w-0">
@@ -193,14 +199,16 @@ export default function Agents() {
                     {agent.path}
                   </div>
                 </div>
-                <button
+                <Button
+                  variant="destructive"
+                  size="sm"
                   type="button"
                   onClick={() => setRemoveTarget(agent.name)}
                   disabled={busyId === `uninstall:${agent.name}`}
-                  className="px-sm py-xs rounded-lg bg-error-container/40 text-on-error-container text-label-xs font-bold hover:bg-error-container/70 disabled:opacity-50"
+                  className="bg-error-container/40 text-on-error-container hover:bg-error-container/70"
                 >
                   {busyId === `uninstall:${agent.name}` ? "…" : t('extensions.agents.remove')}
-                </button>
+                </Button>
               </div>
             ))}
           </div>
@@ -249,7 +257,7 @@ function AgentCard({
         <h4 className="font-bold text-label-md text-on-surface">{entry.name}</h4>
         <div className="flex items-center gap-[4px] shrink-0">
           <SecurityBadge text={entry.description} trust={entry.trust} />
-          <span className={`text-label-xs px-xs py-[1px] rounded-full font-bold ${trustLabel.cls}`}>
+          <span className={cn("text-label-xs px-xs py-[1px] rounded-full font-bold", trustLabel.cls)}>
             {t(trustLabel.textKey)}
           </span>
         </div>
@@ -271,7 +279,7 @@ function AgentCard({
         </div>
       )}
       {feedback && (
-        <div className={`text-label-xs mb-xs ${feedback.ok ? "text-primary" : "text-error"}`}>
+        <div className={cn("text-label-xs mb-xs", feedback.ok ? "text-primary" : "text-error")}>
           {feedback.msg}
         </div>
       )}
@@ -286,22 +294,23 @@ function AgentCard({
             {t('extensions.agents.view')}
           </a>
         )}
-        <button
+        <Button
           type="button"
+          size="sm"
           onClick={onInstall}
           disabled={busy || installed}
-          className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {busy ? "…" : installed ? t('extensions.agents.installedBtn') : t('extensions.agents.installBtn')}
-        </button>
+        </Button>
       </div>
     </div>
   );
 }
 
 const TRUST_LABELS: Record<AgentCatalogEntry['trust'], { textKey: string; cls: string }> = {
-  verified: { textKey: "extensions.agents.trust.verified", cls: "bg-primary-container/50 text-on-primary-container" },
-  official: { textKey: "extensions.agents.trust.official", cls: "bg-secondary-container/50 text-on-secondary-container" },
+  verified: { textKey: "extensions.agents.trust.verified", cls: "bg-primary-container text-on-primary-container" },
+  official: { textKey: "extensions.agents.trust.official", cls: "bg-secondary-container text-on-secondary-container" },
   community: { textKey: "extensions.agents.trust.community", cls: "bg-tertiary-container/50 text-on-tertiary-container" },
   unknown: { textKey: "extensions.agents.trust.unknown", cls: "bg-surface-container-highest text-on-surface-variant" },
 };

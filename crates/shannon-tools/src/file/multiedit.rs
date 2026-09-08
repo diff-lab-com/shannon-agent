@@ -46,8 +46,15 @@ struct SingleEditResult {
 }
 
 pub async fn execute(input: MultiEditInput) -> Result<ToolOutput, ToolError> {
-    use tokio::fs;
+    execute_with(input, crate::defaults::fs().as_ref()).await
+}
 
+/// Provider-injected entry point (§4.11): batch edits flow through the
+/// injected filesystem world instead of direct async filesystem APIs calls.
+pub async fn execute_with(
+    input: MultiEditInput,
+    fs: &dyn shannon_tool_interface::FileSystemProvider,
+) -> Result<ToolOutput, ToolError> {
     if input.edits.is_empty() {
         return Err(ToolError::InvalidInput(
             "No edit operations provided".to_string(),
@@ -78,35 +85,38 @@ pub async fn execute(input: MultiEditInput) -> Result<ToolOutput, ToolError> {
         std::collections::HashMap::new();
 
     for op in &input.edits {
-        let metadata = fs::metadata(&op.file_path).await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                ToolError::InvalidInput(format!("File not found: {}", op.file_path))
-            } else {
-                ToolError::ExecutionFailed(format!("Failed to access {}: {e}", op.file_path))
-            }
-        })?;
+        let metadata = fs
+            .metadata(std::path::Path::new(&op.file_path))
+            .await
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    ToolError::InvalidInput(format!("File not found: {}", op.file_path))
+                } else {
+                    ToolError::ExecutionFailed(format!("Failed to access {}: {e}", op.file_path))
+                }
+            })?;
 
-        if metadata.is_dir() {
+        if metadata.is_dir {
             return Err(ToolError::InvalidInput(format!(
                 "Path is a directory: {}",
                 op.file_path
             )));
         }
-        if metadata.len() > MAX_FILE_SIZE {
+        if metadata.len > MAX_FILE_SIZE {
             return Err(ToolError::InvalidInput(format!(
                 "File too large: {} ({} bytes, max {})",
-                op.file_path,
-                metadata.len(),
-                MAX_FILE_SIZE
+                op.file_path, metadata.len, MAX_FILE_SIZE
             )));
         }
 
         let content = if let Some(prev) = per_file_content.get(&op.file_path) {
             prev.clone()
         } else {
-            fs::read_to_string(&op.file_path).await.map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to read {}: {e}", op.file_path))
-            })?
+            fs.read_text(std::path::Path::new(&op.file_path))
+                .await
+                .map_err(|e| {
+                    ToolError::ExecutionFailed(format!("Failed to read {}: {e}", op.file_path))
+                })?
         };
 
         let (new_content, replacements, locations) =
@@ -131,12 +141,14 @@ pub async fn execute(input: MultiEditInput) -> Result<ToolOutput, ToolError> {
     let mut diff_parts: Vec<String> = Vec::new();
 
     for (op, old_content, new_content, replacements, locations) in &pending {
-        fs::write(&op.file_path, new_content).await.map_err(|e| {
-            ToolError::ExecutionFailed(format!(
-                "Failed to write {}: {e} — earlier edits in this batch were applied",
-                op.file_path
-            ))
-        })?;
+        fs.write_bytes(std::path::Path::new(&op.file_path), new_content.as_bytes())
+            .await
+            .map_err(|e| {
+                ToolError::ExecutionFailed(format!(
+                    "Failed to write {}: {e} — earlier edits in this batch were applied",
+                    op.file_path
+                ))
+            })?;
 
         total_replacements += replacements;
 

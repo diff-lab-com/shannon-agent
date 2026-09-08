@@ -642,6 +642,113 @@ async fn test_task_write_then_verify() {
     cleanup_workspace(&workspace);
 }
 
+// ── Test: Done-event token accounting accumulates every request ────────
+
+/// Regression (dogfood l1, 2026-08-22): the headless loop used to take
+/// `max()` over per-request Usage events, which for multi-request queries
+/// only ever reflected the LAST request (13× undercount vs the wire
+/// fixtures). The done event must report the engine's Cost totals — the
+/// sum of usage across all requests in the query.
+///
+/// The SSE helpers hardcode usage (input=50 each; output 20/30/15), so a
+/// correct ledger shows tokens_in=150, tokens_out=65, tokens_used=215 —
+/// the old code reported 50/30/50.
+#[serial]
+#[tokio::test]
+async fn test_done_event_tokens_accumulate_across_requests() {
+    let workspace = create_workspace("token_accum");
+
+    let file_path = workspace.join("output.txt");
+    fs::write(&file_path, "").unwrap();
+
+    let mut server = mockito::Server::new_async().await;
+
+    // FIFO mocks: Write (in 50/out 20) -> text+Bash (50/30) -> text (50/15)
+    let write_input = serde_json::json!({
+        "file_path": "output.txt",
+        "content": "hi"
+    });
+    let _m1 = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_header("anthropic-version", "2023-06-01")
+        .with_body(anthropic_tool_use_sse("toolu_1", "Write", write_input))
+        .expect(1)
+        .create();
+
+    let bash_input = serde_json::json!({"command": "cat output.txt"});
+    let _m2 = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_header("anthropic-version", "2023-06-01")
+        .with_body(anthropic_text_and_tool_sse(
+            "Written. Verifying...",
+            "toolu_2",
+            "Bash",
+            bash_input,
+        ))
+        .expect(1)
+        .create();
+
+    let _m3 = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_header("anthropic-version", "2023-06-01")
+        .with_body(anthropic_text_sse("Done."))
+        .expect(1)
+        .create();
+
+    let result = shannon_with_mock(&server.url(), &workspace)
+        .args([
+            "--prompt",
+            "write hi then verify",
+            "--output-format",
+            "json-stream",
+            "--max-turns",
+            "5",
+        ])
+        .timeout(std::time::Duration::from_secs(45))
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let events: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid NDJSON: {line}\n{e}"))
+        })
+        .collect();
+
+    let done = events
+        .iter()
+        .find(|e| e["type"] == "done" && e.get("turns_used").is_some())
+        .expect("CiEvent::Done with turns_used");
+
+    assert_eq!(
+        done["tokens_in"].as_u64(),
+        Some(150),
+        "tokens_in must SUM all requests (50×3), got {}",
+        done["tokens_in"]
+    );
+    assert_eq!(
+        done["tokens_out"].as_u64(),
+        Some(65),
+        "tokens_out must SUM all requests (20+30+15), got {}",
+        done["tokens_out"]
+    );
+    assert_eq!(
+        done["tokens_used"].as_u64(),
+        Some(215),
+        "tokens_used must equal in+out, got {}",
+        done["tokens_used"]
+    );
+
+    cleanup_workspace(&workspace);
+}
+
 // ── Test: Tool error handling — Bash command that fails ───────────────
 
 #[serial]
@@ -1651,6 +1758,241 @@ async fn scenario_anthropic_multi_tool() {
         tool_calls.iter().any(|tc| tc["tool"] == "Bash"),
         "Should have a Bash tool call"
     );
+
+    cleanup_workspace(&workspace);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// --schema validation vs. multi-turn transcripts
+// (dogfood l2-deep-analysis 2026-08-23: "Schema validation failed: Invalid
+//  JSON in response: EOF while parsing a value at line 1 column 0")
+// ════════════════════════════════════════════════════════════════════════
+
+/// MiniMax-M3 reasoning+tool turn on the OpenAI wire: reasoning opens with
+/// `<think>`, and the close tag arrives glued to the SAME delta that opens
+/// the tool call — the exact shape of wire fixture minimax_b4a41957c1d58a26
+/// (`"content":"</think>\n\n","tool_calls":[...]`).
+fn openai_think_tool_sse(
+    think: &str,
+    tool_id: &str,
+    tool_name: &str,
+    tool_input: serde_json::Value,
+) -> String {
+    let mut body = sse_line(&json!({
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": think}}]
+    }));
+    body.push_str(&sse_line(&json!({
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "content": "</think>\n\n",
+                "role": "assistant",
+                "tool_calls": [{
+                    "index": 0,
+                    "id": tool_id,
+                    "type": "function",
+                    "function": {"name": tool_name, "arguments": tool_input.to_string()}
+                }]
+            }
+        }]
+    })));
+    body.push_str(&sse_line(&json!({
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]
+    })));
+    body.push_str("data: [DONE]\n\n");
+    body
+}
+
+/// Plain preamble text followed by a tool call in one SSE response (no
+/// reasoning tags) — the ordinary multi-turn shape every provider emits.
+fn openai_preamble_tool_sse(
+    preamble: &str,
+    tool_id: &str,
+    tool_name: &str,
+    tool_input: serde_json::Value,
+) -> String {
+    let mut body = sse_line(&json!({
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": preamble}}]
+    }));
+    body.push_str(&sse_line(&json!({
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "index": 0,
+                    "id": tool_id,
+                    "type": "function",
+                    "function": {"name": tool_name, "arguments": tool_input.to_string()}
+                }]
+            }
+        }]
+    })));
+    body.push_str(&sse_line(&json!({
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]
+    })));
+    body.push_str("data: [DONE]\n\n");
+    body
+}
+
+/// Final answer as a fenced JSON object — how models actually wrap
+/// structured output despite the "no text outside the JSON" instruction.
+fn openai_fenced_json_sse(answer: serde_json::Value) -> String {
+    let fenced = format!("```json\n{answer}\n```");
+    let mut body = sse_line(&json!({
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": fenced}}]
+    }));
+    body.push_str(&sse_line(&json!({
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+    })));
+    body.push_str("data: [DONE]\n\n");
+    body
+}
+
+const ANSWER_SCHEMA: &str =
+    r#"{"type":"object","required":["answer"],"properties":{"answer":{"type":"number"}}}"#;
+
+/// Regression (dogfood l2-deep-analysis 2026-08-23): the adapter dropped
+/// `delta.content` on chunks that also carry `tool_calls`, so the `</think>`
+/// close tag never reached the assembled text. The transcript kept an
+/// unclosed `<think>`, reasoning stripping swallowed every later answer, and
+/// `--schema` validation parsed an empty string: "EOF while parsing a value
+/// at line 1 column 0". The close tag must survive the tool-call chunk and
+/// the final fenced JSON must validate.
+#[serial]
+#[tokio::test]
+async fn schema_minimax_think_close_on_tool_chunk_validates() {
+    let workspace = create_workspace("schema_think_close");
+    fs::write(workspace.join("data.txt"), "42").unwrap();
+
+    let mut server = mockito::Server::new_async().await;
+    let read_input = json!({"file_path": "data.txt"});
+
+    let _m1 = server
+        .mock("POST", "/v1/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(openai_think_tool_sse(
+            "<think>The answer is in data.txt. Let me read it.",
+            "call_mm_schema_1",
+            "Read",
+            read_input,
+        ))
+        .expect(1)
+        .create();
+
+    let _m2 = server
+        .mock("POST", "/v1/chat/completions")
+        .match_body(Matcher::Regex(r#"tool"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(openai_fenced_json_sse(json!({"answer": 42})))
+        .expect(1)
+        .create();
+
+    let result = shannon_openai(&server.url(), &workspace)
+        .args([
+            "--prompt",
+            "Read data.txt and report the number as JSON",
+            "--output-format",
+            "json",
+            "--schema",
+            ANSWER_SCHEMA,
+        ])
+        .timeout(std::time::Duration::from_secs(30))
+        .assert();
+
+    let stderr = String::from_utf8_lossy(&result.get_output().stderr).to_string();
+    assert!(
+        !stderr.contains("Schema validation failed"),
+        "schema validation must not fail, stderr: {stderr}"
+    );
+
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+    assert_eq!(
+        json["exit_code"], "success",
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+
+    // `response` is the validated JSON object, not the raw transcript.
+    let validated =
+        serde_json::from_str::<serde_json::Value>(json["response"].as_str().unwrap_or(""))
+            .expect("response should be the schema-validated JSON object");
+    assert_eq!(validated["answer"], 42);
+
+    cleanup_workspace(&workspace);
+}
+
+/// Regression (same dogfood run, second half): headless `--schema`
+/// validation used to run on the WHOLE multi-turn transcript. Intermediate
+/// turn text (here a plain preamble, no reasoning tags) glued in front of
+/// the final fenced JSON made strict parsing fail. Validation — and the
+/// `response` output field — must target the final answer turn only.
+#[serial]
+#[tokio::test]
+async fn schema_validation_targets_final_turn_not_transcript() {
+    let workspace = create_workspace("schema_final_turn");
+    fs::write(workspace.join("data.txt"), "42").unwrap();
+
+    let mut server = mockito::Server::new_async().await;
+    let read_input = json!({"file_path": "data.txt"});
+
+    let _m1 = server
+        .mock("POST", "/v1/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(openai_preamble_tool_sse(
+            "Let me check the file. ",
+            "call_schema_2",
+            "Read",
+            read_input,
+        ))
+        .expect(1)
+        .create();
+
+    let _m2 = server
+        .mock("POST", "/v1/chat/completions")
+        .match_body(Matcher::Regex(r#"tool"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(openai_fenced_json_sse(json!({"answer": 42})))
+        .expect(1)
+        .create();
+
+    let result = shannon_openai(&server.url(), &workspace)
+        .args([
+            "--prompt",
+            "Read data.txt and report the number as JSON",
+            "--output-format",
+            "json",
+            "--schema",
+            ANSWER_SCHEMA,
+        ])
+        .timeout(std::time::Duration::from_secs(30))
+        .assert();
+
+    let stderr = String::from_utf8_lossy(&result.get_output().stderr).to_string();
+    assert!(
+        !stderr.contains("Schema validation failed"),
+        "schema validation must not fail, stderr: {stderr}"
+    );
+
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+    assert_eq!(
+        json["exit_code"], "success",
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let response = json["response"].as_str().unwrap_or("");
+    assert!(
+        !response.contains("Let me check"),
+        "response must contain only the final answer turn, got: {response}"
+    );
+    let validated =
+        serde_json::from_str::<serde_json::Value>(response).expect("validated final answer");
+    assert_eq!(validated["answer"], 42);
 
     cleanup_workspace(&workspace);
 }

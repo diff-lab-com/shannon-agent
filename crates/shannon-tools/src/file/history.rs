@@ -436,6 +436,8 @@ pub struct FileHistoryManager {
     cache: HashMap<PathBuf, FileHistory>,
     /// Whether the cache has been loaded from disk.
     cache_loaded: bool,
+    /// Filesystem world backing snapshot persistence (§4.11).
+    fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
 }
 
 /// Action that [`FileHistoryManager::rewind_file_to_turn`] prescribes for a file
@@ -461,12 +463,22 @@ impl FileHistoryManager {
             ttl: config.ttl.map(Duration::from_secs),
             cache: HashMap::new(),
             cache_loaded: false,
+            fs: crate::defaults::fs(),
         };
 
         // Ensure the history directory exists
-        let _ = std::fs::create_dir_all(&manager.history_dir);
+        let _ = manager.fs.create_dir_all_blocking(&manager.history_dir);
 
         manager
+    }
+
+    /// Inject a filesystem world override for snapshot storage (§4.11).
+    pub fn with_fs(
+        mut self,
+        fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+    ) -> Self {
+        self.fs = fs;
+        self
     }
 
     /// Create a new manager with a temporary directory (for testing).
@@ -484,7 +496,7 @@ impl FileHistoryManager {
 
     /// Ensure the history directory exists.
     fn ensure_dir(&self) -> Result<(), FileHistoryError> {
-        std::fs::create_dir_all(&self.history_dir)?;
+        self.fs.create_dir_all_blocking(&self.history_dir)?;
         Ok(())
     }
 
@@ -509,7 +521,7 @@ impl FileHistoryManager {
 
         let index_path = self.history_dir.join("_index.json");
         if index_path.exists() {
-            let content = std::fs::read_to_string(&index_path)?;
+            let content = self.fs.read_text_blocking(&index_path)?;
             let index: HashMap<String, Vec<String>> = serde_json::from_str(&content)?;
 
             for (file_path_str, snapshot_ids) in index {
@@ -519,7 +531,7 @@ impl FileHistoryManager {
                 for id in &snapshot_ids {
                     let snapshot_path = self.file_dir(&file_path).join(format!("{id}.json"));
                     if snapshot_path.exists() {
-                        if let Ok(content) = std::fs::read_to_string(&snapshot_path) {
+                        if let Ok(content) = self.fs.read_text_blocking(&snapshot_path) {
                             if let Ok(snapshot) = serde_json::from_str::<FileSnapshot>(&content) {
                                 snapshots.push(snapshot);
                             }
@@ -549,7 +561,8 @@ impl FileHistoryManager {
 
         let index_path = self.history_dir.join("_index.json");
         let content = serde_json::to_string_pretty(&index)?;
-        std::fs::write(&index_path, content)?;
+        self.fs
+            .write_bytes_blocking(&index_path, content.as_bytes())?;
 
         Ok(())
     }
@@ -557,11 +570,12 @@ impl FileHistoryManager {
     /// Save a single snapshot to disk.
     fn save_snapshot(&self, snapshot: &FileSnapshot) -> Result<(), FileHistoryError> {
         let dir = self.file_dir(&snapshot.file_path);
-        std::fs::create_dir_all(&dir)?;
+        self.fs.create_dir_all_blocking(&dir)?;
 
         let snapshot_path = dir.join(format!("{}.json", snapshot.id));
         let content = serde_json::to_string_pretty(snapshot)?;
-        std::fs::write(&snapshot_path, content)?;
+        self.fs
+            .write_bytes_blocking(&snapshot_path, content.as_bytes())?;
 
         Ok(())
     }
@@ -668,6 +682,18 @@ impl FileHistoryManager {
         Ok(snapshot.content.clone())
     }
 
+    /// Roll back a file and persist the restored content **through the
+    /// manager's filesystem world**. REPL-side `/rewind` must use this (with
+    /// the provider-wired manager from `ToolRegistrationResult`) or a remote
+    /// session would restore the file onto the wrong machine.
+    pub fn restore(&mut self, file_path: &Path, id: &str) -> Result<String, FileHistoryError> {
+        let content = self.rollback(file_path, id)?;
+        self.fs
+            .write_bytes_blocking(file_path, content.as_bytes())
+            .map_err(FileHistoryError::Io)?;
+        Ok(content)
+    }
+
     /// Record a turn-boundary snapshot capturing the file's content at the end of a
     /// conversation turn (W6-2 B.2). Tagged with `turn_index` so [`rewind_file_to_turn`]
     /// can locate it. Content-deduplicated like ordinary snapshots.
@@ -747,6 +773,46 @@ impl FileHistoryManager {
         }
     }
 
+    /// Determine how to restore `file_path` to its state BEFORE conversation
+    /// `turn_index` started — the "rewind to your message N" flavor that
+    /// drops turn N and everything after it. Identical to
+    /// [`rewind_file_to_turn`](Self::rewind_file_to_turn) except the target
+    /// filter is strict (`turn_index < turn`), so a turn-0 rewind prescribes
+    /// [`RewindAction::Delete`] for files first created during the session
+    /// instead of silently keeping their end-of-turn-0 state.
+    ///
+    /// Like [`rewind_file_to_turn`](Self::rewind_file_to_turn), this only
+    /// decides; the caller writes to disk.
+    pub fn rewind_before_turn(
+        &mut self,
+        file_path: &Path,
+        turn_index: usize,
+    ) -> Result<RewindAction, FileHistoryError> {
+        self.ensure_cache_loaded()?;
+
+        let history = match self.cache.get(file_path) {
+            Some(h) => h,
+            None => return Ok(RewindAction::NoChange),
+        };
+
+        let target = history
+            .snapshots
+            .iter()
+            .filter(|s| s.turn_index.is_some_and(|t| t < turn_index))
+            .max_by_key(|s| s.turn_index);
+
+        match target {
+            Some(s) => Ok(RewindAction::Restore(s.content.clone())),
+            None => {
+                if history.snapshots.iter().any(|s| s.turn_index.is_some()) {
+                    Ok(RewindAction::Delete)
+                } else {
+                    Ok(RewindAction::NoChange)
+                }
+            }
+        }
+    }
+
     /// List all tracked files.
     pub fn list_tracked_files(&mut self) -> Result<Vec<PathBuf>, FileHistoryError> {
         self.ensure_cache_loaded()?;
@@ -783,7 +849,7 @@ impl FileHistoryManager {
         // Second pass: delete the snapshot files
         for (file_path, snapshot_id) in &files_to_delete {
             let snapshot_path = self.file_dir(file_path).join(format!("{snapshot_id}.json"));
-            if let Err(e) = std::fs::remove_file(&snapshot_path) {
+            if let Err(e) = self.fs.remove_file_blocking(&snapshot_path) {
                 tracing::debug!("Failed to remove old snapshot: {e}");
             }
         }
@@ -828,7 +894,7 @@ impl FileHistoryManager {
 
         for (file_path, snapshot_id) in &to_delete {
             let snapshot_path = self.file_dir(file_path).join(format!("{snapshot_id}.json"));
-            if let Err(e) = std::fs::remove_file(&snapshot_path) {
+            if let Err(e) = self.fs.remove_file_blocking(&snapshot_path) {
                 tracing::debug!("Failed to remove expired snapshot: {e}");
             }
         }
@@ -860,7 +926,7 @@ impl FileHistoryManager {
 
     /// Check total storage usage against the quota.
     fn check_storage_quota(&self) -> Result<(), FileHistoryError> {
-        let total_bytes = dir_size(&self.history_dir).unwrap_or(0);
+        let total_bytes = dir_size(self.fs.as_ref(), &self.history_dir).unwrap_or(0);
         let used_mb = total_bytes as f64 / (1024.0 * 1024.0);
 
         if used_mb > self.max_total_history_mb as f64 {
@@ -1163,19 +1229,24 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// Recursively compute the total size of a directory in bytes.
-fn dir_size(path: &Path) -> Result<u64, std::io::Error> {
-    if !path.is_dir() {
-        return Ok(std::fs::metadata(path)?.len());
+///
+/// Walks through the injected filesystem world rather than filesystem APIs
+/// directly (§4.11).
+fn dir_size(
+    fs: &dyn shannon_tool_interface::FileSystemProvider,
+    path: &Path,
+) -> Result<u64, std::io::Error> {
+    let meta = fs.metadata_blocking(path)?;
+    if !meta.is_dir {
+        return Ok(meta.len);
     }
 
     let mut total = 0u64;
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        let metadata = entry.metadata()?;
-        if metadata.is_dir() {
-            total += dir_size(&entry.path())?;
+    for entry in fs.list_dir_blocking(path)? {
+        if entry.is_dir {
+            total += dir_size(fs, &entry.path)?;
         } else {
-            total += metadata.len();
+            total += entry.len;
         }
     }
     Ok(total)
@@ -1609,6 +1680,33 @@ mod tests {
         assert_eq!(
             manager.rewind_file_to_turn(path, 3).unwrap(),
             RewindAction::Delete
+        );
+    }
+
+    #[test]
+    fn test_rewind_before_turn_strict_boundary() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_before_turn.rs");
+
+        manager.record_turn_snapshot(path, "turn1", 1).unwrap();
+        manager.record_turn_snapshot(path, "turn2", 2).unwrap();
+
+        // Rewind-to-message-2 (drop turn 2 and later) → restore end-of-turn-1.
+        assert_eq!(
+            manager.rewind_before_turn(path, 2).unwrap(),
+            RewindAction::Restore("turn1".to_string())
+        );
+        // Rewind-to-message-1 → the file has no pre-session history → Delete.
+        assert_eq!(
+            manager.rewind_before_turn(path, 1).unwrap(),
+            RewindAction::Delete
+        );
+        // Untracked file → NoChange.
+        assert_eq!(
+            manager
+                .rewind_before_turn(Path::new("/tmp/never_seen.rs"), 5)
+                .unwrap(),
+            RewindAction::NoChange
         );
     }
 

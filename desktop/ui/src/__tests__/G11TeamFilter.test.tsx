@@ -1,6 +1,6 @@
 // G11 tests: TasksHeader team filter + TaskCard team badge.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import TasksHeader from '@/components/tasks/TasksHeader'
 import TaskCard from '@/components/tasks/TaskCard'

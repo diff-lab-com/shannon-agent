@@ -187,6 +187,7 @@ async fn run_llm_task(params: &ExecuteTaskParams, args: &Args) -> Result<String,
                     tracing::debug!(thinking = %thinking, "Model thinking");
                 }
                 ContentDelta::InputJsonDelta { .. } => {}
+                ContentDelta::SignatureDelta { .. } | ContentDelta::Unknown => {}
             },
             Ok(StreamEvent::MessageStart { .. }) => {
                 tracing::debug!(task_id = %params.task_id, "LLM stream started");

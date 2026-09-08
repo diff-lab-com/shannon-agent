@@ -52,6 +52,14 @@ pub struct AgentSpawnInput {
     /// sub-agent. Names must match tool registry names (e.g., "Read", "Bash",
     /// "Grep"). If empty or unset, all sub-agent tools are available.
     pub allowed_tools: Option<Vec<String>>,
+
+    /// Optional tool denylist forwarded as `--disallowed-tools` to the spawned
+    /// sub-agent process. Prevents the sub-agent from regaining tools the
+    /// parent denied via `--disallowed-tools` (the parent's CLI deny list is
+    /// NOT auto-inherited — call sites must forward it explicitly, or rely on
+    /// the parent's tool registry not exposing them). If unset, the child
+    /// inherits only the parent's process-level `--disallowed-tools`.
+    pub disallowed_tools: Option<Vec<String>>,
 }
 
 /// Output from agent spawn
@@ -327,6 +335,7 @@ impl AgentTool {
                     .map(|d| d.max_concurrent_tasks as u32)
                     .unwrap_or(50),
                 team,
+                disallowed_tools: input.disallowed_tools.clone().unwrap_or_default(),
             };
 
             // Capture values before moving config into spawn
@@ -466,6 +475,7 @@ impl AgentTool {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message,
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
@@ -612,6 +622,13 @@ impl AgentTool {
                         working_directory: std::path::PathBuf::from("."),
                         max_turns: def.map(|d| d.max_concurrent_tasks as u32).unwrap_or(50),
                         team: Some(team_name.clone()),
+                        // Inherit the parent's --disallowed-tools denylist as the
+                        // baseline. Each sub-agent runs as a fresh `shannon --team-agent`
+                        // process and does NOT auto-inherit the parent's CLI flags,
+                        // so a sub-agent could otherwise regain a tool the parent
+                        // revoked. `create_team` has no per-call denylist, so the
+                        // baseline IS the denylist here.
+                        disallowed_tools: ctx.parent_disallowed_tools.clone(),
                     };
                 let agent = ctx.registry.spawn(config).await.map_err(|e| {
                     ToolError::ExecutionFailed(format!("Failed to spawn {agent_type}: {e}"))
@@ -812,6 +829,11 @@ impl Tool for AgentTool {
                     "items": { "type": "string" },
                     "description": "Optional tool allowlist. Only these tools will be available to the sub-agent (e.g. ['Read', 'Bash', 'Grep'])"
                 },
+                "disallowed_tools": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional tool denylist forwarded as --disallowed-tools to the sub-agent process. Use to forward the parent's --disallowed-tools so a sub-agent cannot regain tools the parent denied (e.g. ['WebFetch', 'WebSearch'])."
+                },
                 "agent_id": {
                     "type": "string",
                     "description": "Agent ID or name for operations"
@@ -863,6 +885,7 @@ mod tests {
             priority: Some("high".into()),
             model: None,
             allowed_tools: None,
+            disallowed_tools: None,
         };
         let ser = serde_json::to_string(&input).unwrap();
         let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
@@ -881,6 +904,7 @@ mod tests {
             priority: None,
             model: None,
             allowed_tools: None,
+            disallowed_tools: None,
         };
         let ser = serde_json::to_string(&input).unwrap();
         let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
@@ -897,6 +921,7 @@ mod tests {
             priority: None,
             model: Some("claude-sonnet-4-6".into()),
             allowed_tools: Some(vec!["Read".into(), "Edit".into(), "Bash".into()]),
+            disallowed_tools: None,
         };
         let ser = serde_json::to_string(&input).unwrap();
         let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
@@ -917,6 +942,7 @@ mod tests {
             priority: None,
             model: None,
             allowed_tools: None,
+            disallowed_tools: None,
         };
         let ser = serde_json::to_string(&input).unwrap();
         let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
@@ -937,6 +963,7 @@ mod tests {
             priority: None,
             model: None,
             allowed_tools: None,
+            disallowed_tools: None,
         };
         let wd = input
             .context
@@ -952,6 +979,7 @@ mod tests {
             priority: None,
             model: None,
             allowed_tools: None,
+            disallowed_tools: None,
         };
         let wd2 = input2
             .context
@@ -967,6 +995,7 @@ mod tests {
             priority: None,
             model: None,
             allowed_tools: None,
+            disallowed_tools: None,
         };
         let wd3 = input3
             .context

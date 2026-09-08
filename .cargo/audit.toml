@@ -76,4 +76,13 @@ ignore = [
     # via ratatui → shannon-ui. Not exploitable: shannon-ui never calls
     # LruCache::iter_mut(). Upgrade blocked on ratatui bumping lru.
     "RUSTSEC-2026-0002",
+    # lru 0.12.5 — use-after-free in `LruCache::pop()` under panic (unsound).
+    # Same crate/family as RUSTSEC-2026-0002; transitive via ratatui →
+    # shannon-ui. Shannon has NO direct lru usage (grep-verified across
+    # crates/ + desktop/src/), and the bug only manifests when pop() panics
+    # mid-call — ratatui's cache get/put operations are not on a panic path,
+    # so the unsafe state is unreachable. `cargo audit --deny warnings`
+    # escalates `unsound` to an error; `cargo deny` treats it as a warning.
+    # Upgrade blocked on ratatui bumping lru (same blocker as -0002).
+    "RUSTSEC-2026-0253",
 ]

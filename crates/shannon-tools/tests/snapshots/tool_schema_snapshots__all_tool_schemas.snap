@@ -36,6 +36,13 @@ expression: output
       "description": "Team description",
       "type": "string"
     },
+    "disallowed_tools": {
+      "description": "Optional tool denylist forwarded as --disallowed-tools to the sub-agent process. Use to forward the parent's --disallowed-tools so a sub-agent cannot regain tools the parent denied (e.g. ['WebFetch', 'WebSearch']).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "force": {
       "description": "Force shutdown",
       "type": "boolean"
@@ -805,7 +812,7 @@ expression: output
 {
   "properties": {
     "file_path": {
-      "description": "Absolute path to the file",
+      "description": "Path to the file — absolute, or relative to the working directory",
       "type": "string"
     },
     "limit": {
@@ -1260,6 +1267,40 @@ expression: output
   "type": "object"
 }
 
+## applescript
+{
+  "properties": {
+    "language": {
+      "description": "Scripting language for target=applescript (default AppleScript; JavaScript = JXA)",
+      "enum": [
+        "AppleScript",
+        "JavaScript"
+      ],
+      "type": "string"
+    },
+    "name": {
+      "description": "Alternative field name for the shortcut name when target=shortcuts",
+      "type": "string"
+    },
+    "script": {
+      "description": "AppleScript/JXA source (target=applescript) or shortcut name (target=shortcuts)",
+      "type": "string"
+    },
+    "target": {
+      "description": "Scripting backend: \"applescript\" (osascript, default) or \"shortcuts\" (run a Shortcuts shortcut)",
+      "enum": [
+        "applescript",
+        "shortcuts"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "script"
+  ],
+  "type": "object"
+}
+
 ## ask_user_question
 {
   "properties": {
@@ -1347,6 +1388,125 @@ expression: output
   "type": "object"
 }
 
+## browser_click
+{
+  "properties": {
+    "tab_id": {
+      "type": "string"
+    },
+    "x": {
+      "type": "number"
+    },
+    "y": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "tab_id",
+    "x",
+    "y"
+  ],
+  "type": "object"
+}
+
+## browser_close
+{
+  "properties": {
+    "all": {
+      "default": false,
+      "type": "boolean"
+    },
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}
+
+## browser_console
+{
+  "properties": {
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id"
+  ],
+  "type": "object"
+}
+
+## browser_navigate
+{
+  "properties": {
+    "tab_id": {
+      "description": "Optional existing tab to reuse; if omitted a new tab is opened",
+      "type": "string"
+    },
+    "url": {
+      "description": "The URL to navigate to (http/https)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "url"
+  ],
+  "type": "object"
+}
+
+## browser_screenshot
+{
+  "properties": {
+    "full_page": {
+      "default": false,
+      "type": "boolean"
+    },
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id"
+  ],
+  "type": "object"
+}
+
+## browser_snapshot
+{
+  "properties": {
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id"
+  ],
+  "type": "object"
+}
+
+## browser_tabs
+{
+  "properties": {},
+  "type": "object"
+}
+
+## browser_type
+{
+  "properties": {
+    "tab_id": {
+      "type": "string"
+    },
+    "text": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id",
+    "text"
+  ],
+  "type": "object"
+}
+
 ## code_actions
 {
   "properties": {
@@ -1389,6 +1549,10 @@ expression: output
       "enum": [
         "screenshot",
         "click",
+        "right_click",
+        "middle_click",
+        "double_click",
+        "triple_click",
         "type",
         "scroll",
         "key_press",

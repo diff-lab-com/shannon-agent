@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
+import LoadingState from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
+import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
 import type { ScheduledRoutine } from '@/types'
 
@@ -74,13 +76,7 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
         role="status"
         aria-live="polite"
       >
-        <span
-          className="material-symbols-outlined text-[28px] text-primary animate-spin"
-          aria-hidden="true"
-        >
-          progress_activity
-        </span>
-        <span className="sr-only">{t('routines.templates.loading')}</span>
+        <LoadingState size="md" label={t('routines.templates.loading')} />
       </div>
     )
   }
@@ -148,15 +144,16 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
                   ? tmpl.cron_expr ?? ''
                   : `${tmpl.interval_secs ?? 0}s`}
               </code>
-              <button
+              <Button
                 onClick={() => handleInstantiate(tmpl)}
                 disabled={instantiating !== null}
-                className="px-md py-xs bg-primary text-on-primary rounded-md font-label-sm cursor-pointer hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                size="sm"
+                className="disabled:cursor-not-allowed"
               >
                 {instantiating === tmpl.id
                   ? t('routines.templates.installing')
                   : t('routines.templates.use')}
-              </button>
+              </Button>
             </div>
           </div>
         ))}

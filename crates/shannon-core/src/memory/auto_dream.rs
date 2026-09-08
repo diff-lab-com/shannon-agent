@@ -2,9 +2,10 @@ use shannon_engine::api::{ContentBlock, Message, MessageContent};
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
+use super::compaction_trigger::{CompactSummary, MemoryCompactionTrigger};
 use super::error::MemoryError;
 use super::store::MemoryStore;
-use super::types::{MemoryCategory, MemoryEntry};
+use super::types::{MemoryCategory, MemoryEntry, SessionMemoryConfig};
 
 // ============================================================================
 // Extraction helpers
@@ -391,6 +392,20 @@ impl AutoDreamService {
         messages: &[Message],
         project: &str,
     ) -> Result<Vec<MemoryEntry>, MemoryError> {
+        self.process_conversation_with_session(messages, project, None)
+    }
+
+    /// [`process_conversation`](Self::process_conversation) with provenance
+    /// tagging (P2-4): stored entries are stamped
+    /// `source_kind = "auto-extract"` and, when the host provides it,
+    /// `source_session_id = session_id` so the Memory page can trace an entry
+    /// back to the conversation that produced it.
+    pub fn process_conversation_with_session(
+        &self,
+        messages: &[Message],
+        project: &str,
+        session_id: Option<&str>,
+    ) -> Result<Vec<MemoryEntry>, MemoryError> {
         // Concatenate all message text
         let full_text: String = messages
             .iter()
@@ -409,20 +424,43 @@ impl AutoDreamService {
             .join("\n");
 
         let extracted = self.extract_memories(&full_text, project);
-        let deduped = deduplicate_memories(extracted);
+        let mut deduped = deduplicate_memories(extracted);
 
-        // Store all new memories
+        // Store all new memories (write-time dedup: near-duplicates update in
+        // place rather than appending paraphrases; ADR-0010 D4/C4').
         let mut store = self
             .store
             .write()
             .map_err(|e| MemoryError::Io(std::io::Error::other(e.to_string())))?;
 
-        for entry in &deduped {
-            store.add(entry.clone())?;
+        for entry in &mut deduped {
+            entry.source_kind = Some(MemoryEntry::SOURCE_AUTO_EXTRACT.to_string());
+            entry.source_session_id = session_id.map(str::to_string);
+            store.add_or_update(entry.clone())?;
         }
 
         store.save()?;
         Ok(deduped)
+    }
+
+    /// Run periodic compaction for `project` if the schedule says so
+    /// (ADR-0010 C5').
+    ///
+    /// Counts this call as one session and compacts when either the max-age or
+    /// max-sessions threshold is met. The schedule is persisted in a sidecar
+    /// next to the memory files, so it survives this service's per-query
+    /// lifetime. Returns `Some(summary)` when a compaction ran this call.
+    pub fn maybe_compact(
+        &self,
+        project: &str,
+        config: &SessionMemoryConfig,
+    ) -> Result<Option<CompactSummary>, MemoryError> {
+        let mut store = self
+            .store
+            .write()
+            .map_err(|e| MemoryError::Io(std::io::Error::other(e.to_string())))?;
+        let trigger = MemoryCompactionTrigger::for_store(&store);
+        trigger.maybe_compact(&mut store, project, config)
     }
 
     /// Search the memory store.
@@ -868,6 +906,46 @@ mod tests {
         // proj_a should only have proj_a memories
         assert!(a_mems.iter().all(|m| m.project == "proj_a"));
         assert!(b_mems.iter().all(|m| m.project == "proj_b"));
+    }
+
+    // ========================================================================
+    // Provenance tagging (P2-4)
+    // ========================================================================
+
+    #[test]
+    fn test_process_conversation_with_session_tags_provenance() {
+        let (svc, dir) = make_service();
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("I always use strict mode.".to_string()),
+        }];
+        let stored = svc
+            .process_conversation_with_session(&messages, "proj", Some("sess-abc"))
+            .unwrap();
+        assert!(!stored.is_empty(), "should extract");
+        assert_eq!(stored[0].source_kind, Some("auto-extract".to_string()));
+        assert_eq!(stored[0].source_session_id, Some("sess-abc".to_string()));
+
+        // The provenance survives the disk roundtrip (save → fresh load).
+        let mut reloaded = MemoryStore::new(dir.path().to_path_buf());
+        reloaded.load().unwrap();
+        let from_disk = reloaded.get(&stored[0].id).unwrap();
+        assert_eq!(from_disk.source_kind.as_deref(), Some("auto-extract"));
+        assert_eq!(from_disk.source_session_id.as_deref(), Some("sess-abc"));
+    }
+
+    #[test]
+    fn test_process_conversation_without_session_tags_kind_only() {
+        let (svc, _dir) = make_service();
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("We decided to use Rust for the backend.".to_string()),
+        }];
+        // Legacy entry point: kind is stamped, session id stays None.
+        let stored = svc.process_conversation(&messages, "proj").unwrap();
+        assert!(!stored.is_empty());
+        assert_eq!(stored[0].source_kind, Some("auto-extract".to_string()));
+        assert!(stored[0].source_session_id.is_none());
     }
 
     // ========================================================================

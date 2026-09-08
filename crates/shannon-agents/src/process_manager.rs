@@ -68,6 +68,12 @@ pub struct AgentProcessConfig {
     /// If set, only these tool names are accessible to this agent.
     #[serde(default)]
     pub allowed_tools: Option<Vec<String>>,
+    /// Tool denylist forwarded to the child process as `--disallowed-tools`.
+    /// Empty / None means no extra denylist beyond the parent's process-level
+    /// `--disallowed-tools`. Each entry is comma-joined and passed as a single
+    /// CLI flag (the clap parser accepts `--disallowed-tools A,B,C`).
+    #[serde(default)]
+    pub disallowed_tools: Option<Vec<String>>,
     /// Maximum seconds to wait for the agent to send `agent_ready` before killing it.
     /// Default: 60 seconds.
     #[serde(default = "default_startup_timeout")]
@@ -270,6 +276,39 @@ impl Default for AgentProcessManager {
     }
 }
 
+/// Normalize a tool list into the per-element argv shape that the CLI's
+/// `num_args = 0..` `--allowed-tools` / `--disallowed-tools` parser expects.
+///
+/// Both the parent's CLI parser and the run_team_agent_mode parser split
+/// their input on commas, so this helper produces one argv entry per
+/// normalized tool name. Skips empty entries and logs a warning for any
+/// entry containing characters outside the ToolFilter glob alphabet
+/// (`A-Za-z0-9_?-*`), so a malformed denylist cannot accidentally glob over
+/// unintended tools or be used to inject shell metacharacters via argv.
+fn normalize_tool_list(tools: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(tools.len());
+    for entry in tools {
+        for piece in entry.split(',') {
+            let trimmed = piece.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if !trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '?' | '*' | '-'))
+            {
+                tracing::warn!(
+                    tool = %trimmed,
+                    "ignoring tool name with characters outside `[A-Za-z0-9_?-*-]`",
+                );
+                continue;
+            }
+            out.push(trimmed.to_string());
+        }
+    }
+    out
+}
+
 impl AgentProcessManager {
     /// Create a new process manager.
     pub fn new() -> Self {
@@ -299,7 +338,6 @@ impl AgentProcessManager {
     }
 
     /// Spawn a new agent process.
-    ///
     /// The process is started and reads JSON-RPC from stdin, writes to stdout.
     /// Logs go to stderr (captured by the coordinator at trace level).
     pub async fn spawn_agent(
@@ -335,8 +373,20 @@ impl AgentProcessManager {
         if let Some(ref mode) = config.permission_mode {
             cmd.arg("--permission-mode").arg(mode);
         }
-        if let Some(ref tools) = config.allowed_tools {
-            cmd.arg("--allowed-tools").arg(tools.join(","));
+        // Both `--allowed-tools` and `--disallowed-tools` use `num_args = 0..` on
+        // the CLI side. Forward each normalized tool name as its own argv
+        // entry so the two flags stay symmetric (no comma-joining on one
+        // side and iteration on the other) and so the same comma-splitting
+        // happens at every layer.
+        for tool in normalize_tool_list(config.allowed_tools.as_deref().unwrap_or(&[])) {
+            cmd.arg("--allowed-tools").arg(tool);
+        }
+        // Forward the parent-side denylist so a sub-agent cannot regain tools
+        // the parent denied via `--disallowed-tools`. Each tool becomes its own
+        // `--disallowed-tools` entry; clap accepts repeated flags and unions
+        // them.
+        for tool in normalize_tool_list(config.disallowed_tools.as_deref().unwrap_or(&[])) {
+            cmd.arg("--disallowed-tools").arg(tool);
         }
         cmd.args(&config.args);
         // Filter dangerous env vars that could enable code injection
@@ -1150,6 +1200,7 @@ mod tests {
             agent_name: "test-agent".to_string(),
             permission_mode: None,
             allowed_tools: None,
+            disallowed_tools: None,
             startup_timeout_secs: 60,
         };
         let result = mgr.spawn_agent(config).await;
@@ -1208,6 +1259,7 @@ mod tests {
             agent_name: "test-agent".to_string(),
             permission_mode: Some("auto".to_string()),
             allowed_tools: Some(vec!["Read".to_string(), "Write".to_string()]),
+            disallowed_tools: None,
             startup_timeout_secs: 30,
         };
         let json = serde_json::to_string(&config).unwrap();
@@ -1462,6 +1514,7 @@ mod tests {
                 "Grep".to_string(),
                 "Bash".to_string(),
             ]),
+            disallowed_tools: Some(vec!["WebFetch".to_string()]),
             startup_timeout_secs: 120,
         };
         let json = serde_json::to_string(&config).unwrap();
@@ -2516,6 +2569,7 @@ mod tests {
                 "Edit".to_string(),
                 "Grep".to_string(),
             ]),
+            disallowed_tools: None,
             startup_timeout_secs: 90,
         };
 

@@ -116,6 +116,36 @@ describe("validateConfig", () => {
   it("rejects an out-of-range mobile.port", () => {
     expect(() => validateConfig({ ...ok, mobile: { port: 99999 } })).toThrow(/mobile\.port/);
   });
+
+  // ── P1-4 IM-channel block ──────────────────────────────────────────────
+
+  it("accepts a valid optional im section and round-trips trigger options", () => {
+    const cfg = validateConfig({
+      ...ok,
+      im: { taskLifecycle: false },
+      adapters: [
+        {
+          platform: "telegram",
+          enabled: true,
+          options: { trigger: { groupMode: "any", dmDirect: false, prefix: "/shy" } },
+        },
+      ],
+    });
+    expect(cfg.im).toEqual({ taskLifecycle: false });
+    expect(cfg.adapters[0]?.options).toEqual({
+      trigger: { groupMode: "any", dmDirect: false, prefix: "/shy" },
+    });
+  });
+
+  it("rejects im that is not an object", () => {
+    expect(() => validateConfig({ ...ok, im: "off" })).toThrow(/im.*object/);
+  });
+
+  it("rejects a non-boolean im.taskLifecycle", () => {
+    expect(() => validateConfig({ ...ok, im: { taskLifecycle: "off" } })).toThrow(
+      /im\.taskLifecycle/,
+    );
+  });
 });
 
 describe("loadConfig", () => {

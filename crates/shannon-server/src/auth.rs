@@ -33,6 +33,13 @@ pub async fn bearer_middleware(
     let Some(expected) = auth.token.as_deref() else {
         return Ok(next.run(request).await);
     };
+    // The GitHub webhook endpoint (P2-7) authenticates via its own
+    // `X-Hub-Signature-256` HMAC against `[hooks.github] secret`; GitHub
+    // cannot send our bearer token, so the bearer check does not apply
+    // (a missing secret still yields 503 from the handler itself).
+    if request.uri().path() == crate::github::GITHUB_HOOK_PATH {
+        return Ok(next.run(request).await);
+    }
     let supplied = request
         .headers()
         .get(header::AUTHORIZATION)

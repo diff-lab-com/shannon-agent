@@ -6,10 +6,16 @@
 // until real team agents are wired into the desktop runtime.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Badge } from '@/components/ui/badge'
 import { useIntl } from 'react-intl'
+import { useT } from '@/i18n'
 import EmptyState from '@/components/ui/empty-state'
 import { ListSkeleton } from '@/components/SkeletonLoader'
+import { Button } from '@/components/ui/button'
+import { useTauriEvent } from '@/hooks/useTauriEvent'
+import { EVENT_NAMES } from '@/types'
 import * as api from '@/lib/tauri-api'
+import { cn } from '@/lib/utils'
 import type { AgentMessageEntry } from '@/types'
 
 const PRIORITIES = ['low', 'normal', 'high', 'critical'] as const
@@ -52,7 +58,7 @@ interface AgentMessagesPanelProps {
 
 export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesPanelProps) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useT()
   const [rows, setRows] = useState<AgentMessageEntry[]>([])
   const [teams, setTeams] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -83,18 +89,20 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
     } finally {
       setLoading(false)
     }
-  }, [team, limit])
+  }, [team, limit, t])
 
   useEffect(() => {
     void reload()
   }, [reload])
 
-  // Poll for new messages every 5s when auto-refresh is enabled.
-  useEffect(() => {
-    if (!autoRefresh) return
-    const id = window.setInterval(() => void reload(), 5000)
-    return () => window.clearInterval(id)
-  }, [autoRefresh, reload])
+  // Live updates: the backend emits agent-messages-updated whenever a record
+  // is written (replaces the former 5s poll). The toggle freezes the view;
+  // manual refresh stays available. Coverage note: externally written JSONL
+  // (team agents running in the CLI) doesn't emit yet — that needs a
+  // file-watch hook in AppState.
+  useTauriEvent(EVENT_NAMES.AGENT_MESSAGES_UPDATED, () => {
+    if (autoRefresh) void reload()
+  })
 
   const handleInject = useCallback(async () => {
     if (!content.trim()) return
@@ -108,7 +116,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
     } finally {
       setInjecting(false)
     }
-  }, [activeTeam, from, to, content, priority, reload])
+  }, [activeTeam, from, to, content, priority, reload, t])
 
   const empty = useMemo(() => rows.length === 0, [rows])
 
@@ -134,14 +142,15 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
             />
             {t('tasks.agentMessagesPanel.autoRefresh')}
           </label>
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={() => void reload()}
             disabled={loading}
             aria-label={t('tasks.agentMessagesPanel.reloadAria')}
-            className="p-xs rounded-lg hover:bg-surface-container text-on-surface-variant cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50"
           >
             <span className="material-symbols-outlined text-[18px]">refresh</span>
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -193,20 +202,22 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
             className="px-md py-sm rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface resize-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
           <div className="flex justify-end gap-sm">
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setContent('')}
-              className="px-md py-xs rounded-lg text-on-surface-variant font-label-md hover:bg-surface-container cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
               disabled={injecting}
             >
               {t('tasks.agentMessagesPanel.clear')}
-            </button>
-            <button
+            </Button>
+            <Button
+              size="sm"
               onClick={() => void handleInject()}
               disabled={injecting || !content.trim()}
-              className="px-md py-xs rounded-lg bg-primary text-on-primary font-label-md hover:brightness-110 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="disabled:cursor-not-allowed"
             >
               {injecting ? t('tasks.agentMessagesPanel.sending') : t('tasks.agentMessagesPanel.send')}
-            </button>
+            </Button>
           </div>
         </div>
       </details>
@@ -241,9 +252,9 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
               return (
                 <li key={m.message_id} className="relative pl-md">
                   <span
-                    className={`absolute left-0 top-2 w-2.5 h-2.5 rounded-full ${
+                    className={cn('absolute left-0 top-2 w-2.5 h-2.5 rounded-full',
                       isBroadcast ? 'bg-primary' : 'bg-tertiary'
-                    } ring-2 ring-surface-container-lowest`}
+                    , 'ring-2 ring-surface-container-lowest')}
                   />
                   <div className="flex flex-wrap items-baseline gap-x-sm gap-y-xs">
                     <span className="font-label-md text-on-surface font-bold">{m.from}</span>
@@ -251,12 +262,12 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
                       {isBroadcast ? 'campaign' : 'arrow_forward'}
                     </span>
                     <span className="font-label-md text-on-surface">{m.to}</span>
-                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${badge.bg}`}>
+                    <Badge size="sm" variant="neutral" className={badge.bg}>
                       {badge.label}
-                    </span>
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-outline-variant/30 bg-surface-container-low text-on-surface-variant uppercase tracking-wider">
+                    </Badge>
+                    <Badge size="sm" variant="neutral" className="border-outline-variant/30 bg-surface-container-low">
                       {kindLabel(m.content_kind)}
-                    </span>
+                    </Badge>
                     <span className="text-label-sm text-on-surface-variant ml-auto">
                       {formatTimestamp(m.timestamp)}
                     </span>

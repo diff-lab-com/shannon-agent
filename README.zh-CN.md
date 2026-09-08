@@ -7,7 +7,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-see%20metrics.md-brightgreen.svg)](./docs/metrics.md)
-[![Crates](https://img.shields.io/badge/crates-12-blue.svg)
+<!-- metrics:start:badge -->[![Crates](https://img.shields.io/badge/crates-20-blue.svg)](./docs/metrics.md)<!-- metrics:end:badge -->
 
 [English](./README.md) | [中文文档](#什么是-shannon-code) | [完整文档](https://shannon-agent.github.io/shannon-code/)
 
@@ -19,7 +19,7 @@
 
 Shannon Code 是一个完全开源的、基于 Rust 的 AI 编程助手，支持**任何 LLM 提供商** — Anthropic、OpenAI、Ollama、DeepSeek 或任何 OpenAI 兼容端点。它提供丰富的终端 UI、强大的工具编排、多 Agent 协调和模型上下文协议（MCP）扩展能力。
 
-与闭源替代方案不同，Shannon Code **没有隐藏的计费注入**、**没有破坏缓存的动态头**、**没有供应商锁定**。每一行代码都可审计，每一个行为都经过近 8,000 个测试验证。
+与闭源替代方案不同，Shannon Code **没有隐藏的计费注入**、**没有破坏缓存的动态头**、**没有供应商锁定**。<!-- metrics:start:intro -->每一行代码都可审计，每一个行为都经过 **11,752** 个自动化测试验证。<!-- metrics:end:intro -->
 
 **核心优势：**
 
@@ -27,7 +27,7 @@ Shannon Code 是一个完全开源的、基于 Rust 的 AI 编程助手，支持
 |------|-------------|-------------|
 | LLM 提供商 | Anthropic、OpenAI、Ollama、任何 OpenAI 兼容端点 | 单一供应商 |
 | 成本透明 | 无隐藏费用或缓存操纵 | 动态计费头使成本膨胀 10-20 倍 |
-| 测试覆盖 | ~7,900 个测试，每个文件均有覆盖 | 通常零测试 |
+<!-- metrics:start:diffrow -->| 测试覆盖 | **11,752** 个测试，覆盖 20 个 workspace 成员 | 通常零测试 |<!-- metrics:end:diffrow -->
 | 可扩展性 | MCP 协议、插件系统、技能框架 | 有限或封闭 |
 | Agent 编排 | 多 Agent 团队、工作树隔离、`/batch` 并行 PR | 基础或无 |
 | 代码可审计 | 源代码完全可见 | 黑盒 |
@@ -112,6 +112,15 @@ Shannon Code 是一个完全开源的、基于 Rust 的 AI 编程助手，支持
 - **技能插件** — 斜杠命令触发的提示模板
 - **钩子系统** — 32+ 事件（工具执行、压缩、配置变更、Agent 生命周期）
 
+### IM 渠道集成
+
+通过桌面端「Social Connections」把 Telegram / Discord / Slack / 飞书 / 钉钉 消息接入为任务，
+执行进度与结果回推 IM（详见 [IM 渠道集成指南](docs/integrations/im-channels.md)）：
+
+- **入站触发** — 私聊直接响应；群聊需 @机器人 或 `/shannon` 前缀（可配置）
+- **生命周期回推** — 任务开始 / 完成 / 失败自动回到原会话
+- **安全基线** — 凭据仅存 OS keyring、webhook 全量验签、敏感操作回 IM 确认
+
 ### 国际化
 
 - 10 种语言：英语、中文、印地语、西班牙语、法语、阿拉伯语、孟加拉语、葡萄牙语、俄语、日语
@@ -137,21 +146,32 @@ VS Code 配套扩展（`editors/vscode/`）：
 下载适用于您平台的最新版本：
 
 ```bash
-# Linux / macOS（从 GitHub Releases 下载）
-curl -fsSL https://github.com/shannon-agent/shannon-agent/releases/latest/download/shannon-$(uname -s)-$(uname -m).tar.gz | tar xz
-sudo mv shannon /usr/local/bin/
+# Linux / macOS —— 一行命令，自动识别平台（CLI + gateway + 桌面端）
+curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | sh
+
+# 服务器 / 无头环境 —— 只装 CLI，不需要 sudo
+curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | SHANNON_COMPONENTS=cli sh
 
 # 或使用 cargo（需要 Rust 1.88+）
-cargo install --git https://github.com/shannon-agent/shannon-agent.git
+cargo install --git https://github.com/diff-lab-com/shannon-agent.git
 ```
 
 <details>
 <summary>其他平台</summary>
 
-- **Windows**：从 [Releases](https://github.com/shannon-agent/shannon-agent/releases) 下载 `.zip`
+- **Windows**：`irm https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.ps1 | iex`（或从 [Releases](https://github.com/diff-lab-com/shannon-agent/releases) 下载 `.zip`）
 - **从源码构建**：见下方[开发者指南](#开发者指南)
 
 </details>
+
+一次安装，四个入口（每个桌面安装器同时内含 `shannon` CLI）：
+
+| 入口 | 用途 |
+|---|---|
+| `shannon` | 交互式 TUI / REPL（默认） |
+| `shannon -p "…"` | 无头脚本化 —— NDJSON 流式输出，`--schema` 结构化输出 |
+| `shannon serve` | 引擎守护进程（:33420）—— gateway / 移动端连接的 API 面 |
+| `shannon desktop` | 桌面应用 —— `--install` 可按需下载当前平台安装包 |
 
 ### 2. 配置
 
@@ -351,28 +371,43 @@ cargo fmt                          # 格式化
 
 ## 可靠性与测试覆盖
 
+<!-- metrics:start:table -->
 | 指标 | 数值 |
 |------|------|
-| Rust 代码总量 | ~282,000 行 |
-| 源文件数 | 355 |
-| 总测试数 | **7,889** |
-| Crate 数量 | 12 |
-| 零测试文件数 | **0**（每个 `src/**/*.rs` 至少一个 `#[test]`） |
+| Rust 代码总量 | 418,458 行 |
+| 源文件数 | 624 |
+| 总测试数（nextest 可运行） | **11,752** |
+| Crate 数（workspace 成员） | 20（19 个 crate + desktop） |
+| 零测试 Crate 数 | 2（`shannon-server`, `shannon-stability-attr`） |
 | CI 代码检查 | `cargo clippy --workspace -- -D warnings`（零警告） |
+<!-- metrics:end:table -->
 
 各 Crate 测试分布：
 
+<!-- metrics:start:crates -->
 | Crate | 测试数 | 职责 |
 |-------|--------|------|
-| `shannon-core` | ~3,370 | API 客户端、查询引擎、权限、工具、状态 |
-| `shannon-ui` | ~1,089 | 终端 UI、REPL、组件、渲染 |
-| `shannon-tools` | ~1,111 | 工具实现 |
-| `shannon-commands` | ~335 | 内置命令 |
-| `shannon-agents` | ~471 | 多 Agent 协作 |
-| `shannon-mcp` | ~373 | MCP 服务器集成 |
-| `shannon-cli` | ~191 | CLI 入口 |
-| `shannon-skills` | ~171 | 技能系统 |
-| 其他 Crate | ~1,051 | Codegen、类型、工具接口、Agent、桌面 |
+| `shannon-core` | 3,766 | API 客户端、查询引擎、权限、工具、状态 |
+| `shannon-tools` | 1,630 | 工具实现：文件操作、Git、搜索、Notebook |
+| `shannon-ui` | 1,497 | 终端 UI、REPL、组件、渲染 |
+| `shannon-engine` | 1,113 | LLM API 客户端、流式适配、压缩/上下文预算、权限 |
+| `shannon-agents` | 897 | 多 Agent 协作：团队、工作树隔离 |
+| `shannon-desktop` | 599 | Tauri 桌面应用外壳与命令 |
+| `shannon-mcp` | 578 | MCP 协议：传输层、服务器、客户端、进程池 |
+| `shannon-cli` | 486 | CLI 入口（`shannon` 二进制） |
+| `shannon-commands` | 416 | 内置斜杠命令 |
+| `shannon-mcp-saas` | 185 | SaaS MCP 服务器（GitHub、Slack、Jira、Notion、Linear） |
+| `shannon-skills` | 172 | 技能框架：发现、加载、执行 |
+| `shannon-codegen` | 100 | 代码生成工具 |
+| `shannon-types` | 84 | 共享类型定义 |
+| `shannon-agent` | 65 | 独立 Agent（JSON-RPC over stdin/stdout） |
+| `shannon-remote` | 55 | 远程执行环境（SSH 主机、Docker） |
+| `shannon-tool-interface` | 42 | 工具 trait 定义 |
+| `shannon-api-protocol` | 37 | 线协议（serde 类型 + TS 代码生成） |
+| `shannon-repomap` | 30 | 仓库符号地图（tree-sitter） |
+| `shannon-server` | 0 | HTTP API 服务器（`shannon serve`） |
+| `shannon-stability-attr` | 0 | 稳定性属性宏 |
+<!-- metrics:end:crates -->
 
 ---
 

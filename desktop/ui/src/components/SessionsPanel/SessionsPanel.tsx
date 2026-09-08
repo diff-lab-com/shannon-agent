@@ -4,6 +4,11 @@
 // Rust backend knows about, mark the active one, and switch the
 // `currentSessionId` in `AppContext` when clicked.
 //
+// U1 (2026-08-26, D1=A): NOT mounted in production. The app sidebar's
+// SessionsSection (components/SidebarSessions.tsx) is the single session
+// list. This spike is retained for the P2-5b ThreadSidebar line — do not
+// mount it without resolving that plan first.
+//
 // This is deliberately small. The full thread-switcher UX
 // (per-session event replay, focused-stream rendering, unread
 // indicators, fork/branch/rename) lives in the next iteration; this
@@ -32,7 +37,7 @@
 
 import { useCallback, useEffect, useMemo } from 'react'
 import { useIntl } from 'react-intl'
-import { Plus, MessageSquare } from 'lucide-react'
+import { Icon } from '@/components/ui/icon'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
@@ -135,7 +140,7 @@ export function SessionsPanel({ className, titleId }: SessionsPanelProps) {
             defaultMessage: 'Start a new thread',
           })}
         >
-          <Plus className="w-4 h-4" />
+          <Icon name="add" />
         </Button>
       </div>
       <ScrollArea className="flex-1 min-h-0">
@@ -172,23 +177,24 @@ interface SessionRowProps {
 function SessionRow({ id, title, messageCount, active, onSelect }: SessionRowProps) {
   const intl = useIntl()
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
       onClick={() => onSelect(id)}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'group flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors',
+        'h-auto justify-start items-start whitespace-normal text-left rounded-md px-2 py-2',
         active
-          ? 'bg-primary/15 text-primary font-bold'
+          ? 'bg-primary/15 text-primary font-bold hover:bg-primary/15'
           : 'hover:bg-on-surface-variant/10 text-on-surface',
       )}
     >
-      <MessageSquare
+      <Icon
+        name="chat"
+        size="sm"
         className={cn(
-          'mt-0.5 h-4 w-4 shrink-0',
+          'mt-0.5 shrink-0',
           active ? 'text-primary' : 'text-on-surface-variant',
         )}
-        aria-hidden="true"
       />
       <span className="flex-1 min-w-0">
         <span className="block truncate text-sm" title={title}>
@@ -201,7 +207,7 @@ function SessionRow({ id, title, messageCount, active, onSelect }: SessionRowPro
           )}
         </span>
       </span>
-    </button>
+    </Button>
   )
 }
 
@@ -209,7 +215,7 @@ function EmptyState() {
   const intl = useIntl()
   return (
     <div className="flex flex-col items-center justify-center px-4 py-8 text-center">
-      <MessageSquare className="h-6 w-6 text-on-surface-variant/50 mb-2" aria-hidden="true" />
+      <Icon name="chat" size="md" className="text-on-surface-variant/50 mb-2" />
       <p className="text-sm text-on-surface-variant">
         {intl.formatMessage({
           id: 'sessionsPanel.empty',

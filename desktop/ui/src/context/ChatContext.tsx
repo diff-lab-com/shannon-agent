@@ -6,16 +6,13 @@
 // which owns the actual state and actions; this file only declares the slice
 // type, the context, the useChat hook, and the <ChatProvider>.
 //
-// P2-5a: <ChatProvider> wraps its children with
-// `<ChatV2RuntimeProvider>` so the assistant-ui runtime mounts (gated on the
-// `chat.v2` feature flag) without disturbing the slice contract that 19
-// existing consumers rely on. When the flag is OFF, ChatV2RuntimeProvider
-// is a passthrough — the runtime never mounts and `<ChatContext.Provider>`
-// behaves exactly as it did before P2-5a. See `docs/plans/chat-upgrade.md`
-// §3.1 acceptance criterion #3.
+// chat.v2 decision (2026-09): production chat renders the legacy path only —
+// the assistant-ui runtime mount and the dev-only /chat-v2-spike route were
+// removed. The bridge library under src/lib/runtime/ stays as a dormant,
+// tested asset; see the ChatProvider note below if that work resumes.
 
 import { createContext, useContext, type ReactNode } from 'react'
-import { ChatV2RuntimeProvider } from '@/lib/runtime/ChatV2RuntimeProvider'
+import type { CheckpointInfo, CompactSessionResult, FeedbackRating } from '@/lib/tauri-api'
 import type { ChatMessage, ToolCall, UsagePayload } from '@/types'
 
 export interface ChatContextValue {
@@ -25,8 +22,31 @@ export interface ChatContextValue {
   isQuerying: boolean
   activeToolCalls: ToolCall[]
   usage: UsagePayload | null
-  sendMessage: (message: string, filePaths?: string[]) => Promise<void>
+  /**
+   * `options.budgetBypass` is the "continue (ignore once)" choice from the
+   * budget-exceeded banner — it exempts exactly that send's pre-turn
+   * budget check (the mid-turn cap stays enforced backend-side).
+   */
+  sendMessage: (
+    message: string,
+    filePaths?: string[],
+    options?: { budgetBypass?: boolean },
+  ) => Promise<void>
   cancelQuery: () => Promise<void>
+  /** /rewind: completed checkpoints for the current session (turn indices). */
+  checkpoints: CheckpointInfo[]
+  /** Rewind to before `turnIndex`: drops that turn and everything after. */
+  rewindSession: (turnIndex: number) => Promise<void>
+  /** /compact: summarize history; resolves with the summary + new messages. */
+  compactSession: () => Promise<CompactSessionResult>
+  /** PM-12: persisted message ratings for the current session. */
+  feedback: Record<string, FeedbackRating>
+  /** Set/clear a message's rating (null clears). Optimistic, then persisted. */
+  recordFeedback: (key: string, rating: FeedbackRating | null) => Promise<void>
+  /** U2: ContextPanel open state lives here so the global Header (in
+   * Layout, outside the /chat route) can toggle the panel that Chat renders. */
+  contextPanelOpen: boolean
+  toggleContextPanel: () => void
 }
 
 export const ChatContext = createContext<ChatContextValue | null>(null)
@@ -38,9 +58,11 @@ export function useChat(): ChatContextValue {
 }
 
 /**
- * Provider for the chat slice. P2-5a: when chat.v2 is on, children also sit
- * inside the assistant-ui `<AssistantRuntimeProvider>`. The slice contract
- * (context value shape, `useChat()` return) is unchanged.
+ * Provider for the chat slice. chat.v2 decision (2026-09): production chat
+ * renders the legacy path only — the assistant-ui runtime mount and the
+ * dev-only /chat-v2-spike route were removed. The bridge library under
+ * src/lib/runtime/ stays as a dormant, tested asset for a future upgrade;
+ * re-wrap children in `ChatV2RuntimeProvider` if that work resumes.
  */
 export function ChatProvider({
   value,
@@ -49,9 +71,5 @@ export function ChatProvider({
   value: ChatContextValue
   children: ReactNode
 }) {
-  return (
-    <ChatV2RuntimeProvider>
-      <ChatContext.Provider value={value}>{children}</ChatContext.Provider>
-    </ChatV2RuntimeProvider>
-  )
+  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>
 }

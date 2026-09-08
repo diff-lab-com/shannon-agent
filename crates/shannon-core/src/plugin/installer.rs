@@ -159,6 +159,10 @@ pub fn install_extension_bytes(
         .map_err(|e| PluginError::InvalidManifest(format!("invalid {}: {e}", kind.extension())))?;
 
     let manifest = find_manifest(&mut archive)?;
+    // §4.10: archives must pass the same install-time validation as
+    // git/path installs before a single byte lands on disk.
+    let warnings = super::validate::validate_for_install(&manifest)?;
+    super::validate::warn_about(&warnings);
     // Re-open the cursor for extraction since `find_manifest` borrowed it mutably.
     drop(archive);
     let cursor2 = Cursor::new(bytes);

@@ -44,8 +44,17 @@ WebFetch: Fetches a URL from the internet and optionally extracts its contents
 WebSearch: Search the web for information using a real search API
 Worktree: Manage git worktree sessions for isolated branch work
 Write: Write content to a file, overwriting if it exists
+applescript: Run AppleScript or JXA against scriptable macOS applications (Mail, Calendar, Reminders, Messages, Finder, Notes, …), or run a Shortcuts shortcut. Requires macOS; the first call per application triggers Apple's standard Automation permission prompt.
 ask_user_question: Ask the user a question during execution. Supports single-select, multi-select, and free-text input. Use this when you need confirmation, option selection, or information from the user.
 auto_commit: Smart git commit tool. Stages changes (all or specific files), generates semantic commit messages from diffs, and creates commits. Supports dry-run preview and co-author trailers. Shows git status and diff stats before committing.
+browser_click: Click the mouse at (x, y) on the given tab.
+browser_close: Close a browser tab. Use `"all": true` to close every tab (the Chrome process keeps running).
+browser_console: Return the buffered console messages (log/debug/info/error/warning) for the given tab, oldest first. Messages are captured from the moment the tab was opened; the buffer holds the most recent 500 entries.
+browser_navigate: Open a URL in a new browser tab. Returns the new tab_id for subsequent actions. Requires the `local-browser` feature.
+browser_screenshot: Capture a PNG screenshot of the given tab (viewport or full page). PNG bytes are returned in tool-result metadata under `image/png`.
+browser_snapshot: Return a text snapshot of the given tab: `<title>` + `<url>` + innerText (≤8KB).
+browser_tabs: List the open browser tabs in this Shannon process.
+browser_type: Type text into the focused field on the given tab.
 code_actions: Get available code actions (quick fixes, refactorings) for a range in a file. Uses the language server to suggest fixes for diagnostics and available refactorings.
 computer: Interact with the computer desktop: take screenshots, click, type, scroll, and press keys. Coordinates are in [0-1024, 0-768] range and scaled to actual screen resolution.
 document_symbol: List all symbols (functions, classes, methods, variables, etc.) in a file. Uses the language server to provide a hierarchical view of the document's symbol structure.

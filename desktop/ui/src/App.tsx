@@ -15,10 +15,11 @@ const Extensions = lazy(() => import('./pages/Extensions'));
 const Settings = lazy(() => import('./pages/Settings'));
 const OPC = lazy(() => import('./pages/OPC'));
 const OPCTask = lazy(() => import('./pages/OPCTask'));
-const QuickFix = lazy(() => import('./pages/QuickFix'));
 const Editor = lazy(() => import('./pages/Editor'));
 const Memory = lazy(() => import('./pages/Memory'));
 const Usage = lazy(() => import('./pages/Usage'));
+// §4.14 — Turn Timeline (inside-of-a-turn visualization over the L0 log).
+const TurnTimeline = lazy(() => import('./pages/TurnTimeline'));
 const SkillProposalsManager = lazy(() => import('./components/skills/SkillProposalsManager'));
 const DataSources = lazy(() => import('./components/extensions/DataSources'));
 const Featured = lazy(() => import('./components/extensions/Featured'));
@@ -31,15 +32,15 @@ const GeneralSettings = lazy(() => import('./components/settings/GeneralSettings
 const ThemeSettings = lazy(() => import('./components/settings/ThemeSettings'));
 const ModelsSettings = lazy(() => import('./components/settings/ModelsSettings'));
 const AdvancedSettings = lazy(() => import('./components/settings/AdvancedSettings'));
-const BillingSettings = lazy(() => import('./components/settings/BillingSettings'));
 const NotificationsSettings = lazy(() => import('./components/settings/NotificationsSettings'));
 const ConnectionsSettings = lazy(() => import('./components/settings/ConnectionsSettings'));
+const RemotesSettings = lazy(() => import('./components/settings/RemotesSettings'));
+const PermissionsSettings = lazy(() => import('./components/settings/PermissionsSettings'));
 
 // P2-5a spike: dev-only test page for the assistant-ui runtime adapter.
 // Loaded here so `Chat.tsx` (production) and its component tree stay untouched.
 // Production routing never exposes this; gating happens at the route level
 // below via `import.meta.env.DEV`.
-const ChatV2Spike = lazy(() => import('./pages/ChatV2Spike'));
 
 function PageLoader() {
   return <div className="flex-1 flex items-center justify-center"><span className="material-symbols-outlined icon-xl text-primary animate-spin">progress_activity</span></div>;
@@ -89,25 +90,23 @@ export default function App() {
                 <Route path="/opc" element={<OPC />} />
                 <Route path="/opc/task" element={<OPCTask />} />
                 <Route path="/opc/task/:id" element={<OPCTask />} />
-                <Route path="/quickfix" element={<QuickFix />} />
+                {/* IA: the Editor keeps a standalone route (palette +
+                    mod+5 entry points); QuickFix is chat-inline only — its
+                    old route had no navigation entry, deep links fall back
+                    to /chat via the catch-all. */}
                 <Route path="/editor" element={<Editor />} />
                 <Route path="/memory" element={<Memory />} />
-                {/* P2-5a spike — dev-only; never shipped to production.
-                    Gates on Vite's `import.meta.env.DEV` (true under
-                    `pnpm dev`, false under `pnpm build`). Production builds
-                    drop the route entirely. */}
-                {import.meta.env.DEV && (
-                  <Route path="/chat-v2-spike" element={<ChatV2Spike />} />
-                )}
+                <Route path="/timeline/:id" element={<TurnTimeline />} />
                 <Route path="/settings" element={<Settings />}>
                   <Route index element={<Navigate to="general" replace />} />
                   <Route path="general" element={<GeneralSettings />} />
                   <Route path="theme" element={<ThemeSettings />} />
                   <Route path="models" element={<ModelsSettings />} />
-                  <Route path="billing" element={<BillingSettings />} />
+                  <Route path="permissions" element={<PermissionsSettings />} />
                   <Route path="advanced" element={<AdvancedSettings />} />
                   <Route path="notifications" element={<NotificationsSettings />} />
                   <Route path="connections" element={<ConnectionsSettings />} />
+                  <Route path="remotes" element={<RemotesSettings />} />
                 </Route>
                 <Route path="*" element={<Navigate to="/chat" replace />} />
               </Route>

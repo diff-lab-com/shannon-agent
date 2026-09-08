@@ -2,9 +2,318 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
-## [Unreleased]
+## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
-_No entries yet._
+### P3 follow-ups: backend selection, AppleScript, browser toolset, foundations (feat/p3-follow-ups)
+
+- **Selectable Linux input backends (T10 Phase 1)**: mutually exclusive
+  cargo features `computer-use-libei` (xdg-desktop-portal RemoteDesktop —
+  the Wayland path), `computer-use-wayland`, `computer-use-x11rb` alongside
+  the existing xdo default. Failing computer-tool actions on a
+  native-Wayland session now carry an actionable hint instead of a bare
+  "Input init failed". Passthrough features on `shannon-cli` and
+  `shannon-desktop`; CI gains a libei build leg.
+- **AppleScript/Shortcuts tool (T13 Tier 1)**: new `applescript` builtin
+  tool runs `osascript` (AppleScript or JXA) and `shortcuts run` against
+  scriptable macOS apps. macOS-only execution (explanatory stub
+  elsewhere); High-risk permission policy; 30s timeout + 50 KiB output cap.
+- **Anthropic browser toolset dual path (T12 Option C)**: with
+  `SHANNON_ANTHROPIC_TOOLSETS=1`, Anthropic requests on Claude 4.x/5.x
+  Opus/Sonnet models carry the server-executed
+  `browser_toolset_20260801` entry plus the `computer-use-2025-11-24`
+  beta, superseding the local `computer` tool and Playwright/Chrome
+  DevTools MCP tools. Non-Anthropic providers are untouched.
+- **Desktop PDF attachments (T6)**: picked/dropped PDFs now reach the
+  model as pdftotext-extracted text blocks (50 KiB cap per PDF; scanned
+  PDFs are called out explicitly).
+- **Attachment polish**: bmp/svg attachments warn that vision models may
+  not render them (T5-B); `UserMessagePayload.attachment_count` records
+  per-turn attachment counts in the session log (T9).
+- **Browser foundations (T14 + T10-P2)**: system-browser detection
+  (Linux/macOS/Windows, `SHANNON_BROWSER_PATH` override) with distro
+  install hints, a `BrowserProvider` provider seam, a
+  `PlatformAdapter` desktop-control abstraction with a Tier-2 macOS AX
+  skeleton, and a `/browser doctor` subcommand reporting detection and
+  MCP state. Shannon still never bundles a browser binary.
+
+### Computer use closed loop, one-command browser automation & file attachments (feat/use-browser-computer-upload)
+
+- **Computer use screenshot loop fixed**: tool image results now deliver the
+  base64 payload to the model from `metadata["data"]` (the `computer` tool's
+  convention) in addition to the Read/AnalyzeImage JSON-in-content convention —
+  previously screenshots returned only the text "Screenshot captured (WxH)" and
+  the model never saw the screen.
+- **Screenshot downscaling**: captures are downscaled to
+  `max_screenshot_width/height` (default 1024×768 reference resolution,
+  aspect-preserving, never upscaled) — aligns the payload with the coordinate
+  contract and cuts multimodal tokens ~4x on Retina displays.
+- **Click variants**: `right_click` / `middle_click` / `double_click` /
+  `triple_click` actions added to the Anthropic-compatible `computer` schema.
+- **Permission policy**: the `computer` tool now registers a High-risk
+  permission policy (per-action confirmation by default), matching
+  Cursor/Cowork-style gating for GUI control.
+- **Feature passthrough**: `shannon-cli` and `shannon-desktop` expose a
+  `computer-use` cargo feature (opt-in; Linux needs libxdo/X11 dev libs) so
+  real screen capture / input simulation can ship in end binaries; CI builds it.
+- **`/browser setup` + `/browser status`**: one command merges the official
+  Playwright MCP server (`npx @playwright/mcp@latest`) into the project
+  `.mcp.json` (idempotent, preserves unrelated servers, refuses symlinked
+  targets); on top of the existing `browser_control_prompt` injection this
+  makes browser automation a first-class flow. New `browser_setup_hint`
+  system-prompt block tells the model to point users at `/browser setup` when
+  a browser task arrives with no browser tool registered.
+- **`QueryContext.attachments`**: the query engine now accepts multimodal
+  attachments on the context; non-empty attachments switch the user message to
+  content blocks (Anthropic + OpenAI adapters serialize both).
+- **File upload wired end-to-end**: REST `POST /v1/sessions/:id/messages`
+  accepts `attachments: [{name?, media_type, data(base64)}]` (png/jpeg/gif/webp,
+  10 MB / 8 files, 400 with reason on violation); the desktop app routes
+  picked/dropped images into the query instead of display-only storage; the
+  TUI `@` picker queues images (`@screenshot.png`) into the next query instead
+  of failing on binary content.
+
+### Added
+
+### Follow-ups — goal hardening & API surface (feat/goal-followups)
+
+- **Blocked 3-turn audit (Codex parity)**: the same blocker (normalized
+  reason) must persist 3 consecutive goal turns before the pause is
+  accepted; earlier claims continue with an audit warning, different
+  reasons restart the streak.
+- **Verified-wait self-report (P2.2)**: continuation replies may open
+  with `GOAL_PROGRESS: progress|verified_wait|no_progress`; claims can
+  only help when backed by tool activity, no-progress counts with or
+  without it.
+- **Check-in backoff (P2.4)**: blocked goals re-test their blocker at
+  30m → 1h → 2h, max 3 fires (checkins persisted); `SHANNON_GOAL_
+  CHECKIN_MINUTES=0` disables; `/goal resume` resets the budget.
+- **`shannon_core::goal` + `GoalApi`**: the goal state machine and the
+  continuation decision moved out of `shannon-ui` so server/desktop
+  clients can drive the same lifecycle without UI dependencies.
+- **Goal eval track (#5)**: `EvalTier::Goal` + `goal_prompt_block`
+  injection + `goal_01`/`goal_02` tasks (suite now 22 tasks; guards
+  updated).
+
+### Phase 2 — autonomous-loop guard rails (feat/goal-phase2 + feat/goal-live-wiring)
+
+- **Progress-based guard rails replace turn-count-as-guard**: `/goal`,
+  `/loop`, and `/ralph` now share deterministic drift protection —
+  anti-spin (2 consecutive no-tool turns → pause) and stall strikes
+  (3-strike budget → pause with a re-planning hint), via the shared
+  `repl::loop_guard` module. R15: goal defaults to **unlimited turns**
+  (`--max N` is an explicit fallback); `/ralph` defaults to 100;
+  `/loop` was always unlimited (plan doc corrected).
+- **`goal_get` / `goal_update` tools** (Codex-spec contract): the model
+  can report completion or blockers through structured tool calls;
+  blocked requires a reason; pause stays user-owned. Wired live via
+  `GoalShared` — the tools observe and transition the real goal during
+  a query, and transitions are replayed, persisted, and surfaced at
+  query completion.
+- **`--budget $N` on `/goal`**: live budget signal from the billing
+  store (spend since set/resume); exceeding it pauses the goal as a
+  recoverable terminal (raise the cap or clear). Defaults off — no
+  implicit termination.
+- **Recursive-submit fixes**: all three loops queue their continuations
+  through `submit_input`'s flat drain loop (O(1) stack depth) instead
+  of nesting `handle_query` frames (stack-overflow hazard with
+  unlimited loops).
+- **Persistence**: active `/loop` and `/ralph` state now persists in
+  the session sidecar and is restored by `/resume` / `--resume`.
+- **`/ralph` completion hardening**: keywords match only the final
+  non-empty line (substring-in-body no longer ends the loop); default
+  cap raised 10 → 100; invalid `--max` falls back to the real default.
+- Deferred: check-in backoff scheduling (needs a one-shot routine
+  primitive), model self-reported progress classification.
+
+- **`/goal` — session goal: a persistent objective with auto-continuation**
+  (parity with Claude Code `/goal` and Codex CLI Goals; design + competitive
+  research in `docs/plans/2026-09-04-goal-design.md` and
+  `docs/research/2026-09-04-goal-competitive-research.md`): `/goal
+  <objective>` sets a session-scoped goal that is injected as a non-cached
+  system block on every query (survives compaction), auto-continues the
+  agent across turns until the model ends a reply with a strict final-line
+  completion marker (`GOAL_COMPLETE` / `GOAL_BLOCKED: <reason>`), and
+  persists in the session sidecar so `--resume` / `/resume` restore it.
+  Anti-runaway guards: iteration cap (`--max N`, default 25, `0` =
+  unlimited) flipping the goal to paused, mutual exclusion with `/ralph`
+  and `/loop`, and interruption stopping the loop (goal stays anchored).
+  Status pill in the status bar (active ◎ / paused ⏸ / complete ✓), desktop
+  notification on completion, `--goal` injection for headless `-p` runs,
+  help overlay entry, and i18n across all 10 locales. Engine side:
+  `QueryEngineConfig::goal` + `GoalSpec` + `set_goal` mirror the existing
+  `/focus` pipeline; completion-marker constants
+  (`GOAL_COMPLETE_MARKER`/`GOAL_BLOCKED_MARKER`) are shared from
+  `shannon-core`. Deliberately deferred (Phase 2): Codex-style
+  `get_goal`/`update_goal` tool contract, token/time budget accounting,
+  check-in backoff scheduling, anti-spin (no-tool-call detection).
+
+- **`write_files` plugin permission enforcement — "declaration IS sandbox"**
+  (closes the last §4.9 scaffolding seam): a plugin manifest that declares
+  `write_files` now gets its stdio server processes spawned **inside a
+  manifest-derived execution world** at both spawn points (discovery +
+  per-call cold spawn). Derivation
+  (`PluginPermissionPolicy::spawn_sandbox_policy`): writable roots converge
+  to the plugin install dir + the current workspace, everything else stays
+  read-only, system binary roots stay executable, and network follows the
+  `network` declaration. Linux installs a Landlock fork-init ruleset
+  (fail-closed: a failed install aborts the spawn); macOS rides the existing
+  Seatbelt bridge; anywhere the backend is missing the spawn chain degrades
+  to legacy behavior with a loud `plugin/sandbox` warning — never a silent
+  fake sandbox. Undeclared manifests keep byte-for-byte legacy spawns (the
+  default-allow compat red line; the derivation is `None` for anything not
+  explicitly declaring `write_files`). New pieces: `plugin::spawn_sandbox`
+  (`PluginSpawnGuard`), `gated_discover_tools_stdio_guarded`,
+  `discover_tools_guarded`, `shannon_tools::sandbox::{plugin_spawn_world,
+  plugin_spawn_guard_for_manifest}`; REPL/CLI plugin loaders wired. E2e
+  acceptance in `crates/shannon-tools/tests/plugin_spawn_sandbox_tests.rs`
+  (kernel-refused out-of-root write vs. in-root success vs. undeclared
+  compat control); author-facing semantics updated in
+  `crates/shannon-core/src/plugin/PERMISSIONS.md`.
+- **OTLP telemetry bridge** (`shannon-core::telemetry`): `telemetry.rs`
+  rewritten from atomic counters into an L0→OpenTelemetry bridge. A pure
+  `build_span_tree` folds a session's events into the
+  `session → turn → tool` span hierarchy (explicit envelope
+  `span_id`/`parent_span_id` win over structural ids; interrupted tool
+  calls still render), and analytics-projection totals feed OTel counters.
+  Traces go out via OTLP gRPC (`opentelemetry-otlp`, batch processor =
+  background delivery); metrics export interval comes from the existing
+  config fields — previously dead `endpoint` / `trace_export` /
+  `metrics_export` are now wired, and `SHANNON_TELEMETRY` keeps its opt-in
+  NOOP-by-default contract (nothing is constructed when off; sinks degrade
+  instead of failing on unreachable endpoints). An in-memory receiver test
+  asserts the exported span tree shape end-to-end.
+- **Full RedactionPolicy** (`shannon-core/src/session_log/redaction.rs`),
+  replacing the §4.2 minimal mask: built-in token prefixes (unchanged,
+  fail-closed) + user extra prefixes / regexes / exact values loaded from
+  `~/.shannon/redaction.toml` (override path: `SHANNON_REDACTION_TOML`) +
+  env-secret value snapshot. Each `SessionTee` captures one immutable
+  policy snapshot per query — masking stays strictly write-time, disk stays
+  clean; an acceptance test scans a written log for injected plaintext.
+- **Desktop Turn Timeline**: new `trace_timeline(session_id)` Tauri command
+  serving `project_turn_timeline(events)` — the per-session L0 projection
+  with turn windows, tool waterfall rows (paired call→result with measured
+  durations, interrupted calls marked), and the token/cost cumulative curve.
+  The `/timeline/:id` panel renders waterfall bars plus an SVG accumulation
+  chart; reachable from every session row's ⋯ menu ("Turn Timeline").
+  Mock-mode fixture + Playwright spec included.
+
+### Changed
+
+- Deps: `opentelemetry` 0.32 (+ `opentelemetry_sdk`, `opentelemetry-otlp`)
+  added to `shannon-core` only; no workspace-level dependency changes.
+- `scripts/otel-demo/docker-compose.yml`: one-command Jaeger (UI :16686)
+  + Grafana (:3300) stack for accepting the span tree visually; usage in
+  the telemetry module docs.
+
+## [Unreleased] — §4.10 W3-2 · manifest v2 + install-time validation + `--dump-config` + ecosystem conventions
+
+### Added
+
+
+- **Plugin manifest v2** (`manifest_version = "2"`): MCP server references
+  (`[[mcp]]` rows; the Claude `mcpServers` map parses into the same list),
+  reserved hook-subscription declarations (`[[hooks]]`, validated against
+  `HookEventType` at install time), a Shannon compat window
+  (`[compat] min/max`), and the reserved `type = "wasm"` slot for the
+  deferred §4.16 pilot (clear "reserved, cannot load yet" error instead of
+  "unknown plugin type").
+- **Install-time validation** shared by git/path/`.dxt`/`.mcpb` installs and
+  plugin updates: structural schema checks plus permission-completeness —
+  the faces a plugin's shape implies (stdio ⇒ `execute_commands`, remote ⇒
+  `network`, tool routing ⇒ `mcp_tools`, command/skill entry reads + prompt
+  turns ⇒ `read_files` + `llm_api`) must be declared. **v2 manifests refuse
+  to install on gaps; v1/claude legacy manifests install with loud
+  warnings**, keeping upgrade paths non-breaking.
+- **`shannon --dump-config`**: prints the effective configuration as JSON
+  with per-entry provenance. Layers render lowest → highest precedence
+  (builtin → user-global `~/.shannon/config.toml` → project
+  `.shannon.toml` → env-vars → connected `~/.shannon/providers.toml` →
+  cli-overlay); each entry is annotated with the nearer high-precedence
+  layer that overrides it (`overridden_by`) and its feeding env var where
+  applicable. Golden-snapshot tested.
+- **Ecosystem conventions doc**: `crates/shannon-core/src/plugin/ECOSYSTEM.md`
+  — GitHub topic `shannon-plugin`, three authoring templates (skill /
+  command / tool) in v2 TOML, v1-TOML / v2-TOML / claude-JSON reading
+  matrix, and the install-validation rule list.
+
+### Changed
+
+- **Broken plugin manifests can no longer vanish silently**
+  (`registry.load_all`). A directory holding a corrupt `plugin.toml` /
+  `plugin.json` is now reported via an aggregated `LoadFailures` error that
+  names every bad path and reason; all valid sibling plugins still load.
+  Manifest-less directories remain benign skips. REPL/CLI load sites print
+  the aggregated report as a warning.
+- MCP references accept `stdio` transport rows without an explicit
+  `type = "stdio"` (inferred default), matching hand-written shorthand.
+
+## [Unreleased] — §4.6 W1-P1 · L0 becomes the only authoritative session record (breaking, DP4)
+
+### ⚠️ Breaking changes
+
+- **Sessions are now event-sourced.** The single-file session snapshot
+  (`~/.shannon/sessions/<uuid>.json`) is gone. Every session's durable state
+  lives in `<sessions>/<uuid>/events.jsonl`, and everything else — message
+  history for `--resume` / `/resume`, token totals, listings, branches — is
+  *derived* from that log at read time. Old `.json` snapshots are neither
+  read nor migrated: delete them after upgrading. Titles survive via a small
+  per-session sidecar (`<uuid>/meta.json`) holding only user-curation fields
+  (title / branch lineage); model, timestamps, project path and token totals
+  come from the log itself.
+- **Transcript files discontinued.** `~/.shannon/transcripts/<sid>.jsonl` is
+  no longer written. Full-text search and stats over past conversations are
+  now pure functions over the event log (`session_log::search_events`,
+  analytics projection), surfaced through the new `shannon trace` family.
+- **Legacy recording fixtures replaced.** `crates/shannon-core/fixtures/sessions/*.jsonl`
+  (RecordingEntry shape) were converted once into authoritative-format logs
+  under `fixtures/session_l0/<name>/events.jsonl`; every fixture-driven test
+  now reads them through the typed L0 reader. Tool-chain assertions are
+  unchanged — same sequences verified on the new medium.
+- **Analytics scatter collection removed.** The unused `AnalyticsStore`
+  write path (zero producers/consumers found) is deleted; its eight
+  aggregate dimensions live on as a derived projection
+  (`project_analytics_jsonl`) bundled by `shannon trace export`.
+- **Session-recording capture retired.** `shannon-core/src/recording/` +
+  `vcr.rs` are removed; their LLM request/response capture role is fully
+  superseded by always-on `request/header` rows carrying the exact wire body.
+  Note this does NOT touch the engine wire-fixture hook
+  (`SHANNON_RECORD_DIR`) used by `just record` / dogfood evidence scripts.
+
+### Added
+
+- **`shannon trace` subcommand family**: `show <session> [--turn N]
+  [--tool X] [--permission]`, `replay <session>` (time-compressed rendering,
+  chunks folded), `diff <a> <b>` (seq/kind/payload-digest comparison), and
+  `export <session> [--out DIR]` (events + derived analytics + summary).
+  Session references accept full UUIDs, unique prefixes, or `latest`.
+- Restore path now projects conversation history from L0 via
+  `session_log::project_conversation`, with a dedicated restore round-trip
+  equivalence suite (`state_integration.rs`) proving
+  write → process exit → re-enter → identical in-memory state.
+- Engine tee writes into the sessions container owned by `StateManager`
+  (still honoring a whole-root `$SHANNON_HOME` override), so redirected
+  stacks (`SHANNON_SESSIONS_DIR`) resume from the same location they log to.
+
+### Changed
+
+- Headless runs no longer checkpoint per-turn JSON snapshots; the continuous
+  event log makes crash-window tail recovery the resumption mechanism.
+
+## v0.10.0 (2026-08-13) — memory curated layer (ADR-0010), ADR-0005 provider tail closed
+
+### Added
+
+- **Memory storage upgrade to append-only JSONL (ADR-0010, C2'-C5').** Memories now persist as append-only JSONL (`~/.shannon/memories/<project>.jsonl`) under a process-wide flock, replacing the single-shot JSON read/write. Injection is scoped per-project/per-category instead of search-based; write-time Jaccard dedup avoids near-duplicate entries; and a periodic compaction trigger (~24h wall-clock or ≥5 sessions) dedupes, drops stale entries, enforces per-category caps, and prunes the injected prompt to a ~2000-token budget. Compaction is multi-agent-safe — concurrent appends from other agents are reconciled under flock and preserved, and deliberately-deleted ids are not resurrected. (#62)
+- **`fallback_models` editor in the Add Provider modal (ADR-0005 G4).** The desktop Add Provider modal's advanced section now has a list editor for `fallback_models`, mirroring the existing `extra_headers` editor; wired through `ProviderInput` → `apply_provider_update` + the `save_provider` insert branch. (#63)
+
+### Changed
+
+- **Retired the `switch_provider` desktop shim (ADR-0005 G6).** The vestigial `switch_provider` Tauri command is removed; the three frontend model-switch surfaces (`Header`, `CommandPalette`, `ModelsSettings`) now route to `configure({ key: 'model', value })`, the canonical store-mutating path. This also fixes a latent bug — `switch_provider` discarded its request argument, so picking a model from those dropdowns had been a no-op since P1.2-B. (#63)
+- **Removed the legacy `providers.json` → `providers.toml` migration code (ADR-0005 G2/G3).** Shannon never shipped a release carrying the `providers.json` wire format externally, so the one-shot `migrate_providers_to_toml` startup migration, the `LegacyProviderConnection`/`LegacyProvidersFile` wire types, the `list_providers` empty-store stale-check, and the `IsolatedHome` test fixture are all deleted. No code path reads or writes `providers.json` now. (#61)
+
+### Internal
+
+- Silenced `lru` advisory RUSTSEC-2026-0253 (pop use-after-free on an unreachable code path) in `.cargo/audit.toml` so `cargo audit` stays green. (#59)
 
 ## v0.9.0 (2026-08-10) — file-history snapshots + unified `/rewind`, provider read facade + wire alignment
 

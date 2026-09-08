@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[cfg(feature = "landlock")]
-use landlock::{Access, AccessFs, Bitflags, Compatible, RulesetCreated, RulesetStatus};
+use landlock::{AccessFs, PathFd, Ruleset, RulesetAttr, RulesetCreated};
 
 // ============================================================================
 // Error Types
@@ -588,9 +588,46 @@ impl DockerSandboxConfig {
         }
     }
 
+    /// Apply `SHANNON_SANDBOX_*` environment overrides to the
+    /// auto-detected Docker backend's default config.
+    ///
+    /// The auto-detected backend starts from `Default` (ubuntu:22.04,
+    /// 512m, 1.0 cpu, 300s) — a minimal image with no toolchain. Callers
+    /// whose sandboxed commands need a real toolchain (e.g. dogfood L
+    /// tasks where the agent must run `cargo test` to self-verify) can
+    /// point the sandbox at a rust image with more headroom, per task,
+    /// without touching machine-level config:
+    ///
+    /// - `SHANNON_SANDBOX_IMAGE` (e.g. `rust:1.88-slim`)
+    /// - `SHANNON_SANDBOX_MEMORY` (docker `-m` value, e.g. `4g`)
+    /// - `SHANNON_SANDBOX_CPUS` (e.g. `2.0`)
+    /// - `SHANNON_SANDBOX_TIMEOUT_SECS` (e.g. `1200`)
+    ///
+    /// Overrides are best-effort: empty or malformed values are ignored.
+    /// Explicitly constructed configs (`with_docker`) are not affected —
+    /// this only feeds the auto-detected path.
+    pub fn apply_env_overrides(&mut self) {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        apply_env_overrides_impl(
+            self,
+            var("SHANNON_SANDBOX_IMAGE"),
+            var("SHANNON_SANDBOX_MEMORY"),
+            var("SHANNON_SANDBOX_CPUS"),
+            std::env::var("SHANNON_SANDBOX_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+        );
+    }
+
     /// Set CPU limit.
     pub fn with_cpus(mut self, cpus: impl Into<String>) -> Self {
         self.cpus = Some(cpus.into());
+        self
+    }
+
+    /// Set the container timeout in seconds.
+    pub fn with_timeout_secs(mut self, secs: u64) -> Self {
+        self.timeout_secs = Some(secs);
         self
     }
 
@@ -650,6 +687,24 @@ impl DockerSandbox {
     }
 }
 
+/// `uid:gid` of the current process (e.g. "1000:1000") for docker
+/// `--user`, so sandbox-created files match host-side tool ownership.
+/// `None` on non-Unix or when the ids cannot be determined — the flag is
+/// then omitted and the container falls back to the image default.
+fn current_user_group() -> Option<String> {
+    #[cfg(unix)]
+    {
+        // SAFETY: getuid/getgid have no failure mode.
+        let uid = unsafe { libc::getuid() };
+        let gid = unsafe { libc::getgid() };
+        Some(format!("{uid}:{gid}"))
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 impl SandboxProvider for DockerSandbox {
     fn is_available(&self) -> bool {
         Self::docker_available()
@@ -660,6 +715,18 @@ impl SandboxProvider for DockerSandbox {
 
         // Run with limited privileges
         args.push("run".to_string());
+
+        // Run as the invoking user so files created inside the bind-mounted
+        // project dir carry that user's ownership on the host. Without this
+        // the container runs as root (image default) and the host-side file
+        // tools — Edit/Write run as the real user — get EACCES on every
+        // sandbox-created file or directory (dogfood l1, 2026-08-23:
+        // root-owned src/sales/ next to user-owned src/lib.rs in the same
+        // task workspace).
+        if let Some(user) = current_user_group() {
+            args.push("--user".to_string());
+            args.push(user);
+        }
 
         // Auto-remove container after execution
         if self.config.auto_remove {
@@ -830,6 +897,49 @@ impl std::fmt::Display for SandboxType {
             SandboxType::Seatbelt => write!(f, "seatbelt"),
             SandboxType::None => write!(f, "none"),
         }
+    }
+}
+
+/// Sandbox backend type detected for the current machine (cached: detection
+/// probes `docker info` / binary lookups and the answer never changes within
+/// a process).
+static SANDBOX_TYPE_CACHE: std::sync::OnceLock<SandboxType> = std::sync::OnceLock::new();
+
+/// One-paragraph self-description of the active command sandbox, for the
+/// model's system prompt (§ sandbox self-description).
+///
+/// Without this the model cannot know the sandbox's path remapping (Docker
+/// sandboxes serve the project at `/workspace`) or that host toolchains may
+/// be absent inside the sandbox — eval runs showed it burning turns probing
+/// the filesystem and running `apt-get install` for tools that were simply
+/// not in the sandbox. Returns `None` when no sandbox backend is active (the
+/// note would be noise).
+pub fn sandbox_self_description(project_dir: &std::path::Path) -> Option<String> {
+    let kind = *SANDBOX_TYPE_CACHE
+        .get_or_init(|| SandboxExecutor::new(SandboxConfig::new(project_dir)).sandbox_type());
+    match kind {
+        SandboxType::None => None,
+        SandboxType::Docker => Some(
+            "Command sandbox: Docker. The project is mounted at /workspace; writable \
+             paths are /workspace and /tmp; paths outside the project are not \
+             visible. The toolchain is whatever the sandbox image ships — probe with \
+             `command -v <tool>` and adapt instead of installing packages. There is \
+             no network access."
+                .to_string(),
+        ),
+        SandboxType::Bubblewrap => Some(
+            "Command sandbox: bubblewrap. The project stays at its real path, system \
+             directories are read-only binds, and writes are limited to the project \
+             and /tmp. Host toolchains are mostly visible but home-directory installs \
+             (nvm, ...) may not be — probe with `command -v <tool>`."
+                .to_string(),
+        ),
+        SandboxType::Seatbelt => Some(
+            "Command sandbox: macOS Seatbelt profile. Writes are restricted to the \
+             project directory and /tmp — probe tool availability with \
+             `command -v <tool>`."
+                .to_string(),
+        ),
     }
 }
 
@@ -1012,7 +1122,18 @@ impl SandboxExecutor {
     // -- Docker implementation -------------------------------------------
 
     fn wrap_command_docker(&self, command: &mut std::process::Command) -> Result<(), SandboxError> {
-        let docker_config = self.docker_config.as_ref().cloned().unwrap_or_default();
+        // Auto-detected backend (no explicit docker_config): start from the
+        // default image and honor SHANNON_SANDBOX_* env overrides — callers
+        // like dogfood L tasks point this at a rust toolchain image.
+        // Explicitly configured executors keep their config untouched.
+        let docker_config = match self.docker_config.clone() {
+            Some(config) => config,
+            None => {
+                let mut config = DockerSandboxConfig::default();
+                config.apply_env_overrides();
+                config
+            }
+        };
         let docker = DockerSandbox::new(docker_config);
 
         // Collect original program and args
@@ -1022,12 +1143,18 @@ impl SandboxExecutor {
             .map(|a| a.to_string_lossy().to_string())
             .collect();
 
-        // Build the full command string
-        let full_cmd = if original_args.is_empty() {
-            original_program
-        } else {
-            format!("{} {}", original_program, original_args.join(" "))
-        };
+        // Build the full command string. Every argument must be shell-quoted:
+        // the string is re-parsed by `sh -c` on the host and again inside the
+        // container, so a plain `join(" ")` loses word boundaries. For the
+        // `bash -c "<command>"` shape the Bash tool uses, that re-parsed as
+        // bare `bash -c mkdir …` — bash ran `mkdir` with the rest as
+        // positional parameters, so every sandboxed multi-word command
+        // degenerated to its first word (dogfood l1, 2026-08-23).
+        let full_cmd = std::iter::once(original_program)
+            .chain(original_args)
+            .map(|part| shell_escape(&part))
+            .collect::<Vec<_>>()
+            .join(" ");
 
         let wrapped = docker.wrap_command(&full_cmd, &self.config)?;
 
@@ -1289,6 +1416,29 @@ pub fn detect_sandbox_provider() -> Box<dyn SandboxProvider> {
 // ============================================================================
 
 /// Minimal shell escaping for a string.
+/// Pure core of [`DockerSandboxConfig::apply_env_overrides`] — kept free of
+/// `std::env` so it is testable without process-global env mutation.
+fn apply_env_overrides_impl(
+    cfg: &mut DockerSandboxConfig,
+    image: Option<String>,
+    memory: Option<String>,
+    cpus: Option<String>,
+    timeout_secs: Option<u64>,
+) {
+    if let Some(image) = image {
+        cfg.image = image;
+    }
+    if let Some(memory) = memory {
+        cfg.memory = Some(memory);
+    }
+    if let Some(cpus) = cpus {
+        cfg.cpus = Some(cpus);
+    }
+    if let Some(secs) = timeout_secs {
+        cfg.timeout_secs = Some(secs);
+    }
+}
+
 fn shell_escape(s: &str) -> String {
     if s.is_empty() {
         return "''".to_string();
@@ -1592,43 +1742,41 @@ pub struct LandlockSandbox {
 #[cfg(feature = "landlock")]
 impl LandlockSandbox {
     /// Create a new Landlock sandbox with the given profile.
+    ///
+    /// Landlock is deny-by-default: every access right handled here is denied
+    /// unless a `PathBeneath` rule grants it beneath one of the profile's
+    /// paths. Missing profile paths fail closed (profile error) rather than
+    /// silently granting nothing.
     pub fn new(profile: SandboxProfile) -> Result<Self, SandboxError> {
-        use landlock::{AccessFs, Ruleset};
+        use landlock::ABI;
 
-        // Build the ruleset based on the profile
-        let mut ruleset = Ruleset::new()
-            .handle_access(AccessFs::from_bitflags(Access::from_read(|access| {
-                // Allow read access to allowed paths
-                for path in &profile.allowed_paths {
-                    if let Ok(path_str) = path.to_str().ok_or_else(|| {
-                        SandboxError::InvalidConfig("Invalid path in profile".to_string())
-                    }) {
-                        let _ = access.path_add_beneath(path_str, Access::FS_READ);
-                    }
-                }
-            })))
-            .handle_access(AccessFs::from_bitflags(Access::from_write(|access| {
-                // Allow write access to writable paths
-                for path in &profile.writable_paths {
-                    if let Ok(path_str) = path.to_str().ok_or_else(|| {
-                        SandboxError::InvalidConfig("Invalid path in profile".to_string())
-                    }) {
-                        let _ = access.path_add_beneath(path_str, Access::FS_WRITE);
-                    }
-                }
-            })));
+        // Request the full write set from the newest ABI the crate knows;
+        // the default BestEffort compatibility silently drops rights the
+        // running kernel doesn't support.
+        let read_access = AccessFs::from_read(ABI::V5);
+        let write_access = AccessFs::from_write(ABI::V5);
 
-        // Try to create the ruleset
-        let ruleset = match ruleset.create() {
-            Ok(r) => Some(r),
-            Err(_) => {
-                // Landlock might not be supported, fall back to no enforcement
-                tracing::warn!("Landlock not supported by kernel, running unsandboxed");
-                None
+        let ruleset = Ruleset::default()
+            .handle_access(read_access | write_access)
+            .map_err(|e| SandboxError::ProfileError(format!("handle_access: {e}")))?
+            .create()
+            .map_err(|e| SandboxError::ProfileError(format!("create ruleset: {e}")))?;
+
+        // Writable paths get read+write; read-only allowed paths get read.
+        let mut ruleset = ruleset;
+        for path in &profile.writable_paths {
+            ruleset = add_beneath_rule(ruleset, path, read_access | write_access)?;
+        }
+        for path in &profile.allowed_paths {
+            if !profile.writable_paths.contains(path) {
+                ruleset = add_beneath_rule(ruleset, path, read_access)?;
             }
-        };
+        }
 
-        Ok(Self { profile, ruleset })
+        Ok(Self {
+            profile,
+            ruleset: Some(ruleset),
+        })
     }
 
     /// Try to create a Landlock sandbox, returns None if not available.
@@ -1637,34 +1785,47 @@ impl LandlockSandbox {
     }
 
     /// Apply the Landlock restrictions to the current thread.
-    pub fn apply_restrictions(&self) -> Result<(), SandboxError> {
-        if let Some(ref ruleset) = self.ruleset {
-            ruleset.restrict().map_err(|e| {
+    ///
+    /// Landlock is thread-scoped: this restricts the calling thread (and any
+    /// process it later spawns). Callers running on a shared worker thread
+    /// (e.g. a tokio runtime) should spawn from a dedicated restricted
+    /// thread instead — see the W7-1 sandbox spike for the full design.
+    pub fn apply_restrictions(&mut self) -> Result<(), SandboxError> {
+        if let Some(ruleset) = self.ruleset.take() {
+            let status = ruleset.restrict_self().map_err(|e| {
                 SandboxError::ExecutionFailed(format!("Failed to apply Landlock: {e}"))
             })?;
+            tracing::debug!(?status, "Landlock restrictions applied");
         }
         Ok(())
     }
 
     /// Check if Landlock is available on this system.
     pub fn is_available() -> bool {
-        Ruleset::new().create().is_ok()
+        Ruleset::default().create().is_ok()
     }
 
     /// Get the sandbox profile.
     pub fn profile(&self) -> &SandboxProfile {
         &self.profile
     }
+}
 
-    /// Get the program being executed.
-    pub fn program(&self) -> &str {
-        &self.program
-    }
+/// Grant `access` beneath `path` on `ruleset`, failing closed if the path
+/// cannot be opened.
+#[cfg(feature = "landlock")]
+fn add_beneath_rule(
+    ruleset: RulesetCreated,
+    path: &Path,
+    access: landlock::BitFlags<AccessFs>,
+) -> Result<RulesetCreated, SandboxError> {
+    use landlock::{PathBeneath, RulesetCreatedAttr};
 
-    /// Get the arguments for the command.
-    pub fn args(&self) -> &[String] {
-        &self.args
-    }
+    let fd = PathFd::new(path)
+        .map_err(|e| SandboxError::ProfileError(format!("{}: {e}", path.display())))?;
+    ruleset
+        .add_rule(PathBeneath::new(fd, access))
+        .map_err(|e| SandboxError::ProfileError(format!("{}: {e}", path.display())))
 }
 
 // ============================================================================
@@ -1757,7 +1918,7 @@ impl SandboxedCommand {
 
         // Apply Landlock restrictions if available
         #[cfg(feature = "landlock")]
-        if let Some(ref landlock) = self.landlock {
+        if let Some(landlock) = self.landlock.as_mut() {
             landlock.apply_restrictions()?;
         }
 
@@ -1892,6 +2053,93 @@ mod tests {
         let sandbox = NoSandbox;
         assert!(sandbox.is_available());
         assert_eq!(sandbox.name(), "none");
+    }
+
+    // ------------------------------------------------------------------
+    // Env-override tests (SHANNON_SANDBOX_*)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_env_overrides_apply_each_field() {
+        let mut cfg = DockerSandboxConfig::default();
+        apply_env_overrides_impl(
+            &mut cfg,
+            Some("rust:1.88-slim".to_string()),
+            Some("4g".to_string()),
+            Some("2.0".to_string()),
+            Some(1200),
+        );
+        assert_eq!(cfg.image, "rust:1.88-slim");
+        assert_eq!(cfg.memory.as_deref(), Some("4g"));
+        assert_eq!(cfg.cpus.as_deref(), Some("2.0"));
+        assert_eq!(cfg.timeout_secs, Some(1200));
+    }
+
+    #[test]
+    fn test_env_overrides_none_keep_defaults() {
+        let mut cfg = DockerSandboxConfig::default();
+        apply_env_overrides_impl(&mut cfg, None, None, None, None);
+        assert_eq!(cfg.image, "ubuntu:22.04");
+        assert_eq!(cfg.memory.as_deref(), Some("512m"));
+        assert_eq!(cfg.cpus.as_deref(), Some("1.0"));
+        assert_eq!(cfg.timeout_secs, Some(300));
+    }
+
+    #[test]
+    fn test_env_overrides_partial() {
+        let mut cfg = DockerSandboxConfig::default();
+        apply_env_overrides_impl(
+            &mut cfg,
+            Some("rust:1.88-slim".to_string()),
+            None,
+            None,
+            None,
+        );
+        // Only the image changes; resource limits stay at defaults.
+        assert_eq!(cfg.image, "rust:1.88-slim");
+        assert_eq!(cfg.memory.as_deref(), Some("512m"));
+    }
+
+    /// The auto-detected executor path must honor SHANNON_SANDBOX_IMAGE:
+    /// the wrapped docker command should carry the overridden image
+    /// instead of the ubuntu default. Skipped without a docker daemon;
+    /// env-var tests are process-global — this crate runs single-threaded
+    /// under nextest (see .config/nextest.toml).
+    #[test]
+    #[cfg(unix)]
+    fn test_executor_env_override_changes_docker_image() {
+        if !DockerSandbox::docker_available() {
+            return;
+        }
+        struct EnvGuard(&'static str);
+        impl EnvGuard {
+            fn set(k: &'static str, v: &str) -> Self {
+                unsafe { std::env::set_var(k, v) };
+                Self(k)
+            }
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                unsafe { std::env::remove_var(self.0) };
+            }
+        }
+        let _guard = EnvGuard::set("SHANNON_SANDBOX_IMAGE", "rust:1.88-slim");
+
+        // SandboxExecutor::new auto-detects the backend (docker here) and
+        // leaves docker_config empty — the path env overrides apply to.
+        let executor = SandboxExecutor::new(SandboxConfig::new("/tmp/project"));
+        let mut cmd = std::process::Command::new("echo");
+        cmd.arg("hi");
+        executor.wrap_command(&mut cmd).unwrap();
+        let payload = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            payload.contains("rust:1.88-slim"),
+            "auto-detected image override must reach the docker payload, got: {payload}"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -2466,6 +2714,108 @@ mod tests {
         assert!(result.contains("--network none"));
         assert!(result.contains("ubuntu:22.04"));
         assert!(result.contains("cargo test"));
+    }
+
+    /// Dogfood l1 (2026-08-23): sandboxed Bash ran as root and created
+    /// root-owned files/dirs in the bind mount; host-side Edit/Write then
+    /// hit EACCES. The wrap must carry the invoking user's uid:gid.
+    #[test]
+    #[cfg(unix)]
+    fn test_docker_sandbox_wrap_command_runs_as_invoking_user() {
+        // wrap_command only builds the command string; no docker needed.
+        let docker = DockerSandbox::new(DockerSandboxConfig::new("ubuntu:22.04"));
+        let config = SandboxConfig::new("/tmp/project");
+
+        let result = docker.wrap_command("mkdir -p src/sales", &config).unwrap();
+        let uid = unsafe { libc::getuid() };
+        let gid = unsafe { libc::getgid() };
+        assert!(
+            result.contains(&format!("--user '{uid}:{gid}'"))
+                || result.contains(&format!("--user {uid}:{gid}")),
+            "docker wrap must set --user to the invoking uid:gid, got: {result}"
+        );
+    }
+
+    /// Dogfood l1 (2026-08-23): `wrap_command_docker` rebuilt the command
+    /// with a plain `join(" ")`, so `bash -c "<command>"` reached the
+    /// container as `bash -c mkdir -p …` — re-parsed there as bare `mkdir`
+    /// with the rest as positional parameters. Every multi-word sandboxed
+    /// command degenerated to its first word (`BASH_EXECUTION_STRING=set`).
+    /// The command must survive as one shell-quoted word.
+    #[test]
+    fn test_docker_executor_wrap_preserves_command_quoting() {
+        // Forces the Docker code path; no docker daemon needed.
+        let executor = SandboxExecutor::with_docker(
+            SandboxConfig::new("/tmp/project"),
+            DockerSandboxConfig::new("ubuntu:22.04"),
+        );
+
+        let command = "mkdir -p src/people src/sales src/logistics src/billing && ls src/";
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg("-c").arg(command);
+        executor.wrap_command(&mut cmd).unwrap();
+
+        assert_eq!(cmd.get_program(), "sh");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(args[0], "-c");
+        let payload = &args[1];
+        assert!(payload.starts_with("docker run"));
+
+        // Post-fix the command travels quoted, as a single shell word.
+        assert!(
+            payload.contains(&shell_escape(command)),
+            "command must stay one quoted word in the docker payload, got: {payload}"
+        );
+        // Pre-fix the unquoted join put the bare first word after `bash -c `.
+        assert!(
+            !payload.contains(&format!("bash -c {command}")),
+            "unquoted `bash -c <command>` join must not appear, got: {payload}"
+        );
+    }
+
+    /// End-to-end variant of the quoting fix: runs the wrapped command
+    /// through a real container (skipped when docker is unavailable) and
+    /// checks both the word boundaries and the on-disk ownership.
+    #[test]
+    #[cfg(unix)]
+    fn test_docker_executor_wrap_executes_full_command() {
+        if !DockerSandbox::docker_available() {
+            return;
+        }
+        let project = tempfile::tempdir().unwrap();
+        let executor = SandboxExecutor::with_docker(
+            SandboxConfig::new(project.path()),
+            DockerSandboxConfig::new("ubuntu:22.04"),
+        );
+
+        let command = "mkdir -p 'src/a b' && printf 'hello world' > 'src/a b/x y.txt'";
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg("-c").arg(command);
+        executor.wrap_command(&mut cmd).unwrap();
+
+        let out = cmd.output().unwrap();
+        assert!(
+            out.status.success(),
+            "sandboxed command failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let created = project.path().join("src/a b/x y.txt");
+        let content = std::fs::read_to_string(&created)
+            .unwrap_or_else(|e| panic!("quoted-path artifact missing ({e}): {created:?}"));
+        assert_eq!(content, "hello world");
+
+        use std::os::unix::fs::MetadataExt;
+        let uid = std::fs::metadata(project.path().join("src/a b"))
+            .unwrap()
+            .uid();
+        assert_eq!(
+            uid,
+            unsafe { libc::getuid() },
+            "sandbox-created dirs must carry the invoking user's uid"
+        );
     }
 
     #[test]

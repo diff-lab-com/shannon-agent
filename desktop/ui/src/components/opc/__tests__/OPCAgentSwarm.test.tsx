@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router-dom'
+import type * as ReactRouterDom from 'react-router-dom'
 import OPCAgentSwarm from '@/components/opc/OPCAgentSwarm'
 import type { AgentInfo, TaskItem } from '@/types'
 
@@ -20,7 +22,7 @@ vi.mock('sonner', () => ({
 
 const { useNavigate: _useNavigate } = vi.hoisted(() => ({ useNavigate: vi.fn() }))
 vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  const actual = await vi.importActual<typeof ReactRouterDom>('react-router-dom')
   return { ...actual, useNavigate: () => _useNavigate }
 })
 
@@ -101,11 +103,15 @@ describe('OPCAgentSwarm', () => {
     expect(screen.getByText(/Agent name is required/)).toBeInTheDocument()
   })
 
-  it('closes Spawn modal on Cancel', () => {
+  it('closes Spawn modal on Cancel', async () => {
     renderSwarm()
     fireEvent.click(screen.getByRole('button', { name: /Spawn new agent/ }))
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }))
-    expect(screen.queryByRole('heading', { name: /Spawn New Agent/ })).not.toBeInTheDocument()
+    // Base UI Dialog stays mounted during the close animation; wait for
+    // the heading to detach instead of asserting immediate removal.
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: /Spawn New Agent/ })).not.toBeInTheDocument()
+    })
   })
 
   it('agent card is keyboard focusable as button', () => {

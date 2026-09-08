@@ -4,9 +4,13 @@ use clap::Subcommand;
 use futures::StreamExt;
 
 mod commands_providers;
+mod crash_hook;
+mod eval_cmd;
 mod loop_command;
 mod mcp_install;
 mod notifications;
+mod signals;
+mod trace;
 mod triggered_command;
 use shannon_commands::preset_utils::ConversationPreset;
 use shannon_core::{
@@ -18,8 +22,9 @@ use shannon_core::{
     unified_config::{ConfigBuilder, ShannonConfig},
 };
 use shannon_engine::{api::LlmClientConfig, state::StateManager};
-use shannon_tools::register_default_tools_with_project_dir_ex;
+use shannon_tools::register_default_tools_with_project_dir_ex_with_providers;
 use shannon_types::model_ref::ModelRef;
+use shannon_types::provider_config::ProviderModelConfig;
 use shannon_ui::Repl;
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
@@ -61,8 +66,7 @@ enum HeadlessExitCode {
     Error = 1,
     /// 2 - maximum turns reached before completion.
     TurnLimit = 2,
-    /// 3 - timeout occurred (request took too long).
-    #[allow(dead_code)] // KEEP: future use
+    /// 3 - request timed out (retries exhausted after read/timeouts).
     Timeout = 3,
     /// 4 - rate limited by API provider.
     RateLimited = 4,
@@ -75,6 +79,29 @@ enum HeadlessExitCode {
 impl From<HeadlessExitCode> for i32 {
     fn from(code: HeadlessExitCode) -> i32 {
         code as i32
+    }
+}
+
+/// Map a query-failure message to the headless exit code (§ headless
+/// contract). Order matters: the most specific cause wins. Timeout sits
+/// behind the others because "denied"/"rate limit" messages can mention
+/// retrying after a delay, while timeout text is distinctive.
+fn classify_headless_failure(error: &str) -> HeadlessExitCode {
+    let err_lower = error.to_lowercase();
+    if err_lower.contains("context")
+        || err_lower.contains("token limit")
+        || err_lower.contains("max_tokens")
+        || err_lower.contains("context_length")
+    {
+        HeadlessExitCode::ContextOverflow
+    } else if err_lower.contains("rate limit") || err_lower.contains("429") {
+        HeadlessExitCode::RateLimited
+    } else if err_lower.contains("permission") || err_lower.contains("denied") {
+        HeadlessExitCode::PermissionDenied
+    } else if err_lower.contains("timed out") || err_lower.contains("timeout") {
+        HeadlessExitCode::Timeout
+    } else {
+        HeadlessExitCode::Error
     }
 }
 
@@ -115,7 +142,13 @@ struct HeadlessOutput {
 enum CiEvent {
     /// Session started.
     #[serde(rename = "start")]
-    Start { prompt: String, model: String },
+    Start {
+        prompt: String,
+        model: String,
+        /// Engine session UUID — cross-links the NDJSON stream to the
+        /// persisted session file (needed for `--resume` checkpointing).
+        session_id: String,
+    },
     /// Tool was invoked.
     #[serde(rename = "tool_call")]
     ToolCall {
@@ -137,6 +170,13 @@ enum CiEvent {
     #[serde(rename = "diff")]
     #[allow(dead_code)] // KEEP: future use
     Diff { path: String, content: String },
+    /// Non-fatal progress note (API retry activity, environment notices).
+    /// Emitted on stderr in text mode; NDJSON in `json-stream` mode.
+    #[serde(rename = "progress")]
+    Progress { message: String },
+    /// Non-fatal warning — the run continues (e.g. turn-budget pressure).
+    #[serde(rename = "warning")]
+    Warning { message: String },
     /// Error occurred.
     #[serde(rename = "error")]
     Error { message: String },
@@ -145,7 +185,14 @@ enum CiEvent {
     Done {
         exit_code: i32,
         turns_used: u32,
+        /// Total tokens used (input + output). Kept for backward compat
+        /// with existing CI parsers; split fields below are preferred for
+        /// budget accounting so the ledger doesn't double-count.
         tokens_used: u64,
+        /// Prompt (input) tokens consumed — split for ledger accounting.
+        tokens_in: u64,
+        /// Completion (output) tokens consumed — split for ledger accounting.
+        tokens_out: u64,
     },
 }
 
@@ -360,6 +407,12 @@ struct Cli {
     #[arg(long)]
     pipe: bool,
 
+    /// Run all tool execution on a remote target (SSH host or Docker
+    /// container) registered in ~/.shannon/remotes.toml or discovered from
+    /// ~/.ssh/config. Overrides SHANNON_TARGET.
+    #[arg(long, value_name = "NAME")]
+    target: Option<String>,
+
     /// LLM model to use (e.g., claude-sonnet-4, gpt-4o)
     #[arg(short, long)]
     model: Option<String>,
@@ -405,22 +458,54 @@ struct Cli {
     #[arg(long = "allowed-tools", hide = true)]
     team_allowed_tools: Option<String>,
 
-    /// Resume the most recent session, or a specific session by UUID.
-    /// Without a UUID argument, loads the most recent session.
-    /// With a UUID argument, loads that specific session.
-    /// Example: shannon --resume           (most recent)
-    ///          shannon --resume abc-123... (specific session)
-    #[arg(short = 'r', long, value_name = "UUID", num_args = 0..=1)]
+    /// Comma-separated list of tool names to forbid in headless mode.
+    /// Maps to the same `!pattern` filter that `set_allowed_tools` accepts,
+    /// so internally it's translated to `["!<tool>" for tool in disallowed]`.
+    /// Use to ban specific tools (e.g. `WebFetch,WebSearch`) without
+    /// spelling out the full positive allowlist. Composes with
+    /// `--allowed-tools` — exclude patterns win.
+    /// Repeatable: pass the flag multiple times to union deny lists.
+    #[arg(long = "disallowed-tools", value_name = "TOOL", num_args = 0.., hide = true)]
+    disallowed_tools: Vec<String>,
+
+    /// Resume a session by UUID, or the most recent session recorded in the
+    /// current directory (falling back to the globally most recent session
+    /// with a warning). Scripts should prefer `--resume-id <UUID>`: explicit
+    /// and independent of directory ordering.
+    /// Example: shannon --resume             (most recent in this directory)
+    ///          shannon --resume abc-123...  (specific session)
+    #[arg(
+        short = 'r',
+        long,
+        value_name = "UUID",
+        num_args = 0..=1,
+        default_missing_value = ""
+    )]
     resume: Option<String>,
 
-    /// Resume a specific session by UUID (explicit alternative to --resume `<UUID>`).
-    /// Example: shannon --resume-id 550e8400-e29b-41d4-a716-446655440000
+    /// Resume a specific session by UUID (explicit alternative to --resume `<UUID>`;
+    /// preferred for scripts). Example: shannon --resume-id 550e8400-e29b-41d4-a716-446655440000
     #[arg(long = "resume-id", value_name = "UUID")]
     resume_id: Option<String>,
 
-    /// Continue the most recent session (alias for --resume).
+    /// Continue the most recent session recorded in the current directory
+    /// (alias for --resume). Headless mode refuses a cross-directory resume.
     #[arg(short = 'c', long, alias = "cont")]
     r#continue: bool,
+
+    /// Attach one or more image files to the next query (headless mode).
+    /// Mirrors the Claude Code `--attach` and Codex `--image` flags:
+    /// the model sees each file as a multimodal content block alongside
+    /// the prompt. Accepted extensions: png, jpg/jpeg, gif, webp, bmp.
+    /// SVG is rejected (vision providers don't accept it). Repeatable.
+    /// Example: shannon -p "what's in this diagram" --attach ./shot.png
+    #[arg(long = "attach", value_name = "PATH", num_args = 1..)]
+    attach: Vec<String>,
+
+    /// Session goal injected into the system prompt (headless: injection only).
+    /// Example: shannon -p "make CI green" --goal "all tests passing"
+    #[arg(long = "goal", value_name = "OBJECTIVE")]
+    goal: Option<String>,
 
     /// CI/CD headless mode: non-interactive prompt (pipe-friendly).
     /// Skips TUI entirely. Use with --output-format, --allowed-tools, --max-turns.
@@ -466,8 +551,77 @@ struct Cli {
     #[arg(long)]
     notify: bool,
 
+    /// Print the effective layered configuration with per-entry provenance
+    /// (§4.10 W3-2) as JSON and exit.
+    ///
+    /// Layers are reported lowest → highest precedence: builtin →
+    /// user-global (`~/.shannon/config.toml`) → project (`.shannon.toml`)
+    /// → env-vars (`SHANNON_*`) → connected (`~/.shannon/providers.toml`)
+    /// → cli-overlay (this invocation's flags).
+    #[arg(long)]
+    dump_config: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
+}
+
+/// Sessions directory override shared by `trace` commands (`--dir`).
+#[derive(Subcommand, Debug)]
+enum TraceCommand {
+    /// Show durable rows of one session, optionally filtered.
+    Show {
+        /// Session id: full UUID, unique prefix, or `latest`.
+        session: String,
+
+        /// Only rows from this turn number.
+        #[arg(long)]
+        turn: Option<u64>,
+
+        /// Only tool activity for this tool name.
+        #[arg(long)]
+        tool: Option<String>,
+
+        /// Only permission decisions.
+        #[arg(long, alias = "perms")]
+        permission: bool,
+
+        /// Sessions root (defaults to ~/.shannon/sessions).
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+    },
+    /// Replay a session end-to-end (chunks folded into steps).
+    Replay {
+        /// Session id: full UUID, unique prefix, or `latest`.
+        session: String,
+
+        /// Sessions root override.
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+    },
+    /// Compare two session logs at seq/kind/payload-digest granularity.
+    Diff {
+        /// Left session reference.
+        a: String,
+        /// Right session reference.
+        b: String,
+
+        /// Sessions root override.
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+    },
+    /// Export events + analytics + summary bundle for evaluation/sharing.
+    Export {
+        /// Session id: full UUID, unique prefix, or `latest`.
+        session: String,
+
+        /// Output root directory (defaults to `<tmp>`/shannon-trace-export).
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+
+        /// Sessions root override.
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+    },
 }
 
 /// Shannon CLI commands
@@ -548,10 +702,6 @@ enum Commands {
         #[arg(long)]
         max_tokens: Option<usize>,
 
-        /// Output format (text, json, markdown)
-        #[arg(long, default_value_t = String::from("text"))]
-        output: String,
-
         /// Disable streaming output (wait for complete response)
         #[arg(long)]
         no_stream: bool,
@@ -590,9 +740,20 @@ enum Commands {
 
     /// Launch the Shannon desktop application (Tauri GUI)
     Desktop {
-        /// Do not attempt to build the desktop app if the binary isn't found.
+        /// Build the desktop app from the workspace `desktop/` dir when the
+        /// binary isn't found (developer flow; needs the Tauri toolchain).
         #[arg(long)]
+        build: bool,
+
+        /// Deprecated: accepted for compatibility. Auto-building is no longer
+        /// the default fallback (install guidance is) — see `--build`.
+        #[arg(long, hide = true)]
         no_build: bool,
+
+        /// Download and install the desktop bundle for this platform when
+        /// the binary isn't found, then launch it.
+        #[arg(long, conflicts_with_all = ["build", "no_build"])]
+        install: bool,
 
         /// Run in the foreground and wait for the desktop app to exit.
         #[arg(long)]
@@ -609,7 +770,14 @@ enum Commands {
     Update,
 
     /// Run diagnostics: check toolchain, ports, and services.
-    Doctor,
+    ///
+    /// With `--json`, emit machine-readable diagnostics: surface identity,
+    /// checks, and dual-install detection (scripting / telemetry / support).
+    Doctor {
+        /// Emit JSON instead of the human-readable report.
+        #[arg(long)]
+        json: bool,
+    },
 
     /// List provider profiles configured in `~/.shannon/providers.toml`.
     ///
@@ -622,6 +790,17 @@ enum Commands {
         json: bool,
     },
 
+    /// Inspect, replay, diff, or export a session's L0 event log (§4.6).
+    ///
+    /// The event log under `<sessions>/<uuid>/events.jsonl` is the single
+    /// authoritative record of every session; these commands are its
+    /// human/CI surface. Session references accept a full UUID, an unambiguous
+    /// prefix, or `latest`.
+    Trace {
+        #[command(subcommand)]
+        command: TraceCommand,
+    },
+
     /// Manage provider profiles (add/remove).
     ///
     /// Mirrors the desktop's Add Provider / Delete Provider flows. Writes
@@ -631,6 +810,46 @@ enum Commands {
         #[command(subcommand)]
         command: ProvidersSubcommand,
     },
+
+    /// Record explicit session feedback (§4.15 anonymous aggregate signal).
+    ///
+    /// Only a count travels anywhere: `up`/`down` increments the local
+    /// analytics projection and — solely when upload is opted in via
+    /// `SHANNON_SIGNALS_UPLOAD` + `SHANNON_SIGNALS_ENDPOINT` — queues the
+    /// aggregate payload. Free-text comments are not accepted by design.
+    Feedback {
+        /// Direction: up | down (aliases +1/-1, 👍/👎)
+        direction: String,
+    },
+
+    /// Inspect or flush the §4.15 aggregate usage counters.
+    ///
+    /// Counters accumulate in memory and persist to
+    /// `<home>/analytics/counters.jsonl` on flush; nothing is ever sent
+    /// unless `SHANNON_SIGNALS_UPLOAD` opts in.
+    Signals {
+        #[command(subcommand)]
+        command: SignalsSubcommand,
+    },
+
+    /// Evaluate the agent against the L1 task suite (§4.4, journey J7).
+    ///
+    /// Dry-run by default so the pipeline can be rehearsed without an API
+    /// key; `--real` drives actual model runs. Reports land under
+    /// `~/.shannon/eval/runs/<run-id>/` (`--out` overrides the root).
+    Eval {
+        #[command(subcommand)]
+        command: eval_cmd::EvalCommand,
+    },
+}
+
+/// Subcommands for `shannon signals`.
+#[derive(Subcommand, Debug)]
+enum SignalsSubcommand {
+    /// Print the current in-memory snapshot plus effective switch state.
+    Status,
+    /// Flush counters to the local projection and queue upload when opted in.
+    Push,
 }
 
 /// Subcommands for `shannon providers <add|remove>`.
@@ -736,6 +955,10 @@ enum GatewaySubcommand {
     MigrateLegacy,
     /// Enroll this device with the gateway control plane.
     Enroll,
+    /// Update the `shannon-gateway` binary from the latest release
+    /// (download + sha256 verify + replace + restart). Handled by the CLI,
+    /// not delegated.
+    Update,
 }
 
 /// Subcommands for `shannon mcp`.
@@ -824,6 +1047,30 @@ fn should_enable_tools(provider: shannon_engine::api::LlmProvider) -> bool {
 /// Priority (highest → lowest):
 ///   CLI overrides > env vars (`SHANNON_*`) > local `.shannon.toml` > global `~/.shannon/config.toml`
 ///
+/// Copy the connected provider profile (`~/.shannon/providers.toml`) and
+/// point the default profile's active target at `model_id`.
+///
+/// A model-only override (`--model`, or a `model = "…"` in a TOML config)
+/// changes which model the connected provider serves — it must not replace
+/// the provider, base_url, or credential (a `CredentialRef::Store` from
+/// `/connect` survives; ADR-0005 Phase 4). Returns `None` when nothing is
+/// connected, in which case the caller synthesises from scratch.
+///
+/// The copy is in-memory only: the store file is never written back.
+fn graft_model_onto_connected(model_id: &str) -> Option<ProviderModelConfig> {
+    let mut pm = shannon_core::provider_config_store::load(None)?;
+    let profile = pm.profiles.get_mut("default")?;
+    profile.active_target.model_id = model_id.to_string();
+    // Match `ConfigBuilder::load_connected_profile`, which runs env-var
+    // substitution over the connected layer before merging.
+    let mut wrapped = ShannonConfig {
+        provider_model: pm,
+        ..ShannonConfig::empty()
+    };
+    shannon_core::substitute::substitute_config(&mut wrapped);
+    Some(wrapped.provider_model)
+}
+
 /// N1/C-fields: the legacy `ShannonConfig { model, provider, api_key,
 /// base_url, … }` literal is gone. CLI options feed
 /// [`shannon_core::provider_resolver::synthesize_default_profile`] (with
@@ -833,11 +1080,16 @@ fn should_enable_tools(provider: shannon_engine::api::LlmProvider) -> bool {
 /// api-key value never enters the config (A1-strict); at `From`-time the
 /// value is sourced from the process environment via `resolve_credential`.
 ///
+/// ADR-0005 Phase 4 precedence inside the CLI layer: a provider/base_url
+/// override synthesises a fresh profile, a model-only override grafts the
+/// model onto the connected profile ([`graft_model_onto_connected`]), and no
+/// overrides leaves the layer empty so the connected profile wins over
+/// ambient `SHANNON_*` env vars (the `/connect` "works without env vars"
+/// contract).
+///
 /// The CLI temporarily injects the resolved api-key value into the
 /// `SHANNON_API_KEY` env var so `resolve_credential` can pick it up. This is
-/// restored before returning. **N2 will replace this with proper secrets.env
-/// plumbing** via `crate::config_migration::persist_secrets` —
-/// pre-N1 the same `unsafe std::env` pattern was used by
+/// restored before returning. pre-N1 the same `unsafe std::env` pattern was used by
 /// `apply_env_overrides`, so this preserves A1 and the same overall behaviour.
 fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
     // 1. Resolve the canonical api-key value: SHANNON_API_KEY (or
@@ -866,15 +1118,41 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
     unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
     unsafe { std::env::remove_var("OPENAI_API_KEY") };
 
-    // 3. Synthesize the v2 default profile now that SHANNON_API_KEY is the
-    //    chosen cred var.
-    let provider_model = synthesize_default_profile(
-        cli_config.model().as_deref(),
-        cli_config.provider().as_deref(),
-        cli_config.get_env("SHANNON_BASE_URL").as_deref(),
-        Some("SHANNON_API_KEY"),
-    )
-    .unwrap_or_default();
+    // 3. Build the CLI-layer provider_model (highest precedence in
+    //    `ShannonConfig::merge`). ADR-0005 Phase 4: the connected profile
+    //    (~/.shannon/providers.toml) wins over ambient env when the user
+    //    gave no provider inputs, so the layer must stay EMPTY in that case
+    //    — synthesising unconditionally would clobber /connect with an
+    //    Anthropic+Env profile even with no flags.
+    //      - provider/base_url override → full synthesis (explicit provider
+    //        switch, pre-N1 behaviour).
+    //      - model-only override → graft the model onto a copy of the
+    //        connected profile: a per-invocation --model changes the model,
+    //        not the provider/credential.
+    //      - no overrides → empty layer; the connected (or env) layer below
+    //        supplies the profile.
+    let provider_input = cli_config.provider();
+    let base_url_input = cli_config.get_env("SHANNON_BASE_URL");
+    let model_input = cli_config.model();
+    let provider_model = if provider_input.is_some() || base_url_input.is_some() {
+        synthesize_default_profile(
+            model_input.as_deref(),
+            provider_input.as_deref(),
+            base_url_input.as_deref(),
+            Some("SHANNON_API_KEY"),
+        )
+        .unwrap_or_default()
+    } else if let Some(ref model_id) = model_input {
+        match graft_model_onto_connected(model_id) {
+            Some(pm) => pm,
+            // Nothing connected: fall back to synthesis so a bare --model
+            // with an env key still works (pre-N1 behaviour).
+            None => synthesize_default_profile(Some(model_id), None, None, Some("SHANNON_API_KEY"))
+                .unwrap_or_default(),
+        }
+    } else {
+        shannon_types::provider_config::ProviderModelConfig::default()
+    };
 
     let cli_overrides = ShannonConfig {
         max_tokens: cli_config.max_tokens(),
@@ -886,6 +1164,7 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
         presets: None,
         permission_profile: None,
         notifications: None,
+        hooks: None,
         provider_model,
     };
 
@@ -920,15 +1199,74 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
     out
 }
 
-/// Load a session for resumption.
+/// Build the headless sessions-dir state manager, honoring the
+/// `SHANNON_SESSIONS_DIR` override.
 ///
-/// If `session_id_str` is provided, loads that specific session by UUID.
-/// Otherwise, loads the most recent session from the sessions directory.
+/// The dogfood supervisor points this at the task's artifacts dir so session
+/// checkpoints are isolated per task (and a killed run can be resumed with
+/// `--resume <session_id>`). Unset => default `~/.shannon/sessions`, i.e.
+/// exactly the previous behaviour.
+fn headless_state_manager() -> Result<shannon_engine::state::StateManager> {
+    match std::env::var("SHANNON_SESSIONS_DIR") {
+        Ok(dir) if !dir.is_empty() => {
+            shannon_engine::state::StateManager::with_sessions_dir(std::path::PathBuf::from(dir))
+                .map_err(|e| anyhow::anyhow!("invalid SHANNON_SESSIONS_DIR: {e}"))
+        }
+        _ => Ok(shannon_engine::state::StateManager::new()),
+    }
+}
+
+/// Resolve the sessions container for headless flows: `SHANNON_SESSIONS_DIR`
+/// overrides; otherwise `SHANNON_HOME/sessions`, else `~/.shannon/sessions`.
+fn sessions_container_from_env() -> std::path::PathBuf {
+    match std::env::var("SHANNON_SESSIONS_DIR") {
+        Ok(dir) if !dir.is_empty() => std::path::PathBuf::from(dir),
+        _ => shannon_core::session_log::SessionStore::default_container(),
+    }
+}
+
+/// How a session was selected for resumption (§ resume guard).
+#[derive(Debug)]
+struct ResolvedResume {
+    session: shannon_core::session_log::StoredSession,
+    /// True when the session's recorded working directory matches the
+    /// current one (best-effort canonicalized comparison). Sessions recorded
+    /// without a working directory never match.
+    cwd_match: bool,
+}
+
+/// Best-effort comparison of a session's recorded project path against the
+/// current working directory. Falls back to exact string equality when either
+/// side cannot be canonicalized; `None` (unrecorded) never matches.
+fn current_cwd_matches(project_path: Option<&str>) -> bool {
+    let Some(recorded) = project_path else {
+        return false;
+    };
+    let recorded_path = std::path::PathBuf::from(recorded);
+    let Ok(cwd) = std::env::current_dir() else {
+        return false;
+    };
+    if recorded_path == cwd {
+        return true;
+    }
+    match (recorded_path.canonicalize(), cwd.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Resolve the session to resume (§4.6 cutover).
 ///
-/// Returns the loaded `SessionData` on success.
-fn load_resume_session(session_id_str: Option<&str>) -> Result<shannon_engine::state::SessionData> {
-    use shannon_engine::state::StateManager;
-    let state_mgr = StateManager::new();
+/// - `--resume-id <UUID>` / `--resume <UUID>`: load that exact session.
+/// - Bare `--resume` / `--continue`: load the most recent session recorded
+///   in the current working directory; when none matches, fall back to the
+///   globally most recent session and let the caller warn (interactive) or
+///   refuse (headless) about the cross-directory resume.
+///
+/// Returns `Ok(None)` when there is nothing to resume (empty sessions
+/// container) so callers keep their "start fresh" fallback.
+fn resolve_resume(session_id_str: Option<&str>) -> Result<Option<ResolvedResume>> {
+    let store = shannon_core::session_log::SessionStore::new(sessions_container_from_env());
 
     if let Some(id_str) = session_id_str {
         let uuid = uuid::Uuid::parse_str(id_str).map_err(|e| {
@@ -939,18 +1277,74 @@ fn load_resume_session(session_id_str: Option<&str>) -> Result<shannon_engine::s
             };
             anyhow::anyhow!("Invalid session UUID '{display}': {e}")
         })?;
-        state_mgr
-            .load_session(&uuid)?
-            .ok_or_else(|| anyhow::anyhow!("Session {uuid} not found"))
-    } else {
-        let sessions = state_mgr.list_persisted_sessions()?;
-        let latest = sessions
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("No previous sessions found to resume"))?;
-        state_mgr
-            .load_session(&latest.session_id)?
-            .ok_or_else(|| anyhow::anyhow!("Session {} not found on disk", latest.session_id))
+        let session = store
+            .load(&uuid)?
+            .ok_or_else(|| anyhow::anyhow!("Session {uuid} not found"))?;
+        let cwd_match = current_cwd_matches(session.metadata.project_path.as_deref());
+        return Ok(Some(ResolvedResume { session, cwd_match }));
+    }
+
+    let infos = store.list()?;
+    if infos.is_empty() {
+        return Ok(None);
+    }
+    let cwd = std::env::current_dir().ok();
+    let cwd_pick = cwd.as_ref().and_then(|cwd| {
+        infos.iter().find(|info| {
+            info.project_path
+                .as_deref()
+                .is_some_and(|p| std::path::Path::new(p) == cwd.as_path())
+        })
+    });
+    let picked_id = cwd_pick
+        .or_else(|| infos.first())
+        .map(|info| info.session_id)
+        .expect("non-empty list yields a candidate");
+    let session = store
+        .load(&picked_id)?
+        .ok_or_else(|| anyhow::anyhow!("Session {picked_id} not found on disk"))?;
+    let cwd_match = current_cwd_matches(session.metadata.project_path.as_deref());
+    Ok(Some(ResolvedResume { session, cwd_match }))
+}
+
+/// Headless resume guard. Resuming a session that was recorded in a different
+/// working directory is how one project's context bleeds into another
+/// project's run (the silent `-c` picks the globally most recent session), so
+/// refuse when both directories are known and differ. Sessions recorded
+/// without a working directory (legacy logs) only qualify for a stderr note —
+/// they cannot be verified, and refusing them would break legacy workflows.
+/// Returns `Ok(None)` when there is nothing to resume (fresh start).
+fn headless_resume_data(
+    should_resume: bool,
+    resume_session_id: Option<&str>,
+) -> Result<Option<shannon_core::session_log::StoredSession>> {
+    if !should_resume {
+        return Ok(None);
+    }
+    match resolve_resume(resume_session_id)? {
+        Some(resolved) if !resolved.cwd_match => {
+            let recorded = resolved.session.metadata.project_path.clone();
+            match recorded {
+                Some(recorded) => {
+                    let cwd = std::env::current_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "<unknown>".to_string());
+                    Err(anyhow::anyhow!(
+                        "refusing to resume session {}: recorded in '{recorded}', but the current directory is '{cwd}'. `cd` into that directory or pass --resume-id <UUID> explicitly.",
+                        resolved.session.session_id
+                    ))
+                }
+                None => {
+                    eprintln!(
+                        "NOTE: resuming session {} (no recorded working directory; cannot verify it belongs to this project).",
+                        resolved.session.session_id
+                    );
+                    Ok(Some(resolved.session))
+                }
+            }
+        }
+        Some(resolved) => Ok(Some(resolved.session)),
+        None => Ok(None),
     }
 }
 
@@ -959,21 +1353,29 @@ fn load_resume_session(session_id_str: Option<&str>) -> Result<shannon_engine::s
 /// `config` holds explicit CLI configuration.
 /// `bypass_all` when true, skips all permission checks (BypassPermissions mode).
 /// `resume_session` when provided, injects prior conversation history into the engine.
+#[allow(clippy::too_many_arguments)]
 fn run_noninteractive_query(
     query: &str,
     stream: bool,
     config: &CliConfig,
     bypass_all: bool,
-    resume_session: Option<shannon_engine::state::SessionData>,
+    resume_session: Option<shannon_core::session_log::StoredSession>,
+    disallowed_tools: Vec<String>,
+    goal: Option<String>,
+    attachments: Vec<shannon_engine::api::ContentBlock>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
 
     rt.block_on(async {
         // Build tool registry with all standard tools (sandboxed to project dir)
-        let project_dir = std::env::current_dir().unwrap_or_default();
+        let (project_dir, providers) =
+            shannon_remote::assembly::assemble_for_headless()
+                .await
+                .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
         let mut tools = ToolRegistry::new();
-        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
-            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let reg_result =
+            register_default_tools_with_project_dir_ex_with_providers(&mut tools, &project_dir, &providers)
+                .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -1042,25 +1444,53 @@ fn run_noninteractive_query(
                 .join(".shannon")
                 .join("plugins");
             let mut plugin_registry = shannon_core::plugin::PluginRegistry::new(plugins_dir);
-            if let Ok(()) = plugin_registry.load_all().await {
+            // §4.10: broken manifests now surface instead of vanishing; every
+            // valid sibling still loads and proceeds below.
+            if let Err(e) = plugin_registry.load_all().await {
+                eprintln!("Warning: some plugins failed to load and were skipped:\n{e}");
+            }
+            {
                 let enabled = plugin_registry.list_enabled();
                 if !enabled.is_empty() {
                     eprintln!("Loaded {} plugin(s)", enabled.len());
                     for plugin in &enabled {
+                        // §4.9: gate every Shannon-side execution point on
+                        // the manifest allow-set; empty declarations keep the
+                        // pre-enforcement lenient default.
+                        let policy = std::sync::Arc::new(
+                            shannon_core::plugin::PluginPermissionPolicy::from_manifest(
+                                &plugin.manifest,
+                            ),
+                        );
+                        // write_files enforcement ("declaration IS sandbox"):
+                        // declared write_files installs a manifest-derived
+                        // execution world around every stdio spawn; anything
+                        // else stays a zero-overhead passthrough.
+                        let spawn_guard = shannon_tools::sandbox::plugin_spawn_guard_for_manifest(
+                            &policy,
+                            &plugin.manifest.name,
+                            &plugin.path,
+                        );
                         match plugin.manifest.kind() {
                             Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
                                 if let Some(command) = transport.command() {
                                     let args = transport.args().to_vec();
-                                    match shannon_core::discover_tools(
+                                    match shannon_core::plugin::gated_discover_tools_stdio_guarded(
+                                        &policy,
                                         &plugin.manifest.name,
                                         command,
                                         &args,
                                         &std::collections::HashMap::new(),
                                         None,
+                                        spawn_guard,
                                     )
                                     .await
                                     {
                                         Ok(result) => {
+                                            tools.attach_plugin_policy(
+                                                &plugin.manifest.name,
+                                                std::sync::Arc::clone(&policy),
+                                            );
                                             let tool_count = result.tools.len();
                                             let boxed: Vec<Box<dyn shannon_core::tools::Tool>> = result
                                                 .tools
@@ -1077,10 +1507,24 @@ fn run_noninteractive_query(
                                 }
                             }
                             Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
-                                eprintln!("  Command plugin '{}' ({}) — use /plugin:{}", plugin.manifest.name, description, name);
+                                // Prompt-driven extension faces apply to the
+                                // slash command this plugin advertises.
+                                match shannon_core::plugin::admit_prompt_based_extension(
+                                    &policy,
+                                    &plugin.manifest.name,
+                                ) {
+                                    Ok(()) => eprintln!("  Command plugin '{}' ({}) — use /plugin:{}", plugin.manifest.name, description, name),
+                                    Err(e) => eprintln!("  Warning: Command plugin '{}' not registered: {e}", plugin.manifest.name),
+                                }
                             }
                             Ok(shannon_core::plugin::PluginKind::Skill { trigger, template: _ }) => {
-                                eprintln!("  Skill plugin '{}' (trigger: '{}') — use /{}", plugin.manifest.name, trigger, trigger);
+                                match shannon_core::plugin::admit_prompt_based_extension(
+                                    &policy,
+                                    &plugin.manifest.name,
+                                ) {
+                                    Ok(()) => eprintln!("  Skill plugin '{}' (trigger: '{}') — use /{}", plugin.manifest.name, trigger, trigger),
+                                    Err(e) => eprintln!("  Warning: Skill plugin '{}' not registered: {e}", plugin.manifest.name),
+                                }
                             }
                             Err(e) => {
                                 eprintln!("  Warning: Plugin '{}' has invalid config: {e}", plugin.manifest.name);
@@ -1096,11 +1540,16 @@ fn run_noninteractive_query(
 
         // Inject team context into AgentTool for sub-agent execution + team coordination
         match shannon_tools::AgentToolContext::new(client_config.clone()).await {
-            Ok(ctx) => {
+            Ok(mut ctx) => {
                 // Register team coordination tools (team_task_create/update/list)
                 if let Err(e) = shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone()) {
                     eprintln!("Warning: Team tool registration failed: {e}");
                 }
+                // Forward the parent's --disallowed-tools denylist so sub-agents
+                // spawned via `create_team` / `agent_spawn` cannot regain tools
+                // the parent revoked. Each runs as a fresh `shannon --team-agent`
+                // process; CLI flags do NOT inherit automatically.
+                ctx.parent_disallowed_tools = disallowed_tools.clone();
                 if let Ok(mut guard) = agent_context_handle.lock() {
                     *guard = Some(ctx);
                 }
@@ -1151,6 +1600,14 @@ fn run_noninteractive_query(
             engine.append_system_prompt(&instructions.content);
         }
 
+        // Inject the session goal (--goal) — injection only in headless mode
+        if let Some(objective) = goal {
+            engine.set_goal(Some(shannon_core::query_engine::GoalSpec {
+                objective,
+                paused: false,
+            }));
+        }
+
         // Restore prior conversation history if --resume was specified
         if let Some(session_data) = resume_session {
             let count = session_data.messages.len();
@@ -1162,6 +1619,7 @@ fn run_noninteractive_query(
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: query.to_string(),
+            attachments,
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: should_enable_tools(llm_provider.clone()),
@@ -1256,7 +1714,10 @@ fn run_noninteractive_query(
 /// Emit an NDJSON event to stdout (newline-delimited JSON).
 fn emit_ci_event(event: &CiEvent) {
     match serde_json::to_string(event) {
-        Ok(json) => println!("{json}"),
+        Ok(json) => {
+            crash_hook::record(&json);
+            println!("{json}");
+        }
         Err(e) => eprintln!("Warning: failed to serialize CI event: {e}"),
     }
 }
@@ -1282,6 +1743,9 @@ enum OutputEvent {
     },
     #[serde(rename = "error")]
     Error { message: String },
+    /// Non-fatal warning — the run continues.
+    #[serde(rename = "warning")]
+    Warning { message: String },
     #[serde(rename = "done")]
     Done { exit_code: i32 },
 }
@@ -1299,6 +1763,7 @@ impl OutputEvent {
 fn emit_output_event(event: &OutputEvent) {
     let line = event.to_ndjson();
     if !line.is_empty() {
+        crash_hook::record(line.trim_end());
         print!("{line}");
         std::io::stdout().flush().ok();
     }
@@ -1328,34 +1793,48 @@ fn load_schema(input: &str) -> Result<shannon_core::StructuredOutputConfig> {
 ///
 /// Features:
 /// - Skips TUI entirely
-/// - Restricts tools to `--allowed-tools` list (exit code 2 on violation)
-/// - Limits turns via `--max-turns` (exit code 3 when exceeded)
+/// - Restricts tools to `--allowed-tools` list (violations are soft-denied
+///   as recoverable tool errors the model can route around; they do not
+///   abort the run)
+/// - Limits turns via `--max-turns` (exit code 2 when exceeded)
 /// - Outputs structured JSON with `--output-format json`
 ///
-/// Exit codes: 0 success, 1 error, 2 tool denied, 3 max turns reached.
+/// Exit codes (`HeadlessExitCode`): 0 success, 1 error, 2 max turns
+/// reached, 3 timeout (retries exhausted after read/timeouts), 4 rate
+/// limited (retries exhausted), 5 context overflow, 6 permission denied.
+#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn run_headless_query(
     prompt: &str,
     config: &CliConfig,
     allowed_tools: Option<&[String]>,
+    disallowed_tools: &[String],
     output_format: OutputFormat,
     max_turns: Option<u32>,
     exit_on_error: bool,
     quiet: bool,
     diff_only: bool,
-    resume_session: Option<shannon_engine::state::SessionData>,
+    resume_session: Option<shannon_core::session_log::StoredSession>,
     schema_config: Option<&shannon_core::StructuredOutputConfig>,
     notify: bool,
+    goal: Option<String>,
 ) -> Result<()> {
+    // Arm structured crash capture when the dogfood loop (or any CI harness)
+    // points SHANNON_CRASH_DIR at a scratch directory; no-op otherwise.
+    crash_hook::install_from_env();
     let rt = tokio::runtime::Runtime::new()?;
     let exit_code: HeadlessExitCode = rt.block_on(async {
         let start = Instant::now();
 
         // Build tool registry with all standard tools (sandboxed to project dir)
-        let project_dir = std::env::current_dir().unwrap_or_default();
+        let (project_dir, providers) =
+            shannon_remote::assembly::assemble_for_headless()
+                .await
+                .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
         let mut tools = ToolRegistry::new();
-        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
-            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let reg_result =
+            register_default_tools_with_project_dir_ex_with_providers(&mut tools, &project_dir, &providers)
+                .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -1409,14 +1888,37 @@ fn run_headless_query(
         if let Some(allowed) = allowed_tools {
             tools.set_allowed_tools(Some(allowed.to_vec()));
         }
+        // Apply --disallowed-tools: each entry becomes a `!pattern` filter that
+        // excludes that tool. Composes with the positive allowlist above
+        // (exclude wins per ToolFilter semantics). If only disallowed is set,
+        // every other tool remains available.
+        if !disallowed_tools.is_empty() {
+            let mut patterns: Vec<String> = match allowed_tools {
+                Some(a) => a.to_vec(),
+                None => Vec::new(),
+            };
+            for tool in disallowed_tools {
+                for t in tool.split(',') {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        patterns.push(format!("!{t}"));
+                    }
+                }
+            }
+            tools.set_allowed_tools(Some(patterns));
+        }
 
         // Build LLM client
         let client_config = build_llm_config_from_builder(config);
         match shannon_tools::AgentToolContext::new(client_config.clone()).await {
-            Ok(ctx) => {
+            Ok(mut ctx) => {
                 if let Err(e) = shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone()) {
                     eprintln!("Warning: Team tool registration failed: {e}");
                 }
+                // Forward parent's --disallowed-tools denylist (see site 1385 comment).
+                // `disallowed_tools` here is &[String] (run_headless_query param),
+                // so use `to_vec()` to materialize a Vec<String>.
+                ctx.parent_disallowed_tools = disallowed_tools.to_vec();
                 if let Ok(mut guard) = agent_context_handle.lock() {
                     *guard = Some(ctx);
                 }
@@ -1447,8 +1949,7 @@ fn run_headless_query(
         // Permissions: FullAuto in headless mode (auto-approve non-critical, deny critical)
         let mut permissions = shannon_engine::permissions::PermissionManager::new();
         permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
-        let state = StateManager::new();
-
+        let state = headless_state_manager()?;
         let mut engine = QueryEngine::with_defaults(client, tools, permissions, state)
             .with_plan_mode_active(plan_mode_flag);
 
@@ -1479,6 +1980,14 @@ fn run_headless_query(
             engine.append_system_prompt(&schema.system_prompt_suffix());
         }
 
+        // Inject the session goal (--goal) — injection only in headless mode
+        if let Some(objective) = goal {
+            engine.set_goal(Some(shannon_core::query_engine::GoalSpec {
+                objective,
+                paused: false,
+            }));
+        }
+
         // Restore prior conversation history if --resume was specified
         if let Some(session_data) = resume_session {
             let count = session_data.messages.len();
@@ -1490,6 +1999,7 @@ fn run_headless_query(
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: prompt.to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: should_enable_tools(llm_provider.clone()),
@@ -1507,8 +2017,22 @@ fn run_headless_query(
         let mut tool_calls: Vec<ToolCallSummary> = Vec::new();
         let mut total_tokens: u64 = 0;
         let mut _pending_tool_name: Option<String> = None;
+        // Split counters for ledger accounting (TaskBudget). Usage events
+        // carry PER-REQUEST usage (not cumulative despite the old comment),
+        // so the max-locals below only ever observe the LAST request — a
+        // multi-request query undercounts by everything before it (13× on
+        // the dogfood l1 run). The authoritative accounting is the engine's
+        // Cost event, which sums every request in the query; the locals
+        // stay as a fallback for paths where Cost never arrives (errors).
+        let mut total_input_tokens: u64 = 0;
+        let mut total_output_tokens: u64 = 0;
+        let mut engine_usage: Option<(u64, u64)> = None;
         let mut exit_code = HeadlessExitCode::Success;
         let mut _turn_count: usize = 0;
+        // Turn-budget pressure warnings fire once per threshold (§ max-turns
+        // early warning) so headless callers can wrap up before the hard cut.
+        let mut turn_budget_warning_80_fired = false;
+        let mut turn_budget_warning_95_fired = false;
         let mut changed_files: Vec<(String, String, String)> = Vec::new(); // (path, old, new)
         let allowed_set: Option<std::collections::HashSet<String>> =
             allowed_tools.map(|v| v.iter().cloned().collect());
@@ -1519,6 +2043,7 @@ fn run_headless_query(
             emit_ci_event(&CiEvent::Start {
                 prompt: prompt.to_string(),
                 model: model_name,
+                session_id: engine.session_id().to_string(),
             });
         }
 
@@ -1534,16 +2059,33 @@ fn run_headless_query(
                     response_text.push_str(&content);
                 }
                 Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
-                    // Check tool permission against allowed list
+                    // A tool call supersedes the preceding text as this turn's
+                    // contribution: keep only the text of the FINAL answer
+                    // turn in `response_text`. Schema validation and the
+                    // `response` output field must see that answer alone, not
+                    // the whole multi-turn transcript with intermediate
+                    // reasoning glued on (dogfood l2-deep-analysis
+                    // 2026-08-23: an unclosed turn-1 `<think>` swallowed
+                    // every later answer and validation parsed an empty
+                    // string). The delta events above still stream ALL text.
+                    response_text.clear();
+                    // A tool outside --allowed-tools is soft-denied
+                    // downstream: the registry's allowed-tools filter turns
+                    // the call into an is_error tool result ("Tool not
+                    // found: X (not in this session's allowed-tools list)")
+                    // that the model can recover from by switching tools.
+                    // Fatal-exiting here (old exit 6 / PermissionDenied)
+                    // killed otherwise recoverable runs — dogfood m3
+                    // 2026-08-23: one turn held a parallel Glob+Bash call,
+                    // Bash was never advertised, and the break discarded the
+                    // in-flight Glob after a single turn.
                     if let Some(ref allowed) = allowed_set {
                         if !allowed.contains(&tool_name) {
                             eprintln!(
-                                "Error: tool '{}' not in allowed list: {}",
+                                "[headless: tool '{}' outside allowed list (soft-denied): {}]",
                                 tool_name,
                                 allowed.iter().cloned().collect::<Vec<_>>().join(",")
                             );
-                            exit_code = HeadlessExitCode::PermissionDenied;
-                            break;
                         }
                     }
                     let input_summary = match serde_json::to_string(&tool_input) {
@@ -1649,6 +2191,42 @@ fn run_headless_query(
                     _turn_count = turn_number;
                     total_tokens += tokens_used;
                     eprintln!("[headless: turn {turn_number}, {tokens_used} tokens]");
+                    // (§4.6) No per-turn file checkpoint needed: every turn is
+                    // already durable in <container>/<id>/events.jsonl via the
+                    // engine tee, including crash-window tail recovery — so a
+                    // run killed mid-flight resumes with `--resume <session_id>`
+                    // without extra writes here.
+                    // Turn-budget pressure warnings (§ max-turns early
+                    // warning): fire once per threshold, before the hard
+                    // TurnLimit break below, so headless callers can wrap up
+                    // or checkpoint instead of being cut mid-task.
+                    if let Some(max) = max_turns {
+                        let max = max.max(1) as usize;
+                        let pct = turn_number.saturating_mul(100) / max;
+                        let threshold = if pct >= 95 && !turn_budget_warning_95_fired {
+                            turn_budget_warning_95_fired = true;
+                            Some((95, "the run stops at the --max-turns limit"))
+                        } else if pct >= 80 && !turn_budget_warning_80_fired {
+                            turn_budget_warning_80_fired = true;
+                            Some((80, "wrap up or checkpoint soon"))
+                        } else {
+                            None
+                        };
+                        if let Some((mark, advice)) = threshold {
+                            let message = format!(
+                                "Turn budget: {turn_number}/{max} turns used ({mark}%) — {advice}."
+                            );
+                            if !quiet {
+                                eprintln!("[headless: {message}]");
+                            }
+                            if output_format == OutputFormat::JsonStream {
+                                emit_ci_event(&CiEvent::Warning {
+                                    message: message.clone(),
+                                });
+                                emit_output_event(&OutputEvent::Warning { message });
+                            }
+                        }
+                    }
                     // Check max turns
                     if let Some(max) = max_turns {
                         if turn_number >= max as usize {
@@ -1662,6 +2240,22 @@ fn run_headless_query(
                 }
                 Ok(QueryEvent::Usage { input_tokens, output_tokens, .. }) => {
                     total_tokens = total_tokens.max(input_tokens + output_tokens);
+                    // Fallback accounting only — see the engine_usage
+                    // declaration for why max-per-request undershoots
+                    // multi-request queries. Adapter skips zero-valued
+                    // usage chunks (some providers emit a `usage: {}`
+                    // sentinel alongside finish_reason).
+                    total_input_tokens = total_input_tokens.max(input_tokens);
+                    total_output_tokens = total_output_tokens.max(output_tokens);
+                }
+                Ok(QueryEvent::Cost { input_tokens, output_tokens, .. }) => {
+                    // Engine-side totals, accumulated across every request
+                    // in this query (engine.rs sums per-request usage) and
+                    // emitted exactly once at query exit, including the
+                    // max-turns path. Headless runs a single query per
+                    // process, so this IS the session total. Last-wins in
+                    // case a provider emits more than one.
+                    engine_usage = Some((input_tokens, output_tokens));
                 }
                 Ok(QueryEvent::Completed { .. }) => {
                     if output_format == OutputFormat::Text && !response_text.is_empty() {
@@ -1671,24 +2265,43 @@ fn run_headless_query(
                 }
                 Ok(QueryEvent::Failed { error, .. }) => {
                     eprintln!("Error: {error}");
-                    let err_lower = error.to_lowercase();
-                    if err_lower.contains("context")
-                        || err_lower.contains("token limit")
-                        || err_lower.contains("max_tokens")
-                        || err_lower.contains("context_length")
-                    {
-                        exit_code = HeadlessExitCode::ContextOverflow;
-                    } else if err_lower.contains("rate limit") || err_lower.contains("429") {
-                        exit_code = HeadlessExitCode::RateLimited;
-                    } else if err_lower.contains("permission") || err_lower.contains("denied") {
-                        exit_code = HeadlessExitCode::PermissionDenied;
-                    } else {
-                        exit_code = HeadlessExitCode::Error;
-                    }
+                    exit_code = classify_headless_failure(&error);
                     if output_format == OutputFormat::JsonStream {
                         emit_output_event(&OutputEvent::Error {
                             message: error.clone(),
                         });
+                    }
+                }
+                Ok(QueryEvent::Progress { message, .. }) => {
+                    // Engine-side progress (API retry activity, context
+                    // truncation, ...): always on stderr in text mode so CI
+                    // logs show why a run is pausing; NDJSON progress events
+                    // in json-stream mode.
+                    if !quiet {
+                        eprintln!("[headless: {message}]");
+                    }
+                    if output_format == OutputFormat::JsonStream {
+                        emit_ci_event(&CiEvent::Progress { message });
+                    }
+                }
+                Ok(QueryEvent::Warning { message, .. }) => {
+                    if !quiet {
+                        eprintln!("[headless: warning: {message}]");
+                    }
+                    if output_format == OutputFormat::JsonStream {
+                        emit_ci_event(&CiEvent::Warning {
+                            message: message.clone(),
+                        });
+                        emit_output_event(&OutputEvent::Warning { message });
+                    }
+                }
+                Ok(QueryEvent::RateLimit {
+                    requests_used,
+                    requests_limit,
+                    ..
+                }) => {
+                    if !quiet {
+                        eprintln!("[headless: provider rate-limit window {requests_used}/{requests_limit}]");
                     }
                 }
                 Ok(_) => {}
@@ -1700,6 +2313,37 @@ fn run_headless_query(
         }
 
         let duration_ms = start.elapsed().as_millis() as u64;
+
+        // OTLP bridge (§4.14): export this session's L0 log when telemetry is
+        // enabled. NOOP by default — when `SHANNON_TELEMETRY` is unset the
+        // manager is a pure no-op and we don't even read the events file
+        // (Pi contract: telemetry must never cost the main loop anything).
+        let telemetry_config = shannon_core::telemetry::TelemetryConfig::from_env();
+        if telemetry_config.enabled {
+            let sid = engine.session_id().to_string();
+            let export = (|| -> anyhow::Result<usize> {
+                let base = shannon_core::session_log::default_shannon_home()?;
+                let reader = shannon_core::session_log::SessionLogReader::open(
+                    shannon_core::session_log::session_events_path(&base, &sid),
+                )?;
+                let events = reader.read_events(false)?;
+                let telemetry =
+                    shannon_core::telemetry::TelemetryManager::new(telemetry_config.clone());
+                Ok(telemetry.export_l0(&events))
+            })();
+            match export {
+                Ok(spans) => tracing::debug!("telemetry: exported {spans} spans"),
+                Err(e) => tracing::debug!("telemetry export skipped: {e}"),
+            }
+        }
+
+        // Authoritative accounting for the ledger: prefer the engine's Cost
+        // totals (sum of every request in the query) over the max-locals,
+        // which only see the last request. total_tokens from TurnCompleted
+        // has the same hole (no event on the final text-only turn).
+        let (tokens_in, tokens_out) =
+            engine_usage.unwrap_or((total_input_tokens, total_output_tokens));
+        let total_tokens = engine_usage.map_or(total_tokens, |(i, o)| i + o);
 
         // Validate structured output schema if provided
         if let Some(schema) = schema_config {
@@ -1745,6 +2389,8 @@ fn run_headless_query(
                     exit_code: i32::from(exit_code),
                     turns_used: _turn_count as u32,
                     tokens_used: total_tokens,
+                    tokens_in,
+                    tokens_out,
                 });
                 emit_output_event(&OutputEvent::Done {
                     exit_code: i32::from(exit_code),
@@ -1915,6 +2561,50 @@ fn load_headless_webhook_config() -> Option<shannon_core::notifier::WebhookConfi
 
 /// Read all of stdin into a String. Returns empty string if stdin is a terminal
 /// (i.e., not piped).
+/// Convert `--attach <PATH>` entries into multimodal content blocks.
+/// Mirrors the supported set advertised by the flag doc-comment (and the
+/// REST `MessageRequest.attachments` allowlist); bmp accepted here for
+/// parity with the TUI `/image` command.
+const CLI_ATTACH_MEDIA: &[(&str, &str)] = &[
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("gif", "image/gif"),
+    ("webp", "image/webp"),
+    ("bmp", "image/bmp"),
+];
+
+fn parse_attachments(paths: &[String]) -> Result<Vec<shannon_engine::api::ContentBlock>> {
+    use base64::Engine;
+    use std::path::Path;
+
+    let mut blocks = Vec::with_capacity(paths.len());
+    for p in paths {
+        let path = Path::new(p);
+        if !path.exists() {
+            return Err(anyhow::anyhow!("--attach: file not found: {p}"));
+        }
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase);
+        let media_type = ext
+            .as_deref()
+            .and_then(|e| CLI_ATTACH_MEDIA.iter().find(|(k, _)| *k == e).map(|(_, v)| *v))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--attach: unsupported extension for {p} (supported: png, jpg, jpeg, gif, webp, bmp)"
+                )
+            })?;
+        let bytes = std::fs::read(path).map_err(|e| anyhow::anyhow!("--attach: read {p}: {e}"))?;
+        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        blocks.push(shannon_engine::api::ContentBlock::Image {
+            source: shannon_engine::api::ImageSource::base64(media_type, data),
+        });
+    }
+    Ok(blocks)
+}
+
 fn read_stdin() -> String {
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() {
@@ -1934,14 +2624,21 @@ fn run_serve_command(
     auth_token: Option<String>,
     allow_nonloopback: bool,
     config: &CliConfig,
+    disallowed_tools: Vec<String>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         // Build tool registry with default tools (sandboxed to project dir).
-        let project_dir = std::env::current_dir().unwrap_or_default();
+        let (project_dir, providers) = shannon_remote::assembly::assemble_for_headless()
+            .await
+            .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
         let mut tools = shannon_core::ToolRegistry::new();
-        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
-            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let reg_result = register_default_tools_with_project_dir_ex_with_providers(
+            &mut tools,
+            &project_dir,
+            &providers,
+        )
+        .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let _plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -1953,12 +2650,14 @@ fn run_serve_command(
 
         // Inject team context into AgentTool for sub-agent execution + team coordination
         match shannon_tools::AgentToolContext::new(client_config.clone()).await {
-            Ok(ctx) => {
+            Ok(mut ctx) => {
                 if let Err(e) =
                     shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone())
                 {
                     eprintln!("Warning: Team tool registration failed: {e}");
                 }
+                // Forward parent's --disallowed-tools denylist (see site 1385 comment).
+                ctx.parent_disallowed_tools = disallowed_tools.clone();
                 if let Ok(mut guard) = agent_context_handle.lock() {
                     *guard = Some(ctx);
                 }
@@ -2029,6 +2728,7 @@ async fn agent_respond_error(id: i64, error: shannon_agents::JsonRpcError) {
 /// `shannon` binary. It gives agents full access to the query engine, tool
 /// registry, MCP servers, plugins, and the LLM client — everything the REPL
 /// has, minus the interactive UI.
+#[allow(clippy::too_many_arguments)]
 fn run_team_agent_mode(
     name: &str,
     model: Option<&str>,
@@ -2037,6 +2737,7 @@ fn run_team_agent_mode(
     workdir: Option<&str>,
     permission_mode: Option<&str>,
     allowed_tools: Option<&str>,
+    disallowed_tools: &[String],
 ) -> Result<()> {
     // Change working directory if specified
     if let Some(dir) = workdir {
@@ -2052,10 +2753,14 @@ fn run_team_agent_mode(
         let config = build_cli_config(model, provider, None, None, None, false, HashMap::new());
 
         // ── Build full tool registry (sandboxed to project dir) ──
-        let project_dir = std::env::current_dir().unwrap_or_default();
+        let (project_dir, providers) =
+            shannon_remote::assembly::assemble_for_headless()
+                .await
+                .map_err(|e| anyhow::anyhow!("remote target assembly failed: {e}"))?;
         let mut tools = ToolRegistry::new();
-        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
-            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let reg_result =
+            register_default_tools_with_project_dir_ex_with_providers(&mut tools, &project_dir, &providers)
+                .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -2127,10 +2832,14 @@ fn run_team_agent_mode(
 
         // Team context
         match shannon_tools::AgentToolContext::new(client_config.clone()).await {
-            Ok(ctx) => {
+            Ok(mut ctx) => {
                 if let Err(e) = shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone()) {
                     tracing::warn!("Team tool registration failed: {e}");
                 }
+                // Forward parent's --disallowed-tools denylist (see site 1385 comment).
+                // `disallowed_tools` here is &[String] (function parameter), so
+                // use `to_vec()` to materialize a Vec<String>.
+                ctx.parent_disallowed_tools = disallowed_tools.to_vec();
                 if let Ok(mut guard) = agent_context_handle.lock() {
                     *guard = Some(ctx);
                 }
@@ -2172,15 +2881,31 @@ fn run_team_agent_mode(
         ))).unwrap_or_else(|e| eprintln!("Warning: tool registration failed: {e}"));
         let coordinator_channel_for_loop = coordinator_channel.clone();
 
-        // Apply tool access restrictions from agent definition
+        // Apply tool access restrictions from agent definition, then layer the
+        // parent's --disallowed-tools denylist on top. The denylist is forwarded
+        // by `process_manager::spawn_agent` so a sub-agent cannot regain tools
+        // the parent denied via --disallowed-tools (see AgentSpawnInput.disallowed_tools).
+        // Both lists use the same `!pattern` filter convention as --prompt mode:
+        // exclude patterns win, so composing them preserves the deny semantics.
+        let mut patterns: Vec<String> = Vec::new();
         if let Some(tools_list) = allowed_tools {
-            let allowed: Vec<String> = tools_list.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            if !allowed.is_empty() {
-                tools.set_allowed_tools(Some(allowed));
+            for t in tools_list.split(',') {
+                let t = t.trim();
+                if !t.is_empty() {
+                    patterns.push(t.to_string());
+                }
             }
+        }
+        for tool in disallowed_tools {
+            for t in tool.split(',') {
+                let t = t.trim();
+                if !t.is_empty() {
+                    patterns.push(format!("!{t}"));
+                }
+            }
+        }
+        if !patterns.is_empty() {
+            tools.set_allowed_tools(Some(patterns));
         }
 
         let llm_provider = client_config.provider.clone();
@@ -2292,6 +3017,7 @@ fn run_team_agent_mode(
                                     query_id: Uuid::new_v4(),
                                     session_id: Uuid::new_v4(),
                                     user_message: task_desc,
+                                    attachments: Vec::new(),
                                     metadata: QueryMetadata {
                                         timestamp: chrono::Utc::now(),
                                         tools_allowed: should_enable_tools(llm_provider.clone()),
@@ -2592,75 +3318,107 @@ fn handle_url_scheme_registration(register: bool, unregister: bool) -> Result<()
 /// Resolve the path to the `shannon-desktop` binary.
 ///
 /// Order: (a) PATH `shannon-desktop`, (b) known install dirs, (c) None.
+///
+/// Install-dir candidates follow the productName "shannon-desktop" bundle:
+/// NSIS currentUser → `%LOCALAPPDATA%\shannon-desktop`, perMachine → Program
+/// Files; macOS drag-install → `shannon-desktop.app` (the productName, NOT
+/// "Shannon Desktop.app") under /Applications and ~/Applications; the
+/// workspace `desktop/target/release` dir covers the `--build` dev flow.
 fn find_desktop_binary() -> Option<std::path::PathBuf> {
     if let Ok(path) = which_desktop_on_path() {
         return Some(path);
     }
-    let candidates = [
+    let mut candidates: Vec<std::path::PathBuf> = vec![
         std::path::PathBuf::from("/usr/local/bin/shannon-desktop"),
         dirs::home_dir()
             .map(|h| h.join(".local").join("bin").join("shannon-desktop"))
             .unwrap_or_default(),
-        std::path::PathBuf::from(
-            "/Applications/Shannon Desktop.app/Contents/MacOS/shannon-desktop",
-        ),
     ];
+    if cfg!(target_os = "macos") {
+        candidates.push(std::path::PathBuf::from(
+            "/Applications/shannon-desktop.app/Contents/MacOS/shannon-desktop",
+        ));
+        if let Some(home) = dirs::home_dir() {
+            candidates.push(
+                home.join("Applications")
+                    .join("shannon-desktop.app")
+                    .join("Contents/MacOS/shannon-desktop"),
+            );
+        }
+    }
+    if cfg!(windows) {
+        // NSIS currentUser install (Tauri default): %LOCALAPPDATA%.
+        if let Some(local) = dirs::data_local_dir() {
+            candidates.push(local.join("shannon-desktop").join("shannon-desktop.exe"));
+        }
+        // perMachine install ("all users" checkbox).
+        candidates.push(std::path::PathBuf::from(
+            r"C:\Program Files\shannon-desktop\shannon-desktop.exe",
+        ));
+        // `shannon desktop --build` output.
+        candidates.push(std::path::PathBuf::from(
+            r"desktop\target\release\shannon-desktop.exe",
+        ));
+    } else {
+        // `shannon desktop --build` output (unix layout).
+        candidates.push(std::path::PathBuf::from(
+            "desktop/target/release/shannon-desktop",
+        ));
+    }
     candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
 /// Probe only the system PATH for `shannon-desktop` and return its path if found.
 fn which_desktop_on_path() -> Result<std::path::PathBuf, ()> {
-    let out = std::process::Command::new("command")
-        .args(["-v", "shannon-desktop"])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() {
-                Err(())
-            } else {
-                Ok(std::path::PathBuf::from(s))
-            }
-        }
-        _ => Err(()),
-    }
+    find_on_path("shannon-desktop").ok_or(())
+}
+
+/// Resolve `exe` on PATH by walking PATH directly. No shell-out: `command -v`
+/// is a shell builtin and `Command::new("command")` fails outright on
+/// distros without a /usr/bin/command shim (stock Ubuntu), which used to
+/// make every doctor probe report a false WARN on Linux.
+fn find_on_path(exe: &str) -> Option<std::path::PathBuf> {
+    let name = if cfg!(windows) && !exe.ends_with(".exe") {
+        format!("{exe}.exe")
+    } else {
+        exe.to_string()
+    };
+    let path_var = std::env::var_os("PATH")?;
+    std::env::split_paths(&path_var)
+        .map(|dir| dir.join(&name))
+        .find(|p| p.is_file())
 }
 
 /// Launch the Shannon desktop application.
 ///
-/// Best-effort: resolves the binary, optionally builds it via `cargo tauri
-/// build`, then spawns it. If `foreground` is false the process is detached
-/// (spawn only); otherwise we wait for it to exit.
-fn run_desktop_command(no_build: bool, foreground: bool) -> Result<()> {
+/// Resolution order when the binary is missing (Phase B B5):
+///   `--install` → download + verify + install the platform bundle;
+///   `--build`   → developer flow, `cargo tauri build` from `desktop/`;
+///   default     → print install guidance (auto-build removed: it is a dev
+///                 behavior, not a product behavior).
+/// `--no-build` is accepted for compatibility and ignored.
+///
+/// If `foreground` is false the process is detached (spawn only); otherwise
+/// we wait for it to exit.
+fn run_desktop_command(build: bool, no_build: bool, install: bool, foreground: bool) -> Result<()> {
+    let _ = no_build; // deprecated — guidance is the default fallback now
     let binary = match find_desktop_binary() {
         Some(b) => b,
         None => {
-            if no_build {
-                anyhow::bail!(
-                    "shannon-desktop not found on PATH or in known install dirs. \
-                     Install it or run without --no-build to build it from desktop/."
-                );
-            }
-            // Try to build the desktop app from the workspace `desktop/` dir.
-            let desktop_dir = std::path::PathBuf::from("desktop");
-            eprintln!("shannon-desktop not found; building via `cargo tauri build`...");
-            let status = std::process::Command::new("cargo")
-                .arg("tauri")
-                .arg("build")
-                .current_dir(&desktop_dir)
-                .status();
-            match status {
-                Ok(s) if s.success() => {
-                    // Search known dirs again after a successful build.
-                    match find_desktop_binary() {
-                        Some(b) => b,
-                        None => anyhow::bail!(
-                            "Built the desktop app but could not locate the shannon-desktop binary."
-                        ),
-                    }
-                }
-                Ok(s) => anyhow::bail!("`cargo tauri build` failed (exit status: {s})."),
-                Err(e) => anyhow::bail!("Failed to run `cargo tauri build`: {e}"),
+            if install {
+                install_desktop_bundle()?;
+                find_desktop_binary().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "installation finished but shannon-desktop still not found — \
+                         start it once from the Applications / Start menu to complete \
+                         first-run setup"
+                    )
+                })?
+            } else if build {
+                build_desktop_from_workspace()?
+            } else {
+                print_desktop_install_guidance();
+                anyhow::bail!("shannon-desktop not found on PATH or in known install dirs");
             }
         }
     };
@@ -2690,22 +3448,349 @@ fn run_desktop_command(no_build: bool, foreground: bool) -> Result<()> {
     }
 }
 
-/// Find the external `shannon-gateway` binary on the system PATH.
-fn find_gateway_binary() -> Option<std::path::PathBuf> {
-    let out = std::process::Command::new("command")
-        .args(["-v", "shannon-gateway"])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() {
-                None
-            } else {
-                Some(std::path::PathBuf::from(s))
+/// The guidance block printed when the desktop binary is missing (the default
+/// fallback — source auto-build was removed as a product behavior in B5).
+fn print_desktop_install_guidance() {
+    println!("Shannon Desktop is not installed.");
+    println!();
+    println!("One-line install:");
+    println!(
+        "    curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | SHANNON_COMPONENTS=desktop sh"
+    );
+    println!("Windows (PowerShell):");
+    println!(
+        "    irm https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.ps1 | iex"
+    );
+    println!();
+    println!("Or let this command do it:      shannon desktop --install");
+    println!("Developer build from this repo: shannon desktop --build");
+    println!("Bundles: https://github.com/diff-lab-com/shannon-agent/releases/latest");
+}
+
+/// Developer flow: build the desktop app from the workspace `desktop/` dir.
+fn build_desktop_from_workspace() -> Result<std::path::PathBuf> {
+    let desktop_dir = std::path::PathBuf::from("desktop");
+    eprintln!("shannon-desktop not found; building via `cargo tauri build`...");
+    let status = std::process::Command::new("cargo")
+        .arg("tauri")
+        .arg("build")
+        .current_dir(&desktop_dir)
+        .status();
+    match status {
+        Ok(s) if s.success() => find_desktop_binary().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Built the desktop app but could not locate the shannon-desktop binary."
+            )
+        }),
+        Ok(s) => anyhow::bail!("`cargo tauri build` failed (exit status: {s})."),
+        Err(e) => anyhow::bail!("Failed to run `cargo tauri build`: {e}"),
+    }
+}
+
+// ── `shannon desktop --install` support ───────────────────────────────────
+//
+// Downloads the platform bundle from the latest GitHub release, verifies it
+// against the release-level SHA256SUMS (best-effort — mirrors install.sh),
+// asks for confirmation, and installs:
+//   macOS   → mount dmg, copy shannon-desktop.app to /Applications
+//             (fallback ~/Applications — no sudo either way)
+//   linux   → sudo dpkg -i <deb> / sudo rpm -Uvh <rpm>
+//   windows → run the NSIS setup with /S (silent)
+
+const SHANNON_REPO: &str = "diff-lab-com/shannon-agent";
+
+/// Pick the desktop asset filename for `(os, arch)` from a release's asset
+/// names. tauri-action naming:
+///   nsis `shannon-desktop_<ver>_<x64|aarch64>-setup.exe`
+///   deb  `shannon-desktop_<ver>_<amd64|arm64>.deb`
+///   rpm  `shannon-desktop_<ver>_<x86_64|aarch64>.rpm`
+///   dmg  `shannon-desktop_<ver>_<x64|aarch64>.dmg`
+fn pick_desktop_asset_for(
+    os: &str,
+    arch: &str,
+    prefer_rpm: bool,
+    assets: &[String],
+) -> Option<String> {
+    let (arch_tokens, suffixes): (&[&str], &[&str]) = match (os, arch) {
+        ("windows", "x86_64") => (&["_x64"], &["-setup.exe"]),
+        ("windows", "aarch64") => (&["_aarch64"], &["-setup.exe"]),
+        ("macos", "x86_64") => (&["_x64"], &[".dmg"]),
+        ("macos", "aarch64") => (&["_aarch64"], &[".dmg"]),
+        ("linux", "x86_64") => (
+            &["_amd64", "_x86_64"],
+            if prefer_rpm { &[".rpm"] } else { &[".deb"] },
+        ),
+        ("linux", "aarch64") => (
+            &["_arm64", "_aarch64"],
+            if prefer_rpm { &[".rpm"] } else { &[".deb"] },
+        ),
+        _ => return None,
+    };
+    assets
+        .iter()
+        .find(|name| {
+            name.starts_with("shannon-desktop_")
+                && suffixes.iter().any(|s| name.ends_with(s))
+                && arch_tokens.iter().any(|t| name.contains(t))
+        })
+        .cloned()
+}
+
+/// Find `asset`'s sha256 in a release-level SHA256SUMS body
+/// (sha256sum format: `<hash>  <name>` per line).
+fn sha256_for_asset(sums_body: &str, asset: &str) -> Option<String> {
+    sums_body.lines().find_map(|line| {
+        let mut it = line.split_whitespace();
+        let hash = it.next()?;
+        let name = it.next()?;
+        (name == asset).then(|| hash.to_ascii_lowercase())
+    })
+}
+
+/// Lowercase hex sha256 of a file, streamed (bundles are tens of MB).
+fn file_sha256(path: &std::path::Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// curl a URL into a string (same transport `shannon update` uses).
+fn curl_to_string(url: &str) -> Result<String> {
+    let out = std::process::Command::new("curl")
+        .args(["-fsSL", "--retry", "3"])
+        .arg(url)
+        .output()
+        .map_err(|e| anyhow::anyhow!("failed to run curl ({e}) — install curl first"))?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "curl failed for {url} (exit {})",
+            out.status.code().unwrap_or(-1)
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// curl a URL to a file (streamed to disk, not buffered in memory).
+fn curl_to_file(url: &str, dest: &std::path::Path) -> Result<()> {
+    let status = std::process::Command::new("curl")
+        .args(["-fL", "--retry", "3", "-o"])
+        .arg(dest)
+        .arg(url)
+        .status()
+        .map_err(|e| anyhow::anyhow!("failed to run curl ({e}) — install curl first"))?;
+    if !status.success() {
+        anyhow::bail!(
+            "curl failed for {url} (exit {})",
+            status.code().unwrap_or(-1)
+        );
+    }
+    Ok(())
+}
+
+/// Best-effort `is this tool on PATH` probe.
+fn which_tool(tool: &str) -> bool {
+    find_on_path(tool).is_some()
+}
+
+/// Fetch the latest release JSON from the GitHub API.
+fn fetch_latest_release_json() -> Result<serde_json::Value> {
+    let body = curl_to_string(&format!(
+        "https://api.github.com/repos/{SHANNON_REPO}/releases/latest"
+    ))?;
+    serde_json::from_str(&body)
+        .map_err(|e| anyhow::anyhow!("failed to parse release metadata: {e}"))
+}
+
+/// `shannon desktop --install`: download + verify + install the platform
+/// desktop bundle from the latest release.
+fn install_desktop_bundle() -> Result<()> {
+    println!("Fetching latest release info...");
+    let release = fetch_latest_release_json()?;
+    let tag = release["tag_name"].as_str().unwrap_or("latest").to_string();
+
+    let mut assets: Vec<(String, String)> = Vec::new(); // (name, download url)
+    if let Some(list) = release["assets"].as_array() {
+        for asset in list {
+            if let (Some(name), Some(url)) = (
+                asset["name"].as_str(),
+                asset["browser_download_url"].as_str(),
+            ) {
+                assets.push((name.to_string(), url.to_string()));
             }
         }
-        _ => None,
     }
+    if assets.is_empty() {
+        anyhow::bail!("release {tag} has no assets to install from");
+    }
+    let names: Vec<String> = assets.iter().map(|(n, _)| n.clone()).collect();
+    let prefer_rpm = !which_tool("dpkg") && which_tool("rpm");
+    let asset = pick_desktop_asset_for(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        prefer_rpm,
+        &names,
+    )
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "no desktop bundle for {}/{} in {tag} (assets: {})",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            names.join(", ")
+        )
+    })?;
+    let url = assets
+        .iter()
+        .find(|(n, _)| *n == asset)
+        .map(|(_, u)| u.clone())
+        .expect("asset tuple exists");
+
+    let tmp = std::env::temp_dir().join(format!("shannon-desktop-install-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp)?;
+    let bundle = tmp.join(&asset);
+    println!("Downloading {asset} ({tag})...");
+    curl_to_file(&url, &bundle)?;
+
+    // Verify against the release-level SHA256SUMS — best-effort, mirroring
+    // install.sh (a hard failure on mismatch, a warning when unavailable).
+    match curl_to_string(&format!(
+        "https://github.com/{SHANNON_REPO}/releases/latest/download/SHA256SUMS"
+    )) {
+        Ok(sums) => match sha256_for_asset(&sums, &asset) {
+            Some(expected) => {
+                let got = file_sha256(&bundle)?;
+                if got != expected {
+                    anyhow::bail!("sha256 mismatch for {asset}: expected {expected}, got {got}");
+                }
+                println!("sha256 verified: {expected}");
+            }
+            None => println!("WARN: {asset} not listed in SHA256SUMS — skipping verification."),
+        },
+        Err(e) => println!("WARN: could not fetch SHA256SUMS ({e}) — skipping verification."),
+    }
+
+    println!();
+    print!("Install Shannon Desktop {tag} ({asset})? [y/N] ");
+    use std::io::Write;
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    if !answer.trim().eq_ignore_ascii_case("y") {
+        anyhow::bail!("aborted; bundle left at {}", bundle.display());
+    }
+
+    install_desktop_bundle_file(&bundle)?;
+    let _ = std::fs::remove_file(&bundle);
+    let _ = std::fs::remove_dir(&tmp);
+    println!("Shannon Desktop {tag} installed.");
+    Ok(())
+}
+
+/// Platform dispatch for the downloaded bundle file.
+fn install_desktop_bundle_file(bundle: &std::path::Path) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        install_desktop_dmg(bundle)
+    } else if cfg!(target_os = "linux") {
+        // dpkg systems got the .deb, rpm-only systems the .rpm (asset pick).
+        let (program, flag) = if bundle.extension().is_some_and(|e| e == "rpm") {
+            ("rpm", "-Uvh")
+        } else {
+            ("dpkg", "-i")
+        };
+        let status = std::process::Command::new("sudo")
+            .arg(program)
+            .arg(flag)
+            .arg(bundle)
+            .status()
+            .map_err(|e| anyhow::anyhow!("failed to run sudo {program} ({e})"))?;
+        if !status.success() {
+            anyhow::bail!("{program} failed (exit {:?})", status.code());
+        }
+        Ok(())
+    } else if cfg!(target_os = "windows") {
+        // NSIS silent install; currentUser mode does not elevate.
+        let status = std::process::Command::new(bundle)
+            .arg("/S")
+            .status()
+            .map_err(|e| anyhow::anyhow!("failed to run the installer ({e})"))?;
+        if !status.success() {
+            anyhow::bail!("installer failed (exit {:?})", status.code());
+        }
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "unsupported platform for --install: {}",
+            std::env::consts::OS
+        );
+    }
+}
+
+/// macOS: mount the dmg read-only, copy `shannon-desktop.app` into
+/// /Applications (fallback ~/Applications when not writable — no sudo path),
+/// then detach.
+fn install_desktop_dmg(dmg: &std::path::Path) -> Result<()> {
+    let out = std::process::Command::new("hdiutil")
+        .args(["attach", "-nobrowse", "-readonly", "-plist"])
+        .arg(dmg)
+        .output()
+        .map_err(|e| anyhow::anyhow!("failed to run hdiutil ({e})"))?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "hdiutil attach failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let plist: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| anyhow::anyhow!("failed to parse hdiutil output: {e}"))?;
+    let mount = plist["system-entities"]
+        .as_array()
+        .and_then(|entities| entities.iter().find_map(|e| e["mount-point"].as_str()))
+        .ok_or_else(|| anyhow::anyhow!("no mount point in hdiutil output"))?
+        .to_string();
+
+    let app_src = std::path::PathBuf::from(&mount).join("shannon-desktop.app");
+    if !app_src.is_dir() {
+        let _ = std::process::Command::new("hdiutil")
+            .args(["detach", &mount])
+            .status();
+        anyhow::bail!("no shannon-desktop.app found in the mounted dmg");
+    }
+
+    let mut targets: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from("/Applications")];
+    if let Some(home) = dirs::home_dir() {
+        targets.push(home.join("Applications"));
+    }
+    let mut installed: Option<std::path::PathBuf> = None;
+    for dir in targets {
+        let dest = dir.join("shannon-desktop.app");
+        // cp -R onto an existing .app merges trees badly — remove first.
+        let _ = std::fs::remove_dir_all(&dest);
+        let ok = std::process::Command::new("cp")
+            .args(["-R"])
+            .arg(&app_src)
+            .arg(&dest)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok && dest.is_dir() {
+            installed = Some(dest);
+            break;
+        }
+        let _ = std::fs::remove_dir_all(&dest);
+    }
+    let _ = std::process::Command::new("hdiutil")
+        .args(["detach", &mount])
+        .status();
+
+    installed.map(|_| ()).ok_or_else(|| {
+        anyhow::anyhow!("could not copy shannon-desktop.app into /Applications or ~/Applications")
+    })
+}
+
+/// Find the external `shannon-gateway` binary on the system PATH.
+fn find_gateway_binary() -> Option<std::path::PathBuf> {
+    find_on_path("shannon-gateway")
 }
 
 /// Delegate a gateway subcommand to the external `shannon-gateway` binary.
@@ -2731,6 +3816,9 @@ fn run_gateway_command(command: GatewaySubcommand) -> Result<()> {
         GatewaySubcommand::Setup => "setup",
         GatewaySubcommand::MigrateLegacy => "migrate-legacy",
         GatewaySubcommand::Enroll => "enroll",
+        // `update` is implemented here (C3): download → verify → replace →
+        // restart. Never delegated to the gateway binary.
+        GatewaySubcommand::Update => return run_gateway_update(),
     };
 
     eprintln!("Delegating to shannon-gateway: {sub}");
@@ -2744,6 +3832,140 @@ fn run_gateway_command(command: GatewaySubcommand) -> Result<()> {
         }
         Err(e) => anyhow::bail!("Failed to run shannon-gateway {sub}: {e}"),
     }
+}
+
+/// Gateway release asset name for a platform — `linux-x64` etc. `None` when
+/// the platform has no gateway build (e.g. Windows).
+fn gateway_asset_name(os: &str, arch: &str) -> Option<String> {
+    let os = match os {
+        "linux" => "linux",
+        "darwin" => "darwin",
+        _ => return None,
+    };
+    let arch = match arch {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        _ => return None,
+    };
+    Some(format!("shannon-gateway-{os}-{arch}"))
+}
+
+/// `shannon gateway update`: fetch the latest release, verify sha256,
+/// atomically replace the gateway binary, then restart the service.
+///
+/// The staging file is written next to the target so the final swap is a
+/// same-filesystem `rename` (atomic). On unix, replacing a running binary
+/// this way is safe — the running service keeps the old inode until the
+/// restart at the end picks up the new one.
+fn run_gateway_update() -> Result<()> {
+    if cfg!(windows) {
+        anyhow::bail!("the gateway is not built for Windows — nothing to update");
+    }
+    let binary = match find_gateway_binary() {
+        Some(b) => b,
+        None => anyhow::bail!(
+            "shannon-gateway not found on PATH. Install it first: \
+             curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | sh"
+        ),
+    };
+    let asset = gateway_asset_name(os_kind(), std::env::consts::ARCH)
+        .ok_or_else(|| anyhow::anyhow!("no gateway build for this platform"))?;
+
+    println!("Fetching latest release info...");
+    let release = fetch_latest_release_json()?;
+    let tag = release
+        .get("tag_name")
+        .and_then(|t| t.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if tag.is_empty() {
+        anyhow::bail!("no tag_name in latest release metadata");
+    }
+
+    println!("shannon-gateway: {}", binary.display());
+    let current = probe_version(&binary);
+    if let Some(cur) = &current {
+        println!("Current version: {cur}");
+    }
+    println!("Latest release:  {tag}");
+    if let Some(cur) = &current {
+        if !version_is_newer(cur, &tag) {
+            println!("Already up to date.");
+            return Ok(());
+        }
+    }
+
+    let assets = release
+        .get("assets")
+        .and_then(|a| a.as_array())
+        .ok_or_else(|| anyhow::anyhow!("no assets in latest release metadata"))?;
+    let asset_url = |name: &str| {
+        assets
+            .iter()
+            .find(|a| a.get("name").and_then(|n| n.as_str()) == Some(name))
+            .and_then(|a| a.get("browser_download_url"))
+            .and_then(|u| u.as_str())
+            .map(str::to_string)
+    };
+    let url = asset_url(&asset)
+        .ok_or_else(|| anyhow::anyhow!("asset {asset} not found in release {tag}"))?;
+
+    // sha256 from the release-level SHA256SUMS (same fallback rule as
+    // `shannon desktop --install`): mismatch is fatal, absence is a warning.
+    let mut expected: Option<String> = None;
+    match asset_url("SHA256SUMS") {
+        Some(sums_url) => match curl_to_string(&sums_url) {
+            Ok(body) => expected = sha256_for_asset(&body, &asset),
+            Err(e) => println!("WARN: could not fetch SHA256SUMS ({e}) — skipping verification"),
+        },
+        None => println!("WARN: no SHA256SUMS in release {tag} — skipping verification"),
+    }
+
+    let staging = binary.with_extension("download");
+    println!("Downloading {url}...");
+    curl_to_file(&url, &staging)?;
+
+    if let Some(exp) = &expected {
+        let actual = file_sha256(&staging)?;
+        if !actual.eq_ignore_ascii_case(exp) {
+            let _ = std::fs::remove_file(&staging);
+            anyhow::bail!("sha256 mismatch for {asset}: expected {exp}, got {actual}");
+        }
+        println!("sha256 verified.");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    if let Err(e) = std::fs::rename(&staging, &binary) {
+        let _ = std::fs::remove_file(&staging);
+        anyhow::bail!(
+            "could not replace {} ({e}) — the install dir may need elevated rights; \
+             re-run with sudo or reinstall via install.sh",
+            binary.display()
+        );
+    }
+    println!("Updated shannon-gateway to {tag}.");
+
+    println!("Restarting gateway service...");
+    match std::process::Command::new(&binary).arg("restart").status() {
+        Ok(s) if s.success() => println!("Gateway restarted."),
+        s => println!(
+            "WARN: restart failed{} — run `shannon gateway restart` manually",
+            s.ok()
+                .and_then(|st| st.code())
+                .map(|c| format!(" (exit {c})"))
+                .unwrap_or_default()
+        ),
+    }
+    Ok(())
+}
+
+/// OS name matching Rust's `std::env::consts::OS` (testable seam).
+fn os_kind() -> &'static str {
+    std::env::consts::OS
 }
 
 /// Current version of the `shannon` CLI crate.
@@ -2789,7 +4011,7 @@ fn run_update_command() -> Result<()> {
     let current = current_version();
     println!("Current version: {current}");
     println!(
-        "Checking for updates at https://api.github.com/repos/shannon-agent/shannon-agent/releases/latest ..."
+        "Checking for updates at https://api.github.com/repos/diff-lab-com/shannon-agent/releases/latest ..."
     );
 
     // Best-effort: shell out to `curl` (already referenced by the install flow).
@@ -2800,7 +4022,7 @@ fn run_update_command() -> Result<()> {
             "Accept: application/vnd.github+json",
             "-H",
             "User-Agent: shannon-cli",
-            "https://api.github.com/repos/shannon-agent/shannon-agent/releases/latest",
+            "https://api.github.com/repos/diff-lab-com/shannon-agent/releases/latest",
         ])
         .output();
 
@@ -2812,13 +4034,13 @@ fn run_update_command() -> Result<()> {
                 o.status.code().unwrap_or(-1)
             );
             println!(
-                "Visit https://github.com/shannon-agent/shannon-agent/releases to update manually."
+                "Visit https://github.com/diff-lab-com/shannon-agent/releases to update manually."
             );
             return Ok(());
         }
         Err(e) => {
             println!("WARN: could not run curl ({e}). Install curl or update manually at");
-            println!("https://github.com/shannon-agent/shannon-agent/releases");
+            println!("https://github.com/diff-lab-com/shannon-agent/releases");
             return Ok(());
         }
     };
@@ -2847,10 +4069,12 @@ fn run_update_command() -> Result<()> {
         println!();
         println!("A newer version is available: {latest}");
         println!("To upgrade, run:");
-        println!("    curl -fsSL https://get.shannon.ai/install.sh | sh");
+        println!(
+            "    curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | sh"
+        );
         println!();
         println!(
-            "Or download from: https://github.com/shannon-agent/shannon-agent/releases/{latest}"
+            "Or download from: https://github.com/diff-lab-com/shannon-agent/releases/{latest}"
         );
     } else {
         println!("You are already on the latest version.");
@@ -2863,21 +4087,187 @@ fn is_port_free(port: u16) -> bool {
     std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
+// ── doctor: dual-install detection (Phase B B7) ────────────────────────────
+//
+// After Phase B a machine commonly holds TWO `shannon` binaries: the one on
+// PATH (install.sh / package manager) and the one bundled inside the desktop
+// installer (deb/rpm /usr/bin, macOS .app, NSIS $INSTDIR). Both are fine —
+// the rule is PATH WINS (desktop installers only ever append to PATH) — but
+// version drift between them deserves a warning.
+
+/// A located `shannon` installation.
+struct ShannonInstallation {
+    path: std::path::PathBuf,
+    version: Option<String>,
+    source: &'static str,
+}
+
+/// Every `shannon` binary reachable from PATH, in PATH order (first wins).
+fn shannon_on_path_list() -> Vec<std::path::PathBuf> {
+    let exe = if cfg!(windows) {
+        "shannon.exe"
+    } else {
+        "shannon"
+    };
+    let Some(path_var) = std::env::var_os("PATH") else {
+        return Vec::new();
+    };
+    std::env::split_paths(&path_var)
+        .map(|dir| dir.join(exe))
+        .filter(|p| p.is_file())
+        .collect()
+}
+
+/// Known locations where a desktop installer drops the bundled CLI.
+fn known_bundle_shannon_locations() -> Vec<(&'static str, std::path::PathBuf)> {
+    let mut locations = Vec::new();
+    if cfg!(target_os = "linux") {
+        locations.push((
+            "desktop deb/rpm bundle",
+            std::path::PathBuf::from("/usr/bin/shannon"),
+        ));
+    }
+    if cfg!(target_os = "macos") {
+        locations.push((
+            "desktop .app bundle",
+            std::path::PathBuf::from("/Applications/shannon-desktop.app/Contents/MacOS/shannon"),
+        ));
+    }
+    if cfg!(target_os = "windows") {
+        if let Some(local) = dirs::data_local_dir() {
+            locations.push((
+                "desktop NSIS bundle",
+                local.join("shannon-desktop").join("shannon.exe"),
+            ));
+        }
+    }
+    locations
+}
+
+/// First whitespace-separated token that starts with a digit — `shannon
+/// 0.11.0`-style `--version` output → `0.11.0`.
+fn version_token_from_output(output: &str) -> Option<String> {
+    output
+        .split_whitespace()
+        .find(|t| t.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .map(String::from)
+}
+
+/// Ask a binary its version (CLI binaries only — never the desktop app).
+fn probe_version(binary: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new(binary)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    version_token_from_output(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// PATH hits + known bundle locations, deduped (a bundle dir can also be on
+/// PATH), with versions probed.
+fn resolve_shannon_installations() -> Vec<ShannonInstallation> {
+    let mut installs: Vec<ShannonInstallation> = shannon_on_path_list()
+        .into_iter()
+        .map(|path| ShannonInstallation {
+            path,
+            version: None,
+            source: "PATH",
+        })
+        .collect();
+    for (label, path) in known_bundle_shannon_locations() {
+        if !path.is_file() {
+            continue;
+        }
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+        let already = installs
+            .iter()
+            .any(|i| i.path.canonicalize().unwrap_or_else(|_| i.path.clone()) == canonical);
+        if !already {
+            installs.push(ShannonInstallation {
+                path,
+                version: None,
+                source: label,
+            });
+        }
+    }
+    for install in &mut installs {
+        install.version = probe_version(&install.path);
+    }
+    installs
+}
+
 /// Run diagnostics: toolchain, ports, services, and config.
 ///
 /// Never blocks — every check reports OK/WARN/INFO and continues.
-fn run_doctor_command() -> Result<()> {
-    println!("Shannon Doctor — diagnostics");
+/// With `--json` the report is machine-readable (surface identity + checks +
+/// dual-install detection; ADR-0011 Phase B B7).
+fn run_doctor_command(json: bool) -> Result<()> {
+    // ── Identity (every surface self-identifies — routing/telemetry/support)
+    let surface = "cli";
+    let version = current_version();
 
-    // Toolchain probes (PATH via `command -v`).
+    // Toolchain probes (direct PATH walk — see find_on_path).
     let tools = ["cargo", "rustc", "node", "bun"];
+    let mut tool_presence = std::collections::BTreeMap::new();
     for tool in tools {
-        let present = std::process::Command::new("command")
-            .args(["-v", tool])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if present {
+        tool_presence.insert(tool, which_tool(tool));
+    }
+
+    // Gateway service on PATH.
+    let gateway = find_gateway_binary();
+
+    // Port 33420 free (the default api_server port).
+    let port_free = is_port_free(33420);
+
+    // Configured engine URL.
+    let engine_url = std::env::var("SHANNON_BASE_URL")
+        .ok()
+        .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok());
+
+    // Dual-install detection.
+    let installs = resolve_shannon_installations();
+    let dual_detected = installs.len() > 1;
+    let versions_differ = dual_detected
+        && installs
+            .iter()
+            .filter_map(|i| i.version.as_deref())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            > 1;
+
+    if json {
+        let report = serde_json::json!({
+            "surface": surface,
+            "version": version,
+            "checks": {
+                "tools": tool_presence,
+                "gateway_on_path": gateway.as_ref().map(|p| p.display().to_string()),
+                "port_33420_free": port_free,
+                "engine_url": engine_url,
+                "desktop_binary": find_desktop_binary().map(|p| p.display().to_string()),
+            },
+            "shannon_installations": installs.iter().map(|i| serde_json::json!({
+                "path": i.path.display().to_string(),
+                "version": i.version,
+                "source": i.source,
+            })).collect::<Vec<_>>(),
+            "dual_install": {
+                "detected": dual_detected,
+                "versions_differ": versions_differ,
+                "rule": "PATH wins",
+            },
+        });
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("Shannon Doctor — diagnostics");
+    println!("[INFO]  surface: {surface} (version {version})");
+
+    for (tool, present) in &tool_presence {
+        if *present {
             println!("[OK]    found '{tool}' on PATH");
         } else {
             // `bun` is optional; only WARN. `cargo`/`rustc`/`node` are WARN too
@@ -2886,26 +4276,46 @@ fn run_doctor_command() -> Result<()> {
         }
     }
 
-    // Gateway service on PATH.
-    match find_gateway_binary() {
+    match &gateway {
         Some(p) => println!("[OK]    shannon-gateway found: {}", p.display()),
         None => println!("[INFO]  shannon-gateway not found on PATH (run `shannon gateway setup`)"),
     }
 
-    // Port 33420 free (the default api_server port).
-    if is_port_free(33420) {
+    if port_free {
         println!("[OK]    port 33420 is free");
     } else {
         println!("[WARN]  port 33420 is already in use (api_server may be running)");
     }
 
-    // Configured engine URL.
-    let engine_url = std::env::var("SHANNON_BASE_URL")
-        .ok()
-        .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok());
     match engine_url {
         Some(url) => println!("[OK]    engine URL configured: {url}"),
         None => println!("[INFO]  no engine URL configured (using provider default)"),
+    }
+
+    match find_desktop_binary() {
+        Some(p) => println!("[OK]    shannon-desktop found: {}", p.display()),
+        None => println!("[INFO]  shannon-desktop not found (run `shannon desktop --install`)"),
+    }
+
+    // `shannon` installations (PATH first — that is the one that wins).
+    println!("[INFO]  shannon installations ({}):", installs.len());
+    for install in &installs {
+        let ver = install.version.as_deref().unwrap_or("unknown version");
+        println!(
+            "        - {} ({}) — {ver}",
+            install.path.display(),
+            install.source
+        );
+    }
+    if dual_detected {
+        if versions_differ {
+            println!("[WARN]  dual install with DIFFERENT versions — PATH wins: the first");
+            println!("        PATH hit is what `shannon` resolves to. Keep them in sync:");
+            println!("        `shannon update` updates the PATH copy; reinstalling the");
+            println!("        desktop app updates its bundled copy.");
+        } else {
+            println!("[INFO]  dual install detected (same version) — PATH wins; nothing to do.");
+        }
     }
 
     println!("Doctor finished.");
@@ -2937,12 +4347,51 @@ fn main() -> Result<()> {
 /// Main CLI dispatch logic, factored out so it can be called from either the
 /// normal `clap::parse()` path or the deep-link transformation path.
 fn run_with_cli(cli: Cli) -> Result<()> {
+    // Promote an explicit --target into SHANNON_TARGET before any worker
+    // threads exist (single source of truth for every assembly site below;
+    // set_var is unsafe only because of concurrent readers, none of which
+    // exist at this point in main).
+    if let Some(target) = cli.target.as_deref().filter(|t| !t.is_empty()) {
+        unsafe { std::env::set_var("SHANNON_TARGET", target) };
+    }
+
     // Initialize i18n — auto-detect system language, allow --lang override
     if let Some(ref lang) = cli.lang {
         i18n::set_locale(lang);
     } else {
         let detected = i18n::detect_system_locale();
         i18n::set_locale(&detected);
+    }
+
+    // ── --dump-config: explainable config ladder (§4.10 W3-2) ──
+    // Runs before any engine/model setup; stdout carries the JSON payload.
+    if cli.dump_config {
+        let mut builder = shannon_core::unified_config::ConfigBuilder::new();
+        builder.load_global_toml();
+        builder.load_local_toml();
+        builder.load_env_vars();
+        builder.load_connected_profile();
+        // Reconstruct the CLI overlay from the flags this invocation carried,
+        // so the dump reflects exactly the precedence that would apply.
+        let mut overlay = shannon_core::unified_config::ShannonConfig::empty();
+        if cli.model.is_some() || cli.provider.is_some() {
+            overlay.provider_model = shannon_core::provider_resolver::synthesize_default_profile(
+                cli.model.as_deref(),
+                cli.provider.as_deref(),
+                None,
+                None,
+            )
+            .unwrap_or_default();
+        }
+        builder.set_cli_overrides(overlay);
+
+        let dump =
+            shannon_core::config_dump::build_dump(&builder.layer_snapshots(), &builder.build());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&dump).expect("ConfigDump always serializes")
+        );
+        return Ok(());
     }
 
     // ── Team agent mode: JSON-RPC over stdin/stdout ──
@@ -2965,6 +4414,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.workdir.as_deref(),
             cli.permission_mode.as_deref(),
             cli.team_allowed_tools.as_deref(),
+            &cli.disallowed_tools,
         );
     }
 
@@ -2992,11 +4442,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             false,
             HashMap::new(),
         );
-        let resume_data = if should_resume {
-            load_resume_session(resume_session_id).ok()
-        } else {
-            None
-        };
+        let resume_data = headless_resume_data(should_resume, resume_session_id)?;
         // Convert comma-separated team_allowed_tools into Vec<String>
         let allowed_vec: Option<Vec<String>> = cli
             .team_allowed_tools
@@ -3009,6 +4455,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             headless_prompt,
             &config,
             allowed_vec.as_deref(),
+            &cli.disallowed_tools,
             cli.output_format,
             cli.max_turns,
             cli.exit_on_error,
@@ -3017,6 +4464,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             resume_data,
             schema_config.as_ref(),
             cli.notify,
+            cli.goal.clone(),
         );
     }
 
@@ -3041,7 +4489,16 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             false,
             HashMap::new(),
         );
-        return run_noninteractive_query(&prompt, true, &config, cli.yes, None);
+        return run_noninteractive_query(
+            &prompt,
+            true,
+            &config,
+            cli.yes,
+            None,
+            cli.disallowed_tools.clone(),
+            cli.goal.clone(),
+            parse_attachments(&cli.attach)?,
+        );
     }
 
     // Bare prompt case: handle directly with explicit config
@@ -3055,12 +4512,17 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             false,
             HashMap::new(),
         );
-        let resume_data = if should_resume {
-            load_resume_session(resume_session_id).ok()
-        } else {
-            None
-        };
-        return run_noninteractive_query(&prompt, true, &config, cli.yes, resume_data);
+        let resume_data = headless_resume_data(should_resume, resume_session_id)?;
+        return run_noninteractive_query(
+            &prompt,
+            true,
+            &config,
+            cli.yes,
+            resume_data,
+            cli.disallowed_tools.clone(),
+            cli.goal.clone(),
+            parse_attachments(&cli.attach)?,
+        );
     }
 
     // No prompt argument: check stdin for piped input
@@ -3075,12 +4537,17 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             false,
             HashMap::new(),
         );
-        let resume_data = if should_resume {
-            load_resume_session(resume_session_id).ok()
-        } else {
-            None
-        };
-        return run_noninteractive_query(&stdin_content, true, &config, cli.yes, resume_data);
+        let resume_data = headless_resume_data(should_resume, resume_session_id)?;
+        return run_noninteractive_query(
+            &stdin_content,
+            true,
+            &config,
+            cli.yes,
+            resume_data,
+            cli.disallowed_tools.clone(),
+            cli.goal.clone(),
+            parse_attachments(&cli.attach)?,
+        );
     }
 
     // Build configuration from CLI options (no more unsafe set_var calls)
@@ -3142,9 +4609,13 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         | Some(Commands::Desktop { .. })
         | Some(Commands::Gateway { .. })
         | Some(Commands::Update)
-        | Some(Commands::Doctor)
+        | Some(Commands::Doctor { .. })
         | Some(Commands::ListProviders { .. })
-        | Some(Commands::Providers { .. }) => CliConfig::default(),
+        | Some(Commands::Providers { .. })
+        | Some(Commands::Feedback { .. })
+        | Some(Commands::Signals { .. })
+        | Some(Commands::Eval { .. })
+        | Some(Commands::Trace { .. }) => CliConfig::default(),
     };
 
     // Initialize tracing if debug mode enabled
@@ -3169,11 +4640,26 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                     eprintln!("Warning: could not open session picker: {e}");
                 }
             } else if should_resume {
-                match load_resume_session(resume_session_id) {
-                    Ok(session_data) => {
-                        let count = repl.restore_session(session_data);
+                match resolve_resume(resume_session_id) {
+                    Ok(Some(resolved)) => {
+                        if !resolved.cwd_match {
+                            // Cross-directory resume: say so loudly instead of
+                            // silently blending another project's context in.
+                            match resolved.session.metadata.project_path.as_deref() {
+                                Some(recorded) => eprintln!(
+                                    "WARNING: resuming session {} recorded in '{recorded}', but the current directory is different — its context may belong to another project (pass --resume-id <UUID> to be explicit).",
+                                    resolved.session.session_id
+                                ),
+                                None => eprintln!(
+                                    "WARNING: resuming session {} (no recorded working directory; cannot verify it belongs to this project).",
+                                    resolved.session.session_id
+                                ),
+                            }
+                        }
+                        let count = repl.restore_session(resolved.session);
                         eprintln!("Resumed session ({count} messages loaded)");
                     }
+                    Ok(None) => {}
                     Err(e) => eprintln!("Warning: could not resume session: {e}"),
                 }
             }
@@ -3195,11 +4681,26 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                     eprintln!("Warning: could not open session picker: {e}");
                 }
             } else if should_resume {
-                match load_resume_session(resume_session_id) {
-                    Ok(session_data) => {
-                        let count = repl.restore_session(session_data);
+                match resolve_resume(resume_session_id) {
+                    Ok(Some(resolved)) => {
+                        if !resolved.cwd_match {
+                            // Cross-directory resume: say so loudly instead of
+                            // silently blending another project's context in.
+                            match resolved.session.metadata.project_path.as_deref() {
+                                Some(recorded) => eprintln!(
+                                    "WARNING: resuming session {} recorded in '{recorded}', but the current directory is different — its context may belong to another project (pass --resume-id <UUID> to be explicit).",
+                                    resolved.session.session_id
+                                ),
+                                None => eprintln!(
+                                    "WARNING: resuming session {} (no recorded working directory; cannot verify it belongs to this project).",
+                                    resolved.session.session_id
+                                ),
+                            }
+                        }
+                        let count = repl.restore_session(resolved.session);
                         eprintln!("Resumed session ({count} messages loaded)");
                     }
+                    Ok(None) => {}
                     Err(e) => eprintln!("Warning: could not resume session: {e}"),
                 }
             }
@@ -3270,17 +4771,19 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             }
         }
         Some(Commands::Query {
-            query,
-            output: _output_format,
-            no_stream,
-            ..
+            query, no_stream, ..
         }) => {
-            let resume_data = if should_resume {
-                load_resume_session(resume_session_id).ok()
-            } else {
-                None
-            };
-            run_noninteractive_query(&query, !no_stream, &config, cli.yes, resume_data)?;
+            let resume_data = headless_resume_data(should_resume, resume_session_id)?;
+            run_noninteractive_query(
+                &query,
+                !no_stream,
+                &config,
+                cli.yes,
+                resume_data,
+                cli.disallowed_tools.clone(),
+                cli.goal.clone(),
+                parse_attachments(&cli.attach)?,
+            )?;
         }
         Some(Commands::Serve {
             port,
@@ -3294,6 +4797,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 auth_token.clone(),
                 allow_nonloopback,
                 &config,
+                cli.disallowed_tools.clone(),
             )?;
         }
         Some(Commands::Screenshot { dir }) => {
@@ -3396,23 +4900,60 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             }
         },
         Some(Commands::Desktop {
+            build,
             no_build,
+            install,
             foreground,
         }) => {
-            run_desktop_command(no_build, foreground)?;
+            run_desktop_command(build, no_build, install, foreground)?;
         }
+        Some(Commands::Eval { command }) => {
+            // `shannon eval` owns its exit code: 0 pass / 1 failures /
+            // 2 config or load error (see eval_cmd module docs).
+            std::process::exit(eval_cmd::execute(command));
+        }
+        Some(Commands::Trace { command }) => match command {
+            TraceCommand::Show {
+                session,
+                turn,
+                tool,
+                permission,
+                dir,
+            } => {
+                let container = trace::resolve_container(dir.as_deref());
+                let rendered = trace::cmd_show(&container, &session, turn, tool, permission)?;
+                println!("{rendered}");
+            }
+            TraceCommand::Replay { session, dir } => {
+                let container = trace::resolve_container(dir.as_deref());
+                let rendered = trace::cmd_replay(&container, &session)?;
+                println!("{rendered}");
+            }
+            TraceCommand::Diff { a, b, dir } => {
+                let container = trace::resolve_container(dir.as_deref());
+                let rendered = trace::cmd_diff(&container, &a, &b)?;
+                println!("{rendered}");
+            }
+            TraceCommand::Export { session, out, dir } => {
+                let container = trace::resolve_container(dir.as_deref());
+                let dest = trace::cmd_export(&container, &session, out.as_deref())?;
+                println!("export bundle: {}", dest.display());
+            }
+        },
+
         Some(Commands::Gateway { command }) => {
             run_gateway_command(command)?;
         }
         Some(Commands::Update) => {
             run_update_command()?;
         }
-        Some(Commands::Doctor) => {
-            run_doctor_command()?;
+        Some(Commands::Doctor { json }) => {
+            run_doctor_command(json)?;
         }
         Some(Commands::ListProviders { json }) => {
             // Engine store reads from `~/.shannon/providers.toml`. The CLI
             // and the desktop join the same file (ADR-0005 Phase 2 task 4).
+            commands_providers::warn_if_providers_toml_unparseable();
             let store = shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
             if let Err(e) = commands_providers::run_list_providers(&store, json) {
                 eprintln!("list-providers failed: {e:?}");
@@ -3442,6 +4983,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
 
                 let mut store =
                     shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+                commands_providers::warn_if_providers_toml_unparseable();
                 if let Err(e) = commands_providers::run_providers_add(&mut store, &cli_args) {
                     eprintln!("providers add failed: {e:?}");
                     std::process::exit(1);
@@ -3451,13 +4993,39 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 let remove_args = commands_providers::RemoveProviderArgs { id: id.clone() };
                 let mut store =
                     shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+                commands_providers::warn_if_providers_toml_unparseable();
                 if let Err(e) = commands_providers::run_providers_remove(&mut store, &remove_args) {
                     eprintln!("providers remove failed: {e:?}");
                     std::process::exit(1);
                 }
             }
         },
+
+        Some(Commands::Feedback { direction }) => match signals::run_feedback(&direction) {
+            Ok(message) => println!("{message}"),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        },
+
+        Some(Commands::Signals { command }) => match command {
+            SignalsSubcommand::Status => println!("{}", signals::status_report()),
+            SignalsSubcommand::Push => match signals::push_now() {
+                Ok(message) => println!("{message}"),
+                Err(e) => {
+                    eprintln!("signals push failed: {e}");
+                    std::process::exit(1);
+                }
+            },
+        },
     }
+
+    // §4.15 online signals: best-effort aggregate-counter flush so every CLI
+    // exit path (REPL included — it runs inside this process) persists its
+    // counters locally. Upload only happens when opted in via env switches;
+    // failures are logged inside and never fail the command.
+    shannon_core::signals::try_flush_default();
 
     Ok(())
 }
@@ -3465,6 +5033,107 @@ fn run_with_cli(cli: Cli) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── desktop --install: asset picking ─────────────────────────────
+
+    #[test]
+    fn test_pick_desktop_asset_linux_deb_default() {
+        let assets = vec![
+            "shannon-desktop_0.11.0_amd64.deb".to_string(),
+            "shannon-desktop_0.11.0_x86_64.rpm".to_string(),
+            "shannon-x86_64-unknown-linux-gnu.tar.gz".to_string(),
+        ];
+        assert_eq!(
+            pick_desktop_asset_for("linux", "x86_64", false, &assets),
+            Some("shannon-desktop_0.11.0_amd64.deb".to_string())
+        );
+    }
+
+    #[test]
+    fn test_pick_desktop_asset_linux_rpm_preferred() {
+        let assets = vec![
+            "shannon-desktop_0.11.0_amd64.deb".to_string(),
+            "shannon-desktop_0.11.0_x86_64.rpm".to_string(),
+        ];
+        assert_eq!(
+            pick_desktop_asset_for("linux", "x86_64", true, &assets),
+            Some("shannon-desktop_0.11.0_x86_64.rpm".to_string())
+        );
+    }
+
+    #[test]
+    fn test_pick_desktop_asset_windows_and_mac() {
+        let win = vec!["shannon-desktop_0.11.0_x64-setup.exe".to_string()];
+        assert_eq!(
+            pick_desktop_asset_for("windows", "x86_64", false, &win),
+            Some("shannon-desktop_0.11.0_x64-setup.exe".to_string())
+        );
+        let mac = vec![
+            "shannon-desktop_0.11.0_x64.dmg".to_string(),
+            "shannon-desktop_0.11.0_aarch64.dmg".to_string(),
+        ];
+        assert_eq!(
+            pick_desktop_asset_for("macos", "aarch64", false, &mac),
+            Some("shannon-desktop_0.11.0_aarch64.dmg".to_string())
+        );
+        // Wrong arch → none.
+        assert_eq!(pick_desktop_asset_for("macos", "x86_64", false, &[]), None);
+    }
+
+    // ── desktop --install: SHA256SUMS parsing ────────────────────────
+
+    #[test]
+    fn test_sha256_for_asset() {
+        let sums = "\
+abc123  shannon-desktop_0.11.0_amd64.deb
+def456  shannon-x86_64-unknown-linux-gnu.tar.gz
+";
+        assert_eq!(
+            sha256_for_asset(sums, "shannon-desktop_0.11.0_amd64.deb"),
+            Some("abc123".to_string())
+        );
+        assert_eq!(sha256_for_asset(sums, "missing.deb"), None);
+    }
+
+    // ── doctor: version probe parsing ────────────────────────────────
+
+    #[test]
+    fn test_version_token_from_output() {
+        assert_eq!(
+            version_token_from_output("shannon 0.11.0\n"),
+            Some("0.11.0".to_string())
+        );
+        assert_eq!(
+            version_token_from_output("0.10.0\n"),
+            Some("0.10.0".to_string())
+        );
+        assert_eq!(version_token_from_output("no digits here\n"), None);
+        assert_eq!(version_token_from_output(""), None);
+    }
+
+    // ── gateway update: asset naming ─────────────────────────────────
+
+    #[test]
+    fn test_gateway_asset_name() {
+        assert_eq!(
+            gateway_asset_name("linux", "x86_64"),
+            Some("shannon-gateway-linux-x64".to_string())
+        );
+        assert_eq!(
+            gateway_asset_name("linux", "aarch64"),
+            Some("shannon-gateway-linux-arm64".to_string())
+        );
+        assert_eq!(
+            gateway_asset_name("darwin", "x86_64"),
+            Some("shannon-gateway-darwin-x64".to_string())
+        );
+        assert_eq!(
+            gateway_asset_name("darwin", "aarch64"),
+            Some("shannon-gateway-darwin-arm64".to_string())
+        );
+        // No Windows gateway builds exist.
+        assert_eq!(gateway_asset_name("windows", "x86_64"), None);
+    }
 
     // ── parse_cli_env tests ──────────────────────────────────────────
 
@@ -3766,6 +5435,31 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parse_dump_config_flag() {
+        // §4.10: --dump-config parses standalone and alongside model/provider
+        // overlay flags; default is off.
+        let cli = Cli::try_parse_from(["shannon", "--dump-config"]).unwrap();
+        assert!(cli.dump_config);
+        assert!(cli.command.is_none());
+
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "--dump-config",
+            "--model",
+            "claude-sonnet-4",
+            "--provider",
+            "anthropic",
+        ])
+        .unwrap();
+        assert!(cli.dump_config);
+        assert_eq!(cli.model.as_deref(), Some("claude-sonnet-4"));
+
+        let cli = Cli::try_parse_from(["shannon"]).unwrap();
+        assert!(!cli.dump_config);
+    }
+
+    #[test]
+    #[test]
     fn test_cli_parse_serve_defaults() {
         let cli = Cli::try_parse_from(["shannon", "serve"]).unwrap();
         match cli.command {
@@ -3992,17 +5686,42 @@ mod tests {
         }
     }
 
+    // ── Goal flag tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn goal_flag_parses() {
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "-p",
+            "make CI green",
+            "--goal",
+            "all tests passing",
+        ])
+        .unwrap();
+        assert_eq!(cli.goal.as_deref(), Some("all tests passing"));
+        let cli = Cli::try_parse_from(["shannon", "-p", "x"]).unwrap();
+        assert!(cli.goal.is_none());
+    }
+
     // ── Resume flag tests ────────────────────────────────────────────────
 
     #[test]
-    fn test_cli_resume_bare_flag_is_none() {
-        // With num_args = 0..=1, bare --resume (no value) gives None
-        // because clap treats "value absent" as None for Option<String>.
-        // Use --continue or -c for "resume most recent" behavior.
+    fn test_cli_resume_bare_flag_requests_most_recent() {
+        // num_args = 0..=1 + default_missing_value = "": bare --resume (no
+        // value) yields Some("") — `should_resume` becomes true and the empty
+        // value resolves to "most recent session" (None id) in run_with_cli.
+        // This matches the documented contract in --help:
+        // `shannon --resume` (most recent).
         let cli = Cli::try_parse_from(["shannon", "--resume"]).unwrap();
-        assert!(cli.resume.is_none());
+        assert_eq!(cli.resume.as_deref(), Some(""));
         assert!(!cli.r#continue);
         assert!(cli.resume_id.is_none());
+        // Empty value must resolve to "no explicit id" (most recent).
+        let resolved: Option<&str> = cli
+            .resume_id
+            .as_deref()
+            .or_else(|| cli.resume.as_deref().filter(|s| !s.is_empty()));
+        assert_eq!(resolved, None);
     }
 
     #[test]
@@ -4078,11 +5797,11 @@ mod tests {
         assert_eq!(cli.headless_prompt.as_deref(), Some("continue this"));
     }
 
-    // ── load_resume_session tests ────────────────────────────────────────
+    // ── resolve_resume tests ─────────────────────────────────────────────
 
     #[test]
-    fn test_load_resume_session_invalid_uuid() {
-        let result = load_resume_session(Some("not-a-valid-uuid"));
+    fn test_resolve_resume_invalid_uuid() {
+        let result = resolve_resume(Some("not-a-valid-uuid"));
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -4092,9 +5811,9 @@ mod tests {
     }
 
     #[test]
-    fn test_load_resume_session_nonexistent_uuid() {
+    fn test_resolve_resume_nonexistent_uuid() {
         let uuid = Uuid::new_v4();
-        let result = load_resume_session(Some(&uuid.to_string()));
+        let result = resolve_resume(Some(&uuid.to_string()));
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -4104,10 +5823,11 @@ mod tests {
     }
 
     #[test]
-    fn test_load_resume_session_no_sessions() {
-        // With an empty default sessions dir, should return an error.
-        // Just verify it doesn't panic.
-        let _ = load_resume_session(None);
+    fn test_resolve_resume_no_sessions_is_ok_none() {
+        // With no matching sessions in the container this resolves to
+        // Ok(None) (fresh start) rather than an error — callers keep their
+        // graceful fallback. Just verify it doesn't panic.
+        let _ = resolve_resume(None);
     }
 
     // ── New REPL options tests ────────────────────────────────────────────
@@ -4411,29 +6131,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parse_query_output_format() {
-        let cli = Cli::try_parse_from(["shannon", "query", "--output", "json", "test"]).unwrap();
-        match cli.command {
-            Some(Commands::Query { query, output, .. }) => {
-                assert_eq!(query, "test");
-                assert_eq!(output, "json");
-            }
-            _ => panic!("Expected Query command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parse_query_default_output() {
-        let cli = Cli::try_parse_from(["shannon", "query", "test"]).unwrap();
-        match cli.command {
-            Some(Commands::Query { output, .. }) => {
-                assert_eq!(output, "text");
-            }
-            _ => panic!("Expected Query command"),
-        }
-    }
-
-    #[test]
     fn test_cli_parse_query_defaults() {
         let cli = Cli::try_parse_from(["shannon", "query", "test"]).unwrap();
         match cli.command {
@@ -4442,14 +6139,12 @@ mod tests {
                 model,
                 provider,
                 max_tokens,
-                output,
                 no_stream,
             }) => {
                 assert_eq!(query, "test");
                 assert!(model.is_none());
                 assert!(provider.is_none());
                 assert!(max_tokens.is_none());
-                assert_eq!(output, "text");
                 assert!(!no_stream);
             }
             _ => panic!("Expected Query command"),
@@ -4473,8 +6168,6 @@ mod tests {
             "anthropic",
             "--max-tokens",
             "4096",
-            "--output",
-            "json",
             "--no-stream",
             "你用的什么模型",
         ])
@@ -4485,14 +6178,12 @@ mod tests {
                 model,
                 provider,
                 max_tokens,
-                output,
                 no_stream,
             }) => {
                 assert_eq!(query, "你用的什么模型");
                 assert_eq!(model.as_deref(), Some("claude-sonnet-4"));
                 assert_eq!(provider.as_deref(), Some("anthropic"));
                 assert_eq!(max_tokens, Some(4096));
-                assert_eq!(output, "json");
                 assert!(no_stream);
             }
             _ => panic!("Expected Query command"),
@@ -4589,6 +6280,157 @@ mod tests {
 
         let llm_config = build_llm_config_from_builder(&config);
         assert!(!llm_config.provider.requires_auth());
+    }
+
+    // ── ADR-0005 Phase 4: CLI layer vs connected profile ─────────────────
+
+    /// Serializes the HOME-swapping tests below: `HOME` (and the env keys
+    /// `build_cli_config` mutates) is process-global, and under plain
+    /// `cargo test` (libtest: one process, many threads) one test's
+    /// restore_home yanks the tempdir out from under another test's
+    /// config lookup. nextest never sees this (one process per test);
+    /// the lock restores the same isolation under libtest.
+    fn home_swap_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Stand up a temp HOME with a connected `providers.toml` (minimax,
+    /// openai-compatible wire, Store credential) plus the matching store
+    /// credential file, and point `HOME` at it. Returns the TempDir (keep
+    /// it alive for the test) and the previous `HOME` for restoration.
+    fn temp_home_with_connected_minimax() -> (tempfile::TempDir, Option<String>) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shannon = dir.path().join(".shannon");
+        std::fs::create_dir_all(shannon.join("credentials")).expect("mkdir credentials");
+        std::fs::write(
+            shannon.join("providers.toml"),
+            r#"version = 2
+
+[profiles.default]
+name = "default"
+credential_scope = "shared"
+
+[profiles.default.active_target]
+provider_id = "minimax"
+model_id = "MiniMax-M3"
+scope = "global"
+
+[[profiles.default.providers]]
+id = "minimax"
+kind = "openai-compatible"
+display_name = "minimax"
+base_url = "https://api.minimax.chat"
+
+[profiles.default.providers.credential]
+backend = "store"
+service = "minimax"
+
+[profiles.default.providers.quirks]
+temperature_strategy = "default"
+send_temperature = true
+
+[profiles.default.providers.tiers]
+
+[gateway]
+multiplex_profiles = false
+profile_routes = []
+"#,
+        )
+        .expect("write providers.toml");
+        std::fs::write(
+            shannon.join("credentials").join("minimax.json"),
+            r#"{"id":"t1","name":"minimax","service":"minimax","value":"sk-test-minimax","created_at":"2026-08-21T00:00:00Z","updated_at":"2026-08-21T00:00:00Z","metadata":{}}"#,
+        )
+        .expect("write credential");
+        let saved = std::env::var("HOME").ok();
+        // SAFETY: test setup, before any assertion that reads HOME.
+        unsafe { std::env::set_var("HOME", dir.path()) };
+        (dir, saved)
+    }
+
+    fn restore_home(saved: Option<String>) {
+        // SAFETY: test teardown, symmetric with temp_home_with_connected_minimax.
+        match saved {
+            Some(h) => unsafe { std::env::set_var("HOME", h) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
+
+    #[test]
+    fn test_connected_profile_wins_without_cli_overrides() {
+        let _guard = home_swap_lock();
+        // Regression (ADR-0005 Phase 4): with no --model/--provider and no
+        // SHANNON_BASE_URL, the CLI layer must stay empty so the connected
+        // profile wins over ambient env — not synthesise an Anthropic+Env
+        // profile that clobbers it.
+        let (_dir, saved) = temp_home_with_connected_minimax();
+        let config = build_cli_config(None, None, None, None, None, false, HashMap::new());
+        let llm = build_llm_config_from_builder(&config);
+        restore_home(saved);
+        assert_eq!(
+            llm.provider,
+            shannon_engine::api::LlmProvider::Minimax,
+            "connected provider must survive the CLI layer"
+        );
+        assert_eq!(llm.base_url, "https://api.minimax.chat");
+        assert_eq!(llm.model, "MiniMax-M3");
+        assert_eq!(
+            llm.api_key, "sk-test-minimax",
+            "Store credential must resolve"
+        );
+    }
+
+    #[test]
+    fn test_model_only_override_grafts_onto_connected_profile() {
+        let _guard = home_swap_lock();
+        // A per-invocation --model changes the model, not the provider:
+        // base_url and the Store credential must survive (graft, not
+        // synthesis).
+        let (_dir, saved) = temp_home_with_connected_minimax();
+        let config = build_cli_config(
+            Some("MiniMax-M2.7"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            HashMap::new(),
+        );
+        let llm = build_llm_config_from_builder(&config);
+        restore_home(saved);
+        assert_eq!(
+            llm.provider,
+            shannon_engine::api::LlmProvider::Minimax,
+            "--model alone must not switch provider"
+        );
+        assert_eq!(llm.base_url, "https://api.minimax.chat");
+        assert_eq!(llm.model, "MiniMax-M2.7");
+        assert_eq!(
+            llm.api_key, "sk-test-minimax",
+            "Store credential must survive"
+        );
+    }
+
+    #[test]
+    fn test_provider_override_still_synthesises() {
+        let _guard = home_swap_lock();
+        // --provider is an explicit provider switch: full synthesis wins
+        // over the connected profile (pre-existing contract).
+        let (_dir, saved) = temp_home_with_connected_minimax();
+        let config = build_cli_config(
+            Some("llama3"),
+            Some("ollama"),
+            None,
+            None,
+            None,
+            false,
+            HashMap::new(),
+        );
+        let llm = build_llm_config_from_builder(&config);
+        restore_home(saved);
+        assert_eq!(llm.provider, shannon_engine::api::LlmProvider::Ollama);
+        assert!(!llm.provider.requires_auth());
     }
 
     // ── TOML config loading ──────────────────────────────────────────────
@@ -4813,6 +6655,43 @@ mod tests {
     }
 
     #[test]
+    fn test_classify_headless_failure_maps_specific_causes() {
+        use HeadlessExitCode as E;
+        // Context overflow wording wins over generic tokens.
+        assert_eq!(
+            E::ContextOverflow,
+            classify_headless_failure("prompt exceeded context_length")
+        );
+        // Rate limit: both provider phrasings, including the engine's
+        // "Rate limit exceeded.<suggestion>" composite text.
+        assert_eq!(
+            E::RateLimited,
+            classify_headless_failure(
+                "Rate limit exceeded. Rate limited — the request will be retried automatically."
+            )
+        );
+        assert_eq!(
+            E::RateLimited,
+            classify_headless_failure("HTTP 429 received")
+        );
+        assert_eq!(
+            E::PermissionDenied,
+            classify_headless_failure("tool permission denied by policy")
+        );
+        // Timeout: read-idle/total deadlines exhausted after retries
+        // (previously collapsed into the generic error bucket).
+        assert_eq!(
+            E::Timeout,
+            classify_headless_failure("Timeout. Request timed out. Try again.")
+        );
+        assert_eq!(
+            E::Timeout,
+            classify_headless_failure("connection timed out")
+        );
+        assert_eq!(E::Error, classify_headless_failure("something exploded"));
+    }
+
+    #[test]
     fn test_headless_exit_code_serialization() {
         let code = HeadlessExitCode::ContextOverflow;
         let json = serde_json::to_string(&code).unwrap();
@@ -4925,6 +6804,22 @@ mod tests {
         for line in &lines {
             let _: serde_json::Value = serde_json::from_str(line).unwrap();
         }
+    }
+
+    // ── CiEvent::Start session_id (dogfood L-tier resume cross-link) ──
+
+    #[test]
+    fn test_ci_event_start_carries_session_id() {
+        let event = CiEvent::Start {
+            prompt: "hello".into(),
+            model: "test-model".into(),
+            session_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&event).unwrap()).unwrap();
+        assert_eq!(parsed["type"], "start");
+        assert_eq!(parsed["session_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(parsed["model"], "test-model");
     }
 
     #[test]

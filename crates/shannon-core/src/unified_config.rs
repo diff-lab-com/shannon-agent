@@ -18,8 +18,8 @@
 //! `provider_model`, synthesized from CLI/TOML/env inputs by
 //! [`crate::provider_resolver::synthesize_default_profile`]. Credentials are
 //! A1-strict: only [`CredentialRef::Env`](shannon_types::provider_config::CredentialRef::Env)
-//! references, never plaintext in the config (plaintext values live in
-//! `~/.shannon/secrets.env` via [`crate::config_migration::persist_secrets`]).
+//! references, never plaintext in the config (plaintext values live in the
+//! process environment, resolved by `resolve_credential`).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -72,12 +72,35 @@ pub struct ShannonConfig {
     /// `[notifications]` section for system-level notification behavior.
     #[serde(default)]
     pub notifications: Option<NotificationsConfig>,
+    /// `[hooks]` section for inbound webhook endpoints (P2-7:
+    /// `[hooks.github] secret` guards `POST /hooks/github` on shannon-server).
+    #[serde(default)]
+    pub hooks: Option<HooksConfig>,
     /// v2 multi-provider/model config. The `"default"` profile's active
     /// target, when present, drives the engine `LlmClientConfig`. CLI / TOML
     /// / env inputs feed this through
     /// [`crate::provider_resolver::synthesize_default_profile`].
     #[serde(default)]
     pub provider_model: shannon_types::provider_config::ProviderModelConfig,
+}
+
+/// `[hooks]` config section: inbound webhook endpoints (P2-7).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HooksConfig {
+    /// GitHub webhook endpoint (`POST /hooks/github` on shannon-server).
+    #[serde(default)]
+    pub github: Option<GitHubHooksConfig>,
+}
+
+/// `[hooks.github]` config section.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GitHubHooksConfig {
+    /// HMAC-SHA256 webhook secret. GitHub sends the same secret in the
+    /// webhook settings UI; deliveries carry `X-Hub-Signature-256:
+    /// sha256=<hex>` over the raw body. When unset, the endpoint answers
+    /// **503** (disabled — safe default).
+    #[serde(default)]
+    pub secret: Option<String>,
 }
 
 impl ShannonConfig {
@@ -126,6 +149,7 @@ impl ShannonConfig {
                 .notifications
                 .clone()
                 .or_else(|| self.notifications.clone()),
+            hooks: other.hooks.clone().or_else(|| self.hooks.clone()),
             provider_model,
         }
     }
@@ -161,11 +185,47 @@ impl ShannonConfig {
     }
 }
 
+/// Provenance-annotated snapshot of one configuration layer.
+///
+/// Produced by [`ConfigBuilder::layer_snapshots`] and consumed by
+/// [`crate::config_dump`] (`shannon --dump-config`, §4.10 W3-2).
+pub struct LayerSnapshot {
+    /// Stable label, one of: `builtin`, `user-global`, `project`,
+    /// `env-vars`, `connected`, `cli-overlay` (ordered lowest → highest
+    /// precedence; this is the engine's true merge order).
+    pub source: &'static str,
+    /// Backing file when the layer is file-backed.
+    pub path: Option<std::path::PathBuf>,
+    /// Did the layer actually contribute bytes? (file present / env set /
+    /// profile connected)
+    pub present: bool,
+    /// The parsed layer content. Empty layer ⇒ all-unset defaults.
+    pub config: ShannonConfig,
+}
+
+impl LayerSnapshot {
+    /// The never-overridden floor every other layer overlays: the engine's
+    /// built-in baseline (all fields unset — downstream runtime defaults
+    /// apply after the merge chain).
+    pub fn builtin() -> Self {
+        Self {
+            source: "builtin",
+            path: None,
+            present: true,
+            config: ShannonConfig::empty(),
+        }
+    }
+}
+
 /// Builder for constructing a merged configuration from multiple sources.
 pub struct ConfigBuilder {
     global_toml: ShannonConfig,
     local_toml: ShannonConfig,
     env_vars: ShannonConfig,
+    // §4.10 provenance bookkeeping for --dump-config.
+    global_present: bool,
+    local_present: bool,
+    connected_present: bool,
     /// The connected provider profile (`~/.shannon/providers.toml`, written by
     /// `/connect`). Merged between env vars and CLI overrides so a connected
     /// provider wins over ambient `SHANNON_*` env vars (the `/connect`
@@ -182,6 +242,9 @@ impl ConfigBuilder {
             global_toml: ShannonConfig::empty(),
             local_toml: ShannonConfig::empty(),
             env_vars: ShannonConfig::empty(),
+            global_present: false,
+            local_present: false,
+            connected_present: false,
             connected: ShannonConfig::empty(),
             cli_overrides: ShannonConfig::empty(),
         }
@@ -191,6 +254,7 @@ impl ConfigBuilder {
     pub fn load_global_toml(&mut self) -> &mut Self {
         if let Some(home) = dirs::home_dir() {
             let path = home.join(".shannon").join("config.toml");
+            self.global_present = path.exists();
             self.global_toml = load_config_file(&path);
             crate::substitute::substitute_config(&mut self.global_toml);
         }
@@ -200,6 +264,7 @@ impl ConfigBuilder {
     /// Load project-local TOML config from `.shannon.toml`.
     pub fn load_local_toml(&mut self) -> &mut Self {
         let path = std::path::Path::new(".shannon.toml");
+        self.local_present = path.exists();
         let local = load_config_file(path);
         self.local_toml = local;
         crate::substitute::substitute_config(&mut self.local_toml);
@@ -233,6 +298,7 @@ impl ConfigBuilder {
     /// file leaves the layer empty (synthesis takes over) — launch never fails.
     pub fn load_connected_profile(&mut self) -> &mut Self {
         if let Some(pm) = crate::provider_config_store::load(None) {
+            self.connected_present = true;
             self.connected = ShannonConfig {
                 max_tokens: None,
                 temperature: None,
@@ -243,6 +309,7 @@ impl ConfigBuilder {
                 presets: None,
                 permission_profile: None,
                 notifications: None,
+                hooks: None,
                 provider_model: pm,
             };
             crate::substitute::substitute_config(&mut self.connected);
@@ -285,6 +352,7 @@ impl ConfigBuilder {
             permission_profile: std::env::var("SHANNON_PERMISSION_PROFILE").ok(),
             presets: None,
             notifications: None,
+            hooks: None,
             provider_model,
         };
         self
@@ -294,6 +362,48 @@ impl ConfigBuilder {
     pub fn set_cli_overrides(&mut self, config: ShannonConfig) -> &mut Self {
         self.cli_overrides = config;
         self
+    }
+
+    /// Ordered (lowest → highest precedence) provenance snapshots of every
+    /// loaded layer — the data behind `shannon --dump-config` (§4.10).
+    ///
+    /// Call this *after* the loaders you care about; unloaded layers show as
+    /// absent empties so the dump can still render the full ladder.
+    pub fn layer_snapshots(&self) -> Vec<LayerSnapshot> {
+        let global_path = dirs::home_dir().map(|home| home.join(".shannon").join("config.toml"));
+        vec![
+            LayerSnapshot::builtin(),
+            LayerSnapshot {
+                source: "user-global",
+                path: global_path,
+                present: self.global_present,
+                config: self.global_toml.clone(),
+            },
+            LayerSnapshot {
+                source: "project",
+                path: Some(std::path::PathBuf::from(".shannon.toml")),
+                present: self.local_present,
+                config: self.local_toml.clone(),
+            },
+            LayerSnapshot {
+                source: "env-vars",
+                path: None,
+                present: true,
+                config: self.env_vars.clone(),
+            },
+            LayerSnapshot {
+                source: "connected",
+                path: crate::provider_config_store::default_path(),
+                present: self.connected_present,
+                config: self.connected.clone(),
+            },
+            LayerSnapshot {
+                source: "cli-overlay",
+                path: None,
+                present: true,
+                config: self.cli_overrides.clone(),
+            },
+        ]
     }
 
     /// Build the final merged configuration.
@@ -429,6 +539,7 @@ fn load_config_file(path: &std::path::Path) -> ShannonConfig {
         presets: None,
         permission_profile,
         notifications: None,
+        hooks: None,
         provider_model,
     }
 }
@@ -491,6 +602,7 @@ impl From<ShannonConfig> for shannon_engine::api::LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         }
     }
 }
@@ -551,6 +663,7 @@ pub fn build_client_from_resolved(
         max_stream_reconnects: 3,
         budget_tokens: None,
         reasoning_effort: None,
+        enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
     }
 }
 

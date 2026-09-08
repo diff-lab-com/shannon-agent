@@ -77,6 +77,9 @@ sys-locale = { workspace = true }
 # Platform-specific disk space info
 libc = "0.2"
 
+# SQLite inbox store (P0-3) — `~/.shannon/inbox.db`
+rusqlite = { workspace = true }
+
 # Webhook HMAC verification / Zhipu JWT auth
 hmac = "0.12"
 sha2 = "0.10"
@@ -98,6 +101,7 @@ lsp-types = "0.95"
 
 # Plugin manifest parsing
 toml = "0.8"
+ignore = "0.4"
 
 # Plugin archive extraction (.dxt / .mcpb Desktop Extensions)
 zip = { workspace = true }
@@ -112,6 +116,9 @@ croner = "3.0"
 # v7 matches what shannon-ui uses for the SourceWatcher; we keep them
 # aligned to avoid two copies of differing notify ABI.
 notify = { version = "7", features = ["macos_kqueue"] }
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio", "testing"] }
+opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
 
 [features]
 default = []
@@ -133,13 +140,17 @@ name = "core_benchmarks"
 harness = false
 
 [[bench]]
-name = "recording_benchmarks"
-harness = false
-
-[[bench]]
 name = "compact_bench"
 harness = false
 
 [[bench]]
 name = "context_budget_bench"
+harness = false
+
+[[bench]]
+name = "turn_log_overhead"
+harness = false
+
+[[bench]]
+name = "event_bus"
 harness = false

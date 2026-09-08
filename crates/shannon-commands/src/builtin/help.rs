@@ -605,6 +605,17 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to share a screenshot, diagram, or photo with the AI for visual analysis")
             .with_related(vec![])
         ),
+        "browser" => Some(
+            CommandHelpEntry::new(
+                "browser".to_string(),
+                "Browser automation via Playwright MCP: setup, status, uninstall".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[setup|status|uninstall]")
+            .with_examples(vec!["/browser setup", "/browser status", "/browser uninstall"])
+            .with_when_to_use("Use to enable, inspect, or remove one-command browser control (navigate, click, screenshot) via the Playwright MCP server")
+            .with_related(vec!["image", "mcp"])
+        ),
         "mode" => Some(
             CommandHelpEntry::new(
                 "mode".to_string(),
@@ -1061,6 +1072,23 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to tell the model to prioritize a specific area like frontend, backend, security, or performance")
             .with_related(vec!["effort", "mode"])
         ),
+        "goal" => Some(
+            CommandHelpEntry::new(
+                "goal".to_string(),
+                "Set a session goal the agent keeps working toward until met".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[<objective>|show|pause|resume|clear] [--max N] [--budget $N]")
+            .with_examples(vec![
+                "/goal all tests passing in CI",
+                "/goal --max 50 refactor the auth module",
+                "/goal --budget $5 migrate the database",
+                "/goal pause",
+                "/goal clear",
+            ])
+            .with_when_to_use("Use to set a persistent objective: Shannon re-anchors it every turn and auto-continues until the model proves the goal is met. Stops come from progress guards (no-tool turns, stall strikes), blockers, or the optional --budget/--max caps — turn count is unlimited by default")
+            .with_related(vec!["focus", "plan", "ralph"])
+        ),
         "watch" => Some(
             CommandHelpEntry::new(
                 "watch".to_string(),
@@ -1160,6 +1188,7 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         "recap",
         "effort",
         "focus",
+        "goal",
     ]
     .iter()
     .filter_map(|name| get_command_help(name))

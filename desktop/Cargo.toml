@@ -1,23 +1,37 @@
 [package]
 name = "shannon-desktop"
-version = "0.9.0"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Shannon — your AI workspace (Tauri desktop app)"
 license = "Apache-2.0"
 authors = ["Shannon Agent Contributors"]
-repository = "https://github.com/shannon-agent/shannon-agent"
-homepage = "https://github.com/shannon-agent/shannon-agent"
+repository = "https://github.com/diff-lab-com/shannon-agent"
+homepage = "https://github.com/diff-lab-com/shannon-agent"
 
 [features]
-default = ["tauri"]
+default = ["tauri", "preview-capture"]
 tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-plugin-updater", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-window-state", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
+# P1-5 C-1 — native window/monitor screenshot capture backing
+# `preview_capture` / the `preview_screenshot` engine tool (xcap, the same
+# capture path the computer-use tool uses). Opt-out for CI matrices that
+# cannot link the capture backends.
+preview-capture = ["dep:xcap", "dep:image"]
 # Local STT (P2-5e). Pulls in whisper-rs (which builds whisper.cpp 1.5.x via
 # its own build.rs) and hound (pure-Rust WAV decoder). Requires cmake ≥ 3.18
 # and a C++17 compiler on the build host. The cloud D4 STT path is unchanged
 # and remains the default; this feature is opt-in for privacy-first users.
 # See docs/integrations/voice-local.md for the design.
 voice-local = ["dep:whisper-rs", "dep:hound"]
+# Real screen capture / input simulation for the `computer` tool (desktop
+# automation). Opt-in: Linux builds need libxdo + X11 dev libraries. Runtime
+# access is still gated by the permission system (High risk policy).
+computer-use = ["shannon-tools/computer-use"]
+# T10 Phase 1 — alternative Linux input backends (Wayland via libei portal,
+# direct wayland-client, pure-Rust X11). See shannon-tools [features].
+computer-use-libei = ["shannon-tools/computer-use-libei"]
+computer-use-wayland = ["shannon-tools/computer-use-wayland"]
+computer-use-x11rb = ["shannon-tools/computer-use-x11rb"]
 
 [dependencies]
 # Shannon engine crates — provided by the unified workspace (no git, no SSH, no rev, no patch).
@@ -25,11 +39,14 @@ shannon-core   .workspace = true
 shannon-engine .workspace = true
 shannon-types  .workspace = true
 shannon-tools  .workspace = true
+shannon-tool-interface .workspace = true
+shannon-remote = { path = "../crates/shannon-remote" }
 shannon-mcp    .workspace = true
 shannon-skills .workspace = true
 shannon-agents .workspace = true
 
 serde = { version = "1.0", features = ["derive"] }
+notify = { version = "7", features = ["macos_kqueue"] }
 serde_json = "1.0"
 tokio = { version = "1.43", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -43,13 +60,18 @@ futures = "0.3"
 tempfile = "3"
 base64 = "0.22"
 dirs = "5"
+gethostname = "1"  # QR pairing endpoint: advertise the desktop as <hostname>.local (§A8b, iOS ATS)
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service"] }
 libc = "0.2"  # macOS launchctl probe (gateway_service_probe::default_probe) + dev e2e
 toml = "0.8"
 lsp-types = "0.95"
 url = "2"
 async-trait = "0.1"
+# HTTP client for provider probes / downloads
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "multipart"] }
+# Loopback engine API server routes (P0-3 trigger endpoint merges into
+# shannon_core::api_server::ShannonApiServer's router).
+axum = { workspace = true }
 dashmap = "6.1"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 sha2 = "0.10"
@@ -57,6 +79,11 @@ rand = "0.8"
 qrcode = "0.14"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 percent-encoding = "2"
+# P2-2 — persona/profile pack (.tar.gz). Both crates are already resolved in
+# Cargo.lock via transitive dependencies (tar 0.4.46, flate2 1.1.9), so these
+# direct deps introduce no new packages — they only reuse the locked versions.
+tar = "0.4"
+flate2 = "1"
 
 tauri = { version = "2", optional = true, features = ["tray-icon"] }
 tauri-plugin-shell = { version = "2", optional = true }
@@ -76,17 +103,36 @@ tauri-plugin-notification = { version = "2", optional = true }
 whisper-rs = { version = "0.13", optional = true }
 hound = { version = "3", optional = true }
 
+# P1-5 C-1 — `preview_capture` screenshot source (see `preview-capture`
+# feature). xcap version matches shannon-tools' computer-use feature.
+xcap = { version = "0.0.13", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
+
+# P1-5 D — integrated terminal PTY sessions. Same crate (and version) the
+# engine's interactive-command executor already uses (shannon-tools pty.rs),
+# so no second pty implementation enters the tree; `shell-words` is already
+# a portable-pty transitive dependency (same 1.1.x resolution in the lock).
+portable-pty = "0.8"
+shell-words = "1"
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"
 criterion = { version = "0.5", features = ["async_tokio"] }
 mockito = "1"
+# `ServiceExt::oneshot` for direct axum router tests (loopback trigger).
+tower = { version = "0.5", features = ["util"] }
 # Enables `tauri::test::mock_app()` for the supervisor E2E test (cfg(test) alone
 # doesn't reach the tauri dependency crate). `test` is an empty gate feature.
 tauri = { version = "2", features = ["test"] }
 
 [build-dependencies]
 tauri-build = { version = "2", optional = true, features = [] }
+# P1-1: minimal ACL codegen in build.rs (see the file header for why the
+# full `tauri_build::build()` is not used). tauri-utils provides the
+# Capability/Manifest/Resolved types the codegen hands to tauri-codegen.
+tauri-utils = "2"
+serde_json = "1.0"
 
 [[bench]]
 name = "load_tests"

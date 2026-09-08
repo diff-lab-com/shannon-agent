@@ -286,11 +286,16 @@ describe('OPC page', () => {
     expect(screen.getByText(/Agent name is required/)).toBeInTheDocument()
   })
 
-  it('closes modal on Cancel', () => {
+  it('closes modal on Cancel', async () => {
     resetCtx()
     renderOPC()
     fireEvent.click(screen.getByRole('button', { name: /Spawn new agent/ }))
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }))
-    expect(screen.queryByRole('heading', { name: /Spawn New Agent/ })).not.toBeInTheDocument()
+    // Base UI Dialog stays mounted during the close animation; wait for
+    // the heading to disappear (or become hidden) instead of asserting
+    // immediate detachment.
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: /Spawn New Agent/ })).not.toBeInTheDocument()
+    })
   })
 })

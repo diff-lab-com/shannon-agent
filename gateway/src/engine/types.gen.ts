@@ -11,7 +11,14 @@
  * these types directly; only the contract is generated.
  */
 
+export interface MessageAttachment {
+  data: string;
+  media_type: string;
+  name: string | null;
+}
+
 export interface QueryRequest {
+  attachments: MessageAttachment[] | null;
   model: string | null;
   prompt: string;
   session_id: string | null;
@@ -66,6 +73,7 @@ export type ApprovalDecision =
 
 export interface WsClientMessageQuery {
   type: "query";
+  attachments?: MessageAttachment[] | null;
   model?: string | null;
   prompt: string;
   session_id?: string | null;

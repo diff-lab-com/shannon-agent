@@ -96,13 +96,13 @@ export function makeShannonTauriAdapter(
 
     // Write-side — used by assistant-ui for branch switches / state imports.
     setMessages(next: readonly ThreadMessage[]): void {
-      // eslint-disable-next-line no-console -- spike: dev log
+       
       console.log(`${SHANNON_SPIKE_TAG} setMessages (${next.length})`);
       messages = [...next];
     },
 
     async onNew(message: AppendMessage): Promise<void> {
-      // eslint-disable-next-line no-console -- spike: dev log
+       
       console.log(`${SHANNON_SPIKE_TAG} onNew:`, {
         parentId: message.parentId,
         sourceId: message.sourceId,
@@ -131,23 +131,23 @@ export function makeShannonTauriAdapter(
 
     async onEdit(): Promise<void> {
       // Spike no-op — production routes to Tauri `query-control edit`.
-      // eslint-disable-next-line no-console -- spike: dev log
+       
       console.log(`${SHANNON_SPIKE_TAG} onEdit (spike no-op)`);
     },
 
     async onDelete(messageId: string): Promise<void> {
       messages = messages.filter((m) => m.id !== messageId);
-      // eslint-disable-next-line no-console -- spike: dev log
+       
       console.log(`${SHANNON_SPIKE_TAG} onDelete: ${messageId}`);
     },
 
     async onReload(): Promise<void> {
-      // eslint-disable-next-line no-console -- spike: dev log
+       
       console.log(`${SHANNON_SPIKE_TAG} onReload (spike no-op)`);
     },
 
     async onCancel(): Promise<void> {
-      // eslint-disable-next-line no-console -- spike: dev log
+       
       console.log(`${SHANNON_SPIKE_TAG} onCancel (spike no-op)`);
     },
   } satisfies ExternalStoreAdapter<ThreadMessage>;

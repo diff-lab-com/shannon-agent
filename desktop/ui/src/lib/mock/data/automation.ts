@@ -4,7 +4,6 @@ import type {
   TriggeredRoutineDto,
   HookEventInfo,
   ProfilesList,
-  CustomProfileInfo,
 } from '@/types'
 
 const now = Date.now()
@@ -46,6 +45,8 @@ export const MOCK_SCHEDULED_ROUTINES: ScheduledRoutine[] = [
       notify_on_failure: true,
       auto_archive_when_empty: false,
       result_routing: ['notification', 'log'],
+      // P2-5: off-peak window (00:00–07:00, inclusive hours, machine-local).
+      execution_window: { start_hour: 0, end_hour: 6, timezone: null },
     },
   } as unknown as ScheduledRoutine,
   {
@@ -198,27 +199,52 @@ export const MOCK_HOOK_EVENTS: HookEventInfo[] = [
 ] as unknown as HookEventInfo[]
 
 export const MOCK_PROFILES: ProfilesList = {
-  current: 'standard',
   builtin: [
-    { name: 'standard', description: 'Default balanced permission profile', source: 'builtin' },
-    { name: 'relaxed', description: 'Broader auto-approve, fewer prompts', source: 'builtin' },
-    { name: 'strict', description: 'Confirm everything except read-only', source: 'builtin' },
-    { name: 'full-auto', description: 'Auto-approve all non-destructive', source: 'builtin' },
+    {
+      id: 'strict',
+      description: 'Maximum safety: approve reads only, deny destructive tools',
+      auto_approve_read: true,
+      auto_approve_write: false,
+      auto_approve_bash: false,
+      auto_approve_delete: false,
+      auto_approve_network: false,
+      deny_destructive: ['Write', 'Bash', 'MultiEdit'],
+    },
+    {
+      id: 'balanced',
+      description: 'Auto-approve reads, ask for writes/bash/delete',
+      auto_approve_read: true,
+      auto_approve_write: false,
+      auto_approve_bash: false,
+      auto_approve_delete: false,
+      auto_approve_network: false,
+      deny_destructive: [],
+    },
+    {
+      id: 'permissive',
+      description: 'Auto-approve reads, writes, bash; still deny system-critical ops',
+      auto_approve_read: true,
+      auto_approve_write: true,
+      auto_approve_bash: true,
+      auto_approve_delete: false,
+      auto_approve_network: false,
+      deny_destructive: [],
+    },
   ],
   custom: [
     {
       name: 'research-mode',
       description: 'For research sessions — broad read access, no writes',
-      auto_approve: ['read_file', 'search', 'list_directory', 'web_search'],
-      confirm: ['write_file', 'bash'],
-      deny: ['rm_rf', 'git_push', 'git_reset_hard'],
-    } as unknown as CustomProfileInfo,
+      auto_approve: ['Read', 'Grep', 'Glob', 'WebSearch'],
+      confirm: ['Write', 'Bash'],
+      deny: ['Bash(rm *)', 'Bash(git push --force *)'],
+    },
     {
       name: 'demo-mode',
       description: 'For demos — auto-approve common safe tools',
-      auto_approve: ['read_file', 'write_file', 'search', 'list_directory', 'bash'],
-      confirm: ['git_push', 'git_reset_hard'],
-      deny: ['rm_rf'],
-    } as unknown as CustomProfileInfo,
+      auto_approve: ['Read', 'Write', 'Edit', 'Grep', 'Bash'],
+      confirm: ['Bash(git push *)'],
+      deny: ['Bash(rm -rf *)'],
+    },
   ],
-} as unknown as ProfilesList
+}

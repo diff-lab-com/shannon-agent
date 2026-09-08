@@ -618,6 +618,11 @@ pub struct QueryContext {
     pub query_id: Uuid,
     pub session_id: Uuid,
     pub user_message: String,
+    /// Multimodal attachments (e.g. images) delivered alongside
+    /// `user_message`. Empty for text-only queries; non-empty values switch
+    /// the user message to a content-blocks form the multimodal adapters
+    /// serialize for both Anthropic and OpenAI providers.
+    pub attachments: Vec<shannon_engine::api::ContentBlock>,
     pub metadata: QueryMetadata,
 }
 
@@ -643,6 +648,23 @@ pub enum CompressionStrategy {
     /// generating a summary. Useful when context window is very small or
     /// when summary overhead is undesirable.
     TruncateOldest,
+}
+
+/// Completion markers a model may emit as the final line of a reply when a
+/// goal is active. Parsing lives in the REPL layer; both sides share the
+/// constants so the contract cannot drift.
+pub const GOAL_COMPLETE_MARKER: &str = "GOAL_COMPLETE";
+pub const GOAL_BLOCKED_MARKER: &str = "GOAL_BLOCKED";
+
+/// Session goal to inject into the system prompt (set via `/goal`).
+///
+/// `paused` goals are still injected (so the model keeps the objective in
+/// view) but the block tells the model not to emit completion markers.
+/// Completed goals are not injected at all — the caller maps them to `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalSpec {
+    pub objective: String,
+    pub paused: bool,
 }
 
 /// Configuration for the query engine
@@ -671,6 +693,9 @@ pub struct QueryEngineConfig {
     pub effort_level: Option<String>,
     /// Focus area for the LLM (e.g. "security", "performance")
     pub focus_area: Option<String>,
+    /// Session goal (set via `/goal`). Injected as a non-cached system block
+    /// on every query so it survives compaction.
+    pub goal: Option<GoalSpec>,
     /// Fast/cheap model for quick tasks (e.g. haiku). If set, the engine can
     /// route simple queries (token counting, short responses) to this model
     /// instead of the primary model, reducing cost and latency.
@@ -691,6 +716,14 @@ pub struct QueryEngineConfig {
     /// Optional override for the repo map root. Defaults to the current
     /// working directory when the engine is asked to inject.
     pub repo_map_root: Option<std::path::PathBuf>,
+    /// When `true` (default), the engine auto-injects working-directory
+    /// context into every request's system blocks: smart-context keyword
+    /// search results and project instruction files (CLAUDE.md /
+    /// AGENTS.md / GEMINI.md). Disable for byte-deterministic requests —
+    /// mock-server tests that verify request payloads, or hosts that
+    /// inject their own context — since the scans read ambient
+    /// filesystem state whose results change between queries under load.
+    pub auto_context_enabled: bool,
     /// Optional auto-test loop config (P1-5). When `Some`, after a successful
     /// file-modifying tool (`Edit`/`Write`) the engine runs the configured
     /// test command, parses the result, and — on failure — injects the
@@ -698,6 +731,16 @@ pub struct QueryEngineConfig {
     /// Anti-loop guards (`max_iterations`, `total_timeout_secs`,
     /// `no_progress_strikes`) cap the iteration count.
     pub auto_test: Option<crate::auto_test::AutoTestConfig>,
+    /// P-B (eval-only): inject a synthetic user message once at this turn
+    /// if Edit/Write hasn't been called yet. Forces the agent out of an
+    /// explore-only loop. None = disabled. Driven by env var
+    /// `SHANNON_TURN_CHECKPOINT` (parsed in `QueryEngine::with_defaults`).
+    /// Production should leave this None; SWE-bench eval sets it via env.
+    pub turn_checkpoint_turn: Option<u32>,
+    /// P-M: when context-window usage crosses 60% / 80%, inject synthetic
+    /// user messages nudging the agent to wrap up. Default `true`; opt-out
+    /// via env `SHANNON_TOKEN_BUDGET_WARNING=false`.
+    pub token_budget_warning: bool,
 }
 
 impl Default for QueryEngineConfig {
@@ -727,7 +770,8 @@ impl Default for QueryEngineConfig {
                      - Use Read/Grep/Glob to understand code before editing.\n\
                      - Prefer Edit over Write for existing files.\n\
                      - Use Bash for system commands, builds, and tests.\n\
-                     - After writing code, run relevant tests to verify.\n\
+                     - After writing code, run tests or builds only if a toolchain is available: probe first (e.g. `command -v cargo`); when it is missing, verify by re-reading your changes instead of hunting for missing tools.\n\
+                     - When the requested changes are complete, give your final answer promptly; do not spend remaining turns on extra confirmation.\n\
                      - When editing, include enough context for unique matches.\n\
                      \n\
                      ## Code Editing Rules\n\
@@ -746,12 +790,16 @@ impl Default for QueryEngineConfig {
             max_parallel_tools: 10,
             effort_level: None,
             focus_area: None,
+            goal: None,
             fast_model: None,
             plan_model: None,
             repo_map_enabled: true,
             repo_map_budget_tokens: 2_000,
             repo_map_root: None,
+            auto_context_enabled: true,
             auto_test: None,
+            turn_checkpoint_turn: None,
+            token_budget_warning: true,
         }
     }
 }
@@ -780,6 +828,13 @@ pub enum QueryEvent {
         tool_name: String,
         result: String,
         is_error: bool,
+        /// Structured tool-private metadata (§4.12): carries e.g.
+        /// `{"classification":"sandbox_denied", …}` for sandboxed denials;
+        /// `Null` for the historical shape. Boxed to keep the event small
+        /// (clippy `result_large_err`). Mirrored into the L0 `tool/result`
+        /// payload's `meta`.
+        #[serde(default)]
+        meta: Box<serde_json::Value>,
     },
 
     /// Turn completed
@@ -1325,5 +1380,35 @@ mod tests {
         let cost = CostTracker::calculate_cost("gpt-4.1", 1_000_000, 500_000);
         // 1M * 2.0/1M + 500K * 8.0/1M = 2.0 + 4.0 = 6.0
         assert!((cost - 6.0).abs() < 0.001);
+    }
+
+    // -- Default system prompt verification guidance (A2) --
+
+    #[test]
+    fn test_default_system_prompt_verification_guidance_is_availability_aware() {
+        let prompt = QueryEngineConfig::default()
+            .system_prompt
+            .expect("default system prompt is configured");
+
+        // Eval finding A2 (docs/eval-findings-2026-09-glm.md): the blanket
+        // "run relevant tests to verify" instruction made agents burn every
+        // remaining turn hunting for a toolchain in sandboxes without
+        // rustc/cargo/python3, ending in turn_limit failures.
+        assert!(
+            !prompt.contains("After writing code, run relevant tests to verify"),
+            "blanket verify-by-running-tests instruction must be gone"
+        );
+        assert!(
+            prompt.contains("command -v"),
+            "prompt must suggest probing toolchain availability (e.g. command -v)"
+        );
+        assert!(
+            prompt.contains("toolchain"),
+            "prompt must frame verification as availability-aware"
+        );
+        assert!(
+            prompt.contains("final answer"),
+            "prompt must tell the agent to wrap up once the goal is met"
+        );
     }
 }

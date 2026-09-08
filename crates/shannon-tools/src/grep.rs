@@ -96,6 +96,8 @@ pub struct GrepFileMatch {
 /// GrepTool - search file contents using regex patterns
 pub struct GrepTool {
     sandbox: PathSandbox,
+    /// Filesystem world backing binary sniffing and line reads (§4.11).
+    fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
 }
 
 impl GrepTool {
@@ -108,38 +110,46 @@ impl GrepTool {
                 denied_patterns: crate::file::sandbox::SandboxConfig::default_denied_patterns(),
                 strict_mode: false,
             }),
+            fs: crate::defaults::fs(),
         }
     }
 
     /// Create a GrepTool with a custom sandbox configuration.
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
-        Self { sandbox }
+        Self {
+            sandbox,
+            fs: crate::defaults::fs(),
+        }
     }
 
-    /// Check if a file appears to be binary by looking for null bytes
-    fn is_binary(path: &Path) -> bool {
-        match std::fs::File::open(path) {
-            Ok(mut file) => {
-                let mut buf = [0u8; BINARY_CHECK_BYTES];
-                match std::io::Read::read(&mut file, &mut buf) {
-                    Ok(n) => buf[..n].contains(&0),
-                    Err(_) => true, // Treat unreadable files as binary
-                }
-            }
-            Err(_) => true,
+    /// Inject a filesystem world override (sandbox/remote assemblies).
+    pub fn with_fs(
+        mut self,
+        fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+    ) -> Self {
+        self.fs = fs;
+        self
+    }
+
+    /// Check if a file appears to be binary by looking for null bytes.
+    /// Reads the sniff buffer through the injected filesystem world.
+    fn is_binary(&self, path: &Path) -> bool {
+        match self.fs.read_prefix_blocking(path, BINARY_CHECK_BYTES) {
+            Ok(buf) => buf.contains(&0),
+            Err(_) => true, // Treat unreadable files as binary
         }
     }
 
     /// Read lines from a file, returning a vector of (line_number, line_content)
-    fn read_file_lines(path: &Path) -> std::io::Result<Vec<(usize, String)>> {
+    fn read_file_lines(&self, path: &Path) -> std::io::Result<Vec<(usize, String)>> {
         // Skip files that are too large to avoid OOM on huge log/data files
         const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
-        if let Ok(meta) = std::fs::metadata(path) {
-            if meta.len() > MAX_FILE_SIZE {
+        if let Ok(meta) = self.fs.metadata_blocking(path) {
+            if meta.len > MAX_FILE_SIZE {
                 return Ok(Vec::new());
             }
         }
-        let content = std::fs::read_to_string(path)?;
+        let content = self.fs.read_text_blocking(path)?;
         Ok(content
             .lines()
             .enumerate()
@@ -156,11 +166,11 @@ impl GrepTool {
         context_before: usize,
         context_after: usize,
     ) -> Option<GrepFileMatch> {
-        if Self::is_binary(path) {
+        if self.is_binary(path) {
             return None;
         }
 
-        let lines = match Self::read_file_lines(path) {
+        let lines = match self.read_file_lines(path) {
             Ok(lines) => lines,
             Err(_) => return None,
         };
@@ -197,8 +207,12 @@ impl GrepTool {
             None
         } else {
             let match_count = matches.len();
+            // A3: echo the path in the command sandbox's view (e.g.
+            // `/workspace/src/x.rs`) so the model can feed it straight into
+            // a sandboxed Bash command. Identity when output aliasing is off.
+            let display_path = self.sandbox.alias_display_path(path);
             Some(GrepFileMatch {
-                file: path.to_string_lossy().to_string(),
+                file: display_path,
                 matches,
                 match_count,
             })
@@ -355,36 +369,33 @@ impl Tool for GrepTool {
         let search_root = PathBuf::from(search_path);
 
         // Validate search path through sandbox
-        self.sandbox
+        let canonical_root = self
+            .sandbox
             .validate(&search_root)
             .await
             .map_err(|e| ToolError::InvalidInput(format!("Path sandbox: {e}")))?;
 
-        if !search_root.exists() {
+        // Existence is provider-checked: on a remote world the search root
+        // lives on the target, so `Path::exists` would probe the wrong disk.
+        // When the raw spelling is missing but the sandbox resolved it (bind
+        // alias addressing like `/workspace/src`), walk the canonical host
+        // root — the companion of the output aliasing in `search_file`.
+        let search_root = if self.fs.exists_blocking(&search_root) {
+            search_root
+        } else if self.fs.exists_blocking(&canonical_root) {
+            canonical_root
+        } else {
             return Err(ToolError::ExecutionFailed(format!(
                 "Path does not exist: {search_path}"
             )));
-        }
+        };
 
-        // Build walker
-        let mut builder = ignore::WalkBuilder::new(&search_root);
-        builder.hidden(true);
-        builder.git_ignore(true);
-        builder.git_global(true);
-        builder.git_exclude(true);
-
-        // Apply include pattern via the ignore crate's OverrideBuilder
-        // Exclude is handled via manual filtering in the walk loop below,
-        // since the ignore crate's gitignore-style semantics don't map
-        // cleanly to "skip these files".
-        if let Some(include) = &grep_input.include {
-            let overrides = ignore::overrides::OverrideBuilder::new(&search_root)
-                .add(include.as_str())
-                .map_err(|e| ToolError::InvalidInput(format!("Invalid include pattern: {e}")))?
-                .build()
-                .map_err(|e| ToolError::InvalidInput(format!("Invalid include pattern: {e}")))?;
-            builder.overrides(overrides);
-        }
+        // Traversal, gitignore handling and content reads all follow the
+        // injected filesystem world (local by default, SSH/Docker under a
+        // remote target). Include/exclude filtering stays in the callback.
+        let mut all_matches: Vec<GrepFileMatch> = Vec::new();
+        let mut total_matches: usize = 0;
+        let mut quota_reached = false;
 
         let show_line_numbers = grep_input.line_number.unwrap_or(true);
         let context_before = grep_input
@@ -398,58 +409,55 @@ impl Tool for GrepTool {
             .min(MAX_ALLOWED_RESULTS);
         let output_mode = grep_input.output_mode.unwrap_or_default();
 
-        // Collect results (this runs in an async context but file I/O is synchronous)
-        let mut all_matches: Vec<GrepFileMatch> = Vec::new();
-        let mut total_matches: usize = 0;
-
-        for entry in builder.build() {
-            if total_matches >= max_results {
-                break;
-            }
-
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            let path = entry.path();
-
-            // Skip directories
-            if path.is_dir() {
-                continue;
-            }
-
-            // Skip files that don't match include pattern (for simple extension matching)
-            if let Some(include) = &grep_input.include {
-                if !path_matches_glob(path, include) {
-                    continue;
+        self.fs
+            .walk_blocking(&search_root, &mut |entry| {
+                if quota_reached {
+                    return false;
                 }
-            }
+                let path = &entry.path;
 
-            // Skip files that match exclude pattern
-            if let Some(exclude) = &grep_input.exclude {
-                if path_matches_glob(path, exclude) {
-                    continue;
+                // Skip directories
+                if entry.is_dir {
+                    return true;
                 }
-            }
 
-            if let Some(mut file_match) = self.search_file(
-                path,
-                &regex,
-                show_line_numbers,
-                context_before,
-                context_after,
-            ) {
-                // Truncate matches if we'd exceed max_results
-                let remaining = max_results - total_matches;
-                if file_match.matches.len() > remaining {
-                    file_match.matches.truncate(remaining);
-                    file_match.match_count = file_match.matches.len();
+                // Skip files that don't match include pattern (for simple extension matching)
+                if let Some(include) = &grep_input.include {
+                    if !path_matches_glob(path, include) {
+                        return true;
+                    }
                 }
-                total_matches += file_match.match_count;
-                all_matches.push(file_match);
-            }
-        }
+
+                // Skip files that match exclude pattern
+                if let Some(exclude) = &grep_input.exclude {
+                    if path_matches_glob(path, exclude) {
+                        return true;
+                    }
+                }
+
+                if let Some(mut file_match) = self.search_file(
+                    path,
+                    &regex,
+                    show_line_numbers,
+                    context_before,
+                    context_after,
+                ) {
+                    // Truncate matches if we'd exceed max_results
+                    let remaining = max_results - total_matches;
+                    if file_match.matches.len() > remaining {
+                        file_match.matches.truncate(remaining);
+                        file_match.match_count = file_match.matches.len();
+                    }
+                    total_matches += file_match.match_count;
+                    all_matches.push(file_match);
+                }
+                if total_matches >= max_results {
+                    quota_reached = true;
+                    return false; // prune the rest of the walk
+                }
+                true
+            })
+            .map_err(|e| ToolError::ExecutionFailed(format!("walk failed: {e}")))?;
 
         // Format output based on mode
         let content = match output_mode {
@@ -545,9 +553,196 @@ fn path_matches_glob(path: &Path, pattern: &str) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    /// Remote-semantics test: paths that do NOT exist on the local disk are
+    /// searched through the injected world (fake fs), proving traversal and
+    /// content reads follow the provider rather than the local disk.
+    #[tokio::test]
+    async fn grep_traverses_through_injected_world() {
+        use shannon_tool_interface::{DirEntryInfo, FileMeta, FileSystemProvider};
+        use std::io;
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+
+        struct RemoteFakeFs;
+
+        #[async_trait]
+        impl FileSystemProvider for RemoteFakeFs {
+            async fn read_text(&self, _path: &Path) -> io::Result<String> {
+                unimplemented!()
+            }
+            async fn read_bytes(&self, _p: &Path) -> io::Result<Vec<u8>> {
+                unimplemented!()
+            }
+            async fn metadata(&self, _p: &Path) -> io::Result<FileMeta> {
+                unimplemented!()
+            }
+            async fn create_dir_all(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn write_bytes(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn rename(&self, _f: &Path, _t: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn read_text_blocking(&self, _p: &Path) -> io::Result<String> {
+                Ok("alpha needle beta\nnothing here\nthird needle line".to_string())
+            }
+            fn write_bytes_blocking(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn create_dir_all_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn remove_file_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn canonicalize_blocking(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn metadata_blocking(&self, _p: &Path) -> io::Result<FileMeta> {
+                Ok(FileMeta {
+                    len: 64,
+                    is_dir: false,
+                    modified: None,
+                })
+            }
+            fn read_prefix_blocking(&self, _p: &Path, _m: usize) -> io::Result<Vec<u8>> {
+                Ok(b"alpha needle beta\nnothing here\nthird needle line".to_vec())
+            }
+            fn list_dir_blocking(&self, _p: &Path) -> io::Result<Vec<DirEntryInfo>> {
+                Ok(Vec::new())
+            }
+            fn exists_blocking(&self, _p: &Path) -> bool {
+                true
+            }
+            fn walk_blocking(
+                &self,
+                root: &Path,
+                cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+            ) -> io::Result<()> {
+                // Serve two non-local files under the remote root.
+                cb(&DirEntryInfo {
+                    path: root.to_path_buf(),
+                    len: 0,
+                    is_dir: true,
+                });
+                cb(&DirEntryInfo {
+                    path: root.join("a.rs"),
+                    len: 64,
+                    is_dir: false,
+                });
+                cb(&DirEntryInfo {
+                    path: root.join("b.rs"),
+                    len: 64,
+                    is_dir: false,
+                });
+                Ok(())
+            }
+        }
+
+        let fs: Arc<dyn FileSystemProvider> = Arc::new(RemoteFakeFs);
+        // Wire the SAME world into the sandbox's TOCTOU canonicalization,
+        // exactly as register_all_tools does for remote assemblies.
+        let sandbox =
+            crate::file::sandbox::PathSandbox::with_config(crate::file::sandbox::SandboxConfig {
+                allowed_roots: vec![PathBuf::from("/remote-host/proj")],
+                denied_patterns: crate::file::sandbox::SandboxConfig::default_denied_patterns(),
+                strict_mode: true,
+            })
+            .with_fs_provider(fs.clone());
+        let tool = GrepTool::with_sandbox(sandbox).with_fs(fs);
+
+        let output = Tool::execute(
+            &tool,
+            serde_json::json!({ "pattern": "needle", "path": "/remote-host/proj" }),
+        )
+        .await
+        .unwrap();
+
+        assert!(!output.is_error);
+        assert!(
+            output.content.contains("/remote-host/proj/a.rs"),
+            "matches must come from the injected world, got: {}",
+            output.content
+        );
+        assert!(output.content.contains("/remote-host/proj/b.rs"));
+        assert_eq!(
+            output.metadata.get("total_matches"),
+            Some(&serde_json::json!(4))
+        );
+    }
+
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    // ── A3: sandbox-visible output paths (docs/eval-findings-2026-09-glm.md) ──
+
+    /// Sandbox wired like the project registration: project root + temp root,
+    /// output aliasing enabled.
+    fn alias_output_sandbox(root: &Path) -> PathSandbox {
+        PathSandbox::with_config(crate::file::sandbox::SandboxConfig {
+            allowed_roots: crate::file::sandbox::SandboxConfig::command_aligned_roots(root),
+            denied_patterns: crate::file::sandbox::SandboxConfig::default_denied_patterns(),
+            strict_mode: true,
+        })
+        .with_bind_alias_output(true)
+    }
+
+    fn alias_grep_fixture() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/a.rs"), "needle here\n").unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn grep_alias_sandbox_echoes_workspace_paths() {
+        let dir = alias_grep_fixture();
+        let tool = GrepTool::with_sandbox(alias_output_sandbox(dir.path()));
+        let host_str = dir.path().to_string_lossy().to_string();
+
+        let output = Tool::execute(
+            &tool,
+            json!({ "pattern": "needle", "path": dir.path().to_string_lossy() }),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            output.content.contains("/workspace/src/a.rs"),
+            "output must show sandbox-visible paths, got: {}",
+            output.content
+        );
+        assert!(
+            !output.content.contains(&host_str),
+            "output must not leak the host path, got: {}",
+            output.content
+        );
+    }
+
+    #[tokio::test]
+    async fn grep_accepts_alias_search_root() {
+        if std::path::Path::new("/workspace").exists() {
+            return; // host really has /workspace — alias addressing is ambiguous
+        }
+        let dir = alias_grep_fixture();
+        let tool = GrepTool::with_sandbox(alias_output_sandbox(dir.path()));
+
+        let output = Tool::execute(&tool, json!({ "pattern": "needle", "path": "/workspace" }))
+            .await
+            .unwrap();
+
+        assert!(
+            output.content.contains("/workspace/src/a.rs"),
+            "grep must walk the alias-resolved root, got: {}",
+            output.content
+        );
+    }
 
     /// Helper to create a temp directory with test files
     fn setup_test_files() -> TempDir {

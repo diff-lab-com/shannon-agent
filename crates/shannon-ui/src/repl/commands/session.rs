@@ -4,6 +4,7 @@ use crate::{Result, widgets::ChatRole};
 
 use super::super::Repl;
 
+use shannon_core::signals::RewindKind;
 use shannon_tools::{FileHistoryConfig, FileHistoryManager, FileSnapshot, RewindAction};
 use std::path::{Path, PathBuf};
 
@@ -45,7 +46,7 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     };
 
-    match repl.state_manager.load_session(&session_id) {
+    match repl.l0_store().load(&session_id) {
         Ok(Some(data)) => {
             repl.chat.clear();
             let title = data.metadata.title.as_deref().unwrap_or("Untitled");
@@ -80,6 +81,20 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
             }
             repl.state.tokens_used =
                 data.metadata.total_input_tokens + data.metadata.total_output_tokens;
+
+            // Restore the session goal (/goal) so it re-anchors after resume.
+            let sidecar_goal = repl.l0_store().sidecar(&session_id).goal;
+            if let Some(stored_goal) = sidecar_goal {
+                repl.state.goal = Some(crate::repl::state::GoalState::from_stored(stored_goal));
+            }
+            // Restore any active loop/ralph state from the sidecar (P2.0).
+            let restored_sidecar = repl.l0_store().sidecar(&session_id);
+            if let Some(ls) = restored_sidecar.loop_state {
+                repl.state.loop_state = Some(crate::repl::state::LoopState::from_stored(ls));
+            }
+            if let Some(rs) = restored_sidecar.ralph_state {
+                repl.state.ralph_state = Some(crate::repl::state::RalphState::from_stored(rs));
+            }
 
             if let Some(ref mut engine) = repl.query_engine {
                 match engine.restore_session(session_id) {
@@ -141,7 +156,7 @@ pub(crate) fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     // Load parent to get message count for default branch point
-    let parent_data = match repl.state_manager.load_session(&session_id) {
+    let parent_data = match repl.l0_store().load(&session_id) {
         Ok(Some(data)) => data,
         Ok(None) => {
             repl.chat
@@ -183,7 +198,7 @@ pub(crate) fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
 
     // Create the branch
     match repl
-        .state_manager
+        .l0_store()
         .create_branch(&session_id, branch_point, None)
     {
         Ok(branch_data) => {
@@ -440,26 +455,63 @@ fn restore_file_snapshot(
     path: &Path,
     id: &str,
 ) -> std::result::Result<String, String> {
-    let content = mgr.rollback(path, id).map_err(|e| e.to_string())?;
-    std::fs::write(path, &content).map_err(|e| format!("failed to write {path:?}: {e}"))?;
-    Ok(content)
+    // `restore` writes through the manager's filesystem world, so a remote
+    // session restores the file on the target, not on the local disk.
+    mgr.restore(path, id).map_err(|e| e.to_string())
 }
 
 /// Per-file rewind used by both the `--yes` fast path and the confirm-dialog
-/// handler. Builds a manager from the file-history env config (the same source
-/// the file tools use) so it reads the same on-disk store.
-pub(crate) fn apply_file_rewind(path: &Path, id: &str) -> std::result::Result<String, String> {
-    let cfg = FileHistoryConfig::from_env().unwrap_or_default();
-    let mut mgr = FileHistoryManager::new(cfg);
-    restore_file_snapshot(&mut mgr, path, id)
+/// handler. Prefers the registry's provider-wired manager (same snapshots the
+/// file tools recorded, same execution world); falls back to building one
+/// from the file-history env config.
+pub(crate) fn apply_file_rewind(
+    history: Option<&std::sync::Arc<std::sync::Mutex<FileHistoryManager>>>,
+    path: &Path,
+    id: &str,
+) -> std::result::Result<String, String> {
+    match history {
+        Some(shared) => {
+            let mut mgr = shared.lock().map_err(|p| format!("history lock: {p}"))?;
+            restore_file_snapshot(&mut mgr, path, id)
+        }
+        None => {
+            let cfg = FileHistoryConfig::from_env().unwrap_or_default();
+            let mut mgr = FileHistoryManager::new(cfg);
+            restore_file_snapshot(&mut mgr, path, id)
+        }
+    }
 }
 
 /// Drive a per-file rewind: resolve the path, pick the snapshot, and either
 /// restore immediately (`skip_confirm`) or raise a confirm dialog. Failures are
 /// reported as system chat messages; this always returns `Ok(())`.
 fn run_file_rewind(repl: &mut Repl, raw_path: &str, skip_confirm: bool) -> Result<()> {
-    let cfg = FileHistoryConfig::from_env().unwrap_or_default();
-    let mut mgr = FileHistoryManager::new(cfg);
+    // Reuse the registry's provider-wired manager when available so listing
+    // and restoring see exactly what the file tools recorded.
+    #[allow(unused_assignments)] // initializer keeps the bindings total
+    let mut owned: Option<FileHistoryManager> = None;
+    #[allow(unused_assignments)]
+    let mut shared_guard: Option<std::sync::MutexGuard<'_, FileHistoryManager>> = None;
+    let mgr: &mut FileHistoryManager = match repl.file_history.as_ref() {
+        Some(shared) => match shared.lock() {
+            Ok(g) => {
+                shared_guard = Some(g);
+                shared_guard.as_mut().expect("just stored")
+            }
+            Err(p) => {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("File rewind unavailable: history lock ({p})."),
+                );
+                return Ok(());
+            }
+        },
+        None => {
+            let cfg = FileHistoryConfig::from_env().unwrap_or_default();
+            owned = Some(FileHistoryManager::new(cfg));
+            owned.as_mut().expect("just built")
+        }
+    };
 
     let tracked = match mgr.list_tracked_files() {
         Ok(t) => t,
@@ -519,7 +571,7 @@ fn run_file_rewind(repl: &mut Repl, raw_path: &str, skip_confirm: bool) -> Resul
     let short_id = &id[..id.len().min(8)];
 
     if skip_confirm {
-        match apply_file_rewind(&path, &id) {
+        match apply_file_rewind(repl.file_history.as_ref(), &path, &id) {
             Ok(_) => {
                 repl.chat.add_message(
                     ChatRole::System,
@@ -691,7 +743,20 @@ fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, Str
 }
 
 pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
-    match parse_rewind_intent(args) {
+    let intent = parse_rewind_intent(args);
+    // §4.15 online signals: count the invocation kind (never the argument
+    // value — a file path stays here). `history` is a read-only listing and
+    // does not count as rewind usage.
+    match &intent {
+        RewindIntent::History => {}
+        RewindIntent::Code(_) => shannon_core::signals::observe_rewind(RewindKind::Code),
+        RewindIntent::Both(_) => shannon_core::signals::observe_rewind(RewindKind::Both),
+        RewindIntent::Conversation(_) => {
+            shannon_core::signals::observe_rewind(RewindKind::Conversation)
+        }
+        RewindIntent::File { .. } => shannon_core::signals::observe_rewind(RewindKind::File),
+    }
+    match intent {
         RewindIntent::History => {
             let checkpoints = repl.checkpoint_manager.list_checkpoints();
             if checkpoints.is_empty() {
@@ -1165,10 +1230,7 @@ pub(crate) fn handle_session(repl: &mut Repl, args: &str) -> Result<()> {
 
     match subcmd {
         "list" | "ls" | "" => {
-            let sessions = repl
-                .state_manager
-                .list_persisted_sessions()
-                .unwrap_or_default();
+            let sessions = repl.l0_store().list().unwrap_or_default();
 
             if sessions.is_empty() {
                 repl.chat

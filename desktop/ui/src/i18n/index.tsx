@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { IntlProvider } from 'react-intl'
+import { IntlProvider, useIntl, type PrimitiveType } from 'react-intl'
 
 import en from './locales/en.json'
 import zhCN from './locales/zh-CN.json'
@@ -84,6 +84,46 @@ export function useI18n(): I18nContextValue {
     throw new Error('useI18n must be used inside <I18nProvider>')
   }
   return ctx
+}
+
+/**
+ * Stable `t(id)` — `intl.formatMessage` bound per locale switch. A raw
+ * `const t = (id) => intl.formatMessage({ id })` creates a fresh function
+ * every render, which trips react-hooks/exhaustive-deps as soon as `t`
+ * (or a callback capturing it) lands in a hook dependency array. `intl`
+ * itself is referentially stable while locale+messages stay unchanged,
+ * so `[intl]` keeps dependent useCallback/useMemo/useEffect from churning.
+ *
+ * @example
+ * const t = useT()
+ * t('settings.title')
+ */
+export function useT(): (id: string, values?: Record<string, PrimitiveType>) => string {
+  const intl = useIntl()
+  return useCallback(
+    (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values),
+    [intl],
+  )
+}
+
+/**
+ * Provider-independent message lookup for non-component contexts — e.g. a
+ * context provider rendered beside (not inside) `<IntlProvider>` that still
+ * needs a translated user-facing string. Reads the persisted locale the same
+ * way `I18nProvider` does; falls back to `en`, then to the raw id.
+ */
+export function messageFor(id: string, values?: Record<string, PrimitiveType>): string {
+  let locale: Locale = 'en'
+  if (typeof window !== 'undefined') {
+    const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY)
+    if (stored === 'en' || stored === 'zh-CN') locale = stored
+    else if ((window.navigator?.language?.toLowerCase() ?? '').startsWith('zh')) locale = 'zh-CN'
+  }
+  const tpl = MESSAGES[locale][id] ?? MESSAGES.en[id] ?? id
+  if (!values) return tpl
+  return tpl.replace(/\{(\w+)\}/g, (_, k: string) =>
+    values[k] !== undefined ? String(values[k]) : `{${k}}`,
+  )
 }
 
 /** Convenience: list of supported locales for switcher UIs. */

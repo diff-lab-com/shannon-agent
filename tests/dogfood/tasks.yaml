@@ -1,0 +1,321 @@
+# Dogfood task manifest v1 (P1a S-tier + P1b M-tier).
+# Spec: docs/plans/autonomous-improvement-loop.md §5.2. Task definitions are an
+# asset: the S->M->L enablement ramp lives in scripts/dogfood/lib.yaml
+# (task_tiers), not here. Every task runs headless via
+# `shannon -p ... --output-format json-stream`.
+#
+# Fields:
+#   tier            S | M | L (L landed at P2-5; enabled by the task_tiers
+#                   ramp in lib.yaml — see §6.2: L stays dormant until the
+#                   user-approved calibration run)
+#   kind            cli (desktop reserved for P2)
+#   workspace       readonly-main | scratch:<fixture> | temp
+#                   - readonly-main: detached git worktree of HEAD; write tools
+#                     withheld via allowed_tools so the main tree stays clean
+#                   - scratch:<fixture>: fresh copy of tests/dogfood/fixtures/<fixture>
+#                     (git init'd) — write tasks live here
+#                   - temp: empty scratch dir
+#   allowed_tools   passed to --allowed-tools (omit = all tools)
+#   env             extra env for the task process (e.g. failure injection)
+#   schema          inline JSON Schema or path (headless --schema)
+#   max_turns       headless --max-turns
+#   provider_tier   fast | standard | pro (mapped to SHANNON_MODEL via lib.yaml)
+#   expect.exit_code      required process exit code (default 0)
+#   expect.contains       substrings asserted on the concatenated text_delta
+#   expect.ndjson_terminal require a terminal {"type":"done"} event (default true)
+#   expect.verify.artifacts  [{path, check}] — file must exist; optional shell
+#                            `check` run in the workspace (non-zero = fail)
+#   expect.verify.golden     path to golden file, whitespace-normalized diff
+#   expect.verify.verify_cmd shell command run in the workspace; non-zero = fail
+#
+# Deliberate failures (expected to fail and be triaged, not fixed):
+#   s6-invalid-key (api_error via injected bad credential)
+
+tasks:
+  # ---------- S tier (P1a) ----------
+  - id: s1-read-analyze
+    tier: S
+    kind: cli
+    workspace: readonly-main
+    allowed_tools: [Read, Grep, Glob]
+    provider_tier: fast
+    timeout_s: 240
+    prompt: >-
+      Read crates/shannon-types/src/model_ref.rs and
+      crates/shannon-types/src/events.rs, then list every exported struct or
+      enum from those two files, one name per line, no prose.
+    expect:
+      exit_code: 0
+      contains: ["ModelRef", "EventEnvelope"]
+
+  - id: s2-grep-locate
+    tier: S
+    kind: cli
+    workspace: readonly-main
+    allowed_tools: [Read, Grep, Glob]
+    provider_tier: fast
+    timeout_s: 240
+    prompt: >-
+      Find where the PermissionDenied exit-code variant for headless mode is
+      defined in this repository (crates/). Answer with the file path and line
+      number only.
+    expect:
+      exit_code: 0
+      contains: ["main.rs"]
+
+  - id: s3-fix-buggy-scratch
+    tier: S
+    kind: cli
+    workspace: scratch:scratch-buggy
+    provider_tier: fast
+    timeout_s: 600
+    prompt: >-
+      The test is_positive_works in tests/api.rs is failing. Fix the bug in
+      src/math.rs (the function must treat zero as NOT positive), then run
+      `cargo test is_positive_works` and make sure that test passes. Do not
+      modify the tests and do not change any other function.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: src/math.rs
+            check: grep -qF 'n > 0' src/math.rs
+        verify_cmd: cargo test -q is_positive_works
+
+  - id: s4-add-test-scratch
+    tier: S
+    kind: cli
+    workspace: scratch:scratch-clean
+    provider_tier: fast
+    timeout_s: 600
+    prompt: >-
+      Add a `#[cfg(test)] mod tests` with unit tests for `multiply` inside
+      src/math.rs (cover positive, negative and zero), then run `cargo test`
+      and make sure everything passes.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: src/math.rs
+            check: grep -qF '#[cfg(test)]' src/math.rs
+        verify_cmd: cargo test -q
+
+  - id: s5-schema-output
+    tier: S
+    kind: cli
+    workspace: temp
+    allowed_tools: []          # pure generation, no tools
+    provider_tier: fast
+    timeout_s: 240
+    schema: >-
+      {"type":"object","required":["primes"],"properties":{"primes":
+      {"type":"array","items":{"type":"integer"},"minItems":5,"maxItems":5}}}
+    prompt: >-
+      Return a JSON object {"primes": [...]} with the first five prime numbers.
+    expect:
+      exit_code: 0
+
+  - id: s6-invalid-key          # deliberate failure: api_error
+    tier: S
+    kind: cli
+    workspace: temp
+    allowed_tools: []
+    provider_tier: fast
+    timeout_s: 120
+    env:
+      # SHANNON_PROVIDER forces the env-credential path; without it the
+      # connected providers.toml profile would win over the ambient
+      # SHANNON_API_KEY (ADR-0005 Phase 4) and the task would not fail.
+      SHANNON_PROVIDER: "anthropic"
+      SHANNON_API_KEY: "sk-dogfood-invalid-on-purpose"
+    prompt: "reply with the single word: ok"
+    expect:
+      exit_code: 1
+
+  # ---------- M tier (P1b) ----------
+  - id: m1-scratch-feature
+    tier: M
+    kind: cli
+    workspace: scratch:scratch-clean
+    timeout_s: 900
+    prompt: >-
+      Add a `pub fn clamp(n: i32, lo: i32, hi: i32) -> i32` function to
+      src/math.rs (documented, clamped to [lo, hi]) with unit tests in the same
+      file, and export it from the crate. Run `cargo test` until green.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: src/math.rs
+            check: grep -qF 'clamp' src/math.rs
+        # --tests runs unit + integration tests but skips doctests. Doctests
+        # in Rust are compiled as a separate wrapper crate where `use crate::`
+        # refers to a synthetic module — not the user crate root — so a
+        # `use crate::clamp;` example fails to resolve even when `clamp` is
+        # re-exported via `pub use math::{..., clamp};` in lib.rs (the
+        # compiler suggests `scratch_lib::clamp` instead). The task asks for
+        # "documented" + unit tests; doctests are optional, so we skip them.
+        verify_cmd: cargo test -q --tests
+
+  - id: m2-rename-refactor
+    tier: M
+    kind: cli
+    workspace: scratch:scratch-clean
+    timeout_s: 900
+    prompt: >-
+      Rename the function `shout` to `exclaim` everywhere in this crate
+      (definition, re-export, tests). Run `cargo test` until green. No other
+      behavior changes.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: src/strings.rs
+            check: grep -qF 'exclaim' src/strings.rs
+        verify_cmd: cargo test -q
+
+  - id: m3-cross-crate-analysis
+    tier: M
+    kind: cli
+    workspace: readonly-main
+    allowed_tools: [Read, Grep, Glob]
+    provider_tier: fast
+    timeout_s: 900
+    prompt: >-
+      Find every definition and call site of
+      inject_cache_control_on_last_block in crates/. Report each as
+      `path:line` followed by a one-line note on what happens there.
+      Use only the Read, Grep, and Glob tools — the Bash tool is not
+      available in this environment.
+    expect:
+      exit_code: 0
+      contains: ["inject_cache_control_on_last_block"]
+
+  - id: m4-write-docs
+    tier: M
+    kind: cli
+    workspace: scratch:scratch-clean
+    timeout_s: 900
+    prompt: >-
+      Write docs/API.md documenting the public functions of this crate
+      (signature + one-line description each). Do not change any code. Then run
+      `cargo test` to confirm nothing broke.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: docs/API.md
+            check: grep -qF 'multiply' docs/API.md
+        verify_cmd: cargo test -q
+
+  - id: m5-fix-mean-bug
+    tier: M
+    kind: cli
+    workspace: scratch:scratch-buggy
+    timeout_s: 900
+    prompt: >-
+      The test mean_works in tests/api.rs is failing: mean returns a truncated
+      integer result instead of a proper f64 average. Fix the implementation in
+      src/math.rs without changing the tests, then run
+      `cargo test mean_works` until that test passes. Do not change any other
+      function.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: src/math.rs
+            check: grep -qF 'values.len() as f64' src/math.rs
+        verify_cmd: cargo test -q mean_works
+
+  # ---------- L tier (P2-5; dormant until lib.yaml task_tiers adds L) ----------
+  # Cost & replay policy: plan §6.2 — graduation evidence is live-only,
+  # replay never counts; calibration run gates enablement.
+  - id: l1-bulk-migrate
+    tier: L
+    kind: cli
+    workspace: scratch:scratch-big
+    provider_tier: standard
+    timeout_s: 7200
+    retries: 1              # supervisor-kill only (timeout/hang) -> --resume
+    max_turns: 150
+    # The agent must run `cargo test` via the sandboxed Bash tool to
+    # self-verify. The default sandbox image (ubuntu:22.04) ships no
+    # toolchain, and 512m/1cpu/300s cannot compile — so in the 2026-08-23
+    # rerun the model could never close its verification loop. Point the
+    # auto-detected docker sandbox at a rust image with headroom (engine
+    # env overrides: crates/shannon-core/src/sandbox.rs
+    # apply_env_overrides).
+    env:
+      SHANNON_SANDBOX_IMAGE: rust:1.88-slim
+      SHANNON_SANDBOX_MEMORY: 4g
+      SHANNON_SANDBOX_CPUS: "2.0"
+      SHANNON_SANDBOX_TIMEOUT_SECS: "1200"
+      # 2026-08-23 gate rerun: with the 4096 default the model burns the
+      # whole output budget on <think>, finish_reason=length, and the
+      # engine's truncation continuation then re-sends the conversation
+      # per continuation — 31 turns / 2.1M input for one l1 attempt
+      # (6x the 337K of a capped-at-planning run). A 16384 ceiling lets
+      # the plan + execution fit one response most turns.
+      SHANNON_MAX_TOKENS: "16384"
+    prompt: >-
+      Restructure this crate from its flat module layout into domain
+      submodules, keeping the public API exactly as re-exported from lib.rs:
+      src/people/ gets customer; src/sales/ gets order and pricing;
+      src/logistics/ gets inventory and shipping; src/billing/ gets currency
+      and report. Move each src/<mod>.rs file into its group directory, add
+      the module declarations, and update internal `use crate::...` paths.
+      Every existing test must keep passing untouched: do NOT modify
+      tests/integration.rs or any test code. Run `cargo test` until green.
+    expect:
+      exit_code: 0
+      verify:
+        artifacts:
+          - path: src/people/customer.rs
+            check: grep -qF 'CustomerTier' src/people/customer.rs
+          - path: src/sales/pricing.rs
+            check: grep -qF 'price_order' src/sales/pricing.rs
+          - path: src/logistics/shipping.rs
+            check: grep -qF 'shipping_cost' src/logistics/shipping.rs
+          - path: src/billing/report.rs
+            check: grep -qF 'Invoice' src/billing/report.rs
+        # tests/integration.rs consumes only the lib.rs re-exports, so green
+        # here proves the public API survived the migration.
+        verify_cmd: cargo test -q
+
+  - id: l2-deep-analysis
+    tier: L
+    kind: cli
+    workspace: readonly-main
+    allowed_tools: [Read, Grep, Glob]
+    provider_tier: fast
+    timeout_s: 3600
+    max_turns: 120
+    # Calibration run (2026-08-22): the schema answer (~8-60 entries) died at
+    # the engine's 4096-token default output cap — finish_reason=length cut
+    # the JSON mid-string, which no extraction can repair. Raise the cap for
+    # this answer-heavy task (env reaches the engine via CliConfig's
+    # SHANNON_MAX_TOKENS fallback; no runner change needed).
+    # Rerun (2026-08-23): with the cap raised the model derailed instead —
+    # finish_reason=stop at 408 tokens, four unclosed <think> tags, tool
+    # calls written as pseudo-syntax in prose. Countered with the explicit
+    # output-discipline lines in the prompt below.
+    env:
+      SHANNON_MAX_TOKENS: "16384"
+    schema: >-
+      {"type":"object","required":["tools"],"properties":{"tools":
+      {"type":"array","minItems":8,"items":{"type":"object",
+      "required":["name","file"],"properties":{"name":{"type":"string"},
+      "file":{"type":"string"},"read_only":{"type":"boolean"}}}}}}
+    prompt: >-
+      Build a catalog of every tool this engine can expose to a model.
+      Search crates/shannon-tools and crates/shannon-tool-interface for
+      implementations of the Tool trait. For each tool report its name, the
+      path of the file that defines it, and whether it is read-only. Use only
+      the Read, Grep, and Glob tools — the Bash tool is not available in this
+      environment. Output discipline: request files ONLY through tool calls
+      (never write tool-call syntax as text), and after gathering evidence
+      emit the final JSON object as the last thing in your response — no
+      prose and no open reasoning tags after it. Return JSON matching the
+      schema.
+    expect:
+      exit_code: 0

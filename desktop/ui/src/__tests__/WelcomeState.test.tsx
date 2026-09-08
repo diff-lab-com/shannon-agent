@@ -4,10 +4,14 @@ import { I18nProvider } from '@/i18n'
 import WelcomeState from '@/components/WelcomeState'
 
 describe('WelcomeState', () => {
-  it('renders hero heading and subtitle', () => {
+  it('renders hero heading and rotating subtitle', () => {
     render(<I18nProvider><WelcomeState onSelectPrompt={() => {}} /></I18nProvider>)
     expect(screen.getByText('What can I help with?')).toBeInTheDocument()
-    expect(screen.getByText(/Pick a starting point or type your own/)).toBeInTheDocument()
+    // The subtitle is now "Shannon can help you <TextLoop items={...}>".
+    // Under jsdom + query-aware matchMedia (prefers-reduced-motion: reduce
+    // returns matches: true) the loop is static on items[0] = "draft emails".
+    expect(screen.getByText('Shannon can help you')).toBeInTheDocument()
+    expect(screen.getByTestId('text-loop').textContent).toBe('draft emails')
   })
 
   it('renders exactly 4 template cards', () => {

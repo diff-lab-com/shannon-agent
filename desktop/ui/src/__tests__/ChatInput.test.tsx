@@ -4,13 +4,14 @@ import { I18nProvider } from '@/i18n'
 import ChatInput from '@/components/chat/ChatInput'
 import * as api from '@/lib/tauri-api'
 import { toast } from 'sonner'
+import type * as ReactRouterDom from 'react-router-dom'
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
 }))
 
 vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  const actual = await vi.importActual<typeof ReactRouterDom>('react-router-dom')
   return {
     ...actual,
     useOutletContext: () => ({ search: '' }),
@@ -41,14 +42,13 @@ function renderChatInput(props: Partial<React.ComponentProps<typeof ChatInput>> 
     value: '',
     onChange: vi.fn(),
     onSend: vi.fn(),
+    onExecuteSlash: vi.fn(),
     attachedFiles: [],
     onAttach: vi.fn(),
     onDetachAll: vi.fn(),
     disabled: false,
     isQuerying: false,
     onCancelQuery: vi.fn(),
-    currentSessionId: 'session-123',
-    sessionWorkingDir: '/home/user/projects/shannon',
     onOpenQuickFix: vi.fn(),
     onOpenEditor: vi.fn(),
   }
@@ -60,30 +60,20 @@ describe('ChatInput', () => {
     vi.clearAllMocks()
     mockRefreshConfig.mockReset()
     vi.mocked(api.configure).mockReset()
-    vi.mocked(api.setSessionWorkingDir).mockReset()
   })
 
-  it('renders the three control strip components', () => {
+  // U2: model switching moved to the global Header and the working-directory
+  // picker to the composer footer — neither control lives in the strip anymore.
+  it('does not render a model selector or working-directory chip (U2)', () => {
     renderChatInput()
-    expect(screen.getByLabelText('Change working directory')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Change working directory')).not.toBeInTheDocument()
+  })
+
+  it('renders the plan-mode and permission-mode controls', () => {
+    renderChatInput()
+    expect(screen.getByRole('button', { name: 'Toggle plan mode' })).toBeInTheDocument()
     expect(screen.getByLabelText('Permission mode')).toBeInTheDocument()
-    expect(screen.getByLabelText('Model')).toBeInTheDocument()
-  })
-
-  it('displays working directory basename', () => {
-    renderChatInput({ sessionWorkingDir: '/home/user/projects/my-project' })
-    expect(screen.getByText('my-project')).toBeInTheDocument()
-  })
-
-  it('shows "Working directory" when no WD is set', () => {
-    renderChatInput({ sessionWorkingDir: '' })
-    expect(screen.getByText('Working directory')).toBeInTheDocument()
-  })
-
-  it('disables WD button when no session', () => {
-    renderChatInput({ currentSessionId: null })
-    const wdButton = screen.getByLabelText('Change working directory')
-    expect(wdButton).toBeDisabled()
   })
 
   it('calls handleSend when Send button is clicked', async () => {
@@ -274,14 +264,6 @@ describe('ChatInput', () => {
     expect(hiddenInput).toBeInTheDocument()
   })
 
-  it('renders model selector with correct default value', () => {
-    renderChatInput()
-    const modelSelect = screen.getByLabelText('Model')
-    expect(modelSelect).toBeInTheDocument()
-    // Check the Model label text is visible
-    expect(screen.getByText('Model')).toBeInTheDocument()
-  })
-
   it('shows correct icons for querying states', () => {
     renderChatInput()
 
@@ -339,5 +321,68 @@ describe('ChatInput', () => {
         expect.objectContaining({ description: 'engine down' }),
       )
     })
+  })
+})
+
+describe('ChatInput — slash-command menu', () => {
+  it('opens the menu on "/" and runs the highlighted command on Enter', async () => {
+    const onChange = vi.fn()
+    const onExecuteSlash = vi.fn()
+    const { container } = renderChatInput({ value: '/', onChange, onExecuteSlash })
+    const menu = screen.getByRole('listbox', { name: 'Slash commands' })
+    expect(menu).toBeInTheDocument()
+
+    // Navigate down once (context -> cost) and run it with Enter.
+    fireEvent.keyDown(container.querySelector('textarea')!, { key: 'ArrowDown' })
+    fireEvent.keyDown(container.querySelector('textarea')!, { key: 'Enter' })
+    expect(onExecuteSlash).toHaveBeenCalledTimes(1)
+    expect(onExecuteSlash.mock.calls[0][0].name).toBe('cost')
+    expect(onChange).toHaveBeenCalledWith('')
+  })
+
+  it('filters by prefix and runs a clicked entry', () => {
+    const onChange = vi.fn()
+    const onExecuteSlash = vi.fn()
+    renderChatInput({ value: '/dif', onChange, onExecuteSlash })
+    fireEvent.mouseDown(screen.getByRole('option', { selected: true }))
+    expect(onExecuteSlash).toHaveBeenCalledTimes(1)
+    expect(onExecuteSlash.mock.calls[0][0].name).toBe('diff')
+  })
+
+  it('hides the menu on Escape and keeps the text', () => {
+    const onChange = vi.fn()
+    const onSend = vi.fn()
+    const view = renderChatInput({ value: '/', onChange, onSend })
+    fireEvent.keyDown(view.container.querySelector('textarea')!, { key: 'Escape' })
+    expect(screen.queryByRole('listbox', { name: 'Slash commands' })).toBeNull()
+    expect(onSend).not.toHaveBeenCalled()
+    // A new query re-opens the menu (the parent owns the value).
+    view.rerender(
+      <I18nProvider>
+        <ChatInput
+          value="/con"
+          onChange={onChange}
+          onSend={onSend}
+          onExecuteSlash={vi.fn()}
+          attachedFiles={[]}
+          onAttach={vi.fn()}
+          onDetachAll={vi.fn()}
+          disabled={false}
+          isQuerying={false}
+          onCancelQuery={vi.fn()}
+          onOpenQuickFix={vi.fn()}
+          onOpenEditor={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+    expect(screen.getByRole('listbox', { name: 'Slash commands' })).toBeInTheDocument()
+  })
+
+  it('sends unknown single tokens (e.g. pasted paths) as plain text', () => {
+    const onSend = vi.fn()
+    const { container } = renderChatInput({ value: '/usr/local/bin', onSend })
+    expect(screen.queryByRole('listbox', { name: 'Slash commands' })).toBeNull()
+    fireEvent.keyDown(container.querySelector('textarea')!, { key: 'Enter' })
+    expect(onSend).toHaveBeenCalledTimes(1)
   })
 })

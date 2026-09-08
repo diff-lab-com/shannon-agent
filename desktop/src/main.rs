@@ -12,6 +12,7 @@ fn main() {
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_config;
     use shannon_desktop::commands_connections;
+    use shannon_desktop::commands_feedback;
     use shannon_desktop::commands_files;
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_memory;
@@ -20,10 +21,14 @@ fn main() {
     use shannon_desktop::commands_onboarding;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
+    use shannon_desktop::commands_remote;
+    use shannon_desktop::commands_rewind;
     use shannon_desktop::commands_routine_templates;
     use shannon_desktop::commands_sessions;
     use shannon_desktop::commands_skill_candidates;
     use shannon_desktop::commands_skill_loop;
+    use shannon_desktop::commands_slash;
+    use shannon_desktop::commands_surface;
     use shannon_desktop::commands_tasks;
     use shannon_desktop::commands_usage;
     use shannon_desktop::commands_voice;
@@ -32,7 +37,13 @@ fn main() {
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
     use shannon_desktop::extensions_commands;
     use shannon_desktop::loopback_api;
+    use shannon_desktop::migration_commands;
+    use shannon_desktop::persona_pack_commands;
+    use shannon_desktop::preview_commands;
+    use shannon_desktop::session_window_commands;
     use shannon_desktop::skill_pattern_detection;
+    use shannon_desktop::terminal_commands;
+    use shannon_desktop::workspace_commands;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
         menu::{MenuBuilder, MenuItemBuilder},
@@ -77,7 +88,6 @@ fn main() {
             commands_chat::cancel_query,
             commands_chat::list_tools,
             commands_config::configure,
-            commands_config::switch_provider,
             commands_config::get_config,
             commands_config::detect_provider_from_env,
             commands_config::test_provider_connection,
@@ -91,6 +101,13 @@ fn main() {
             commands_connections::gateway_get_secret,
             commands_connections::gateway_has_secret,
             commands_connections::gateway_delete_secret,
+            commands_remote::remote_list_targets,
+            commands_remote::remote_discover_ssh_hosts,
+            commands_remote::remote_list_docker_containers,
+            commands_remote::remote_add_target,
+            commands_remote::remote_remove_target,
+            commands_remote::remote_set_default_target,
+            commands_remote::remote_test_target,
             commands_connections::gateway_read_config,
             commands_connections::gateway_write_config,
             commands_connections::gateway_supervisor_start,
@@ -99,6 +116,13 @@ fn main() {
             commands_connections::gateway_set_managed,
             // Q4-A — engine discovery probe result (Hosted vs External)
             commands_engine_discovery::engine_discovery_get_mode,
+            // ADR-0011 Phase B B3/B7 — surface identity + in-app CLI install
+            commands_surface::get_surface_info,
+            commands_surface::get_cli_install_status,
+            commands_surface::install_cli_to_path,
+            // C1① — semi-automatic update check (GitHub latest → open page)
+            commands_surface::check_app_update,
+            commands_surface::open_release_page,
             // P1.3 — mobile device pairing (Design D shared-file channel)
             commands_mobile_pairing::mobile_generate_pair_token,
             commands_mobile_pairing::mobile_list_paired_devices,
@@ -131,6 +155,8 @@ fn main() {
             commands_sessions::rename_session,
             commands_sessions::duplicate_session,
             commands_sessions::branch_session,
+            // §4.14 — Turn Timeline panel data source
+            commands_sessions::trace_timeline,
             // E2 skill loop — task evaluation and skill proposal management
             commands_skill_loop::skill_loop_evaluate,
             commands_skill_loop::skill_loop_generate,
@@ -145,6 +171,15 @@ fn main() {
             skill_pattern_detection::trigger_skill_pattern_detection,
             commands_permissions::request_permission,
             commands_permissions::respond_permission,
+            commands_slash::get_session_context_stats,
+            commands_slash::get_session_git_diff,
+            commands_slash::compact_session,
+            commands_usage::get_session_usage,
+            commands_rewind::list_checkpoints,
+            commands_rewind::rewind_session,
+            commands_feedback::record_message_feedback,
+            commands_feedback::list_message_feedback,
+            commands_feedback::list_feedback_sessions,
             commands_files::get_file_diff,
             commands_files::apply_diff,
             commands_files::save_text_file,
@@ -241,9 +276,41 @@ fn main() {
             shannon_desktop::scheduled_commands::toggle_triggered_routine,
             shannon_desktop::scheduled_commands::create_triggered_routine,
             shannon_desktop::scheduled_commands::get_opc_metrics,
+            // P0-3 — SQLite inbox (items + automation run history)
+            shannon_desktop::inbox_commands::list_inbox_items,
+            shannon_desktop::inbox_commands::update_inbox_item_status,
+            shannon_desktop::inbox_commands::get_inbox_stats,
+            shannon_desktop::inbox_commands::rerun_inbox_item,
+            shannon_desktop::inbox_commands::continue_inbox_item_session,
+            // P0-2 — desktop goal runner (run cards on the Tasks page)
+            shannon_desktop::goal_commands::start_goal_run,
+            shannon_desktop::goal_commands::list_goal_runs,
+            shannon_desktop::goal_commands::get_goal_run,
+            shannon_desktop::goal_commands::stop_goal_run,
+            shannon_desktop::goal_commands::pause_goal_run,
+            shannon_desktop::goal_commands::resume_goal_run,
+            shannon_desktop::goal_commands::update_goal_objective,
+            // P1-2 — desktop best-of-N batch runs (frozen contract)
+            shannon_desktop::batch_commands::start_batch_run,
+            shannon_desktop::batch_commands::list_batch_runs,
+            shannon_desktop::batch_commands::get_batch_branch_diff,
+            shannon_desktop::batch_commands::adopt_batch_branch,
+            shannon_desktop::batch_commands::discard_batch_run,
+            // P0-4 — cost observability: session budget + context
+            // breakdown + per-session usage aggregation
+            shannon_desktop::cost_commands::set_session_budget,
+            shannon_desktop::cost_commands::get_session_budget,
+            shannon_desktop::cost_commands::get_session_context_breakdown,
+            shannon_desktop::cost_commands::get_usage_by_session,
+            // P1-1 — session multi-window (frozen contract)
+            session_window_commands::open_session_window,
+            session_window_commands::list_session_windows,
+            session_window_commands::close_session_window,
+            session_window_commands::reveal_session_in_main,
             // Automation: hook-event catalog + custom permission profiles
             shannon_desktop::automation_commands::list_hook_events,
             shannon_desktop::automation_commands::list_permission_profiles,
+            shannon_desktop::automation_commands::activate_permission_profile,
             shannon_desktop::automation_commands::save_custom_profile,
             shannon_desktop::automation_commands::delete_custom_profile,
             shannon_desktop::lsp_commands::lsp_code_actions,
@@ -278,15 +345,90 @@ fn main() {
             commands_memory::delete_memory,
             commands_memory::search_memories,
             commands_memory::get_memory_stats,
+            commands_memory::get_memory_source,
+            commands_memory::get_memory_graph,
+            // P1-5 C-1 — dev-server preview (frozen contract) + log ring.
+            preview_commands::preview_detect,
+            preview_commands::preview_start,
+            preview_commands::preview_stop,
+            preview_commands::preview_status,
+            preview_commands::preview_capture,
+            preview_commands::preview_logs,
+            // P1-6 — migration wizard (Claude Code / ZCode → Shannon)
+            migration_commands::migration_scan,
+            migration_commands::migration_preview,
+            migration_commands::migration_apply,
+            // P2-2 — persona/profile pack (frozen contract).
+            persona_pack_commands::persona_pack_export,
+            persona_pack_commands::persona_pack_import,
+            persona_pack_commands::persona_pack_inspect,
+            // P1-5 D — integrated terminal (frozen contract).
+            terminal_commands::terminal_spawn,
+            terminal_commands::terminal_write,
+            terminal_commands::terminal_resize,
+            terminal_commands::terminal_kill,
+            terminal_commands::terminal_list,
+            // P1-5 C-2 — draggable panel workspace (frozen contract).
+            workspace_commands::workspace_get_layout,
+            workspace_commands::workspace_set_layout,
         ])
+        // P1-1 — session window lifecycle: a destroyed `session-*` window
+        // (titlebar close, close_session_window, OS teardown) drops its
+        // registry entry and refreshes the persisted restore list.
+        .on_window_event(|window, event| {
+            if !matches!(event, tauri::WindowEvent::Destroyed) {
+                return;
+            }
+            if window.label() == "main" {
+                // P1-5 C-1 — the preview dev-server child must never outlive
+                // the app: kill it before teardown (kill_on_drop on the
+                // managed AppState is the backstop if this doesn't run).
+                if let Some(state) = window.app_handle().try_state::<commands::AppState>() {
+                    preview_commands::shutdown_on_exit(&state);
+                    // P1-5 D — PTY process trees must never outlive the app.
+                    terminal_commands::shutdown_on_exit(&state);
+                }
+                // 主窗口关闭 = 退出应用 (existing semantic, P1-1): persist the
+                // open-session list for next-launch restore, then close the
+                // session windows so the app actually exits.
+                session_window_commands::handle_main_window_destroyed(window.app_handle());
+                return;
+            }
+            if window
+                .label()
+                .starts_with(session_window_commands::SESSION_WINDOW_PREFIX)
+            {
+                let label = window.label().to_string();
+                let app = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(state) = app.try_state::<commands::AppState>() {
+                        session_window_commands::cleanup_destroyed_window(&state, &label).await;
+                    }
+                });
+            }
+        })
         .setup(|app| {
             let mut state = commands::AppState::new();
             state.attach_notification_handler(app.handle().clone());
+            // P1-5 D — the terminal pump emits `terminal:output` through the
+            // AppHandle (attached as early as possible so a shell spawned
+            // before any command runs can already stream).
+            terminal_commands::attach_sink(&state, app.handle().clone());
             app.manage(state);
+
+            // P1-1 — reopen the session windows that were open at last
+            // shutdown. Silent on failure (stale ids are dropped from the
+            // persisted list); must run after `app.manage(state)`.
+            session_window_commands::restore_session_windows(app.handle());
 
             // E-1 方案 C — auto-start the gateway supervisor when `managed` is on.
             let app_handle = app.handle().clone();
             let state_ref: tauri::State<'_, commands::AppState> = app.state();
+            // The P2-5 scheduler below also needs an AppHandle and runs
+            // outside this `async move` block; clone once so the outer
+            // binding isn't consumed by the block_on future (rustc's
+            // `async move` capture moves the original by value).
+            let app_handle_for_block = app_handle.clone();
             tauri::async_runtime::block_on(async move {
                 // Q4-A — before hosting our own loopback engine API server,
                 // probe 127.0.0.1:33420. If another engine (typically the
@@ -309,7 +451,9 @@ fn main() {
                     // is reachable when the supervised gateway boots. The
                     // brief sleep lets the listener bind first; serve() then
                     // runs for the lifetime of the process on a detached task.
-                    loopback_api::spawn(state_ref.inner()).await;
+                    // P0-3 — the same listener also serves the HMAC-gated
+                    // POST /api/routines/:id/trigger endpoint.
+                    loopback_api::spawn(state_ref.inner(), app_handle_for_block.clone()).await;
                     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                 } else {
                     tracing::info!(
@@ -317,8 +461,24 @@ fn main() {
                          skipping loopback host"
                     );
                 }
-                commands_connections::bootstrap_gateway_supervisor(&state_ref, &app_handle).await;
+                commands_connections::bootstrap_gateway_supervisor(
+                    &state_ref,
+                    &app_handle_for_block,
+                )
+                .await;
             });
+
+            // P2-5 — routine scheduler: periodic due check (every 30s).
+            // Routines due inside their execution window (or without one)
+            // execute through the shared routine-run path; routines due
+            // outside their window are queued until the window opens.
+            {
+                let sched_state: tauri::State<'_, commands::AppState> = app.state();
+                shannon_desktop::scheduled_commands::spawn_scheduler(
+                    sched_state.inner(),
+                    app_handle.clone(),
+                );
+            }
 
             // Bundle A — Click-to-foreground: when a Shannon notification is
             // clicked, bring the main window to the foreground. On macOS and
@@ -336,6 +496,18 @@ fn main() {
                     let _ = webview_window.set_focus();
                 }
             });
+
+            // Surface CLI-written inter-agent messages in the desktop UI:
+            // watch ~/.shannon/agent-messages/ and emit the same event
+            // record_agent_message emits for in-app writes.
+            {
+                let state_ref: tauri::State<'_, commands::AppState> = app.state();
+                let watch_handle = app.handle().clone();
+                shannon_desktop::agent_message_watcher::spawn(
+                    state_ref.agent_message_history.base_dir(),
+                    watch_handle,
+                );
+            }
 
             // Register global shortcut handlers
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -390,8 +562,8 @@ fn main() {
             // Audit #25: the status line and tooltip previously hardcoded
             // `anthropic / claude-sonnet-4-6`. They are now built from the
             // current desktop config, and a background task refreshes the tray
-            // whenever the provider/model changes (covers both `configure` and
-            // `switch_provider`).
+            // whenever the provider/model changes (`configure('model')` and
+            // `set_active_provider` both emit `CONFIG_UPDATED`).
             let initial_label = tray_status_label(app.handle());
             let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
             let new_session_item =
@@ -455,9 +627,10 @@ fn main() {
                 .build(app)?;
 
             // Audit #25 / F3: refresh the tray menu + tooltip when the
-            // provider or model changes. Both `configure` and `switch_provider`
-            // emit `config-updated`, so we listen for that event and rebuild
-            // the menu on change. Replaces the prior 2-second polling loop.
+            // provider or model changes. Both `configure('model')` and
+            // `set_active_provider` emit `config-updated`, so we listen for
+            // that event and rebuild the menu on change. Replaces the prior
+            // 2-second polling loop.
             let refresh_handle = app.handle().clone();
             let _ = app.listen(
                 shannon_desktop::events::event_names::CONFIG_UPDATED,

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use super::adapter::{OpenaiStreamState, normalize_sse_event};
 use super::error::ApiError;
-use super::retry::retry_request;
+use super::retry::{RetryNotice, RetryObserver, retry_request_with_observer};
 use super::streaming::MessageStream;
 use super::types::*;
 use crate::testing::record_replay::{RecordedExchange, RecordedRequest, RecordedResponse};
@@ -71,6 +71,12 @@ fn generate_zhipu_jwt(api_key: &str) -> Option<String> {
     Some(format!("{message}.{sig}"))
 }
 
+/// Synchronous observer invoked with the exact serialized JSON body of every
+/// outgoing LLM request (session-log tee, plan §4.2). Receives the adapter's
+/// own wire product — the same value handed to the HTTP layer — so callers
+/// can log requests byte-faithfully without reconstructing them.
+pub type RequestCapture = std::sync::Arc<dyn Fn(&serde_json::Value) + Send + Sync>;
+
 /// LLM API client with multi-provider and streaming support
 #[derive(Clone)]
 pub struct LlmClient {
@@ -78,16 +84,50 @@ pub struct LlmClient {
     client: Client,
     /// Cached Ollama model capabilities (populated by check_ollama_capabilities).
     ollama_info: std::sync::Arc<std::sync::RwLock<Option<OllamaModelInfo>>>,
+    /// Optional request observer (see [`RequestCapture`]).
+    request_capture: Option<RequestCapture>,
+    /// Optional retry observer: fired before every retry sleep / mid-stream
+    /// reconnect so consumers can surface the pause (§ retry observability).
+    retry_observer: std::sync::Arc<std::sync::RwLock<Option<RetryObserver>>>,
 }
 
 impl LlmClient {
-    /// Build a reqwest client with the given timeout (seconds).
+    /// Connect-phase deadline (TCP + TLS handshake), shared by every
+    /// request. Chosen independently of `timeout_seconds`: connecting is
+    /// bounded by network RTT, not by how long a model may legitimately
+    /// keep a response stream open.
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Build the shared reqwest client.
+    ///
+    /// Deliberately sets **no total request timeout**: reqwest's client-level
+    /// `timeout` spans "start connecting until the response body has
+    /// finished", so any SSE stream running longer than the budget was
+    /// hard-killed mid-generation (review 2026-08-28 PERF-2) and then paid
+    /// for again by a full-message reconnect. Instead the timeout decomposes
+    /// into:
+    ///
+    /// - [`Self::CONNECT_TIMEOUT`] bounds the connect/handshake phase;
+    /// - `read_timeout` bounds the gap between two body reads (idle
+    ///   timeout). `timeout_seconds` is reused as that idle bound — a
+    ///   connection that produced nothing for a whole legacy budget is
+    ///   stalled by any definition, while a stream that keeps producing
+    ///   chunks is never cut no matter how long the total transfer runs.
+    ///   NOTE: this is a per-*read* bound — SSE keepalive bytes (comments,
+    ///   blank lines, pings) keep resetting it, so a response that is
+    ///   byte-alive but content-dead is invisible here. That case is
+    ///   covered by the content-level stream idle watchdog
+    ///   (`SHANNON_STREAM_IDLE_SECS`, see `streaming.rs`), off by default;
+    /// - non-streaming requests re-add a total deadline per-request via
+    ///   `RequestBuilder::timeout` (see `send_message`), preserving their
+    ///   previous end-to-end semantics exactly.
     ///
     /// Falls back to a default client if TLS initialization fails,
     /// logging the error instead of panicking.
     fn build_client(timeout_secs: u64) -> Client {
         Client::builder()
-            .timeout(Duration::from_secs(timeout_secs))
+            .connect_timeout(Self::CONNECT_TIMEOUT)
+            .read_timeout(Duration::from_secs(timeout_secs.max(1)))
             .build()
             .unwrap_or_else(|e| {
                 tracing::error!("Failed to build HTTP client with timeout ({timeout_secs}s): {e}; falling back to default");
@@ -103,19 +143,24 @@ impl LlmClient {
             config,
             client,
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            request_capture: None,
+            retry_observer: Default::default(),
         }
     }
 
     /// Create a new LLM API client, returning an error if client construction fails.
     pub fn try_new(config: LlmClientConfig) -> Result<Self, ApiError> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(config.timeout_seconds))
+            .connect_timeout(Self::CONNECT_TIMEOUT)
+            .read_timeout(Duration::from_secs(config.timeout_seconds.max(1)))
             .build()
             .map_err(|e| ApiError::InvalidResponse(format!("Failed to create HTTP client: {e}")))?;
         Ok(Self {
             config,
             client,
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            request_capture: None,
+            retry_observer: Default::default(),
         })
     }
 
@@ -147,7 +192,77 @@ impl LlmClient {
             config,
             client,
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            request_capture: None,
+            retry_observer: Default::default(),
         }
+    }
+
+    /// Attach a retry observer: fired before every retry sleep (rate-limit
+    /// backoff, read-timeout retry) and before mid-stream reconnects, so
+    /// consumers can surface the pause instead of watching a silent stall.
+    /// See [`RetryNotice`](super::retry::RetryNotice).
+    pub fn set_retry_observer(&self, observer: Option<RetryObserver>) {
+        *self
+            .retry_observer
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = observer;
+    }
+
+    /// Builder variant of [`Self::set_retry_observer`]; propagated to
+    /// internal fallback / reconnect client clones.
+    pub fn with_retry_observer(self, observer: Option<RetryObserver>) -> Self {
+        self.set_retry_observer(observer);
+        self
+    }
+
+    fn retry_observer_handle(&self) -> Option<RetryObserver> {
+        self.retry_observer
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Fire the retry observer (if attached).
+    pub(crate) fn notify_retry(&self, notice: &RetryNotice) {
+        if let Some(observer) = self
+            .retry_observer
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            observer(notice);
+        }
+    }
+
+    /// Attach a request observer (see [`RequestCapture`]). Consumer:
+    /// `shannon-core`'s session-log tee records every request envelope.
+    pub fn with_request_capture(mut self, capture: RequestCapture) -> Self {
+        self.request_capture = Some(capture);
+        self
+    }
+
+    /// The current request observer, if any (for propagating to internal
+    /// fallback / reconnect client clones).
+    pub(crate) fn request_capture_handle(&self) -> Option<RequestCapture> {
+        self.request_capture.clone()
+    }
+
+    /// Fire the observer (if attached) with a serialized request body.
+    fn capture_request(&self, body: &serde_json::Value) {
+        if let Some(capture) = &self.request_capture {
+            capture(body);
+        }
+    }
+
+    /// T12 Option C: post-process a serialized Anthropic request body —
+    /// drop tools superseded by the browser toolset and append the toolset
+    /// entry. No-op for non-Anthropic providers, when the opt-in flag is
+    /// off, or on unsupported models.
+    fn apply_anthropic_toolsets(&self, body: &mut serde_json::Value) {
+        let enabled = self.config.provider == LlmProvider::Anthropic
+            && self.config.enable_anthropic_toolsets
+            && super::toolsets::model_supports_toolsets(&self.config.model);
+        super::toolsets::apply_browser_toolset(body, enabled);
     }
 
     /// Build authentication headers for the configured provider
@@ -163,7 +278,15 @@ impl LlmClient {
                     ));
                 }
                 // Inject model-declared beta headers (e.g. 1M context unlock).
-                let betas = beta_headers_for(&self.config.model);
+                let mut betas: Vec<&'static str> = beta_headers_for(&self.config.model).to_vec();
+                // T12: the browser toolset family requires the umbrella
+                // computer-use beta; only added when toolsets are enabled.
+                if self.config.enable_anthropic_toolsets
+                    && super::toolsets::model_supports_toolsets(&self.config.model)
+                    && !betas.contains(&super::toolsets::COMPUTER_USE_BETA)
+                {
+                    betas.push(super::toolsets::COMPUTER_USE_BETA);
+                }
                 if !betas.is_empty() {
                     headers.push(("anthropic-beta".to_string(), betas.join(",")));
                 }
@@ -186,6 +309,14 @@ impl LlmClient {
             | LlmProvider::DashScope
             | LlmProvider::Cloudflare
             | LlmProvider::Replicate => {
+                headers.push((
+                    "Authorization".to_string(),
+                    format!("Bearer {}", self.config.api_key),
+                ));
+            }
+            LlmProvider::ZhipuCodingPlan => {
+                // Coding Plan quota accepts a plain Bearer API key (verified
+                // against /api/coding/paas/v4 — JWT not required).
                 headers.push((
                     "Authorization".to_string(),
                     format!("Bearer {}", self.config.api_key),
@@ -405,17 +536,21 @@ impl LlmClient {
             reasoning_effort: self.config.reasoning_effort,
         };
 
-        let serialized = super::adapter::serialize_request_with_base_url(
+        let mut serialized = super::adapter::serialize_request_with_base_url(
             &request_body,
             &self.config.provider,
             &self.config.base_url,
         );
+        self.apply_anthropic_toolsets(&mut serialized);
 
         // ── Replay mode: return saved fixture ──
         if let Some(stream) = self.try_replay(&serialized, &self.config.provider) {
             tracing::info!("Replaying recorded fixture for this request");
             return Ok(stream);
         }
+
+        // Session-log tee: observe the exact wire body of the real request.
+        self.capture_request(&serialized);
 
         // ── Real API call ──
         let url = self.endpoint_url();
@@ -490,10 +625,16 @@ impl LlmClient {
             let messages_clone = request_body.messages.clone();
             let tools_clone = request_body.tools.clone();
             let system_clone = request_body.system.clone();
+            let reconnect_client = Self::new(self.config.clone());
+            let reconnect_client = match self.request_capture_handle() {
+                Some(capture) => reconnect_client.with_request_capture(capture),
+                None => reconnect_client,
+            }
+            .with_retry_observer(self.retry_observer_handle());
             Ok(super::streaming::sse_stream_from_response_resumable(
                 response,
                 self.config.provider.clone(),
-                Self::new(self.config.clone()),
+                reconnect_client,
                 messages_clone,
                 tools_clone,
                 system_clone,
@@ -547,11 +688,14 @@ impl LlmClient {
             request = request.header(k.as_str(), v.as_str());
         }
 
-        let body = super::adapter::serialize_request_with_base_url(
+        let mut body = super::adapter::serialize_request_with_base_url(
             &request_body,
             &self.config.provider,
             &self.config.base_url,
         );
+        self.apply_anthropic_toolsets(&mut body);
+        // Session-log tee: observe the exact wire body of the real request.
+        self.capture_request(&body);
         request = request.json(&body);
 
         let response = request.send().await.map_err(|e| match e.status() {
@@ -644,15 +788,20 @@ impl LlmClient {
         let url = self.endpoint_url();
         let headers = self.auth_headers();
 
+        let mut serialized = super::adapter::serialize_request_with_base_url(
+            &request_body,
+            &self.config.provider,
+            &self.config.base_url,
+        );
+        self.apply_anthropic_toolsets(&mut serialized);
+        // Session-log tee: observe the exact wire body of the real request.
+        self.capture_request(&serialized);
+
         let mut request = self
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&super::adapter::serialize_request_with_base_url(
-                &request_body,
-                &self.config.provider,
-                &self.config.base_url,
-            ));
+            .json(&serialized);
 
         for (key, value) in headers {
             request = request.header(&key, &value);
@@ -729,19 +878,29 @@ impl LlmClient {
         let url = self.endpoint_url();
         let headers = self.auth_headers();
 
+        let mut serialized = super::adapter::serialize_request_with_base_url(
+            &request_body,
+            &self.config.provider,
+            &self.config.base_url,
+        );
+        self.apply_anthropic_toolsets(&mut serialized);
+        // Session-log tee: observe the exact wire body of the real request.
+        self.capture_request(&serialized);
+
         let mut request = self
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&super::adapter::serialize_request_with_base_url(
-                &request_body,
-                &self.config.provider,
-                &self.config.base_url,
-            ));
+            .json(&serialized);
 
         for (key, value) in headers {
             request = request.header(&key, &value);
         }
+
+        // Non-streaming: keep the total request deadline the shared client
+        // used to provide. The full response body must arrive within
+        // `timeout_seconds` — streaming paths get no such cap (idle-only).
+        request = request.timeout(Duration::from_secs(self.config.timeout_seconds));
 
         let response = request.send().await.map_err(|e| match e.status() {
             Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
@@ -914,7 +1073,8 @@ impl LlmClient {
         system: Option<String>,
     ) -> Result<Vec<ContentBlock>, ApiError> {
         let retry_config = &self.config.retry_config;
-        let result = retry_request(retry_config, || {
+        let retry_observer = self.retry_observer_handle();
+        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
             self.send_message(messages.clone(), tools.clone(), system.clone())
         })
         .await;
@@ -939,8 +1099,15 @@ impl LlmClient {
                     fallback_config.base_url = fallback_base_url.clone();
                     // Inherit retry config
                     let fallback_retry = fallback_config.retry_config.clone();
-                    let fallback_client = Self::new(fallback_config);
-                    retry_request(&fallback_retry, || {
+                    // Keep the request observer attached across failover so
+                    // the session log records fallback envelopes too.
+                    let fallback_client = match self.request_capture_handle() {
+                        Some(capture) => Self::new(fallback_config).with_request_capture(capture),
+                        None => Self::new(fallback_config),
+                    }
+                    .with_retry_observer(self.retry_observer_handle());
+                    let fallback_observer = fallback_client.retry_observer_handle();
+                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
                         fallback_client.send_message(
                             messages.clone(),
                             tools.clone(),
@@ -963,7 +1130,8 @@ impl LlmClient {
         system: Option<String>,
     ) -> Result<MessageStream, ApiError> {
         let retry_config = &self.config.retry_config;
-        let result = retry_request(retry_config, || {
+        let retry_observer = self.retry_observer_handle();
+        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
             self.send_message_stream(messages.clone(), tools.clone(), system.clone())
         })
         .await;
@@ -986,8 +1154,15 @@ impl LlmClient {
                     fallback_config.provider = fallback_provider.clone();
                     fallback_config.base_url = fallback_base_url.clone();
                     let fallback_retry = fallback_config.retry_config.clone();
-                    let fallback_client = Self::new(fallback_config);
-                    retry_request(&fallback_retry, || {
+                    // Keep the request observer attached across failover so
+                    // the session log records fallback envelopes too.
+                    let fallback_client = match self.request_capture_handle() {
+                        Some(capture) => Self::new(fallback_config).with_request_capture(capture),
+                        None => Self::new(fallback_config),
+                    }
+                    .with_retry_observer(self.retry_observer_handle());
+                    let fallback_observer = fallback_client.retry_observer_handle();
+                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
                         fallback_client.send_message_stream(
                             messages.clone(),
                             tools.clone(),
@@ -1010,7 +1185,8 @@ impl LlmClient {
         system_blocks: Vec<super::types::SystemContentBlock>,
     ) -> Result<MessageStream, ApiError> {
         let retry_config = &self.config.retry_config;
-        let result = retry_request(retry_config, || {
+        let retry_observer = self.retry_observer_handle();
+        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
             self.send_message_stream_structured(
                 messages.clone(),
                 tools.clone(),
@@ -1037,8 +1213,15 @@ impl LlmClient {
                     fallback_config.provider = fallback_provider.clone();
                     fallback_config.base_url = fallback_base_url.clone();
                     let fallback_retry = fallback_config.retry_config.clone();
-                    let fallback_client = Self::new(fallback_config);
-                    retry_request(&fallback_retry, || {
+                    // Keep the request observer attached across failover so
+                    // the session log records fallback envelopes too.
+                    let fallback_client = match self.request_capture_handle() {
+                        Some(capture) => Self::new(fallback_config).with_request_capture(capture),
+                        None => Self::new(fallback_config),
+                    }
+                    .with_retry_observer(self.retry_observer_handle());
+                    let fallback_observer = fallback_client.retry_observer_handle();
+                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
                         fallback_client.send_message_stream_structured(
                             messages.clone(),
                             tools.clone(),
@@ -1161,6 +1344,7 @@ mod tests {
             fallback_base_url: None,
             retry_config: Default::default(),
             reasoning_effort: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
         }
     }
 
@@ -1180,7 +1364,185 @@ mod tests {
             fallback_base_url: None,
             retry_config: Default::default(),
             reasoning_effort: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
         }
+    }
+
+    // ── Stream timeouts (review 2026-08-28 PERF-2) ──────────────────────
+
+    const STREAM_TIMEOUT_SECS: u64 = 2;
+
+    /// Streaming config against the mock server: `timeout_seconds` doubles
+    /// as the read-idle bound (see `build_client`); reconnects are disabled
+    /// so the timeout behavior is observed in isolation.
+    fn slow_stream_config(base_url: String) -> LlmClientConfig {
+        LlmClientConfig {
+            provider: LlmProvider::Anthropic,
+            api_key: "test-key".to_string(),
+            model: "claude-3-5-sonnet-20241022".to_string(),
+            base_url,
+            max_tokens: 64,
+            api_version: "2023-06-01".to_string(),
+            timeout_seconds: STREAM_TIMEOUT_SECS,
+            max_stream_reconnects: 0,
+            extra_headers: Default::default(),
+            budget_tokens: None,
+            fallback_provider: None,
+            fallback_base_url: None,
+            retry_config: Default::default(),
+            reasoning_effort: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
+        }
+    }
+
+    fn user_message() -> Message {
+        Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("hi".to_string()),
+        }
+    }
+
+    /// A slow-drip SSE stream — chunk gaps (700ms) far below the idle
+    /// budget (2s) but a total transfer (3.5s) far above the legacy
+    /// client-level total timeout (2s) — must run to completion. Under the
+    /// pre-PERF-2 build this stream was hard-killed at 2s mid-generation
+    /// and then replayed from scratch by the reconnect path.
+    #[tokio::test]
+    async fn slow_stream_survives_past_legacy_total_timeout() {
+        use futures::StreamExt;
+        use std::io::Write as _;
+        use std::sync::Arc;
+        use std::time::Instant;
+
+        let mut server = mockito::Server::new_async().await;
+        let pieces: Vec<String> = vec![
+            format!(
+                "data: {}\n\n",
+                r#"{"type":"message_start","message":{"id":"msg_slow","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}"#
+            ),
+            format!(
+                "data: {}\n\n",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}"#
+            ),
+            format!(
+                "data: {}\n\n",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"b"}}"#
+            ),
+            format!(
+                "data: {}\n\n",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"c"}}"#
+            ),
+            "data: [DONE]\n\n".to_string(),
+        ];
+        let drip = Arc::new(pieces);
+        let drip_for_handler = Arc::clone(&drip);
+        let mock = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |w| {
+                for piece in drip_for_handler.iter() {
+                    w.write_all(piece.as_bytes())?;
+                    w.flush()?;
+                    std::thread::sleep(std::time::Duration::from_millis(700));
+                }
+                Ok(())
+            })
+            .create_async()
+            .await;
+
+        let client = LlmClient::new(slow_stream_config(server.url()));
+        let started = Instant::now();
+        let mut stream = client
+            .send_message_stream(vec![user_message()], None, None)
+            .await
+            .expect("stream must open");
+
+        let mut text = String::new();
+        let mut saw_stop = false;
+        while let Some(event) = stream.next().await {
+            match event.expect("chunks must keep flowing; no timeout may fire") {
+                StreamEvent::ContentBlockDelta {
+                    delta: ContentDelta::TextDelta { text: t },
+                    ..
+                } => text.push_str(&t),
+                StreamEvent::MessageStop => saw_stop = true,
+                _ => {}
+            }
+        }
+        let elapsed = started.elapsed();
+
+        mock.assert();
+        assert_eq!(text, "abc", "every dripped delta must be delivered");
+        assert!(saw_stop, "stream must end via MessageStop, not a cut");
+        assert!(
+            elapsed >= std::time::Duration::from_millis(2_500),
+            "transfer ran {elapsed:?}; the legacy 2s total timeout is gone"
+        );
+    }
+
+    /// The inverse contract: a genuinely stalled stream (no bytes for
+    /// longer than the idle bound) is still cut — removing the total
+    /// timeout must not mean removing all timeouts.
+    #[tokio::test]
+    async fn stalled_stream_is_cut_by_read_idle_timeout() {
+        use futures::StreamExt;
+        use std::io::Write as _;
+        use std::time::{Duration, Instant};
+
+        let mut server = mockito::Server::new_async().await;
+        let first = format!(
+            "data: {}\n\n",
+            r#"{"type":"message_start","message":{"id":"msg_stall","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}"#
+        );
+        let mock = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |w| {
+                w.write_all(first.as_bytes())?;
+                w.flush()?;
+                // Stall well past the 2s idle budget before sending more.
+                std::thread::sleep(Duration::from_secs(4));
+                let _ = w.write_all(b"data: [DONE]\n\n");
+                let _ = w.flush();
+                Ok(())
+            })
+            .create_async()
+            .await;
+
+        let client = LlmClient::new(slow_stream_config(server.url()));
+        let started = Instant::now();
+        let mut stream = client
+            .send_message_stream(vec![user_message()], None, None)
+            .await
+            .expect("stream must open");
+
+        // First chunk arrives, then the idle cut.
+        let mut first_ok = false;
+        let mut cut = None;
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(_) => first_ok = true,
+                Err(e) => {
+                    cut = Some(e);
+                    break;
+                }
+            }
+        }
+        let elapsed = started.elapsed();
+
+        assert!(first_ok, "the pre-stall chunk must be delivered");
+        assert!(cut.is_some(), "the stalled stream must surface an error");
+        assert!(
+            elapsed >= Duration::from_millis(1_500),
+            "cut at {elapsed:?} — must not fire before the stall"
+        );
+        assert!(
+            elapsed < Duration::from_millis(3_900),
+            "cut at {elapsed:?} — the idle timeout (2s), not the server's 4s close, ended it"
+        );
+        mock.assert(); // note: cut client leaves body unread; mockito tolerates
     }
 
     // ── Construction ────────────────────────────────────────────────────
@@ -1340,6 +1702,85 @@ mod tests {
     }
 
     #[test]
+    fn test_toolset_beta_header_added_when_enabled() {
+        let mut cfg = test_config();
+        cfg.model = "claude-opus-4-5".to_string();
+        cfg.enable_anthropic_toolsets = true;
+        let client = LlmClient::new(cfg);
+        let beta = client
+            .auth_headers()
+            .into_iter()
+            .find(|(k, _)| k == "anthropic-beta")
+            .map(|(_, v)| v)
+            .unwrap_or_default();
+        assert!(
+            beta.contains(crate::api::toolsets::COMPUTER_USE_BETA),
+            "expected computer-use beta in \"{beta}\""
+        );
+    }
+
+    #[test]
+    fn test_toolset_beta_header_absent_when_disabled() {
+        let mut cfg = test_config();
+        cfg.model = "claude-opus-4-5".to_string();
+        // enable_anthropic_toolsets stays false (or env unset in tests)
+        cfg.enable_anthropic_toolsets = false;
+        let client = LlmClient::new(cfg);
+        let beta = client
+            .auth_headers()
+            .into_iter()
+            .find(|(k, _)| k == "anthropic-beta")
+            .map(|(_, v)| v)
+            .unwrap_or_default();
+        assert!(
+            !beta.contains(crate::api::toolsets::COMPUTER_USE_BETA),
+            "beta must not appear without the opt-in flag, got \"{beta}\""
+        );
+    }
+
+    #[test]
+    fn test_apply_anthropic_toolsets_injects_and_prunes() {
+        let mut cfg = test_config();
+        cfg.provider = LlmProvider::Anthropic;
+        cfg.model = "claude-opus-4-5".to_string();
+        cfg.enable_anthropic_toolsets = true;
+        let client = LlmClient::new(cfg);
+        let mut body = serde_json::json!({
+            "tools": [
+                {"name": "Read", "description": "r", "input_schema": {}},
+                {"name": "computer", "description": "c", "input_schema": {}},
+                {"name": "mcp__playwright__browser_navigate", "description": "p", "input_schema": {}}
+            ]
+        });
+        client.apply_anthropic_toolsets(&mut body);
+        let tools = body["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t.get("name").and_then(|n| n.as_str()))
+            .collect();
+        assert_eq!(names, vec!["Read"]);
+        assert_eq!(
+            tools.last().unwrap()["type"],
+            serde_json::json!(crate::api::toolsets::BROWSER_TOOLSET_TYPE)
+        );
+    }
+
+    #[test]
+    fn test_apply_anthropic_toolsets_noop_for_openai() {
+        let mut cfg = test_config();
+        cfg.provider = LlmProvider::OpenAI;
+        cfg.model = "gpt-5".to_string();
+        cfg.enable_anthropic_toolsets = true; // even with the flag on
+        let client = LlmClient::new(cfg);
+        let mut body = serde_json::json!({
+            "tools": [{"name": "computer", "description": "c", "input_schema": {}}]
+        });
+        client.apply_anthropic_toolsets(&mut body);
+        // Non-Anthropic providers must be untouched (Option C guarantee).
+        assert_eq!(body["tools"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
     fn test_auth_headers_openai() {
         let mut cfg = test_config();
         cfg.provider = LlmProvider::OpenAI;
@@ -1479,6 +1920,7 @@ mod tests {
             fallback_base_url: None,
             retry_config: Default::default(),
             reasoning_effort: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
         };
         let client = LlmClient::new(config);
         let headers = client.auth_headers();

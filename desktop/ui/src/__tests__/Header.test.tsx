@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import { Header } from '@/components/Header'
 import * as api from '@/lib/tauri-api'
@@ -13,10 +14,30 @@ const mockCtx = vi.hoisted(() => ({
   ],
   permissionRequest: null as any,
   respondPermission: vi.fn(),
+  refreshConfig: vi.fn(),
+  refreshStatus: vi.fn(),
+  config: { active_permission_profile: 'balanced', approval_mode: 'suggest', sandbox: { mode: 'off' } } as any,
+}))
+
+// U2: Header reads the session slice (title on /chat) and the chat slice
+// (ContextPanel toggle state, owned by AppProvider).
+const mockSessionCtx = vi.hoisted(() => ({
+  sessions: [] as any[],
+  currentSessionId: null as string | null,
+}))
+const mockChatCtx = vi.hoisted(() => ({
+  contextPanelOpen: false,
+  toggleContextPanel: vi.fn(),
 }))
 
 vi.mock('@/context/CatalogContext', () => ({
   useCatalog: () => mockCtx,
+}))
+vi.mock('@/context/SessionContext', () => ({
+  useSessions: () => mockSessionCtx,
+}))
+vi.mock('@/context/ChatContext', () => ({
+  useChat: () => mockChatCtx,
 }))
 
 function wrap(ui: React.ReactElement, { route = '/chat' } = {}) {
@@ -29,6 +50,11 @@ function wrap(ui: React.ReactElement, { route = '/chat' } = {}) {
   )
 }
 
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="header-location">{location.pathname}</div>
+}
+
 describe('Header component', () => {
   beforeEach(() => {
     mockCtx.status = { model: 'claude-sonnet-4-6', provider: 'anthropic', querying: false }
@@ -38,11 +64,64 @@ describe('Header component', () => {
     ]
     mockCtx.permissionRequest = null
     mockCtx.respondPermission = vi.fn()
+    mockCtx.refreshConfig = vi.fn()
+    mockCtx.refreshStatus = vi.fn()
+    mockCtx.config = { active_permission_profile: 'balanced', approval_mode: 'suggest', sandbox: { mode: 'off' } }
+    mockSessionCtx.sessions = []
+    mockSessionCtx.currentSessionId = null
+    mockChatCtx.contextPanelOpen = false
+    mockChatCtx.toggleContextPanel = vi.fn()
   })
 
   it('renders page title based on route', () => {
     render(wrap(<Header />, { route: '/chat' }))
     expect(screen.getByText('Chat')).toBeInTheDocument()
+  })
+
+  // U2 — the global Header carries the current session's title on /chat
+  // (replaces the retired per-page ChatHeader).
+  it('shows the current session title on /chat', () => {
+    mockSessionCtx.sessions = [
+      { id: 's1', title: 'Q3 roadmap brainstorm', created_at: 1, message_count: 0 },
+    ]
+    mockSessionCtx.currentSessionId = 's1'
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByText('Q3 roadmap brainstorm')).toBeInTheDocument()
+    expect(screen.queryByText('Chat')).not.toBeInTheDocument()
+  })
+
+  it('keeps the fixed Chat title when no session is active', () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByText('Chat')).toBeInTheDocument()
+  })
+
+  it('keeps TITLE_MAP titles on non-chat pages even with a session active', () => {
+    mockSessionCtx.sessions = [
+      { id: 's1', title: 'Q3 roadmap brainstorm', created_at: 1, message_count: 0 },
+    ]
+    mockSessionCtx.currentSessionId = 's1'
+    render(wrap(<Header />, { route: '/tasks' }))
+    expect(screen.getByText('Scheduled')).toBeInTheDocument()
+  })
+
+  // U2 — ContextPanel toggle moved here from the retired ChatHeader.
+  it('renders the ContextPanel toggle on /chat and wires it to the chat slice', () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    const toggle = screen.getByRole('button', { name: 'Toggle context panel' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(toggle)
+    expect(mockChatCtx.toggleContextPanel).toHaveBeenCalledTimes(1)
+  })
+
+  it('reflects open state on the ContextPanel toggle', () => {
+    mockChatCtx.contextPanelOpen = true
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByRole('button', { name: 'Toggle context panel' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('does not render the ContextPanel toggle on other pages', () => {
+    render(wrap(<Header />, { route: '/tasks' }))
+    expect(screen.queryByRole('button', { name: 'Toggle context panel' })).not.toBeInTheDocument()
   })
 
   it('renders model selector with current model name', () => {
@@ -59,6 +138,8 @@ describe('Header component', () => {
     })
   })
 
+  // U2 — Header absorbed ChatInput's dual-write: it configures the model
+  // NAME plus the model's provider (not just the catalog id).
   it('switches model when option is clicked', async () => {
     const api = await import('@/lib/tauri-api')
     render(wrap(<Header />, { route: '/chat' }))
@@ -67,7 +148,10 @@ describe('Header component', () => {
       expect(screen.getByText('GPT-4o')).toBeInTheDocument()
     })
     fireEvent.click(screen.getByText('GPT-4o'))
-    expect(api.switchProvider).toHaveBeenCalled()
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'GPT-4o' })
+      expect(api.configure).toHaveBeenCalledWith({ key: 'provider', value: 'openai' })
+    })
   })
 
   it('renders OPC title on /opc route', () => {
@@ -94,6 +178,46 @@ describe('Header component', () => {
     expect(screen.getByText('Deny')).toBeInTheDocument()
   })
 
+  // U3 — four distinguishable risk tiers: critical=error, high=secondary,
+  // medium=tertiary (was wrongly secondary), low=tertiary. Localized text,
+  // announced via aria-label.
+  describe.each(['critical', 'high', 'medium', 'low'] as const)('risk tier %s', (risk) => {
+    const label = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' }[risk]
+    const tier = { critical: 'text-error', high: 'text-secondary', medium: 'text-tertiary', low: 'text-tertiary' }[risk]
+
+    it(`renders a localized "${label}" badge in the ${tier} tier`, () => {
+      mockCtx.permissionRequest = { request_id: 'p1', tool: 'bash', risk, input: null }
+      render(wrap(<Header />, { route: '/chat' }))
+      const badge = screen.getByText(label)
+      expect(badge).toBeInTheDocument()
+      expect(badge.className).toContain(tier)
+      expect(badge).toHaveAttribute('aria-label', `Risk level: ${label}`)
+    })
+  })
+
+  it('no longer renders the dead "Always allow" checkbox (U3)', () => {
+    mockCtx.permissionRequest = { request_id: 'p1', tool: 'bash', risk: 'low', input: null }
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(screen.queryByText('Always allow')).not.toBeInTheDocument()
+  })
+
+  it('focuses Deny so Enter is the safe default and denies the request', async () => {
+    mockCtx.permissionRequest = { request_id: 'p9', tool: 'bash', risk: 'high', input: null }
+    render(wrap(<Header />, { route: '/chat' }))
+    const deny = screen.getByRole('button', { name: 'Deny' })
+    expect(deny).toHaveFocus()
+    await userEvent.setup().keyboard('{Enter}')
+    expect(mockCtx.respondPermission).toHaveBeenCalledWith('p9', false)
+  })
+
+  it('clicking Allow Once approves the request', () => {
+    mockCtx.permissionRequest = { request_id: 'p9', tool: 'bash', risk: 'high', input: null }
+    render(wrap(<Header />, { route: '/chat' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Allow Once' }))
+    expect(mockCtx.respondPermission).toHaveBeenCalledWith('p9', true)
+  })
+
   it('renders Chat title on /chat route (legacy /goals redirects)', () => {
     render(wrap(<Header />, { route: '/chat' }))
     expect(screen.getByText('Chat')).toBeInTheDocument()
@@ -118,6 +242,42 @@ describe('Header component', () => {
     render(wrap(<Header />, { route: '/chat' }))
     expect(screen.getByLabelText('Notifications')).toBeInTheDocument()
     expect(screen.getByLabelText('Help')).toBeInTheDocument()
+  })
+
+  // U6: the bell tooltip says where it leads — the approval dialog when
+  // pending, Triage otherwise.
+  it('bell title names the Triage inbox when nothing is pending', () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByLabelText('Notifications')).toHaveAttribute(
+      'title', 'View notifications (Triage inbox)'
+    )
+  })
+
+  it('bell title names the approval dialog when skills are pending', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.listSkillCandidates).mockResolvedValue([
+      { id: 'c1', proposed_name: 'X', proposed_trigger: 'Y', occurrence_count: 1, procedure: [], last_seen_at: '', originating_sessions: [] },
+    ])
+    render(wrap(<Header />, { route: '/chat' }))
+    const bell = await screen.findByLabelText('Notifications')
+    await waitFor(() => {
+      expect(bell).toHaveAttribute('title', expect.stringContaining('opens the approval dialog'))
+    })
+  })
+
+  // U6: the avatar is a button that opens Settings (was a dead icon).
+  it('avatar button navigates to /settings', () => {
+    render(
+      wrap(
+        <>
+          <Header />
+          <LocationProbe />
+        </>,
+        { route: '/chat' }
+      )
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings' }))
+    expect(screen.getByTestId('header-location')).toHaveTextContent('/settings')
   })
 })
 
@@ -153,5 +313,89 @@ describe('Header — skill candidate badge', () => {
     await waitFor(() => { expect(screen.getByLabelText('Notifications').querySelector('.bg-error')).toBeTruthy() })
     fireEvent.click(screen.getByLabelText('Notifications'))
     await waitFor(() => { expect(screen.getByText('Save as skill?')).toBeInTheDocument() })
+  })
+
+})
+
+// ── P1-3: execution-mode switcher + approval-dialog decision reason ──
+describe('Header — P1-3 execution mode + decision reason', () => {
+  beforeEach(() => {
+    // Top-level describe — the outer beforeEach does not run here, so
+    // re-seed the catalog config slice per test.
+    mockCtx.config = { active_permission_profile: 'balanced', approval_mode: 'suggest', sandbox: { mode: 'off' } }
+    // The skill-candidate describe resets this mock; the Header effect
+    // always calls it, so give it a benign resolved value here.
+    vi.mocked(api.listSkillCandidates).mockResolvedValue([])
+  })
+
+  it('renders the execution-mode switcher on /chat with the current tier', () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' })).toBeInTheDocument()
+  })
+
+  it('does not render the execution-mode switcher on other pages', () => {
+    render(wrap(<Header />, { route: '/tasks' }))
+    expect(screen.queryByRole('button', { name: /Execution mode:/ })).not.toBeInTheDocument()
+  })
+
+  it('shows a custom profile name on the custom tier', () => {
+    mockCtx.config = { ...mockCtx.config, active_permission_profile: 'research-mode' }
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByRole('button', { name: 'Execution mode: Custom: research-mode. Press to change.' })).toBeInTheDocument()
+  })
+
+  it('dispatches activate_permission_profile and refreshes config on tier switch', async () => {
+    vi.mocked(api.activatePermissionProfile).mockResolvedValue({ active: 'strict', approval_mode: 'suggest' })
+    render(wrap(<Header />, { route: '/chat' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Strict' }))
+    await waitFor(() => {
+      expect(api.activatePermissionProfile).toHaveBeenCalledWith('strict')
+      expect(mockCtx.refreshConfig).toHaveBeenCalled()
+    })
+  })
+
+  it('marks the active tier aria-selected in the menu', async () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' }))
+    const balanced = await screen.findByRole('option', { name: 'Balanced' })
+    expect(balanced).toHaveAttribute('aria-selected', 'true')
+    expect(await screen.findByRole('option', { name: 'Strict' })).toHaveAttribute('aria-selected', 'false')
+  })
+
+  // ── P1-3: approval-dialog decision reason ────────────────────────────
+
+  it('shows the matched rule as the reason line', () => {
+    mockCtx.permissionRequest = {
+      request_id: 'p1', tool: 'bash', risk: 'high', input: null,
+      reason: { source: 'rule', ruleName: 'Bash(git push *)', confidence: null },
+    }
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByText('Matched rule: Bash(git push *)')).toBeInTheDocument()
+  })
+
+  it('shows the classifier confidence as the reason line', () => {
+    mockCtx.permissionRequest = {
+      request_id: 'p1', tool: 'bash', risk: 'high', input: null,
+      reason: { source: 'llm', ruleName: null, confidence: 0.91 },
+    }
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByText('Safety classifier — confidence 91%')).toBeInTheDocument()
+  })
+
+  it('falls back to the policy-default wording when no rule name is known', () => {
+    mockCtx.permissionRequest = {
+      request_id: 'p1', tool: 'bash', risk: 'medium', input: null,
+      reason: { source: 'default', ruleName: null, confidence: null },
+    }
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByText('No specific rule matched — policy default')).toBeInTheDocument()
+  })
+
+  it('hides the reason line for legacy payloads without one', () => {
+    mockCtx.permissionRequest = { request_id: 'p1', tool: 'bash', risk: 'high', input: null }
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.queryByText(/Matched rule:/)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Why this prompt was raised')).not.toBeInTheDocument()
   })
 })

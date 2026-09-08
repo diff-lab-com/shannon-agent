@@ -113,6 +113,9 @@ pub fn llm_provider_from_slug(slug: &str) -> Option<LlmProvider> {
             Some(ZhipuInternational)
         }
         "zhipucoding" | "zhipu-coding" | "zhipu-anthropic" => Some(ZhipuCoding),
+        "glm-plan" | "zhipu-plan" | "zhipucodingplan" | "zhipu-coding-plan" => {
+            Some(ZhipuCodingPlan)
+        }
         "moonshot" | "kimi" => Some(Moonshot),
         "minimax" | "mm" => Some(Minimax),
         "dashscope" | "qwen" | "aliyun" => Some(DashScope),

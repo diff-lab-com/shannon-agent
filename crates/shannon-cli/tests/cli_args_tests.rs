@@ -13,6 +13,38 @@ fn shannon() -> Command {
     Command::cargo_bin(BIN).unwrap()
 }
 
+// ── Remote Target Flag ──────────────────────────────────────────────────
+
+#[test]
+fn test_target_flag_is_accepted() {
+    // Parse-level check only: an unknown target name must surface as a
+    // "not found" style error, not an argument error.
+    let output = shannon()
+        .arg("--target")
+        .arg("definitely-not-a-registered-host")
+        .arg("--prompt")
+        .arg("hello")
+        .env("SHANNON_HEADLESS_SILENT", "1")
+        .output()
+        .expect("binary runs");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("unexpected argument '--target'"),
+        "--target must be a recognized flag, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_target_flag_requires_value() {
+    shannon()
+        .arg("--target")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "a value is required for '--target",
+        ));
+}
+
 // ── Version Flag ────────────────────────────────────────────────────────
 
 #[serial]
@@ -60,6 +92,37 @@ fn test_help_flag_short() {
 // ── Subcommand Help ─────────────────────────────────────────────────────
 
 #[serial]
+// ── --attach flag ────────────────────────────────────────────────────
+#[test]
+fn test_attach_flag_is_recognized() {
+    // `--attach` must parse without "unrecognized argument" surfacing in
+    // stderr; the actual file resolution runs at query dispatch time.
+    shannon()
+        .args(["--attach", "/nonexistent.png", "--prompt", "x"])
+        .env("SHANNON_HEADLESS_SILENT", "1")
+        .assert()
+        .stderr(predicate::str::contains("unexpected argument '--attach'").not());
+}
+
+#[test]
+fn test_attach_flag_help_lists_path_metavar() {
+    shannon()
+        .args(["--help"])
+        .assert()
+        .stdout(predicate::str::contains("--attach <PATH>"));
+}
+
+#[test]
+fn test_attach_repeats_allowed() {
+    // `--attach` is `num_args = 1..` — ensure clap accepts two values
+    // without complaining about a missing second occurrence.
+    shannon()
+        .args(["--attach", "/a.png", "--attach", "/b.jpg", "--prompt", "x"])
+        .env("SHANNON_HEADLESS_SILENT", "1")
+        .assert()
+        .stderr(predicate::str::contains("unexpected argument").not());
+}
+
 #[test]
 fn test_repl_subcommand_help() {
     shannon()
@@ -414,4 +477,54 @@ fn test_unknown_flag_fails() {
 #[test]
 fn test_invalid_repl_args() {
     shannon().args(["repl", "--nonexistent"]).assert().failure();
+}
+
+// ── Trace Subcommand (§4.6 L0 session-log surface) ──────────────────────
+
+#[serial]
+#[test]
+fn test_trace_help_lists_four_subcommands() {
+    shannon()
+        .args(["trace", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("show"))
+        .stdout(predicate::str::contains("replay"))
+        .stdout(predicate::str::contains("diff"))
+        .stdout(predicate::str::contains("export"));
+}
+
+#[serial]
+#[test]
+fn test_trace_show_requires_session_argument() {
+    shannon().args(["trace", "show"]).assert().failure();
+}
+
+#[serial]
+#[test]
+fn test_trace_diff_requires_two_sessions() {
+    shannon()
+        .args(["trace", "diff", "only-one"])
+        .assert()
+        .failure();
+}
+
+#[serial]
+#[test]
+fn test_trace_show_missing_session_errors_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    let container = dir.path().join("sessions");
+    std::fs::create_dir_all(&container).unwrap();
+
+    shannon()
+        .args([
+            "trace",
+            "show",
+            "00000000-0000-4000-8000-ffffffffffff",
+            "--dir",
+            container.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no events.jsonl"));
 }

@@ -25,6 +25,15 @@ permissions:
 
 jobs:
   publish:
+    # RC tags (v0.11.0-rc1) trigger this workflow because the glob
+    # matches the suffix, but the workspace version is the numeric
+    # core (0.11.0). For an RC rehearsal we do NOT want to actually
+    # publish shannon-api-protocol to crates.io -- the verify check
+    # below would fail AND a real `cargo publish` would push a
+    # numeric version anyway. Skip the whole job on prerelease tags
+    # (any tag containing `-`); GA tags proceed normally. Mirrors the
+    # rc-tag handling added to release.yml in cbdf296d.
+    if: ${{ !contains(github.ref_name, '-') }}
     name: cargo publish shannon-api-protocol
     runs-on: ubuntu-22.04
     timeout-minutes: 15

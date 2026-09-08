@@ -799,6 +799,12 @@ pub struct OpenaiStreamState {
     /// must synthesize it. Without this, the engine's tool execution loop
     /// never sees a stop event and skips running the tools.
     pub open_tool_indices: Vec<usize>,
+    /// Tool-call ids already started in this stream. MiniMax M-series
+    /// echoes the id on continuation fragments; re-emitting
+    /// `ContentBlockStart` for the echo duplicates the tool_use id in the
+    /// assistant history and the provider rejects the next request with
+    /// `invalid params, duplicate tool_call id` (2013).
+    pub seen_tool_ids: Vec<String>,
 }
 
 impl OpenaiStreamState {
@@ -806,6 +812,7 @@ impl OpenaiStreamState {
         Self {
             tool_index: 0,
             open_tool_indices: Vec::new(),
+            seen_tool_ids: Vec::new(),
         }
     }
 
@@ -818,6 +825,7 @@ impl OpenaiStreamState {
     pub fn reset(&mut self) {
         self.tool_index = 0;
         self.open_tool_indices.clear();
+        self.seen_tool_ids.clear();
     }
 }
 
@@ -840,29 +848,66 @@ fn normalize_openai_event(
         }
     };
 
-    // If we have usage info, emit a MessageDelta with usage
-    if let Some(usage) = chunk.usage {
-        let raw_reason = chunk.choices.first().and_then(|c| c.finish_reason.clone());
-        let normalized_reason = raw_reason.map(|r| match r.as_str() {
-            "stop" | "STOP" => "end_turn".to_string(),
-            other => other.to_string(),
-        });
-        return vec![Ok(StreamEvent::MessageDelta {
-            delta: MessageDeltaDelta {
-                stop_reason: normalized_reason,
-                stop_sequence: None,
-            },
-            usage: Usage {
-                input_tokens: usage.prompt_tokens.unwrap_or(0),
-                output_tokens: usage.completion_tokens.unwrap_or(0),
-                cache_read_input_tokens: usage
-                    .prompt_tokens_details
-                    .as_ref()
-                    .and_then(|d| d.cached_tokens)
-                    .unwrap_or(0),
-                ..Default::default()
-            },
-        })];
+    // If we have usage info, emit a MessageDelta with usage.
+    //
+    // Some providers (notably MiniMax M-series) emit a sentinel chunk with
+    // `"usage": {}` where every field is `None`; unwrap_or(0) would yield
+    // (0, 0, 0) and forward a MessageDelta with empty usage. If the engine
+    // processes that as the terminal event (no tool uses), it returns
+    // early and never reads the real-usage chunk that follows in a SEPARATE
+    // later SSE frame (`choices:[]`, real usage). Skip emission when no
+    // usage field carries real data — fall through so the finish_reason
+    // branch below can decide; if there's no finish_reason either, the
+    // trailing branches return an empty event list (the real usage chunk
+    // arrives separately).
+    if let Some(ref usage) = chunk.usage {
+        let input = usage.prompt_tokens.unwrap_or(0);
+        let output = usage.completion_tokens.unwrap_or(0);
+        let cached = usage
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens)
+            .unwrap_or(0);
+        if input > 0 || output > 0 || cached > 0 {
+            // Zhipu/GLM coding-plan (and other OpenAI-compatible gateways)
+            // pack `finish_reason` AND the real usage into ONE terminal
+            // chunk — unlike MiniMax, whose real usage arrives in a separate
+            // `choices: []` frame AFTER the finish chunk. The finish_reason
+            // branch below never runs for such a chunk, so without this
+            // synthesis the open tool indices are never closed: the engine
+            // only sees its post-MessageDelta flush, tools execute, but
+            // `QueryEvent::ToolUseRequest` is never broadcast (dogfood
+            // 2026-08-27 glm-5.3-flash 20/20 tasks: L0 tool/call rows = 0).
+            // Mirror the finish_reason branch: synthesize one
+            // ContentBlockStop per open tool call BEFORE the terminal
+            // MessageDelta so the engine's single canonical broadcast path
+            // (ContentBlockStop handler) fires exactly once with the fully
+            // parsed input.
+            let mut events: Vec<Result<StreamEvent, ApiError>> = Vec::new();
+            for idx in state.open_tool_indices.drain(..) {
+                events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
+            }
+            state.reset();
+            let raw_reason = chunk.choices.first().and_then(|c| c.finish_reason.clone());
+            let normalized_reason = raw_reason.map(|r| match r.as_str() {
+                "stop" | "STOP" => "end_turn".to_string(),
+                other => other.to_string(),
+            });
+            events.push(Ok(StreamEvent::MessageDelta {
+                delta: MessageDeltaDelta {
+                    stop_reason: normalized_reason,
+                    stop_sequence: None,
+                },
+                usage: Usage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    cache_read_input_tokens: cached,
+                    ..Default::default()
+                },
+            }));
+            return events;
+        }
+        // usage is present but all-zero (M3 sentinel): fall through.
     }
 
     let choice = match chunk.choices.first() {
@@ -880,13 +925,62 @@ fn normalize_openai_event(
     // events into one vector and return at the end.
     let mut events: Vec<Result<StreamEvent, ApiError>> = Vec::new();
 
+    // Text content is likewise non-exclusive with `tool_calls` and
+    // `finish_reason`: MiniMax M-series packs it into those chunks (e.g. the
+    // closing `</think>` glued onto the tool-call delta, or the final answer
+    // onto the finish delta). Emit it first — before tool blocks and terminal
+    // events — or the text is silently dropped. Dropped closes strand an
+    // unclosed `<think>` that swallows every later answer downstream
+    // (dogfood l2-deep-analysis 2026-08-23).
+    if let Some(ref content) = choice.delta.content {
+        events.push(Ok(StreamEvent::ContentBlockDelta {
+            index: 0,
+            delta: ContentDelta::TextDelta {
+                text: content.clone(),
+            },
+        }));
+    }
+
     // Tool calls — emit ContentBlockStart + ContentBlockDelta; track each
     // opened index so the (possibly same-chunk) finish_reason can close it.
     if let Some(ref tool_calls) = choice.delta.tool_calls {
         for tc in tool_calls {
-            let idx = tc.index.unwrap_or_else(|| state.next_tool_index());
+            // Classify the fragment first. MiniMax M-series emits two
+            // continuation quirks (dogfood 2026-08-22 s3/m4):
+            //   1. the tool-call slot repeated with an EMPTY id while
+            //      streaming argument deltas,
+            //   2. fragments echoing a non-empty id already started.
+            // Either way a naive ContentBlockStart mints a phantom tool
+            // block; the finish chunk synthesizes a Stop per open index,
+            // history ends up with duplicate tool_use ids, and the NEXT
+            // request is rejected with `duplicate tool_call id` (2013).
+            // An empty id is never a new call; a non-empty id not yet
+            // seen in this stream is.
+            let call_id = tc.id.clone().filter(|id| !id.is_empty());
+            let is_new_call = call_id
+                .as_ref()
+                .is_some_and(|id| !state.seen_tool_ids.iter().any(|s| s == id));
 
-            if let Some(ref id) = tc.id {
+            let idx = match tc.index {
+                Some(i) => i,
+                None => {
+                    if is_new_call {
+                        state.next_tool_index()
+                    } else {
+                        // Continuation without index: attach to the most
+                        // recent open call rather than allocating a fresh
+                        // index (which would duplicate the tool block).
+                        state
+                            .open_tool_indices
+                            .last()
+                            .copied()
+                            .unwrap_or_else(|| state.next_tool_index())
+                    }
+                }
+            };
+
+            if let (Some(ref id), true) = (call_id.as_ref(), is_new_call) {
+                state.seen_tool_ids.push(id.to_string());
                 // New tool call starting
                 let name = tc
                     .function
@@ -896,13 +990,14 @@ fn normalize_openai_event(
                 events.push(Ok(StreamEvent::ContentBlockStart {
                     index: idx,
                     content_block: ContentBlock::ToolUse {
-                        id: id.clone(),
+                        id: id.to_string(),
                         name,
                         input: serde_json::Value::Null,
                     },
                 }));
-                // Track so we can emit a synthesized ContentBlockStop when
-                // the finish_reason chunk arrives (same chunk or later).
+                // Track so we can emit a synthesized ContentBlockStop
+                // when the finish_reason chunk arrives (same chunk or
+                // later).
                 if !state.open_tool_indices.contains(&idx) {
                     state.open_tool_indices.push(idx);
                 }
@@ -923,7 +1018,8 @@ fn normalize_openai_event(
 
     // Finish reason → synthesize ContentBlockStop for any in-progress tool
     // calls (including those opened earlier in this same chunk above) and
-    // emit MessageDelta with the normalized stop reason.
+    // emit MessageDelta with the normalized stop reason. (Any final text
+    // content packed into this chunk was already emitted above.)
     if let Some(ref reason) = choice.finish_reason {
         for idx in state.open_tool_indices.drain(..) {
             events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
@@ -947,18 +1043,11 @@ fn normalize_openai_event(
         return events;
     }
 
+    // Content-only chunks already pushed their event above; chunks with
+    // neither content, tool_calls, nor finish_reason (role-only deltas,
+    // usage sentinels) fall through empty.
     if !events.is_empty() {
         return events;
-    }
-
-    // Text content
-    if let Some(ref content) = choice.delta.content {
-        return vec![Ok(StreamEvent::ContentBlockDelta {
-            index: 0,
-            delta: ContentDelta::TextDelta {
-                text: content.clone(),
-            },
-        })];
     }
 
     vec![]
@@ -1773,6 +1862,127 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_anthropic_signature_delta_parses() {
+        // Regression: MiniMax (Anthropic-compatible) emits signature_delta
+        // after thinking deltas; an unknown variant used to kill the stream.
+        let event_json = r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"EqMC..."}}"#;
+        let result = normalize_sse_event(event_json, &LlmProvider::Anthropic, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(
+                    delta,
+                    &ContentDelta::SignatureDelta {
+                        signature: "EqMC...".to_string()
+                    }
+                );
+            }
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
+        }
+    }
+
+    fn collect_stream_text(
+        chunk: &str,
+        provider: &LlmProvider,
+        state: &mut OpenaiStreamState,
+        out: &mut String,
+    ) {
+        for ev in normalize_sse_event(chunk, provider, state) {
+            if let Ok(StreamEvent::ContentBlockDelta { delta, .. }) = ev {
+                if let ContentDelta::TextDelta { text: t } = delta {
+                    out.push_str(&t);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_minimax_m3_content_after_think_close_survives() {
+        // MiniMax M3 (OpenAI wire) streams inline reasoning: text chunks
+        // opening with `<think>`, then the closer `</think>\n\n` glued to the
+        // final answer. The final content may arrive in its own chunk OR
+        // packed with `finish_reason` — regression: the same-chunk form was
+        // dropped, truncating the response to just the think prefix.
+        let expected = "<think>The user wants me to reply with exactly \"ok\".</think>\n\nok";
+
+        let separate = [
+            r#"{"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"<think>The user wants","role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":" me to reply with","role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":" exactly \"ok\".","role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"</think>\n\nok","role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"role":"assistant"},"finish_reason":"stop"}]}"#,
+        ];
+        let mut text = String::new();
+        let state = &mut fresh_state();
+        for c in separate {
+            collect_stream_text(c, &LlmProvider::Minimax, state, &mut text);
+        }
+        assert_eq!(text, expected);
+
+        // Recorded live shape (short answers): content + finish_reason in
+        // ONE chunk, usage in a trailing choices-less chunk.
+        let same_chunk = [
+            r#"{"choices":[{"delta":{"content":"<think>The user wants me to reply with exactly \"ok\".","role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"</think>\n\nok","role":"assistant"},"finish_reason":"stop"}]}"#,
+            r#"{"choices":[{"delta":null}],"usage":{"prompt_tokens":1,"completion_tokens":2}}"#,
+        ];
+        let mut text = String::new();
+        let state = &mut fresh_state();
+        for c in same_chunk {
+            collect_stream_text(c, &LlmProvider::Minimax, state, &mut text);
+        }
+        assert_eq!(text, expected);
+    }
+
+    #[test]
+    fn test_minimax_think_close_on_tool_call_chunk_survives() {
+        // Regression (dogfood l2-deep-analysis 2026-08-23, wire fixture
+        // minimax_b4a41957c1d58a26): MiniMax M-series glues the reasoning
+        // close tag onto the SAME delta that opens the tool call —
+        // `"content":"</think>\n\n","tool_calls":[...]`. The tool_calls
+        // branch used to return without emitting that content, so the
+        // assembled text kept an unclosed `<think>`; downstream reasoning
+        // stripping then swallowed every later answer and `--schema`
+        // validation parsed an empty string ("EOF while parsing a value at
+        // line 1 column 0"). Content must survive the tool-call chunk.
+        let chunks = [
+            r#"{"choices":[{"delta":{"content":"<think>Planning the search.","role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"</think>\n\n","role":"assistant","tool_calls":[{"id":"call_01a02a9c6f7a7940a57b2368","type":"function","function":{"name":"Read","arguments":"{\"file_path\":\"/lib.rs\"}"},"index":0}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ];
+        let mut text = String::new();
+        let state = &mut fresh_state();
+        for c in chunks {
+            collect_stream_text(c, &LlmProvider::Minimax, state, &mut text);
+        }
+        assert_eq!(text, "<think>Planning the search.</think>\n\n");
+
+        // The same chunk must still open the tool call: content and
+        // tool_calls are processed non-exclusively.
+        let mut state = fresh_state();
+        let events = normalize_sse_event(chunks[1], &LlmProvider::Minimax, &mut state);
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Ok(StreamEvent::ContentBlockStart {
+                content_block: ContentBlock::ToolUse { id, name, .. },
+                ..
+            }) if *id == "call_01a02a9c6f7a7940a57b2368" && *name == "Read"
+        )));
+    }
+
+    #[test]
+    fn test_anthropic_unknown_delta_tolerated() {
+        let event_json = r#"{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":"x"}}"#;
+        let result = normalize_sse_event(event_json, &LlmProvider::Anthropic, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::Unknown);
+            }
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
+        }
+    }
+
     // -- OpenAI SSE normalization --
 
     #[test]
@@ -2034,6 +2244,112 @@ mod tests {
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_minimax_empty_id_continuation_does_not_start_tool() {
+        // MiniMax M-series fragments long tool-call arguments across chunks,
+        // repeating the tool-call slot with an EMPTY id on continuation
+        // fragments (dogfood 2026-08-22 s3/m4; isolated independently by
+        // the fixer session from the id-echo shape below). Only the first
+        // fragment (non-empty id + name) may open a call; empty-id
+        // fragments are continuations. Treating them as starts mints a
+        // phantom ToolUse with an empty id, and the provider rejects the
+        // next request with 2013 `duplicate tool_call id`.
+        let mut state = fresh_state();
+        let start = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_mm_1","type":"function","function":{"name":"Read","arguments":"{\"file_pa"}}]},"index":0}]}"#;
+        let cont1 = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"arguments":"th\":\"/tmp/a.rs\""}}]},"index":0}]}"#;
+        let cont2 = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"arguments":"}"}}]},"index":0,"finish_reason":"tool_calls"}]}"#;
+
+        let events: Vec<_> = [start, cont1, cont2]
+            .iter()
+            .flat_map(|c| normalize_sse_event(c, &LlmProvider::Minimax, &mut state))
+            .collect();
+
+        let starts: Vec<&ContentBlock> = events
+            .iter()
+            .filter_map(|e| match e {
+                Ok(StreamEvent::ContentBlockStart { content_block, .. }) => Some(content_block),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            starts.len(),
+            1,
+            "empty-id fragments must not open tool calls"
+        );
+        match starts[0] {
+            ContentBlock::ToolUse { id, name, .. } => {
+                assert_eq!(id, "call_mm_1");
+                assert_eq!(name, "Read");
+            }
+            other => panic!("Expected ToolUse block, got {other:?}"),
+        }
+
+        let json: String = events
+            .iter()
+            .filter_map(|e| match e {
+                Ok(StreamEvent::ContentBlockDelta { index, delta }) => match delta {
+                    ContentDelta::InputJsonDelta { partial_json } if *index == 0 => {
+                        Some(partial_json.clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(json, r#"{"file_path":"/tmp/a.rs"}"#);
+    }
+
+    #[test]
+    fn test_minimax_fragment_echo_does_not_duplicate_tool_start() {
+        // MiniMax M-series (dogfood 2026-08-22 s3/m4): argument fragments can
+        // arrive with the id echoed and no index. Each echo used to mint a
+        // fresh ContentBlockStart with a duplicate id, and the next request
+        // was rejected with `duplicate tool_call id` (2013).
+        let mut state = fresh_state();
+        let start = r#"{"choices":[{"delta":{"tool_calls":[{"id":"call_x","type":"function","function":{"name":"Read","arguments":""},"index":0}]},"index":0}]}"#;
+        let frag1 = r#"{"choices":[{"delta":{"tool_calls":[{"id":"call_x","function":{"arguments":"{\"file_path\""}}]},"index":0}]}"#;
+        let frag2 = r#"{"choices":[{"delta":{"tool_calls":[{"id":"call_x","function":{"arguments":":\"lib.rs\"}"}}]},"index":0}]}"#;
+        let finish = r#"{"choices":[{"delta":{},"finish_reason":"tool_calls","index":0}]}"#;
+
+        let events: Vec<_> = [start, frag1, frag2, finish]
+            .iter()
+            .flat_map(|c| normalize_sse_event(c, &LlmProvider::OpenAI, &mut state))
+            .collect();
+
+        let starts = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Ok(StreamEvent::ContentBlockStart {
+                        content_block: ContentBlock::ToolUse { .. },
+                        ..
+                    })
+                )
+            })
+            .count();
+        assert_eq!(starts, 1, "echoed id must not re-emit ContentBlockStart");
+
+        let mut args = String::new();
+        for e in &events {
+            if let Ok(StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::InputJsonDelta { partial_json },
+                ..
+            }) = e
+            {
+                args.push_str(partial_json);
+            }
+        }
+        assert_eq!(args, r#"{"file_path":"lib.rs"}"#);
+
+        // Exactly one synthesized stop for the single open index.
+        let stops = events
+            .iter()
+            .filter(|e| matches!(e, Ok(StreamEvent::ContentBlockStop { .. })))
+            .count();
+        assert_eq!(stops, 1);
     }
 
     #[test]

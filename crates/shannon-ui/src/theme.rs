@@ -1643,7 +1643,8 @@ mod tests {
     #[test]
     fn test_detect_returns_valid_theme() {
         let theme = Theme::detect();
-        assert!(theme.name == "dark" || theme.name == "light");
+        // `no_color` is returned when NO_COLOR / TERM=dumb is set (CI).
+        assert!(matches!(theme.name.as_str(), "dark" | "light" | "no_color"));
     }
 
     #[test]

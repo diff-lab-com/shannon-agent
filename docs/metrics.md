@@ -14,10 +14,11 @@
 
 | metric | value |
 |---|---:|
-| Tests (nextest, runnable) | 11273 |
+| Tests (nextest, runnable) | 11752 |
 | Tests (source `#[test]`/`#[tokio::test]` attrs) | 11171 |
 | Rust source files | 624 |
 | Rust LOC (code) | 418458 |
+| Workspace members | 20 |
 | `cargo clippy --workspace -- -D warnings` | pass |
 | `cargo deny check` | pass |
 
@@ -28,23 +29,24 @@ Counts below come from `cargo nextest list --workspace --message-format=json`
 
 | crate | tests | binaries |
 |---|---:|---:|
-| shannon-core | 3571 | 40 |
-| shannon-tools | 1538 | 11 |
-| shannon-ui | 1421 | 8 |
-| shannon-engine | 1132 | 3 |
+| shannon-core | 3766 | 45 |
+| shannon-tools | 1630 | 14 |
+| shannon-ui | 1497 | 8 |
+| shannon-engine | 1113 | 3 |
 | shannon-agents | 897 | 10 |
-| shannon-desktop | 588 | 4 |
+| shannon-desktop | 599 | 4 |
 | shannon-mcp | 578 | 9 |
-| shannon-cli | 443 | 8 |
-| shannon-commands | 419 | 5 |
+| shannon-cli | 486 | 9 |
+| shannon-commands | 416 | 5 |
 | shannon-mcp-saas | 185 | 2 |
 | shannon-skills | 172 | 5 |
 | shannon-codegen | 100 | 4 |
-| shannon-types | 74 | 3 |
+| shannon-types | 84 | 3 |
 | shannon-agent | 65 | 2 |
+| shannon-remote | 55 | 1 |
+| shannon-tool-interface | 42 | 1 |
 | shannon-api-protocol | 37 | 3 |
-| shannon-repomap | 29 | 3 |
-| shannon-tool-interface | 24 | 1 |
+| shannon-repomap | 30 | 3 |
 | shannon-server | 0 | 1 |
 | shannon-stability-attr | 0 | 1 |
 

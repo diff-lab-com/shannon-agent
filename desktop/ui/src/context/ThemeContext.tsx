@@ -1,9 +1,15 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
 import * as api from '@/lib/tauri-api'
+import { THEME_REGISTRY } from '@/theme/generated/registry'
 
 export type ThemeName = 'material' | 'tokyo-night' | 'tokyo-night-light' | 'catppuccin' | 'nord' | 'ember' | 'slate' | 'solarized' | 'solarized-light' | 'dracula' | 'gruvbox' | 'gruvbox-light' | 'system'
 
 type ResolvedTheme = Exclude<ThemeName, 'system'>
+
+/** The light/dark scheme each resolved theme renders as — mirrors THEME_SCHEMES. */
+export function themeModeOf(resolved: ResolvedTheme): 'light' | 'dark' {
+  return THEME_SCHEMES[resolved]
+}
 
 interface ThemeContextValue {
   theme: ThemeName
@@ -21,6 +27,28 @@ export function useTheme() {
   if (!ctx) throw new Error('useTheme must be used within ThemeProvider')
   return ctx
 }
+
+// U9/U-themes: the scheme each theme renders as comes from the GENERATED
+// registry (scripts/theme-source.json → scripts/generate-themes.mjs) — the
+// same single source that emits the token blocks in
+// src/theme/generated/themes.css. ThemeProvider mirrors it onto
+// <html data-theme-mode>, and index.css's `dark:` variant keys off that
+// attribute. The registry must match the token blocks: e2e/themes.spec.ts
+// asserts each theme's surface luminance against its registered scheme, so
+// a mismatch (e.g. a light token block registered as 'dark', which made the
+// `dark:` variants misfire on ember/slate) fails CI instead of shipping.
+const THEME_SCHEMES = Object.fromEntries(
+  THEME_REGISTRY.map(entry => [entry.id, entry.mode]),
+) as Record<ResolvedTheme, 'light' | 'dark'>
+
+// Compile-time drift tripwire: the generated registry must cover exactly the
+// ResolvedTheme union — a theme added to the type (or to theme-source.json)
+// without the other fails here.
+type RegistryTheme = (typeof THEME_REGISTRY)[number]['id']
+type RegistryMissing = [Exclude<ResolvedTheme, RegistryTheme>] extends [never] ? true : false
+type RegistryExtra = [Exclude<RegistryTheme, ResolvedTheme>] extends [never] ? true : false
+const REGISTRY_ALIGNED: [RegistryMissing, RegistryExtra] = [true, true]
+void REGISTRY_ALIGNED
 
 const THEMES: { id: ThemeName; label: string }[] = [
   { id: 'system', label: 'System' },
@@ -63,6 +91,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', resolvedTheme)
+    document.documentElement.setAttribute('data-theme-mode', THEME_SCHEMES[resolvedTheme])
     if (theme !== 'system') {
       localStorage.setItem('shannon-theme', theme)
     }

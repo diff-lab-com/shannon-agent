@@ -1,131 +1,96 @@
-// Analytics mock data: triage items, OPC metrics, perf, billing.
+// Analytics mock data: inbox items, OPC metrics, perf.
 import type {
-  TriageItem,
-  TriageStats,
+  InboxItem,
   OpcMetrics,
-  BillingPlan,
-  CostRecord,
-  BillingHistory,
 } from '@/types'
 
 const now = Date.now()
 const day = 86400_000
 const dayIso = (n: number) => new Date(now - n * day).toISOString().slice(0, 10)
 
-export const MOCK_TRIAGE_ITEMS: TriageItem[] = [
+// Inbox (P0-3) — camelCase rows exactly as the SQLite store serialises them.
+// `sessionId` values link to MOCK_SESSIONS so "continue in session" works in
+// the demo; two items are `pending` with one carrying an `error` so the
+// visual audit shows every card state (pending dot, error expander, rerun
+// enabled/disabled).
+export const MOCK_INBOX_ITEMS: InboxItem[] = [
   {
-    id: 'triage-001',
-    title: 'Customer #4421 refund failed',
-    detail: 'Stripe API timed out during refund. Customer waiting 4h.',
-    severity: 'critical',
-    source: 'support',
-    created_at: Math.floor((now - 4 * 3600_000) / 1000),
-    read: false,
-    archived: false,
-    action_label: 'Retry refund',
-    action_target: 'task-015',
-  } as unknown as TriageItem,
-  {
-    id: 'triage-002',
-    title: 'Webhook latency spike — investigate',
-    detail: 'P99 latency jumped 20x at 14:32 UTC. Ongoing.',
-    severity: 'critical',
-    source: 'monitoring',
-    created_at: Math.floor((now - 2 * 3600_000) / 1000),
-    read: false,
-    archived: false,
-    action_label: 'Open incident',
-    action_target: 'task-013',
-  } as unknown as TriageItem,
-  {
-    id: 'triage-003',
-    title: 'PR #2841 needs your review',
-    detail: 'Billing schema migration. Priya started review; 3 comments unresolved.',
-    severity: 'high',
-    source: 'github',
-    created_at: Math.floor((now - 6 * 3600_000) / 1000),
-    read: false,
-    archived: false,
-    action_label: 'Open PR',
-    action_target: 'https://github.com/co/repo/pull/2841',
-  } as unknown as TriageItem,
-  {
-    id: 'triage-004',
-    title: '4 new enterprise security questionnaires',
-    detail: '2 SOC2, 1 HIPAA, 1 ISO27001. Avg 3-day turnaround expected.',
-    severity: 'high',
-    source: 'sales',
-    created_at: Math.floor((now - day) / 1000),
-    read: true,
-    archived: false,
-    action_label: 'Start triage',
-    action_target: 'task-009',
-  } as unknown as TriageItem,
-  {
-    id: 'triage-005',
-    title: 'Weekly metrics digest ready',
-    detail: 'Generated Mon 9:02am. 3 anomalies flagged.',
-    severity: 'normal',
-    source: 'automation',
-    created_at: Math.floor((now - 2 * day) / 1000),
-    read: true,
-    archived: false,
-    action_label: 'View digest',
-    action_target: 'sess-006',
-  } as unknown as TriageItem,
-  {
-    id: 'triage-006',
-    title: 'A/B test onboarding variant B is winning',
-    detail: '+12% activation (p=0.03). Recommend ship.',
-    severity: 'normal',
-    source: 'experiment',
-    created_at: Math.floor((now - 3 * day) / 1000),
-    read: true,
-    archived: false,
-    action_label: 'View results',
-    action_target: 'task-006',
-  } as unknown as TriageItem,
-  {
-    id: 'triage-007',
-    title: 'Stale PR #2801 open 9 days',
-    detail: 'Feature/old-billing-refactor. Author @orion last active 5d ago.',
-    severity: 'low',
-    source: 'github',
-    created_at: Math.floor((now - 4 * day) / 1000),
-    read: true,
-    archived: false,
-    action_label: 'Close or ping',
-    action_target: 'https://github.com/co/repo/pull/2801',
-  } as unknown as TriageItem,
-  {
-    id: 'triage-008',
-    title: 'Slack #support hit 50+ unread',
-    detail: 'Mostly onboarding questions. Consider doc update.',
-    severity: 'low',
-    source: 'slack',
-    created_at: Math.floor((now - 5 * day) / 1000),
-    read: true,
-    archived: true,
-    action_label: 'Open Slack',
-    action_target: 'slack://channel?id=support',
-  } as unknown as TriageItem,
-]
-
-export const MOCK_TRIAGE_STATS: TriageStats = {
-  total: 7,
-  unread: 4,
-  archived: 1,
-  by_kind: {
-    alert: 3,
-    mention: 2,
-    deadline: 1,
-    review: 1,
+    id: 1,
+    source: 'scheduled_task',
+    sourceId: 'sched-002',
+    sessionId: null,
+    title: 'Nightly dependency audit failed',
+    summary: 'cargo audit exited with code 2 after scanning 412 crates.',
+    error: 'cargo audit exited with code 2: 2 vulnerabilities found\n  RUSTSEC-2026-0121 (regex) — upgrade to >= 1.11\n  RUSTSEC-2026-0044 (reqwest) — upgrade to >= 0.12.9',
+    status: 'pending',
+    createdAtMs: now - 2 * 3600_000,
+    updatedAtMs: now - 2 * 3600_000,
   },
-}
+  {
+    id: 2,
+    source: 'routine',
+    sourceId: 'sched-001',
+    sessionId: 'sess-006',
+    title: 'Weekly metrics digest finished',
+    summary: 'Compiled Mon 9:02am. 3 anomalies flagged in the billing pipeline; digest posted to #ops.',
+    error: null,
+    status: 'pending',
+    createdAtMs: now - 5 * 3600_000,
+    updatedAtMs: now - 5 * 3600_000,
+  },
+  {
+    id: 3,
+    source: 'trigger',
+    sourceId: 'ops-webhook',
+    sessionId: null,
+    title: 'Ops webhook: incident IR-2041 opened',
+    summary: 'Trigger endpoint received a signed payload (HMAC verified): "checkout error rate 4.1%".',
+    error: null,
+    status: 'read',
+    createdAtMs: now - 9 * 3600_000,
+    updatedAtMs: now - 8 * 3600_000,
+  },
+  {
+    id: 4,
+    source: 'goal',
+    sourceId: 'goal-billing-migration',
+    sessionId: 'sess-008',
+    title: 'Goal checkpoint: billing migration 60% complete',
+    summary: 'Objective "migrate billing schema to v2" — 6 iterations, no stalls, budget on track.',
+    error: null,
+    status: 'read',
+    createdAtMs: now - day + 3600_000,
+    updatedAtMs: now - day + 3600_000,
+  },
+  {
+    id: 5,
+    source: 'routine',
+    sourceId: 'sched-003',
+    sessionId: 'sess-005',
+    title: 'Investor update draft ready',
+    summary: "Draft compiled from this week's sessions and metrics; ready for review.",
+    error: null,
+    status: 'read',
+    createdAtMs: now - 2 * day,
+    updatedAtMs: now - 2 * day,
+  },
+  {
+    id: 6,
+    source: 'routine',
+    sourceId: 'sched-001',
+    sessionId: 'sess-006',
+    title: 'Weekly metrics digest finished',
+    summary: 'Compiled Mon 9:00am. No anomalies detected.',
+    error: null,
+    status: 'archived',
+    createdAtMs: now - 8 * day,
+    updatedAtMs: now - 7 * day,
+  },
+]
 
 export const MOCK_OPC_METRICS: OpcMetrics = {
   total: 16,
-  completion_rate: 0.27,
+  completion_rate: 27.0,
   by_status: [
     { status: 'in_progress', count: 4 },
     { status: 'pending', count: 3 },
@@ -156,40 +121,6 @@ export const MOCK_OPC_METRICS: OpcMetrics = {
     { date: dayIso(0), created: 4, completed: 2 },
   ],
 } as unknown as OpcMetrics
-
-export const MOCK_BILLING_PLAN: BillingPlan = {
-  name: 'Pro',
-  price: 24,
-  token_limit: 2_000_000,
-  features: [
-    'Unlimited sessions',
-    '5 concurrent agents',
-    'Claude Sonnet + Opus access',
-    'MCP marketplace',
-    'Priority support',
-  ],
-}
-
-export const MOCK_COST_HISTORY: CostRecord[] = Array.from({ length: 14 }).map((_, i) => {
-  const base = 8 + Math.sin(i / 2) * 3
-  const noise = (Math.random() - 0.5) * 2
-  const cost = Math.max(2, base + noise)
-  return {
-    date: dayIso(13 - i),
-    input_tokens: Math.floor(cost * 25000 + Math.random() * 5000),
-    output_tokens: Math.floor(cost * 8000 + Math.random() * 2000),
-    cost_usd: Math.round(cost * 100) / 100,
-  }
-})
-
-export const MOCK_BILLING_HISTORY: BillingHistory[] = [
-  { id: 'inv-2026-06', date: dayIso(0), description: 'Pro plan — June 2026', amount: 24, status: 'paid' },
-  { id: 'inv-2026-05', date: dayIso(30), description: 'Pro plan — May 2026', amount: 24, status: 'paid' },
-  { id: 'inv-2026-04', date: dayIso(60), description: 'Pro plan — April 2026', amount: 24, status: 'paid' },
-  { id: 'inv-2026-03', date: dayIso(90), description: 'Pro plan — March 2026', amount: 24, status: 'paid' },
-  { id: 'inv-2026-02', date: dayIso(120), description: 'Pro plan — February 2026 + overage', amount: 38, status: 'paid' },
-  { id: 'inv-2026-01', date: dayIso(150), description: 'Pro plan — January 2026', amount: 24, status: 'paid' },
-]
 
 // Perf traces (for /perf page)
 export const MOCK_PERF_TRACES = [
@@ -242,7 +173,7 @@ export const MOCK_PERF_TRACES = [
     error_rate: 0,
   },
   {
-    name: 'list_triage_items',
+    name: 'list_inbox_items',
     p50_ms: 22,
     p95_ms: 68,
     p99_ms: 180,

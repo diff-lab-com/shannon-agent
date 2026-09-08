@@ -26,7 +26,6 @@
 //! - [`VoiceModeService`]: Voice input/output management and keyword spotting
 //! - [`MagicDocsService`]: Automatic documentation generation from source paths
 //! - `SessionHistoryManager`: Session history listing, searching, archiving, and resumption
-//! - [`TranscriptStore`]: Persistent conversation transcript storage and search
 //! - [`ActivityManager`]: Long-running task activity tracking with progress
 //! - [`Housekeeper`]: Periodic background cleanup tasks
 
@@ -38,18 +37,23 @@
 rust_i18n::i18n!("../../locales", fallback = "en");
 
 pub mod ai_limits;
-pub mod analytics;
 pub mod api_services;
 pub mod away_summary;
 pub mod bridge_service;
+pub mod bus;
 pub mod checkpoint;
 pub mod compact;
-pub mod config_migration;
+pub mod config_dump;
 pub mod config_persist;
 pub mod config_watcher;
 pub mod diagnostics;
 pub mod extract_memories;
 pub mod git_operation_tracking;
+/// GitHub event trigger matching for routines (P2-7).
+pub mod github_triggers;
+/// Session-goal continuation decision (P0-2) — pure goal loop logic shared
+/// by the TUI and the desktop goal runner.
+pub mod goal_loop;
 pub mod internal_logging;
 pub mod magic_docs;
 pub mod mcp_advanced;
@@ -73,6 +77,7 @@ pub mod rate_limit_messages;
 pub mod remote_settings;
 pub mod settings;
 pub mod settings_sync;
+pub mod signals;
 pub mod smart_context;
 pub mod substitute;
 pub mod suggestions;
@@ -85,7 +90,6 @@ pub mod tool_use_summary;
 pub mod tools;
 pub mod unified_config;
 pub mod updater;
-pub mod vcr;
 pub mod voice_mode;
 
 pub mod activity_manager;
@@ -96,12 +100,15 @@ pub mod credential_manager;
 pub mod doctor;
 pub mod enhanced_suggestions;
 pub mod feature_flags;
+pub mod goal;
 pub mod housekeeping;
+/// SQLite inbox + automation-run store (P0-3).
+pub mod inbox_store;
 pub mod lsp;
 pub mod mcp_server_approval;
 pub mod plugin;
 pub mod preference_memory;
-pub mod recording;
+pub mod providers;
 pub mod sandbox;
 pub mod scheduled_budget;
 pub mod scheduled_retry;
@@ -109,7 +116,7 @@ pub mod scheduled_routines;
 pub mod scheduled_runs;
 pub mod scheduled_task_store;
 pub mod scheduled_worktree;
-pub mod session_transcript;
+pub mod session_log;
 pub mod skill_loop;
 pub mod team_memory_sync;
 pub mod telemetry;
@@ -125,10 +132,6 @@ pub mod auto_test;
 
 // Re-export key types for convenience
 pub use ai_limits::{AiLimitType, AiLimitsTracker, AiUsageRecord, LimitStatus};
-pub use analytics::{
-    AnalyticsError, AnalyticsEvent, AnalyticsEventType, AnalyticsStore, AnalyticsSummary,
-    DailyStats, SessionStats, ToolStats,
-};
 pub use api_services::{
     ApiManager, ApiRequest, ApiResponse, ApiServiceError, ModelUsage, RateLimitInfo, UsageStats,
     UsageTracker,
@@ -138,7 +141,6 @@ pub use bridge_service::{
     SessionMessage,
 };
 pub use checkpoint::{Checkpoint, CheckpointManager, TurnCheckpoint};
-pub use config_migration::{SecretBinding, default_secrets_path, persist_secrets};
 pub use diagnostics::{
     DiagnosticCategory, DiagnosticEvent, DiagnosticLevel, DiagnosticSummary, DiagnosticTracker,
     ErrorPattern,
@@ -224,9 +226,7 @@ pub use shannon_engine::hooks::{
 pub use shannon_engine::permissions::{
     ApprovalMode, Permission, PermissionLevel, PermissionManager,
 };
-pub use shannon_engine::state::{
-    SessionData, SessionInfo, SessionPersistMetadata, SessionState, StateManager,
-};
+pub use shannon_engine::state::{SessionState, StateManager};
 pub use shannon_engine::streaming_tool_executor::{StreamingToolExecutor, ToolStatus, TrackedTool};
 pub use suggestions::{
     Suggestion, SuggestionCategory, SuggestionContext, SuggestionEngine, SuggestionRule,
@@ -239,7 +239,6 @@ pub use tool_execution::{
 pub use tools::{Tool, ToolInfo, ToolOutput, ToolRegistry, ToolResult};
 pub use unified_config::{ConfigBuilder, ShannonConfig};
 pub use updater::{AutoUpdater, ReleaseInfo, UpdateError, UpdateStatus, UpdaterConfig};
-pub use vcr::{Vcr, VcrConfig, VcrError, VcrRecording};
 pub use voice_mode::{
     KeywordSpotter, TranscriptionResult, VoiceCommand, VoiceCommandResult, VoiceConfig, VoiceError,
     VoiceModeService, VoiceSession, VoiceStatus,
@@ -271,10 +270,6 @@ pub use mcp_server_approval::{
     McpServerApprovalRequest, McpTransportType, RiskAssessment,
 };
 pub use progressive_loader::{ProgressiveLoaderConfig, lines_for_token_budget, truncate_content};
-pub use session_transcript::{
-    GlobalTranscriptStats, SessionTranscriptStats, ToolCallRecord, TranscriptEntry,
-    TranscriptError, TranscriptQuery, TranscriptRole, TranscriptStore,
-};
 pub use shannon_engine::custom_profiles::{
     CustomProfileDef, CustomProfileError, CustomProfileRegistry,
 };
@@ -310,7 +305,6 @@ pub use project_memory::{
 /// Core error types for Shannon
 pub mod error {
     pub use crate::activity_manager::ActivityError;
-    pub use crate::analytics::AnalyticsError;
     pub use crate::api_services::ApiServiceError;
     pub use crate::auto_dream_consolidation::ConsolidationError;
     pub use crate::billing::BillingError;
@@ -330,7 +324,6 @@ pub mod error {
     pub use crate::policy_limits::PolicyError;
     pub use crate::project_memory::ProjectMemoryError;
     pub use crate::remote_settings::RemoteSettingsError;
-    pub use crate::session_transcript::TranscriptError;
     pub use crate::settings::SettingsError;
     pub use crate::settings_sync::SyncError;
     pub use crate::team_memory_sync::TeamMemorySyncError;
@@ -339,7 +332,6 @@ pub mod error {
     pub use crate::tools::ToolError;
     pub use crate::ui_adapter::UiError;
     pub use crate::updater::UpdateError;
-    pub use crate::vcr::VcrError;
     pub use crate::voice_mode::VoiceError;
     pub use shannon_engine::api::ApiError;
     pub use shannon_engine::compact::CompactError;
