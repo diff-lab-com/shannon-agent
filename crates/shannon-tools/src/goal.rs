@@ -66,7 +66,7 @@ impl Tool for GoalGetTool {
         "goal_get"
     }
     fn description(&self) -> &str {
-        "Return the current session goal (objective, status, iteration counter, ".into()
+        "Return the current session goal (objective, status, iteration counter, "
     }
     fn input_schema(&self) -> Value {
         json!({ "type": "object", "properties": {} })
@@ -99,7 +99,6 @@ impl Tool for GoalUpdateTool {
          Allowed transitions: active/paused -> complete (with status=complete); \
          active/paused -> paused (with status=blocked, reason required). \
          The goal stays paused when blocked; /goal resume re-arms it."
-            .into()
     }
     fn input_schema(&self) -> Value {
         json!({

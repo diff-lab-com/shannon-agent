@@ -381,7 +381,7 @@ impl Tool for ComputerUseTool {
             });
         }
 
-        let mut result = match computer_input.action {
+        let result = match computer_input.action {
             ComputerAction::Screenshot => self.execute_screenshot().await,
             ComputerAction::Click
             | ComputerAction::RightClick

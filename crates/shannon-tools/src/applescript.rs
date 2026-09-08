@@ -25,13 +25,16 @@ use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 use std::collections::HashMap;
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
 /// Upper bound for one osascript/shortcuts invocation. AppleScript hitting
 /// a busy app can block indefinitely; anything longer is a hang.
+#[cfg(target_os = "macos")]
 const SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Cap on returned output (osascript prints arbitrarily long results).
+#[cfg(target_os = "macos")]
 const MAX_OUTPUT_CHARS: usize = 50 * 1024;
 
 /// Scripting backend selected by the `target` argument.
@@ -234,6 +237,7 @@ impl AppleScriptTool {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn truncate(s: &str) -> &str {
     if s.len() <= MAX_OUTPUT_CHARS {
         s

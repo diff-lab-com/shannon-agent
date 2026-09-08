@@ -23,8 +23,6 @@
 //! so the 7 tools in `browser_tools.rs` compile under both `cargo
 //! check` and `cargo check --features local-browser`.
 
-use std::path::PathBuf;
-
 #[cfg(feature = "local-browser")]
 mod live {
     use chromiumoxide::browser::{Browser, BrowserConfig};

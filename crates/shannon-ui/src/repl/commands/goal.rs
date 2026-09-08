@@ -9,8 +9,6 @@
 //! as the final non-empty line). Completion is mutually exclusive with
 //! `/ralph` and `/loop`, which own their own auto-continuation loops.
 
-use shannon_core::query_engine::{GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER};
-
 use super::set_error;
 use crate::Result;
 use crate::repl::Repl;
@@ -52,9 +50,7 @@ impl shannon_tools::goal::GoalStateAccess for ReplGoalAccess {
 
 pub(crate) use crate::repl::loop_guard::turn_had_tool_calls;
 pub(crate) use shannon_core::goal::{
-    BLOCKED_AUDIT_TURNS, GoalContinuation, GoalMarker, ProgressReport, TurnFacts,
-    continuation_prompt, goal_completion_marker, goal_continuation_decision,
-    goal_continuation_decision_with_facts, parse_progress_report,
+    GoalContinuation, TurnFacts, goal_continuation_decision_with_facts, parse_progress_report,
 };
 
 /// Parsed `/goal` subcommand.
@@ -185,10 +181,7 @@ pub(crate) fn maybe_fire_check_in(repl: &mut Repl) -> bool {
     save_goal_sidecar(repl);
     repl.chat.add_message(
         ChatRole::System,
-        format!(
-            "Goal check-in {checkins}/{}: re-testing the blocker.",
-            MAX_GOAL_CHECKINS
-        ),
+        format!("Goal check-in {checkins}/{MAX_GOAL_CHECKINS}: re-testing the blocker."),
     );
     // We are called from the run loop (not inside handle_query), so
     // submitting here is recursion-safe.
@@ -321,7 +314,7 @@ pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
                 max_iterations,
                 consecutive_no_tool_turns: 0,
                 stall_strikes: 0,
-                max_budget_usd: max_budget_usd,
+                max_budget_usd,
                 cost_baseline_usd,
                 blocked_streak: 0,
                 last_block_reason: None,
@@ -347,13 +340,6 @@ pub(crate) fn handle_goal(repl: &mut Repl, args: &str) -> Result<()> {
     }
     Ok(())
 }
-
-/// Called after a query completes (before the ralph/loop checks). Applies the
-/// [`goal_continuation_decision`] for the current goal: finish it, pause it,
-/// or inject the next continuation turn.
-///
-/// Returns true if a new goal iteration was started (callers must then skip
-/// the ralph/loop checks so only one auto-continuation loop runs).
 
 /// Called after a query completes (before the ralph/loop checks). Applies the
 /// [`goal_continuation_decision`] for the current goal: finish it, pause it,
@@ -512,6 +498,7 @@ pub(crate) fn check_goal_continuation(repl: &mut Repl) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shannon_core::goal::{GoalMarker, goal_completion_marker};
 
     // ── parse_goal_args ────────────────────────────────────────────────
 
@@ -640,6 +627,8 @@ mod tests {
 mod handler_tests {
     use super::*;
     use crate::repl::state::GoalState;
+    use shannon_core::goal::{ProgressReport, continuation_prompt, goal_continuation_decision};
+    use shannon_core::query_engine::{GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER};
 
     /// Point HOME at a scratch dir so any state writes never touch the real
     /// one. nextest runs each test in its own process, so the env swap is
