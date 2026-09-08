@@ -73,7 +73,9 @@ function batchStatusBadge(status: BatchRunStatus): {
 function branchChipClasses(status: BatchBranch['status']): string {
   switch (status) {
     case 'running':
-      return 'bg-primary/10 text-primary border-primary/20'
+      // Container-token pair: primary-on-primary-tint fails AA for the
+      // chip's label-size text (axe color-contrast, themes sweep).
+      return 'bg-primary-container text-on-primary-container border-primary-container'
     case 'completed':
       return 'bg-green-600/10 text-green-600 border-green-600/20'
     case 'failed':

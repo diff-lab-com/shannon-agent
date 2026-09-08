@@ -29,6 +29,10 @@ export default function ContextPanel({ open, usage, activeToolCalls }: ContextPa
   return (
     <aside
       aria-label={t('chat.context.aria')}
+      // tabIndex: the panel is a keyboard-scrollable region (axe
+      // scrollable-region-focusable) — without focus, keyboard users can
+      // never reach the overflowed content.
+      tabIndex={0}
       className="glass-panel shrink-0 overflow-y-auto p-lg border-l border-outline-variant/10 bg-surface-container-lowest/50 transition-all duration-300 ease-in-out"
       style={{
         width: open ? 300 : 0,
