@@ -1674,6 +1674,7 @@ fn write_session_file_with_cwd(
         provider: None,
         cwd: cwd.map(str::to_string),
         app_version: None,
+        ..Default::default()
     }));
 
     for pair in messages.chunks(2) {

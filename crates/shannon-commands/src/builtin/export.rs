@@ -743,6 +743,7 @@ mod tests {
                         provider: None,
                         cwd: Some("/tmp/proj".into()),
                         app_version: None,
+                        ..Default::default()
                     },
                 ),
             );

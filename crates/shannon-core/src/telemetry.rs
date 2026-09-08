@@ -265,9 +265,25 @@ pub fn build_span_tree(events: &[SessionEvent]) -> Vec<TelemetrySpanNode> {
     // Host context for platform prioritization (T13-T2 / T10-P2 scheduling
     // evidence): OS plus, on Linux, X11 vs native-Wayland session type.
     root_attrs.push(("shannon.os".into(), std::env::consts::OS.into()));
+    root_attrs.push(("shannon.arch".into(), std::env::consts::ARCH.into()));
     root_attrs.push((
         "shannon.display_server".into(),
         display_server_kind().into(),
+    ));
+    // Remote-browser attach signal (B1-tail scheduling evidence): prefer the
+    // session/start record; fall back to the live env read so a span built
+    // from an old log still reflects this process. Must stay in sync with
+    // shannon-browser's cdp_endpoint reader.
+    let browser_cdp = start_payload
+        .and_then(|p| p.browser_cdp)
+        .unwrap_or_else(|| {
+            std::env::var("SHANNON_BROWSER_CDP")
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false)
+        });
+    root_attrs.push((
+        "shannon.browser_cdp".into(),
+        SpanAttribute::Bool(browser_cdp),
     ));
     if let Some(p) = start_payload {
         root_attrs.push(("shannon.model".into(), p.model.clone().into()));
@@ -972,6 +988,7 @@ mod tests {
                     provider: Some("anthropic".into()),
                     cwd: None,
                     app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                    ..Default::default()
                 }),
             ),
             turn_start(1, 1),
@@ -995,6 +1012,22 @@ mod tests {
     #[test]
     fn test_empty_slice_yields_no_spans() {
         assert!(build_span_tree(&[]).is_empty());
+    }
+
+    #[test]
+    fn root_span_carries_arch_and_browser_cdp_attrs() {
+        let tree = build_span_tree(&two_turn_fixture());
+        let root = &tree[0];
+        let get = |k: &str| {
+            root.attributes
+                .iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.clone())
+        };
+        assert!(matches!(get("shannon.arch"), Some(SpanAttribute::Str(_))));
+        // Fixture carries no browser_cdp in session/start; the env fallback
+        // decides (unset in tests → false).
+        assert_eq!(get("shannon.browser_cdp"), Some(SpanAttribute::Bool(false)));
     }
 
     #[test]
