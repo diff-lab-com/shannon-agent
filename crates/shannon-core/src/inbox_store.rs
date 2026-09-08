@@ -18,10 +18,10 @@
 //! ## Legacy triage migration
 //!
 //! The previous inbox was `~/.shannon/triage.jsonl` (JSONL, latest-revision-
-//! wins). On the first [`InboxStore::open`] with an empty `inbox_items`
+//! wins). On the first [`InboxStore::open`](inbox_store::InboxStore::open) with an empty `inbox_items`
 //! table, existing triage entries are imported once and the `meta` key
 //! `legacy_triage_imported` is set to `1` so the migration never re-runs.
-//! Pass `legacy = None` (via [`InboxStore::open_with_legacy`]) to skip it —
+//! Pass `legacy = None` (via [`InboxStore::open_with_legacy`](inbox_store::InboxStore::open_with_legacy)) to skip it —
 //! tests use this to point the migrator at a fixture file.
 //!
 //! ## Mapping from triage items

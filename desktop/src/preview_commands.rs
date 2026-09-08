@@ -7,7 +7,7 @@
 //!
 //! # Process discipline (mirrors task-2 / inbox_commands)
 //!
-//! The dev-server child process is owned by the [`PreviewManager`] that
+//! The dev-server child process is owned by the `PreviewManager` that
 //! lives on `AppState`:
 //!
 //! * exactly one preview instance — a second `preview_start` returns the

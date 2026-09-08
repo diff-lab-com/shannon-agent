@@ -5,7 +5,7 @@
 //! **one shared** [`MemoryStore`] handle (`Arc<RwLock<..>>`); every engine the
 //! desktop constructs (interactive send, background task, slash diagnostics,
 //! and the goal/batch/inbox unattended runners) attaches that same handle via
-//! [`attach_shared_memory`], so memory injection and auto-extraction converge
+//! `attach_shared_memory`, so memory injection and auto-extraction converge
 //! on a single in-process instance.
 //!
 //! The commands below operate on that shared instance (lock per command, no

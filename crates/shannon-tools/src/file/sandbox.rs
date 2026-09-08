@@ -298,7 +298,7 @@ impl PathSandbox {
     }
 
     /// Render a canonical host path the way the command sandbox sees it —
-    /// the reverse of [`PathSandbox::remap_bind_alias`] (A3).
+    /// the reverse of `PathSandbox::remap_bind_alias` (A3).
     ///
     /// A path under the project root becomes `/workspace/<rest>`; anything
     /// else (the temp root, paths outside every root) is returned unchanged.

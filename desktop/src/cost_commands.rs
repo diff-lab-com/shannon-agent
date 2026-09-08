@@ -1,13 +1,13 @@
 //! P0-4 — cost-observability commands: per-session budget + context
 //! breakdown + per-session usage aggregation.
 //!
-//! - [`set_session_budget`] / [`get_session_budget`] persist the session's
+//! - `set_session_budget` / `get_session_budget` persist the session's
 //!   optional USD spend cap in the session sidecar (`meta.json`,
 //!   backward-compatible `budget_usd` field — `events.jsonl` is untouched).
-//! - [`get_session_context_breakdown`] estimates the six-category context
+//! - `get_session_context_breakdown` estimates the six-category context
 //!   split (system / tools / skills / memory / mcp / conversation) on the
 //!   session's restored engine snapshot.
-//! - [`get_usage_by_session`] aggregates the usage ledger per `session_id`
+//! - `get_usage_by_session` aggregates the usage ledger per `session_id`
 //!   for the Usage page's per-session view.
 //!
 //! The budget itself is *enforced* in `commands.rs::send_message` (pre-turn

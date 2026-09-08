@@ -391,11 +391,11 @@ pub mod event_names {
     /// Frontend: Tasks-page batch cards refresh on this instead of polling.
     pub const BATCH_UPDATED: &str = "batch:updated";
     /// P0-4: the session's cumulative spend crossed 80% of its budget cap.
-    /// Payload: [`BudgetStatusPayload`]. Frontend: yellow advisory bar.
+    /// Payload: [`BudgetStatusPayload`](super::BudgetStatusPayload). Frontend: yellow advisory bar.
     pub const BUDGET_WARNING: &str = "budget:warning";
     /// P0-4: the session's budget cap was reached — a send was rejected
     /// pre-turn or a running turn was cancelled mid-stream. Payload:
-    /// [`BudgetStatusPayload`]. Frontend: red choice bar (continue once with
+    /// [`BudgetStatusPayload`](super::BudgetStatusPayload). Frontend: red choice bar (continue once with
     /// bypass / raise the budget / stop).
     pub const BUDGET_EXCEEDED: &str = "budget:exceeded";
     pub const UPDATE_AVAILABLE: &str = "update-available";

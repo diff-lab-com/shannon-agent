@@ -7,7 +7,7 @@
 //!   `update_inbox_item_status`, `get_inbox_stats`, `rerun_inbox_item`,
 //!   `continue_inbox_item_session`) — **command names and payload shapes are
 //!   an interface contract with the desktop UI task and must stay verbatim**;
-//! - [`spawn_routine_run`], the shared async executor used by both
+//! - `spawn_routine_run`, the shared async executor used by both
 //!   `rerun_inbox_item` and the loopback `POST /api/routines/:id/trigger`
 //!   endpoint. It mirrors the unattended execution path of
 //!   `commands::start_background_task` (fresh `QueryEngine`, configured
@@ -153,7 +153,7 @@ pub async fn continue_inbox_item_session(
 /// - an override is configured and non-empty (empty = disabled), and
 /// - the run starts inside the window.
 ///
-/// Pure in `now` so tests inject the clock; [`spawn_routine_run`] calls it
+/// Pure in `now` so tests inject the clock; `spawn_routine_run` calls it
 /// with the real clock at spawn time. Reruns and loopback triggers get the
 /// same treatment because they funnel through the same executor.
 pub(crate) fn resolve_offpeak_model(
@@ -203,12 +203,12 @@ impl RunMirror for shannon_core::scheduled_runs::ScheduledRunsStore {
     }
 }
 
-/// The state slices [`spawn_routine_run`] needs, Arc-cloned so the spawned
+/// The state slices `spawn_routine_run` needs, Arc-cloned so the spawned
 /// task owns its inputs. Constructed from [`AppState`] (Tauri commands) or
 /// from the loopback trigger endpoint's state.
 pub(crate) struct RoutineRunDeps {
     pub(crate) inbox: std::sync::Arc<shannon_core::inbox_store::InboxStore>,
-    /// Legacy JSONL history mirror (best-effort — see [`spawn_routine_run`]).
+    /// Legacy JSONL history mirror (best-effort — see `spawn_routine_run`).
     pub(crate) runs_store: std::sync::Arc<dyn RunMirror>,
     pub(crate) usage_store: std::sync::Arc<crate::commands_usage::UsageStore>,
     pub(crate) client_config: std::sync::Arc<RwLock<shannon_engine::api::types::LlmClientConfig>>,

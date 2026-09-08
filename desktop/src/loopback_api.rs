@@ -11,7 +11,7 @@
 //! P0-3 adds `POST /api/routines/:id/trigger` to the same listener (merged
 //! into the router via `ShannonApiServer::with_extra_routes`). It fires a
 //! scheduled task through the shared unattended execution path
-//! ([`crate::inbox_commands::spawn_routine_run`]) and records the run in the
+//! (`crate::inbox_commands::spawn_routine_run`) and records the run in the
 //! SQLite inbox (`source=trigger`).
 //!
 //! ## Auth contract (HMAC, shared with the notifier webhook signing)

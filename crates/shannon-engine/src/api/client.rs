@@ -200,7 +200,7 @@ impl LlmClient {
     /// Attach a retry observer: fired before every retry sleep (rate-limit
     /// backoff, read-timeout retry) and before mid-stream reconnects, so
     /// consumers can surface the pause instead of watching a silent stall.
-    /// See [`RetryNotice`](super::retry::RetryNotice).
+    /// See [`RetryNotice`].
     pub fn set_retry_observer(&self, observer: Option<RetryObserver>) {
         *self
             .retry_observer
