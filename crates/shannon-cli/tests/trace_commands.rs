@@ -48,6 +48,7 @@ fn seed(container: &std::path::Path) {
         provider: Some("anthropic".into()),
         cwd: Some("/tmp/proj".into()),
         app_version: None,
+        ..Default::default()
     }));
     w.record(SessionEventBody::TurnStart(TurnStartPayload {
         query_id: None,

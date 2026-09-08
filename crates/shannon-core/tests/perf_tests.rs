@@ -85,6 +85,7 @@ fn build_session_bodies(count: usize) -> Vec<SessionEventBody> {
         provider: Some("anthropic".into()),
         cwd: None,
         app_version: None,
+        ..Default::default()
     }));
     for i in 1..count {
         match i % 4 {

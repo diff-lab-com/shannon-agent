@@ -219,7 +219,14 @@ pub struct TodoSnapshotEntry {
 // ============================================================================
 
 /// Payload for [`SessionEventKind::SessionStart`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// The `os` / `arch` / `browser_cdp` fields are opt-in-telemetry decision
+/// signals (roadmap 2026-09-08): they size the macOS user share (T13
+/// priority) and the remote-CDP usage rate (B1-tail priority) once sessions
+/// are exported. All three are `serde(default)` so logs written before
+/// their introduction keep parsing, and `skip_serializing_if` keeps old
+/// readers unaffected when unset.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionStartPayload {
     /// The model id active at session start.
     pub model: String,
@@ -232,6 +239,17 @@ pub struct SessionStartPayload {
     /// Shannon version that wrote the log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_version: Option<String>,
+    /// Coarse platform of the session host (`std::env::consts::OS`:
+    /// "macos" / "linux" / "windows").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
+    /// CPU architecture of the session host (`std::env::consts::ARCH`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+    /// True when `SHANNON_BROWSER_CDP` was configured for this session
+    /// (remote-browser attach via the B1-B path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_cdp: Option<bool>,
 }
 
 /// Payload for [`SessionEventKind::SessionEndSeed`]: the seed/resume boundary
@@ -667,6 +685,7 @@ mod tests {
                 provider: Some("anthropic".into()),
                 cwd: Some("/tmp/proj".into()),
                 app_version: Some("0.11.0".into()),
+                ..Default::default()
             }),
             SessionEventKind::SessionEndSeed => {
                 SessionEventBody::SessionEndSeed(SessionEndSeedPayload {

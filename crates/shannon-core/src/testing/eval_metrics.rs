@@ -1070,6 +1070,7 @@ mod tests {
                 provider: Some("mock".into()),
                 cwd: None,
                 app_version: Some("0.0.0".into()),
+                ..Default::default()
             }),
             SessionEventBody::UserMessage(shannon_types::session_event::UserMessagePayload {
                 source: "user".into(),
@@ -1558,6 +1559,7 @@ mod tests {
                 provider: Some("mock".into()),
                 cwd: None,
                 app_version: None,
+                ..Default::default()
             }),
         );
 
