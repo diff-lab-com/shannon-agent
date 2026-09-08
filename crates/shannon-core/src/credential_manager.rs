@@ -18,7 +18,9 @@ use std::os::unix::fs::PermissionsExt;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{debug, warn};
+use tracing::debug;
+#[cfg(unix)]
+use tracing::warn;
 use uuid::Uuid;
 
 /// Errors that can occur during credential management operations.
@@ -423,12 +425,11 @@ impl CredentialManager {
             return Ok(());
         }
 
-        let meta = fs::metadata(path)?;
-
         // On Unix, check that the file is readable/writable only by the owner.
         // 0o600 = 0b110000000 in the lowest 9 bits.
         #[cfg(unix)]
         {
+            let meta = fs::metadata(path)?;
             const SECURE_MODE: u32 = 0o600;
             let file_mode = meta.permissions().mode() & 0o777;
             if file_mode != SECURE_MODE {
@@ -454,6 +455,8 @@ impl CredentialManager {
             let permissions = fs::Permissions::from_mode(0o600);
             fs::set_permissions(path, permissions)?;
         }
+        #[cfg(not(unix))]
+        let _ = path; // POSIX file modes do not exist on this platform
         Ok(())
     }
 

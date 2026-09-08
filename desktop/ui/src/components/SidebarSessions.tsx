@@ -295,7 +295,7 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
                           'flex-1 min-w-0 text-left px-3 py-2 rounded-lg font-label-md text-label-md transition-all duration-200 flex items-center gap-2 cursor-pointer select-none',
                           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
                           isActive
-                            ? 'bg-primary/10 text-primary font-bold'
+                            ? 'bg-primary-container text-on-primary-container font-bold'
                             : 'text-on-surface-variant hover:bg-surface-container-low hover:text-primary',
                         )}
                       >

@@ -506,6 +506,45 @@ jobs:
         # other matrix legs.
         if: runner.os == 'Linux'
         run: cargo check -p shannon-core --features landlock
+      - name: Check all features (Linux only)
+        # Feature-universe compile: --all-features unions optional deps no
+        # default-features gate ever sees. Three carve-outs, each with its
+        # own legs below: shannon-desktop (Tauri system deps, built in
+        # release.yml), shannon-tools + shannon-cli — the latter forwards
+        # shannon-tools' computer-use input backends, which are mutually
+        # exclusive by design (compile_error!s), so `--workspace
+        # --all-features` can never hold for them even with --exclude
+        # (feature unification follows dependency edges, not the member
+        # list). The member list is jq-driven so new crates join
+        # automatically. shannon-server's swagger feature uses
+        # utoipa-swagger-ui/vendored so this stays network-free and
+        # deterministic.
+        if: runner.os == 'Linux'
+        run: |
+          for p in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | grep -vx -e shannon-desktop -e shannon-tools -e shannon-cli); do
+            cargo check -p "$p" --all-features
+          done
+      - name: Check computer-use feature builds (Linux only)
+        # One leg per feature shape: the umbrella backend existing builds
+        # use, each alternative Linux input backend, the Wayland capture
+        # composition, and the local-browser forward — on shannon-tools and
+        # on its shannon-cli forwarder. The plain `computer-use` build broke
+        # unseen for weeks before the #81 hotfix — these legs keep every
+        # shape compiling.
+        # libxdo-dev: enigo's default Linux backend needs libxdo headers on
+        # a fresh runner (cargo check type-checks the FFI surface); jq is
+        # needed by the per-member loop above and this job has no other
+        # step installing it.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends jq libxdo-dev
+          for f in computer-use computer-use-libei computer-use-wayland computer-use-x11rb; do
+            cargo check -p shannon-tools --features "$f"
+            cargo check -p shannon-cli --features "$f"
+          done
+          cargo check -p shannon-tools --features computer-use-wayland-capture
+          cargo check -p shannon-tools --features computer-use-wayland,computer-use-wayland-capture
+          cargo check -p shannon-tools --features local-browser
 
   check-linux-musl:
     # Linux-only musl smoke test. Renamed from `check-cross-platform` so

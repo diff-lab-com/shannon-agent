@@ -154,7 +154,7 @@ export function ExecutionModeSwitcher() {
                 className={cn(
                   'w-full justify-between px-md py-sm h-auto rounded-none',
                   i === focus
-                    ? 'bg-primary/10 text-primary'
+                    ? 'bg-primary-container text-on-primary-container'
                     : selected
                       ? 'text-primary font-bold'
                       : 'text-on-surface hover:bg-primary/5',
