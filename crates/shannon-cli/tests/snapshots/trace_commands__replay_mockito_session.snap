@@ -1,6 +1,6 @@
 ---
 source: crates/shannon-cli/tests/trace_commands.rs
-assertion_line: 270
+assertion_line: 274
 expression: rendered
 ---
 #000 t0 session ▸ model=claude-sonnet-4-20250514, provider=anthropic
@@ -11,6 +11,6 @@ expression: rendered
 #005 t1 tool ▸ echo ({"label":"alpha"})
 #006 t1 permission ▸ ask tool=echo
 #007 t1 tool-ok ▸ [echo] echo: alpha
-#008 t2 request ▸ header model=claude-sonnet-4-20250514 tools=1 reason=turn
-#009 t2 assistant ▸ All done.
-#010 t2 turn ▸ end reason=completed (in=50 out=25 cache_w=0 cache_r=$0.0005)
+#008 t1 request ▸ header model=claude-sonnet-4-20250514 tools=1 reason=turn
+#009 t1 assistant ▸ All done.
+#010 t1 turn ▸ end reason=completed (in=50 out=25 cache_w=0 cache_r=$0.0005)
