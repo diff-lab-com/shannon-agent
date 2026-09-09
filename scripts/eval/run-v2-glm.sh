@@ -52,6 +52,15 @@ pick_engine() { # $1 = suite default (snapshot|improved)
   esac
 }
 
+# Network-window preflight (docs/backlog.md §一 L1): two sweeps were
+# invalidated by egress flaps. Warn loudly when the window is degraded;
+# model-api unreachable is fatal (nothing will run).
+if ! "$SELF_DIR/preflight-network.sh" --quiet; then
+  echo "FATAL: network preflight degraded (model-api or 2+ probes unreachable)." >&2
+  echo "Wait for a healthy window or run scripts/eval/preflight-network.sh to diagnose." >&2
+  exit 8
+fi
+
 case "${1:-}" in
   swe)
     export SHANNON_BIN="$(pick_engine snapshot)"

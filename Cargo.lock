@@ -6885,6 +6885,7 @@ dependencies = [
  "futures",
  "globset",
  "hmac",
+ "libc",
  "mockito",
  "proptest",
  "regex",
