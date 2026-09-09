@@ -647,8 +647,7 @@ impl Tool for GlobTool {
             // companion of the output aliasing below. Any spelling that
             // exists as-is (relative paths, real absolute paths) is kept
             // byte-for-byte so existing glob semantics are unchanged.
-            if !self.fs.exists_blocking(Path::new(base_path))
-                && self.fs.exists_blocking(&canonical)
+            if !self.fs.exists_blocking(Path::new(base_path)) && self.fs.exists_blocking(&canonical)
             {
                 glob_input.path = Some(canonical.to_string_lossy().to_string());
             }
@@ -1208,7 +1207,10 @@ mod tests {
             .unwrap();
         assert!(!output.is_error, "Write to /tmp must succeed");
         // The temp root is not relocated by the command sandbox: echo stays.
-        assert_eq!(output.metadata["file_path"], tmp_target.to_string_lossy().to_string());
+        assert_eq!(
+            output.metadata["file_path"],
+            tmp_target.to_string_lossy().to_string()
+        );
         assert_eq!(std::fs::read_to_string(&tmp_target).unwrap(), "scratch");
         let _ = std::fs::remove_file(&tmp_target);
     }
@@ -1305,8 +1307,15 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert!(output.content.contains("/workspace/src/a.rs"), "got: {}", output.content);
-        assert!(!output.content.contains(&host_str), "must not leak host paths");
+        assert!(
+            output.content.contains("/workspace/src/a.rs"),
+            "got: {}",
+            output.content
+        );
+        assert!(
+            !output.content.contains(&host_str),
+            "must not leak host paths"
+        );
         assert_eq!(output.metadata["files"][0]["path"], "/workspace/src/a.rs");
 
         // Bind-alias addressing: `/workspace` does not exist on the host, so

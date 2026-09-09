@@ -7095,6 +7095,7 @@ dependencies = [
  "landlock",
  "memmap2",
  "mockito",
+ "once_cell",
  "portable-pty",
  "proptest",
  "regex",

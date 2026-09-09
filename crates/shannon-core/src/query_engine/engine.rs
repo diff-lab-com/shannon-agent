@@ -285,11 +285,20 @@ impl ToolResultEntry {
                 .and_then(|v| v.as_str())
                 .unwrap_or("application/octet-stream");
 
-            // Parse the base64 data from the JSON content string.
-            // The Read tool returns a JSON structure with a "data" field.
-            let base64_data = serde_json::from_str::<serde_json::Value>(&self.content)
-                .ok()
-                .and_then(|v| v.get("data").and_then(|d| d.as_str()).map(String::from))
+            // Two metadata conventions carry the base64 payload: the
+            // computer tool returns it in `metadata["data"]` with plain text
+            // in `content`, while Read/AnalyzeImage return a JSON object in
+            // `content` with a `data` field. Prefer the metadata form.
+            let base64_data = self
+                .metadata
+                .get("data")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .or_else(|| {
+                    serde_json::from_str::<serde_json::Value>(&self.content)
+                        .ok()
+                        .and_then(|v| v.get("data").and_then(|d| d.as_str()).map(String::from))
+                })
                 .unwrap_or_default();
 
             if base64_data.is_empty() {
@@ -297,18 +306,20 @@ impl ToolResultEntry {
                 return Some(ToolResultContent::Single(self.content.clone()));
             }
 
-            let file_path = self
-                .metadata
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("image");
+            let mut text = match self.metadata.get("file_path").and_then(|v| v.as_str()) {
+                Some(path) => format!("Image file: {path} ({media_type})"),
+                None => format!("Image ({media_type})"),
+            };
+            if let (Some(w), Some(h)) = (
+                self.metadata.get("width").and_then(|v| v.as_u64()),
+                self.metadata.get("height").and_then(|v| v.as_u64()),
+            ) {
+                text.push_str(&format!(" {w}x{h}"));
+            }
+            text.push_str("\nThe image content is provided as an image block below.");
 
             Some(ToolResultContent::Multiple(vec![
-                ContentBlock::Text {
-                    text: format!(
-                        "Image file: {file_path} ({media_type})\nThe image content is provided as an image block below."
-                    ),
-                },
+                ContentBlock::Text { text },
                 ContentBlock::Image {
                     source: ImageSource::base64(media_type, base64_data),
                 },
@@ -1050,6 +1061,19 @@ impl QueryEngine {
         self
     }
 
+    /// Attach an already-shared memory store to this query engine.
+    ///
+    /// Unlike [`with_memory`](Self::with_memory) (which wraps a store in a
+    /// fresh `Arc`), this accepts the caller's `Arc` so several engines
+    /// observe the *same* underlying store. Desktop hosts (P2-4b) hold one
+    /// shared handle in app state and thread clones of it into every engine
+    /// they construct — interactive, background, and unattended runners — so
+    /// all injection reads and extraction writes converge on one instance.
+    pub fn with_memory_arc(mut self, store: Arc<std::sync::RwLock<MemoryStore>>) -> Self {
+        self.memory = Some(store);
+        self
+    }
+
     /// Access the memory store, if configured.
     pub fn memory(&self) -> Option<&Arc<std::sync::RwLock<MemoryStore>>> {
         self.memory.as_ref()
@@ -1268,6 +1292,38 @@ impl QueryEngine {
     pub fn estimate_conversation_tokens(&self) -> usize {
         self.conversation
             .estimate_tokens_with_system_prompt(self.config.system_prompt.as_deref())
+    }
+
+    /// Six-category context breakdown of the current session state (P0-4).
+    ///
+    /// Instant estimate — deliberately off the request-assembly path: it
+    /// snapshots the engine's *current* system prompt, tool pool, injected
+    /// memory text and conversation history and runs the shared estimators
+    /// over them (see `shannon_engine::context_breakdown`). Categories with
+    /// no content (no memory store, no MCP/skill tools) report `0`; the
+    /// ambient assembly-time blocks (smart context, project instructions,
+    /// repo map, goal block) are host-dependent reads and are **not**
+    /// approximated, so `system` is a lower bound for the fully-assembled
+    /// prompt.
+    pub fn context_breakdown(&self) -> shannon_engine::context_breakdown::ContextBreakdown {
+        use shannon_engine::context_breakdown::ContextBreakdownInput;
+
+        let memory_text = self.memory.as_ref().and_then(|mem| {
+            mem.read().ok().and_then(|store| {
+                let project = std::env::current_dir()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "default".to_string());
+                store.format_for_injection(&project)
+            })
+        });
+        let input = ContextBreakdownInput {
+            system_prompt: self.config.system_prompt.clone(),
+            tool_definitions: self.tools.to_tool_definitions(),
+            memory_text,
+            messages: self.conversation.messages.clone(),
+            context_window: self.resolved_context_window_opt().map(|v| v as u64),
+        };
+        shannon_engine::context_breakdown::compute_breakdown(&input)
     }
 
     /// Get the current conversation messages (for session persistence).
@@ -1521,6 +1577,8 @@ impl QueryEngine {
         // `SHANNON_HOME` still wins when set (legacy whole-root override).
         let l0_container = crate::session_log::effective_log_container(self.state.sessions_dir());
         let user_message = context.user_message.clone();
+        let user_attachments = context.attachments.clone();
+        let attachment_count = user_attachments.len();
         let cost_tracker = self.cost_tracker.clone();
         let hook_manager = self.hook_manager.clone();
         let triggered_routines = self.triggered_routines.clone();
@@ -1649,6 +1707,17 @@ impl QueryEngine {
             }
         }
 
+        // Browser-related request but no browser tool: surface the
+        // `/browser setup` hint so the model can guide the user instead of
+        // failing the task silently.
+        {
+            let tool_names = tools.list();
+            if let Some(hint) = crate::query_engine::browser_setup_hint(&tool_names, &user_message)
+            {
+                system_blocks.push(SystemContentBlock::text(hint));
+            }
+        }
+
         // Inject team coordination instructions when team tools are present
         {
             let tool_names = tools.list();
@@ -1701,7 +1770,16 @@ impl QueryEngine {
 
         // Inject the working directory so the model knows where to write files.
         if let Ok(cwd) = std::env::current_dir() {
-            let cwd_text = format!("\n\n## Environment\n\nWorking directory: {}", cwd.display());
+            let mut cwd_text =
+                format!("\n\n## Environment\n\nWorking directory: {}", cwd.display());
+            // Sandbox self-description (§ sandbox self-description): the
+            // model cannot otherwise know the sandbox's path remapping or
+            // that host toolchains may be absent — eval runs showed it
+            // burning turns probing the filesystem / running apt-get.
+            if let Some(sandbox_text) = crate::sandbox::sandbox_self_description(&cwd) {
+                cwd_text.push_str("\n\n");
+                cwd_text.push_str(&sandbox_text);
+            }
             if let Some(ref mut prompt) = system_prompt {
                 prompt.push_str(&cwd_text);
             }
@@ -1723,9 +1801,23 @@ impl QueryEngine {
                 .unwrap_or("none"),
             "Starting new query: cloning conversation for background task"
         );
+        // Attachments (e.g. images from the REST API, desktop app, or TUI)
+        // switch the user message to content blocks so multimodal adapters
+        // can carry them to the provider; text-only queries keep the plain
+        // string form.
+        let user_content = if user_attachments.is_empty() {
+            MessageContent::Text(user_message.clone())
+        } else {
+            let mut blocks = Vec::with_capacity(user_attachments.len() + 1);
+            blocks.push(shannon_engine::api::ContentBlock::Text {
+                text: user_message.clone(),
+            });
+            blocks.extend(user_attachments);
+            MessageContent::Blocks(blocks)
+        };
         conversation.messages.push(Message {
             role: "user".to_string(),
-            content: MessageContent::Text(user_message.clone()),
+            content: user_content,
         });
 
         // Clone memory store for post-query extraction (fire-and-forget)
@@ -1801,7 +1893,7 @@ impl QueryEngine {
 
             // §4.2: open the L0 record for this query — the user message and
             // turn boundary precede anything the model sees.
-            tee.record_user_message(&user_message);
+            tee.record_user_message_with_count(&user_message, attachment_count);
             tee.record_turn_start(Some(query_id.to_string()));
 
             // Fire UserPromptSubmit hook — §4.8: as a bus trigger picked up
@@ -2561,6 +2653,23 @@ impl QueryEngine {
                 }
 
                 // Call the API — use structured system blocks when available for prompt caching
+                // Surface API retry activity as query progress (§ retry
+                // observability): without this the retry loop is invisible
+                // to consumers and a rate-limited run looks like a silent
+                // multi-second stall.
+                client.set_retry_observer(Some(std::sync::Arc::new({
+                    let tx = tx.clone();
+                    move |notice: &shannon_engine::api::retry::RetryNotice| {
+                        let message = format!(
+                            "API retry {}/{} (next try in {:.0}s): {}",
+                            notice.attempt,
+                            notice.total_attempts,
+                            notice.wait.as_secs_f32(),
+                            notice.reason
+                        );
+                        send_event!(tx, QueryEvent::Progress { query_id, message });
+                    }
+                })));
                 let stream_result = if let Some(ref blocks) = system_blocks_opt {
                     client
                         .send_message_stream_structured_with_retry(
@@ -2578,6 +2687,7 @@ impl QueryEngine {
                         )
                         .await
                 };
+                client.set_retry_observer(None);
                 match stream_result {
                     Ok(mut stream) => {
                         // Per-index tool call state. OpenAI streaming interleaves
@@ -4407,7 +4517,12 @@ impl QueryEngine {
                                         }
                                     }
 
-                                    // No partial content, non-recoverable — fail
+                                    // No partial content, non-recoverable — fail.
+                                    // Keep the ORIGINAL error text (not just the
+                                    // suggestion) so consumers can classify the
+                                    // failure — headless exit codes match on
+                                    // "rate limit" / "timed out" substrings of
+                                    // the provider error.
                                     let suggestion = e
                                         .user_suggestion()
                                         .map(|s| format!(" {s}"))
@@ -4415,7 +4530,7 @@ impl QueryEngine {
                                     let user_error = if suggestion.is_empty() {
                                         format!("{e}")
                                     } else {
-                                        suggestion
+                                        format!("{e}.{suggestion}")
                                     };
                                     send_event!(
                                         tx,
@@ -5025,12 +5140,19 @@ impl QueryEngine {
             if let Some(ref mem_store) = memory_for_extraction {
                 let store_arc = mem_store.clone();
                 let msgs = conversation.messages.clone();
+                // P2-4 provenance: stamp extracted entries with the session
+                // that produced them so the Memory page can jump back.
+                let session_for_extraction = self_session_id.clone();
                 tokio::spawn(async move {
                     let dream = AutoDreamService::new(store_arc);
                     let project = std::env::current_dir()
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|_| "default".to_string());
-                    let _ = dream.process_conversation(&msgs, &project);
+                    let _ = dream.process_conversation_with_session(
+                        &msgs,
+                        &project,
+                        Some(&session_for_extraction),
+                    );
                     // Periodic compaction (ADR-0010 C5'): dedupe + prune + size
                     // control, gated by a persisted sidecar schedule. Each query
                     // is one session; compaction fires at ~24 h or ≥ 5 sessions.
@@ -5176,6 +5298,7 @@ async fn maybe_run_auto_test(
 mod tests {
     use super::*;
     use crate::tools::ToolRegistry;
+    use shannon_engine::api::ImageSource;
     use shannon_engine::api::{LlmClient, LlmClientConfig, MessageContent};
     use shannon_engine::permissions::PermissionManager;
     use std::env;
@@ -5824,6 +5947,157 @@ mod tests {
         let permissions = PermissionManager::new();
         let config = QueryEngineConfig::default();
         QueryEngine::new(client, tools, permissions, state, config)
+    }
+
+    // ── context_breakdown (P0-4) ────────────────────────────────────────
+
+    #[test]
+    fn context_breakdown_empty_session_reports_zero_categories_without_panicking() {
+        // Strip the default system prompt so the session is genuinely empty:
+        // no prompt, no tools, no memory, no history.
+        let client = create_test_client();
+        let config = QueryEngineConfig {
+            system_prompt: None,
+            ..Default::default()
+        };
+        let engine = QueryEngine::new(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+            config,
+        );
+        let breakdown = engine.context_breakdown();
+        assert_eq!(breakdown.total_tokens, 0);
+        assert!(breakdown.categories.iter().all(|c| c.tokens == 0));
+        let keys: Vec<&str> = breakdown
+            .categories
+            .iter()
+            .map(|c| c.key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["system", "tools", "skills", "memory", "mcp", "conversation"]
+        );
+    }
+
+    #[test]
+    fn context_breakdown_with_only_system_prompt_counts_it() {
+        // Default config ships a base system prompt: the empty session's
+        // breakdown is exactly that prompt, and the window mirrors
+        // resolved_context_window_opt (None for a model absent from the
+        // catalog — no fabricated fallback).
+        let engine = create_test_engine();
+        let breakdown = engine.context_breakdown();
+        assert!(breakdown.tokens_for("system") > 0);
+        assert_eq!(breakdown.total_tokens, breakdown.tokens_for("system"));
+        for key in ["tools", "skills", "memory", "mcp", "conversation"] {
+            assert_eq!(breakdown.tokens_for(key), 0, "{key} must be 0");
+        }
+        assert_eq!(
+            breakdown.context_window.map(|v| v as usize),
+            engine.resolved_context_window_opt()
+        );
+    }
+
+    #[test]
+    fn context_breakdown_counts_registry_skills_memory_and_history() {
+        use crate::memory::{MemoryCategory, MemoryEntry, MemoryStore};
+
+        // A minimal registry: one built-in, one MCP-prefixed, one skill.
+        // (`ToolRegistry::register` takes `&self` — interior mutability.)
+        let registry = ToolRegistry::new();
+        struct SchemaTool {
+            name: String,
+        }
+        #[async_trait::async_trait]
+        impl crate::tools::Tool for SchemaTool {
+            fn name(&self) -> &str {
+                &self.name
+            }
+            fn description(&self) -> &str {
+                "A tool whose schema is counted in the breakdown"
+            }
+            fn input_schema(&self) -> serde_json::Value {
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {"x": {"type": "string"}}
+                })
+            }
+            async fn execute(
+                &self,
+                _input: serde_json::Value,
+            ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+                Ok(crate::tools::ToolOutput::success("ok".into()))
+            }
+        }
+        for name in ["Bash", "mcp__gh__search", "skill_commit"] {
+            registry
+                .register(Box::new(SchemaTool {
+                    name: name.to_string(),
+                }))
+                .expect("register test tool");
+        }
+
+        let temp_dir = env::temp_dir()
+            .join("shannon-context-breakdown-test")
+            .join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&temp_dir).expect("temp dir");
+        let mut store = MemoryStore::new(temp_dir.clone());
+        let entry = MemoryEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            project: std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "default".to_string()),
+            category: MemoryCategory::Preference,
+            content: "The user prefers concise answers.".to_string(),
+            tags: vec![],
+            confidence: 1.0,
+            created_at: chrono::Utc::now(),
+            accessed_at: chrono::Utc::now(),
+            access_count: 0,
+            source_session_id: None,
+            source_kind: None,
+        };
+        store.add(entry).expect("add memory");
+
+        let client = create_test_client();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+        let engine = QueryEngine::new(
+            client,
+            registry,
+            permissions,
+            state,
+            QueryEngineConfig::default(),
+        )
+        .with_memory(store);
+        let mut engine = engine;
+        engine.conversation.messages = vec![
+            shannon_engine::api::Message {
+                role: "user".into(),
+                content: MessageContent::Text("Hello there, Shannon.".into()),
+            },
+            shannon_engine::api::Message {
+                role: "assistant".into(),
+                content: MessageContent::Text("Hi! How can I help today?".into()),
+            },
+        ];
+
+        let breakdown = engine.context_breakdown();
+        for key in ["system", "tools", "skills", "memory", "mcp", "conversation"] {
+            assert!(
+                breakdown.tokens_for(key) > 0,
+                "category {key} must be > 0 with a populated engine"
+            );
+        }
+        let sum: u64 = breakdown.categories.iter().map(|c| c.tokens).sum();
+        assert_eq!(breakdown.total_tokens, sum);
+        // test-model is absent from the model catalog and the client is not
+        // an Ollama probe — the window must stay None (no fabricated 200K).
+        assert_eq!(breakdown.context_window, None);
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
@@ -6714,6 +6988,98 @@ mod tests {
         let _ = fs::remove_dir_all(temp_dir);
     }
 
+    #[test]
+    fn test_with_memory_arc_shares_one_instance_across_engines() {
+        use crate::memory::{MemoryCategory, MemoryEntry};
+        // P2-4b seam: desktop hosts hold one shared handle and thread clones
+        // of it into every engine. Both engines must observe the same store —
+        // a write through one handle is visible (and injectable) through the
+        // other's.
+        let temp_dir = env::temp_dir()
+            .join("shannon-memory-arc-test")
+            .join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&temp_dir).unwrap();
+        let project = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "default".to_string());
+
+        let shared = Arc::new(std::sync::RwLock::new(MemoryStore::new(temp_dir.clone())));
+        let engine_a = create_test_engine().with_memory_arc(shared.clone());
+        let engine_b = create_test_engine().with_memory_arc(shared.clone());
+
+        let handle_a = engine_a.memory().cloned().expect("engine a has memory");
+        let handle_b = engine_b.memory().expect("engine b has memory");
+        assert!(
+            Arc::ptr_eq(&handle_a, handle_b),
+            "both engines must reference the same Arc instance"
+        );
+
+        {
+            let mut store = handle_a.write().unwrap_or_else(|e| e.into_inner());
+            let mut entry = MemoryEntry::new(&project, MemoryCategory::Preference, "shared fact");
+            entry.source_kind = Some(MemoryEntry::SOURCE_AUTO_EXTRACT.to_string());
+            store.add(entry).expect("add through engine a's handle");
+        }
+
+        let store_b = handle_b.read().unwrap_or_else(|e| e.into_inner());
+        let injected = store_b
+            .format_for_injection(&project)
+            .expect("injection text for the cwd project");
+        assert!(
+            injected.contains("shared fact"),
+            "a write through engine a must be injectable from engine b"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_with_memory_arc_feeds_the_injection_read_path() {
+        use crate::memory::{MemoryCategory, MemoryEntry};
+        // The same read (`format_for_injection` over the cwd project key)
+        // process_query and context_breakdown perform — must produce text
+        // once the shared store carries entries for that key.
+        let temp_dir = env::temp_dir()
+            .join("shannon-memory-arc-inject-test")
+            .join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&temp_dir).unwrap();
+        let project = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "default".to_string());
+
+        let shared = Arc::new(std::sync::RwLock::new(MemoryStore::new(temp_dir.clone())));
+        {
+            let mut store = shared.write().unwrap_or_else(|e| e.into_inner());
+            store
+                .add(MemoryEntry::new(
+                    &project,
+                    MemoryCategory::Context,
+                    "engine injected this",
+                ))
+                .expect("seed memory");
+        }
+
+        let engine = create_test_engine().with_memory_arc(shared);
+        let text = engine
+            .memory()
+            .unwrap()
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .format_for_injection(&project)
+            .expect("memory text");
+        assert!(text.contains("engine injected this"));
+
+        // And the context breakdown's `memory` category (which snapshots the
+        // identical injection text) is non-zero with the store attached.
+        let breakdown = engine.context_breakdown();
+        assert!(
+            breakdown.tokens_for("memory") > 0,
+            "memory category must be non-zero with a populated shared store"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
     // ── set_model_for_provider tests ────────────────────────────────
 
     #[test]
@@ -6849,5 +7215,141 @@ mod tests {
         engine.set_max_turns(42);
         assert_eq!(engine.config.max_turns, 42);
         assert_ne!(engine.config.max_turns, default_turns);
+    }
+
+    // ── ToolResultEntry::to_tool_result_content — direct coverage ─────
+    // Locks down the dual-metadata-image convention added in the
+    // use-browser-computer-upload branch: the `computer` tool returns
+    // base64 in `metadata["data"]` with plain text in `content`, while
+    // Read/AnalyzeImage return a JSON object in `content` with a `data`
+    // field. Both paths must produce an Image content block for the LLM
+    // to "see" the file; failure to parse must fall back to plain text.
+
+    fn make_entry(
+        content: &str,
+        metadata: std::collections::HashMap<String, serde_json::Value>,
+    ) -> ToolResultEntry {
+        ToolResultEntry {
+            tool_use_id: "test".into(),
+            content: content.into(),
+            is_error: false,
+            metadata,
+        }
+    }
+
+    fn image_metadata() -> std::collections::HashMap<String, serde_json::Value> {
+        let mut m = std::collections::HashMap::new();
+        m.insert("type".into(), serde_json::json!("image"));
+        m.insert("media_type".into(), serde_json::json!("image/png"));
+        m.insert("data".into(), serde_json::json!("iVBORw0KGgo="));
+        m.insert("width".into(), serde_json::json!(1920u32));
+        m.insert("height".into(), serde_json::json!(1080u32));
+        m.insert("file_path".into(), serde_json::json!("/tmp/shot.png"));
+        m
+    }
+
+    #[test]
+    fn tool_result_entry_image_from_metadata_data() {
+        let entry = make_entry("Screenshot captured (1920x1080)", image_metadata());
+        let out = entry
+            .to_tool_result_content()
+            .expect("image result yields content");
+        let ToolResultContent::Multiple(blocks) = out else {
+            panic!("expected Multiple for image metadata, got single");
+        };
+        assert_eq!(blocks.len(), 2);
+        // text block describes the file (path + media type + dims)
+        let ContentBlock::Text { text } = &blocks[0] else {
+            panic!("first block must be Text");
+        };
+        assert!(text.contains("/tmp/shot.png"));
+        assert!(text.contains("image/png"));
+        assert!(text.contains("1920x1080"));
+        // image block carries the base64 payload untouched
+        let ContentBlock::Image { source } = &blocks[1] else {
+            panic!("second block must be Image");
+        };
+        assert_eq!(source.media_type, "image/png");
+        assert_eq!(source.data, "iVBORw0KGgo=");
+    }
+
+    #[test]
+    fn tool_result_entry_image_from_content_json_convention() {
+        // Read/AnalyzeImage convention: base64 lives in a `data` field of
+        // a JSON object in `content`; metadata only carries image markers.
+        let mut meta = std::collections::HashMap::new();
+        meta.insert("type".into(), serde_json::json!("image"));
+        meta.insert("media_type".into(), serde_json::json!("image/jpeg"));
+        meta.insert("file_path".into(), serde_json::json!("pic.jpg"));
+        let entry = make_entry(r#"{"type":"image","data":"/9j/4AAQSk=="}"#, meta);
+        let out = entry
+            .to_tool_result_content()
+            .expect("image result yields content");
+        let ToolResultContent::Multiple(blocks) = out else {
+            panic!("expected Multiple");
+        };
+        assert_eq!(blocks.len(), 2);
+        let ContentBlock::Image { source } = &blocks[1] else {
+            panic!("second block must be Image");
+        };
+        assert_eq!(source.data, "/9j/4AAQSk==");
+    }
+
+    #[test]
+    fn tool_result_entry_image_without_path_uses_generic_label() {
+        let mut meta = std::collections::HashMap::new();
+        meta.insert("type".into(), serde_json::json!("image"));
+        meta.insert("media_type".into(), serde_json::json!("image/png"));
+        meta.insert("data".into(), serde_json::json!("AAA="));
+        let entry = make_entry("Screenshot captured (WxH)", meta);
+        let out = entry.to_tool_result_content().expect("ok");
+        let ToolResultContent::Multiple(blocks) = out else {
+            panic!("expected Multiple");
+        };
+        let ContentBlock::Text { text } = &blocks[0] else {
+            panic!("first block must be Text");
+        };
+        // No file_path → generic label, still descriptive
+        assert!(text.starts_with("Image (image/png)"));
+        assert!(text.contains("The image content is provided"));
+    }
+
+    #[test]
+    fn tool_result_entry_image_no_payload_falls_back_to_single() {
+        // Both conventions absent: we still want a Text fallback rather
+        // than dropping the result on the floor.
+        let mut meta = std::collections::HashMap::new();
+        meta.insert("type".into(), serde_json::json!("image"));
+        meta.insert("media_type".into(), serde_json::json!("image/png"));
+        // No data field anywhere
+        let entry = make_entry("plain text no base64", meta);
+        let out = entry.to_tool_result_content().expect("ok");
+        assert!(matches!(out, ToolResultContent::Single(_)));
+    }
+
+    #[test]
+    fn tool_result_entry_non_image_returns_single() {
+        let mut meta = std::collections::HashMap::new();
+        meta.insert("exit_code".into(), serde_json::json!(0));
+        let entry = make_entry("hello world", meta);
+        assert!(matches!(
+            entry.to_tool_result_content(),
+            Some(ToolResultContent::Single(_))
+        ));
+    }
+
+    #[test]
+    fn tool_result_entry_image_with_error_returns_single() {
+        let entry = ToolResultEntry {
+            tool_use_id: "t".into(),
+            content: "boom".into(),
+            is_error: true,
+            metadata: image_metadata(),
+        };
+        // is_error short-circuits to Single regardless of metadata type.
+        assert!(matches!(
+            entry.to_tool_result_content(),
+            Some(ToolResultContent::Single(_))
+        ));
     }
 }

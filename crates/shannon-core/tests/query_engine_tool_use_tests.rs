@@ -134,6 +134,7 @@ mod tool_use_tests {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let client = shannon_engine::api::LlmClient::new(config);
         QueryEngine::new(
@@ -150,6 +151,7 @@ mod tool_use_tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: msg.to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
@@ -699,6 +701,7 @@ mod openai_trailing_usage_tests {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool)).unwrap();
@@ -717,6 +720,7 @@ mod openai_trailing_usage_tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: "use the echo tool".to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
@@ -876,6 +880,7 @@ mod openai_truncation_continuation_tests {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let engine = QueryEngine::new(
             shannon_engine::api::LlmClient::new(config),
@@ -892,6 +897,7 @@ mod openai_truncation_continuation_tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: "restructure the crate".to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
@@ -1160,6 +1166,7 @@ mod zhipu_tool_use_broadcast_tests {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool)).unwrap();
@@ -1178,6 +1185,7 @@ mod zhipu_tool_use_broadcast_tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: "use the echo tool".to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,

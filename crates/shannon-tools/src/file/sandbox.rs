@@ -298,7 +298,7 @@ impl PathSandbox {
     }
 
     /// Render a canonical host path the way the command sandbox sees it —
-    /// the reverse of [`PathSandbox::remap_bind_alias`] (A3).
+    /// the reverse of `PathSandbox::remap_bind_alias` (A3).
     ///
     /// A path under the project root becomes `/workspace/<rest>`; anything
     /// else (the temp root, paths outside every root) is returned unchanged.
@@ -764,8 +764,7 @@ fn replace_path_prefix(text: &str, from: &str, to: &str) -> String {
         // Root "/" would rewrite every absolute path; skip degenerate cases.
         return text.to_string();
     }
-    let is_path_char =
-        |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '-');
+    let is_path_char = |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '-');
     let mut result = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(pos) = rest.find(from) {
@@ -775,8 +774,7 @@ fn replace_path_prefix(text: &str, from: &str, to: &str) -> String {
         // the match is not the root — keep it. A `/` tail is a CHILD path
         // and is exactly the case being rewritten.
         let preceded_by_path = before.ends_with(|c: char| is_path_char(c) || c == '/');
-        let tail_blocks =
-            matches!(tail.chars().next(), Some(c) if is_path_char(c));
+        let tail_blocks = matches!(tail.chars().next(), Some(c) if is_path_char(c));
         if preceded_by_path || tail_blocks {
             result.push_str(before);
             result.push_str(from);
@@ -791,10 +789,7 @@ fn replace_path_prefix(text: &str, from: &str, to: &str) -> String {
 }
 
 /// Recursively rewrite every JSON string through the alias display mapping.
-fn remap_json_strings(
-    value: &mut serde_json::Value,
-    sandbox: &PathSandbox,
-) {
+fn remap_json_strings(value: &mut serde_json::Value, sandbox: &PathSandbox) {
     match value {
         serde_json::Value::String(s) => {
             let remapped = sandbox.alias_display_text(s);
@@ -1251,7 +1246,10 @@ mod tests {
             tmp_file.to_string_lossy()
         );
         // Paths outside every root are echoed unchanged.
-        assert_eq!(sandbox.alias_display_path(Path::new("/etc/hosts")), "/etc/hosts");
+        assert_eq!(
+            sandbox.alias_display_path(Path::new("/etc/hosts")),
+            "/etc/hosts"
+        );
     }
 
     #[test]
@@ -1312,7 +1310,12 @@ mod tests {
             "error must list sandbox-visible roots, got: {err}"
         );
         assert!(
-            !err.contains(&fs::canonicalize(td.path()).unwrap().to_string_lossy().to_string()),
+            !err.contains(
+                &fs::canonicalize(td.path())
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            ),
             "host workspace path must not leak into the error, got: {err}"
         );
     }

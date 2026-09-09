@@ -36,9 +36,12 @@ mod defaults;
 pub mod sandbox;
 
 pub mod agent;
+pub mod applescript;
 pub mod ask_user;
 pub mod background;
 pub mod brief;
+pub mod browser_tools;
+pub mod chrome_session;
 pub mod computer_use;
 pub mod config;
 pub mod cron;
@@ -57,10 +60,18 @@ pub mod mcp_tools;
 pub mod messaging;
 pub mod notebook;
 pub mod plan_mode;
+pub mod platform_adapter;
+pub mod preview;
 pub mod pty;
 pub mod remote_trigger;
 pub mod repl_tool;
 pub mod schedule_wakeup;
+/// B3 / T10-Phase2: native Wayland screen capture (wlr-screencopy +
+/// xdg-desktop-portal). Compiled only on Linux builds with the
+/// `computer-use-wayland-capture` feature; on other builds the xcap
+/// path in `computer_use` handles (or rejects) screenshots.
+#[cfg(all(target_os = "linux", feature = "computer-use-wayland-capture"))]
+pub mod screen_capture;
 pub mod skill;
 pub mod synthetic_output;
 pub mod system;
@@ -75,6 +86,7 @@ pub mod worktree;
 
 // Re-exports for convenience
 pub use agent::{AgentOperation, AgentTool, AgentToolContext};
+pub use applescript::AppleScriptTool;
 pub use ask_user::{
     AskUserError, AskUserInput, AskUserQuestionTool, ErrorQuestionHandler, MockQuestionHandler,
     Question, QuestionAnswer, QuestionHandler, QuestionOption, SharedQuestionHandler,
@@ -240,8 +252,7 @@ fn register_all_tools(
             // project dir plus the temp root. Without the temp root, Write
             // refuses /tmp while sandboxed Bash happily writes it, and the
             // model splits its writes across inconsistent tool worlds.
-            let allowed_roots =
-                crate::file::sandbox::SandboxConfig::command_aligned_roots(dir);
+            let allowed_roots = crate::file::sandbox::SandboxConfig::command_aligned_roots(dir);
             // A3: when the command sandbox backends relocate the project dir
             // to /workspace (bwrap/Docker — see `SANDBOX_BIND_ALIAS`), echo
             // output paths in that same view so `cd`/`ls` on an echoed path
@@ -454,6 +465,19 @@ fn register_all_tools(
 
     // ── Computer Use (desktop automation) ────────────────────────────────
     registry.register(Box::new(ComputerUseTool::new()))?;
+
+    // ── AppleScript / Shortcuts (macOS app automation, T13 Tier 1) ───────
+    registry.register(Box::new(applescript::AppleScriptTool::new()))?;
+
+    // ── Built-in browser tools (T14 Phase 1, local-browser) ──────────────
+    registry.register(Box::new(browser_tools::BrowserNavigateTool))?;
+    registry.register(Box::new(browser_tools::BrowserClickTool))?;
+    registry.register(Box::new(browser_tools::BrowserTypeTool))?;
+    registry.register(Box::new(browser_tools::BrowserSnapshotTool))?;
+    registry.register(Box::new(browser_tools::BrowserScreenshotTool))?;
+    registry.register(Box::new(browser_tools::BrowserTabsTool))?;
+    registry.register(Box::new(browser_tools::BrowserCloseTool))?;
+    registry.register(Box::new(browser_tools::BrowserConsoleTool))?;
 
     // ── MCP resource tools ─────────────────────────────────────────────
     registry.register(Box::new(McpResourceTool::new()))?;

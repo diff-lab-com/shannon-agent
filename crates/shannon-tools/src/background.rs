@@ -39,7 +39,7 @@ use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use shannon_tool_interface::{PipedSpawn, ProcessProvider, ProcessRequest};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -459,9 +459,8 @@ impl Tool for WaitForLogTool {
         let matcher: MatcherKind = match parsed.match_kind.as_str() {
             "is" => MatcherKind::Substring(parsed.pattern.clone()),
             "re" => {
-                let re = Regex::new(&parsed.pattern).map_err(|e| {
-                    ToolError::InvalidInput(format!("Invalid regex pattern: {e}"))
-                })?;
+                let re = Regex::new(&parsed.pattern)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid regex pattern: {e}")))?;
                 MatcherKind::Regex(re)
             }
             other => {
@@ -471,7 +470,8 @@ impl Tool for WaitForLogTool {
             }
         };
 
-        let poll_interval = Duration::from_millis(parsed.poll_interval_ms.unwrap_or(DEFAULT_POLL_MS));
+        let poll_interval =
+            Duration::from_millis(parsed.poll_interval_ms.unwrap_or(DEFAULT_POLL_MS));
         let timeout = Duration::from_millis(parsed.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS));
         let deadline = Instant::now() + timeout;
         let max_lines = parsed.max_lines.unwrap_or(RING_CAPACITY);
@@ -803,10 +803,7 @@ mod tests {
 
     #[async_trait]
     impl ProcessProvider for LocalFakeProcess {
-        fn run_blocking(
-            &self,
-            _request: &ProcessRequest,
-        ) -> std::io::Result<CapturedOutput> {
+        fn run_blocking(&self, _request: &ProcessRequest) -> std::io::Result<CapturedOutput> {
             Ok(CapturedOutput {
                 stdout: Vec::new(),
                 stderr: Vec::new(),
@@ -814,17 +811,11 @@ mod tests {
             })
         }
 
-        async fn run_async(
-            &self,
-            _request: &ProcessRequest,
-        ) -> std::io::Result<CapturedOutput> {
+        async fn run_async(&self, _request: &ProcessRequest) -> std::io::Result<CapturedOutput> {
             self.run_blocking(_request)
         }
 
-        async fn spawn_piped(
-            &self,
-            spec: &PipedSpawn,
-        ) -> std::io::Result<Box<dyn PipedChild>> {
+        async fn spawn_piped(&self, spec: &PipedSpawn) -> std::io::Result<Box<dyn PipedChild>> {
             use tokio::process::Command;
             let mut cmd = Command::new(&spec.request.program);
             cmd.args(&spec.request.args);
@@ -862,27 +853,21 @@ mod tests {
 
     #[async_trait]
     impl PipedChild for RealPipedChild {
-        fn take_stdin(
-            &mut self,
-        ) -> Option<Box<dyn AsyncWrite + Send + Unpin>> {
+        fn take_stdin(&mut self) -> Option<Box<dyn AsyncWrite + Send + Unpin>> {
             self.child
                 .stdin
                 .take()
                 .map(|s| Box::new(s) as Box<dyn AsyncWrite + Send + Unpin>)
         }
 
-        fn take_stdout(
-            &mut self,
-        ) -> Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>> {
+        fn take_stdout(&mut self) -> Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>> {
             self.child
                 .stdout
                 .take()
                 .map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Send + Unpin>)
         }
 
-        fn take_stderr(
-            &mut self,
-        ) -> Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>> {
+        fn take_stderr(&mut self) -> Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>> {
             self.child
                 .stderr
                 .take()
@@ -981,7 +966,9 @@ mod tests {
         assert_eq!(res.metadata["matched"].as_bool(), Some(true));
         let matched_lines = res.metadata["matched_lines"].as_array().unwrap();
         assert!(
-            matched_lines.iter().any(|v| v.as_str().unwrap().contains("hello")),
+            matched_lines
+                .iter()
+                .any(|v| v.as_str().unwrap().contains("hello")),
             "matched_lines should contain 'hello'; got {matched_lines:?}"
         );
         assert_eq!(res.metadata["exited"].as_bool(), Some(true));
@@ -1001,8 +988,8 @@ mod tests {
                 "name": "repeater",
                 "command": "sleep 5",
             }))
-        .await
-        .expect("first RunBackground ok");
+            .await
+            .expect("first RunBackground ok");
 
         // Allow a moment for the first reader tasks to attach.
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1012,7 +999,7 @@ mod tests {
                 "name": "repeater",
                 "command": "echo replaced",
             }))
-        .await
+            .await
             .expect("second RunBackground ok");
 
         assert_eq!(
@@ -1022,7 +1009,10 @@ mod tests {
 
         // Only one entry remains under the name.
         let registry = REGISTRY.lock().unwrap();
-        assert_eq!(registry.get("repeater").map(|e| e.name.clone()), Some("repeater".to_string()));
+        assert_eq!(
+            registry.get("repeater").map(|e| e.name.clone()),
+            Some("repeater".to_string())
+        );
         drop(registry);
 
         REGISTRY.lock().unwrap().remove("repeater");
@@ -1049,8 +1039,8 @@ mod tests {
                 "name": "killable",
                 "timeout_ms": 200,
             }))
-        .await
-        .expect("KillBackground ok");
+            .await
+            .expect("KillBackground ok");
 
         assert_eq!(kill_out.metadata["name"].as_str(), Some("killable"));
 
@@ -1064,7 +1054,7 @@ mod tests {
                 "command": "echo after-kill",
             }))
             .await
-        .expect("respawn after Kill");
+            .expect("respawn after Kill");
         assert_eq!(respawn.metadata["name"].as_str(), Some("killable"));
 
         REGISTRY.lock().unwrap().remove("killable");
@@ -1120,7 +1110,10 @@ mod tests {
         for i in 0..10 {
             push_line(&buf, format!("l{i}"));
         }
-        assert_eq!(tail(&buf, 3), vec!["l7".to_string(), "l8".to_string(), "l9".to_string()]);
+        assert_eq!(
+            tail(&buf, 3),
+            vec!["l7".to_string(), "l8".to_string(), "l9".to_string()]
+        );
         assert_eq!(tail(&buf, 1000).len(), 10);
     }
 
@@ -1134,8 +1127,14 @@ mod tests {
             (kb.name(), kb.input_schema()),
         ] {
             assert_eq!(schema["type"], "object", "{name}: schema must be object");
-            assert!(schema["properties"].is_object(), "{name}: must have properties");
-            assert!(schema["required"].is_array(), "{name}: must declare required");
+            assert!(
+                schema["properties"].is_object(),
+                "{name}: must have properties"
+            );
+            assert!(
+                schema["required"].is_array(),
+                "{name}: must declare required"
+            );
         }
     }
 

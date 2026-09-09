@@ -618,6 +618,11 @@ pub struct QueryContext {
     pub query_id: Uuid,
     pub session_id: Uuid,
     pub user_message: String,
+    /// Multimodal attachments (e.g. images) delivered alongside
+    /// `user_message`. Empty for text-only queries; non-empty values switch
+    /// the user message to a content-blocks form the multimodal adapters
+    /// serialize for both Anthropic and OpenAI providers.
+    pub attachments: Vec<shannon_engine::api::ContentBlock>,
     pub metadata: QueryMetadata,
 }
 
