@@ -79,7 +79,15 @@ impl RetryConfig {
                 }
                 self.retryable_status_codes.contains(status)
             }
-            ApiError::HttpError(e) => e.is_timeout() || e.is_connect(),
+            // N1: Kind::Request ("error sending request") wraps mid-send
+            // network failures — DNS flaps, resets while the request is in
+            // flight. These are transient by nature and were previously
+            // classified NOT retryable (neither is_timeout() nor is_connect()
+            // is true for Kind::Request), so a single network blip killed the
+            // whole query at the first call (measured: 18 first-call deaths
+            // in the TB2.1 sweep, docs/backlog.md §一). Bounded by
+            // max_retries + exponential backoff.
+            ApiError::HttpError(e) => e.is_timeout() || e.is_connect() || e.is_request(),
             ApiError::Timeout => true,
             // Auth errors, invalid responses, and provider errors are not retryable
             ApiError::AuthenticationFailed
