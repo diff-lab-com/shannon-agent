@@ -2315,9 +2315,7 @@ impl QueryEngine {
                                 QueryEvent::Progress {
                                     query_id,
                                     message: format!(
-                                        "Token budget exceeded ({} > {}); injecting \
-                                         targeted-read nudge",
-                                        total_input_tokens, budget
+                                        "Token budget exceeded ({total_input_tokens} > {budget});                                          injecting targeted-read nudge"
                                     ),
                                 }
                             );
