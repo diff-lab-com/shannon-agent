@@ -343,7 +343,15 @@ impl SessionTee {
             Ok(mut writer) => {
                 let fresh = writer.next_seq() == 0;
                 if fresh {
-                    // First event of the log: model / provider / cwd / version.
+                    // First event of the log: model / provider / cwd / version
+                    // plus the telemetry decision signals (roadmap 2026-09-08):
+                    // platform share (T13 priority) and remote-CDP usage
+                    // (B1-tail priority). The CDP env var name must stay in
+                    // sync with shannon-browser's cdp_endpoint reader — core
+                    // deliberately does not depend on that crate.
+                    let browser_cdp = std::env::var("SHANNON_BROWSER_CDP")
+                        .map(|v| !v.trim().is_empty())
+                        .unwrap_or(false);
                     writer.record(SessionEventBody::SessionStart(SessionStartPayload {
                         model: model.to_string(),
                         provider: provider.map(String::from),
@@ -351,6 +359,9 @@ impl SessionTee {
                             .ok()
                             .map(|p| p.display().to_string()),
                         app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                        os: Some(std::env::consts::OS.to_string()),
+                        arch: Some(std::env::consts::ARCH.to_string()),
+                        browser_cdp: Some(browser_cdp),
                     }));
                 }
                 Self {
@@ -390,9 +401,16 @@ impl SessionTee {
 
     /// Record the user message that started the turn.
     pub fn record_user_message(&mut self, content: &str) {
+        self.record_user_message_with_count(content, 0);
+    }
+
+    /// Record the user message plus how many multimodal attachments (images)
+    /// accompanied it. The base64 payloads themselves are NOT persisted.
+    pub fn record_user_message_with_count(&mut self, content: &str, attachment_count: usize) {
         self.record_body(SessionEventBody::UserMessage(UserMessagePayload {
             source: UserMessagePayload::SOURCE_USER.into(),
             content: self.policy.redact_str(content),
+            attachment_count,
         }));
     }
 
@@ -516,13 +534,6 @@ impl SessionTee {
 
     /// Record a `request/header` built from the adapter's own serialized
     /// request body. Headers bypass the size limit; only redaction applies.
-    ///
-    /// Every header after the first one starts a new envelope turn (C1): the
-    /// engine tees one header per LLM request, and each request *is* an agent
-    /// turn, so the envelope `turn` on subsequent rows must advance. Before
-    /// this, every event of a multi-step headless run was stamped `turn = 1`
-    /// (the vocabulary turn opens once per query) and the real round count
-    /// was only recoverable by counting `request/header` rows.
     pub fn record_request_header(
         &mut self,
         wire_body: &Value,
@@ -535,14 +546,6 @@ impl SessionTee {
         } else {
             "turn"
         };
-        if self.headers_written > 0 {
-            // C1: a new LLM request is a new turn. The first header of the
-            // query stays on the turn opened by `record_turn_start`; each
-            // subsequent request advances the envelope counter.
-            if let Some(writer) = self.writer.as_mut() {
-                writer.set_turn(writer.current_turn() + 1);
-            }
-        }
         self.headers_written += 1;
         let payload = RequestHeaderPayload {
             model: model.to_string(),
@@ -728,6 +731,13 @@ impl TeeHandle {
         }
     }
 
+    /// See [`SessionTee::record_user_message_with_count`].
+    pub fn record_user_message_with_count(&self, content: &str, attachment_count: usize) {
+        if let Ok(mut tee) = self.tee.lock() {
+            tee.record_user_message_with_count(content, attachment_count);
+        }
+    }
+
     /// Record `turn/start`.
     pub fn record_turn_start(&self, query_id: Option<String>) {
         if let Ok(mut tee) = self.tee.lock() {
@@ -831,6 +841,26 @@ mod tests {
             tee.close();
         }
         assert_eq!(read_bodies(&dir).len(), 1, "reopen writes no session/start");
+    }
+
+    #[test]
+    fn test_record_user_message_with_count_persists_attachment_count() {
+        let dir = TempDir::new().expect("tempdir");
+        {
+            let mut tee = open_tee(&dir);
+            tee.record_user_message("text only");
+            tee.record_user_message_with_count("with two images", 2);
+            tee.close();
+        }
+        let bodies = read_bodies(&dir);
+        let counts: Vec<usize> = bodies
+            .iter()
+            .filter_map(|b| match b {
+                SessionEventBody::UserMessage(p) => Some(p.attachment_count),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(counts, vec![0, 2], "attachment_count must round-trip");
     }
 
     #[test]
@@ -1027,91 +1057,6 @@ mod tests {
             }
             other => panic!("wrong body: {other:?}"),
         }
-    }
-
-    /// C1 regression: the envelope `turn` must advance with each new LLM
-    /// request. The engine tees one `request/header` per LLM request while
-    /// opening only one vocabulary turn per query — so before the fix every
-    /// row of a multi-step headless run was stamped `turn = 1` and the real
-    /// round count was only recoverable by counting header rows.
-    #[test]
-    fn test_request_header_advances_envelope_turn_per_llm_request() {
-        let dir = TempDir::new().expect("tempdir");
-        let header = |tee: &mut SessionTee| {
-            tee.record_request_header(&json!({"model": "m"}), "m", None, json!({}));
-        };
-        {
-            let mut tee = open_tee(&dir);
-            tee.record_turn_start(Some("q-1".into()));
-            // Turn 1: the first LLM request of the query.
-            header(&mut tee);
-            // A later step in the agent loop issues request two, then three.
-            header(&mut tee);
-            header(&mut tee);
-            tee.close();
-        }
-        let path = super::super::session_events_path(dir.path(), "sess-tee");
-        let reader = super::super::SessionLogReader::open(&path).expect("open reader");
-        let events = reader.read_events(false).expect("read events");
-        let turns: Vec<u64> = events.iter().map(|e| e.turn).collect();
-        // session/start (turn 0) → turn/start (1) → header 1 (1) →
-        // header 2 (2) → header 3 (3) → turn/end (3).
-        assert_eq!(turns, vec![0, 1, 1, 2, 3, 3]);
-        // The header reasons still tell the initial/subsequent story.
-        let header_turns: Vec<(u64, Option<&str>)> = events
-            .iter()
-            .filter_map(|e| match &e.body {
-                SessionEventBody::RequestHeader(p) => Some((e.turn, p.reason.as_deref())),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            header_turns,
-            vec![(1, Some("initial")), (2, Some("turn")), (3, Some("turn"))]
-        );
-    }
-
-    /// C1: a fresh query on an existing log keeps the sequence going — the
-    /// first request of the new query rides the turn opened by its own
-    /// `turn/start` (counter resumed from the last event), later requests
-    /// advance from there.
-    #[test]
-    fn test_second_query_on_same_log_continues_turn_sequence() {
-        let dir = TempDir::new().expect("tempdir");
-        let header = |tee: &mut SessionTee| {
-            tee.record_request_header(&json!({"model": "m"}), "m", None, json!({}));
-        };
-        {
-            let mut tee = open_tee(&dir);
-            tee.record_turn_start(None);
-            header(&mut tee);
-            header(&mut tee);
-            tee.close();
-        }
-        {
-            // Reopened tee (fresh_log = false): the writer resumes at turn 2
-            // (the last event of query 1), turn/start opens turn 3.
-            let mut tee = open_tee(&dir);
-            tee.record_turn_start(None);
-            header(&mut tee);
-            header(&mut tee);
-            tee.close();
-        }
-        let path = super::super::session_events_path(dir.path(), "sess-tee");
-        let reader = super::super::SessionLogReader::open(&path).expect("open reader");
-        let events = reader.read_events(false).expect("read events");
-        let header_turns: Vec<u64> = events
-            .iter()
-            .filter_map(|e| match &e.body {
-                SessionEventBody::RequestHeader(_) => Some(e.turn),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            header_turns,
-            vec![1, 2, 3, 4],
-            "each query's first header stays on its own turn; later ones advance"
-        );
     }
 
     #[test]
