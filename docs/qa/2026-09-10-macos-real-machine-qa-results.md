@@ -60,15 +60,16 @@
   shell rc 无 key 导出），REPL 启动即回落 ollama `127.0.0.1:11434` 连接拒绝退出。
   QA-1 #6（REPL High-risk 审批流）与 QA-4 的 `/browser doctor` REPL 行在配置
   provider 前无法执行。
-- **F12（存量，未修，已记录）**：修复 E6 后仍有 **9 个**存量 macOS 失败（基线对比
-  确认，与本批改动无关）：`file::sandbox_adapter::tests` 的 validate 三件套 +
-  `file::tests` 的 6 个工具回显/快照测试（glob/read/write/multiedit/edit 的
-  alias-echo 与 snapshot 断言）。同属 /private 别名家族，但散布在各工具的回显
-  构造点，需逐点处理。基线全量对比数据：feature 形态 25 → 18 失败（本批净修复
-  11 个，0 引入）。
-- **F13（取证）**：`git::tests` 在 macOS 上负载敏感——单测通过，并行全量时失败
-  子集逐轮随机变化（基线 3 个、本批 4 个、互不重合）。仓库 CI 已因 "HOME-race
-  git tests" 配置 nextest 重试；本地全量跑的 git 失败请先单独重跑再下结论。
+- **F12（已修复，2026-09-10 第二批）**：sandbox_adapter 的 denied/allowed/read_only
+  策略匹配改为 canonical+raw 双拼写（此前 macOS 上 denied_paths 配置实际从未生效，
+  属安全相关修复）；FileHistory 缓存键规范化 + 双拼写查询（快照跨拼写可寻址）；
+  glob/read/write 的 alias-echo 测试按沙箱可见拼写修正。
+- **F13（已修复，2026-09-10 第二批）**：根因是 31 个 git/edit 测试直接改进程级
+  cwd 且互不串行——并行时互相踩进错误目录。新增 `test_support::CwdGuard`
+  （RAII 恢复 + 全局锁串行化），git.rs 31 处、edit.rs 5 处统一接入；
+  `manifest_helper` / `test_sync_validation_allows_cwd` 等 cwd 读取测试持锁运行。
+  另：`generate_cell_id` 纳秒时间戳加原子序号，消除同刻碰撞。最终双形态全量
+  **0 失败**（feature 1425 / default 1424），clippy 双形态归零。
 - **F11（已修复，产品级）**：macOS `/private` 路径别名破坏沙箱显示与策略匹配——
   `std::fs::canonicalize` 把 /etc、/tmp、/var 解析为 /private/…，导致
   ① denied pattern（/etc/**）失配，降级为 outside-roots 错误；

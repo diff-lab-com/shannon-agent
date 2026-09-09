@@ -343,7 +343,7 @@ impl PathSandboxAdapter {
         self.config
             .read_only_paths
             .iter()
-            .any(|ro| resolved.starts_with(ro) || resolved == *ro)
+            .any(|ro| matches_policy_path(&resolved, ro, self.fs.as_ref()))
     }
 
     /// Check if a path is in the denied list.
@@ -352,7 +352,7 @@ impl PathSandboxAdapter {
         self.config
             .denied_paths
             .iter()
-            .any(|denied| resolved.starts_with(denied) || resolved == *denied)
+            .any(|denied| matches_policy_path(&resolved, denied, self.fs.as_ref()))
     }
 
     /// Check if a path is under any allowed path.
@@ -366,8 +366,29 @@ impl PathSandboxAdapter {
         self.config
             .allowed_paths
             .iter()
-            .any(|allowed| resolved.starts_with(allowed) || resolved == *allowed)
+            .any(|allowed| matches_policy_path(&resolved, allowed, self.fs.as_ref()))
     }
+}
+
+/// Prefix-match a resolved path against a configured policy path, in any
+/// spelling (roadmap E7).
+///
+/// macOS canonicalization renders /var/…, /etc and /tmp as /private/var/…,
+/// /private/etc and /private/tmp, so a configured root and a resolved path
+/// routinely disagree about the prefix while naming the same files. Without
+/// the second spelling a configured `denied_paths: ["/etc"]` never matched
+/// the resolved `/private/etc/…` — the denial silently did not enforce.
+fn matches_policy_path(
+    resolved: &Path,
+    configured: &Path,
+    fs: &dyn shannon_tool_interface::FileSystemProvider,
+) -> bool {
+    if resolved.starts_with(configured) || resolved == configured {
+        return true;
+    }
+    let canonical_configured =
+        fs.canonicalize_blocking(configured).unwrap_or_else(|_| configured.to_path_buf());
+    resolved.starts_with(&canonical_configured) || resolved == canonical_configured
 }
 
 /// Safely resolve a path for security checks.

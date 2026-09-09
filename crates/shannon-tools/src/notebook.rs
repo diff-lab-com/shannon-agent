@@ -260,12 +260,17 @@ impl NotebookEditTool {
 
     /// Generate a new cell ID
     fn generate_cell_id() -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
         use std::time::{SystemTime, UNIX_EPOCH};
+        static CALL_SEQ: AtomicU64 = AtomicU64::new(0);
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        format!("{timestamp:x}")
+        // Mix in a per-call sequence: two calls inside one clock-granularity
+        // tick used to produce identical ids (roadmap E7).
+        let seq = CALL_SEQ.fetch_add(1, Ordering::Relaxed);
+        format!("{timestamp:x}{seq:x}")
     }
 
     /// Find cell index by ID or numeric index

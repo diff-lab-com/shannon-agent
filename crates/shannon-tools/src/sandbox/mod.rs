@@ -1084,6 +1084,10 @@ executable = ["/usr/local"]
     /// can be a silent fake restriction.
     #[test]
     fn manifest_helper_matches_host_capability_for_write_files() {
+        // The helper derives the plugin workspace from the process cwd; hold
+        // the shared cwd lock so concurrent chdir tests can't yank it away.
+        let _cwd = crate::test_support::lock_cwd();
+
         let dir = tempdir();
         let manifest = dir.path().join("plugin.toml");
         std::fs::write(&manifest, "# fixture\n").expect("manifest fixture");
@@ -1102,10 +1106,14 @@ executable = ["/usr/local"]
                 assert_eq!(guard.kind(), expected);
             }
             None => {
-                // Degrade path: only legitimate when the platform lacks any
-                // execution-world backend.
+                // Degrade path. On macOS a Docker install shadows Seatbelt
+                // in the executor's auto-detection, and the plugin argv-
+                // bridge deliberately refuses Docker worlds — so None there
+                // reflects host shape, not silent loss (roadmap E7).
+                let docker_shadows_seatbelt = cfg!(target_os = "macos")
+                    && shannon_core::sandbox::DockerSandbox::docker_available();
                 assert!(
-                    !cfg!(any(target_os = "linux", target_os = "macos")),
+                    docker_shadows_seatbelt,
                     "degradation on Linux/macOS would mean a backend-capable host silently \
                      lost enforcement"
                 );

@@ -585,6 +585,25 @@ impl FileHistoryManager {
     /// Record a snapshot of file content.
     ///
     /// Returns the snapshot if it was recorded (None if deduplicated).
+    /// Cache key for `path`: its canonical spelling when the file exists,
+    /// the given spelling otherwise. On macOS the same file is reachable as
+    /// `/var/…/f` and `/private/var/…/f` (canonicalize resolves the /var
+    /// symlink) — keying on the caller's spelling would fragment history
+    /// across spellings (roadmap E7).
+    fn cache_key(&self, path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    /// Cache lookup tolerant of path spellings: try the given key, then its
+    /// canonical form (see [`Self::cache_key`]).
+    fn lookup_history(&self, path: &Path) -> Option<FileHistory> {
+        if let Some(history) = self.cache.get(path) {
+            return Some(history.clone());
+        }
+        let canonical = std::fs::canonicalize(path).ok()?;
+        self.cache.get(&canonical).cloned()
+    }
+
     pub fn record_snapshot(
         &mut self,
         file_path: &Path,
@@ -593,17 +612,17 @@ impl FileHistoryManager {
     ) -> Result<FileSnapshot, FileHistoryError> {
         self.ensure_cache_loaded()?;
 
-        let file_path = file_path.to_path_buf();
+        let key = self.cache_key(file_path);
 
         // Check storage quota
         self.check_storage_quota()?;
 
-        let snapshot = FileSnapshot::new(file_path.clone(), content.to_string(), operation);
+        let snapshot = FileSnapshot::new(file_path.to_path_buf(), content.to_string(), operation);
 
         let history = self
             .cache
-            .entry(file_path.clone())
-            .or_insert_with(|| FileHistory::new(file_path.clone(), self.max_history_per_file));
+            .entry(key.clone())
+            .or_insert_with(|| FileHistory::new(key, self.max_history_per_file));
 
         if let Some(recorded) = history.add_snapshot(snapshot.clone()) {
             self.save_snapshot(&recorded)?;
@@ -620,9 +639,7 @@ impl FileHistoryManager {
     pub fn get_history(&mut self, file_path: &Path) -> Result<FileHistory, FileHistoryError> {
         self.ensure_cache_loaded()?;
 
-        self.cache
-            .get(file_path)
-            .cloned()
+        self.lookup_history(file_path)
             .ok_or_else(|| FileHistoryError::NoHistory(file_path.to_string_lossy().to_string()))
     }
 
@@ -634,10 +651,9 @@ impl FileHistoryManager {
     ) -> Result<FileSnapshot, FileHistoryError> {
         self.ensure_cache_loaded()?;
 
-        let history = self
-            .cache
-            .get(file_path)
-            .ok_or_else(|| FileHistoryError::NoHistory(file_path.to_string_lossy().to_string()))?;
+        let history = self.lookup_history(file_path).ok_or_else(|| {
+            FileHistoryError::NoHistory(file_path.to_string_lossy().to_string())
+        })?;
 
         history
             .get_by_id(id)
@@ -750,7 +766,7 @@ impl FileHistoryManager {
     ) -> Result<RewindAction, FileHistoryError> {
         self.ensure_cache_loaded()?;
 
-        let history = match self.cache.get(file_path) {
+        let history = match self.lookup_history(file_path) {
             Some(h) => h,
             None => return Ok(RewindAction::NoChange),
         };
@@ -790,7 +806,7 @@ impl FileHistoryManager {
     ) -> Result<RewindAction, FileHistoryError> {
         self.ensure_cache_loaded()?;
 
-        let history = match self.cache.get(file_path) {
+        let history = match self.lookup_history(file_path) {
             Some(h) => h,
             None => return Ok(RewindAction::NoChange),
         };

@@ -61,7 +61,7 @@
 | E4 | **存量 clippy 告警在 computer-use 形态下** | `computer_use.rs` format! 风格 ×3、Key clone ×3、landlock unused imports、platform_adapter unneeded return、glob/sandbox 测试散点 | **已清理（2026-09-10）**：双形态 clippy 归零 |
 | E5 | **30s 超时与首次 TCC 提示竞争** | 实测：Notes 首次授权若用户未在 30s 内点击，osascript 连同未决提示被超时杀死，报 `timed out after 30s` | **已缓解（2026-09-10）**：超时错误信息附带 TCC 提示指引；根治（放宽/暂停计时）需 TCC 状态内省（无公开 API），随权限预检立项评估 |
 | E6 | **macOS /private 路径别名破坏沙箱显示与策略匹配** | `std::fs::canonicalize` 把 /etc、/tmp、/var 解析为 /private/…：denied pattern（/etc/**）失配降级为 outside-roots 错误；bind-alias 显示失配导致错误信息泄漏宿主真实路径；temp 拼写失配使 tmp 排除失效，临时目录下的路径被错误重写为 /workspace。4 个存量单测在 macOS 上失败即源于此 | **已修复（2026-09-10）**：denied pattern 按可见拼写别名匹配；alias 展示匹配 canonical+raw 双拼写；temp 根统一渲染为沙箱可见的 /tmp 拼写；4 个测试修正为拼写无关断言，`file::sandbox::` 53/53 通过 |
-| E7 | **残留 9 个存量 macOS 失败（E6 同族，散布在工具回显构造点）** | `file::sandbox_adapter::tests` validate 三件套 + `file::tests` 6 个 alias-echo/snapshot 断言（glob/read/write/multiedit/edit）；基线对比确认与本批改动无关。另：`git::tests` 负载敏感（单测过、并行全量随机失败子集，CI nextest 重试已覆盖） | 逐工具回显点应用与 E6 相同的双拼写/别名展示处理；git 测试考虑 repo 隔离 |
+| E7 | **残留 9 个存量 macOS 失败 + git 测试负载敏感** | sandbox_adapter 策略匹配（denied_paths 在 macOS 实际未生效，安全相关）、FileHistory 缓存键拼写敏感、glob/read/write 回显；git/edit 31+5 处进程级 chdir 无串行化 | **已修复（2026-09-10）**：策略匹配双拼写；FileHistory 键规范化；回显测试按沙箱可见拼写修正；新增 `test_support::CwdGuard` 串行化并恢复 cwd；`generate_cell_id` 加原子序号。最终双形态全量 0 失败 |
 
 ---
 

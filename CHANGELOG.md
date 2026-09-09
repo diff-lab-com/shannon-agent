@@ -38,7 +38,18 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
   match the visible spelling, alias display matches canonical+raw root
   spellings, and the temp root renders as the sandbox-visible /tmp on
   every platform. Fixes 4 pre-existing macOS test failures.
-- **Honest screen-size failure (E1)**: `screen_size()` no longer silently
+- **Policy/path-spelling hardening (E7)**: `PathSandboxAdapter` denied/
+  allowed/read-only checks match both raw and canonical spellings — on macOS
+  a configured `denied_paths: ["/etc"]` never matched the resolved
+  `/private/etc/...`, so denials silently did not enforce. `FileHistory`
+  keys its cache canonically and tolerates either spelling on lookup, so
+  snapshot history is addressable no matter how the model spells the path.
+  Tests that retarget the process cwd (git/edit) now run under a shared
+  serialized RAII guard, and notebook cell ids mix an atomic sequence into
+  the timestamp to avoid same-tick collisions. Full lib suite: 0 failures
+  in both feature shapes on macOS (was 25 pre-existing failures at batch
+  start).
+- **Honest screen-size failure (E1): `screen_size()` no longer silently
   falls back to the 1024x768 reference frame when display enumeration
   fails (e.g. displays asleep) — that turned model coordinates into
   unscaled screen coordinates; the error now propagates. The AppleScript

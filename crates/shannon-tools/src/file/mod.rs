@@ -1171,10 +1171,15 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            output.metadata["file_path"],
-            host_path.to_string_lossy().to_string(),
-            "plain (no alias mount) scenario keeps host-path echo"
+        // The echo stays a host spelling — the raw input, or its canonical
+        // form (macOS resolves /var/… to /private/var/…). Aliasing off means
+        // it must NOT be rewritten to /workspace.
+        let echoed = output.metadata["file_path"].as_str().unwrap();
+        let canonical_input = std::fs::canonicalize(&host_path).unwrap();
+        let raw = host_path.to_string_lossy().to_string();
+        assert!(
+            echoed == raw.as_str() || std::path::Path::new(echoed) == canonical_input,
+            "plain (no alias mount) scenario keeps host-path echo, got: {echoed}"
         );
     }
 
@@ -1206,11 +1211,14 @@ mod tests {
             .await
             .unwrap();
         assert!(!output.is_error, "Write to /tmp must succeed");
-        // The temp root is not relocated by the command sandbox: echo stays.
-        assert_eq!(
-            output.metadata["file_path"],
-            tmp_target.to_string_lossy().to_string()
-        );
+        // The temp root renders as the sandbox-visible /tmp spelling: Linux
+        // host /tmp is already literal (identity); macOS folds
+        // /var/folders/…/T into the same tmpfs mount.
+        let expected_tmp_echo = match tmp_target.strip_prefix(std::env::temp_dir()) {
+            Ok(rest) => format!("/tmp/{}", rest.display()),
+            Err(_) => tmp_target.to_string_lossy().to_string(),
+        };
+        assert_eq!(output.metadata["file_path"], expected_tmp_echo);
         assert_eq!(std::fs::read_to_string(&tmp_target).unwrap(), "scratch");
         let _ = std::fs::remove_file(&tmp_target);
     }
@@ -1316,7 +1324,19 @@ mod tests {
             !output.content.contains(&host_str),
             "must not leak host paths"
         );
-        assert_eq!(output.metadata["files"][0]["path"], "/workspace/src/a.rs");
+        // Snapshot ordering is mtime-based and a.rs/b.rs share a timestamp
+        // granule — assert the alias-echoed set, not the order.
+        let paths: Vec<String> = output.metadata["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["path"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            paths.contains(&"/workspace/src/a.rs".to_string())
+                && paths.contains(&"/workspace/src/b.rs".to_string()),
+            "got: {paths:?}"
+        );
 
         // Bind-alias addressing: `/workspace` does not exist on the host, so
         // the canonical base the sandbox resolved must drive the walk.

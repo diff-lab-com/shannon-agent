@@ -343,13 +343,16 @@ impl PathSandbox {
             }
         }
         let tmp = std::env::temp_dir();
-        for input in &inputs {
-            for t in [tmp.as_path(), Path::new(SANDBOX_TMP_ROOT)] {
-                if let Ok(rest) = input.strip_prefix(t) {
-                    return match rest.as_os_str().is_empty() {
-                        true => SANDBOX_TMP_ROOT.to_string(),
-                        false => format!("{SANDBOX_TMP_ROOT}/{}", rest.display()),
-                    };
+        let tmp_canonical = self.canonical_of(&tmp);
+        if self.bind_alias_output {
+            for input in &inputs {
+                for t in [tmp.as_path(), tmp_canonical.as_path(), Path::new(SANDBOX_TMP_ROOT)] {
+                    if let Ok(rest) = input.strip_prefix(t) {
+                        return match rest.as_os_str().is_empty() {
+                            true => SANDBOX_TMP_ROOT.to_string(),
+                            false => format!("{SANDBOX_TMP_ROOT}/{}", rest.display()),
+                        };
+                    }
                 }
             }
         }
@@ -370,10 +373,18 @@ impl PathSandbox {
         }
         // Temp root spellings render as the sandbox-visible /tmp (see
         // alias_display_path): Linux is the identity, macOS folds
-        // /var/folders/…/T and /private/var/folders/…/T into /tmp.
-        let tmp = std::env::temp_dir();
-        for t in [tmp.as_path(), Path::new(SANDBOX_TMP_ROOT)] {
-            out = replace_path_prefix(&out, &t.to_string_lossy(), SANDBOX_TMP_ROOT);
+        // /var/folders/…/T and /private/var/folders/…/T into /tmp. Gated on
+        // the flag so alias-off assemblies keep echoing host paths.
+        if self.bind_alias_output {
+            let tmp = std::env::temp_dir();
+            let tmp_canonical = self.canonical_of(&tmp);
+            for t in [
+                tmp.as_path(),
+                tmp_canonical.as_path(),
+                Path::new(SANDBOX_TMP_ROOT),
+            ] {
+                out = replace_path_prefix(&out, &t.to_string_lossy(), SANDBOX_TMP_ROOT);
+            }
         }
         out
     }
@@ -1343,10 +1354,16 @@ mod tests {
         // Sibling names sharing the prefix must NOT be rewritten to the
         // project alias (boundary safety). They are children of the temp
         // dir, so their sandbox-visible spelling is /tmp/… on every
-        // platform (see alias_display_path).
+        // platform (see alias_display_path). Match both temp spellings —
+        // macOS canonicalizes the temp dir under /private/var/….
         let tmp = std::env::temp_dir();
+        let tmp_canonical = fs::canonicalize(&tmp).unwrap_or_else(|_| tmp.clone());
         for sibling in [format!("{root_str}-backup/x.rs"), format!("{root_str}foo")] {
-            let expected = match Path::new(&sibling).strip_prefix(&tmp) {
+            let sibling_path = Path::new(&sibling);
+            let expected = match sibling_path
+                .strip_prefix(&tmp)
+                .or_else(|_| sibling_path.strip_prefix(&tmp_canonical))
+            {
                 Ok(rest) => format!("{SANDBOX_TMP_ROOT}/{}", rest.display()),
                 Err(_) => sibling.clone(),
             };
@@ -1674,6 +1691,9 @@ mod tests {
 
     #[test]
     fn test_sync_validation_allows_cwd() {
+        // The assertion reads the process cwd — hold the shared cwd lock so
+        // concurrent chdir tests (git/file modules) can't relocate it mid-run.
+        let _cwd = crate::test_support::lock_cwd();
         let sandbox = PathSandbox::new();
         let cwd = std::env::current_dir().expect("Failed to get cwd");
         let result = sandbox.validate_sync(&cwd);

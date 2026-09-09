@@ -84,6 +84,43 @@ pub mod tool_search;
 pub mod web;
 pub mod worktree;
 
+/// Test-only helper for tests that must retarget the process-wide working
+/// directory (`std::env::set_current_dir` is global state — parallel test
+/// threads otherwise race each other into the wrong repo, roadmap E7/F13).
+/// Every cwd-mutating test takes [`test_support::CwdGuard`]; cwd-reading
+/// tests take [`test_support::lock_cwd`] to run outside churn windows.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, MutexGuard};
+
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
+
+    pub fn lock_cwd() -> MutexGuard<'static, ()> {
+        CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub struct CwdGuard {
+        prev: PathBuf,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl CwdGuard {
+        pub fn acquire(path: &Path) -> Self {
+            let lock = lock_cwd();
+            let prev = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+            std::env::set_current_dir(path).unwrap();
+            Self { prev, _lock: lock }
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.prev);
+        }
+    }
+}
+
 // Re-exports for convenience
 pub use agent::{AgentOperation, AgentTool, AgentToolContext};
 pub use applescript::AppleScriptTool;

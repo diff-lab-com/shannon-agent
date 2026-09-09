@@ -817,6 +817,7 @@ pub async fn execute_with(
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::await_holding_lock)]
 mod tests {
+
     use super::*;
     use std::io::Write;
 
@@ -1273,8 +1274,6 @@ mod tests {
     // that `git show HEAD:<relative-path>` inside `get_git_head_version` resolves
     // correctly. A static mutex serialises them to avoid parallel-cwd races.
 
-    use std::sync::Mutex;
-    static CWD_MUTEX: Mutex<()> = Mutex::new(());
 
     /// Helper: create a temp git repo, commit an initial file, return TempDir.
     /// The repo root can be used as cwd so that `git show HEAD:<file>` works.
@@ -1328,7 +1327,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_attempt_merge_fallback_no_git() {
-        let _lock = CWD_MUTEX.lock().unwrap();
 
         // Non-git temp directory — no HEAD version available
         let dir = tempfile::TempDir::new().unwrap();
@@ -1336,13 +1334,11 @@ mod tests {
             .await
             .unwrap();
 
-        let saved_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd_guard = crate::test_support::CwdGuard::acquire(dir.path());
 
         let result =
             attempt_merge_fallback("test.txt", "hello world", "hello", "goodbye", false).await;
 
-        std::env::set_current_dir(&saved_cwd).unwrap();
 
         match result {
             MergeFallbackResult::NotAvailable(msg) => {
@@ -1359,12 +1355,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_attempt_merge_fallback_base_lacks_old_string() {
-        let _lock = CWD_MUTEX.lock().unwrap();
 
         let dir = init_git_repo_with_file("test.txt", "original content").await;
 
-        let saved_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd_guard = crate::test_support::CwdGuard::acquire(dir.path());
 
         let result = attempt_merge_fallback(
             "test.txt",
@@ -1375,7 +1369,6 @@ mod tests {
         )
         .await;
 
-        std::env::set_current_dir(&saved_cwd).unwrap();
 
         match result {
             MergeFallbackResult::NotAvailable(msg) => {
@@ -1392,7 +1385,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_attempt_merge_fallback_clean_merge() {
-        let _lock = CWD_MUTEX.lock().unwrap();
 
         // base   = "line1\nline2\nline3\n"
         // ours   = "line1\nline2\nMODIFIED3\n"  (external change on line3)
@@ -1406,13 +1398,11 @@ mod tests {
             .await
             .unwrap();
 
-        let saved_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd_guard = crate::test_support::CwdGuard::acquire(dir.path());
 
         let result =
             attempt_merge_fallback("test.txt", disk_content, "line2", "replaced", false).await;
 
-        std::env::set_current_dir(&saved_cwd).unwrap();
 
         match result {
             MergeFallbackResult::Applied {
@@ -1441,7 +1431,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_attempt_merge_fallback_conflict_merge() {
-        let _lock = CWD_MUTEX.lock().unwrap();
 
         // base   = "line1\nline2\nline3\n"
         // ours   = "line1\nchanged_by_us\nline3\n"
@@ -1455,14 +1444,12 @@ mod tests {
             .await
             .unwrap();
 
-        let saved_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd_guard = crate::test_support::CwdGuard::acquire(dir.path());
 
         let result =
             attempt_merge_fallback("test.txt", disk_content, "line2", "changed_by_edit", false)
                 .await;
 
-        std::env::set_current_dir(&saved_cwd).unwrap();
 
         match result {
             MergeFallbackResult::Applied {
@@ -1490,7 +1477,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_merge_fallback_integration() {
-        let _lock = CWD_MUTEX.lock().unwrap();
 
         // Integration: commit a file, modify it externally, call execute() with
         // old_string from the committed version. Direct edit fails (old_string not
@@ -1504,8 +1490,7 @@ mod tests {
             .await
             .unwrap();
 
-        let saved_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        let _cwd_guard = crate::test_support::CwdGuard::acquire(dir.path());
 
         let input = EditInput {
             file_path: "test.txt".to_string(),
@@ -1516,7 +1501,6 @@ mod tests {
         };
         let result = execute(input).await;
 
-        std::env::set_current_dir(&saved_cwd).unwrap();
 
         assert!(
             result.is_ok(),
