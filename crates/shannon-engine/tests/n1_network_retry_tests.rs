@@ -48,7 +48,10 @@ async fn kind_request_failure_is_retryable() {
         err.is_request(),
         "expected Kind::Request, got a different error kind: {err}"
     );
-    assert!(!err.is_connect(), "precondition: not a connect-phase failure");
+    assert!(
+        !err.is_connect(),
+        "precondition: not a connect-phase failure"
+    );
 
     let policy = RetryPolicy::default();
     assert!(
@@ -111,8 +114,8 @@ async fn kind_request_retry_policy_survives_rst_variant_too() {
 
 mod support {
     use std::io::{Read, Write};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Connections to fail with a FIN before any response (Kind::Request
     /// per the probe: is_request=true, is_connect=false).
@@ -188,10 +191,14 @@ async fn transient_kind_request_failures_are_retried_to_success() {
     let client = LlmClient::new(config);
 
     let blocks = client
-        .send_message_with_retry(vec![Message {
-            role: "user".to_string(),
-            content: shannon_engine::api::MessageContent::Text("hi".to_string()),
-        }], None, None)
+        .send_message_with_retry(
+            vec![Message {
+                role: "user".to_string(),
+                content: shannon_engine::api::MessageContent::Text("hi".to_string()),
+            }],
+            None,
+            None,
+        )
         .await
         .expect("retry must recover from injected Kind::Request failures");
 
@@ -207,8 +214,8 @@ async fn transient_kind_request_failures_are_retried_to_success() {
 
 #[tokio::test]
 async fn permanent_failures_surface_immediately_when_retries_disabled() {
-    use shannon_engine::api::{LlmClient, LlmClientConfig, LlmProvider, Message};
     use shannon_engine::api::retry::RetryConfig;
+    use shannon_engine::api::{LlmClient, LlmClientConfig, LlmProvider, Message};
 
     // No listener at all: connect-phase errors with retries disabled must
     // surface as an error after a single attempt (bounded behavior guard).
