@@ -2484,6 +2484,14 @@ impl QueryEngine {
                     }
                 }
 
+                // Secret-guard wiring point 1 (blueprint §9.6): run the
+                // outgoing messages through the installed transform before
+                // any send in this region (main turn + in-region fallbacks
+                // reuse this binding). Deterministic (I1) + idempotent (I3)
+                // keeps the request prefix byte-stable across turns, so
+                // provider prompt caching is unaffected. No-op unless a
+                // plugin is installed.
+                let mut messages = crate::secret_guard::transform_outgoing_messages(messages);
                 // Call the API — use structured system blocks when available for prompt caching
                 // Surface API retry activity as query progress (§ retry
                 // observability): without this the retry loop is invisible
@@ -4655,6 +4663,12 @@ impl QueryEngine {
                                         );
                                     }
                                 }
+                                // Compaction rebuilt `messages` — re-apply the
+                                // transform so the post-compaction send (and
+                                // the history sync below) stay surrogate-
+                                // consistent (blueprint §5.4).
+                                let messages =
+                                    crate::secret_guard::transform_outgoing_messages(messages);
                                 // Sync compacted messages back to conversation
                                 // so ConversationUpdate reflects the actual state
                                 conversation.messages = messages.clone();

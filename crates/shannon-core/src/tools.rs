@@ -509,6 +509,10 @@ impl ToolRegistry {
     pub async fn execute(&self, name: &str, input: Value) -> ToolResult<ToolOutput> {
         self.check_plugin_permission(name)?;
         let tool = self.get(name).ok_or_else(|| self.lookup_error(name))?;
+        let input = match self.restore_for_execution(name, input) {
+            Ok(v) => v,
+            Err(blocked) => return Ok(blocked),
+        };
 
         let is_read_only = tool.is_read_only();
 
@@ -619,6 +623,28 @@ impl ToolRegistry {
     ///
     /// When a streaming cache is configured, successful results from read-only
     /// tools are cached and reused on subsequent calls with identical inputs.
+    /// Secret-guard wiring point 2 (blueprint §9.6): restore real values for
+    /// surrogates the model echoed into tool arguments — on the execution
+    /// face only; the restored input is never persisted back into history.
+    /// Fail-closed plugin failures surface as tool-level error outputs.
+    fn restore_for_execution(&self, name: &str, mut input: Value) -> Result<Value, ToolOutput> {
+        match crate::secret_guard::restore_tool_args_for_execution(name, &mut input) {
+            Ok(()) => Ok(input),
+            Err(reason) => {
+                tracing::warn!(
+                    target: "shannon::secret_guard",
+                    tool = name,
+                    "tool call blocked by secret-guard fail-closed policy"
+                );
+                Err(ToolOutput {
+                    content: format!("secret-guard blocked this tool call (fail-closed): {reason}"),
+                    is_error: true,
+                    metadata: std::collections::HashMap::new(),
+                })
+            }
+        }
+    }
+
     pub async fn execute_streaming(
         &self,
         name: &str,
@@ -627,6 +653,10 @@ impl ToolRegistry {
     ) -> ToolResult<ToolOutput> {
         self.check_plugin_permission(name)?;
         let tool = self.get(name).ok_or_else(|| self.lookup_error(name))?;
+        let input = match self.restore_for_execution(name, input) {
+            Ok(v) => v,
+            Err(blocked) => return Ok(blocked),
+        };
 
         let is_read_only = tool.is_read_only();
 
