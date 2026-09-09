@@ -617,7 +617,11 @@ jobs:
           # cargo-semver-checks (>=0.48) requires (rustc >=1.91 for its rustdoc
           # format). The repo-wide 1.88 pin is intentionally not used here.
           feature-group: default-features
-          exclude: shannon-desktop
+          # shannon-browser / shannon-remote are new crates absent from the
+          # v0.10.0 baseline — cargo-semver-checks cannot load a baseline
+          # manifest for them ("no `package` table"); they join the exclude
+          # list until the next baseline tag.
+          exclude: shannon-desktop shannon-browser shannon-remote
           verbose: true
 
   insta:
