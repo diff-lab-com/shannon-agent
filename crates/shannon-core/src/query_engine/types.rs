@@ -771,7 +771,8 @@ impl Default for QueryEngineConfig {
                      - Prefer Edit over Write for existing files.\n\
                      - Use Bash for system commands, builds, and tests.\n\
                      - After writing code, run tests or builds only if a toolchain is available: probe first (e.g. `command -v cargo`); when it is missing, verify by re-reading your changes instead of hunting for missing tools.\n\
-                     - When the requested changes are complete, give your final answer promptly; do not spend remaining turns on extra confirmation.\n\
+                     - Before giving your final answer, verify your work against the original request: every required artifact must exist and work. If something could not be verified, say so explicitly instead of claiming success.\n\
+                     - Completing the environment (installing a package, provisioning a tool) is NOT task completion. Never stop while a required deliverable is still missing.\n\
                      - When editing, include enough context for unique matches.\n\
                      \n\
                      ## Code Editing Rules\n\
@@ -1410,5 +1411,34 @@ mod tests {
             prompt.contains("final answer"),
             "prompt must tell the agent to wrap up once the goal is met"
         );
+    }
+
+    // -- C4: catalog-priced cost accounting for the eval anchor model --
+
+    #[test]
+    fn glm_5_3_flash_cost_uses_catalog_price_not_fallback() {
+        // The TB2.1 eval anchor model must price from the static catalog
+        // ($0.114 in / $0.40 out per Mtok, bigmodel.cn reference), not from
+        // the $3/$15 DEFAULT_PRICING_FALLBACK — and, because exact match now
+        // wins over the `contains` scan, not from the "glm-5" entry's
+        // $7.14/$7.14 either.
+        let cost = CostTracker::calculate_cost("glm-5.3-flash", 1_000_000, 1_000_000);
+        let expected = 0.114 + 0.40;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "expected catalog price {expected}, got {cost}"
+        );
+        // Guard against both regression directions explicitly.
+        assert!(
+            (cost - 3.0 - 15.0).abs() > 1.0,
+            "must not fall back to the default estimate"
+        );
+        assert!(
+            (cost - 7.14 - 7.14).abs() > 1.0,
+            "must not substring-match the glm-5 entry"
+        );
+        // Scaled input shape: 42M input / 9M output (sweep-magnitude run).
+        let cost = CostTracker::calculate_cost("glm-5.3-flash", 42_000_000, 9_000_000);
+        assert!((cost - (42.0 * 0.114 + 9.0 * 0.40)).abs() < 1e-6);
     }
 }

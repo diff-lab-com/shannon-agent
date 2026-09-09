@@ -247,10 +247,16 @@ struct ToolResultEntry {
 impl ToolResultEntry {
     /// Build the appropriate `ToolResultContent` for this entry.
     ///
-    /// For image results (detected via `metadata["type"] == "image"`),
+    /// For single-image results (detected via `metadata["type"] == "image"`),
     /// returns `ToolResultContent::Multiple` containing a text description
     /// block followed by a `ContentBlock::Image` block so the LLM can
     /// "see" the image.
+    ///
+    /// For multi-image batch results (`metadata["type"] == "images"`,
+    /// produced by the AnalyzeImages tool — C-ImgBatch), expands the
+    /// `images[]` payload into interleaved `## <path>` text headings and
+    /// `ContentBlock::Image` blocks so the whole batch rides in ONE
+    /// tool_result → ONE LLM vision request.
     ///
     /// For everything else, returns `ToolResultContent::Single`.
     fn to_tool_result_content(&self) -> Option<ToolResultContent> {
@@ -258,13 +264,19 @@ impl ToolResultEntry {
             return Some(ToolResultContent::Single(self.content.clone()));
         }
 
-        // Check if this is an image result from the Read/AnalyzeImage tool.
-        let is_image = self
+        let output_type = self
             .metadata
             .get("type")
             .and_then(|v| v.as_str())
-            .map(|s| s == "image")
-            .unwrap_or(false);
+            .unwrap_or("");
+
+        // Multi-image batch results (C-ImgBatch).
+        if output_type == "images" {
+            return Some(self.multi_image_content());
+        }
+
+        // Check if this is an image result from the Read/AnalyzeImage tool.
+        let is_image = output_type == "image";
 
         if is_image {
             let media_type = self
@@ -315,6 +327,80 @@ impl ToolResultEntry {
         } else {
             Some(ToolResultContent::Single(self.content.clone()))
         }
+    }
+
+    /// Expand an AnalyzeImages batch payload (C-ImgBatch) into a single
+    /// `ToolResultContent::Multiple` holding, per image, a `## <path>` text
+    /// heading followed by an image block — one tool_result, one vision
+    /// request with N image parts.
+    ///
+    /// Wire support: Anthropic passes `tool_result` content blocks through
+    /// verbatim (multi-image works). The OpenAI/Ollama/Gemini adapters
+    /// currently flatten `tool_result` content to text, so there the model
+    /// only sees the text headings without pixels — degradation that already
+    /// applied to the single-image path. Follow-up: teach those adapters to
+    /// emit multi-image tool results; add a per-batch pixel budget.
+    fn multi_image_content(&self) -> ToolResultContent {
+        let parsed = serde_json::from_str::<serde_json::Value>(&self.content).ok();
+        let images = parsed
+            .as_ref()
+            .and_then(|v| v.get("images"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        if images.is_empty() {
+            // Fallback: couldn't parse the batch payload, return as text.
+            return ToolResultContent::Single(self.content.clone());
+        }
+
+        let prompt = parsed
+            .as_ref()
+            .and_then(|v| v.get("prompt"))
+            .and_then(|p| p.as_str())
+            .unwrap_or("");
+
+        let count = images.len();
+        let mut intro = format!(
+            "Batch of {count} images follows; each image is preceded by a `## <path>` heading. Analyze each in order."
+        );
+        if !prompt.is_empty() {
+            intro.push_str(&format!("\nPrompt for each image: {prompt}"));
+        }
+
+        let mut blocks = Vec::with_capacity(1 + images.len() * 2);
+        blocks.push(ContentBlock::Text { text: intro });
+
+        let mut emitted = 0usize;
+        for (i, img) in images.iter().enumerate() {
+            let source = img
+                .get("source")
+                .and_then(|s| s.as_str())
+                .unwrap_or("unknown");
+            let media_type = img
+                .get("media_type")
+                .and_then(|m| m.as_str())
+                .unwrap_or("application/octet-stream");
+            let data = img.get("data").and_then(|d| d.as_str()).unwrap_or_default();
+            if data.is_empty() {
+                tracing::warn!(index = i, source, "batch image entry has no data; skipping");
+                continue;
+            }
+            blocks.push(ContentBlock::Text {
+                text: format!("## {source}"),
+            });
+            blocks.push(ContentBlock::Image {
+                source: ImageSource::base64(media_type, data),
+            });
+            emitted += 1;
+        }
+
+        if emitted == 0 {
+            // No decodable image data — degrade to the raw text payload.
+            return ToolResultContent::Single(self.content.clone());
+        }
+
+        ToolResultContent::Multiple(blocks)
     }
 }
 
@@ -402,6 +488,48 @@ fn think_only_min_answer_chars() -> usize {
         "SHANNON_THINK_ONLY_MIN_ANSWER_CHARS",
         DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS as u32,
     ) as usize
+}
+
+// ── B.6 ────────────────────────────────────────────────────────────────────
+// SHANNON_TOKEN_BUDGET: a hard cap on cumulative input tokens. When the cap
+// is exceeded the engine synthesizes a user-side message that pushes the
+// model away from full-file reads (the eval failure mode measured in
+// eval-findings-2026-09-glm.md F2 — single-shot `cat` of multi-MB files
+// burned the remaining turn budget). Disabling the cap = SHANNON_TOKEN_BUDGET=0.
+
+/// Default value for the B.6 token-budget watchdog (`SHANNON_TOKEN_BUDGET`).
+/// Zero disables it entirely so non-eval users are unaffected.
+const DEFAULT_TOKEN_BUDGET: u64 = 0;
+
+/// Recommended eval setting for SWE-bench / TB2.1 runs (120k tokens ≈
+/// the cap after which the model starts losing recent context in
+/// `estimate_tokens`).
+#[allow(dead_code)] // KEEP: documentation anchor; eval reads the env directly.
+pub const RECOMMENDED_TOKEN_BUDGET: u64 = 120_000;
+
+/// Resolve the configured B.6 budget. `0` (default) disables the watchdog.
+/// Honors the same parse contract as [`env_num_override`]: unset, empty,
+/// or unparseable → `DEFAULT_TOKEN_BUDGET`.
+fn token_budget_limit() -> u64 {
+    env_num_override("SHANNON_TOKEN_BUDGET", DEFAULT_TOKEN_BUDGET as u32) as u64
+}
+
+/// Build the targeted-read nudge the model receives when the B.6 budget is
+/// exceeded. Pure: depends only on `(used, budget)` so the call site can
+/// pass live counts and unit tests can pin both arguments.
+///
+/// Returns `None` when `budget == 0` (disabled) or `used <= budget`. The
+/// text is the exact phrase required by the plan — verbatim so the unit
+/// test's `contains("Context is large")` assertion matches.
+fn token_budget_nudge_for(used: u64, budget: u64) -> Option<String> {
+    if budget == 0 || used <= budget {
+        return None;
+    }
+    Some(format!(
+        "Context is large ({used}/{budget} tokens). Prefer targeted reads \
+         (`Grep`, `head -c`, `Read` with offset+limit) over full-file reads \
+         or `cat`. Re-read only what you need; commit fixes promptly."
+    ))
 }
 
 /// Split inline `<think>...</think>` reasoning out of assistant text.
@@ -2151,6 +2279,47 @@ impl QueryEngine {
                         conversation.messages.push(synth_msg);
                         token_warning_80_fired = true;
                         tracing::info!(pct, "P-M 80% token-budget synthetic message fired");
+                    }
+
+                    // B.6: SHANNON_TOKEN_BUDGET watchdog. Different from the
+                    // 60%/80% ratio warnings above — that pair is keyed to
+                    // the model's context window (which is provider/model
+                    // specific). The B.6 budget is keyed to a caller-supplied
+                    // cap (env `SHANNON_TOKEN_BUDGET`, default 0 = off; eval
+                    // recommends 120_000). When the cumulative input-token
+                    // total crosses the cap the engine nudges the model
+                    // toward targeted reads (`Grep` / `head -c` / Read with
+                    // offset+limit) instead of full-file reads.
+                    //
+                    // Fires on EVERY turn where the cap is exceeded (unlike
+                    // the once-per-query ratio warnings) because the model
+                    // may still default to `cat` until it sees the reminder
+                    // in the current turn's user-context.
+                    let budget = token_budget_limit();
+                    if budget > 0 && total_input_tokens > budget {
+                        if let Some(text) = token_budget_nudge_for(total_input_tokens, budget) {
+                            let synth_msg = Message {
+                                role: "user".to_string(),
+                                content: MessageContent::Text(text.clone()),
+                            };
+                            messages.push(synth_msg.clone());
+                            conversation.messages.push(synth_msg);
+                            tracing::info!(
+                                used = total_input_tokens,
+                                budget,
+                                turn,
+                                "B.6 SHANNON_TOKEN_BUDGET synthetic message fired",
+                            );
+                            send_event!(
+                                tx,
+                                QueryEvent::Progress {
+                                    query_id,
+                                    message: format!(
+                                        "Token budget exceeded ({total_input_tokens} > {budget});                                          injecting targeted-read nudge"
+                                    ),
+                                }
+                            );
+                        }
                     }
 
                     if usage_ratio > config.compression_threshold {
@@ -5284,6 +5453,125 @@ mod tests {
         }
     }
 
+    /// B.6: SHANNON_TOKEN_BUDGET parses the same way as the think-only
+    /// overrides — unset / empty / unparseable → default (0 = disabled).
+    /// Locks the process-global env behind the same mutex used by the
+    /// think-only env tests to keep parallel tests from racing.
+    #[test]
+    fn token_budget_env_override_parses() {
+        use std::sync::{Mutex, OnceLock};
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env-var test mutex poisoned");
+
+        let saved = env::var("SHANNON_TOKEN_BUDGET").ok();
+
+        unsafe {
+            env::remove_var("SHANNON_TOKEN_BUDGET");
+        }
+        assert_eq!(
+            token_budget_limit(),
+            0,
+            "unset should default to 0 (disabled)"
+        );
+
+        unsafe {
+            env::set_var("SHANNON_TOKEN_BUDGET", "120000");
+        }
+        assert_eq!(token_budget_limit(), 120_000);
+
+        unsafe {
+            env::set_var("SHANNON_TOKEN_BUDGET", "0");
+        }
+        assert_eq!(token_budget_limit(), 0, "explicit 0 must disable");
+
+        unsafe {
+            env::set_var("SHANNON_TOKEN_BUDGET", "");
+        }
+        assert_eq!(
+            token_budget_limit(),
+            0,
+            "empty value must fall back to default"
+        );
+
+        unsafe {
+            env::set_var("SHANNON_TOKEN_BUDGET", "bogus");
+        }
+        assert_eq!(token_budget_limit(), 0, "garbage must fall back to default");
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TOKEN_BUDGET", v) },
+            None => unsafe { env::remove_var("SHANNON_TOKEN_BUDGET") },
+        }
+    }
+
+    /// B.6: pure nudge builder contract. Pinned so the wired-in engine
+    /// call site and any future tweak share the exact phrase tested here.
+    #[test]
+    fn token_budget_nudge_for_pure_contract() {
+        // Disabled budget → no nudge.
+        assert!(token_budget_nudge_for(50_000, 0).is_none());
+        // At or under budget → no nudge.
+        assert!(token_budget_nudge_for(100, 100).is_none());
+        assert!(token_budget_nudge_for(99, 100).is_none());
+        // Over budget → nudge with the required prefix.
+        let nudge = token_budget_nudge_for(101, 100).expect("nudge fires");
+        assert!(
+            nudge.contains("Context is large"),
+            "must contain the exact phrase 'Context is large'; got: {nudge:?}"
+        );
+        assert!(
+            nudge.contains("101/100 tokens"),
+            "must report used/budget; got: {nudge:?}"
+        );
+    }
+
+    /// B.6 integration-style test: simulate the per-turn `total_input_tokens`
+    /// accumulating past the budget. Each turn where the cumulative total
+    /// exceeds the cap must yield a nudge message starting with the
+    /// required phrase. The plan-doc test contract: "模拟 budget=100, 注入
+    /// 两轮累计 token > 100, 断言第三轮 user message 含 'Context is large'".
+    #[test]
+    fn token_budget_nudge_fires_across_three_turns() {
+        let budget: u64 = 100;
+        // Per-turn usage: 60, 60, 60 → cumulative 60, 120, 180.
+        // Only turn 2 and turn 3 exceed the budget.
+        let per_turn = [60u64, 60, 60];
+        let mut cumulative: u64 = 0;
+        let mut nudge_count = 0;
+        let mut last_nudge: Option<String> = None;
+
+        for (turn_idx, inc) in per_turn.iter().enumerate() {
+            cumulative = cumulative.saturating_add(*inc);
+            // Mirror the engine loop's gating: `total_input_tokens > budget`.
+            if let Some(text) = token_budget_nudge_for(cumulative, budget) {
+                nudge_count += 1;
+                last_nudge = Some(text);
+                eprintln!(
+                    "turn {} nudge fired (cumulative={cumulative})",
+                    turn_idx + 1
+                );
+            }
+        }
+
+        assert_eq!(
+            nudge_count, 2,
+            "two turns exceeded the budget (turn 2 and turn 3)"
+        );
+        let text = last_nudge.expect("a nudge must have fired");
+        assert!(
+            text.contains("Context is large"),
+            "the third turn's user message must contain 'Context is large' \
+             (plan-doc test contract); got: {text}"
+        );
+        assert!(
+            text.contains("180/100 tokens"),
+            "must report the third turn's cumulative total; got: {text}"
+        );
+    }
+
     #[tokio::test]
     async fn abort_on_drop_stream_forwards_items_and_aborts_producer_on_drop() {
         // The whole point of P0-c: dropping the QueryStream must actually stop
@@ -6442,6 +6730,159 @@ mod tests {
         match result {
             ToolResultContent::Single(text) => assert_eq!(text, "Image load failed"),
             other => panic!("Expected Single for error, got: {other:?}"),
+        }
+    }
+
+    // ── Multi-image batch results (C-ImgBatch) ──────────────────────
+
+    /// Build an AnalyzeImages-style content payload with the given images.
+    fn make_batch_images_json(images: &[(&str, &str, &str)], prompt: &str) -> String {
+        let arr: Vec<serde_json::Value> = images
+            .iter()
+            .map(|(source, media_type, data)| {
+                serde_json::json!({
+                    "source": source,
+                    "media_type": media_type,
+                    "data": data,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "type": "images",
+            "count": arr.len(),
+            "prompt": prompt,
+            "images": arr,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn test_tool_result_entry_multi_image_creates_sectioned_blocks() {
+        let content = make_batch_images_json(
+            &[
+                ("/tmp/a.png", "image/png", "AAAA"),
+                ("/tmp/b.jpg", "image/jpeg", "BBBB"),
+            ],
+            "describe each",
+        );
+        let entry = ToolResultEntry {
+            tool_use_id: "batch_1".to_string(),
+            content,
+            is_error: false,
+            metadata: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("type".to_string(), serde_json::json!("images"));
+                map.insert("count".to_string(), serde_json::json!(2));
+                map
+            },
+        };
+
+        let result = entry.to_tool_result_content().unwrap();
+        match result {
+            ToolResultContent::Multiple(blocks) => {
+                // intro + (heading + image) per image = 1 + 2*2 = 5 blocks
+                assert_eq!(blocks.len(), 5, "blocks: {blocks:?}");
+                match &blocks[0] {
+                    ContentBlock::Text { text } => {
+                        assert!(text.contains("2 images"), "intro: {text}");
+                        assert!(text.contains("describe each"), "intro: {text}");
+                    }
+                    other => panic!("Expected intro Text, got: {other:?}"),
+                }
+                // Per-image `## <path>` heading directly before its image.
+                for (heading, image, expected) in [
+                    (&blocks[1], &blocks[2], ("/tmp/a.png", "image/png", "AAAA")),
+                    (&blocks[3], &blocks[4], ("/tmp/b.jpg", "image/jpeg", "BBBB")),
+                ] {
+                    match heading {
+                        ContentBlock::Text { text } => {
+                            assert_eq!(text, &format!("## {}", expected.0));
+                        }
+                        other => panic!("Expected heading Text, got: {other:?}"),
+                    }
+                    match image {
+                        ContentBlock::Image { source } => {
+                            assert_eq!(source.media_type, expected.1);
+                            assert_eq!(source.data, expected.2);
+                        }
+                        other => panic!("Expected Image block, got: {other:?}"),
+                    }
+                }
+            }
+            other => panic!("Expected Multiple for batch images, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_tool_result_entry_multi_image_batch_error_stays_single() {
+        let entry = ToolResultEntry {
+            tool_use_id: "batch_1".to_string(),
+            content: "Failed to load image 1 of 2".to_string(),
+            is_error: true,
+            metadata: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("type".to_string(), serde_json::json!("images"));
+                map
+            },
+        };
+        let result = entry.to_tool_result_content().unwrap();
+        match result {
+            ToolResultContent::Single(text) => {
+                assert_eq!(text, "Failed to load image 1 of 2");
+            }
+            other => panic!("Expected Single for batch error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_tool_result_entry_multi_image_unparseable_falls_back_to_single() {
+        let entry = ToolResultEntry {
+            tool_use_id: "batch_1".to_string(),
+            content: "not json".to_string(),
+            is_error: false,
+            metadata: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("type".to_string(), serde_json::json!("images"));
+                map
+            },
+        };
+        let result = entry.to_tool_result_content().unwrap();
+        match result {
+            ToolResultContent::Single(text) => assert_eq!(text, "not json"),
+            other => panic!("Expected Single fallback, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_tool_result_entry_multi_image_empty_data_entries_skipped() {
+        let content = make_batch_images_json(
+            &[
+                ("/tmp/empty.png", "image/png", ""),
+                ("/tmp/ok.png", "image/png", "CCCC"),
+            ],
+            "",
+        );
+        let entry = ToolResultEntry {
+            tool_use_id: "batch_1".to_string(),
+            content,
+            is_error: false,
+            metadata: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("type".to_string(), serde_json::json!("images"));
+                map
+            },
+        };
+        let result = entry.to_tool_result_content().unwrap();
+        match result {
+            ToolResultContent::Multiple(blocks) => {
+                // intro + 1 usable image pair (empty-data entry skipped)
+                assert_eq!(blocks.len(), 3, "blocks: {blocks:?}");
+                match &blocks[1] {
+                    ContentBlock::Text { text } => assert_eq!(text, "## /tmp/ok.png"),
+                    other => panic!("Expected heading Text, got: {other:?}"),
+                }
+            }
+            other => panic!("Expected Multiple, got: {other:?}"),
         }
     }
 

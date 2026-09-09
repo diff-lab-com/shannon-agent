@@ -5,6 +5,7 @@ expression: output
 ---
 Agent: Spawn and manage AI agent teammates for collaborative problem-solving
 AnalyzeImage: Analyze an image file or URL. The image is sent to the LLM for visual analysis based on your prompt. Supports PNG, JPEG, GIF, WebP, BMP, ICO, and TIFF formats.
+AnalyzeImages: Analyze multiple image files in ONE call (batch). Each image is sent to the LLM as part of a single vision request, with results organized under a '## <path>' heading per image. Accepts up to 20 paths; use this instead of calling AnalyzeImage repeatedly. Supports PNG, JPEG, GIF, WebP, BMP, ICO, and TIFF formats.
 Bash: Executes bash commands and returns output
 Brief: Generate a concise task summary from conversation history or content
 Config: Manage runtime configuration with get, set, list, delete, and reset operations
@@ -18,6 +19,7 @@ GitSafety: Check if a git command is safe before executing it
 GitStash: Manage git stashes: list, push, pop, drop, and apply stashed changes
 Glob: Fast file pattern matching tool that works with any codebase size
 Grep: A powerful search tool built on ripgrep. Searches file contents using regex patterns. Supports include/exclude globs, context lines, case-insensitive matching, and multiple output modes.
+KillBackground: Terminate a background child by name, wait for it to exit (bounded), and return its exit code plus the captured tail of stdout/stderr.
 McpAuth: Manage OAuth authentication for MCP servers that require it
 McpResource: Read and list resources from MCP (Model Context Protocol) servers
 MergeResolve: Resolve merge conflict markers in a file by choosing 'ours' or 'theirs' for each conflict
@@ -26,6 +28,7 @@ NotebookEdit: Edit Jupyter notebook (.ipynb) cells - replace, insert, or delete 
 PowerShell: Executes PowerShell commands and returns output
 REPL: Execute a REPL command that wraps primitive tool calls for batch operations
 Read: Read file contents from the local filesystem
+RunBackground: Spawn a long-running bash command and stream stdout/stderr into a line-bounded ring buffer keyed by `name`. Re-calling with the same `name` kills the previous child first. Pair with `WaitForLog` to block until a regex/substring appears, and `KillBackground` to shut down.
 ScheduleWakeup: Schedule a prompt to be enqueued after a delay (for /loop dynamic pacing). Call with delaySeconds and prompt to schedule; omit or call without arguments to end the loop. Cache optimization: delays <= 270s keep the prompt cache warm; 270-300s risks cache expiry; > 300s pays cold read cost. Prefer 270s for active work, 600s+ for idle waits.
 SendMessage: Send messages to agent teammates for collaborative problem-solving
 Skill: Invoke user-callable slash-command skills for specialized workflows
@@ -40,6 +43,7 @@ TaskStop: Stop or cancel a running task by its ID
 TaskUpdate: Update an existing task's status, subject, or description
 TeamDelete: Remove a team and clean up its associated task list
 TodoWrite: Create and manage session task checklists for tracking work progress
+WaitForLog: Poll a background process's stdout/stderr ring buffer until a substring (match_kind=is) or regex (match_kind=re) matches, the process exits, or the timeout elapses. Returns immediately on match or exit.
 WebFetch: Fetches a URL from the internet and optionally extracts its contents
 WebSearch: Search the web for information using a real search API
 Worktree: Manage git worktree sessions for isolated branch work

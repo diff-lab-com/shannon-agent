@@ -106,6 +106,34 @@ expression: output
   "type": "object"
 }
 
+## AnalyzeImages
+{
+  "properties": {
+    "paths": {
+      "description": "Absolute paths to the image files to analyze, in order. Results are sectioned per image under a '## <path>' heading.",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 20,
+      "minItems": 1,
+      "type": "array"
+    },
+    "prompt": {
+      "description": "What to analyze or describe about each image (applied to every image in the batch)",
+      "type": "string"
+    },
+    "question": {
+      "description": "Alias for prompt",
+      "type": "string"
+    }
+  },
+  "required": [
+    "paths",
+    "prompt"
+  ],
+  "type": "object"
+}
+
 ## Bash
 {
   "properties": {
@@ -603,6 +631,28 @@ expression: output
   "type": "object"
 }
 
+## KillBackground
+{
+  "properties": {
+    "max_lines": {
+      "description": "Cap on tail lines returned per stream (default 50).",
+      "type": "integer"
+    },
+    "name": {
+      "description": "Background process name to kill.",
+      "type": "string"
+    },
+    "timeout_ms": {
+      "description": "Timeout to wait for graceful exit before forcing (ms). Default 5000.",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "type": "object"
+}
+
 ## McpAuth
 {
   "properties": {
@@ -826,6 +876,36 @@ expression: output
   },
   "required": [
     "file_path"
+  ],
+  "type": "object"
+}
+
+## RunBackground
+{
+  "properties": {
+    "command": {
+      "description": "Shell command passed to `bash -c <command>`.",
+      "type": "string"
+    },
+    "cwd": {
+      "description": "Optional working directory for the spawned child.",
+      "type": "string"
+    },
+    "env": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Optional extra environment variables.",
+      "type": "object"
+    },
+    "name": {
+      "description": "Idempotency key. Re-using a name kills the previous child first.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "command"
   ],
   "type": "object"
 }
@@ -1155,6 +1235,45 @@ expression: output
   },
   "required": [
     "todos"
+  ],
+  "type": "object"
+}
+
+## WaitForLog
+{
+  "properties": {
+    "match_kind": {
+      "description": "Match mode: 'is' (substring) or 're' (regex). Default 'is'.",
+      "enum": [
+        "is",
+        "re"
+      ],
+      "type": "string"
+    },
+    "max_lines": {
+      "description": "Optional cap on lines scanned per poll (default = ring capacity).",
+      "type": "integer"
+    },
+    "name": {
+      "description": "Background process name (registered by RunBackground).",
+      "type": "string"
+    },
+    "pattern": {
+      "description": "Substring or regex to match against captured lines.",
+      "type": "string"
+    },
+    "poll_interval_ms": {
+      "description": "Poll interval in ms. Default 200.",
+      "type": "integer"
+    },
+    "timeout_ms": {
+      "description": "Hard timeout in ms. Default 30000.",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "name",
+    "pattern"
   ],
   "type": "object"
 }
