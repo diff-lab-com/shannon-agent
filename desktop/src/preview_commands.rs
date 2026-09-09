@@ -382,7 +382,11 @@ impl PreviewCaptureSource for AppWindowCapture {
         let window = xcap::Window::all()
             .map_err(|e| format!("window enumeration failed: {e}"))?
             .into_iter()
-            .find(|w| w.app_name().to_lowercase().contains("shannon"));
+            .find(|w| {
+                w.app_name()
+                    .map(|name| name.to_lowercase().contains("shannon"))
+                    .unwrap_or(false)
+            });
         if let Some(image) = window.and_then(|w| w.capture_image().ok()) {
             return encode(image);
         }

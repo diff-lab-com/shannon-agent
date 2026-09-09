@@ -87,13 +87,14 @@ async fn applescript_timeout_is_an_error() {
     match result {
         Ok(out) => {
             assert!(out.is_error, "delay 60 must surface as an error");
-            assert!(out.content.contains("timed out after 30s"), "got: {}", out.content);
+            assert!(
+                out.content.contains("timed out after 30s"),
+                "got: {}",
+                out.content
+            );
         }
         Err(shannon_tools::ToolError::ExecutionFailed(msg)) => {
-            assert!(
-                msg.contains("timed out after 30s"),
-                "got: {msg}"
-            );
+            assert!(msg.contains("timed out after 30s"), "got: {msg}");
             println!("[ok] timeout surfaced as ExecutionFailed: {msg}");
         }
         Err(other) => panic!("unexpected error shape: {other}"),
@@ -137,7 +138,11 @@ async fn applescript_denied_app_reports_not_authorized() {
         }))
         .await
         .unwrap();
-    assert!(result.is_error, "denied app must error, got: {}", result.content);
+    assert!(
+        result.is_error,
+        "denied app must error, got: {}",
+        result.content
+    );
     assert!(
         result.content.contains("-1743") || result.content.contains("not allow"),
         "error should carry not-authorized semantics, got: {}",
@@ -192,8 +197,15 @@ async fn computer_screenshot_captures_real_screen() {
     let png = base64::engine::general_purpose::STANDARD
         .decode(data)
         .unwrap();
-    assert!(png.starts_with(&[0x89, b'P', b'N', b'G']), "payload is not a PNG");
-    println!("[info] payload {} bytes ({}KB)", png.len(), png.len() / 1024);
+    assert!(
+        png.starts_with(&[0x89, b'P', b'N', b'G']),
+        "payload is not a PNG"
+    );
+    println!(
+        "[info] payload {} bytes ({}KB)",
+        png.len(),
+        png.len() / 1024
+    );
     assert!(
         png.len() > 30 * 1024,
         "PNG suspiciously small ({}) — blank frame? check Screen Recording grant",
@@ -273,7 +285,10 @@ async fn computer_click_succeeds() {
         .await
         .unwrap();
     assert!(!result.is_error, "click failed: {}", result.content);
-    println!("[ok] click at reference (512, 384): {}", result.content.trim());
+    println!(
+        "[ok] click at reference (512, 384): {}",
+        result.content.trim()
+    );
 }
 
 /// Diagnostic: what does xcap enumerate on this host, and do the reported
@@ -290,9 +305,15 @@ async fn debug_monitor_enumeration() {
                     "[info] id={:?} name={:?} {}x{} scale={:?}",
                     m.id(),
                     m.name(),
-                    m.width().map(|v| v.to_string()).unwrap_or_else(|e| format!("ERR:{e}")),
-                    m.height().map(|v| v.to_string()).unwrap_or_else(|e| format!("ERR:{e}")),
-                    m.scale_factor().map(|v| v.to_string()).unwrap_or_else(|e| format!("ERR:{e}")),
+                    m.width()
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|e| format!("ERR:{e}")),
+                    m.height()
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|e| format!("ERR:{e}")),
+                    m.scale_factor()
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|e| format!("ERR:{e}")),
                 );
             }
         }
