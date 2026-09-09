@@ -24,6 +24,27 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
   macOS. Evidence and remaining manual steps (TCC prompts, Accessibility
   grant, provider-backed REPL checks):
   `docs/qa/2026-09-10-macos-real-machine-qa-results.md`.
+- **macOS Accessibility preflight (E3)**: the `computer` tool's input
+  actions (click/type/scroll/key/move/drag) now probe the Accessibility
+  TCC grant (`AXIsProcessTrusted`, no new dependencies) and fail with an
+  actionable message instead of reporting success while the window server
+  silently drops the synthetic events. `MacosEnigoAdapter::available()`
+  reports the grant honestly.
+- **macOS /private path-alias fixes (E6/F11)**: canonicalization renders
+  /etc, /tmp and /var as /private/… on macOS, which (a) let denied
+  patterns written as /etc/** miss the resolved /private/etc/… path and
+  (b) broke bind-alias display matching, leaking host paths in sandbox
+  errors and rewriting temp-dir paths to /workspace. Denied patterns now
+  match the visible spelling, alias display matches canonical+raw root
+  spellings, and the temp root renders as the sandbox-visible /tmp on
+  every platform. Fixes 4 pre-existing macOS test failures.
+- **Honest screen-size failure (E1)**: `screen_size()` no longer silently
+  falls back to the 1024x768 reference frame when display enumeration
+  fails (e.g. displays asleep) — that turned model coordinates into
+  unscaled screen coordinates; the error now propagates. The AppleScript
+  timeout error names the TCC-prompt case (E5). CI's macOS leg gained a
+  `cargo check -p shannon-tools --features computer-use` gate (E2), and
+  the computer-use feature shape is clippy-clean (E4).
 
 ### P3 follow-ups: backend selection, AppleScript, browser toolset, foundations (feat/p3-follow-ups)
 

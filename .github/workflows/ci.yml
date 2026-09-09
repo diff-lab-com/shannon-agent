@@ -506,6 +506,13 @@ jobs:
         # other matrix legs.
         if: runner.os == 'Linux'
         run: cargo check -p shannon-core --features landlock
+      - name: Check computer-use feature (macOS only)
+        # xcap 0.0.13's macOS backend didn't compile on the pinned rustc
+        # 1.88 (E0282) and no leg noticed: the computer-use build gate lives
+        # in the Linux-only feature job, and this matrix's macOS leg checks
+        # default features only. Keep the macOS capture path compiling.
+        if: runner.os == 'macOS'
+        run: cargo check -p shannon-tools --features computer-use
       - name: Check all features (Linux only)
         # Feature-universe compile: --all-features unions optional deps no
         # default-features gate ever sees. Three carve-outs, each with its

@@ -43,6 +43,25 @@ pub trait PlatformAdapter: Send + Sync {
     fn capabilities(&self) -> AdapterCapabilities;
 }
 
+/// macOS: has the responsible process been granted the Accessibility TCC
+/// permission? Without it enigo's CGEvent posts report success but the
+/// events are silently dropped by the window server. Cheap, side-effect-free
+/// C probe — no prompt is triggered (that would need
+/// `AXIsProcessTrustedWithOptions`). Non-macOS: nothing to check.
+#[cfg(target_os = "macos")]
+pub fn accessibility_granted() -> bool {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    unsafe extern "C" {
+        fn AXIsProcessTrusted() -> u8;
+    }
+    unsafe { AXIsProcessTrusted() != 0 }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn accessibility_granted() -> bool {
+    true
+}
+
 /// Current enigo/CGEvent path — the macOS baseline and universal fallback.
 pub struct MacosEnigoAdapter;
 
@@ -52,10 +71,10 @@ impl PlatformAdapter for MacosEnigoAdapter {
     }
 
     fn available(&self) -> bool {
-        // enigo is compiled in whenever desktop automation exists; the
-        // Accessibility TCC grant is the runtime question, which surfaces
-        // as action failures today.
-        cfg!(feature = "computer-use")
+        // enigo is compiled in whenever desktop automation exists; on macOS
+        // the Accessibility TCC grant is the runtime question — without it
+        // synthetic events are silently dropped, so report honestly.
+        cfg!(feature = "computer-use") && accessibility_granted()
     }
 
     fn capabilities(&self) -> AdapterCapabilities {
@@ -102,7 +121,7 @@ pub fn select_desktop_adapter() -> Box<dyn PlatformAdapter> {
         if ax.available() {
             return Box::new(ax);
         }
-        return Box::new(MacosEnigoAdapter);
+        Box::new(MacosEnigoAdapter)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -145,9 +164,11 @@ mod tests {
             "unexpected adapter {}",
             adapter.name()
         );
-        // Usability tracks the compiled feature: with `computer-use` the
-        // enigo path is real; without it, the selected backend honestly
-        // reports unavailable (tool execution returns the stub error).
-        assert_eq!(adapter.available(), cfg!(feature = "computer-use"));
+        // Usability tracks the compiled feature AND, on macOS, the actual
+        // Accessibility grant (without it CGEvents are silently dropped):
+        // `available()` must never overpromise.
+        let expected =
+            cfg!(feature = "computer-use") && super::accessibility_granted();
+        assert_eq!(adapter.available(), expected);
     }
 }

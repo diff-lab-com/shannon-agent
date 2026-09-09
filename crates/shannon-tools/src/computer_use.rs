@@ -507,7 +507,7 @@ impl ComputerUseTool {
         metadata.insert("height".to_string(), json!(height));
 
         Ok(ToolOutput {
-            content: format!("Screenshot captured ({}x{})", width, height),
+            content: format!("Screenshot captured ({width}x{height})"),
             is_error: false,
             metadata,
         })
@@ -562,10 +562,12 @@ impl ComputerUseTool {
                 metadata: HashMap::new(),
             });
         }
+        Self::ensure_input_permitted()?;
 
         let (button, clicks, label) = Self::click_spec(action);
 
-        let (actual_w, actual_h) = Self::screen_size();
+        let (actual_w, actual_h) = Self::screen_size()
+            .map_err(ToolError::ExecutionFailed)?;
         let scaled = Self::scale_coordinate(coord, actual_w, actual_h);
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
@@ -636,6 +638,7 @@ impl ComputerUseTool {
                 metadata: HashMap::new(),
             });
         }
+        Self::ensure_input_permitted()?;
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
@@ -678,13 +681,15 @@ impl ComputerUseTool {
                 metadata: HashMap::new(),
             });
         }
+        Self::ensure_input_permitted()?;
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
 
         // Move to coordinate if provided
         if let Some(c) = coord {
-            let (actual_w, actual_h) = Self::screen_size();
+            let (actual_w, actual_h) = Self::screen_size()
+            .map_err(ToolError::ExecutionFailed)?;
             let scaled = Self::scale_coordinate(c, actual_w, actual_h);
             enigo
                 .move_mouse(scaled[0], scaled[1], enigo::Coordinate::Abs)
@@ -703,7 +708,7 @@ impl ComputerUseTool {
             .map_err(|e| ToolError::ExecutionFailed(format!("Scroll failed: {e}")))?;
 
         Ok(ToolOutput {
-            content: format!("Scrolled {:?} x{}", direction, amount),
+            content: format!("Scrolled {direction:?} x{amount}"),
             is_error: false,
             metadata: HashMap::new(),
         })
@@ -734,6 +739,7 @@ impl ComputerUseTool {
                 metadata: HashMap::new(),
             });
         }
+        Self::ensure_input_permitted()?;
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
@@ -743,24 +749,24 @@ impl ComputerUseTool {
         // For simple single keys, click directly
         if enigo_keys.len() == 1 {
             enigo
-                .key(enigo_keys[0].clone(), Direction::Click)
+                .key(enigo_keys[0], Direction::Click)
                 .map_err(|e| ToolError::ExecutionFailed(format!("Key press failed: {e}")))?;
         } else {
             // Press modifiers first, then the main key, then release in reverse
             for k in &enigo_keys {
                 enigo
-                    .key(k.clone(), Direction::Press)
+                    .key(*k, Direction::Press)
                     .map_err(|e| ToolError::ExecutionFailed(format!("Key press failed: {e}")))?;
             }
             for k in enigo_keys.iter().rev() {
                 enigo
-                    .key(k.clone(), Direction::Release)
+                    .key(*k, Direction::Release)
                     .map_err(|e| ToolError::ExecutionFailed(format!("Key release failed: {e}")))?;
             }
         }
 
         Ok(ToolOutput {
-            content: format!("Pressed key: {}", key),
+            content: format!("Pressed key: {key}"),
             is_error: false,
             metadata: HashMap::new(),
         })
@@ -809,8 +815,10 @@ impl ComputerUseTool {
                 metadata: HashMap::new(),
             });
         }
+        Self::ensure_input_permitted()?;
 
-        let (actual_w, actual_h) = Self::screen_size();
+        let (actual_w, actual_h) = Self::screen_size()
+            .map_err(ToolError::ExecutionFailed)?;
         let scaled = Self::scale_coordinate(coord, actual_w, actual_h);
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
@@ -851,8 +859,10 @@ impl ComputerUseTool {
                 metadata: HashMap::new(),
             });
         }
+        Self::ensure_input_permitted()?;
 
-        let (actual_w, actual_h) = Self::screen_size();
+        let (actual_w, actual_h) = Self::screen_size()
+            .map_err(ToolError::ExecutionFailed)?;
         let scaled_start = Self::scale_coordinate(start, actual_w, actual_h);
         let scaled_end = Self::scale_coordinate(end, actual_w, actual_h);
 
@@ -898,25 +908,50 @@ impl ComputerUseTool {
         })
     }
 
+    /// Gate every input action on the macOS Accessibility permission
+    /// (roadmap E3): without the grant, enigo's CGEvent posts report
+    /// success while the window server silently drops the events — the
+    /// model would see "done" while nothing happened. Fail loudly with an
+    /// actionable message instead. No-op off macOS.
+    #[cfg(feature = "computer-use")]
+    fn ensure_input_permitted() -> Result<(), ToolError> {
+        if crate::platform_adapter::accessibility_granted() {
+            Ok(())
+        } else {
+            Err(ToolError::ExecutionFailed(
+                "Input simulation requires the macOS Accessibility permission, \
+                 which the hosting app does not currently hold: synthetic mouse \
+                 and keyboard events would be silently dropped. Grant it in \
+                 System Settings → Privacy & Security → Accessibility, then retry."
+                    .into(),
+            ))
+        }
+    }
+
     /// Get the actual screen size.
     #[cfg(feature = "computer-use")]
-    fn screen_size() -> (u32, u32) {
+    fn screen_size() -> Result<(u32, u32), String> {
         // xcap reports CGDisplayBounds points (logical coords — the same
         // space enigo's CGEvent absolute moves expect); captures come back
         // in physical pixels on Retina, so screenshot↔input scales differ.
-        match xcap::Monitor::all() {
-            Ok(monitors) => {
-                if let Some(m) = monitors.into_iter().next() {
-                    match (m.width(), m.height()) {
-                        (Ok(w), Ok(h)) => (w, h),
-                        _ => (REFERENCE_WIDTH, REFERENCE_HEIGHT),
-                    }
-                } else {
-                    (REFERENCE_WIDTH, REFERENCE_HEIGHT)
-                }
-            }
-            Err(_) => (REFERENCE_WIDTH, REFERENCE_HEIGHT),
-        }
+        // Enumeration failures propagate: silently assuming the 1024x768
+        // reference frame would turn model coordinates into unscaled screen
+        // coordinates (misclicks once the Accessibility grant is held).
+        let monitors = xcap::Monitor::all().map_err(|e| {
+            tracing::warn!(error = %e, "monitor enumeration failed");
+            format!("monitor enumeration failed: {e}")
+        })?;
+        let monitor = monitors.into_iter().next().ok_or_else(|| {
+            tracing::warn!("no active display reported by the OS");
+            "no active display found (display asleep or detached?)".to_string()
+        })?;
+        let width = monitor
+            .width()
+            .map_err(|e| format!("monitor width unavailable: {e}"))?;
+        let height = monitor
+            .height()
+            .map_err(|e| format!("monitor height unavailable: {e}"))?;
+        Ok((width, height))
     }
 }
 

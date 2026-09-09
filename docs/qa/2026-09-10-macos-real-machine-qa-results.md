@@ -60,8 +60,49 @@
   shell rc 无 key 导出），REPL 启动即回落 ollama `127.0.0.1:11434` 连接拒绝退出。
   QA-1 #6（REPL High-risk 审批流）与 QA-4 的 `/browser doctor` REPL 行在配置
   provider 前无法执行。
+- **F12（存量，未修，已记录）**：修复 E6 后仍有 **9 个**存量 macOS 失败（基线对比
+  确认，与本批改动无关）：`file::sandbox_adapter::tests` 的 validate 三件套 +
+  `file::tests` 的 6 个工具回显/快照测试（glob/read/write/multiedit/edit 的
+  alias-echo 与 snapshot 断言）。同属 /private 别名家族，但散布在各工具的回显
+  构造点，需逐点处理。基线全量对比数据：feature 形态 25 → 18 失败（本批净修复
+  11 个，0 引入）。
+- **F13（取证）**：`git::tests` 在 macOS 上负载敏感——单测通过，并行全量时失败
+  子集逐轮随机变化（基线 3 个、本批 4 个、互不重合）。仓库 CI 已因 "HOME-race
+  git tests" 配置 nextest 重试；本地全量跑的 git 失败请先单独重跑再下结论。
+- **F11（已修复，产品级）**：macOS `/private` 路径别名破坏沙箱显示与策略匹配——
+  `std::fs::canonicalize` 把 /etc、/tmp、/var 解析为 /private/…，导致
+  ① denied pattern（/etc/**）失配，降级为 outside-roots 错误；
+  ② bind-alias 展示在 raw/canonical 拼写间失配，沙箱错误信息**泄漏宿主真实路径**；
+  ③ temp 根拼写失配使 tmp 排除失效，临时目录下的路径被错误重写为 /workspace；
+  ④ `screen_size` 兜底掩盖同类失配（见 F5/E1）。**4 个存量单测**在 macOS 上失败
+  （`alias_display_text_rewrites_only_at_path_boundaries`、
+  `outside_roots_error_lists_sandbox_view_roots`、
+  `denied_pattern_error_lists_allowed_roots`、
+  `test_validate_for_write_new_file_in_missing_subdirectory`），均已在基线
+  （未含本批改动）复测确认为存量问题。修复后 `file::sandbox::` 53/53 通过。
+
+## 二·补 第二批修复（同日，roadmap E1-E6 落地）
+
+- **E1**：`screen_size()` 改为传播错误 + warn（不再静默兜底 1024×768）。
+- **E3（输入侧）**：新增 `platform_adapter::accessibility_granted()`（AXIsProcessTrusted
+  直接 C 声明，无新依赖）；`MacosEnigoAdapter::available()` 如实反映授权状态；
+  `computer` 全部 6 个输入动作预检，未授权时返回可行动错误（含授权路径指引），
+  替代"报成功但静默丢弃"。真机验证：无授权时 click/type 均被预检拦截 ✓。
+- **E5**：applescript 超时错误信息附带 TCC 提示指引（30s 契约不变，QA-1 #7 断言
+  子串仍匹配）。
+- **E4**：computer-use 形态存量 clippy 告警清零（format! ×3、Key clone ×3、
+  landlock unused imports、platform_adapter unneeded return、glob/sandbox/integration
+  测试散点；landlock 以 `cfg_attr(not(target_os = "linux"))` 模块级豁免）。
+- **E2**：CI `cross-platform` macOS 腿新增
+  `cargo check -p shannon-tools --features computer-use`。
+- **E6（=F11）**：沙箱别名/策略匹配修复（详见 F11）。
+- harness 同步：`computer_type_lands_in_textedit` / `computer_click_succeeds`
+  在无 AX 授权时改为断言预检拒绝（Err(ExecutionFailed) 或 is_error 两种形态均
+  接受），有授权时仍验证完整落屏链路。
 
 ## 三、改动清单
+
+第一批（验证 + 编译修复）：
 
 - `crates/shannon-tools/Cargo.toml`：xcap 0.0.13 → 0.9；dev-deps + base64
 - `desktop/Cargo.toml`：xcap 同步升 0.9（`preview-capture` feature 编译通过）
@@ -71,6 +112,18 @@
 - `crates/shannon-tools/tests/macos_real_machine.rs`：**新增** macOS 真机 QA harness
   （`#![cfg(all(target_os = "macos", feature = "computer-use"))]` + 全部 `#[ignore]`，
   默认构建不受影响）
+
+第二批（E1-E6 修复）：
+
+- `crates/shannon-tools/src/computer_use.rs`：E1 错误传播 + E3 预检门控 6 个输入动作
+- `crates/shannon-tools/src/platform_adapter.rs`：E3 `accessibility_granted()` +
+  `available()` 诚实化
+- `crates/shannon-tools/src/applescript.rs`：E5 超时信息 TCC 指引
+- `crates/shannon-tools/src/file/sandbox.rs`：E6 别名/策略匹配修复 + 2 个测试
+  平台化修正
+- `crates/shannon-tools/src/sandbox/landlock_backend.rs`、`src/file/glob.rs`、
+  `tests/computer_use_integration.rs`、`tests/sandbox_matrix.rs`：E4 clippy 清理
+- `.github/workflows/ci.yml`：E2 macOS computer-use check 腿
 
 ## 四、复跑方式
 
