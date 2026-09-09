@@ -56,6 +56,7 @@ uuid = { workspace = true }
 [dev-dependencies]
 tokio-test = "0.4"
 mockito = "1.6"
+libc = "0.2"
 proptest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

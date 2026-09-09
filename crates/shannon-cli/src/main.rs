@@ -157,6 +157,15 @@ fn run_retry_limit() -> u32 {
     parse_run_retries(std::env::var("SHANNON_RUN_RETRIES").ok())
 }
 
+/// Backoff before run-level retry attempt `attempt` (1-based). 20 s per
+/// attempt, capped at 60 s — long enough to outlive provider cutoff windows
+/// (minutes-scale), short enough to keep headless automation responsive.
+/// Returns milliseconds so callers log and sleep with one value.
+fn run_retry_backoff_ms(attempt: u32) -> u64 {
+    let base = 20_000u64.saturating_mul(attempt as u64);
+    base.min(60_000)
+}
+
 /// A7 empty-patch marker: the run ended on an infra-class exit without any
 /// assistant output (no text, no tool calls). Such a run exercised no model
 /// capability, so eval harnesses should book it as infra instead of a model
@@ -2388,9 +2397,23 @@ fn run_headless_query(
                             } else {
                                 "rate_limited"
                             };
+                            // N2: backoff between attempts. Failure windows
+                            // (provider 6-min cutoffs, host egress flaps) last
+                            // minutes — an immediate re-send burns the budget
+                            // inside the same bad window (measured in the
+                            // TB2.1 sweep: retries exhausted back-to-back).
+                            let backoff =
+                                std::time::Duration::from_millis(run_retry_backoff_ms(
+                                    run_attempt,
+                                ));
                             if !quiet {
-                                eprintln!("[run-retry] attempt {run_attempt} after {kind} ({error})");
+                                eprintln!(
+                                    "[run-retry] attempt {run_attempt} after {kind}; \
+                                     retrying in {}ms ({error})",
+                                    backoff.as_millis()
+                                );
                             }
+                            tokio::time::sleep(backoff).await;
                             if output_format == OutputFormat::JsonStream {
                                 // Synthetic stream event so harnesses see the
                                 // restart between the failure and attempt 2.
@@ -7226,6 +7249,17 @@ profile_routes = []
             classify_headless_failure("connection timed out after 600s"),
             HeadlessExitCode::Timeout
         );
+    }
+
+    #[test]
+    fn test_run_retry_backoff_ms_scales_and_caps() {
+        // N2: backoff grows per attempt (20 s base) and caps at 60 s so a
+        // long outage still re-checks every minute without stalling headless
+        // automation indefinitely.
+        assert_eq!(run_retry_backoff_ms(1), 20_000);
+        assert_eq!(run_retry_backoff_ms(2), 40_000);
+        assert_eq!(run_retry_backoff_ms(3), 60_000, "capped at 60 s");
+        assert_eq!(run_retry_backoff_ms(99), 60_000, "stays capped");
     }
 
     #[test]
