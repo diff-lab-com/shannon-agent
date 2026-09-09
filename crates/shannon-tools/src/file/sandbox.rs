@@ -280,38 +280,75 @@ impl PathSandbox {
         self.bind_alias_output
     }
 
-    /// Roots whose children are rendered under the bind alias in output.
-    ///
-    /// The temp root is excluded on purpose: the command sandbox exposes
-    /// `/tmp` at the same literal path (tmpfs mount), so a host `/tmp/...`
-    /// path is already sandbox-visible spelling and must not be rewritten
-    /// to `/workspace/...`.
-    fn alias_candidate_roots(&self) -> Vec<PathBuf> {
+    /// Canonical spelling of `path`, or `path` itself when it cannot be
+    /// resolved (not yet created, virtual).
+    fn canonical_of(&self, path: &Path) -> PathBuf {
+        self.fs.canonicalize_blocking(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    /// Whether `path` is the command sandbox's tmpfs root (/tmp), in any
+    /// spelling. macOS resolves std::env::temp_dir() under
+    /// `/private/var/folders/…`, so comparing the raw path against the
+    /// literal `/tmp` constant silently missed it there.
+    fn is_tmp_root(&self, path: &Path) -> bool {
+        if path.as_os_str() == SANDBOX_TMP_ROOT || path == std::env::temp_dir() {
+            return true;
+        }
+        self.canonical_of(path) == self.canonical_of(&std::env::temp_dir())
+    }
+
+    /// Spellings of the alias-eligible (non-temp) roots: canonicalized and
+    /// as-configured. macOS canonicalization renders /var/… as
+    /// /private/var/… (same for /etc, /tmp), so configured roots, resolved
+    /// paths and echoed text frequently disagree about the prefix while
+    /// naming the same files — match every spelling (roadmap F11).
+    fn alias_root_spellings(&self) -> Vec<PathBuf> {
         if !self.bind_alias_output {
             return Vec::new();
         }
-        self.effective_roots()
-            .into_iter()
-            .filter(|root| root.to_string_lossy() != SANDBOX_TMP_ROOT)
-            .map(|root| self.fs.canonicalize_blocking(&root).unwrap_or(root))
-            .collect()
+        let mut out = Vec::new();
+        for root in self.effective_roots() {
+            if self.is_tmp_root(&root) {
+                continue;
+            }
+            out.push(self.canonical_of(&root));
+            out.push(root);
+        }
+        out
     }
 
     /// Render a canonical host path the way the command sandbox sees it —
     /// the reverse of `PathSandbox::remap_bind_alias` (A3).
     ///
-    /// A path under the project root becomes `/workspace/<rest>`; anything
-    /// else (the temp root, paths outside every root) is returned unchanged.
-    /// When output aliasing is off ([`PathSandbox::with_bind_alias_output`])
-    /// this is the identity, so plain non-sandboxed assemblies keep echoing
-    /// host paths exactly as before.
+    /// A path under the project root becomes `/workspace/<rest>`; a path
+    /// under the temp root renders as the sandbox-visible `/tmp` spelling
+    /// (Linux host `/tmp` is already literal — identity; macOS folds
+    /// `/var/folders/…/T` and `/private/var/folders/…/T` into `/tmp`);
+    /// anything else (paths outside every root) is returned unchanged. When
+    /// output aliasing is off ([`PathSandbox::with_bind_alias_output`]) this
+    /// is the identity, so plain non-sandboxed assemblies keep echoing host
+    /// paths exactly as before.
     pub fn alias_display_path(&self, path: &Path) -> String {
-        for root in self.alias_candidate_roots() {
-            if let Ok(rest) = path.strip_prefix(&root) {
-                return match rest.as_os_str().is_empty() {
-                    true => SANDBOX_BIND_ALIAS.to_string(),
-                    false => format!("{SANDBOX_BIND_ALIAS}/{}", rest.display()),
-                };
+        let inputs = [path.to_path_buf(), self.canonical_of(path)];
+        for root in self.alias_root_spellings() {
+            for input in &inputs {
+                if let Ok(rest) = input.strip_prefix(&root) {
+                    return match rest.as_os_str().is_empty() {
+                        true => SANDBOX_BIND_ALIAS.to_string(),
+                        false => format!("{SANDBOX_BIND_ALIAS}/{}", rest.display()),
+                    };
+                }
+            }
+        }
+        let tmp = std::env::temp_dir();
+        for input in &inputs {
+            for t in [tmp.as_path(), Path::new(SANDBOX_TMP_ROOT)] {
+                if let Ok(rest) = input.strip_prefix(t) {
+                    return match rest.as_os_str().is_empty() {
+                        true => SANDBOX_TMP_ROOT.to_string(),
+                        false => format!("{SANDBOX_TMP_ROOT}/{}", rest.display()),
+                    };
+                }
             }
         }
         path.to_string_lossy().to_string()
@@ -326,8 +363,15 @@ impl PathSandbox {
     /// tool-generated path echoes are.
     pub fn alias_display_text(&self, text: &str) -> String {
         let mut out = text.to_string();
-        for root in self.alias_candidate_roots() {
+        for root in self.alias_root_spellings() {
             out = replace_path_prefix(&out, &root.to_string_lossy(), SANDBOX_BIND_ALIAS);
+        }
+        // Temp root spellings render as the sandbox-visible /tmp (see
+        // alias_display_path): Linux is the identity, macOS folds
+        // /var/folders/…/T and /private/var/folders/…/T into /tmp.
+        let tmp = std::env::temp_dir();
+        for t in [tmp.as_path(), Path::new(SANDBOX_TMP_ROOT)] {
+            out = replace_path_prefix(&out, &t.to_string_lossy(), SANDBOX_TMP_ROOT);
         }
         out
     }
@@ -621,18 +665,27 @@ impl PathSandbox {
 
     /// Check if the canonicalized path matches any denied pattern.
     fn check_denied_patterns(&self, canonical_str: &str) -> Result<(), SandboxError> {
+        // macOS canonicalization renders /etc, /tmp and /var as /private/…;
+        // a denied pattern written against the visible spelling (/etc/…)
+        // must still match the same file after resolution (roadmap F11).
+        let spellings = [
+            canonical_str,
+            canonical_str.strip_prefix("/private").unwrap_or(canonical_str),
+        ];
         for pattern in &self.config.denied_patterns {
+            let bare = pattern.trim_end_matches('/');
             // Match as prefix. Both "/etc/passwd" and "/etc/" itself should match "/etc/"
-            if canonical_str.starts_with(pattern) || canonical_str == pattern.trim_end_matches('/')
-            {
-                // B3: even a denied-pattern hit should tell the model where
-                // writes ARE accepted, so a rejected Write is recoverable in
-                // one turn instead of three guesses.
-                return Err(SandboxError::Denied(format!(
-                    "Path '{canonical_str}' is in a restricted area (matches '{pattern}'); \
-                     allowed roots: {}",
-                    self.allowed_roots_summary()
-                )));
+            for candidate in spellings {
+                if candidate.starts_with(pattern.as_str()) || candidate == bare {
+                    // B3: even a denied-pattern hit should tell the model where
+                    // writes ARE accepted, so a rejected Write is recoverable in
+                    // one turn instead of three guesses.
+                    return Err(SandboxError::Denied(format!(
+                        "Path '{canonical_str}' is in a restricted area (matches '{pattern}'); \
+                         allowed roots: {}",
+                        self.allowed_roots_summary()
+                    )));
+                }
             }
         }
         Ok(())
@@ -1235,16 +1288,20 @@ mod tests {
     }
 
     #[test]
-    fn alias_display_path_leaves_temp_and_outside_paths() {
+    fn alias_display_path_renders_temp_as_sandbox_visible_tmp() {
         let td = TestDir::new();
         let sandbox = alias_output_sandbox(td.path());
 
-        // The temp root keeps its literal (sandbox-visible) spelling.
+        // The temp root renders as the sandbox-visible /tmp spelling on
+        // every platform: Linux host /tmp is already literal (identity),
+        // macOS folds /var/folders/…/T (and its /private/… canonical form)
+        // into the same tmpfs mount.
         let tmp_file = std::env::temp_dir().join("alias_display_probe.txt");
-        assert_eq!(
-            sandbox.alias_display_path(&tmp_file),
-            tmp_file.to_string_lossy()
-        );
+        let expected = match tmp_file.strip_prefix(std::env::temp_dir()) {
+            Ok(rest) => format!("{SANDBOX_TMP_ROOT}/{}", rest.display()),
+            Err(_) => tmp_file.to_string_lossy().to_string(),
+        };
+        assert_eq!(sandbox.alias_display_path(&tmp_file), expected);
         // Paths outside every root are echoed unchanged.
         assert_eq!(
             sandbox.alias_display_path(Path::new("/etc/hosts")),
@@ -1279,11 +1336,23 @@ mod tests {
             "head /workspace/src/a.rs mid /workspace/src/b.rs tail"
         );
 
-        // Sibling names sharing the prefix stay untouched.
+        // Sibling names sharing the prefix must NOT be rewritten to the
+        // project alias (boundary safety). They are children of the temp
+        // dir, so their sandbox-visible spelling is /tmp/… on every
+        // platform (see alias_display_path).
+        let tmp = std::env::temp_dir();
         for sibling in [format!("{root_str}-backup/x.rs"), format!("{root_str}foo")] {
+            let expected = match Path::new(&sibling).strip_prefix(&tmp) {
+                Ok(rest) => format!("{SANDBOX_TMP_ROOT}/{}", rest.display()),
+                Err(_) => sibling.clone(),
+            };
+            assert!(
+                !expected.starts_with(SANDBOX_BIND_ALIAS),
+                "project alias must not swallow {sibling}"
+            );
             assert_eq!(
                 sandbox.alias_display_text(&sibling),
-                sibling,
+                expected,
                 "boundary safety"
             );
         }
@@ -1825,8 +1894,12 @@ mod tests {
             "Should allow creating new file in not-yet-existing subdir: {result:?}"
         );
         let canonical = result.unwrap();
+        // Compare against the canonical root spelling: macOS canonicalizes
+        // /var/… to /private/var/…, so the raw configured root never
+        // prefixes the canonical result there (roadmap F11).
+        let canonical_root = fs::canonicalize(td.path()).expect("canonicalize root");
         assert!(
-            canonical.starts_with(td.path()),
+            canonical.starts_with(&canonical_root),
             "Canonical path must stay inside the allowed root: {canonical:?}"
         );
         assert!(canonical.ends_with("ws/docs/API.md"));

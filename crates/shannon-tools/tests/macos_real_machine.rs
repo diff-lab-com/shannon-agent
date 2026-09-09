@@ -209,14 +209,37 @@ async fn computer_screenshot_captures_real_screen() {
 /// Full input chain: enigo typing must land in the frontmost app. TextEdit
 /// is driven via AppleScript (activate + fresh document), the marker is
 /// typed through the `computer` tool, then read back via AppleScript.
-/// Requires the Accessibility grant on the hosting app; without it CGEvents
-/// are silently dropped and the mismatch below is the documented failure
-/// mode (no preflight exists yet).
+/// Requires the Accessibility grant on the hosting app. Without the grant
+/// the tool must fail loudly with the preflight error (roadmap E3) — the
+/// historical behavior was a silent CGEvent drop with a success reply.
 #[tokio::test]
 #[ignore]
 async fn computer_type_lands_in_textedit() {
     let ax = accessibility_granted();
     println!("[info] AXIsProcessTrusted = {ax}");
+    let computer = ComputerUseTool::new();
+
+    if !ax {
+        // Preflight check first: it must refuse to fake success, with no
+        // TCC prompt and no hanging AppleScript involved.
+        let probe = computer
+            .execute(serde_json::json!({"action": "type", "text": "probe"}))
+            .await;
+        match probe {
+            Ok(out) => assert!(
+                out.is_error && out.content.contains("Accessibility"),
+                "without the Accessibility grant the type action must fail \
+                 with the preflight error, got: {}",
+                out.content
+            ),
+            Err(shannon_tools::ToolError::ExecutionFailed(msg)) => {
+                assert!(msg.contains("Accessibility"), "got: {msg}");
+                println!("[ok] preflight blocked type without the grant (E3): {msg}");
+            }
+            Err(other) => panic!("unexpected error shape: {other}"),
+        }
+        return;
+    }
 
     let script_tool = AppleScriptTool::new();
     let setup = script_tool
@@ -228,7 +251,6 @@ async fn computer_type_lands_in_textedit() {
     assert!(!setup.is_error, "TextEdit setup failed: {}", setup.content);
 
     let marker = format!("shannon-qa-{}", std::process::id());
-    let computer = ComputerUseTool::new();
     let typed = computer
         .execute(serde_json::json!({"action": "type", "text": marker}))
         .await
@@ -242,13 +264,6 @@ async fn computer_type_lands_in_textedit() {
         .await
         .unwrap();
     let text = readback.content.trim().to_string();
-    if !ax && !text.contains(&marker) {
-        panic!(
-            "CONFIRMED known gap: Accessibility grant missing, so CGEvent input was \
-             silently dropped (type reported success, TextEdit got {text:?}). \
-             Grant Accessibility to the hosting app and re-run."
-        );
-    }
     assert!(
         text.contains(&marker),
         "marker not found in TextEdit (got {text:?}) — AX trusted: {ax}"
@@ -270,8 +285,27 @@ async fn computer_click_succeeds() {
             "action": "click",
             "coordinate": [512, 384]
         }))
-        .await
-        .unwrap();
+        .await;
+    if !accessibility_granted() {
+        // Fixed behavior (E3): preflight refuses to fake success. The
+        // refusal surfaces as ToolError::ExecutionFailed (the same channel
+        // as "Input init failed").
+        match result {
+            Ok(out) => assert!(
+                out.is_error && out.content.contains("Accessibility"),
+                "without the Accessibility grant the click action must fail \
+                 with the preflight error, got: {}",
+                out.content
+            ),
+            Err(shannon_tools::ToolError::ExecutionFailed(msg)) => {
+                assert!(msg.contains("Accessibility"), "got: {msg}");
+                println!("[ok] preflight blocked click without the grant (E3): {msg}");
+            }
+            Err(other) => panic!("unexpected error shape: {other}"),
+        }
+        return;
+    }
+    let result = result.unwrap();
     assert!(!result.is_error, "click failed: {}", result.content);
     println!("[ok] click at reference (512, 384): {}", result.content.trim());
 }

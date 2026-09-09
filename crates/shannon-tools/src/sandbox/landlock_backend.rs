@@ -22,7 +22,10 @@
 //! ## Non-Linux builds
 //!
 //! A stub keeps [`probe_new`] available on all platforms; it fails closed
-//! with [`SandboxError::Unsupported`] (surfaced loudly by callers).
+//! with [`SandboxError::Unsupported`] (surfaced loudly by callers). The
+//! Linux-only guts below stay compiled for structure and the stub's tests,
+//! so non-Linux builds relax the dead-code lints they would trip.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code, unused_imports))]
 
 use shannon_tool_interface::sandbox::{
     ChildWorldInit, DegradeNotice, SANDBOX_DENIED_PREFIX, SandboxError, SandboxPolicy,

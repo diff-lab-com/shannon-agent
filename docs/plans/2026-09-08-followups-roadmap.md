@@ -53,13 +53,15 @@
 
 ## E. macOS 真机验证发现（2026-09-10，见 [结果文档](../qa/2026-09-10-macos-real-machine-qa-results.md)）
 
-| # | 项 | 说明 | 建议 |
+| # | 项 | 说明 | 状态 |
 |---|---|---|---|
-| E1 | **`screen_size()` 静默兜底 (1024,768)** | `Monitor::all()` 失败（如显示器休眠，`CGGetActiveDisplayList` 返回 0）时坐标缩放退化为恒等映射；若 AX 已授权，参考系坐标会被原样当作屏幕坐标点击（错位） | 失败时向上传播错误或至少 `tracing::warn`，勿静默兜底 |
-| E2 | **CI 的 macOS 腿不覆盖 `computer-use` feature** | "Build with computer-use feature" step 在 Linux-only job；`cross-platform` macOS 腿只跑默认 feature `cargo check` → F1 那类 macOS 专属编译损坏在 CI 不可见 | `cross-platform` macOS 腿追加 `cargo check -p shannon-tools --features computer-use`（xcap 0.9.8 起可编译）；clippy 同理 |
-| E3 | **权限预检缺口的实证** | AX 未授权时 enigo 动作报成功但 CGEvent 静默丢弃（此前仅为注释级认知，现有点击/输入双向证据） | 支持"权限预检/引导"立项：`AXIsProcessTrustedWithOptions` 预检 + 可行动的错误提示；desktop 端补 Info.plist/entitlements 声明 |
-| E4 | **存量 clippy 告警在 computer-use 形态下** | `computer_use.rs` 3×format! 风格、3×Key clone、landlock unused imports（CI clippy 不带该 feature 故未暴露） | 随 E2 的 clippy 腿一并清理 |
-| E5 | **30s 超时与首次 TCC 提示竞争** | 实测：Notes 首次授权若用户未在 30s 内点击，osascript 连同未决提示被超时杀死，报 `timed out after 30s` | 首次调用（或检测到 TCC 提示挂起）时放宽 `SCRIPT_TIMEOUT` |
+| E1 | **`screen_size()` 静默兜底 (1024,768)** | `Monitor::all()` 失败（如显示器休眠，`CGGetActiveDisplayList` 返回 0）时坐标缩放退化为恒等映射；若 AX 已授权，参考系坐标会被原样当作屏幕坐标点击（错位） | **已修复（2026-09-10）**：改为向上传播错误 + `tracing::warn` |
+| E2 | **CI 的 macOS 腿不覆盖 `computer-use` feature** | "Build with computer-use feature" step 在 Linux-only job；`cross-platform` macOS 腿只跑默认 feature `cargo check` → F1 那类 macOS 专属编译损坏在 CI 不可见 | **已修复（2026-09-10）**：`cross-platform` macOS 腿新增 `cargo check -p shannon-tools --features computer-use` |
+| E3 | **权限预检缺口的实证** | AX 未授权时 enigo 动作报成功但 CGEvent 静默丢弃（此前仅为注释级认知，现有点击/输入双向证据） | **已修复（2026-09-10，输入侧）**：`platform_adapter::accessibility_granted()`（AXIsProcessTrusted）+ 6 个输入动作预检，未授权时返回可行动错误；真机 harness 已验证。剩余：desktop 端 Info.plist/entitlements 声明 |
+| E4 | **存量 clippy 告警在 computer-use 形态下** | `computer_use.rs` format! 风格 ×3、Key clone ×3、landlock unused imports、platform_adapter unneeded return、glob/sandbox 测试散点 | **已清理（2026-09-10）**：双形态 clippy 归零 |
+| E5 | **30s 超时与首次 TCC 提示竞争** | 实测：Notes 首次授权若用户未在 30s 内点击，osascript 连同未决提示被超时杀死，报 `timed out after 30s` | **已缓解（2026-09-10）**：超时错误信息附带 TCC 提示指引；根治（放宽/暂停计时）需 TCC 状态内省（无公开 API），随权限预检立项评估 |
+| E6 | **macOS /private 路径别名破坏沙箱显示与策略匹配** | `std::fs::canonicalize` 把 /etc、/tmp、/var 解析为 /private/…：denied pattern（/etc/**）失配降级为 outside-roots 错误；bind-alias 显示失配导致错误信息泄漏宿主真实路径；temp 拼写失配使 tmp 排除失效，临时目录下的路径被错误重写为 /workspace。4 个存量单测在 macOS 上失败即源于此 | **已修复（2026-09-10）**：denied pattern 按可见拼写别名匹配；alias 展示匹配 canonical+raw 双拼写；temp 根统一渲染为沙箱可见的 /tmp 拼写；4 个测试修正为拼写无关断言，`file::sandbox::` 53/53 通过 |
+| E7 | **残留 9 个存量 macOS 失败（E6 同族，散布在工具回显构造点）** | `file::sandbox_adapter::tests` validate 三件套 + `file::tests` 6 个 alias-echo/snapshot 断言（glob/read/write/multiedit/edit）；基线对比确认与本批改动无关。另：`git::tests` 负载敏感（单测过、并行全量随机失败子集，CI nextest 重试已覆盖） | 逐工具回显点应用与 E6 相同的双拼写/别名展示处理；git 测试考虑 repo 隔离 |
 
 ---
 

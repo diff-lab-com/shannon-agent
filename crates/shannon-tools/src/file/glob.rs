@@ -274,8 +274,6 @@ mod tests {
         use std::io;
         use std::path::{Path, PathBuf};
 
-        use async_trait::async_trait;
-
         struct RemoteFakeFs;
 
         impl RemoteFakeFs {

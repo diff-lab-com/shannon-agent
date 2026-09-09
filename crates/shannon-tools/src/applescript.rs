@@ -183,7 +183,16 @@ impl AppleScriptTool {
 
         let output = tokio::time::timeout(SCRIPT_TIMEOUT, cmd.output())
             .await
-            .map_err(|_| ToolError::ExecutionFailed(format!("{label}: timed out after 30s")))?
+            .map_err(|_| {
+                // The 30s ceiling also swallows first-run Automation TCC
+                // prompts (they wait for a human click), so name that case —
+                // otherwise "first use" reads as a bare timeout (roadmap E5).
+                ToolError::ExecutionFailed(format!(
+                    "{label}: timed out after 30s (if a macOS Automation \
+                     permission prompt is waiting to be allowed, allow it and \
+                     retry)"
+                ))
+            })?
             .map_err(|e| ToolError::ExecutionFailed(format!("{label}: failed to spawn: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
