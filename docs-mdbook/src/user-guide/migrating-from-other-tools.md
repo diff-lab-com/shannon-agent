@@ -1,12 +1,12 @@
-# Migration Guide
+# Migrating from Other Tools
 
 ## From Claude Code CLI
 
-Shannon Code is CLI-compatible with Claude Code's MCP configuration and tool interface.
+Shannon is CLI-compatible with Claude Code's MCP configuration and tool interface.
 
 ### Config Migration
 
-Claude Code uses `~/.claude/settings.json`. Shannon Code reads the same MCP config:
+Claude Code uses `~/.claude/settings.json`. Shannon reads the same MCP config:
 
 ```json
 {
@@ -23,7 +23,7 @@ No changes needed — Shannon reads `.mcp.json`, `~/.claude/settings.json`, and 
 
 ### CLI Equivalence
 
-| Claude Code | Shannon Code |
+| Claude Code | Shannon |
 |-------------|-------------|
 | `claude` | `shannon` |
 | `claude -p "text"` | `shannon --prompt "text"` |
@@ -40,7 +40,7 @@ No changes needed — Shannon reads `.mcp.json`, `~/.claude/settings.json`, and 
 
 ## From Codex CLI
 
-| Codex CLI | Shannon Code |
+| Codex CLI | Shannon |
 |-----------|-------------|
 | `codex "text"` | `shannon --prompt "text"` |
 | `codex --model gpt-4o` | `shannon --model gpt-4o` |
@@ -49,8 +49,17 @@ No changes needed — Shannon reads `.mcp.json`, `~/.claude/settings.json`, and 
 
 ## From OpenCode
 
-| OpenCode | Shannon Code |
+| OpenCode | Shannon |
 |----------|-------------|
 | `opencode` | `shannon` |
 | Go-based | Rust-based |
 | Limited tool set | Full tool set + MCP |
+
+## Version Migration Notes (within Shannon)
+
+### v0.11: event-sourced sessions
+
+Starting with v0.11, sessions are stored exclusively as append-only `events.jsonl` logs
+(see [Trace](trace.md)). Legacy `sessions/<uuid>.json` snapshots and transcript files are no
+longer read. If you upgrade from an earlier release, old sessions cannot be resumed — export
+anything you need before upgrading.

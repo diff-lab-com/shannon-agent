@@ -6,7 +6,7 @@ section: getting-started
 
 # Getting Started
 
-Get Shannon Code running in under a minute. No Rust toolchain needed.
+Get Shannon running in under a minute. No Rust toolchain needed.
 
 ## Install
 

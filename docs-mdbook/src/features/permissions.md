@@ -1,6 +1,6 @@
 # Permissions
 
-Shannon Code provides a configurable permission system to control what tools can do.
+Shannon provides a configurable permission system to control what tools can do.
 
 ## Approval Modes
 

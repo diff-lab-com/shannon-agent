@@ -6,7 +6,7 @@ section: development
 
 # Building from Source
 
-Build Shannon Code from source if you want to contribute, hack on the code, or run a custom build.
+Build Shannon from source if you want to contribute, hack on the code, or run a custom build.
 
 ## Prerequisites
 

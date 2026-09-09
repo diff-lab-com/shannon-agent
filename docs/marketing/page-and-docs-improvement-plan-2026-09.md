@@ -3,7 +3,7 @@
 - **日期**: 2026-09-10 ｜ **定位**: 宣传方案的落地执行案（只做「门面」，不改产品代码）
 - **依据**: dev @ c3bc5647 实测盘点 · [核心宣传方案](./core-marketing-plan-2026-09.md)（口号与信息屋的落点） · 现有约定：`docs/metrics.md` 为指标单一事实源、`scripts/gen-metrics.sh` 注入 README
 - **范围**: ① GitHub 仓库页（README 双语 + 仓库元信息）② 产品主页 `website/`（Astro 落地页）③ 用户文档 `docs-mdbook/`（mdBook）与 `desktop/docs/user/` 的关系
-- **状态**: ⏳ 待审核（决策点见 §0.2 与 §10 决策表）
+- **状态**: ✅ 已评审通过（2026-09-10），按 §10 决策表执行中；**核心叙事锚定「开源可控 + 密钥安全」双核心**（见 [核心宣传方案 §9](./core-marketing-plan-2026-09.md)）；实施记录见 §11
 
 ---
 
@@ -17,13 +17,11 @@
 | **产品主页 website/** | 文案为早期版本而写 | Hero 停在 "AI coding, without limits"；终端演示写 **v0.1.0**；Feature 列 **7,889 tests / 12 crates**（实测 11,752 / 20）；**第 07 项仍在宣传 VS Code 扩展**；无桌面板块、无截图、无新口号 |
 | **用户文档 docs-mdbook/** | 开发者向（Crate Reference 是一级目录） | 桌面、自动化（goal/routine）、IM/移动派活、语音、computer use/浏览器、安全（secret-guard/redaction/沙箱）、trace 回放等已交付能力**全部无文档**；`book.toml` 仓库地址指向 `github.com/ericdong/shannon-code`（与实际仓库不符）；与 `desktop/docs/user/` 双轨并行无整合策略 |
 
-### 0.2 决策点速览（详见 §10）
+### 0.2 决策点（已全部评审通过，2026-09-10，详见 §10）
 
-1. 产品名口径（建议统一「Shannon」，淡化 "Shannon Code"）；
-2. README 是否放竞品真名对比表（建议放，事实型+标来源）；
-3. 文档整合策略（建议 mdBook 为唯一门面，desktop 内嵌帮助保留并反向引用）；
-4. 官网是否加统计条与截图（涉及素材生产排期）；
-5. "10-20x" 等存量风险表述处置（建议删除）。
+1. 产品名口径：统一「Shannon」，淡化 "Shannon Code"；2. README/官网对比表点名竞品（事实型+标来源）；3. mdBook 为唯一文档门面，desktop 内嵌帮助 include 收编；4. Wave 1 立即执行；5. "10-20x" 删除；6. 素材按 §6 清单生产；7. 发布锚定 v0.12；8. **核心宣传点 =「开源可控 + 密钥安全」**。
+
+> **双核心落地原则**（本版新增）：三处门面的首屏叙事、章节顺序、Feature 排序一律以「开源可控」「密钥安全」为第一、第二卖点；「任意模型 × 全形态」作为支撑证据后置。文案必须承诺与证据同屏（测试徽章 / trace / secret-guard 文档链接）。
 
 ---
 
@@ -279,3 +277,48 @@ CTABanner / Footer（口号收尾；Footer 仓库链接修正）
 | 5 | "10-20x" 处置：删除 | 删除 | ☐ |
 | 6 | 素材生产排期（截图/GIF 谁做、何时） | 按 §6 清单，Wave 2 前 3 张 | ☐ |
 | 7 | 发布锚点：v0.12 "Workspace" | 是 | ☐ |
+| 8 | 核心宣传点 =「开源可控 + 密钥安全」 | 是（用户指定，2026-09-10） | ✅ |
+
+---
+
+## 11. 实施记录（2026-09-10，本分支）
+
+**双核心叙事已全量落地到三处门面，构建验证通过。**
+
+### GitHub 仓库页（README.md / README.zh-CN.md）
+
+- Hero 改为双核心主口号：EN "Open source. Total control. Keys never leave your machine." ｜ CN「完全开源，尽在掌控；密钥不出门，数据不搬家」；产品名统一为 **Shannon**。
+- 新增「Two commitments」（开源可控 / 密钥不出门）双小节置于首屏，各带证据要点；R5 修复：新增 One engine four surfaces + Terminal / Desktop 双产品章节。
+- 对比表改为三列事实型（Shannon ｜ 云端订阅制 agent（Claude Code、Codex、Grok Bot）｜ 开源同类（Hermes、Codex CLI、Grok Build）），删除「10-20x」无来源表述，标注截至日期与来源文档。
+- R2 修复：删除 VS Code 扩展章节及项目结构树中的 `editors/vscode` 行。
+- R3 修复：provider 表更新（Claude Sonnet/Opus/Haiku、GPT-4o 及更新、DeepSeek、**新增智谱 GLM 行**）。
+- 新增章节：Goals & Autonomous Tasks（/goal、预算上限、anti-spin）、Automation & Triggers（cron/API endpoint/GitHub/IM/手机）、Security & Privacy 六层表格；补 `/goal` headless 示例、`SHANNON_TOKEN_BUDGET` 环境变量、`shannon desktop` 运行方式。
+- metrics 生成标记（badge/intro/diffrow/table/crates）全部保留，CI 生成链路不受影响。
+- 双语结构完全对齐；免责声明等处 "Shannon Code" → "Shannon"。
+
+### 产品主页（website/）
+
+- i18n 全量重写（EN+ZH）：Hero 双核心标题与副标、终端演示换为 `/goal` 派活 + `trace replay` 回放剧情（v0.11）、Feature 8 项重排（01 任意模型 / 02 开源可审计 / 03 密钥安全 / 04 自主目标 / 05 多 agent / 06 桌面 / 07 IM 手机派活 / 08 工程纪律）。
+- **新增 TrustSection 组件**（「Two commitments」双卡片，置于终端演示之后、FeatureGrid 之前），`id="security"` 锚点。
+- 统计条改为 11,752+ tests / 20 crates / 4 surfaces / 5 IM channels；对比表换为六行事实型 + 列名「Typical Cloud Agent」+ 来源脚注（ComparisonTable 组件已扩展 footnote 渲染）。
+- W8 修复：`<title>` / meta description / OG 标签更新为双核心定位。
+- 链接修复：Hero / Navbar / DownloadButtons 中 `github.com/shannon-agent/shannon-code` → `github.com/diff-lab-com/shannon-agent`；Navbar/页脚 "Shannon Code" → "Shannon"。
+- website 内置 docs（`src/content/docs/`）修复：introduction / roadmap 过期测试数（8,600 → 11,752+）。
+- 验证：`astro build` 29 页构建成功；产物抽查确认双核心文案与数字渲染（Keys never leave ×3、secret-guard ×2、11,752+ ×2、Two commitments ×1）。
+
+### 用户文档（docs-mdbook/）
+
+- D1/D2 修复：`book.toml` 标题改 "Shannon Documentation"，仓库地址 `ericdong/shannon-code` → `diff-lab-com/shannon-agent`（edit 模板同步）。
+- SUMMARY 重构：新增 **User Guide** 一级分区（Desktop / Goals / Automations & Triggers / Agent Teams & /batch / IM Channels / Mobile Dispatch / Cost Control / Trace / Security & Privacy / Migrating from Other Tools），原 Migration Guide 移入 User Guide；Developer Reference（Architecture / Crate Reference / Development）整体降级。
+- 新增 9 个用户文档页（grounded in 代码事实，含命令与配置示例）：`desktop.md`、`goals.md`、`automations.md`、`agent-teams.md`、`im-channels.md`、`mobile-dispatch.md`、`cost.md`、`trace.md`、`security-and-privacy.md`（安全页含「Honest limits」诚实边界小节）。
+- introduction.md 重写：工作台定位 + 双承诺 + At a Glance 表（修正错误的双许可表述为 Apache-2.0）。
+- 全局修复：`Shannon Code` → `Shannon`（约 20 处）、`ericdong` 链接清零、测试数 8,600 → 11,752+、"12 crates" 表述移除。
+- 验证：`mdbook build` 干净构建（处理了一个 SUMMARY 缺文件被 mdbook 自动补桩的问题：删除桩文件 `user-guide/version-migration.md`、SUMMARY 指向真实文件）。
+
+### 遗留事项（不阻塞，移交后续）
+
+- facts.json 生成机制 + 禁词 CI 检查（§7）：机制已设计，待接入 CI（本次为手工同步）。
+- 素材生产（§6）：README/官网截图与 GIF 占位待真实素材替换。
+- GitHub 仓库元信息（description/topics/social preview）需仓库管理员在 GitHub 设置中更新。
+- `docs-mdbook/src/configuration.md`、`architecture.md`、`crates/*` 等开发者向页面内容未逐页更新（本次只修正错误事实与命名）。
+- 模型注册表中已退役型号清理（grok research §9.1）属产品代码范畴，另行走修复流程。

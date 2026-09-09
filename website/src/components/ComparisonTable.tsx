@@ -76,9 +76,9 @@ export default function ComparisonTable({ lang }: ComparisonTableProps) {
           background: 'var(--bg-soft)',
         }}>
           <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--muted)' }} />
-          <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--accent)', textAlign: 'center' }}>Shannon Code</span>
+          <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--accent)', textAlign: 'center' }}>Shannon</span>
           <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--muted)', textAlign: 'center' }}>
-            {lang === 'en' ? 'Typical Alternative' : '典型替代方案'}
+            {lang === 'en' ? 'Typical Cloud Agent' : '典型云端 agent'}
           </span>
         </div>
         {t.comparison.rows.map((row, i) => (
@@ -96,6 +96,16 @@ export default function ComparisonTable({ lang }: ComparisonTableProps) {
           </div>
         ))}
       </div>
+
+      <p style={{
+        margin: '16px 4px 0',
+        color: 'var(--muted)',
+        fontSize: 12,
+        lineHeight: 1.6,
+        textAlign: 'center',
+      }}>
+        {t.comparison.footnote}
+      </p>
     </section>
   );
 }
