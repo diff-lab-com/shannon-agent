@@ -600,12 +600,13 @@ jobs:
       # shannon-remote, and cargo-semver-checks cannot build a baseline
       # rustdoc for workspace crates absent from the baseline revision
       # ("no `package` table" → retrieval failure) — the gate has been
-      # red on dev for this reason. Pin the baseline to a recent dev
-      # commit that contains every workspace crate; bump to the next
-      # release tag when one is cut. It feeds both `baseline-rev` and the
-      # cache `prefix-key`, so a baseline bump always invalidates the
-      # cached baseline rustdoc and never serves a stale one.
-      SEMVER_BASELINE: 7b052b0b2e2e4a9be0f9ce7e2f6bd7ee1c8b6c31
+      # red on dev for this reason. `semver-baseline-2026-09` is a tag on
+      # a dev commit containing every workspace crate; move it forward
+      # (or bump to the next release tag) when new crates land. It feeds
+      # both `baseline-rev` and the cache `prefix-key`, so a baseline bump
+      # always invalidates the cached baseline rustdoc and never serves a
+      # stale one.
+      SEMVER_BASELINE: semver-baseline-2026-09
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
