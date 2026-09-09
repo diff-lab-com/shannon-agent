@@ -140,7 +140,10 @@ AGENT_SECS=$(( $(date +%s) - AGENT_START ))
 docker cp "$CONTAINER:/agent-logs/agent.ndjson" "$WORK/agent.ndjson" >/dev/null 2>&1 || true
 docker cp "$CONTAINER:/tmp/agent-stderr.log" "$WORK/agent-stderr.log" >/dev/null 2>&1 || true
 
-# Token usage from the NDJSON `done` event (lenient).
+# Token usage from the NDJSON `done` event (lenient). Fallback: the engine's
+# stderr progress lines ("[headless: turn N, X tokens]") carry the cumulative
+# token count even when the run is killed before a done event (C3 fix —
+# resolved-with-0-tokens verdicts hid real spend).
 TOKENS_IN=""; TOKENS_OUT=""
 if [ -f "$WORK/agent.ndjson" ]; then
   read -r TOKENS_IN TOKENS_OUT <<< "$(python3 - "$WORK/agent.ndjson" <<'PYEOF'
@@ -157,6 +160,12 @@ print(ti if ti is not None else "", to if to is not None else "")
 PYEOF
 )"
 fi
+TOKENS_SRC="ndjson-done"
+if [ -z "$TOKENS_IN" ] && [ -f "$WORK/agent-stderr.log" ]; then
+  TOKENS_IN="$(grep -oE 'turn [0-9]+, [0-9]+ tokens' "$WORK/agent-stderr.log" \
+    | grep -oE '[0-9]+' | tail -1)"
+  TOKENS_SRC="stderr-estimate"
+fi
 
 # Verdict: the task's own verifier only.
 TESTS_START=$(date +%s)
@@ -172,6 +181,7 @@ elif [ "$AGENT_RC" -ne 0 ]; then
 else
   NOTE="agent rc=0 (${AGENT_SECS}s); run-tests rc=$TEST_RC (${TEST_SECS}s); up=${UP_SECS}s image=$IMG_NOTE"
 fi
+[ "$TOKENS_SRC" = "stderr-estimate" ] && NOTE="$NOTE; tokens=$TOKENS_SRC"
 
 RESOLVED=false
 [ "$TEST_RC" -eq 0 ] && RESOLVED=true

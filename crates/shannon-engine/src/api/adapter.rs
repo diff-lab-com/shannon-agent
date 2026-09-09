@@ -1631,6 +1631,132 @@ mod tests {
         assert_eq!(val["model"], "test-model");
     }
 
+    // -- Multi-image batch tool_result (C-ImgBatch) --
+
+    /// A user message carrying one `tool_result` whose content is
+    /// `Multiple([Text, Image, Text, Image])` — the shape the engine builds
+    /// for AnalyzeImages — must serialize (Anthropic wire) into a single
+    /// request message whose tool_result content array contains BOTH image
+    /// parts, i.e. one vision request for the whole batch.
+    #[test]
+    fn test_anthropic_tool_result_multi_image_single_request() {
+        let req = MessageRequest {
+            model: "claude-test".to_string(),
+            max_tokens: 1024,
+            system: None,
+            system_blocks: None,
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: crate::api::types::MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "batch_1".to_string(),
+                        content: Some(crate::api::types::ToolResultContent::Multiple(vec![
+                            ContentBlock::Text {
+                                text: "Batch of 2 images follows".to_string(),
+                            },
+                            ContentBlock::Text {
+                                text: "## /tmp/a.png".to_string(),
+                            },
+                            ContentBlock::Image {
+                                source: crate::api::types::ImageSource::base64("image/png", "AAAA"),
+                            },
+                            ContentBlock::Text {
+                                text: "## /tmp/b.png".to_string(),
+                            },
+                            ContentBlock::Image {
+                                source: crate::api::types::ImageSource::base64("image/png", "BBBB"),
+                            },
+                        ])),
+                        is_error: Some(false),
+                    },
+                ]),
+            }],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Anthropic);
+        // messages[0].content[0] is the tool_result block; its own "content"
+        // is the array of per-image text/image parts sent in this one request.
+        let content = &val["messages"][0]["content"][0]["content"];
+        assert!(content.is_array(), "tool_result content should be an array");
+        let image_parts: Vec<&Value> = content
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|b| b["type"] == "image")
+            .collect();
+        assert_eq!(
+            image_parts.len(),
+            2,
+            "One request must carry both image parts, got: {content}"
+        );
+        assert_eq!(image_parts[0]["source"]["data"], "AAAA");
+        assert_eq!(image_parts[1]["source"]["data"], "BBBB");
+        // Section headings preserved so the model can map answers to paths.
+        let headings: Vec<&Value> = content
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|b| b["type"] == "text" && b["text"].as_str().unwrap_or("").starts_with("## "))
+            .collect();
+        assert_eq!(headings.len(), 2);
+    }
+
+    /// Documents the current degraded behavior (C-ImgBatch): the OpenAI
+    /// adapter flattens `tool_result` content to text, so image parts inside
+    /// a tool result are dropped. Follow-up: emit multi-image content parts
+    /// for tool results on OpenAI-compatible wire formats too.
+    #[test]
+    fn test_openai_tool_result_multi_image_currently_flattens_to_text() {
+        let req = MessageRequest {
+            model: "gpt-test".to_string(),
+            max_tokens: 1024,
+            system: None,
+            system_blocks: None,
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: crate::api::types::MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "batch_1".to_string(),
+                        content: Some(crate::api::types::ToolResultContent::Multiple(vec![
+                            ContentBlock::Text {
+                                text: "## /tmp/a.png".to_string(),
+                            },
+                            ContentBlock::Image {
+                                source: crate::api::types::ImageSource::base64("image/png", "AAAA"),
+                            },
+                        ])),
+                        is_error: Some(false),
+                    },
+                ]),
+            }],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::OpenAI);
+        let tool_msg = &val["messages"][0];
+        assert_eq!(tool_msg["role"], "tool");
+        let text = tool_msg["content"].as_str().unwrap();
+        assert!(text.contains("## /tmp/a.png"));
+        assert!(!text.contains("AAAA"), "image data must not leak into text");
+    }
+
     #[test]
     fn test_anthropic_extracts_system_role_messages() {
         // Compression may inject role: "system" messages into the messages
@@ -2569,7 +2695,7 @@ mod tests {
                         text: "What is this?".to_string(),
                     },
                     ContentBlock::Image {
-                        source: ImageSource::base64("image/png", "iVBOR..."),
+                        source: crate::api::types::ImageSource::base64("image/png", "iVBOR..."),
                     },
                 ]),
             }],
@@ -2615,7 +2741,7 @@ mod tests {
                         text: "Describe this".to_string(),
                     },
                     ContentBlock::Image {
-                        source: ImageSource::base64("image/jpeg", "/9j/4AAQ"),
+                        source: crate::api::types::ImageSource::base64("image/jpeg", "/9j/4AAQ"),
                     },
                 ]),
             }],

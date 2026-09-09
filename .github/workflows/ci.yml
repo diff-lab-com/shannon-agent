@@ -596,18 +596,35 @@ jobs:
     #    deps this job does not install, and its public API is not consumed
     #    externally (application crate, not a library).
     env:
-      # Bump this when cutting a new baseline release. It feeds both
-      # `baseline-rev` and the cache `prefix-key`, so a baseline bump always
-      # invalidates the cached baseline rustdoc and never serves a stale one.
-      SEMVER_BASELINE: v0.10.0
+      # Interim fix (2026-09-09): v0.10.0 predates shannon-browser /
+      # shannon-remote, and cargo-semver-checks cannot build a baseline
+      # rustdoc for workspace crates absent from the baseline revision
+      # ("no `package` table" → retrieval failure) — the gate has been
+      # red on dev for this reason. `semver-baseline-2026-09` is a tag on
+      # a dev commit containing every workspace crate; move it forward
+      # (or bump to the next release tag) when new crates land. It feeds
+      # both `baseline-rev` and the cache `prefix-key`, so a baseline bump
+      # always invalidates the cached baseline rustdoc and never serves a
+      # stale one.
+      SEMVER_BASELINE: semver-baseline-2026-09
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
-      - name: Install libdbus headers
+      - name: Install libdbus + Tauri system deps
         # shannon-mcp-saas → keyring → libdbus-sys needs pkg-config +
         # libdbus-1-dev at build time (also needed for the baseline rustdoc).
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev
+        # Tauri deps (libwebkit2gtk/gtk3/...) are needed because the CURRENT
+        # workspace's rustdoc pass builds shannon-desktop's dependency tree
+        # (glib-sys build script) even when the crate itself is excluded from
+        # comparison — the v0.10.0 baseline had no desktop crate, but the
+        # current one does (Insta job installs the same set for the same
+        # reason).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libxdo-dev patchelf
       - name: Check semver (baseline rustdoc cached)
         uses: obi1kenobi/cargo-semver-checks-action@eac29787462b0f1957d618a21f458305db73b36c
         with:
@@ -617,7 +634,11 @@ jobs:
           # cargo-semver-checks (>=0.48) requires (rustc >=1.91 for its rustdoc
           # format). The repo-wide 1.88 pin is intentionally not used here.
           feature-group: default-features
-          exclude: shannon-desktop
+          # shannon-browser / shannon-remote are new crates absent from the
+          # v0.10.0 baseline — cargo-semver-checks cannot load a baseline
+          # manifest for them ("no `package` table"); they join the exclude
+          # list until the next baseline tag.
+          exclude: shannon-desktop shannon-browser shannon-remote
           verbose: true
 
   insta:

@@ -1,5 +1,6 @@
 ---
 source: crates/shannon-cli/tests/trace_commands.rs
+assertion_line: 274
 expression: rendered
 ---
 #000 t0 session ▸ model=claude-sonnet-4-20250514, provider=anthropic
