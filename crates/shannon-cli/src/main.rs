@@ -122,7 +122,14 @@ fn is_false(value: &bool) -> bool {
 /// and would otherwise be mis-classified as ContextOverflow (RCA 2026-09-06).
 fn classify_headless_failure(error: &str) -> HeadlessExitCode {
     let err_lower = error.to_lowercase();
-    if err_lower.contains("timed out") || err_lower.contains("timeout") {
+    if err_lower.contains("timed out")
+        || err_lower.contains("timeout")
+        // P1-3: reqwest Kind::Request ("error sending request") is the
+        // connect/send-phase failure measured 18× in the TB2.1 sweep —
+        // transient by nature, so it belongs in the retryable timeout class
+        // (docs/backlog.md §四 P1-3).
+        || err_lower.contains("error sending request")
+    {
         HeadlessExitCode::Timeout
     } else if err_lower.contains("rate limit") || err_lower.contains("429") {
         HeadlessExitCode::RateLimited
