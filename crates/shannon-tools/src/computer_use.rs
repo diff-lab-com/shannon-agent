@@ -901,10 +901,16 @@ impl ComputerUseTool {
     /// Get the actual screen size.
     #[cfg(feature = "computer-use")]
     fn screen_size() -> (u32, u32) {
+        // xcap reports CGDisplayBounds points (logical coords — the same
+        // space enigo's CGEvent absolute moves expect); captures come back
+        // in physical pixels on Retina, so screenshot↔input scales differ.
         match xcap::Monitor::all() {
             Ok(monitors) => {
                 if let Some(m) = monitors.into_iter().next() {
-                    (m.width(), m.height())
+                    match (m.width(), m.height()) {
+                        (Ok(w), Ok(h)) => (w, h),
+                        _ => (REFERENCE_WIDTH, REFERENCE_HEIGHT),
+                    }
                 } else {
                     (REFERENCE_WIDTH, REFERENCE_HEIGHT)
                 }

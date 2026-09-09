@@ -15,24 +15,11 @@
 use shannon_tools::chrome_session::{self, ChromeSession};
 
 fn browser_available() -> bool {
-    // Cheap probe: reuse the session's own detection. SHANNON_BROWSER_PATH
-    // lets a developer point at a specific binary.
-    std::env::var_os("SHANNON_BROWSER_PATH").is_some() || which_browser().is_some()
-}
-
-fn which_browser() -> Option<std::path::PathBuf> {
-    for p in [
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable",
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-    ] {
-        let p = std::path::Path::new(p);
-        if p.is_file() {
-            return Some(p.to_path_buf());
-        }
-    }
-    None
+    // Reuse the session's own detection (platform candidate lists live in
+    // shannon-browser::detect). SHANNON_BROWSER_PATH lets a developer point
+    // at a specific binary.
+    std::env::var_os("SHANNON_BROWSER_PATH").is_some()
+        || chrome_session::detect_system_browser().is_ok()
 }
 
 #[tokio::test]

@@ -105,7 +105,7 @@ hound = { version = "3", optional = true }
 
 # P1-5 C-1 — `preview_capture` screenshot source (see `preview-capture`
 # feature). xcap version matches shannon-tools' computer-use feature.
-xcap = { version = "0.0.13", optional = true }
+xcap = { version = "0.9", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 
 # P1-5 D — integrated terminal PTY sessions. Same crate (and version) the

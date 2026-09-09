@@ -132,7 +132,7 @@ local-browser = ["shannon-browser/local-browser"]
 
 
 [dependencies.xcap]
-version = "0.0.13"
+version = "0.9"
 optional = true
 
 [dependencies.enigo]
@@ -149,6 +149,7 @@ tokio-test = "0.4"
 tempfile = "3"
 mockito = "1.6"
 serde_json = "1"
+base64 = { workspace = true }
 criterion = "0.5"
 globset = "0.4"
 regex = "1"

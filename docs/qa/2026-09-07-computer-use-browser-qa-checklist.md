@@ -20,6 +20,12 @@
 | 6 | 权限策略：REPL 中确认 `applescript` 调用触发 High-risk **逐次确认**（或按已配置的 approval mode） | 确认弹窗出现；拒绝后模型收到错误 |
 | 7 | 超时：执行 `delay 60` | 30 秒超时，is_error 含 "timed out after 30s" |
 
+> **2026-09-10 真机执行记录**（详见 [macOS 结果文档](2026-09-10-macos-real-machine-qa-results.md)）：
+> #1/#4/#7 ✅（可复跑 harness `tests/macos_real_machine.rs`；#7 实际以
+> `ToolError::ExecutionFailed` 呈现，语义等价）；#2/#3/#5/#6 ⏸ 待真机人工操作
+> （TCC 点击/权限开关/快捷指令名/provider）。`computer screenshot` 与 browser
+> E2E 已在真机通过；输入类（type）待宿主 app 获得 Accessibility 授权后重跑。
+
 ## QA-2 Linux Wayland：libei 后端（T10 Phase 1）
 
 前置：GNOME-Wayland 会话（Ubuntu 24.04 / Fedora 40 原生，非 XWayland），无 Xwayland fallback 的测试窗口（如原生 GTK 应用）。
@@ -87,5 +93,6 @@ QA-4 属体验项，失败不阻塞合并，但需记录到 issue。
 
 ## 已知非目标（不做）
 
-- Windows/macOS 的 computer 工具真机回归（enigo/xcap 上游已覆盖，行为与合并前一致）
+- Windows 的 computer 工具真机回归（enigo/xcap 上游已覆盖，行为与合并前一致）。
+  （macOS 半边已于 2026-09-10 完成真机验证并补齐 harness，见结果文档——不再是非目标）
 - SkyLight 背景虚拟光标（T13-Tier3，不做）

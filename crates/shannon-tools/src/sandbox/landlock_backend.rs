@@ -609,7 +609,11 @@ mod tests {
     #[cfg(not(target_os = "linux"))]
     #[test]
     fn non_linux_probe_fails_closed() {
-        let err = probe_new(Arc::new(policy(false))).expect_err("must fail closed");
+        // `expect_err` would need `Ok`-side Debug, which the trait object
+        // does not implement; let-else asserts the same without formatting.
+        let Err(err) = probe_new(Arc::new(policy(false))) else {
+            panic!("stub hosts must fail closed");
+        };
         assert!(matches!(err, SandboxError::Unsupported { .. }));
     }
 

@@ -10,9 +10,9 @@
 
 | # | 项 | 阻塞原因 | 解锁条件 | 关联 |
 |---|---|---|---|---|
-| A1 | **T13-T2 macOS AX 适配器完整实现** | 无 Mac 开发机；AXUIElement 行为（TCC 授权流、AXObserver、Electron 树差异）无法在 Linux 验证，盲写风险高 | ① 一台 Mac；② telemetry 显示 macOS 用户占比可观 | `platform_adapter.rs` 的 `MacosAxAdapter` 骨架已合并，实现即插即用 |
-| A2 | **applescript 工具 macOS 真机 QA**（T13-T1 的 TCC 授权流 + 真实 osascript 执行） | 同上（无 Mac） | 同上；步骤已备于 [docs/qa/2026-09-07-computer-use-browser-qa-checklist.md](./2026-09-07-computer-use-browser-qa-checklist.md) QA-1 | T13-T1 代码已合并 |
-| A3 | **chromiumoxide / computer-use 在 Windows 与 macOS 的编译与运行验证** | 无对应环境 | CI windows/macos job 已覆盖编译（2026-09-08 起 windows 编译门全绿：openssh 依赖按 `cfg(unix)` 门控，ssh 远程在 Windows 运行时报 `Unsupported`，见 `shannon-remote/src/ssh/mod.rs`）；运行验证需真机 | T14 / T10 |
+| A1 | **T13-T2 macOS AX 适配器完整实现** | ~~无 Mac 开发机~~（**2026-09-10 起已有 Mac**，见 A2）；剩余门槛是 telemetry：AXUIElement 行为（TCC 授权流、AXObserver、Electron 树差异）需真机投入验证，盲写风险仍高 | ① ~~一台 Mac~~ ✅；② telemetry 显示 macOS 用户占比可观 | `platform_adapter.rs` 的 `MacosAxAdapter` 骨架已合并，实现即插即用 |
+| A2 | **applescript 工具 macOS 真机 QA**（T13-T1 的 TCC 授权流 + 真实 osascript 执行） | 剩余 4 步需真人操作：TCC 弹窗点击（#2）、权限开关切换（#3）、快捷指令名（#5）、provider + REPL 审批流（#6） | 步骤与复跑命令见 [QA 清单 QA-1](../qa/2026-09-07-computer-use-browser-qa-checklist.md) 与 [2026-09-10 结果文档](../qa/2026-09-10-macos-real-machine-qa-results.md)；#1/#4/#7 已 ✅（harness `tests/macos_real_machine.rs`） | T13-T1 代码已合并 |
+| A3 | ~~chromiumoxide / computer-use 在 Windows 与 macOS 的编译与运行验证~~ | **macOS 半边已完成（2026-09-10）**：编译修复（xcap 0.0.13→0.9.8，见 F1）、screenshot/browser E2E 真机通过。**剩余：Windows 真机验证** | Windows 真机 | T14 / T10；macOS 证据见结果文档 |
 | A4 | **computer-use libei 后端的 Wayland 真机会话验证**（Portal 授权流 + 原生 Wayland 点击） | 本机无原生 Wayland 会话可自动化；Portal 授权需人工点击 | 带 GNOME-Wayland 的测试机或自托管 runner；步骤见 QA 清单 QA-2 | T10-Phase1 已合并（编译门在 CI） |
 
 ## B. 工程量大，按排期延后（有就绪的底座）
@@ -51,6 +51,16 @@
 | D1 | **dev 前端 overlay lint 红**（`MigrationWizard.tsx:193` 白名单外 `fixed inset-0`，dev CI "Desktop Unit Tests" job） | **已修复（2026-09-08）**：MigrationWizard 迁移至 Modal 原语（与 CancelTaskModal 的 T1.2 路径一致），`ui/modal.tsx` 增加可选 `testId` prop；未动白名单 |
 | D2 | **goal.rs 的 clippy 告警**（unused imports ×3、unused_mut、never_loop）与 `shannon-ui` 两处 private-interface 告警 | **已修复（2026-09-08）**：全 workspace 25 处 clippy 告警清零（含 `GuardCounters` 提为 pub、applescript 后端按 `cfg(target_os)` 门控）；Clippy job 转绿 |
 
+## E. macOS 真机验证发现（2026-09-10，见 [结果文档](../qa/2026-09-10-macos-real-machine-qa-results.md)）
+
+| # | 项 | 说明 | 建议 |
+|---|---|---|---|
+| E1 | **`screen_size()` 静默兜底 (1024,768)** | `Monitor::all()` 失败（如显示器休眠，`CGGetActiveDisplayList` 返回 0）时坐标缩放退化为恒等映射；若 AX 已授权，参考系坐标会被原样当作屏幕坐标点击（错位） | 失败时向上传播错误或至少 `tracing::warn`，勿静默兜底 |
+| E2 | **CI 的 macOS 腿不覆盖 `computer-use` feature** | "Build with computer-use feature" step 在 Linux-only job；`cross-platform` macOS 腿只跑默认 feature `cargo check` → F1 那类 macOS 专属编译损坏在 CI 不可见 | `cross-platform` macOS 腿追加 `cargo check -p shannon-tools --features computer-use`（xcap 0.9.8 起可编译）；clippy 同理 |
+| E3 | **权限预检缺口的实证** | AX 未授权时 enigo 动作报成功但 CGEvent 静默丢弃（此前仅为注释级认知，现有点击/输入双向证据） | 支持"权限预检/引导"立项：`AXIsProcessTrustedWithOptions` 预检 + 可行动的错误提示；desktop 端补 Info.plist/entitlements 声明 |
+| E4 | **存量 clippy 告警在 computer-use 形态下** | `computer_use.rs` 3×format! 风格、3×Key clone、landlock unused imports（CI clippy 不带该 feature 故未暴露） | 随 E2 的 clippy 腿一并清理 |
+| E5 | **30s 超时与首次 TCC 提示竞争** | 实测：Notes 首次授权若用户未在 30s 内点击，osascript 连同未决提示被超时杀死，报 `timed out after 30s` | 首次调用（或检测到 TCC 提示挂起）时放宽 `SCRIPT_TIMEOUT` |
+
 ---
 
 ## 已完成项索引（供对照，勿重复立项）
@@ -60,3 +70,4 @@
 - T10-Phase1 enigo backend / T12 OptionC toolset / T13-T1 AppleScript / T13-T2 地基 / T14 地基 —— #74
 - T14 Phase 1+2（chromiumoxide 会话 / 8 工具 / TUI open / press_key / console / full_page / E2E）/ Phase 3（providers + DynamicWorld + dispatch QA）—— #76
 - T15 架构基线 —— #73（已验证干净）
+- **macOS 真机验证第一批**（QA-1 #1/#4/#7、screenshot、browser E2E、CI 对齐单测；xcap 0.0.13→0.9.8 编译修复、browser_e2e 探测修复、landlock 非 Linux 测试编译修复、真机 harness `tests/macos_real_machine.rs`）—— 2026-09-10，证据见 [结果文档](../qa/2026-09-10-macos-real-machine-qa-results.md)

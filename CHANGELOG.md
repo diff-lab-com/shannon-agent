@@ -4,6 +4,27 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### macOS real-machine verification, first batch (2026-09-10)
+
+- **xcap 0.0.13 → 0.9.8**: 0.0.13 fails to compile on macOS with the pinned
+  rustc 1.88 (E0282 in the macOS backend) — invisible to CI because the
+  `computer-use` feature build gate only runs on the Linux leg. One API
+  adaptation (`Monitor::width/height` now return `XCapResult<u32>`; semantics
+  unchanged — CGDisplayBounds logical points, matching enigo's CGEvent space).
+  Applied to `shannon-tools` and the desktop `preview-capture` feature.
+- **macOS real-machine QA harness** `crates/shannon-tools/tests/macos_real_machine.rs`
+  (cfg-gated to macOS + computer-use, `#[ignore]`d): AppleScript pure/JXA/timeout,
+  Notes Automation TCC, deny-path, Shortcuts, screenshot payload checks, and an
+  enigo→TextEdit input-chain test that doubles as the Accessibility-gap probe.
+- **Fixes surfaced by the first real runs**: `browser_e2e` skip-probe was
+  Linux-only and never ran on macOS (now reuses the session's own
+  detection; e2e passes against local Chrome); a `#[cfg(not(target_os =
+  "linux"))]` sandbox test had never been compiled anywhere and broke on
+  macOS (let-else rewrite). CI-parity `--lib computer` tests: 45 passed on
+  macOS. Evidence and remaining manual steps (TCC prompts, Accessibility
+  grant, provider-backed REPL checks):
+  `docs/qa/2026-09-10-macos-real-machine-qa-results.md`.
+
 ### P3 follow-ups: backend selection, AppleScript, browser toolset, foundations (feat/p3-follow-ups)
 
 - **Selectable Linux input backends (T10 Phase 1)**: mutually exclusive
