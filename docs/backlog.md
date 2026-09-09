@@ -157,6 +157,14 @@ agent 更彻底但更慢（AgentTimeout 15→24），需 A2 原版 vs R1 版的�
       × 3 并发 × 无看门狗（`SHANNON_STREAM_IDLE_SECS=0`）；对照 P1d 同题集逐层 delta。
       通过标准：control 6 题无回归 + 流超时层显著收敛。
 
+### 已实施（2026-09-09，网络健壮性 + 测量卫生）
+- [x] **N1** reqwest Kind::Request 归入可重试（`14b07b4b`；FIN-close listener 行为测试 +
+      RST 变体守护）
+- [x] **N2** A7 attempt 退避 20s×n cap 60s（同 commit；纯函数测试）
+- [x] **E1** retry-infra-failed.sh（对真实 T1 数据验证：12 infra / 49 clean，与手工分析一致）
+- [x] **E2** preflight-network.sh 四点探针 + run-v2-glm 发车门禁（当前窗口实测 4/4）
+- [ ] **T1b** A2 提示归因二分——低优（2×2 已证提示因子中性；仅在出现新证据时重开）
+
 ### 建议排队（真实能力/健壮性）
 - [ ] musl 二进制的 CI 产出（`CFLAGS_x86_64_unknown_linux_musl` fortify 处理已文档化，待接 CI）
 - [ ] provider A/B 执行（需按量 key：`~/.shannon/credentials/zhipu-payg.json`；脚本就绪 `012bce57`）
