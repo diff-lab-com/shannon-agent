@@ -162,8 +162,14 @@ fn run_retry_limit() -> u32 {
 /// (minutes-scale), short enough to keep headless automation responsive.
 /// Returns milliseconds so callers log and sleep with one value.
 fn run_retry_backoff_ms(attempt: u32) -> u64 {
-    let base = 20_000u64.saturating_mul(attempt as u64);
-    base.min(60_000)
+    // Base is env-injectable so tests can shrink the wait deterministically
+    // without touching production defaults (20 s per attempt, cap 60 s).
+    let base_ms = std::env::var("SHANNON_RUN_RETRY_BACKOFF_BASE_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(20_000);
+    let raw = base_ms.saturating_mul(attempt as u64);
+    raw.min(60_000)
 }
 
 /// A7 empty-patch marker: the run ended on an infra-class exit without any

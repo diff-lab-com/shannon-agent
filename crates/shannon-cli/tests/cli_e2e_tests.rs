@@ -875,6 +875,9 @@ async fn test_rate_limit_retries_are_visible_in_headless() {
 
     let result = shannon_with_mock("openai", &server.url())
         .env("SHANNON_API_KEY", "test-key")
+        // N2 backoff base: keep the 429 retry ladder fast (20s/40s sleeps
+        // would exceed the test timeout); the ladder order is what's asserted.
+        .env("SHANNON_RUN_RETRY_BACKOFF_BASE_MS", "50")
         .args([
             "--prompt",
             "hello",
