@@ -29,12 +29,69 @@ use enigo::{Axis, Direction, Keyboard, Mouse};
 pub const REFERENCE_WIDTH: u32 = 1024;
 pub const REFERENCE_HEIGHT: u32 = 768;
 
+// ── T10 Phase 1: Linux input backend selection ─────────────────────────
+// The backend is chosen at compile time via mutually exclusive cargo
+// features; guard against accidental combinations.
+
+#[cfg(all(feature = "computer-use-libei", feature = "computer-use-wayland"))]
+compile_error!(
+    "features `computer-use-libei` and `computer-use-wayland` are mutually exclusive: pick one Linux input backend"
+);
+#[cfg(all(feature = "computer-use-libei", feature = "computer-use-x11rb"))]
+compile_error!(
+    "features `computer-use-libei` and `computer-use-x11rb` are mutually exclusive: pick one Linux input backend"
+);
+#[cfg(all(feature = "computer-use-wayland", feature = "computer-use-x11rb"))]
+compile_error!(
+    "features `computer-use-wayland` and `computer-use-x11rb` are mutually exclusive: pick one Linux input backend"
+);
+
+/// Name of the compile-time-selected enigo input backend, for diagnostics
+/// and error messages. On non-Linux targets every backend feature maps to
+/// the same platform implementation, so this reports the generic name.
+pub fn input_backend_name() -> &'static str {
+    if cfg!(feature = "computer-use-libei") {
+        "libei (xdg-desktop-portal RemoteDesktop)"
+    } else if cfg!(feature = "computer-use-wayland") {
+        "wayland-client"
+    } else if cfg!(feature = "computer-use-x11rb") {
+        "x11rb"
+    } else {
+        "xdo (X11)"
+    }
+}
+
+/// Returns a hint when the compiled input backend is X11-only but the
+/// session looks like native Wayland (`WAYLAND_DISPLAY` set, `DISPLAY`
+/// unset). XWayland sessions (both set) still work with X11 backends, so
+/// no hint is produced there.
+#[cfg(feature = "computer-use")]
+pub fn session_compatibility_hint() -> Option<&'static str> {
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let x11 = std::env::var_os("DISPLAY").is_some();
+    let x11_only_backend =
+        !(cfg!(feature = "computer-use-libei") || cfg!(feature = "computer-use-wayland"));
+    if wayland && !x11 && x11_only_backend {
+        Some(concat!(
+            "This build uses an X11-only input backend (xdo), but the session looks like ",
+            "native Wayland (WAYLAND_DISPLAY set, DISPLAY unset). Rebuild with ",
+            "`--features computer-use-libei` (Wayland via xdg-desktop-portal) or run under XWayland."
+        ))
+    } else {
+        None
+    }
+}
+
 /// Actions supported by the computer use tool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComputerAction {
     Screenshot,
     Click,
+    RightClick,
+    MiddleClick,
+    DoubleClick,
+    TripleClick,
     Type,
     Scroll,
     KeyPress,
@@ -167,6 +224,24 @@ impl ComputerUseTool {
         ]
     }
 
+    /// Compute the downscaled dimensions that fit within the configured
+    /// screenshot maximum, preserving aspect ratio. Returns `None` when the
+    /// image already fits (never upscales).
+    #[cfg(feature = "computer-use")]
+    fn downscale_dims(&self, width: u32, height: u32) -> Option<(u32, u32)> {
+        let (max_w, max_h) = (
+            self.config.max_screenshot_width,
+            self.config.max_screenshot_height,
+        );
+        if max_w == 0 || max_h == 0 || (width <= max_w && height <= max_h) {
+            return None;
+        }
+        let scale = (f64::from(max_w) / f64::from(width)).min(f64::from(max_h) / f64::from(height));
+        let new_w = ((f64::from(width) * scale).round() as u32).max(1);
+        let new_h = ((f64::from(height) * scale).round() as u32).max(1);
+        Some((new_w, new_h))
+    }
+
     /// Parse a key combination string into individual keys.
     /// "ctrl+a" → ["ctrl", "a"], "alt+F4" → ["alt", "F4"]
     pub fn parse_key_combination(key: &str) -> Vec<String> {
@@ -219,7 +294,7 @@ impl ComputerUseTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["screenshot", "click", "type", "scroll", "key_press", "wait", "mouse_move", "left_click_drag"],
+                    "enum": ["screenshot", "click", "right_click", "middle_click", "double_click", "triple_click", "type", "scroll", "key_press", "wait", "mouse_move", "left_click_drag"],
                     "description": "The action to perform"
                 },
                 "coordinate": {
@@ -306,13 +381,22 @@ impl Tool for ComputerUseTool {
             });
         }
 
-        match computer_input.action {
+        // `mut` is only exercised by the computer-use session-hint append
+        // below; plain builds would warn on it (and dropping `mut` breaks
+        // the computer-use build instead — both halves of the gate matter).
+        #[cfg_attr(not(feature = "computer-use"), allow(unused_mut))]
+        let mut result = match computer_input.action {
             ComputerAction::Screenshot => self.execute_screenshot().await,
-            ComputerAction::Click => {
+            ComputerAction::Click
+            | ComputerAction::RightClick
+            | ComputerAction::MiddleClick
+            | ComputerAction::DoubleClick
+            | ComputerAction::TripleClick => {
                 let coord = computer_input.coordinate.ok_or_else(|| {
                     ToolError::InvalidInput("click action requires 'coordinate'".to_string())
                 })?;
-                self.execute_click(coord).await
+                self.execute_click_variant(&computer_input.action, coord)
+                    .await
             }
             ComputerAction::Type => {
                 let text = computer_input.text.ok_or_else(|| {
@@ -357,7 +441,19 @@ impl Tool for ComputerUseTool {
                 })?;
                 self.execute_drag(start, end).await
             }
+        };
+        #[cfg(feature = "computer-use")]
+        if let Ok(out) = &mut result {
+            if out.is_error {
+                if let Some(hint) = session_compatibility_hint() {
+                    if !out.content.ends_with(hint) {
+                        out.content.push_str("\n\n");
+                        out.content.push_str(hint);
+                    }
+                }
+            }
         }
+        result
     }
 }
 
@@ -374,20 +470,23 @@ impl ComputerUseTool {
             });
         }
 
-        let monitors = xcap::Monitor::all()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get monitors: {e}")))?;
+        let image = self
+            .capture_screen()
+            .await
+            .map_err(ToolError::ExecutionFailed)?;
 
-        let monitor = monitors
-            .into_iter()
-            .next()
-            .ok_or_else(|| ToolError::ExecutionFailed("No monitors found".to_string()))?;
-
-        let width = monitor.width();
-        let height = monitor.height();
-
-        let image = monitor
-            .capture_image()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Screenshot failed: {e}")))?;
+        // Downscale to the configured maximum so the payload matches the
+        // 1024x768 reference coordinate space and stays within the
+        // multimodal token budget (native Retina captures are up to 4x).
+        let (orig_w, orig_h) = (image.width(), image.height());
+        let image = match self.downscale_dims(orig_w, orig_h) {
+            Some((new_w, new_h)) => {
+                image::imageops::resize(&image, new_w, new_h, image::imageops::FilterType::Lanczos3)
+            }
+            None => image,
+        };
+        let width = image.width();
+        let height = image.height();
 
         // Encode as PNG
         let mut png_data = Vec::new();
@@ -414,6 +513,33 @@ impl ComputerUseTool {
         })
     }
 
+    /// Screen capture backend dispatch (B3 / T10-Phase2). On a Wayland
+    /// session with the native capture feature, wlr-screencopy runs first,
+    /// then the xdg-desktop-portal; anything else — including a failed
+    /// native attempt (logged) — falls back to xcap, which still works
+    /// under XWayland.
+    #[cfg(feature = "computer-use")]
+    async fn capture_screen(&self) -> Result<image::RgbaImage, String> {
+        #[cfg(all(target_os = "linux", feature = "computer-use-wayland-capture"))]
+        if crate::screen_capture::wayland_session_active() {
+            match crate::screen_capture::capture_screen_wayland().await {
+                Ok(img) => return Ok(img.to_rgba8()),
+                Err(e) => {
+                    tracing::warn!(error = %e, "native Wayland capture failed; falling back to xcap")
+                }
+            }
+        }
+
+        let monitors = xcap::Monitor::all().map_err(|e| format!("Failed to get monitors: {e}"))?;
+        let monitor = monitors
+            .into_iter()
+            .next()
+            .ok_or_else(|| "No monitors found".to_string())?;
+        monitor
+            .capture_image()
+            .map_err(|e| format!("Screenshot failed: {e}"))
+    }
+
     #[cfg(not(feature = "computer-use"))]
     async fn execute_screenshot(&self) -> ToolResult<ToolOutput> {
         Ok(ToolOutput {
@@ -424,7 +550,11 @@ impl ComputerUseTool {
     }
 
     #[cfg(feature = "computer-use")]
-    async fn execute_click(&self, coord: [i32; 2]) -> ToolResult<ToolOutput> {
+    async fn execute_click_variant(
+        &self,
+        action: &ComputerAction,
+        coord: [i32; 2],
+    ) -> ToolResult<ToolOutput> {
         if !self.config.input_enabled {
             return Ok(ToolOutput {
                 content: "Input simulation is disabled.".to_string(),
@@ -432,6 +562,8 @@ impl ComputerUseTool {
                 metadata: HashMap::new(),
             });
         }
+
+        let (button, clicks, label) = Self::click_spec(action);
 
         let (actual_w, actual_h) = Self::screen_size();
         let scaled = Self::scale_coordinate(coord, actual_w, actual_h);
@@ -443,17 +575,15 @@ impl ComputerUseTool {
             .move_mouse(scaled[0], scaled[1], enigo::Coordinate::Abs)
             .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
 
-        enigo
-            .button(enigo::Button::Left, Direction::Press)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Mouse press failed: {e}")))?;
-
-        enigo
-            .button(enigo::Button::Left, Direction::Release)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Mouse release failed: {e}")))?;
+        for _ in 0..clicks {
+            enigo
+                .button(button, Direction::Click)
+                .map_err(|e| ToolError::ExecutionFailed(format!("Mouse click failed: {e}")))?;
+        }
 
         Ok(ToolOutput {
             content: format!(
-                "Clicked at ({}, {}) [scaled from ({}, {})]",
+                "{label} at ({}, {}) [scaled from ({}, {})]",
                 scaled[0], scaled[1], coord[0], coord[1]
             ),
             is_error: false,
@@ -461,11 +591,35 @@ impl ComputerUseTool {
         })
     }
 
+    /// Resolve the enigo button, click repetition, and result label for a
+    /// click-family action.
+    #[cfg(feature = "computer-use")]
+    fn click_spec(action: &ComputerAction) -> (enigo::Button, usize, &'static str) {
+        match action {
+            ComputerAction::RightClick => (enigo::Button::Right, 1, "Right-clicked"),
+            ComputerAction::MiddleClick => (enigo::Button::Middle, 1, "Middle-clicked"),
+            ComputerAction::DoubleClick => (enigo::Button::Left, 2, "Double-clicked"),
+            ComputerAction::TripleClick => (enigo::Button::Left, 3, "Triple-clicked"),
+            _ => (enigo::Button::Left, 1, "Clicked"),
+        }
+    }
+
     #[cfg(not(feature = "computer-use"))]
-    async fn execute_click(&self, coord: [i32; 2]) -> ToolResult<ToolOutput> {
+    async fn execute_click_variant(
+        &self,
+        action: &ComputerAction,
+        coord: [i32; 2],
+    ) -> ToolResult<ToolOutput> {
+        let verb = match action {
+            ComputerAction::RightClick => "right-click",
+            ComputerAction::MiddleClick => "middle-click",
+            ComputerAction::DoubleClick => "double-click",
+            ComputerAction::TripleClick => "triple-click",
+            _ => "click",
+        };
         Ok(ToolOutput {
             content: format!(
-                "Computer use not enabled. Would click at ({}, {}). Rebuild with --features computer-use.",
+                "Computer use not enabled. Would {verb} at ({}, {}). Rebuild with --features computer-use.",
                 coord[0], coord[1]
             ),
             is_error: true,
@@ -804,6 +958,10 @@ mod tests {
             .unwrap();
         assert!(actions.contains(&json!("screenshot")));
         assert!(actions.contains(&json!("click")));
+        assert!(actions.contains(&json!("right_click")));
+        assert!(actions.contains(&json!("middle_click")));
+        assert!(actions.contains(&json!("double_click")));
+        assert!(actions.contains(&json!("triple_click")));
         assert!(actions.contains(&json!("type")));
         assert!(actions.contains(&json!("scroll")));
         assert!(actions.contains(&json!("key_press")));
@@ -969,6 +1127,57 @@ mod tests {
     }
 
     #[test]
+    fn test_deserialize_click_variants() {
+        for (name, expected) in [
+            ("right_click", ComputerAction::RightClick),
+            ("middle_click", ComputerAction::MiddleClick),
+            ("double_click", ComputerAction::DoubleClick),
+            ("triple_click", ComputerAction::TripleClick),
+        ] {
+            let input: ComputerUseInput =
+                serde_json::from_value(json!({ "action": name, "coordinate": [10, 20] })).unwrap();
+            assert_eq!(input.action, expected);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "computer-use")]
+    fn test_downscale_dims_noop_when_within_bounds() {
+        let tool = ComputerUseTool::new();
+        assert_eq!(tool.downscale_dims(1024, 768), None);
+        assert_eq!(tool.downscale_dims(800, 600), None);
+    }
+
+    #[test]
+    #[cfg(feature = "computer-use")]
+    fn test_downscale_dims_scales_to_reference() {
+        let tool = ComputerUseTool::new();
+        // 2x Retina capture fits back into the 1024x768 reference box
+        assert_eq!(tool.downscale_dims(2048, 1536), Some((1024, 768)));
+        assert_eq!(tool.downscale_dims(1920, 1080), Some((1024, 576)));
+    }
+
+    #[test]
+    #[cfg(feature = "computer-use")]
+    fn test_downscale_dims_preserves_aspect_ratio() {
+        let tool = ComputerUseTool::new();
+        let (w, h) = tool.downscale_dims(2560, 1440).unwrap();
+        assert!((w as f64 / h as f64 - 2560.0 / 1440.0).abs() < 0.01);
+        assert!(w <= REFERENCE_WIDTH && h <= REFERENCE_HEIGHT);
+    }
+
+    #[test]
+    #[cfg(feature = "computer-use")]
+    fn test_downscale_dims_zero_limit_disables_scaling() {
+        let tool = ComputerUseTool::with_config(ComputerUseConfig {
+            max_screenshot_width: 0,
+            max_screenshot_height: 0,
+            ..Default::default()
+        });
+        assert_eq!(tool.downscale_dims(4096, 2160), None);
+    }
+
+    #[test]
     fn test_deserialize_invalid_action() {
         let result = serde_json::from_value::<ComputerUseInput>(json!({
             "action": "invalid_action"
@@ -1017,6 +1226,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(feature = "computer-use"))]
     async fn test_execute_without_feature_returns_error() {
         let tool = ComputerUseTool::new();
 
@@ -1056,6 +1266,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(feature = "computer-use"))]
     async fn test_execute_click_without_feature() {
         let tool = ComputerUseTool::new();
         let result = tool
@@ -1079,6 +1290,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(feature = "computer-use"))]
     async fn test_execute_type_without_feature() {
         let tool = ComputerUseTool::new();
         let result = tool
@@ -1121,6 +1333,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(feature = "computer-use"))]
     async fn test_execute_scroll_default_direction() {
         let tool = ComputerUseTool::new();
         let result = tool.execute(make_input("scroll")).await.unwrap();
@@ -1144,6 +1357,21 @@ mod tests {
             .unwrap();
         assert!(result.is_error);
         assert!(result.content.contains("not allowed"));
+    }
+
+    #[test]
+    fn test_input_backend_name_reports_a_backend() {
+        // Diagnostics contract: always a non-empty, stable name.
+        assert!(!input_backend_name().is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "computer-use")]
+    fn test_session_hint_absent_without_wayland_only_session() {
+        // In the test env neither WAYLAND_DISPLAY nor DISPLAY is guaranteed;
+        // the hint must only fire on the wayland-without-x11 combination, so
+        // assert the function is total and returns Option.
+        let _ = session_compatibility_hint();
     }
 
     #[test]

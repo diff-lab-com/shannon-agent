@@ -1,0 +1,29 @@
+id = "github-issue-triage"
+name = "GitHub issue triage"
+description = "Triage each newly opened GitHub issue: summarize, label a severity, and suggest next steps."
+category = "engineering"
+trigger_type = "github"
+# GitHub trigger (P2-7): fires when the shannon-server `POST /hooks/github`
+# endpoint receives a matching delivery.
+#   github_event  — X-GitHub-Event header value (issues / issue_comment /
+#                   pull_request / check_run)
+#   github_repo   — repository full_name the delivery must come from ("*"
+#                   matches any repo); EDIT THIS to your own repository
+#   github_action — optional action qualifier (opened / created / completed)
+# First-batch mappings: issues.opened, issue_comment.created,
+# pull_request.opened, check_run.completed(conclusion=failure only).
+github_event = "issues"
+github_repo = "octocat/your-repo"
+github_action = "opened"
+timezone = ""
+prompt = """
+Triage the following newly opened GitHub issue.
+
+1. Summarize the problem in 2-3 sentences.
+2. Assess severity (critical / high / normal / low) and say why.
+3. List what information is missing from the report, if anything.
+4. Suggest the next concrete step for the maintainer.
+
+Write the triage as a short markdown block suitable for pasting into the
+issue. Do not modify any files.
+"""

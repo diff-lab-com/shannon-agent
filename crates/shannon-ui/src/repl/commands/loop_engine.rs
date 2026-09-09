@@ -2364,7 +2364,7 @@ mod p20_recursion {
     use super::*;
     use crate::repl::state::{LoopState, RalphState};
 
-    struct HomeGuard(#[allow(dead_code)] std::path::PathBuf); // KEEP: held for Drop-side tempdir cleanup
+    struct HomeGuard(#[allow(dead_code)] std::path::PathBuf); // KEEP: field owns the tempdir so HOME stays valid for the whole test
     impl HomeGuard {
         fn new() -> Self {
             let dir = tempfile::tempdir().unwrap();

@@ -62,9 +62,12 @@ fn plugin_registry_dir() -> std::path::PathBuf {
 pub struct AppState {
     /// Per-session state registry. Holds the active session's messages /
     /// querying flag / cancellation token, plus the "focused" session
-    /// pointer (P0-4 / `query-coordinator-concurrency`). Spike scope: all
-    /// existing single-session command paths resolve the active session
-    /// via `registry.get_or_create_active()`.
+    /// pointer (P0-4 / `query-coordinator-concurrency`). Spike scope: most
+    /// single-session command paths resolve the active session
+    /// via `registry.get_or_create_active()`. P1-1 exception: `send_message`
+    /// and `cancel_query` route explicitly via
+    /// `registry.resolve_explicit_or_active` (multi-window), so they never
+    /// read or move the pointer when a sessionId is supplied.
     pub(crate) registry: Arc<SessionRegistry>,
     /// LLM client config — used to build clients on demand. P1.2-B:
     /// this is the single source of truth for the active `model` /
@@ -119,8 +122,36 @@ pub struct AppState {
     pub(crate) scheduled_runs_store: Arc<shannon_core::scheduled_runs::ScheduledRunsStore>,
     /// Triage items needing user attention.
     pub(crate) triage_store: Arc<crate::scheduled_commands::TriageStore>,
+    /// Live desktop goal runners, keyed by session id (P0-2). One active
+    /// runner per session; while one exists, manual sends to that session
+    /// are rejected (see `send_message`) — goal and manual input are
+    /// mutually exclusive.
+    pub(crate) goal_runs: Arc<crate::goal_commands::GoalRunRegistry>,
+    /// P1-2 — best-of-N batch runs (live handles + on-disk records + the
+    /// branch-execution semaphore).
+    pub(crate) batch_runs: Arc<crate::batch_commands::BatchRunRegistry>,
+    /// Open session windows — label → session id (P1-1). Mirrored into
+    /// `DesktopConfig.open_session_windows` for restart restore.
+    pub(crate) session_windows: crate::session_window_commands::SessionWindowRegistry,
+    /// P1-5 C-1 — dev-server preview lifecycle owner (single instance,
+    /// process-group kill on stop/exit, ≤500-line log ring, capture source).
+    /// Also backs the desktop-only `preview_screenshot` engine tool.
+    pub(crate) preview: Arc<crate::preview_commands::PreviewManager>,
+    /// P1-5 D — integrated terminal PTY sessions (≤4, process trees owned
+    /// here and killed on app exit; output coalesced ≤16 ms per emit).
+    pub(crate) terminals: Arc<crate::terminal_commands::TerminalManager>,
+    /// SQLite inbox store (`~/.shannon/inbox.db`, P0-3). Lazily opened on
+    /// first use so a failing on-disk open degrades to an in-memory store
+    /// (with a warning) instead of poisoning every inbox command.
+    pub(crate) inbox_store: std::sync::OnceLock<Arc<shannon_core::inbox_store::InboxStore>>,
     /// Usage ledger (`~/.shannon/usage.jsonl`) — append-only token/cache/cost.
     pub(crate) usage_store: Arc<crate::commands_usage::UsageStore>,
+    /// Shared memory store (`~/.shannon/memories/`, P2-4b). One instance per
+    /// process: every engine the desktop constructs attaches this handle
+    /// (`.with_memory_arc`) so memory injection and auto-extraction converge;
+    /// the Memory page commands operate on the same instance, so page edits
+    /// reach the injection path without any reload dance.
+    pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
     /// Triggered-routine enabled/disabled overrides.
     pub(crate) routine_overrides: Arc<crate::scheduled_commands::RoutineOverrideStore>,
     /// Triggered-routine registry (reloaded on demand).
@@ -211,6 +242,10 @@ fn detect_media_type(path: &str) -> Option<String> {
 /// Security: `path` must already be validated by the caller — see
 /// `validate_attachment_path`. This helper does no path checking on its own
 /// because callers sometimes pass already-canonicalized paths.
+/// Cap on injected PDF text per attachment (50 KiB, mirrors the TUI
+/// @-reference FILE_CONTENT_LIMIT).
+const PDF_TEXT_INJECT_LIMIT: usize = 50 * 1024;
+
 fn file_to_base64(path: &str) -> Result<(String, String), String> {
     use base64::Engine;
     use std::fs;
@@ -318,11 +353,45 @@ impl AppState {
         // remote target can be attached later without a registry rebuild.
         let mut tool_registry = ToolRegistry::new();
         let assembly = shannon_remote::assembly::assemble_dynamic();
+        // P1-3: the persisted `sandbox.mode` config (off|local|landlock)
+        // decorates the execution worlds at assembly time — the same seam
+        // the TUI's env flag feeds. Invalid/unavailable configs degrade
+        // loudly here and run unrestricted (never silently fake-restrict).
+        let sandboxed_providers = match crate::sandbox_assembly::effective_sandbox_providers(
+            desktop_config
+                .sandbox
+                .as_ref()
+                .and_then(|s| s.mode.as_deref()),
+            desktop_config.working_dir.as_deref(),
+            &assembly.providers,
+        ) {
+            Ok(providers) => providers,
+            Err(e) => {
+                tracing::error!("sandbox disabled, continuing unrestricted: {e}");
+                None
+            }
+        };
         let _agent_context = {
             let _ = &assembly;
-            register_default_tools_with_providers(&mut tool_registry, &assembly.providers)
-                .expect("Failed to register default tools")
+            register_default_tools_with_providers(
+                &mut tool_registry,
+                sandboxed_providers.as_ref().unwrap_or(&assembly.providers),
+            )
+            .expect("Failed to register default tools")
         };
+
+        // P1-5 C-1 — dev-server preview manager + the desktop-only
+        // `preview_screenshot` engine tool bound to it. Registration happens
+        // here, NOT in `register_default_tools`, so CLI/headless surfaces
+        // never see the tool (it is meaningless without the desktop panel).
+        let preview = Arc::new(crate::preview_commands::PreviewManager::new());
+        shannon_tools::preview::register_preview_screenshot_tool(
+            &mut tool_registry,
+            Arc::new(crate::preview_commands::ManagerPreviewAccess::new(
+                preview.clone(),
+            )),
+        )
+        .expect("Failed to register preview_screenshot tool");
 
         Self {
             registry: Arc::new(SessionRegistry::new()),
@@ -345,7 +414,14 @@ impl AppState {
             ),
             scheduled_runs_store: Arc::new(shannon_core::scheduled_runs::ScheduledRunsStore::new()),
             triage_store: Arc::new(crate::scheduled_commands::TriageStore::new()),
+            goal_runs: Arc::new(crate::goal_commands::GoalRunRegistry::new()),
+            batch_runs: Arc::new(crate::batch_commands::BatchRunRegistry::new()),
+            session_windows: crate::session_window_commands::SessionWindowRegistry::default(),
+            preview,
+            terminals: Arc::new(crate::terminal_commands::TerminalManager::new()),
+            inbox_store: std::sync::OnceLock::new(),
             usage_store: Arc::new(crate::commands_usage::UsageStore::new()),
+            memory_store: crate::commands_memory::open_shared_store(),
             routine_overrides: Arc::new(crate::scheduled_commands::RoutineOverrideStore::new()),
             triggered_registry: Arc::new(tokio::sync::RwLock::new(
                 shannon_core::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
@@ -427,8 +503,14 @@ impl AppState {
 /// session ID are now sourced from the active session in `state.registry`
 /// instead of from `AppState` directly. The active session is materialised
 /// lazily on first call. The hard-rejection ("A query is already in
-/// progress") now fires per-session rather than globally — multi-session
-/// multiplexing is unlocked but not yet exercised by the UI.
+/// progress") now fires per-session rather than globally.
+///
+/// P1-1 (multi-window routing fix): `session_id` — when provided, the send
+/// is routed to **that** session (registered via `new_session` /
+/// `switch_session`); an unknown id is a hard error and the shared
+/// active-session pointer is **never touched**, so one window's send can no
+/// longer silently land in another window's session. Without the parameter
+/// the legacy active-session fallback applies (back-compat).
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn send_message(
@@ -436,12 +518,39 @@ pub async fn send_message(
     app_handle: tauri::AppHandle,
     message: String,
     file_paths: Option<Vec<String>>,
+    budget_bypass: Option<bool>,
+    session_id: Option<String>,
 ) -> Result<SendMessageResponse, String> {
-    // P0-4: resolve the active session lazily. Falls through to creating
-    // one if the registry is empty (the "first call ever" case).
-    let active_session = state.registry.get_or_create_active();
+    // P1-1: explicit sessionId routes to that session without touching the
+    // shared active pointer; no sessionId keeps the legacy active fallback
+    // (materialises lazily on the "first call ever" case).
+    let (_, active_session) = state
+        .registry
+        .resolve_explicit_or_active(session_id.as_deref())?;
     let session_id = active_session.session_id;
 
+    // P0-2: a desktop goal run owns this session while active — a manual
+    // send would interleave with the unattended turn loop. The composer
+    // gates on the same condition via `get_goal_run`; this is the backend
+    // backstop. (Defence in depth; not a drive-by change.)
+    if state.goal_runs.blocks_session(&session_id) {
+        return Err(
+            "A goal run is active on this session — pause or stop it from the Tasks page before sending messages"
+                .into(),
+        );
+    }
+
+    // P0-4: session-budget pre-turn guard (logic in the generic helper so
+    // it stays testable — see `enforce_pre_turn_budget`).
+    let budget_cap_usd = crate::cost_commands::session_budget_usd(&state, session_id);
+    enforce_pre_turn_budget(
+        &state,
+        &app_handle,
+        session_id,
+        budget_cap_usd,
+        budget_bypass,
+    )
+    .await?;
     // Prevent concurrent queries — check and set in a single lock scope to avoid TOCTOU race
     {
         let mut querying = active_session.querying.lock().await;
@@ -503,6 +612,86 @@ pub async fn send_message(
         }
     });
 
+    // Route image attachments into the multimodal query path so the model
+    // actually sees them. The `FileAttachment`s stored on the ChatMessage
+    // below are display-only (chat history / UI chips); only these content
+    // blocks reach the LLM. SVG is excluded — vision providers accept
+    // png/jpeg/gif/webp only.
+    let image_blocks: Vec<shannon_engine::api::ContentBlock> = attachments
+        .as_ref()
+        .map(|list| {
+            list.iter()
+                .filter_map(|att| {
+                    let b64 = att.base64_data.as_ref()?;
+                    let media_type = att.media_type.as_deref()?;
+                    if !matches!(
+                        media_type,
+                        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+                    ) {
+                        return None;
+                    }
+                    Some(shannon_engine::api::ContentBlock::Image {
+                        source: shannon_engine::api::ImageSource::base64(
+                            media_type.to_string(),
+                            b64.clone(),
+                        ),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // T6: PDF attachments reach the model as extracted text blocks (vision
+    // providers have no PDF document-block contract on the OpenAI-compatible
+    // side, so text is the portable representation). Extracted via pdftotext
+    // when available (same helper the attachment preview uses); scanned PDFs
+    // with no extractable text are called out explicitly so the model can
+    // tell the user instead of guessing.
+    let mut attachment_blocks = image_blocks;
+    {
+        let pdf_futs = attachments
+            .as_ref()
+            .map(|list| {
+                list.iter()
+                    .filter(|att| att.media_type.as_deref() == Some("application/pdf"))
+                    .map(|att| async move {
+                        let text = crate::commands_files::extract_pdf_text_best_effort(
+                            std::path::Path::new(&att.path),
+                        )
+                        .await;
+                        (att.name.clone(), att.size, text)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for (name, size, text) in futures::future::join_all(pdf_futs).await {
+            let trimmed = text.trim();
+            let body = if trimmed.is_empty() {
+                format!(
+                    "Attached PDF \"{name}\" ({size} bytes). No extractable text — the PDF is likely scanned/image-only; OCR is not available."
+                )
+            } else {
+                let mut end = PDF_TEXT_INJECT_LIMIT;
+                while !trimmed.is_char_boundary(end) && end > 0 {
+                    end -= 1;
+                }
+                let truncated = &trimmed[..end];
+                let suffix = if trimmed.len() > end {
+                    format!(
+                        "\n*[Truncated — showing first {end} of {} bytes]*",
+                        trimmed.len()
+                    )
+                } else {
+                    String::new()
+                };
+                format!(
+                    "Attached PDF \"{name}\" ({size} bytes). Extracted text:\n```text\n{truncated}\n```{suffix}"
+                )
+            };
+            attachment_blocks.push(shannon_engine::api::ContentBlock::Text { text: body });
+        }
+    }
+
     // Tier-1 auto-title: capture emptiness before the push — this message is
     // the session's first user message iff the buffer was empty.
     let first_user_message = {
@@ -554,6 +743,15 @@ pub async fn send_message(
     // rules written by "Always allow" in the permission modal) feed the rule
     // checker so previously granted tools stop re-prompting.
     let mut permissions = PermissionManager::new();
+    // P1-3: the active permission profile (strict/balanced/permissive or a
+    // custom `.shannon/profiles/*.toml` name) contributes its rule
+    // side-effects (deny list, active-profile record). The configured
+    // `approval_mode` is applied AFTER so a manual mode edit stays
+    // authoritative over the profile-derived mode.
+    crate::automation_commands::apply_active_profile(
+        &mut permissions,
+        desktop_cfg.active_permission_profile.as_deref(),
+    );
     permissions.set_approval_mode(approval_mode);
     let mut settings = SettingsManager::new();
     if let Err(e) = settings.load_from_files() {
@@ -576,8 +774,10 @@ pub async fn send_message(
     let _state_mgr = state.state_manager.clone();
     let _qe_config = state.qe_config.read().await.clone();
 
-    let mut engine =
-        QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new());
+    let mut engine = crate::commands_memory::attach_shared_memory(
+        QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
+        &state.memory_store,
+    );
     // Bind the engine to the REAL session and restore prior turns. Both the
     // L0 tee (events.jsonl path) and the conversation clone at the top of
     // process_query key off engine state — a fresh engine with a random id
@@ -611,6 +811,7 @@ pub async fn send_message(
         query_id,
         session_id,
         user_message: message,
+        attachments: attachment_blocks,
         metadata: shannon_core::query_engine::QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: true,
@@ -629,6 +830,20 @@ pub async fn send_message(
     let usage_store_arc = state.usage_store.clone();
     let notifier_arc = state.notifier.clone();
     let session_for_task = active_session.clone();
+    // P1-1: owner session stamped onto every `query:*` payload so
+    // multi-window shells can filter streams per window.
+    let session_id_str = session_for_task.session_id.to_string();
+    // P0-4 mid-turn budget guard basis: spend already on the ledger before
+    // this turn started. The streaming Usage handler folds each event's
+    // cost into the guard, which enforces the cap (>=100% cancel +
+    // one-shot `budget:exceeded`, >=80% one-shot `budget:warning`).
+    // `None` cap = no accounting.
+    let mut budget_guard = budget_cap_usd.map(|cap| {
+        crate::cost_commands::BudgetTurnGuard::new(
+            cap,
+            crate::cost_commands::session_spent_usd(&state, &session_id.to_string()),
+        )
+    });
 
     // P2-5b: per-session in-process fan-out. Every event the loop
     // emits to the Tauri wire is also pushed onto `session_for_task`'s
@@ -648,8 +863,26 @@ pub async fn send_message(
     // onto the engine's choice enum (AlwaysAllow also lands in the engine's
     // in-session memory via process_permission_choice).
     let app_for_permissions = app_handle.clone();
+    let session_id_for_permissions = session_id_str.clone();
     tokio::spawn(async move {
         use shannon_engine::permissions::PermissionChoice;
+        // P1-3: engine DecisionReason → wire PermissionReason (frozen
+        // camelCase shape) so the approval dialog can show why it fired.
+        fn wire_reason(
+            reason: &shannon_engine::permissions::DecisionReason,
+        ) -> shannon_types::events::PermissionReason {
+            use shannon_engine::permissions::ReasonSource;
+            shannon_types::events::PermissionReason {
+                source: match reason.source {
+                    ReasonSource::Rule => "rule",
+                    ReasonSource::Llm => "llm",
+                    ReasonSource::Default => "default",
+                }
+                .to_string(),
+                rule_name: reason.rule_name.clone(),
+                confidence: reason.confidence.map(f64::from),
+            }
+        }
         while let Some(request) = perm_rx.recv().await {
             let prompt = &request.prompt;
             let risk = match prompt.risk_level {
@@ -666,6 +899,8 @@ pub async fn send_message(
                 prompt.tool_input.clone(),
                 risk.to_string(),
                 300,
+                Some(session_id_for_permissions.clone()),
+                Some(wire_reason(&prompt.reason)),
             )
             .await;
             let choice = match decision {
@@ -702,6 +937,7 @@ pub async fn send_message(
                     event_names::QUERY_CANCELLED,
                     events::QueryCancelledPayload {
                         query_id: qid_str.clone(),
+                        session_id: Some(session_id_str.clone()),
                     },
                 );
                 route_event(crate::session_registry::SessionEvent::Status(
@@ -717,6 +953,7 @@ pub async fn send_message(
                         let payload = events::QueryTextPayload {
                             query_id: qid_str.clone(),
                             content,
+                            session_id: Some(session_id_str.clone()),
                         };
                         route_event(crate::session_registry::SessionEvent::QueryText(
                             payload.clone(),
@@ -741,6 +978,7 @@ pub async fn send_message(
                             tool_use_id,
                             tool_name,
                             tool_input,
+                            session_id: Some(session_id_str.clone()),
                         };
                         route_event(crate::session_registry::SessionEvent::ToolStart(
                             payload.clone(),
@@ -760,6 +998,7 @@ pub async fn send_message(
                             tool_name,
                             result,
                             is_error,
+                            session_id: Some(session_id_str.clone()),
                         };
                         route_event(crate::session_registry::SessionEvent::ToolResult(
                             payload.clone(),
@@ -779,6 +1018,7 @@ pub async fn send_message(
                             tool_name,
                             progress,
                             message: msg,
+                            session_id: Some(session_id_str.clone()),
                         };
                         route_event(crate::session_registry::SessionEvent::ToolProgress(
                             payload.clone(),
@@ -789,6 +1029,7 @@ pub async fn send_message(
                         let payload = events::ThinkingPayload {
                             query_id: qid_str.clone(),
                             content,
+                            session_id: Some(session_id_str.clone()),
                         };
                         route_event(crate::session_registry::SessionEvent::Thinking(
                             payload.clone(),
@@ -826,11 +1067,27 @@ pub async fn send_message(
                             input_tokens,
                             output_tokens,
                             cost_usd,
+                            session_id: Some(session_id_str.clone()),
                         };
                         route_event(crate::session_registry::SessionEvent::Usage(
                             payload.clone(),
                         ));
                         let _ = app.emit(event_names::QUERY_USAGE, payload);
+
+                        // P0-4 mid-turn budget enforcement (logic in the
+                        // generic helper — see `enforce_mid_turn_usage`):
+                        // first cap crossing cancels via the SAME token
+                        // `cancel_query` pulls (`query:cancelled` at the
+                        // loop top), exceeded latched to one emit; the
+                        // first 80% crossing warns once; a jump straight
+                        // past 100% emits exceeded only.
+                        enforce_mid_turn_usage(
+                            &app,
+                            &mut budget_guard,
+                            &cancel_token_clone,
+                            &session_id,
+                            cost_usd,
+                        );
                     }
                     QueryEvent::Completed { .. } => {
                         // Save final assistant message into the per-session buffer.
@@ -872,6 +1129,7 @@ pub async fn send_message(
                             event_names::QUERY_COMPLETED,
                             events::QueryCompletedPayload {
                                 query_id: qid_str.clone(),
+                                session_id: Some(session_id_str.clone()),
                             },
                         );
                         route_event(crate::session_registry::SessionEvent::Status(
@@ -992,6 +1250,7 @@ pub async fn send_message(
                             events::QueryFailedPayload {
                                 query_id: qid_str.clone(),
                                 error: error.clone(),
+                                session_id: Some(session_id_str.clone()),
                             },
                         );
                         route_event(crate::session_registry::SessionEvent::Status(
@@ -1013,6 +1272,7 @@ pub async fn send_message(
                         events::QueryFailedPayload {
                             query_id: qid_str.clone(),
                             error: err_string.clone(),
+                            session_id: Some(session_id_str.clone()),
                         },
                     );
                     route_event(crate::session_registry::SessionEvent::Status(
@@ -1041,6 +1301,96 @@ pub async fn send_message(
     Ok(SendMessageResponse {
         query_id: return_qid,
     })
+}
+
+// ── P0-4: send_message budget enforcement (injectable boundary) ──────────
+//
+// The `#[tauri::command]` `send_message` is `AppHandle<Wry>`-concrete, so
+// the mock-runtime test harness cannot drive it directly. All budget logic
+// therefore lives in these two runtime-generic helpers, which the command
+// calls and the tests exercise with `tauri::test::mock_app()` — the same
+// split used by the goal runner. Behavior is unchanged: the helpers carry
+// everything budget-related (sidecar/ledger reads, verdicts, emits, the
+// cancel token), the command just supplies its arguments.
+
+/// Pre-turn guard: when the session has a cap and `bypass` is not set,
+/// cumulative ledger spend at/over the cap rejects the send and fires
+/// `budget:exceeded` (the frontend offers continue-once / raise-budget /
+/// stop). `bypass` is the "continue once" choice: it exempts *exactly this
+/// send's* pre-turn check — the mid-turn guard still enforces the cap.
+/// Runs before the querying flag is set, so a rejected send leaves no
+/// trace on the session.
+pub(crate) async fn enforce_pre_turn_budget<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+    session_id: uuid::Uuid,
+    budget_cap_usd: Option<f64>,
+    bypass: Option<bool>,
+) -> Result<(), String> {
+    let Some(cap) = budget_cap_usd else {
+        return Ok(());
+    };
+    if bypass.unwrap_or(false) {
+        return Ok(());
+    }
+    let spent = crate::cost_commands::session_spent_usd(state, &session_id.to_string());
+    if crate::cost_commands::budget_verdict(spent, cap)
+        == crate::cost_commands::BudgetVerdict::Exceeded
+    {
+        crate::cost_commands::emit_budget_status(app, false, &session_id.to_string(), spent, cap);
+        return Err(format!(
+            "Session budget exceeded: spent ${spent:.4} of ${cap:.4} — continue (ignore once), raise the budget, or stop"
+        ));
+    }
+    Ok(())
+}
+
+/// Mid-turn guard: fold one streaming `Usage` event into the turn's
+/// [`crate::cost_commands::BudgetTurnGuard`]; on the first cap crossing
+/// emit `budget:exceeded` (latched — one emit per turn) and cancel via the
+/// SAME [`tokio_util::sync::CancellationToken`] the `cancel_query` command
+/// pulls, so the stream breaks through the identical path; on the first
+/// 80% crossing emit a one-shot `budget:warning`. A single event large
+/// enough to jump straight past 100% emits exceeded only — the Exceeded
+/// arm is checked first.
+pub(crate) fn enforce_mid_turn_usage<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    guard: &mut Option<crate::cost_commands::BudgetTurnGuard>,
+    cancel_token: &CancellationToken,
+    session_id: &uuid::Uuid,
+    cost_usd: f64,
+) {
+    let Some(g) = guard.as_mut() else {
+        return;
+    };
+    match g.on_usage(cost_usd) {
+        crate::cost_commands::BudgetTurnAction::Exceeded {
+            spent_usd,
+            budget_usd,
+        } => {
+            crate::cost_commands::emit_budget_status(
+                app,
+                false,
+                &session_id.to_string(),
+                spent_usd,
+                budget_usd,
+            );
+            cancel_token.cancel();
+        }
+        crate::cost_commands::BudgetTurnAction::Warn {
+            spent_usd,
+            budget_usd,
+        } => {
+            crate::cost_commands::emit_budget_status(
+                app,
+                true,
+                &session_id.to_string(),
+                spent_usd,
+                budget_usd,
+            );
+        }
+        crate::cost_commands::BudgetTurnAction::Quiet => {}
+    }
 }
 
 // Chat-related commands (get_conversation, list_models, get_status,
@@ -1111,6 +1461,9 @@ pub async fn start_background_task(
     let provider = client_config.provider.to_string();
     let usage_store = state.usage_store.clone();
     let approval_mode_str = state.desktop_config.read().await.approval_mode.clone();
+    // P2-4b: hand the shared memory handle to the spawned task — the runner
+    // attaches it to its engine instead of leaving memory: None.
+    let memory_store = state.memory_store.clone();
 
     tokio::spawn(async move {
         // Build query engine for this task
@@ -1141,8 +1494,10 @@ pub async fn start_background_task(
             ));
         }
 
-        let engine =
-            QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new());
+        let engine = crate::commands_memory::attach_shared_memory(
+            QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
+            &memory_store,
+        );
 
         let query_id = uuid::Uuid::new_v4();
         let _qid_str = query_id.to_string();
@@ -1155,6 +1510,7 @@ pub async fn start_background_task(
             query_id,
             session_id: uuid::Uuid::new_v4(),
             user_message: prompt.clone(),
+            attachments: Vec::new(),
             metadata: shannon_core::query_engine::QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
@@ -1331,6 +1687,7 @@ mod tests {
                     UserMessagePayload {
                         source: UserMessagePayload::SOURCE_USER.into(),
                         content: text,
+                        attachment_count: 0,
                     },
                 ));
             } else {
@@ -2105,5 +2462,314 @@ mod build_client_config_tests {
         );
         assert_eq!(out.base_url, "http://localhost:11434");
         assert_eq!(out.model, "llama3");
+    }
+}
+
+// ── P0-4: budget enforcement tests (injectable boundary) ────────────────
+// `send_message` is `AppHandle<Wry>`-concrete, so the budget logic was
+// extracted into the runtime-generic `enforce_pre_turn_budget` /
+// `enforce_mid_turn_usage` helpers (see above) and is tested here through
+// `tauri::test::mock_app()` with an AppState whose sessions dir + usage
+// ledger are redirected into a tempdir — the two stores the budget path
+// reads (`pub(crate)` fields, same crate). Mid-turn tests drive the real
+// `BudgetTurnGuard` + the SAME `CancellationToken` type the `cancel_query`
+// command pulls, so a cap crossing is asserted to cancel through the
+// identical mechanism as the user-facing cancel button.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod budget_enforcement_tests {
+    use super::*;
+    use crate::commands_usage::{UsageTotals, record_event};
+    use shannon_core::session_log::SessionSidecar;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tauri::Listener;
+
+    fn mock_app() -> tauri::AppHandle<tauri::test::MockRuntime> {
+        tauri::test::mock_app().handle().clone()
+    }
+
+    /// AppState with the budget-path stores redirected into `dir`.
+    /// `AppState::new()` only *reads* ambient config (providers.toml /
+    /// desktop config / default tools) — nothing here writes outside `dir`.
+    fn budget_test_state(dir: &std::path::Path) -> AppState {
+        let mut state = AppState::new();
+        state.state_manager = Arc::new(
+            StateManager::with_sessions_dir(dir.join("sessions")).expect("temp sessions dir"),
+        );
+        state.usage_store = Arc::new(crate::commands_usage::UsageStore::with_path(
+            dir.join("usage.jsonl"),
+        ));
+        state
+    }
+
+    fn seed_budget(state: &AppState, session_id: uuid::Uuid, cap: f64) {
+        state
+            .l0_store()
+            .save_sidecar_replace(
+                &session_id,
+                &SessionSidecar {
+                    budget_usd: Some(cap),
+                    ..Default::default()
+                },
+            )
+            .expect("seed sidecar budget");
+    }
+
+    fn seed_spend(state: &AppState, session_id: &uuid::Uuid, cost: f64) {
+        state
+            .usage_store
+            .append(&record_event(
+                "budget-path-test-model",
+                "anthropic",
+                UsageTotals {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                    cost_usd: cost,
+                },
+                Some(&session_id.to_string()),
+            ))
+            .expect("seed ledger spend");
+    }
+
+    /// Session-filtered counters for the two budget events.
+    struct BudgetEventCounters {
+        exceeded: Arc<AtomicUsize>,
+        warned: Arc<AtomicUsize>,
+        listeners: Vec<tauri::EventId>,
+    }
+
+    impl BudgetEventCounters {
+        fn exceeded(&self) -> usize {
+            self.exceeded.load(Ordering::SeqCst)
+        }
+        fn warned(&self) -> usize {
+            self.warned.load(Ordering::SeqCst)
+        }
+    }
+
+    fn count_budget_events(
+        app: &tauri::AppHandle<tauri::test::MockRuntime>,
+        session: &str,
+    ) -> BudgetEventCounters {
+        let warned = Arc::new(AtomicUsize::new(0));
+        let exceeded = Arc::new(AtomicUsize::new(0));
+        let mut listeners = Vec::new();
+
+        let ex_counter = exceeded.clone();
+        let ex_session = session.to_string();
+        listeners.push(app.listen_any(event_names::BUDGET_EXCEEDED, move |e| {
+            let Ok(p) =
+                serde_json::from_str::<shannon_types::events::BudgetStatusPayload>(e.payload())
+            else {
+                return;
+            };
+            if p.session_id == ex_session {
+                ex_counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+        let w_counter = warned.clone();
+        let w_session = session.to_string();
+        listeners.push(app.listen_any(event_names::BUDGET_WARNING, move |e| {
+            let Ok(p) =
+                serde_json::from_str::<shannon_types::events::BudgetStatusPayload>(e.payload())
+            else {
+                return;
+            };
+            if p.session_id == w_session {
+                w_counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
+        BudgetEventCounters {
+            exceeded,
+            warned,
+            listeners,
+        }
+    }
+
+    fn unlisten_all(app: &tauri::AppHandle<tauri::test::MockRuntime>, c: &BudgetEventCounters) {
+        for id in &c.listeners {
+            app.unlisten(*id);
+        }
+    }
+
+    /// Captured payloads for one event name — used to pin the frozen wire
+    /// shape (sessionId/spentUsd/budgetUsd) end-to-end.
+    fn capture_payloads(
+        app: &tauri::AppHandle<tauri::test::MockRuntime>,
+        name: &str,
+    ) -> Arc<std::sync::Mutex<Vec<shannon_types::events::BudgetStatusPayload>>> {
+        let sink: Arc<std::sync::Mutex<Vec<shannon_types::events::BudgetStatusPayload>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink_for_cb = sink.clone();
+        app.listen_any(name, move |e| {
+            if let Ok(p) =
+                serde_json::from_str::<shannon_types::events::BudgetStatusPayload>(e.payload())
+            {
+                sink_for_cb.lock().unwrap().push(p);
+            }
+        });
+        sink
+    }
+
+    // ① Pre-turn: spend at the cap (first-limit-wins boundary) rejects the
+    // send with an explicit error and emits budget:exceeded exactly once.
+    #[tokio::test]
+    async fn pre_turn_exhausted_budget_rejects_and_emits_exceeded() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let state = budget_test_state(tmp.path());
+        let sid = state.registry.get_or_create_active().session_id;
+        seed_budget(&state, sid, 1.0);
+        seed_spend(&state, &sid, 0.5);
+        let counters = count_budget_events(&app, &sid.to_string());
+        let payloads = capture_payloads(&app, event_names::BUDGET_EXCEEDED);
+
+        // Under the cap (0.5 of 1.0): allowed, no events.
+        enforce_pre_turn_budget(&state, &app, sid, Some(1.0), None)
+            .await
+            .expect("spend below the cap must pass");
+        assert_eq!(counters.exceeded(), 0);
+
+        // Push spend to 1.5 (over the 1.0 cap): rejected, explicit error,
+        // one emit with the frozen payload.
+        seed_spend(&state, &sid, 1.0);
+        let err = enforce_pre_turn_budget(&state, &app, sid, Some(1.0), None)
+            .await
+            .expect_err("spend at the cap must reject the send");
+        assert!(err.contains("budget exceeded"), "explicit error: {err}");
+
+        assert_eq!(counters.exceeded(), 1, "exactly one exceeded emit");
+        let seen = payloads.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].session_id, sid.to_string());
+        assert!((seen[0].spent_usd - 1.5).abs() < 1e-9);
+        assert!((seen[0].budget_usd - 1.0).abs() < 1e-9);
+        assert_eq!(counters.warned(), 0, "pre-turn reject never warns");
+        unlisten_all(&app, &counters);
+    }
+
+    // ② Bypass is per-call: exempts the send it is attached to, and the
+    // next (bypass-less) call rejects again — nothing is stored.
+    #[tokio::test]
+    async fn pre_turn_bypass_exempts_one_send_only() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let state = budget_test_state(tmp.path());
+        let sid = state.registry.get_or_create_active().session_id;
+        seed_budget(&state, sid, 1.0);
+        seed_spend(&state, &sid, 1.0);
+
+        // With bypass: accepted despite the exhausted budget.
+        enforce_pre_turn_budget(&state, &app, sid, Some(1.0), Some(true))
+            .await
+            .expect("bypass must exempt this send's pre-turn check");
+
+        // Immediately after, bypass-less: rejected again.
+        let err = enforce_pre_turn_budget(&state, &app, sid, Some(1.0), None)
+            .await
+            .expect_err("the follow-up bypass-less send must reject");
+        assert!(err.contains("budget exceeded"), "{err}");
+
+        // No cap at all: always fine, bypass or not.
+        enforce_pre_turn_budget(&state, &app, sid, None, None)
+            .await
+            .expect("no cap = no check");
+    }
+
+    // ③ Mid-turn: the first cap crossing cancels through the SAME
+    // CancellationToken the cancel_query command pulls, exceeded fires
+    // exactly once, and buffered events after the cancel stay silent.
+    #[tokio::test]
+    async fn mid_turn_exceeded_cancels_token_and_latches_to_one_emit() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let state = budget_test_state(tmp.path());
+        let sid = state.registry.get_or_create_active().session_id;
+        let counters = count_budget_events(&app, &sid.to_string());
+
+        // The exact wiring send_message uses: the token created for the
+        // turn is cloned into the session slot (cancel_query cancels that
+        // slot) and the same token guards the stream loop.
+        let turn_token = tokio_util::sync::CancellationToken::new();
+        let cancel_token_clone = turn_token.clone();
+
+        let mut guard = Some(crate::cost_commands::BudgetTurnGuard::new(1.0, 0.5));
+        assert!(!turn_token.is_cancelled());
+
+        // Event 1: 0.6 → spent 1.1 >= cap → exceeded + cancel.
+        enforce_mid_turn_usage(&app, &mut guard, &cancel_token_clone, &sid, 0.6);
+        assert!(turn_token.is_cancelled(), "cap crossing must cancel");
+        assert_eq!(counters.exceeded(), 1);
+
+        // Events 2..n: already buffered when the cancel lands — the latch
+        // must keep them silent, and the token stays cancelled.
+        enforce_mid_turn_usage(&app, &mut guard, &cancel_token_clone, &sid, 0.1);
+        enforce_mid_turn_usage(&app, &mut guard, &cancel_token_clone, &sid, 0.1);
+        assert_eq!(counters.exceeded(), 1, "exceeded is latched to one emit");
+        assert_eq!(counters.warned(), 0);
+        unlisten_all(&app, &counters);
+    }
+
+    // ④ Mid-turn: the 80% crossing warns exactly once; a single event that
+    // jumps straight from below the band to >= 100% must NOT warn (the
+    // Exceeded arm is checked first) — pinned here via the real guard.
+    #[tokio::test]
+    async fn mid_turn_warning_is_one_shot_and_jump_past_cap_never_warns() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let state = budget_test_state(tmp.path());
+        let sid = state.registry.get_or_create_active().session_id;
+        let counters = count_budget_events(&app, &sid.to_string());
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        // Warning band: 7.0 (70%, quiet) → +1.5 (85%, warn once) → quiet.
+        let mut guard = Some(crate::cost_commands::BudgetTurnGuard::new(10.0, 0.0));
+        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, 7.0);
+        assert_eq!(counters.warned(), 0);
+        assert!(!cancel.is_cancelled());
+        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, 1.5);
+        assert_eq!(counters.warned(), 1, "one-shot warning at the 80% line");
+        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, 0.5);
+        assert_eq!(counters.warned(), 1, "still under the cap: no re-warn");
+        assert_eq!(counters.exceeded(), 0);
+        assert!(!cancel.is_cancelled(), "under the cap: no cancel");
+
+        // Jump-past-cap turn: from 0 straight to 2.0 of a 1.0 cap.
+        let jump_counters = count_budget_events(&app, &sid.to_string());
+        let jump_cancel = tokio_util::sync::CancellationToken::new();
+        let mut guard = Some(crate::cost_commands::BudgetTurnGuard::new(1.0, 0.0));
+        enforce_mid_turn_usage(&app, &mut guard, &jump_cancel, &sid, 2.0);
+        enforce_mid_turn_usage(&app, &mut guard, &jump_cancel, &sid, 0.5);
+        assert_eq!(jump_counters.exceeded(), 1);
+        assert_eq!(
+            jump_counters.warned(),
+            0,
+            "no stray warning on a jump straight past the cap"
+        );
+        assert!(jump_cancel.is_cancelled());
+        unlisten_all(&app, &counters);
+        unlisten_all(&app, &jump_counters);
+    }
+
+    // ⑤ No cap on the session: the guard is a complete no-op (no events,
+    // no cancel) even for arbitrarily large usage.
+    #[tokio::test]
+    async fn mid_turn_without_a_cap_is_a_noop() {
+        let app = mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let state = budget_test_state(tmp.path());
+        let sid = state.registry.get_or_create_active().session_id;
+        let counters = count_budget_events(&app, &sid.to_string());
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        let mut guard: Option<crate::cost_commands::BudgetTurnGuard> = None;
+        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, 999.0);
+        assert_eq!(counters.exceeded(), 0);
+        assert_eq!(counters.warned(), 0);
+        assert!(!cancel.is_cancelled());
+        unlisten_all(&app, &counters);
     }
 }

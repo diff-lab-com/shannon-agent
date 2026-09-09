@@ -392,6 +392,10 @@ pub struct LlmClientConfig {
     pub fallback_base_url: Option<String>,
     /// Maximum number of automatic stream reconnection attempts (default: 3).
     pub max_stream_reconnects: u32,
+    /// T12 Option C: inject the Anthropic browser toolset on supported
+    /// models, superseding local browser tools. Opt-in (default false);
+    /// typically set from `SHANNON_ANTHROPIC_TOOLSETS=1`.
+    pub enable_anthropic_toolsets: bool,
     /// Budget tokens for extended thinking mode (Anthropic-specific).
     /// When set, enables extended thinking with the given token budget.
     pub budget_tokens: Option<u32>,
@@ -461,6 +465,7 @@ impl Default for LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 }
@@ -546,6 +551,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -570,6 +576,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -595,6 +602,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -619,6 +627,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -644,6 +653,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -667,6 +677,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -689,6 +700,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -712,6 +724,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 
@@ -735,6 +748,7 @@ impl LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         }
     }
 }
@@ -1974,6 +1988,7 @@ mod tests {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         };
         assert!(cfg.validate().is_ok());
         assert!(cfg.is_configured());
@@ -2003,6 +2018,7 @@ mod tests {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         };
         let err = cfg.validate().unwrap_err();
         assert!(
@@ -2029,6 +2045,7 @@ mod tests {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         };
         let err = cfg.validate().unwrap_err();
         assert!(
@@ -2059,6 +2076,7 @@ mod tests {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: false,
         };
         let err = cfg.validate().unwrap_err();
         assert!(err.contains("model"), "error should mention model: {err}");

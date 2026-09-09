@@ -8,6 +8,8 @@ import type { SessionInfo } from '@/types'
 export interface SessionContextValue {
   sessions: SessionInfo[]
   currentSessionId: string | null
+  /** P1-1: session pinned to this window via `/?windowSession=<id>`; null in the main window. In-memory only. */
+  windowSessionId: string | null
   createSession: () => Promise<void>
   createSessionInWorktree: () => Promise<void>
   switchSession: (id: string) => Promise<void>

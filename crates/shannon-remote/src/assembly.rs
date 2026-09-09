@@ -3,7 +3,7 @@
 //! Two shapes:
 //! - **Dynamic** (interactive REPL): a [`DynamicWorld`] decorator starts in
 //!   the local world and can be switched to an SSH/Docker target at runtime
-//!   via `/remote use`. The shared [`WorldSandboxHandle`] lets the swap
+//!   via `/remote use`. The shared [`WorldSandboxHandle`](shannon_tools::file::sandbox::WorldSandboxHandle) lets the swap
 //!   retarget every registered tool's path sandbox without a registry
 //!   rebuild.
 //! - **Static** (headless `--target`): the world is fixed for the process

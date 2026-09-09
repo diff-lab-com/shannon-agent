@@ -72,12 +72,35 @@ pub struct ShannonConfig {
     /// `[notifications]` section for system-level notification behavior.
     #[serde(default)]
     pub notifications: Option<NotificationsConfig>,
+    /// `[hooks]` section for inbound webhook endpoints (P2-7:
+    /// `[hooks.github] secret` guards `POST /hooks/github` on shannon-server).
+    #[serde(default)]
+    pub hooks: Option<HooksConfig>,
     /// v2 multi-provider/model config. The `"default"` profile's active
     /// target, when present, drives the engine `LlmClientConfig`. CLI / TOML
     /// / env inputs feed this through
     /// [`crate::provider_resolver::synthesize_default_profile`].
     #[serde(default)]
     pub provider_model: shannon_types::provider_config::ProviderModelConfig,
+}
+
+/// `[hooks]` config section: inbound webhook endpoints (P2-7).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HooksConfig {
+    /// GitHub webhook endpoint (`POST /hooks/github` on shannon-server).
+    #[serde(default)]
+    pub github: Option<GitHubHooksConfig>,
+}
+
+/// `[hooks.github]` config section.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GitHubHooksConfig {
+    /// HMAC-SHA256 webhook secret. GitHub sends the same secret in the
+    /// webhook settings UI; deliveries carry `X-Hub-Signature-256:
+    /// sha256=<hex>` over the raw body. When unset, the endpoint answers
+    /// **503** (disabled — safe default).
+    #[serde(default)]
+    pub secret: Option<String>,
 }
 
 impl ShannonConfig {
@@ -126,6 +149,7 @@ impl ShannonConfig {
                 .notifications
                 .clone()
                 .or_else(|| self.notifications.clone()),
+            hooks: other.hooks.clone().or_else(|| self.hooks.clone()),
             provider_model,
         }
     }
@@ -285,6 +309,7 @@ impl ConfigBuilder {
                 presets: None,
                 permission_profile: None,
                 notifications: None,
+                hooks: None,
                 provider_model: pm,
             };
             crate::substitute::substitute_config(&mut self.connected);
@@ -327,6 +352,7 @@ impl ConfigBuilder {
             permission_profile: std::env::var("SHANNON_PERMISSION_PROFILE").ok(),
             presets: None,
             notifications: None,
+            hooks: None,
             provider_model,
         };
         self
@@ -513,6 +539,7 @@ fn load_config_file(path: &std::path::Path) -> ShannonConfig {
         presets: None,
         permission_profile,
         notifications: None,
+        hooks: None,
         provider_model,
     }
 }
@@ -575,6 +602,7 @@ impl From<ShannonConfig> for shannon_engine::api::LlmClientConfig {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         }
     }
 }
@@ -635,6 +663,7 @@ pub fn build_client_from_resolved(
         max_stream_reconnects: 3,
         budget_tokens: None,
         reasoning_effort: None,
+        enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
     }
 }
 

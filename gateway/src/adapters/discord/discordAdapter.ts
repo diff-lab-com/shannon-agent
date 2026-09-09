@@ -45,6 +45,13 @@ interface DcUser {
   global_name?: string | null;
   bot?: boolean;
 }
+export interface DcAttachment {
+  id?: string;
+  filename?: string;
+  content_type?: string;
+  url?: string;
+  size?: number;
+}
 export interface DcMessage {
   id: string;
   channel_id: string;
@@ -54,6 +61,8 @@ export interface DcMessage {
   timestamp?: string;
   /** Present when the message is inside a thread channel. */
   thread?: { id: string };
+  /** Image (and other) attachments — B4 ingests the image ones. */
+  attachments?: DcAttachment[];
 }
 interface DcInteractionData {
   component_type?: number;
@@ -70,12 +79,40 @@ interface DcInteraction {
 
 // ── pure transforms (unit-tested) ───────────────────────────────────────
 
-/** A Discord `MESSAGE_CREATE` message → NormalizedInbound, or null (bots/no text). */
+/**
+ * Image attachments on a message (B4). Discord's CDN URLs are fetchable
+ * without auth, so the media rides as `url` and the turn handler's media
+ * pipeline does the download. Only image content types are surfaced.
+ */
+export function extractDiscordMedia(message: unknown): import("../types.js").MediaAttachment[] {
+  if (typeof message !== "object" || message === null) return [];
+  const m = message as DcMessage;
+  if (!Array.isArray(m.attachments)) return [];
+  return m.attachments
+    .filter(
+      (a): a is DcAttachment & { url: string; filename: string } =>
+        typeof a.url === "string" &&
+        typeof a.filename === "string" &&
+        typeof a.content_type === "string" &&
+        a.content_type.startsWith("image/"),
+    )
+    .map((a) => ({
+      kind: "image" as const,
+      mimeType: a.content_type as string,
+      url: a.url,
+      caption: a.filename,
+    }));
+}
+
+/** A Discord `MESSAGE_CREATE` message → NormalizedInbound, or null (bots,
+ * nothing to act on). Image-only messages (empty content, attachments) are
+ * accepted since B4. */
 export function normalizeDiscordMessage(message: unknown): NormalizedInbound | null {
   if (typeof message !== "object" || message === null) return null;
   const m = message as DcMessage;
   if (typeof m.id !== "string" || typeof m.channel_id !== "string") return null;
-  if (typeof m.content !== "string" || m.content.length === 0) return null;
+  const media = extractDiscordMedia(m);
+  if ((typeof m.content !== "string" || m.content.length === 0) && media.length === 0) return null;
   const author = m.author;
   if (!author || author.bot) return null;
   return {
@@ -83,10 +120,11 @@ export function normalizeDiscordMessage(message: unknown): NormalizedInbound | n
     chatId: m.channel_id,
     senderId: author.id,
     senderName: author.global_name ?? author.username,
-    text: m.content,
+    text: m.content ?? "",
     timestamp: parseDiscordTimestamp(m.timestamp),
     threadId: m.id,
     isDirect: !m.guild_id,
+    media,
     raw: message,
   };
 }
@@ -385,6 +423,7 @@ export function createDiscordAdapter(
       pairing: false,
       approvalButtons: true,
       streaming: "partial",
+      mediaIn: ["image/png", "image/jpeg", "image/gif", "image/webp"],
       editWindowMs: 60 * 60 * 1000, // Discord allows edits for ~1h
     },
     async start(): Promise<void> {

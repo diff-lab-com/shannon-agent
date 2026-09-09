@@ -25,6 +25,10 @@ export default function AdvancedSettings() {
   const [debugConsole, setDebugConsole] = useState(config?.debug_console ?? false)
   const [skillLoopEnabled, setSkillLoopEnabled] = useState(config?.skill_loop_enabled ?? false)
   const [skillDetectionEnabled, setSkillDetectionEnabled] = useState(config?.skill_detection_enabled ?? true)
+  // P2-5: `offpeak.model_override` — model used for routine executions that
+  // start inside their off-peak execution window. Empty input = disabled.
+  const [offpeakModel, setOffpeakModel] = useState(config?.offpeak?.model_override ?? '')
+  const [savingOffpeak, setSavingOffpeak] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
@@ -58,6 +62,11 @@ export default function AdvancedSettings() {
         .catch(() => { if (active) setCandidates([]) })
     }
   }, [])
+
+  // P2-5: keep the input in sync when the persisted config refreshes.
+  useEffect(() => {
+    setOffpeakModel(config?.offpeak?.model_override ?? '')
+  }, [config?.offpeak?.model_override])
 
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
@@ -118,6 +127,20 @@ export default function AdvancedSettings() {
     } catch (e) {
       toastError(t('settings.advanced.updateOpenFailed'), e)
     }
+  }
+
+  // P2-5: persist `offpeak.model_override` (frozen config key). An empty
+  // value disables the override — routines then use the active model.
+  const handleSaveOffpeakModel = async () => {
+    setSavingOffpeak(true)
+    try {
+      await api.configure({ key: 'offpeak.model_override', value: offpeakModel.trim() })
+      await refreshConfig()
+      toast.success(t('settings.advanced.offpeak.saved'))
+    } catch (e) {
+      toastError(t('settings.advanced.offpeak.saveFailed'), e)
+    }
+    setSavingOffpeak(false)
   }
 
   function advanceCandidate() {
@@ -228,6 +251,43 @@ export default function AdvancedSettings() {
               </div>
               <Switch checked={encryptionEnabled} onCheckedChange={v => handleToggle('encryption', v, setEncryptionEnabled)} className="shrink-0" />
             </div>
+          </div>
+        </div>
+
+        {/* Off-peak model override (P2-5, frozen key `offpeak.model_override`) */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-2 bg-secondary/10 rounded-lg text-secondary flex items-center justify-center">
+              <span className="material-symbols-outlined">bedtime</span>
+            </div>
+            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.offpeak.title')}</h3>
+          </div>
+          <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.offpeak.desc')}</p>
+          <div className="flex flex-col md:flex-row md:items-end gap-sm">
+            <label className="flex flex-col gap-xs flex-1">
+              <span className="font-label-sm text-[12px] text-on-surface-variant">
+                {t('settings.advanced.offpeak.inputLabel')}
+              </span>
+              <input
+                type="text"
+                value={offpeakModel}
+                onChange={e => setOffpeakModel(e.target.value)}
+                placeholder={t('settings.advanced.offpeak.placeholder')}
+                aria-label={t('settings.advanced.offpeak.inputLabel')}
+                className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+              <span className="font-label-sm text-[11px] text-on-surface-variant">
+                {offpeakModel.trim() ? t('settings.advanced.offpeak.enabledHint') : t('settings.advanced.offpeak.disabledHint')}
+              </span>
+            </label>
+            <Button
+              className="px-xl py-md bg-primary text-on-primary rounded-lg font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-sm active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer disabled:opacity-50"
+              onClick={handleSaveOffpeakModel}
+              disabled={savingOffpeak}
+              aria-label={t('settings.advanced.offpeak.saveAria')}
+            >
+              {savingOffpeak ? t('settings.advanced.offpeak.saving') : t('settings.advanced.offpeak.save')}
+            </Button>
           </div>
         </div>
 

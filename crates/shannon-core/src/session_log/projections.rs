@@ -668,6 +668,17 @@ pub struct SessionAnalytics {
     pub permission_requests_total: u64,
     /// Permission requests that were allowed.
     pub permission_requests_approved: u64,
+    /// Coarse platform of the session host, from `session/start`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
+    /// CPU architecture of the session host, from `session/start`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+    /// `SHANNON_BROWSER_CDP` was configured for the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_cdp: Option<bool>,
+    /// Calls of the builtin `browser_*` tools (rollup over [`Self::tools`]).
+    pub browser_tool_calls: u64,
 }
 
 impl SessionAnalytics {
@@ -737,6 +748,15 @@ pub fn project_session_analytics(events: &[SessionEvent]) -> SessionAnalytics {
             SessionEventBody::SessionStart(p) => {
                 view.session_started = true;
                 view.model.get_or_insert_with(|| p.model.clone());
+                if view.os.is_none() {
+                    view.os = p.os.clone();
+                }
+                if view.arch.is_none() {
+                    view.arch = p.arch.clone();
+                }
+                if view.browser_cdp.is_none() {
+                    view.browser_cdp = p.browser_cdp;
+                }
             }
             SessionEventBody::TurnEnd(TurnEndPayload {
                 reason,
@@ -776,6 +796,15 @@ pub fn project_session_analytics(events: &[SessionEvent]) -> SessionAnalytics {
             _ => {}
         }
     }
+    // Decision-signal rollup: builtin browser tool usage (B-series
+    // scheduling evidence). `browser_` is the registered tool-name prefix
+    // (browser_navigate / browser_click / …).
+    view.browser_tool_calls = view
+        .tools
+        .iter()
+        .filter(|(name, _)| name.starts_with("browser_"))
+        .map(|(_, agg)| agg.calls)
+        .sum();
     view
 }
 
@@ -845,7 +874,8 @@ pub fn scan_session_summaries(sessions_container: &Path) -> Vec<SessionScanEntry
 mod tests {
     use super::*;
     use shannon_types::session_event::{
-        AssistantChunkPayload, TokenUsage, ToolCallPayload, TurnStartPayload, UserMessagePayload,
+        AssistantChunkPayload, SessionStartPayload, TokenUsage, ToolCallPayload, TurnStartPayload,
+        UserMessagePayload,
     };
 
     fn ev(seq: u64, ts: u64, body: SessionEventBody) -> SessionEvent {
@@ -859,6 +889,7 @@ mod tests {
             SessionEventBody::UserMessage(UserMessagePayload {
                 source: UserMessagePayload::SOURCE_USER.into(),
                 content: content.into(),
+                attachment_count: 0,
             }),
         )
     }
@@ -899,6 +930,78 @@ mod tests {
                 meta: serde_json::Value::Null,
             }),
         )
+    }
+
+    // ── telemetry decision signals (roadmap 2026-09-08) ──────────────────
+
+    fn start_with_signals() -> SessionEvent {
+        ev(
+            0,
+            100,
+            SessionEventBody::SessionStart(SessionStartPayload {
+                model: "claude-sonnet-4".into(),
+                provider: None,
+                cwd: None,
+                app_version: None,
+                os: Some("macos".into()),
+                arch: Some("aarch64".into()),
+                browser_cdp: Some(true),
+            }),
+        )
+    }
+
+    #[test]
+    fn analytics_passthrough_os_arch_cdp_and_browser_rollup() {
+        let events = vec![
+            start_with_signals(),
+            user(1, "open example.com"),
+            ev(
+                2,
+                102,
+                SessionEventBody::ToolCall(ToolCallPayload {
+                    tool_use_id: "b1".into(),
+                    tool_name: "browser_navigate".into(),
+                    arguments: "{}".into(),
+                }),
+            ),
+            ev(
+                3,
+                103,
+                SessionEventBody::ToolResult(ToolResultPayload {
+                    tool_use_id: "b1".into(),
+                    tool_name: "browser_navigate".into(),
+                    output: "ok".into(),
+                    is_error: false,
+                    duration_ms: Some(10),
+                    meta: serde_json::Value::Null,
+                }),
+            ),
+            call(4, "t1", "{}"),
+            result(5, "t1", "ok", false),
+            turn_end(6, None),
+        ];
+        let view = project_session_analytics(&events);
+        assert_eq!(view.os.as_deref(), Some("macos"));
+        assert_eq!(view.arch.as_deref(), Some("aarch64"));
+        assert_eq!(view.browser_cdp, Some(true));
+        // browser_navigate + the bare Bash call: rollup counts only browser_*.
+        assert_eq!(view.browser_tool_calls, 1);
+        assert!(view.tools.contains_key("browser_navigate"));
+    }
+
+    #[test]
+    fn session_start_payload_old_logs_without_signals_parse() {
+        // serde(default) on the signal fields keeps pre-signal logs (and
+        // pre-signal writers) fully compatible.
+        let json = serde_json::json!({
+            "model": "gpt-4o",
+            "cwd": "/tmp"
+        });
+        let p: SessionStartPayload = serde_json::from_value(json).expect("legacy payload parses");
+        assert_eq!(p.model, "gpt-4o");
+        assert_eq!(p.os, None);
+        assert_eq!(p.arch, None);
+        assert_eq!(p.browser_cdp, None);
     }
 
     fn turn_start(seq: u64) -> SessionEvent {
@@ -983,6 +1086,7 @@ mod tests {
                     provider: Some("anthropic".into()),
                     cwd: None,
                     app_version: None,
+                    ..Default::default()
                 }),
             ),
             user(0, "hi"),
@@ -1047,6 +1151,7 @@ mod tests {
                 provider: None,
                 cwd: None,
                 app_version: None,
+                ..Default::default()
             }),
         );
         let tl = project_turn_timeline(&[start]);
@@ -1294,6 +1399,7 @@ mod tests {
                 provider: None,
                 cwd: None,
                 app_version: None,
+                ..Default::default()
             }),
         );
         let read_call = ev(

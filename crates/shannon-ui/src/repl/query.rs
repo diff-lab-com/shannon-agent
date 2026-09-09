@@ -310,6 +310,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         query_id,
         session_id,
         user_message: input.to_string(),
+        // Images queued via `@<image>` since the last query ride along here.
+        attachments: {
+            let drained = std::mem::take(&mut repl.state.pending_attachments);
+            repl.state.attachment_bar.attachments.clear();
+            drained
+        },
         metadata: shannon_core::query_engine::QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: {
@@ -1681,6 +1687,8 @@ fn auto_save_memory(repl: &mut Repl, response: &str) {
         created_at: chrono::Utc::now(),
         accessed_at: chrono::Utc::now(),
         access_count: 0,
+        source_session_id: None,
+        source_kind: Some(MemoryEntry::SOURCE_AUTO_EXTRACT.to_string()),
     };
 
     let id = entry.id.clone();
@@ -1795,6 +1803,7 @@ mod tests {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let client = shannon_engine::api::LlmClient::new(config);
         let tools = ToolRegistry::new();

@@ -856,6 +856,57 @@ async fn test_rate_limit_exit_code() {
     }
 }
 
+/// Rate-limited headless runs must surface their retries instead of looking
+/// like a silent stall: stderr notes each API retry (attempt/total + wait),
+/// json-stream emits a progress event, and the exhausted run still
+/// classifies as rate_limited (exit 4) — not a generic error.
+#[serial]
+#[tokio::test]
+#[serial]
+async fn test_rate_limit_retries_are_visible_in_headless() {
+    let mut server = mockito::Server::new_async().await;
+    let _m = server
+        .mock("POST", "/v1/chat/completions")
+        .with_status(429)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"error":{"type":"rate_limit_error","message":"rate limit exceeded"}}"#)
+        .expect(4)
+        .create();
+
+    let result = shannon_with_mock("openai", &server.url())
+        .env("SHANNON_API_KEY", "test-key")
+        .args([
+            "--prompt",
+            "hello",
+            "--output-format",
+            "json-stream",
+            "--max-turns",
+            "1",
+        ])
+        .timeout(std::time::Duration::from_secs(60))
+        .assert();
+
+    let stderr = stderr_string(&result);
+    assert!(
+        stderr.contains("API retry 1/4"),
+        "stderr should show the first retry, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("API retry 3/4"),
+        "stderr should show the last retry, got: {stderr}"
+    );
+
+    let stdout = stdout_string(&result);
+    assert!(
+        stdout.contains(r#""type":"progress""#),
+        "json-stream should carry progress events for retries, got: {stdout}"
+    );
+    assert!(
+        stdout.contains(r#""exit_code":4"#),
+        "persistent rate limit must stay exit code 4, got: {stdout}"
+    );
+}
+
 #[serial]
 #[tokio::test]
 #[serial]
@@ -1596,6 +1647,17 @@ fn write_session_file(
     session_id: &str,
     messages: Vec<serde_json::Value>,
 ) {
+    write_session_file_with_cwd(home_dir, session_id, None, messages);
+}
+
+/// Same as [`write_session_file`], but records `cwd` in the `session/start`
+/// event so resume-selection logic can match sessions by directory.
+fn write_session_file_with_cwd(
+    home_dir: &std::path::Path,
+    session_id: &str,
+    cwd: Option<&str>,
+    messages: Vec<serde_json::Value>,
+) {
     use shannon_types::session_event::{
         AssistantMessagePayload, SessionEventBody, SessionStartPayload, TurnEndPayload,
         TurnStartPayload, UserMessagePayload,
@@ -1610,8 +1672,9 @@ fn write_session_file(
     w.record(SessionEventBody::SessionStart(SessionStartPayload {
         model: "test-model".into(),
         provider: None,
-        cwd: None,
+        cwd: cwd.map(str::to_string),
         app_version: None,
+        ..Default::default()
     }));
 
     for pair in messages.chunks(2) {
@@ -1622,6 +1685,7 @@ fn write_session_file(
             w.record(SessionEventBody::UserMessage(UserMessagePayload {
                 source: UserMessagePayload::SOURCE_USER.into(),
                 content: user["content"].as_str().unwrap_or_default().into(),
+                attachment_count: 0,
             }));
         }
         if let Some(reply) = pair.get(1) {
@@ -1651,6 +1715,163 @@ fn find_latest_session_id(home_dir: &std::path::Path) -> Option<String> {
         .into_iter()
         .next()
         .map(|info| info.session_id.to_string())
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Section: Resume directory guard (-c cwd filtering + mismatch rejection)
+// ════════════════════════════════════════════════════════════════════════
+
+/// `-c` must resume the most recent session recorded in the CURRENT
+/// directory, even when a newer session from a different project exists —
+/// silently blending another project's context in is the incident class the
+/// resume guard exists for.
+#[serial]
+#[tokio::test]
+#[serial]
+async fn test_continue_prefers_session_recorded_in_current_directory() {
+    let home = session_home_dir();
+    let home_str = home.to_string_lossy().to_string();
+
+    // Older session belonging to this directory.
+    write_session_file_with_cwd(
+        &home,
+        "cccccccc-0000-0000-0000-000000000001",
+        Some(&home_str),
+        vec![
+            serde_json::json!({"content": "THIS_PROJECT_CONTEXT"}),
+            serde_json::json!({"content": "acknowledged"}),
+        ],
+    );
+    // Newer session from a different project: without the cwd preference,
+    // `-c` would pick this one (globally most recent).
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    write_session_file_with_cwd(
+        &home,
+        "cccccccc-0000-0000-0000-000000000002",
+        Some("/opt/other-project"),
+        vec![
+            serde_json::json!({"content": "OTHER_PROJECT_CONTEXT"}),
+            serde_json::json!({"content": "acknowledged"}),
+        ],
+    );
+
+    let mut server = mockito::Server::new_async().await;
+    let _m = server
+        .mock("POST", "/v1/chat/completions")
+        .match_body(Matcher::Regex("THIS_PROJECT_CONTEXT".to_string()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(openai_sse_body("one word reply"))
+        .expect(1)
+        .create();
+
+    let r = shannon_with_sessions("openai", &server.url(), &home)
+        .env("SHANNON_API_KEY", "test-key")
+        .args([
+            "--continue",
+            "--prompt",
+            "Reply with one word.",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+    assert_eq!(
+        parse_json_output(&stdout_string(&r))["exit_code"],
+        "success"
+    );
+    // The matching session produces no cross-directory warning.
+    assert!(!stderr_string(&r).contains("WARNING: resuming session"));
+}
+
+/// Headless mode must refuse to resume a session recorded in a different
+/// directory (both directories known), naming the session's directory and
+/// the `--resume-id` escape hatch.
+#[serial]
+#[tokio::test]
+#[serial]
+async fn test_headless_resume_rejects_cross_directory_session() {
+    let home = session_home_dir();
+    write_session_file_with_cwd(
+        &home,
+        "cccccccc-0000-0000-0000-000000000003",
+        Some("/opt/other-project"),
+        vec![
+            serde_json::json!({"content": "OTHER_PROJECT_CONTEXT"}),
+            serde_json::json!({"content": "acknowledged"}),
+        ],
+    );
+
+    for flag in [
+        vec!["--resume-id", "cccccccc-0000-0000-0000-000000000003"],
+        vec!["--continue"],
+    ] {
+        let output = shannon_with_sessions("openai", "http://127.0.0.1:1", &home)
+            .env("SHANNON_API_KEY", "test-key")
+            .args(&flag)
+            .args(["--prompt", "hello", "--output-format", "json"])
+            .timeout(std::time::Duration::from_secs(15))
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "flag {flag:?}: cross-directory resume must fail"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--resume-id"),
+            "flag {flag:?}: stderr should suggest --resume-id, got: {stderr}"
+        );
+        assert!(
+            stderr.contains("/opt/other-project"),
+            "flag {flag:?}: stderr should name the recorded directory, got: {stderr}"
+        );
+    }
+}
+
+/// Legacy sessions recorded without a working directory stay resumable in
+/// headless mode (stderr note only) — they cannot be verified, and refusing
+/// them would break existing workflows.
+#[serial]
+#[tokio::test]
+#[serial]
+async fn test_headless_resume_without_recorded_cwd_warns_but_resumes() {
+    let home = session_home_dir();
+    write_session_file(
+        &home,
+        "cccccccc-0000-0000-0000-000000000004",
+        vec![
+            serde_json::json!({"content": "LEGACY_CONTEXT"}),
+            serde_json::json!({"content": "acknowledged"}),
+        ],
+    );
+
+    let mut server = mockito::Server::new_async().await;
+    let _m = server
+        .mock("POST", "/v1/chat/completions")
+        .match_body(Matcher::Regex("LEGACY_CONTEXT".to_string()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(openai_sse_body("one word reply"))
+        .expect(1)
+        .create();
+
+    let r = shannon_with_sessions("openai", &server.url(), &home)
+        .env("SHANNON_API_KEY", "test-key")
+        .args([
+            "--continue",
+            "--prompt",
+            "Reply with one word.",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+    assert_eq!(
+        parse_json_output(&stdout_string(&r))["exit_code"],
+        "success"
+    );
+    assert!(stderr_string(&r).contains("NOTE: resuming session"));
 }
 
 /// Generate N turns of conversation messages with a unique marker in turn 2.

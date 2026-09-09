@@ -59,6 +59,28 @@ Wave 3(扩张)  ████████░░ 7/8  ≈ 88%   (P2-8 暂缓,用�
 
 ---
 
+## 🧾 v5 事后销账(2026-09-05)
+
+> 本计划已被 [improvement-plan-2026-09.md](./improvement-plan-2026-09.md) 接替桌面任务块(见其 §9 对照表)。此处只做销账与移交登记,不改写历史原文;每条以 commit 为证。
+
+### ✅ 已落地(补记销账)
+
+| 条目 | 状态 | 证据 |
+|---|---|---|
+| **P2-6** auto-commit + Undo/快照(产品侧) | ✅ 已落地 | file-history 快照 + `/rewind` 内容快照 `fee2aba3`(W6-2,PR #52);桌面 `/rewind` 后端(逐轮 checkpoint、文件回退)`d85dacb0` + TUI 入口 `76a2054e`。auto-commit hook 拆分多文件提交属开发工具链债,非产品项(见 [tech-debt](./tech-debt.md) TD-5,维持暂不改) |
+| **P2-4.x** doc 硬化最后一公里(`-D warnings` required) | ✅ 已解决 2026-09-05,证据 `d37af11d` | `95d90224` 修复断链 → `d37af11d` 移除 `doc` job `continue-on-error`,升级 hard gate(见 [tech-debt](./tech-debt.md) P2-4.x) |
+| 文档事实一致性(README 对齐 metrics.md + CI drift check) | ✅ 由 2026-09 计划 P0-1 完成(2026-09-05) | `scripts/update-readme-metrics.mjs` + `.github/workflows/ci.yml` metrics job |
+
+### 🔁 移交 / 处置(2026-09-05)
+
+- **P2-8 VS Code 扩展**:2026-09-05 评审**否决**(永久放弃成为 VS Code 扩展),从两期计划移除(09 计划 §8 决策 4)。
+- **P1-3c/3d Notion/Linear MCP**:降级为「走 MCP 目录自然解决」,不再自研 adapter(09 计划 §9)。
+- **P2-2 ADR-0005 Phase 2 收尾**:沿用本计划排期,09 计划未吸收、不重复列。
+- **P3-7 沙盒执行**:S0 spike 完成后未排期;沙箱方向由 09 计划 P1-3(沙箱与权限产品化)接续。
+- 其余桌面方向(goal 桌面化 / 自动化收件箱 / 成本面板 / 多窗口等)由 09 计划 P0-2 / P0-3 / P0-4 / P1-1 接续。
+
+---
+
 ## 0. 战略主线(沿用 v2,双赛道)
 
 > **"先收敛、再补短、后扩张"** —— 两条产品线,一套引擎,分线补短。

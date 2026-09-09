@@ -48,6 +48,7 @@ pub async fn instantiate_routine_template(
         .as_deref()
         .map(|s| match s {
             "cron" => shannon_core::scheduled_routines::TriggerType::Cron,
+            "github" => shannon_core::scheduled_routines::TriggerType::Github,
             _ => shannon_core::scheduled_routines::TriggerType::Interval,
         })
         .unwrap_or_default();
@@ -60,6 +61,27 @@ pub async fn instantiate_routine_template(
                 .ok_or_else(|| "cron_expr is required when trigger_type=cron".to_string())?;
             ScheduledRoutine::new_cron(payload.name.clone(), payload.prompt.clone(), cron_expr)
                 .map_err(|e| e.to_string())?
+        }
+        shannon_core::scheduled_routines::TriggerType::Github => {
+            // P2-7: GitHub event trigger. event + repo are required (validated
+            // against shipped templates by the bundled template tests too).
+            let event = template
+                .github_event
+                .clone()
+                .filter(|e| !e.is_empty())
+                .ok_or_else(|| "github_event is required when trigger_type=github".to_string())?;
+            let repo = template
+                .github_repo
+                .clone()
+                .filter(|r| !r.is_empty())
+                .ok_or_else(|| "github_repo is required when trigger_type=github".to_string())?;
+            let mut r = ScheduledRoutine::new(payload.name.clone(), payload.prompt.clone(), 0);
+            r.github = Some(shannon_core::github_triggers::GitHubTrigger {
+                event,
+                repo,
+                action: template.github_action.clone().filter(|a| !a.is_empty()),
+            });
+            r
         }
         _ => {
             let interval_secs = payload.interval_secs.unwrap_or(3600);

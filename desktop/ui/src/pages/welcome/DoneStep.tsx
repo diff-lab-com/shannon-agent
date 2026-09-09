@@ -25,6 +25,8 @@ interface DoneStepProps {
   onFinish: () => void
   onInstallSkill: (skill: DocumentsSkill) => void
   onBrowseFeaturedSkills: () => void
+  /** P1-6 — opens the migration wizard (import from Claude Code / ZCode). */
+  onOpenMigration?: () => void
 }
 
 export function DoneStep({
@@ -41,6 +43,7 @@ export function DoneStep({
   onFinish,
   onInstallSkill,
   onBrowseFeaturedSkills,
+  onOpenMigration,
 }: DoneStepProps) {
   const intl = useIntl()
   const currentTask = TASKS.find(t => t.id === task)!
@@ -139,6 +142,31 @@ export function DoneStep({
           </div>
         </div>
       </label>
+
+      {/* P1-6 — migration entry: one-pass import from Claude Code / ZCode.
+          Optional prop so tests and non-Welcome reuse stay unaffected. */}
+      {onOpenMigration && (
+        <div
+          className="mt-md flex items-center gap-md p-md rounded-xl border border-outline-variant/50 hover:border-primary/50 transition-all"
+          data-testid="welcome-migration-entry"
+        >
+          <span className="material-symbols-outlined text-primary text-[22px]" aria-hidden="true">move_in</span>
+          <div className="flex-1">
+            <div className="font-headline-md text-on-surface">{intl.formatMessage({ id: 'welcome.migration.entry.title' })}</div>
+            <div className="font-body-sm text-on-surface-variant mt-xs">
+              {intl.formatMessage({ id: 'welcome.migration.entry.desc' })}
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            onClick={onOpenMigration}
+            data-testid="welcome-migration-open"
+            className="px-md py-sm bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 rounded-lg font-label-md text-on-surface cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          >
+            {intl.formatMessage({ id: 'welcome.migration.entry.button' })}
+          </Button>
+        </div>
+      )}
 
       {/* P2.4 — Documents skill recommendations. Hidden until the skill
           repos are published. */}

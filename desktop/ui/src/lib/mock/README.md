@@ -44,7 +44,7 @@ Mock data lives in `data/`:
 |---|---|
 | `data/core.ts` | Chat, Tasks, MissionControl, Extensions, OPC, QuickFix |
 | `data/automation.ts` | Scheduled routines, Routines, Hooks, Profiles |
-| `data/analytics.ts` | Triage, OPC metrics, Perf, Billing, Goals, Diagnostics |
+| `data/analytics.ts` | Inbox (triage), OPC metrics, Perf, Billing, Goals, Diagnostics |
 | `data/config.ts` | Settings, status, models |
 
 ## Editing mock data

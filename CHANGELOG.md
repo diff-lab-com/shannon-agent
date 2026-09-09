@@ -4,7 +4,95 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### P3 follow-ups: backend selection, AppleScript, browser toolset, foundations (feat/p3-follow-ups)
+
+- **Selectable Linux input backends (T10 Phase 1)**: mutually exclusive
+  cargo features `computer-use-libei` (xdg-desktop-portal RemoteDesktop —
+  the Wayland path), `computer-use-wayland`, `computer-use-x11rb` alongside
+  the existing xdo default. Failing computer-tool actions on a
+  native-Wayland session now carry an actionable hint instead of a bare
+  "Input init failed". Passthrough features on `shannon-cli` and
+  `shannon-desktop`; CI gains a libei build leg.
+- **AppleScript/Shortcuts tool (T13 Tier 1)**: new `applescript` builtin
+  tool runs `osascript` (AppleScript or JXA) and `shortcuts run` against
+  scriptable macOS apps. macOS-only execution (explanatory stub
+  elsewhere); High-risk permission policy; 30s timeout + 50 KiB output cap.
+- **Anthropic browser toolset dual path (T12 Option C)**: with
+  `SHANNON_ANTHROPIC_TOOLSETS=1`, Anthropic requests on Claude 4.x/5.x
+  Opus/Sonnet models carry the server-executed
+  `browser_toolset_20260801` entry plus the `computer-use-2025-11-24`
+  beta, superseding the local `computer` tool and Playwright/Chrome
+  DevTools MCP tools. Non-Anthropic providers are untouched.
+- **Desktop PDF attachments (T6)**: picked/dropped PDFs now reach the
+  model as pdftotext-extracted text blocks (50 KiB cap per PDF; scanned
+  PDFs are called out explicitly).
+- **Attachment polish**: bmp/svg attachments warn that vision models may
+  not render them (T5-B); `UserMessagePayload.attachment_count` records
+  per-turn attachment counts in the session log (T9).
+- **Browser foundations (T14 + T10-P2)**: system-browser detection
+  (Linux/macOS/Windows, `SHANNON_BROWSER_PATH` override) with distro
+  install hints, a `BrowserProvider` provider seam, a
+  `PlatformAdapter` desktop-control abstraction with a Tier-2 macOS AX
+  skeleton, and a `/browser doctor` subcommand reporting detection and
+  MCP state. Shannon still never bundles a browser binary.
+
+### Computer use closed loop, one-command browser automation & file attachments (feat/use-browser-computer-upload)
+
+- **Computer use screenshot loop fixed**: tool image results now deliver the
+  base64 payload to the model from `metadata["data"]` (the `computer` tool's
+  convention) in addition to the Read/AnalyzeImage JSON-in-content convention —
+  previously screenshots returned only the text "Screenshot captured (WxH)" and
+  the model never saw the screen.
+- **Screenshot downscaling**: captures are downscaled to
+  `max_screenshot_width/height` (default 1024×768 reference resolution,
+  aspect-preserving, never upscaled) — aligns the payload with the coordinate
+  contract and cuts multimodal tokens ~4x on Retina displays.
+- **Click variants**: `right_click` / `middle_click` / `double_click` /
+  `triple_click` actions added to the Anthropic-compatible `computer` schema.
+- **Permission policy**: the `computer` tool now registers a High-risk
+  permission policy (per-action confirmation by default), matching
+  Cursor/Cowork-style gating for GUI control.
+- **Feature passthrough**: `shannon-cli` and `shannon-desktop` expose a
+  `computer-use` cargo feature (opt-in; Linux needs libxdo/X11 dev libs) so
+  real screen capture / input simulation can ship in end binaries; CI builds it.
+- **`/browser setup` + `/browser status`**: one command merges the official
+  Playwright MCP server (`npx @playwright/mcp@latest`) into the project
+  `.mcp.json` (idempotent, preserves unrelated servers, refuses symlinked
+  targets); on top of the existing `browser_control_prompt` injection this
+  makes browser automation a first-class flow. New `browser_setup_hint`
+  system-prompt block tells the model to point users at `/browser setup` when
+  a browser task arrives with no browser tool registered.
+- **`QueryContext.attachments`**: the query engine now accepts multimodal
+  attachments on the context; non-empty attachments switch the user message to
+  content blocks (Anthropic + OpenAI adapters serialize both).
+- **File upload wired end-to-end**: REST `POST /v1/sessions/:id/messages`
+  accepts `attachments: [{name?, media_type, data(base64)}]` (png/jpeg/gif/webp,
+  10 MB / 8 files, 400 with reason on violation); the desktop app routes
+  picked/dropped images into the query instead of display-only storage; the
+  TUI `@` picker queues images (`@screenshot.png`) into the next query instead
+  of failing on binary content.
+
 ### Added
+
+### Follow-ups — goal hardening & API surface (feat/goal-followups)
+
+- **Blocked 3-turn audit (Codex parity)**: the same blocker (normalized
+  reason) must persist 3 consecutive goal turns before the pause is
+  accepted; earlier claims continue with an audit warning, different
+  reasons restart the streak.
+- **Verified-wait self-report (P2.2)**: continuation replies may open
+  with `GOAL_PROGRESS: progress|verified_wait|no_progress`; claims can
+  only help when backed by tool activity, no-progress counts with or
+  without it.
+- **Check-in backoff (P2.4)**: blocked goals re-test their blocker at
+  30m → 1h → 2h, max 3 fires (checkins persisted); `SHANNON_GOAL_
+  CHECKIN_MINUTES=0` disables; `/goal resume` resets the budget.
+- **`shannon_core::goal` + `GoalApi`**: the goal state machine and the
+  continuation decision moved out of `shannon-ui` so server/desktop
+  clients can drive the same lifecycle without UI dependencies.
+- **Goal eval track (#5)**: `EvalTier::Goal` + `goal_prompt_block`
+  injection + `goal_01`/`goal_02` tasks (suite now 22 tasks; guards
+  updated).
 
 ### Phase 2 — autonomous-loop guard rails (feat/goal-phase2 + feat/goal-live-wiring)
 

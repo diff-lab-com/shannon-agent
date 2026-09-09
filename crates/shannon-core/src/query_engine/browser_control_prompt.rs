@@ -34,6 +34,36 @@ pub fn browser_control_prompt(tool_names: &[String]) -> Option<String> {
     Some(BROWSER_CONTROL_PROMPT.to_string())
 }
 
+/// Returns a short setup hint when the user's request looks browser-related
+/// but no browser-capable tool is registered — so the model can point the
+/// user at `/browser setup` instead of failing the task silently. Purely
+/// informational: registers nothing.
+pub fn browser_setup_hint(tool_names: &[String], user_message: &str) -> Option<String> {
+    if browser_control_prompt(tool_names).is_some() {
+        return None;
+    }
+    let msg = user_message.to_lowercase();
+    let looks_browser_related = [
+        "browser",
+        "浏览器",
+        "网页",
+        "playwright",
+        "chrome",
+        "firefox",
+        "devtools",
+    ]
+    .iter()
+    .any(|kw| msg.contains(kw));
+    if !looks_browser_related {
+        return None;
+    }
+    Some(BROWSER_SETUP_HINT.to_string())
+}
+
+const BROWSER_SETUP_HINT: &str = "# Browser Tools Not Configured
+
+The user's request appears to involve browser automation, but no browser tool is registered. For tasks that need a real browser (navigation, clicking, screenshots), tell the user to run `/browser setup` (writes the Playwright MCP server into the project `.mcp.json`) and restart Shannon. Until then, use `WebFetch` for read-only page text and say clearly that interactive browser control is not available yet.";
+
 const BROWSER_CONTROL_PROMPT: &str = "\
 # Browser Control
 
@@ -170,6 +200,26 @@ mod tests {
         // "screenshot" in tool name should trigger (contains check)
         let tools = vec!["take_screenshot".to_string()];
         assert!(browser_control_prompt(&tools).is_some());
+    }
+
+    #[test]
+    fn test_setup_hint_when_browser_intent_without_tools() {
+        let tools = vec!["Bash".to_string(), "Read".to_string()];
+        let hint = browser_setup_hint(&tools, "帮我打开 example.com 网页截图");
+        assert!(hint.is_some());
+        assert!(hint.unwrap().contains("/browser setup"));
+    }
+
+    #[test]
+    fn test_setup_hint_suppressed_with_browser_tools() {
+        let tools = vec!["mcp__playwright__browser_navigate".to_string()];
+        assert!(browser_setup_hint(&tools, "open the browser").is_none());
+    }
+
+    #[test]
+    fn test_setup_hint_suppressed_without_browser_intent() {
+        let tools = vec!["Bash".to_string()];
+        assert!(browser_setup_hint(&tools, "fix this rust bug").is_none());
     }
 
     #[test]

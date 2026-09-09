@@ -9,6 +9,13 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
   pull_request:
     branches: [main, dev]
+  workflow_dispatch:
+    inputs:
+      run-browser-e2e:
+        description: "Run the real-Chrome browser E2E test (installs headless Chrome)"
+        type: boolean
+        default: false
+        required: false
 
 # Cancel in-progress runs for the same ref when a new commit is pushed.
 # Keeps CI queue short on active branches (e.g. dev) without affecting main.
@@ -35,6 +42,11 @@ jobs:
         with:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Bump to invalidate caches that predate the feature-isolated
+          # target dir (a stale cache carried feature-ON shannon-tools test
+          # binaries into the feature-OFF workspace run).
+          prefix-key: ci-v2
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -48,8 +60,6 @@ jobs:
           tool: cargo-nextest
       - name: Build
         run: cargo build --workspace
-      - name: Build with computer-use feature
-        run: cargo build -p shannon-tools --features computer-use
       - name: Compile tests
         run: cargo test --workspace --no-run
       - name: Test
@@ -57,7 +67,47 @@ jobs:
         # settings: per-test retries (2, exponential backoff) so known
         # load-sensitive tests (e.g. the byte-exact session-log tee mock
         # round-trip) don't fail the whole gate on a runner hiccup.
-        run: cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
+        run: |
+          # Guard against stale cached binaries with unexpected feature sets.
+          cargo clean -p shannon-tools
+          cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
+      # Feature-gated builds/tests (downscale_dims, click_spec, key combos,
+      # libei backend). Runs AFTER the main gate, in an ISOLATED target dir:
+      # sharing `target/` with feature-OFF steps leaked the enabled feature
+      # into the workspace nextest build (the `computer` stub tests took the
+      # real-execution path on the displayless runner).
+      - name: Build with computer-use feature
+        run: |
+          CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features computer-use
+          # CLI passthrough feature (opt-in desktop automation build)
+          CARGO_TARGET_DIR=target-feature cargo build -p shannon-cli --features computer-use
+      - name: Test with computer-use feature
+        # Only the computer module matters here (feature-off stub tests are
+        # cfg-gated out; the full lib run would drag in HOME-race git tests
+        # into a target dir without the nextest retry profile).
+        run: CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools --features computer-use --lib computer --no-fail-fast
+      # T10 Phase 1: compile-check the Wayland-capable backend (libei via
+      # xdg-desktop-portal). Pure-Rust deps (reis/ashpd) — no extra system
+      # packages needed at build time; the portal is only a runtime dep.
+      - name: Build with computer-use-libei feature
+        run: CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features computer-use-libei
+      # T14 Phase 1: compile-check the live browser tools. No browser is
+      # installed on the runner, so only the compile gate runs here; the
+      # E2E integration test self-skips when no browser is detected.
+      - name: Build with local-browser feature
+        run: CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features local-browser
+      # T14 Phase 3: REAL end-to-end browser test — installs headless
+      # Chrome, then drives the session layer (launch → navigate →
+      # screenshot → key press → console buffer → close) exactly as the
+      # builtin tools do. Manual trigger from the Actions tab.
+      - name: E2E with local-browser feature (real Chrome)
+        if: inputs.run-browser-e2e == true
+        continue-on-error: true
+        run: |
+          # Headless Chrome needs its deps; the runner image already has
+          # most. `--no-sandbox` is set by the session layer.
+          CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools \
+            --features local-browser --test browser_e2e -- --nocapture
       - name: Doctests
         # nextest does not execute doctests, so a doctest-only regression
         # (e.g. an example that relies on opt-in configuration) stays green
@@ -456,6 +506,45 @@ jobs:
         # other matrix legs.
         if: runner.os == 'Linux'
         run: cargo check -p shannon-core --features landlock
+      - name: Check all features (Linux only)
+        # Feature-universe compile: --all-features unions optional deps no
+        # default-features gate ever sees. Three carve-outs, each with its
+        # own legs below: shannon-desktop (Tauri system deps, built in
+        # release.yml), shannon-tools + shannon-cli — the latter forwards
+        # shannon-tools' computer-use input backends, which are mutually
+        # exclusive by design (compile_error!s), so `--workspace
+        # --all-features` can never hold for them even with --exclude
+        # (feature unification follows dependency edges, not the member
+        # list). The member list is jq-driven so new crates join
+        # automatically. shannon-server's swagger feature uses
+        # utoipa-swagger-ui/vendored so this stays network-free and
+        # deterministic.
+        if: runner.os == 'Linux'
+        run: |
+          for p in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | grep -vx -e shannon-desktop -e shannon-tools -e shannon-cli); do
+            cargo check -p "$p" --all-features
+          done
+      - name: Check computer-use feature builds (Linux only)
+        # One leg per feature shape: the umbrella backend existing builds
+        # use, each alternative Linux input backend, the Wayland capture
+        # composition, and the local-browser forward — on shannon-tools and
+        # on its shannon-cli forwarder. The plain `computer-use` build broke
+        # unseen for weeks before the #81 hotfix — these legs keep every
+        # shape compiling.
+        # libxdo-dev: enigo's default Linux backend needs libxdo headers on
+        # a fresh runner (cargo check type-checks the FFI surface); jq is
+        # needed by the per-member loop above and this job has no other
+        # step installing it.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends jq libxdo-dev
+          for f in computer-use computer-use-libei computer-use-wayland computer-use-x11rb; do
+            cargo check -p shannon-tools --features "$f"
+            cargo check -p shannon-cli --features "$f"
+          done
+          cargo check -p shannon-tools --features computer-use-wayland-capture
+          cargo check -p shannon-tools --features computer-use-wayland,computer-use-wayland-capture
+          cargo check -p shannon-tools --features local-browser
 
   check-linux-musl:
     # Linux-only musl smoke test. Renamed from `check-cross-platform` so

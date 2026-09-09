@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use super::adapter::{OpenaiStreamState, normalize_sse_event};
 use super::error::ApiError;
-use super::retry::retry_request;
+use super::retry::{RetryNotice, RetryObserver, retry_request_with_observer};
 use super::streaming::MessageStream;
 use super::types::*;
 use crate::testing::record_replay::{RecordedExchange, RecordedRequest, RecordedResponse};
@@ -86,6 +86,9 @@ pub struct LlmClient {
     ollama_info: std::sync::Arc<std::sync::RwLock<Option<OllamaModelInfo>>>,
     /// Optional request observer (see [`RequestCapture`]).
     request_capture: Option<RequestCapture>,
+    /// Optional retry observer: fired before every retry sleep / mid-stream
+    /// reconnect so consumers can surface the pause (§ retry observability).
+    retry_observer: std::sync::Arc<std::sync::RwLock<Option<RetryObserver>>>,
 }
 
 impl LlmClient {
@@ -141,6 +144,7 @@ impl LlmClient {
             client,
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
             request_capture: None,
+            retry_observer: Default::default(),
         }
     }
 
@@ -156,6 +160,7 @@ impl LlmClient {
             client,
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
             request_capture: None,
+            retry_observer: Default::default(),
         })
     }
 
@@ -188,6 +193,44 @@ impl LlmClient {
             client,
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
             request_capture: None,
+            retry_observer: Default::default(),
+        }
+    }
+
+    /// Attach a retry observer: fired before every retry sleep (rate-limit
+    /// backoff, read-timeout retry) and before mid-stream reconnects, so
+    /// consumers can surface the pause instead of watching a silent stall.
+    /// See [`RetryNotice`].
+    pub fn set_retry_observer(&self, observer: Option<RetryObserver>) {
+        *self
+            .retry_observer
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = observer;
+    }
+
+    /// Builder variant of [`Self::set_retry_observer`]; propagated to
+    /// internal fallback / reconnect client clones.
+    pub fn with_retry_observer(self, observer: Option<RetryObserver>) -> Self {
+        self.set_retry_observer(observer);
+        self
+    }
+
+    fn retry_observer_handle(&self) -> Option<RetryObserver> {
+        self.retry_observer
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Fire the retry observer (if attached).
+    pub(crate) fn notify_retry(&self, notice: &RetryNotice) {
+        if let Some(observer) = self
+            .retry_observer
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            observer(notice);
         }
     }
 
@@ -211,6 +254,17 @@ impl LlmClient {
         }
     }
 
+    /// T12 Option C: post-process a serialized Anthropic request body —
+    /// drop tools superseded by the browser toolset and append the toolset
+    /// entry. No-op for non-Anthropic providers, when the opt-in flag is
+    /// off, or on unsupported models.
+    fn apply_anthropic_toolsets(&self, body: &mut serde_json::Value) {
+        let enabled = self.config.provider == LlmProvider::Anthropic
+            && self.config.enable_anthropic_toolsets
+            && super::toolsets::model_supports_toolsets(&self.config.model);
+        super::toolsets::apply_browser_toolset(body, enabled);
+    }
+
     /// Build authentication headers for the configured provider
     pub(crate) fn auth_headers(&self) -> Vec<(String, String)> {
         let mut headers = Vec::new();
@@ -224,7 +278,15 @@ impl LlmClient {
                     ));
                 }
                 // Inject model-declared beta headers (e.g. 1M context unlock).
-                let betas = beta_headers_for(&self.config.model);
+                let mut betas: Vec<&'static str> = beta_headers_for(&self.config.model).to_vec();
+                // T12: the browser toolset family requires the umbrella
+                // computer-use beta; only added when toolsets are enabled.
+                if self.config.enable_anthropic_toolsets
+                    && super::toolsets::model_supports_toolsets(&self.config.model)
+                    && !betas.contains(&super::toolsets::COMPUTER_USE_BETA)
+                {
+                    betas.push(super::toolsets::COMPUTER_USE_BETA);
+                }
                 if !betas.is_empty() {
                     headers.push(("anthropic-beta".to_string(), betas.join(",")));
                 }
@@ -474,11 +536,12 @@ impl LlmClient {
             reasoning_effort: self.config.reasoning_effort,
         };
 
-        let serialized = super::adapter::serialize_request_with_base_url(
+        let mut serialized = super::adapter::serialize_request_with_base_url(
             &request_body,
             &self.config.provider,
             &self.config.base_url,
         );
+        self.apply_anthropic_toolsets(&mut serialized);
 
         // ── Replay mode: return saved fixture ──
         if let Some(stream) = self.try_replay(&serialized, &self.config.provider) {
@@ -566,7 +629,8 @@ impl LlmClient {
             let reconnect_client = match self.request_capture_handle() {
                 Some(capture) => reconnect_client.with_request_capture(capture),
                 None => reconnect_client,
-            };
+            }
+            .with_retry_observer(self.retry_observer_handle());
             Ok(super::streaming::sse_stream_from_response_resumable(
                 response,
                 self.config.provider.clone(),
@@ -624,11 +688,12 @@ impl LlmClient {
             request = request.header(k.as_str(), v.as_str());
         }
 
-        let body = super::adapter::serialize_request_with_base_url(
+        let mut body = super::adapter::serialize_request_with_base_url(
             &request_body,
             &self.config.provider,
             &self.config.base_url,
         );
+        self.apply_anthropic_toolsets(&mut body);
         // Session-log tee: observe the exact wire body of the real request.
         self.capture_request(&body);
         request = request.json(&body);
@@ -723,11 +788,12 @@ impl LlmClient {
         let url = self.endpoint_url();
         let headers = self.auth_headers();
 
-        let serialized = super::adapter::serialize_request_with_base_url(
+        let mut serialized = super::adapter::serialize_request_with_base_url(
             &request_body,
             &self.config.provider,
             &self.config.base_url,
         );
+        self.apply_anthropic_toolsets(&mut serialized);
         // Session-log tee: observe the exact wire body of the real request.
         self.capture_request(&serialized);
 
@@ -812,11 +878,12 @@ impl LlmClient {
         let url = self.endpoint_url();
         let headers = self.auth_headers();
 
-        let serialized = super::adapter::serialize_request_with_base_url(
+        let mut serialized = super::adapter::serialize_request_with_base_url(
             &request_body,
             &self.config.provider,
             &self.config.base_url,
         );
+        self.apply_anthropic_toolsets(&mut serialized);
         // Session-log tee: observe the exact wire body of the real request.
         self.capture_request(&serialized);
 
@@ -1006,7 +1073,8 @@ impl LlmClient {
         system: Option<String>,
     ) -> Result<Vec<ContentBlock>, ApiError> {
         let retry_config = &self.config.retry_config;
-        let result = retry_request(retry_config, || {
+        let retry_observer = self.retry_observer_handle();
+        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
             self.send_message(messages.clone(), tools.clone(), system.clone())
         })
         .await;
@@ -1036,8 +1104,10 @@ impl LlmClient {
                     let fallback_client = match self.request_capture_handle() {
                         Some(capture) => Self::new(fallback_config).with_request_capture(capture),
                         None => Self::new(fallback_config),
-                    };
-                    retry_request(&fallback_retry, || {
+                    }
+                    .with_retry_observer(self.retry_observer_handle());
+                    let fallback_observer = fallback_client.retry_observer_handle();
+                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
                         fallback_client.send_message(
                             messages.clone(),
                             tools.clone(),
@@ -1060,7 +1130,8 @@ impl LlmClient {
         system: Option<String>,
     ) -> Result<MessageStream, ApiError> {
         let retry_config = &self.config.retry_config;
-        let result = retry_request(retry_config, || {
+        let retry_observer = self.retry_observer_handle();
+        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
             self.send_message_stream(messages.clone(), tools.clone(), system.clone())
         })
         .await;
@@ -1088,8 +1159,10 @@ impl LlmClient {
                     let fallback_client = match self.request_capture_handle() {
                         Some(capture) => Self::new(fallback_config).with_request_capture(capture),
                         None => Self::new(fallback_config),
-                    };
-                    retry_request(&fallback_retry, || {
+                    }
+                    .with_retry_observer(self.retry_observer_handle());
+                    let fallback_observer = fallback_client.retry_observer_handle();
+                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
                         fallback_client.send_message_stream(
                             messages.clone(),
                             tools.clone(),
@@ -1112,7 +1185,8 @@ impl LlmClient {
         system_blocks: Vec<super::types::SystemContentBlock>,
     ) -> Result<MessageStream, ApiError> {
         let retry_config = &self.config.retry_config;
-        let result = retry_request(retry_config, || {
+        let retry_observer = self.retry_observer_handle();
+        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
             self.send_message_stream_structured(
                 messages.clone(),
                 tools.clone(),
@@ -1144,8 +1218,10 @@ impl LlmClient {
                     let fallback_client = match self.request_capture_handle() {
                         Some(capture) => Self::new(fallback_config).with_request_capture(capture),
                         None => Self::new(fallback_config),
-                    };
-                    retry_request(&fallback_retry, || {
+                    }
+                    .with_retry_observer(self.retry_observer_handle());
+                    let fallback_observer = fallback_client.retry_observer_handle();
+                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
                         fallback_client.send_message_stream_structured(
                             messages.clone(),
                             tools.clone(),
@@ -1268,6 +1344,7 @@ mod tests {
             fallback_base_url: None,
             retry_config: Default::default(),
             reasoning_effort: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
         }
     }
 
@@ -1287,6 +1364,7 @@ mod tests {
             fallback_base_url: None,
             retry_config: Default::default(),
             reasoning_effort: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
         }
     }
 
@@ -1313,6 +1391,7 @@ mod tests {
             fallback_base_url: None,
             retry_config: Default::default(),
             reasoning_effort: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
         }
     }
 
@@ -1623,6 +1702,85 @@ mod tests {
     }
 
     #[test]
+    fn test_toolset_beta_header_added_when_enabled() {
+        let mut cfg = test_config();
+        cfg.model = "claude-opus-4-5".to_string();
+        cfg.enable_anthropic_toolsets = true;
+        let client = LlmClient::new(cfg);
+        let beta = client
+            .auth_headers()
+            .into_iter()
+            .find(|(k, _)| k == "anthropic-beta")
+            .map(|(_, v)| v)
+            .unwrap_or_default();
+        assert!(
+            beta.contains(crate::api::toolsets::COMPUTER_USE_BETA),
+            "expected computer-use beta in \"{beta}\""
+        );
+    }
+
+    #[test]
+    fn test_toolset_beta_header_absent_when_disabled() {
+        let mut cfg = test_config();
+        cfg.model = "claude-opus-4-5".to_string();
+        // enable_anthropic_toolsets stays false (or env unset in tests)
+        cfg.enable_anthropic_toolsets = false;
+        let client = LlmClient::new(cfg);
+        let beta = client
+            .auth_headers()
+            .into_iter()
+            .find(|(k, _)| k == "anthropic-beta")
+            .map(|(_, v)| v)
+            .unwrap_or_default();
+        assert!(
+            !beta.contains(crate::api::toolsets::COMPUTER_USE_BETA),
+            "beta must not appear without the opt-in flag, got \"{beta}\""
+        );
+    }
+
+    #[test]
+    fn test_apply_anthropic_toolsets_injects_and_prunes() {
+        let mut cfg = test_config();
+        cfg.provider = LlmProvider::Anthropic;
+        cfg.model = "claude-opus-4-5".to_string();
+        cfg.enable_anthropic_toolsets = true;
+        let client = LlmClient::new(cfg);
+        let mut body = serde_json::json!({
+            "tools": [
+                {"name": "Read", "description": "r", "input_schema": {}},
+                {"name": "computer", "description": "c", "input_schema": {}},
+                {"name": "mcp__playwright__browser_navigate", "description": "p", "input_schema": {}}
+            ]
+        });
+        client.apply_anthropic_toolsets(&mut body);
+        let tools = body["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t.get("name").and_then(|n| n.as_str()))
+            .collect();
+        assert_eq!(names, vec!["Read"]);
+        assert_eq!(
+            tools.last().unwrap()["type"],
+            serde_json::json!(crate::api::toolsets::BROWSER_TOOLSET_TYPE)
+        );
+    }
+
+    #[test]
+    fn test_apply_anthropic_toolsets_noop_for_openai() {
+        let mut cfg = test_config();
+        cfg.provider = LlmProvider::OpenAI;
+        cfg.model = "gpt-5".to_string();
+        cfg.enable_anthropic_toolsets = true; // even with the flag on
+        let client = LlmClient::new(cfg);
+        let mut body = serde_json::json!({
+            "tools": [{"name": "computer", "description": "c", "input_schema": {}}]
+        });
+        client.apply_anthropic_toolsets(&mut body);
+        // Non-Anthropic providers must be untouched (Option C guarantee).
+        assert_eq!(body["tools"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
     fn test_auth_headers_openai() {
         let mut cfg = test_config();
         cfg.provider = LlmProvider::OpenAI;
@@ -1762,6 +1920,7 @@ mod tests {
             fallback_base_url: None,
             retry_config: Default::default(),
             reasoning_effort: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
         };
         let client = LlmClient::new(config);
         let headers = client.auth_headers();

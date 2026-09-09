@@ -14,6 +14,18 @@ pub use fs::SshFs;
 pub use process::{SshProcess, compose_command};
 pub use session::{HealthReport, SshRuntime, WorldStatus};
 
+/// Placeholder error for the transport faces compiled on platforms the
+/// openssh stack does not support: every type and trait stays importable so
+/// the remote-exec surface is platform-independent, while each call reports
+/// `Unsupported` at runtime (the unix builds never construct these).
+#[cfg(not(unix))]
+pub(crate) fn unsupported_transport() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "ssh remotes require a unix host (openssh transport)",
+    )
+}
+
 /// Build the ssh target for ignored integration tests from the environment
 /// (`SHANNON_TEST_SSH_HOST/_PORT/_USER/_WORKSPACE`; defaults localhost:22).
 #[cfg(test)]

@@ -44,9 +44,9 @@ use uuid::Uuid;
 // a sweeping rename. New code should import them from `shannon_api_protocol`
 // directly when there is no engine-side adapter to write.
 pub use shannon_api_protocol::{
-    ApprovalDecision, ApprovalRespondRequest, HealthResponse, ModelInfo, ModelsResponse,
-    PROTOCOL_VERSION, QueryRequest, QueryResponse, ToolEntry, ToolsListResponse, UsageInfo,
-    WsClientMessage, WsServerMessage,
+    ApprovalDecision, ApprovalRespondRequest, HealthResponse, MessageAttachment, ModelInfo,
+    ModelsResponse, PROTOCOL_VERSION, QueryRequest, QueryResponse, ToolEntry, ToolsListResponse,
+    UsageInfo, WsClientMessage, WsServerMessage,
 };
 
 /// Generic error returned by all API endpoints.
@@ -124,6 +124,11 @@ pub struct ShannonApiServer {
     /// Explicit opt-in to bind on a non-loopback interface. Defaults to
     /// `false`; when `true`, `serve()` additionally requires `auth_token`.
     allow_nonloopback: bool,
+    /// Extra routes merged into the router (P0-3). Must already be
+    /// state-applied (`Router<()>`) — e.g. the desktop's
+    /// `POST /api/routines/:id/trigger` handler with its own state.
+    /// They sit under the same auth/CORS middleware as the core routes.
+    extra_routes: Vec<axum::Router<()>>,
 }
 
 impl ShannonApiServer {
@@ -138,6 +143,7 @@ impl ShannonApiServer {
             auth_token: None,
             allowed_origins: Vec::new(),
             allow_nonloopback: false,
+            extra_routes: Vec::new(),
         }
     }
 
@@ -182,18 +188,35 @@ impl ShannonApiServer {
         self
     }
 
+    /// Merge additional routes into the router (P0-3).
+    ///
+    /// The routes must be state-applied (`axum::Router<()>`, i.e.
+    /// `Router::with_state(deps)` has been called by the embedder). They are
+    /// merged *before* the auth/CORS middleware layers are applied, so they
+    /// inherit the same middleware policy as the built-in routes.
+    pub fn with_extra_routes(mut self, extra: axum::Router<()>) -> Self {
+        self.extra_routes.push(extra);
+        self
+    }
+
     /// Build the `axum::Router` with all routes and middleware.
     fn build_router(&self) -> axum::Router<()> {
         let cors = build_cors_layer(&self.allowed_origins);
 
-        axum::Router::new()
+        let mut router = axum::Router::new()
             .route("/api/health", get(health_handler))
             .route("/api/models", get(models_handler))
             .route("/api/query", post(query_handler))
             .route("/api/query/stream", get(query_stream_handler))
             .route("/api/tools/list", post(tools_list_handler))
             .route("/api/ws", get(ws_handler))
-            .route("/api/approval/respond", post(approval_respond_handler))
+            .route("/api/approval/respond", post(approval_respond_handler));
+        for extra in &self.extra_routes {
+            // `with_state(())` re-types an already state-applied router so it
+            // can merge with the (not yet state-applied) core router.
+            router = router.merge(extra.clone().with_state(()));
+        }
+        router
             .layer(axum::middleware::from_fn_with_state(
                 self.auth_token.clone(),
                 auth_middleware,
@@ -389,6 +412,64 @@ fn attach_session(engine: &mut QueryEngine, session_id: Uuid) {
     }
 }
 
+/// Maximum attachments per message (Anthropic accepts up to 100; this keeps
+/// a single request's multimodal payload bounded).
+pub const MAX_ATTACHMENTS: usize = 8;
+/// 10 MiB per attachment after base64 decode.
+pub const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
+/// MIME types the multimodal adapters can serialize.
+const SUPPORTED_MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// Validate attachments and convert them to provider-agnostic content
+/// blocks. Returns a user-facing error message on the first violation.
+///
+/// Shared by every entry path (REST `/v1/sessions/:id/messages`,
+/// `POST /api/query`, and the `WsClientMessage::Query` frame) so the
+/// gateway's IM media pipeline (B4) faces exactly one set of rules.
+pub fn attachments_to_blocks(
+    attachments: &[MessageAttachment],
+) -> Result<Vec<shannon_engine::api::ContentBlock>, String> {
+    use base64::Engine;
+
+    if attachments.len() > MAX_ATTACHMENTS {
+        return Err(format!(
+            "too many attachments: {} (max {MAX_ATTACHMENTS})",
+            attachments.len()
+        ));
+    }
+
+    let mut blocks = Vec::with_capacity(attachments.len());
+    for (i, att) in attachments.iter().enumerate() {
+        let label = att
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("attachment-{i}"));
+        if !SUPPORTED_MEDIA_TYPES.contains(&att.media_type.as_str()) {
+            return Err(format!(
+                "attachment \"{label}\": unsupported media_type \"{}\" (supported: {})",
+                att.media_type,
+                SUPPORTED_MEDIA_TYPES.join(", ")
+            ));
+        }
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(att.data.as_bytes())
+            .map_err(|_| format!("attachment \"{label}\": data is not valid base64"))?;
+        if decoded.len() > MAX_ATTACHMENT_BYTES {
+            return Err(format!(
+                "attachment \"{label}\": {} bytes exceeds the {MAX_ATTACHMENT_BYTES} byte limit",
+                decoded.len()
+            ));
+        }
+        blocks.push(shannon_engine::api::ContentBlock::Image {
+            source: shannon_engine::api::ImageSource::base64(
+                att.media_type.clone(),
+                att.data.clone(),
+            ),
+        });
+    }
+    Ok(blocks)
+}
+
 async fn query_handler(
     State(state): State<AppState>,
     Json(req): Json<QueryRequest>,
@@ -399,6 +480,19 @@ async fn query_handler(
             message: "prompt must not be empty".to_string(),
         });
     }
+
+    let attachment_blocks = match req.attachments.as_deref() {
+        None => Vec::new(),
+        Some(atts) => match attachments_to_blocks(atts) {
+            Ok(blocks) => blocks,
+            Err(message) => {
+                return Err(ApiError {
+                    status: StatusCode::BAD_REQUEST,
+                    message,
+                });
+            }
+        },
+    };
 
     let mut config = state.client_config.clone();
     if let Some(ref model) = req.model {
@@ -424,6 +518,7 @@ async fn query_handler(
         query_id: Uuid::new_v4(),
         session_id,
         user_message: req.prompt,
+        attachments: attachment_blocks,
         metadata: QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: true,
@@ -515,6 +610,7 @@ async fn query_stream_handler(
         query_id: Uuid::new_v4(),
         session_id,
         user_message: prompt,
+        attachments: Vec::new(),
         metadata: QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: true,
@@ -674,7 +770,20 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                 prompt,
                 model,
                 session_id: query_session_hint,
+                attachments,
             } => {
+                // Validate B4 attachments before touching the engine; a
+                // violation is one Error frame, then the socket stays up.
+                let attachment_blocks = match attachments.as_deref() {
+                    None => Vec::new(),
+                    Some(atts) => match attachments_to_blocks(atts) {
+                        Ok(blocks) => blocks,
+                        Err(message) => {
+                            let _ = send_msg(&mut sender, WsServerMessage::Error { message }).await;
+                            continue;
+                        }
+                    },
+                };
                 let mut config = state.client_config.clone();
                 if let Some(ref m) = model {
                     config.model = m.clone();
@@ -713,6 +822,7 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                     query_id: uuid::Uuid::new_v4(),
                     session_id: effective_session_id,
                     user_message: prompt,
+                    attachments: attachment_blocks,
                     metadata: QueryMetadata {
                         timestamp: chrono::Utc::now(),
                         tools_allowed: true,
@@ -923,6 +1033,81 @@ async fn send_msg(
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use super::*;
+
+    fn png_b64(len: usize) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(vec![0x89u8; len])
+    }
+
+    #[test]
+    fn attachments_valid_images_convert_to_blocks() {
+        let atts = vec![
+            MessageAttachment {
+                name: Some("shot.png".into()),
+                media_type: "image/png".into(),
+                data: png_b64(16),
+            },
+            MessageAttachment {
+                name: None,
+                media_type: "image/jpeg".into(),
+                data: png_b64(16),
+            },
+        ];
+        let blocks = attachments_to_blocks(&atts).unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(
+            blocks[0],
+            shannon_engine::api::ContentBlock::Image { .. }
+        ));
+    }
+
+    #[test]
+    fn attachments_unsupported_media_type_rejected() {
+        let atts = vec![MessageAttachment {
+            name: Some("doc.pdf".into()),
+            media_type: "application/pdf".into(),
+            data: png_b64(16),
+        }];
+        let err = attachments_to_blocks(&atts).unwrap_err();
+        assert!(err.contains("unsupported media_type"), "got: {err}");
+    }
+
+    #[test]
+    fn attachments_invalid_base64_rejected() {
+        let atts = vec![MessageAttachment {
+            name: None,
+            media_type: "image/png".into(),
+            data: "not!base64!".into(),
+        }];
+        let err = attachments_to_blocks(&atts).unwrap_err();
+        assert!(err.contains("not valid base64"), "got: {err}");
+    }
+
+    #[test]
+    fn attachments_oversized_rejected() {
+        let atts = vec![MessageAttachment {
+            name: Some("big.png".into()),
+            media_type: "image/png".into(),
+            data: png_b64(MAX_ATTACHMENT_BYTES + 1),
+        }];
+        let err = attachments_to_blocks(&atts).unwrap_err();
+        assert!(err.contains("exceeds"), "got: {err}");
+    }
+
+    #[test]
+    fn attachments_too_many_rejected() {
+        let atts: Vec<MessageAttachment> = (0..=MAX_ATTACHMENTS)
+            .map(|_| MessageAttachment {
+                name: None,
+                media_type: "image/png".into(),
+                data: png_b64(4),
+            })
+            .collect();
+        let err = attachments_to_blocks(&atts).unwrap_err();
+        assert!(err.contains("too many attachments"), "got: {err}");
+    }
+
     use super::*;
     use axum::Router;
     use axum::body::Body;
@@ -1709,6 +1894,7 @@ mod tests {
             prompt: "hello world".to_string(),
             model: Some("gpt-4o".to_string()),
             session_id: None,
+            attachments: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("hello world"));
@@ -1835,6 +2021,7 @@ mod tests {
             prompt: "hello".to_string(),
             model: Some("gpt-4o".to_string()),
             session_id: None,
+            attachments: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1849,6 +2036,7 @@ mod tests {
             prompt: "test".to_string(),
             model: None,
             session_id: None,
+            attachments: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1885,6 +2073,7 @@ mod tests {
                 prompt: "test prompt".to_string(),
                 model: Some("llama3".to_string()),
                 session_id: None,
+                attachments: None,
             },
             WsClientMessage::Clear,
             WsClientMessage::Info,

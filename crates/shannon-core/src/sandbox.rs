@@ -900,6 +900,49 @@ impl std::fmt::Display for SandboxType {
     }
 }
 
+/// Sandbox backend type detected for the current machine (cached: detection
+/// probes `docker info` / binary lookups and the answer never changes within
+/// a process).
+static SANDBOX_TYPE_CACHE: std::sync::OnceLock<SandboxType> = std::sync::OnceLock::new();
+
+/// One-paragraph self-description of the active command sandbox, for the
+/// model's system prompt (§ sandbox self-description).
+///
+/// Without this the model cannot know the sandbox's path remapping (Docker
+/// sandboxes serve the project at `/workspace`) or that host toolchains may
+/// be absent inside the sandbox — eval runs showed it burning turns probing
+/// the filesystem and running `apt-get install` for tools that were simply
+/// not in the sandbox. Returns `None` when no sandbox backend is active (the
+/// note would be noise).
+pub fn sandbox_self_description(project_dir: &std::path::Path) -> Option<String> {
+    let kind = *SANDBOX_TYPE_CACHE
+        .get_or_init(|| SandboxExecutor::new(SandboxConfig::new(project_dir)).sandbox_type());
+    match kind {
+        SandboxType::None => None,
+        SandboxType::Docker => Some(
+            "Command sandbox: Docker. The project is mounted at /workspace; writable \
+             paths are /workspace and /tmp; paths outside the project are not \
+             visible. The toolchain is whatever the sandbox image ships — probe with \
+             `command -v <tool>` and adapt instead of installing packages. There is \
+             no network access."
+                .to_string(),
+        ),
+        SandboxType::Bubblewrap => Some(
+            "Command sandbox: bubblewrap. The project stays at its real path, system \
+             directories are read-only binds, and writes are limited to the project \
+             and /tmp. Host toolchains are mostly visible but home-directory installs \
+             (nvm, ...) may not be — probe with `command -v <tool>`."
+                .to_string(),
+        ),
+        SandboxType::Seatbelt => Some(
+            "Command sandbox: macOS Seatbelt profile. Writes are restricted to the \
+             project directory and /tmp — probe tool availability with \
+             `command -v <tool>`."
+                .to_string(),
+        ),
+    }
+}
+
 /// User-facing sandbox mode controlling when sandboxing is applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]

@@ -85,6 +85,7 @@ fn build_session_bodies(count: usize) -> Vec<SessionEventBody> {
         provider: Some("anthropic".into()),
         cwd: None,
         app_version: None,
+        ..Default::default()
     }));
     for i in 1..count {
         match i % 4 {
@@ -94,6 +95,7 @@ fn build_session_bodies(count: usize) -> Vec<SessionEventBody> {
             1 => bodies.push(SessionEventBody::UserMessage(UserMessagePayload {
                 source: UserMessagePayload::SOURCE_USER.into(),
                 content: format!("Help with task {i}"),
+                attachment_count: 0,
             })),
             2 => bodies.push(SessionEventBody::ToolCall(ToolCallPayload {
                 tool_use_id: format!("toolu_{i}"),

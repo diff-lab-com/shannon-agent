@@ -43,9 +43,6 @@ regex = "1"
 # File traversal (respects .gitignore)
 ignore = "0.4"
 
-# Lazy statics (global BackgroundProcess registry; §B.5)
-once_cell = { workspace = true }
-
 # UUID generation
 uuid = { version = "1.0", features = ["v4", "serde"] }
 
@@ -70,13 +67,64 @@ portable-pty = "0.8"
 # §4.12 sandbox settings parsing (layered TOML config stack)
 toml = "0.8"
 
+# B2: shared browser foundation — detect + providers + the chromiumoxide
+# session the builtin browser_* tools drive
+shannon-browser = { path = "../shannon-browser" }
+
 # Landlock backend for the Linux kernel-enforced execution world (§4.12)
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4"
 
+# B3 / T10-Phase2: native Wayland screenshot stack (optional, behind the
+# computer-use-wayland-capture feature). wayland-client + the wlr screencopy
+# extension cover wlroots-family compositors; ashpd (xdg-desktop-portal)
+# covers GNOME/KDE. Versions track the ones already in the lockfile via
+# enigo's wayland/libei backends so no new versions enter the tree.
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols-wlr = { version = "0.2", optional = true, features = ["client"] }
+memmap2 = { version = "0.8", optional = true }
+# NOTE: must match enigo's ashpd feature set (default = async-std). Enabling
+# the tokio feature alongside enigo/libei turns on BOTH runtimes inside
+# ashpd 0.8 and its duplicate-import bug breaks the build. The async-io
+# reactor runs on its own driver thread, so the portal future is awaitable
+# from tokio regardless.
+ashpd = { version = "0.8", optional = true }
+
 [features]
 default = []
-computer-use = ["xcap", "enigo", "image"]
+# Desktop automation with the default enigo backend (Linux: xdo/libxdo via
+# X11; macOS: CGEvent; Windows: Win32). This is the historical shape of the
+# feature and stays the default so existing builds are unchanged.
+computer-use = ["xcap", "enigo", "enigo/xdo", "image"]
+# T10 Phase 1 — alternative Linux input backends, mutually exclusive with
+# each other at runtime (enigo picks per-OS; on non-Linux these features
+# behave identically to `computer-use` because the backend cfgs are
+# Linux-only). `libei` goes through the xdg-desktop-portal RemoteDesktop
+# portal (ashpd/reis) and is the recommended Wayland path; `wayland` uses
+# direct wayland-client protocols (needs compositor support for virtual
+# input); `x11rb` is a pure-Rust X11 backend with no system library.
+computer-use-libei = ["xcap", "enigo", "enigo/libei", "image"]
+computer-use-wayland = ["xcap", "enigo", "enigo/wayland", "image"]
+computer-use-x11rb = ["xcap", "enigo", "enigo/x11rb", "image"]
+
+# B3 / T10-Phase2: native Wayland screenshot backends, orthogonal to the
+# input backend above (composes with any of them; implies computer-use).
+# Runtime order under WAYLAND_DISPLAY: wlr-screencopy, then the
+# xdg-desktop-portal, then the xcap fallback (XWayland).
+computer-use-wayland-capture = [
+    "computer-use",
+    "dep:wayland-client",
+    "dep:wayland-protocols-wlr",
+    "dep:memmap2",
+    "dep:ashpd",
+]
+
+# T14 Phase 1 / B2: live browser tools. The chromiumoxide session layer
+# lives in the shannon-browser leaf crate (shared with shannon-remote's
+# browser providers); this crate only forwards the feature so the session
+# compiles exactly when the tools that drive it do.
+local-browser = ["shannon-browser/local-browser"]
+
 
 [dependencies.xcap]
 version = "0.0.13"
@@ -85,6 +133,7 @@ optional = true
 [dependencies.enigo]
 version = "0.2"
 optional = true
+default-features = false
 
 [dependencies.image]
 version = "0.25"

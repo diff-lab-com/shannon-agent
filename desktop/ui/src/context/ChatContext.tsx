@@ -22,7 +22,16 @@ export interface ChatContextValue {
   isQuerying: boolean
   activeToolCalls: ToolCall[]
   usage: UsagePayload | null
-  sendMessage: (message: string, filePaths?: string[]) => Promise<void>
+  /**
+   * `options.budgetBypass` is the "continue (ignore once)" choice from the
+   * budget-exceeded banner — it exempts exactly that send's pre-turn
+   * budget check (the mid-turn cap stays enforced backend-side).
+   */
+  sendMessage: (
+    message: string,
+    filePaths?: string[],
+    options?: { budgetBypass?: boolean },
+  ) => Promise<void>
   cancelQuery: () => Promise<void>
   /** /rewind: completed checkpoints for the current session (turn indices). */
   checkpoints: CheckpointInfo[]

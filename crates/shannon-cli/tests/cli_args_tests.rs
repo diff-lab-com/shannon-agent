@@ -92,6 +92,37 @@ fn test_help_flag_short() {
 // ── Subcommand Help ─────────────────────────────────────────────────────
 
 #[serial]
+// ── --attach flag ────────────────────────────────────────────────────
+#[test]
+fn test_attach_flag_is_recognized() {
+    // `--attach` must parse without "unrecognized argument" surfacing in
+    // stderr; the actual file resolution runs at query dispatch time.
+    shannon()
+        .args(["--attach", "/nonexistent.png", "--prompt", "x"])
+        .env("SHANNON_HEADLESS_SILENT", "1")
+        .assert()
+        .stderr(predicate::str::contains("unexpected argument '--attach'").not());
+}
+
+#[test]
+fn test_attach_flag_help_lists_path_metavar() {
+    shannon()
+        .args(["--help"])
+        .assert()
+        .stdout(predicate::str::contains("--attach <PATH>"));
+}
+
+#[test]
+fn test_attach_repeats_allowed() {
+    // `--attach` is `num_args = 1..` — ensure clap accepts two values
+    // without complaining about a missing second occurrence.
+    shannon()
+        .args(["--attach", "/a.png", "--attach", "/b.jpg", "--prompt", "x"])
+        .env("SHANNON_HEADLESS_SILENT", "1")
+        .assert()
+        .stderr(predicate::str::contains("unexpected argument").not());
+}
+
 #[test]
 fn test_repl_subcommand_help() {
     shannon()

@@ -503,6 +503,15 @@ impl ResumableSseStream {
             eid,
         );
 
+        // Surface the reconnect pause through the client's retry observer so
+        // consumers see why the stream went quiet (§ retry observability).
+        self.client.notify_retry(&super::retry::RetryNotice {
+            attempt: attempts_used,
+            total_attempts: self.initial_reconnects + 1,
+            wait: std::time::Duration::from_secs(backoff_secs),
+            reason: "stream dropped mid-response; reconnecting".to_string(),
+        });
+
         let (tx, rx) = tokio::sync::oneshot::channel();
         let config = self.client.config().clone();
         let messages = self.messages.clone();

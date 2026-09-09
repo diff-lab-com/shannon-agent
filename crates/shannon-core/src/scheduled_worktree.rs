@@ -162,6 +162,76 @@ pub fn remove(path: &Path) -> Result<(), WorktreeError> {
     Ok(())
 }
 
+/// Create a worktree with **explicit** directory and branch names, forked at
+/// `base_commit`, running git against the repository that contains
+/// `repo_dir` (P1-2 batch runs: every branch of a batch forks from the same
+/// base commit, and the repo may differ from the process CWD when the batch
+/// was started against a session's working directory).
+///
+/// Unlike [`create_for_task`] this has no "branch already exists" fallback:
+/// a batch branch name is derived from a fresh batch id, so an existing
+/// branch means a name collision and must fail loudly instead of silently
+/// checking out stale work. (An existing *directory* is still returned as
+/// the idempotent shortcut, matching [`create_for_task`].)
+pub fn create_named(
+    repo_dir: &Path,
+    base_dir: &Path,
+    dir_name: &str,
+    branch: &str,
+    base_commit: &str,
+) -> Result<PathBuf, WorktreeError> {
+    let status = Command::new("git")
+        .current_dir(repo_dir)
+        .arg("rev-parse")
+        .arg("--is-inside-work-tree")
+        .output()?;
+    if !status.status.success() {
+        return Err(WorktreeError::NotInRepo);
+    }
+
+    std::fs::create_dir_all(base_dir)?;
+    let path = base_dir.join(dir_name);
+    if path.exists() {
+        // Same idempotent-shortcut contract as `create_for_task`.
+        return Ok(path);
+    }
+
+    let status = Command::new("git")
+        .current_dir(repo_dir)
+        .arg("worktree")
+        .arg("add")
+        .arg("-b")
+        .arg(branch)
+        .arg(&path)
+        .arg(base_commit)
+        .output()?;
+    if !status.status.success() {
+        return Err(WorktreeError::GitFailed {
+            stderr: String::from_utf8_lossy(&status.stderr).trim().to_string(),
+        });
+    }
+    Ok(path)
+}
+
+/// Remove a worktree by path, running git against the repository that
+/// contains `repo_dir` (see [`create_named`] for why the repo dir is
+/// explicit). Same `--force` semantics as [`remove`].
+pub fn remove_in(repo_dir: &Path, path: &Path) -> Result<(), WorktreeError> {
+    let status = Command::new("git")
+        .current_dir(repo_dir)
+        .arg("worktree")
+        .arg("remove")
+        .arg("--force")
+        .arg(path)
+        .output()?;
+    if !status.status.success() {
+        return Err(WorktreeError::GitFailed {
+            stderr: String::from_utf8_lossy(&status.stderr).trim().to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// List all scheduled-task worktrees under `base_dir`.
 ///
 /// Returns descriptors for directories that exist; missing directories are
@@ -468,5 +538,103 @@ mod tests {
             stderr: "boom".into(),
         };
         assert!(e.to_string().contains("boom"));
+    }
+
+    // ── P1-2: create_named / remove_in (real temp repo) ────────────────
+
+    fn init_temp_repo() -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |dir: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .current_dir(dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&repo, &["init"]);
+        run(&repo, &["config", "user.email", "wt-test@shannon.local"]);
+        run(&repo, &["config", "user.name", "Wt Test"]);
+        std::fs::write(repo.join("f.txt"), "v1\n").unwrap();
+        run(&repo, &["add", "-A"]);
+        run(&repo, &["commit", "-q", "-m", "init"]);
+        (tmp, repo)
+    }
+
+    #[test]
+    fn test_create_named_forks_at_base_commit_and_removes() {
+        let (_tmp, repo) = init_temp_repo();
+        let commit = {
+            let out = Command::new("git")
+                .current_dir(&repo)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let base = repo.join(DEFAULT_BASE_DIR);
+
+        let wt = create_named(
+            &repo,
+            &base,
+            "batch-abc12345-0",
+            "batch-abc12345-0",
+            &commit,
+        )
+        .unwrap();
+        assert!(wt.is_dir(), "worktree directory created");
+        assert_eq!(wt, base.join("batch-abc12345-0"));
+
+        // The branch exists and points exactly at the requested base commit
+        // (fork point), not at whatever HEAD moved to since.
+        std::fs::write(repo.join("f.txt"), "v2\n").unwrap();
+        let run = |dir: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .current_dir(dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?} failed");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        run(&repo, &["add", "-A"]);
+        run(&repo, &["commit", "-q", "-m", "advance base"]);
+        let branch_head = run(&repo, &["rev-parse", "batch-abc12345-0"]);
+        assert_eq!(
+            branch_head, commit,
+            "branch forked at the given base commit"
+        );
+
+        // Same base → a diff of the fresh worktree against the commit is empty.
+        let diff = run(&wt, &["diff", &commit]);
+        assert!(
+            diff.trim().is_empty(),
+            "fresh worktree has no changes: {diff}"
+        );
+
+        // Duplicate branch name fails loudly (no silent checkout of stale work).
+        let dup = create_named(&repo, &base, "other-dir", "batch-abc12345-0", &commit);
+        assert!(dup.is_err(), "existing branch name must fail");
+
+        // Pre-existing DIRECTORY is the idempotent shortcut (returns the path).
+        std::fs::create_dir_all(base.join("preexisting")).unwrap();
+        let p = create_named(&repo, &base, "preexisting", "unused-branch", &commit).unwrap();
+        assert_eq!(p, base.join("preexisting"));
+
+        // remove_in removes the worktree; the branch ref survives for review.
+        remove_in(&repo, &wt).unwrap();
+        assert!(!wt.exists(), "worktree directory removed");
+        let still = run(&repo, &["branch", "--list", "batch-abc12345-0"]);
+        assert!(
+            !still.trim().is_empty(),
+            "branch ref not deleted by remove_in"
+        );
     }
 }

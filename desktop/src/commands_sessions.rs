@@ -719,6 +719,16 @@ pub async fn duplicate_session(
                     provider: None,
                     cwd: None,
                     app_version: None,
+                    // Desktop-duplicated sessions keep the writer defaults:
+                    // the os/arch/cdp signals describe the live host, which
+                    // is exactly this machine.
+                    os: Some(std::env::consts::OS.to_string()),
+                    arch: Some(std::env::consts::ARCH.to_string()),
+                    browser_cdp: Some(
+                        std::env::var("SHANNON_BROWSER_CDP")
+                            .map(|v| !v.trim().is_empty())
+                            .unwrap_or(false),
+                    ),
                 },
             ));
         }

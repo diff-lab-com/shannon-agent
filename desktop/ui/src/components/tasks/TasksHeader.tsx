@@ -15,6 +15,8 @@ interface TasksHeaderProps {
   dagView?: boolean
   onToggleDag?: () => void
   onToggleNewTask: () => void
+  /** P1-2: optional best-of-N batch entry (shown when provided). */
+  onToggleBatch?: () => void
   onToggleSchedule: () => void
   /** G11: unique team names available for filtering. */
   teams?: string[]
@@ -31,6 +33,7 @@ export default function TasksHeader({
   dagView,
   onToggleDag,
   onToggleNewTask,
+  onToggleBatch,
   onToggleSchedule,
   teams,
   teamFilter,
@@ -97,6 +100,16 @@ export default function TasksHeader({
           <span className="material-symbols-outlined text-[18px]">schedule</span>
           {t('tasks.tasksHeader.newRoutine')}
         </Button>
+        {onToggleBatch ? (
+          <Button
+            aria-label={t('batch.form.title')}
+            className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors"
+            onClick={onToggleBatch}
+          >
+            <span className="material-symbols-outlined text-[18px]">call_split</span>
+            {t('batch.form.headerButton')}
+          </Button>
+        ) : null}
         <Button
           aria-label={t('tasks.tasksHeader.newBackgroundTask')}
           className="px-md py-sm bg-primary text-on-primary rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:shadow-md active:scale-95 transition-all"

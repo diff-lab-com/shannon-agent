@@ -48,6 +48,7 @@ fn seed(container: &std::path::Path) {
         provider: Some("anthropic".into()),
         cwd: Some("/tmp/proj".into()),
         app_version: None,
+        ..Default::default()
     }));
     w.record(SessionEventBody::TurnStart(TurnStartPayload {
         query_id: None,
@@ -55,6 +56,7 @@ fn seed(container: &std::path::Path) {
     w.record(SessionEventBody::UserMessage(UserMessagePayload {
         source: UserMessagePayload::SOURCE_USER.into(),
         content: "list files".into(),
+        attachment_count: 0,
     }));
     w.record(SessionEventBody::ToolCall(ToolCallPayload {
         tool_use_id: "u1".into(),
@@ -205,6 +207,7 @@ fn replay_rendering_matches_live_broadcast_content_and_snaps() {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+        enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         // Redirected state manager → the tee writes events.jsonl HERE.
         let mgr = shannon_engine::state::StateManager::with_sessions_dir(
@@ -229,6 +232,7 @@ fn replay_rendering_matches_live_broadcast_content_and_snaps() {
                     query_id: Uuid::new_v4(),
                     session_id: Uuid::new_v4(),
                     user_message: "list files".into(),
+                    attachments: Vec::new(),
                     metadata: QueryMetadata {
                         timestamp: chrono::Utc::now(),
                         tools_allowed: true,

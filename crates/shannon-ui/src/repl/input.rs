@@ -267,6 +267,20 @@ pub fn handle_input(
             }
             Ok(())
         }
+        // Ctrl+Shift+X: remove the most recently queued image attachment
+        // (and its bar entry). Keeps pending_attachments and the visible
+        // attachment bar in sync.
+        KeyCode::Char('x')
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && key.modifiers.contains(KeyModifiers::SHIFT) =>
+        {
+            if !repl.state.pending_attachments.is_empty() {
+                repl.state.pending_attachments.pop();
+                repl.state.attachment_bar.attachments.pop();
+            }
+            update_auto_completions(repl);
+            Ok(())
+        }
         KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             repl.running = false;
             Ok(())
@@ -1746,6 +1760,47 @@ fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 
             if let Some(value) = selected {
                 if is_file_pick {
+                    // Image references ride the multimodal path: the base64
+                    // block is queued and attached to the next query (text
+                    // injection cannot carry binary content).
+                    if super::at_reference::is_image_reference(&value) {
+                        match super::at_reference::load_image_block(&value) {
+                            Ok(block) => {
+                                repl.state.pending_attachments.push(block);
+                                let _ =
+                                    repl.state
+                                        .attachment_bar
+                                        .add(crate::widgets::attachment_bar::Attachment {
+                                        path: value.clone(),
+                                        kind: crate::widgets::attachment_bar::AttachmentKind::Image,
+                                        size_bytes: std::fs::metadata(&value).ok().map(|m| m.len()),
+                                    });
+                                let current = repl.prompt.input().to_string();
+                                let trimmed = current.trim_end_matches('@');
+                                repl.prompt.set_input(format!("{trimmed}{value} "));
+                                repl.chat.add_message(
+                                    ChatRole::System,
+                                    format!(
+                                        "Image \"{value}\" attached — it will be sent with your next message."
+                                    ),
+                                );
+                                if super::at_reference::needs_vision_conversion_hint(
+                                    crate::repl::at_reference::image_media_type(&value)
+                                        .unwrap_or(""),
+                                ) {
+                                    repl.chat.add_message(
+                                        ChatRole::System,
+                                        "Note: bmp/svg attachments are usually NOT rendered by vision models (png/jpeg/gif/webp only) — convert to PNG for reliable results."
+                                            .to_string(),
+                                    );
+                                }
+                            }
+                            Err(msg) => {
+                                repl.chat.add_message(ChatRole::System, msg);
+                            }
+                        }
+                        return Ok(());
+                    }
                     // Extract file content and inject it
                     let processed = super::at_reference::extract_file_content(&value);
                     if processed.is_error {
@@ -1885,6 +1940,44 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                         }
                     }
                     super::at_reference::AtReferenceKind::File => {
+                        // Image references ride the multimodal path (see the
+                        // fuzzy-picker branch above).
+                        if super::at_reference::is_image_reference(&path) {
+                            match super::at_reference::load_image_block(&path) {
+                                Ok(block) => {
+                                    repl.state.pending_attachments.push(block);
+                                    let _ = repl
+                                        .state
+                                        .attachment_bar
+                                        .add(crate::widgets::attachment_bar::Attachment {
+                                        path: path.clone(),
+                                        kind: crate::widgets::attachment_bar::AttachmentKind::Image,
+                                        size_bytes: std::fs::metadata(&path).ok().map(|m| m.len()),
+                                    });
+                                    repl.prompt.set_input(format!("{path} "));
+                                    repl.chat.add_message(
+                                        ChatRole::System,
+                                        format!(
+                                            "Image \"{path}\" attached — it will be sent with your next message."
+                                        ),
+                                    );
+                                    if super::at_reference::needs_vision_conversion_hint(
+                                        crate::repl::at_reference::image_media_type(&path)
+                                            .unwrap_or(""),
+                                    ) {
+                                        repl.chat.add_message(
+                                            ChatRole::System,
+                                            "Note: bmp/svg attachments are usually NOT rendered by vision models (png/jpeg/gif/webp only) — convert to PNG for reliable results."
+                                                .to_string(),
+                                        );
+                                    }
+                                }
+                                Err(msg) => {
+                                    repl.chat.add_message(ChatRole::System, msg);
+                                }
+                            }
+                            return Ok(());
+                        }
                         let processed = super::at_reference::extract_file_content(&path);
                         if processed.is_error {
                             repl.prompt.set_input(path);

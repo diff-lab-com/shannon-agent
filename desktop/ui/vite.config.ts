@@ -14,7 +14,13 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': '/src',
+      // Must be a real absolute path: esbuild's dev-server dependency
+      // scanner stats the aliased directory to resolve `/index.ts`, and a
+      // root-relative '/src' doesn't exist on disk — runtime-value imports
+      // like `import { EVENT_NAMES } from '@/types'` then fail the whole
+      // dev-server build (production build and tsc are unaffected, which
+      // is why only `pnpm demo` / Desktop E2E went red).
+      '@': path.resolve(__dirname, 'src'),
       // Swap the Tauri core module with our mock when demo mode is on.
       // This is the only way to intercept invoke() calls cleanly in ESM.
       ...(mockMode ? { '@tauri-apps/api/core': path.resolve(__dirname, 'src/lib/mock/coreMock.ts') } : {}),

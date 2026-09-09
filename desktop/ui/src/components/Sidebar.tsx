@@ -10,9 +10,7 @@ import { useSessions } from '@/context/SessionContext';
 import { useCatalog } from '@/context/CatalogContext';
 import { SessionsSection } from './SidebarSessions';
 import { useSidebar } from './Layout';
-import { useTriageStats } from '@/hooks/scheduled-tasks';
-import { useTauriEvent } from '@/hooks/useTauriEvent';
-import { EVENT_NAMES } from '@/types';
+import { useInboxStats } from '@/hooks/inbox';
 import { formatShortcut } from '@/lib/platform';
 
 const MIN_W = 200
@@ -142,19 +140,20 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   const { createSession, sessions, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree } = useSessions();
   const { status } = useCatalog();
   const intl = useIntl();
-  const { stats: triageStats, refresh: refreshTriageStats } = useTriageStats();
+  const { stats: inboxStats, refresh: refreshInboxStats } = useInboxStats();
 
-  // P2-6: triage stats refresh on the backend `triage-updated` event instead
-  // of a 30s poll. An immediate refresh on window focus still catches
-  // external changes (e.g. triage.jsonl edited while backgrounded).
-  useTauriEvent(EVENT_NAMES.TRIAGE_UPDATED, () => { void refreshTriageStats() });
+  // P2-6 history: the badge count used to poll every 30s, then moved to the
+  // backend `triage-updated` event. The P0-3 inbox badge reads
+  // `get_inbox_stats().pending` and `useInboxStats` already refreshes on the
+  // `inbox-updated` event internally; the window-focus refresh below still
+  // catches external changes (e.g. the DB edited while backgrounded).
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    const onVisibility = () => { if (!document.hidden) refreshTriageStats(); };
-    refreshTriageStats();
+    const onVisibility = () => { if (!document.hidden) refreshInboxStats(); };
+    refreshInboxStats();
     document.addEventListener('visibilitychange', onVisibility);
     return () => { document.removeEventListener('visibilitychange', onVisibility); };
-  }, [refreshTriageStats]);
+  }, [refreshInboxStats]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -348,9 +347,9 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
           >
             <span className="material-symbols-outlined">inbox</span>
             <span className="flex-1">{intl.formatMessage({ id: 'nav.triage' })}</span>
-            {triageStats.unread > 0 && (
+            {inboxStats.pending > 0 && (
               <span className="bg-error text-on-error text-[11px] font-bold px-1.5 py-0.5 rounded-full">
-                {triageStats.unread}
+                {inboxStats.pending}
               </span>
             )}
           </NavLink>
@@ -459,11 +458,9 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
              <SubNavLink to="/settings/general" labelId="nav.general" />
              <SubNavLink to="/settings/theme" labelId="nav.theme" />
              <SubNavLink to="/settings/models" labelId="nav.models" />
+             <SubNavLink to="/settings/permissions" labelId="nav.permissions" />
              {mode === 'dev' && (
-               <>
-                 <SubNavLink to="/settings/billing" labelId="nav.usageBilling" />
-                 <SubNavLink to="/settings/advanced" labelId="nav.advanced" />
-               </>
+               <SubNavLink to="/settings/advanced" labelId="nav.advanced" />
              )}
              <SubNavLink to="/settings/notifications" labelId="nav.notifications" />
              <SubNavLink to="/settings/connections" labelId="nav.connections" />

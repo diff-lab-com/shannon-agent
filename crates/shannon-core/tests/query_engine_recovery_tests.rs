@@ -37,6 +37,7 @@ mod engine_recovery_tests {
             max_stream_reconnects: 0, // No retries in tests
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let client = shannon_engine::api::LlmClient::new(config);
         let tools = ToolRegistry::new();
@@ -57,6 +58,7 @@ mod engine_recovery_tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: "test query".to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
@@ -522,6 +524,7 @@ mod engine_recovery_tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let ctx = QueryContext {
             user_message: "Write a short story".to_string(),
+            attachments: Vec::new(),
             ..make_query_context()
         };
         let events = rt.block_on(async {
@@ -614,6 +617,7 @@ mod engine_recovery_tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let ctx1 = QueryContext {
             user_message: "Write a story about two people".to_string(),
+            attachments: Vec::new(),
             ..make_query_context()
         };
         let events1 = rt.block_on(async {
@@ -654,6 +658,7 @@ mod engine_recovery_tests {
 
         let ctx2 = QueryContext {
             user_message: "How many characters are in the story?".to_string(),
+            attachments: Vec::new(),
             ..make_query_context()
         };
         let events2 = rt.block_on(async {
@@ -798,6 +803,7 @@ mod engine_recovery_tests {
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let client = shannon_engine::api::LlmClient::new(config);
         let tools = ToolRegistry::new();

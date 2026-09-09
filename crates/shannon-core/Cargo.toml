@@ -77,6 +77,9 @@ sys-locale = { workspace = true }
 # Platform-specific disk space info
 libc = "0.2"
 
+# SQLite inbox store (P0-3) — `~/.shannon/inbox.db`
+rusqlite = { workspace = true }
+
 # Webhook HMAC verification / Zhipu JWT auth
 hmac = "0.12"
 sha2 = "0.10"

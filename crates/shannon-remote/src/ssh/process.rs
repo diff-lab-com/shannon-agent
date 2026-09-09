@@ -67,6 +67,9 @@ impl SshProcess {
         compose_command(request, &self.default_cwd)
     }
 
+    // The transport faces are unix-only; non-unix builds get the
+    // `ProcessProvider` stub below and every call reports `Unsupported`.
+    #[cfg(unix)]
     async fn run_impl(&self, request: &ProcessRequest) -> io::Result<CapturedOutput> {
         let argv = self.compose(request);
         match &request.stdin_data {
@@ -98,6 +101,7 @@ impl SshProcess {
     }
 }
 
+#[cfg(unix)]
 #[async_trait]
 impl ProcessProvider for SshProcess {
     fn run_blocking(&self, request: &ProcessRequest) -> io::Result<CapturedOutput> {
@@ -116,6 +120,28 @@ impl ProcessProvider for SshProcess {
         self.rt
             .spawn_piped_argv(argv, spec.pipe_stdin, spec.pipe_stdout, spec.pipe_stderr)
             .await
+    }
+
+    fn capabilities(&self) -> ExecCaps {
+        ExecCaps { is_remote: true }
+    }
+}
+
+// Non-unix stand-in: same trait surface, every operation reports
+// `Unsupported` (see `ssh::unsupported_transport`).
+#[cfg(not(unix))]
+#[async_trait]
+impl ProcessProvider for SshProcess {
+    fn run_blocking(&self, _request: &ProcessRequest) -> io::Result<CapturedOutput> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn run_async(&self, _request: &ProcessRequest) -> io::Result<CapturedOutput> {
+        Err(super::unsupported_transport())
+    }
+
+    async fn spawn_piped(&self, _spec: &PipedSpawn) -> io::Result<Box<dyn PipedChild>> {
+        Err(super::unsupported_transport())
     }
 
     fn capabilities(&self) -> ExecCaps {

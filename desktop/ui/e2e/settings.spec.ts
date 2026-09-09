@@ -16,9 +16,11 @@ test.describe('Settings pages', () => {
     await expect(page.getByRole('heading', { name: 'Model Configuration' })).toBeVisible()
   })
 
-  test('navigates to billing settings', async ({ page }) => {
+  // P0-4 (decision D5): the billing demo page was removed — the route no
+  // longer resolves to any pane.
+  test('billing settings no longer exist', async ({ page }) => {
     await page.goto('/settings/billing')
-    await expect(page.getByRole('heading', { name: /Usage.*Billing/i })).toBeVisible()
+    await expect(page.getByRole('heading', { name: /Usage.*Billing/i })).toHaveCount(0)
   })
 
   test('navigates to advanced settings', async ({ page }) => {

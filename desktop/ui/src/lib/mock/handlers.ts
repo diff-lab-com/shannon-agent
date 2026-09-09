@@ -4,12 +4,14 @@ import { MOCK_TASKS, MOCK_AGENTS, MOCK_AGENT_DEFINITIONS, MOCK_SESSIONS, MOCK_ME
   MOCK_SKILLS, MOCK_MCP_SERVERS, MOCK_PLUGINS, MOCK_BACKGROUND_TASKS,
   MOCK_TURN_TIMELINE } from './data/core'
 import { MOCK_SCHEDULED_ROUTINES, MOCK_TRIGGERED_ROUTINES, MOCK_HOOK_EVENTS, MOCK_PROFILES } from './data/automation'
-import { MOCK_TRIAGE_ITEMS, MOCK_TRIAGE_STATS, MOCK_OPC_METRICS, MOCK_BILLING_PLAN,
-  MOCK_COST_HISTORY, MOCK_BILLING_HISTORY, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
+import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
-import type { ProviderInput, SessionInfo } from '@/types'
+import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo } from '@/types'
+import { MOCK_TERMINAL_OUTPUT_EVENT } from '../runtime/terminalEvents'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
+import type { MemoryGraph } from '@/lib/tauri-api'
+import type { WorkspaceLayout } from '@/components/workspace/layout'
 import {
   MOCK_SKILL_CATALOG,
   MOCK_AGENT_CATALOG,
@@ -25,13 +27,190 @@ const delay = (ms = 80) => new Promise<void>(r => setTimeout(r, ms + Math.random
 const deletedSessions = new Set<string>()
 const renamedSessions = new Map<string, SessionInfo>()
 
+// P1-3: mutable desktop config so execution-mode / sandbox switches in the
+// demo feel live (get_config hands out a fresh clone of this).
+const demoConfig = clone(MOCK_CONFIG)
+
+// P1-6: ids already imported in this demo session — re-applying the same
+// migration surfaces as skipped (conflict handling), never duplicates.
+const demoMigration = { applied: new Set<string>() }
+
+// P2-2: whether the persona pack was already imported in this demo session —
+// a second import run surfaces as skipped (identical content), never dupes.
+const demoPersonaPack = { imported: false }
+
 // Mutable state for "live" feeling during demo
 const state = {
   tasks: clone(MOCK_TASKS),
   scheduled: clone(MOCK_SCHEDULED_ROUTINES),
   background: clone(MOCK_BACKGROUND_TASKS),
   providers: clone(MOCK_PROVIDERS),
+  inbox: clone(MOCK_INBOX_ITEMS) as InboxItem[],
 }
+
+// ids for inbox items created at runtime (rerun simulation).
+let nextInboxId = Math.max(...MOCK_INBOX_ITEMS.map(i => i.id)) + 1
+
+// P0-4: demo session budget — null = no cap; set via the budget control.
+let demoBudgetUsd: number | null = null
+
+// P1-5 C-1: demo live-preview lifecycle (single instance, like the backend).
+const demoPreview = {
+  running: false,
+  url: null as string | null,
+  startedAtMs: null as number | null,
+}
+const PREVIEW_URL = 'http://localhost:5173'
+// 1x1 transparent PNG so demo capture payloads stay a real image.
+const PREVIEW_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+// P1-5 D: demo PTY sessions + a tiny simulated shell. Output rides the same
+// shape as the real `terminal:output` event (base64 data) re-dispatched as a
+// window CustomEvent — `runtime/terminalEvents.listenTerminalOutput` is the
+// single subscriber that knows about this transport.
+const demoTerminals = new Map<string, TerminalInfo & { buffer: string }>()
+let nextTerminalSeq = 1
+
+// P1-5 C-2: per-project workspace layouts, session-scoped (in-memory stand-in
+// for ~/.shannon/desktop/workspace-layouts.json).
+const demoWorkspaceLayouts = new Map<string, WorkspaceLayout>()
+
+// P2-1: mobile dispatch demo state — a minted pair token + the paired-device
+// registry the gateway would own (~/.shannon/mobile-devices.json).
+let demoPairToken: { token: string; expiresAt: number; lanEndpoint: string; qrDataUrl: string } | null = null
+let demoDevices: Array<{ deviceId: string; publicKey: string; label?: string | null; addedAt: number; lastSeenAt: number }> = [
+  { deviceId: 'demo-4f8a2c1e9b7d3a05c6e1f2b4a8d60317', publicKey: 'demo-key-x', label: 'Pixel 9', addedAt: 1735689600000, lastSeenAt: 1735693200000 },
+]
+
+function demoTerminalEmit(terminalId: string, text: string) {
+  // base64, exactly like the Rust pump's wire payload
+  const bytes = new TextEncoder().encode(text)
+  let binary = ''
+  bytes.forEach(b => { binary += String.fromCharCode(b) })
+  const data = btoa(binary)
+  setTimeout(() => {
+    window.dispatchEvent(new CustomEvent(MOCK_TERMINAL_OUTPUT_EVENT, {
+      detail: { terminalId, data },
+    }))
+  }, 40 + Math.random() * 60)
+}
+
+/** Toy shell: prompt, echo, pwd, ls (canned), exit; anything else errs. */
+function demoShellRun(terminalId: string, input: string) {
+  const terminal = demoTerminals.get(terminalId)
+  if (!terminal) return
+  terminal.buffer += input
+  // A pty echoes typed input back (line discipline) — simulate it, with
+  // the tty's CRLF translation so xterm's cursor returns to column 0.
+  demoTerminalEmit(terminalId, input.replace(/\n/g, '\r\n'))
+  while (terminal.buffer.includes('\n')) {
+    const line = terminal.buffer.slice(0, terminal.buffer.indexOf('\n')).trim()
+    terminal.buffer = terminal.buffer.slice(terminal.buffer.indexOf('\n') + 1)
+    let out = ''
+    if (line === 'exit') {
+      out = '\r\n\u001b[2m[shannon: process exited — done]\u001b[0m\r\n'
+    } else if (line === '') {
+      out = '$ '
+    } else if (/^echo\b/.test(line)) {
+      out = `${line.replace(/^echo\s+/, '')}\r\n$ `
+    } else if (line === 'pwd') {
+      out = `${terminal.projectDir || '/tmp/demo'}\r\n$ `
+    } else if (line === 'ls') {
+      out = 'src\tpackage.json\r\n$ '
+    } else {
+      out = `sh: command not found: ${line.split(/\s+/)[0]}\r\n$ `
+    }
+    demoTerminalEmit(terminalId, out)
+    if (out.includes('process exited')) demoTerminals.delete(terminalId)
+  }
+}
+
+// P1-2: demo best-of-N batch runs. One running + one finished so the Tasks
+// page batch cards and the compare dialog both have something to show.
+const demoBatchBranch = (i: number, status: string, files: number, spent: number, err: string | null = null) => ({
+  index: i,
+  branchName: `batch-demo000${i}-${i}`,
+  worktreePath: `/tmp/demo-repo/.shannon/scheduled-worktrees/batch-demo000${i}-${i}`,
+  status,
+  error: err,
+  summary: status === 'running' ? null : { filesChanged: files, additions: files * 7, deletions: files * 2 },
+  spentUsd: spent,
+})
+const batchRuns: Record<string, unknown>[] = [
+  {
+    batchId: '0196batch-0000-7000-8000-000000000001',
+    title: 'Speed up the search box',
+    prompt: 'Reduce search-as-you-type latency; consider caching and debounce',
+    count: 3,
+    status: 'running',
+    createdAtMs: Date.now() - 4 * 60_000,
+    branches: [
+      demoBatchBranch(0, 'completed', 4, 0.31),
+      demoBatchBranch(1, 'running', 0, 0.12),
+      demoBatchBranch(2, 'failed', 0, 0.05, 'provider overloaded (429)'),
+    ],
+    adoptedIndex: null,
+  },
+  {
+    batchId: '0196batch-0000-7000-8000-000000000002',
+    title: 'Add CSV export to reports',
+    prompt: 'Add an export button that downloads the filtered report as CSV',
+    count: 2,
+    status: 'completed',
+    createdAtMs: Date.now() - 40 * 60_000,
+    branches: [demoBatchBranch(0, 'completed', 6, 0.44), demoBatchBranch(1, 'completed', 3, 0.27)],
+    adoptedIndex: null,
+  },
+]
+const demoPatch = (branch: number) =>
+  [
+    'diff --git a/src/search.ts b/src/search.ts',
+    'index 83db48f..bf269f4 100644',
+    '--- a/src/search.ts',
+    '+++ b/src/search.ts',
+    '@@ -12,7 +12,10 @@ export function createSearchBox() {',
+    '   const cache = new Map<string, Result>()',
+    '+  // branch #' + branch + ': debounce keystrokes before hitting the index',
+    '+  let timer: number | undefined',
+    '   input.addEventListener("input", () => {',
+    '-    runSearch(input.value)',
+    '+    clearTimeout(timer)',
+    '+    timer = setTimeout(() => runSearch(input.value), 120)',
+    '   })',
+  ].join('\n')
+
+// P0-2: demo goal runs. One live (so the Tasks page shows a run card) and
+// one finished; start_goal_run appends new running rows with live feel.
+const goalRuns = [
+  {
+    sessionId: '0196aaaa-0000-7000-8000-000000000001',
+    title: 'Harden the upload pipeline',
+    objective: 'Add retry + tests to the upload pipeline so flaky network errors cannot lose files',
+    status: 'running',
+    iterations: 3,
+    maxTurns: 12,
+    spentUsd: 0.42,
+    budgetUsd: 5,
+    stallStrikes: 0,
+    lastError: null,
+    startedAtMs: Date.now() - 26 * 60_000,
+    updatedAtMs: Date.now() - 2 * 60_000,
+  },
+  {
+    sessionId: '0196aaaa-0000-7000-8000-000000000002',
+    title: 'Changelog digest',
+    objective: 'Summarize the last two weeks of commits into a release-notes draft',
+    status: 'completed',
+    iterations: 4,
+    maxTurns: null,
+    spentUsd: 0.18,
+    budgetUsd: null,
+    stallStrikes: 0,
+    lastError: null,
+    startedAtMs: Date.now() - 27 * 60 * 60_000,
+    updatedAtMs: Date.now() - 26.5 * 60 * 60_000,
+  },
+] as Array<Record<string, unknown> & { sessionId: string; status: string }>
 
 // Snapshot the managed-providers roster as a cloned ProvidersFile.
 function providersFile() {
@@ -67,8 +246,21 @@ export const handlers: Record<string, MockHandler> = {
   async cancel_query() { await delay(30) },
 
   // --- Config ---
-  async get_config() { await delay(); return clone(MOCK_CONFIG) },
-  async configure() { await delay() },
+  async get_config() { await delay(); return clone(demoConfig) },
+  async configure(args: { key: string; value: string }) {
+    await delay()
+    // P1-3: keep the persisted keys the new settings surfaces touch in sync.
+    if (args?.key === 'sandbox.mode') {
+      const mode = String(args.value || 'off') as 'off' | 'local' | 'landlock'
+      demoConfig.sandbox = { mode }
+    } else if (args?.key === 'approval_mode') {
+      demoConfig.approval_mode = args.value
+    } else if (args?.key === 'offpeak.model_override') {
+      // P2-5: frozen config key — empty value disables the override.
+      const trimmed = String(args.value ?? '').trim()
+      demoConfig.offpeak = { model_override: trimmed ? trimmed : null }
+    }
+  },
 
   // --- Managed providers (Models P2) ---
   async test_provider_connection() {
@@ -237,6 +429,39 @@ export const handlers: Record<string, MockHandler> = {
   async get_session_usage() {
     await delay(30)
     return { input_tokens: 12400, output_tokens: 3150, cache_creation_tokens: 0, cache_read_tokens: 9800, cost_usd: 0.0731, events: 6 }
+  },
+  // P0-4 cost observability: demo budget (mutable so the banner flow is
+  // explorable), a fixed six-category breakdown and two attributed
+  // sessions for the Usage page's per-session view.
+  async get_session_budget() { await delay(30); return demoBudgetUsd },
+  async set_session_budget(args: { budgetUsd: number | null }) {
+    await delay(30)
+    demoBudgetUsd = args.budgetUsd
+  },
+  async get_session_context_breakdown() {
+    await delay(30)
+    return {
+      totalTokens: 9480,
+      contextWindow: 200000,
+      categories: [
+        { key: 'system', tokens: 1820 },
+        { key: 'tools', tokens: 2640 },
+        { key: 'skills', tokens: 610 },
+        { key: 'memory', tokens: 340 },
+        { key: 'mcp', tokens: 0 },
+        { key: 'conversation', tokens: 4070 },
+      ],
+    }
+  },
+  async get_usage_by_session(args: { days: number }) {
+    await delay()
+    const cutoff = Date.now() - Math.min(args.days ?? 30, 365) * 86400_000
+    const rows = [
+      { sessionId: MOCK_SESSIONS[0]?.id ?? 'demo-session', title: MOCK_SESSIONS[0]?.title ?? null, inputTokens: 48210, outputTokens: 12640, cacheCreationTokens: 18300, cacheReadTokens: 156400, costUsd: 0.842, requests: 31, lastUsedAtMs: Date.now() - 3600_000 },
+      { sessionId: MOCK_SESSIONS[1]?.id ?? 'demo-session-2', title: MOCK_SESSIONS[1]?.title ?? null, inputTokens: 15400, outputTokens: 8210, cacheCreationTokens: 4200, cacheReadTokens: 38700, costUsd: 0.214, requests: 12, lastUsedAtMs: Date.now() - 26 * 3600_000 },
+      { sessionId: '8f2c1a9e-4b7d-4c3a-9f01-2d5e8b7a6c01', title: null, inputTokens: 6100, outputTokens: 2400, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0.038, requests: 4, lastUsedAtMs: Date.now() - 20 * 86400_000 },
+    ]
+    return rows.filter(r => r.lastUsedAtMs >= cutoff)
   },
   async get_session_git_diff() {
     await delay(30)
@@ -413,21 +638,129 @@ export const handlers: Record<string, MockHandler> = {
     }
   },
 
-  // --- Triage ---
-  async list_triage_items() { await delay(); return clone(MOCK_TRIAGE_ITEMS) },
-  async mark_triage_read(args: { id: string }) {
-    await delay(40)
-    const item = MOCK_TRIAGE_ITEMS.find(i => i.id === args.id)
-    if (item) (item as { read: boolean }).read = true
-    return true
+  // --- Inbox (P0-3 SQLite inbox) ---
+  async list_inbox_items(args: { status?: string | null; source?: string | null; limit?: number | null }) {
+    await delay()
+    return clone(
+      state.inbox
+        .filter(i => (args.status ? i.status === args.status : true))
+        .filter(i => (args.source ? i.source === args.source : true))
+        .sort((a, b) => b.createdAtMs - a.createdAtMs)
+        .slice(0, args.limit ?? 100),
+    )
   },
-  async archive_triage_item(args: { id: string }) {
+  async update_inbox_item_status(args: { id: number; status: InboxItem['status'] }) {
     await delay(40)
-    const item = MOCK_TRIAGE_ITEMS.find(i => i.id === args.id)
-    if (item) (item as { archived: boolean }).archived = true
-    return true
+    const item = state.inbox.find(i => i.id === args.id)
+    if (!item) throw new Error(`inbox item not found: ${args.id}`)
+    item.status = args.status
+    item.updatedAtMs = Date.now()
+    return undefined
   },
-  async get_triage_stats() { await delay(); return clone(MOCK_TRIAGE_STATS) },
+  async get_inbox_stats() {
+    await delay()
+    const startOfToday = new Date()
+    startOfToday.setHours(0, 0, 0, 0)
+    return {
+      pending: state.inbox.filter(i => i.status === 'pending').length,
+      today: state.inbox.filter(i => i.createdAtMs >= startOfToday.getTime()).length,
+    }
+  },
+  async rerun_inbox_item(args: { id: number }) {
+    await delay(200)
+    const item = state.inbox.find(i => i.id === args.id)
+    if (!item) throw new Error(`inbox item not found: ${args.id}`)
+    if (item.source === 'goal' || item.source === 'trigger') {
+      throw new Error(`inbox item source '${item.source}' cannot be rerun`)
+    }
+    // Simulate the unattended run: it completes a moment later and lands a
+    // fresh pending item in the demo inbox (the real backend emits
+    // `inbox-updated` when this happens).
+    setTimeout(() => {
+      state.inbox.unshift({
+        id: nextInboxId++,
+        source: item.source,
+        sourceId: item.sourceId,
+        sessionId: `sess-${String(nextInboxId).padStart(3, '0')}`,
+        title: `${item.title} (rerun)`,
+        summary: 'Rerun finished successfully.',
+        error: null,
+        status: 'pending',
+        createdAtMs: Date.now(),
+        updatedAtMs: Date.now(),
+      })
+    }, 1500)
+    return `run-${Date.now()}`
+  },
+  async continue_inbox_item_session(args: { id: number }) {
+    await delay(60)
+    const item = state.inbox.find(i => i.id === args.id)
+    if (!item) throw new Error(`inbox item not found: ${args.id}`)
+    if (!item.sessionId) throw new Error(`inbox item ${args.id} has no linked session`)
+    return item.sessionId
+  },
+
+  // --- Goal runs (P0-2 desktop goal runner) ---
+  async list_goal_runs() {
+    await delay()
+    return clone(goalRuns).sort((a, b) => (b.startedAtMs as number) - (a.startedAtMs as number))
+  },
+  async get_goal_run(args: { sessionId: string }) {
+    await delay()
+    return clone(goalRuns.find(r => r.sessionId === args.sessionId) ?? null)
+  },
+  async start_goal_run(args: { sessionId?: string | null; title: string; objective: string; maxTurns?: number | null; budgetUsd?: number | null }) {
+    await delay(120)
+    const sessionId = args.sessionId ?? `0196goal-0000-7000-8000-${String(goalRuns.length + 1).padStart(12, '0')}`
+    if (goalRuns.some(r => r.sessionId === sessionId && (r.status === 'running' || r.status === 'paused'))) {
+      throw new Error('a goal run is already active on this session')
+    }
+    goalRuns.unshift({
+      sessionId,
+      title: args.title,
+      objective: args.objective,
+      status: 'running',
+      iterations: 0,
+      maxTurns: args.maxTurns ?? null,
+      spentUsd: 0,
+      budgetUsd: args.budgetUsd ?? null,
+      stallStrikes: 0,
+      lastError: null,
+      startedAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+    })
+    return { sessionId }
+  },
+  async stop_goal_run(args: { sessionId: string }) {
+    await delay(60)
+    const run = goalRuns.find(r => r.sessionId === args.sessionId)
+    if (run) { run.status = 'stopped'; run.updatedAtMs = Date.now() }
+    return undefined
+  },
+  async pause_goal_run(args: { sessionId: string }) {
+    await delay(60)
+    const run = goalRuns.find(r => r.sessionId === args.sessionId)
+    if (!run || run.status !== 'running') throw new Error('no running goal run for this session')
+    run.status = 'paused'
+    run.updatedAtMs = Date.now()
+    return undefined
+  },
+  async resume_goal_run(args: { sessionId: string }) {
+    await delay(60)
+    const run = goalRuns.find(r => r.sessionId === args.sessionId)
+    if (!run || run.status !== 'paused') throw new Error('no paused goal run for this session')
+    run.status = 'running'
+    run.updatedAtMs = Date.now()
+    return undefined
+  },
+  async update_goal_objective(args: { sessionId: string; objective: string }) {
+    await delay(60)
+    const run = goalRuns.find(r => r.sessionId === args.sessionId)
+    if (!run) throw new Error('no goal found for this session')
+    run.objective = args.objective
+    run.updatedAtMs = Date.now()
+    return undefined
+  },
 
   // --- History ---
   async list_task_executions() {
@@ -438,7 +771,9 @@ export const handlers: Record<string, MockHandler> = {
       task_name: MOCK_SCHEDULED_ROUTINES[i % MOCK_SCHEDULED_ROUTINES.length].name,
       started_at: Math.floor((Date.now() - i * 86400_000) / 1000),
       completed_at: Math.floor((Date.now() - i * 86400_000 + 600) / 1000),
-      status: i === 0 ? 'failed' : 'succeeded',
+      // P2-5: one queued record so the off-peak queue state is visible in
+      // the demo History tab (nightly-backup-check carries a window).
+      status: i === 0 ? 'failed' : i === 3 ? 'queued' : 'succeeded',
       duration_secs: 600,
       output_preview: 'Task output preview...',
     }))
@@ -478,28 +813,49 @@ export const handlers: Record<string, MockHandler> = {
   // --- Hook events + profiles ---
   async list_hook_events() { await delay(); return clone(MOCK_HOOK_EVENTS) },
   async list_permission_profiles() { await delay(); return clone(MOCK_PROFILES) },
-  async save_custom_profile(args: { name: string }) {
-    await delay(100)
-    return {
-      name: args.name,
-      description: '',
-      auto_approve: [],
-      confirm: [],
-      deny: [],
+  // P1-3: frozen contract — activate_permission_profile(name: string|null).
+  async activate_permission_profile(args: { name: string | null }) {
+    await delay(60)
+    const name = (args?.name ?? '').trim()
+    if (name !== '' && name !== 'strict' && name !== 'balanced' && name !== 'permissive' &&
+        !MOCK_PROFILES.custom.some((c) => c.name === name)) {
+      throw new Error(`unknown permission profile \`${name}\``)
     }
+    demoConfig.active_permission_profile = name === '' ? null : name
+    // Mirror the backend's mode mapping so the demo header reflects it.
+    if (name === 'strict' || name === 'balanced') demoConfig.approval_mode = 'suggest'
+    else if (name === 'permissive') demoConfig.approval_mode = 'auto_edit'
+    return { active: name === '' ? null : name, approval_mode: demoConfig.approval_mode }
   },
-  async delete_custom_profile() { await delay(60); return ['standard', 'relaxed', 'strict'] },
+  async save_custom_profile(args: { name: string; description?: string; auto_approve: string[]; confirm: string[]; deny: string[] }) {
+    await delay(100)
+    const trimmed = args.name.trim()
+    if (trimmed === '') throw new Error('profile name must not be empty')
+    const row = {
+      name: trimmed,
+      description: args.description ?? '',
+      auto_approve: args.auto_approve,
+      confirm: args.confirm,
+      deny: args.deny,
+    }
+    const existing = MOCK_PROFILES.custom.findIndex((c) => c.name === trimmed)
+    if (existing >= 0) MOCK_PROFILES.custom[existing] = row
+    else MOCK_PROFILES.custom.push(row)
+    return clone(row)
+  },
+  async delete_custom_profile(args: { name: string }) {
+    await delay(60)
+    const idx = MOCK_PROFILES.custom.findIndex((c) => c.name === args?.name)
+    if (idx >= 0) MOCK_PROFILES.custom.splice(idx, 1)
+    if (demoConfig.active_permission_profile === args?.name) {
+      demoConfig.active_permission_profile = null
+    }
+    return idx >= 0 ? [`.shannon/profiles/${args.name}.toml`] : []
+  },
 
   // --- OPC analytics ---
   async get_opc_metrics() { await delay(); return clone(MOCK_OPC_METRICS) },
 
-  // --- Billing ---
-  async get_billing_plan() { await delay(); return clone(MOCK_BILLING_PLAN) },
-  async get_cost_history(args: { days: number }) {
-    await delay()
-    return clone(MOCK_COST_HISTORY.slice(-Math.min(args.days ?? 14, 14)))
-  },
-  async get_billing_history() { await delay(); return clone(MOCK_BILLING_HISTORY) },
 
   // --- File context ---
   async get_file_context() {
@@ -550,12 +906,242 @@ export const handlers: Record<string, MockHandler> = {
       created_at: new Date().toISOString(),
       accessed_at: new Date().toISOString(),
       access_count: 0,
+      source_kind: 'manual',
     }
   },
   async update_memory() { await delay() },
   async delete_memory() { await delay() },
   async search_memories(args: { query: string; project?: string | null }) {
     return handlers.list_memories({ query: args.query, project: args.project })
+  },
+
+  // --- P2-4 memory provenance + graph ---
+  async get_memory_source(args: { sessionId: string; memoryId: string }) {
+    await delay()
+    const m = MOCK_MEMORIES.find((x) => x.id === args.memoryId)
+    return m?.source_session_id ? { sessionId: m.source_session_id } : null
+  },
+  async get_memory_graph(args?: { project?: string | null }) {
+    await delay()
+    const scoped = MOCK_MEMORIES.filter(
+      (m) => !args?.project || m.project === args.project,
+    )
+    const nodes: MemoryGraph['nodes'] = []
+    const edges: MemoryGraph['edges'] = []
+    const byProject = new Map<string, typeof scoped>()
+    for (const m of scoped) {
+      const list = byProject.get(m.project) ?? []
+      list.push(m)
+      byProject.set(m.project, list)
+    }
+    for (const [project, members] of byProject) {
+      const rootId = `project:${project}`
+      nodes.push({ id: rootId, kind: 'project', label: project, weight: members.length, category: null, tags: [], sourceKind: null, sourceSessionId: null })
+      const byCategory = new Map<string, typeof scoped>()
+      for (const m of members) {
+        const list = byCategory.get(m.category) ?? []
+        list.push(m)
+        byCategory.set(m.category, list)
+      }
+      for (const [category, catMembers] of byCategory) {
+        const catId = `category:${project}|${category}`
+        nodes.push({ id: catId, kind: 'category', label: category, category: category as MemoryGraph['nodes'][number]['category'], weight: catMembers.length, tags: [], sourceKind: null, sourceSessionId: null })
+        edges.push({ source: rootId, target: catId, kind: 'cluster' })
+        for (const m of catMembers) {
+          const entryId = `entry:${m.id}`
+          nodes.push({ id: entryId, kind: 'entry', label: m.content, category: m.category, weight: m.confidence, tags: m.tags, sourceKind: (m.source_kind ?? null) as MemoryGraph['nodes'][number]['sourceKind'], sourceSessionId: m.source_session_id ?? null })
+          edges.push({ source: catId, target: entryId, kind: 'cluster' })
+        }
+      }
+      // Weak same-session association edges, chained per project.
+      const bySession = new Map<string, typeof scoped>()
+      for (const m of members) {
+        if (!m.source_session_id) continue
+        const list = bySession.get(m.source_session_id) ?? []
+        list.push(m)
+        bySession.set(m.source_session_id, list)
+      }
+      for (const group of bySession.values()) {
+        const ordered = [...group].sort((a, b) => a.created_at.localeCompare(b.created_at))
+        for (let i = 1; i < ordered.length; i++) {
+          edges.push({ source: `entry:${ordered[i - 1].id}`, target: `entry:${ordered[i].id}`, kind: 'session' })
+        }
+      }
+    }
+    const graph: MemoryGraph = { project: args?.project ?? null, nodes, edges, entryCount: scoped.length, maxEntries: 200, truncated: false }
+    return graph
+  },
+
+  // --- Migration wizard (P1-6): stateful demo — a second apply run shows
+  // conflict handling (identical targets) instead of duplicates. ---
+  async migration_scan(args: { source: 'claude-code' | 'zcode' }) {
+    await delay()
+    if (args?.source === 'zcode') {
+      return {
+        source: 'zcode',
+        items: [
+          {
+            id: 'zcode:skill:commit',
+            kind: 'skill',
+            name: 'commit',
+            sourcePath: '~/.zcode/skills/commit',
+            targetPath: '~/.shannon/skills/commit',
+            conflict: demoMigration.applied.has('zcode:skill:commit') ? 'skip-existing' : 'none',
+            sizeHint: 482,
+          },
+        ],
+        notFound: [
+          'settings — ~/.zcode/settings.json',
+          'commands — ~/.zcode/commands',
+          'memory (project) — AGENTS.md',
+          'memory (global) — ~/.zcode/AGENTS.md',
+          'mcp (settings) — ~/.zcode/settings.json',
+        ],
+        errors: [],
+      }
+    }
+    return {
+      source: 'claude-code',
+      items: [
+        {
+          id: 'claude-code:mcp:github',
+          kind: 'mcp',
+          name: 'github',
+          sourcePath: '~/.claude.json',
+          targetPath: '~/.shannon/desktop/mcp-servers.json',
+          conflict: demoMigration.applied.has('claude-code:mcp:github') ? 'skip-existing' : 'overwrite',
+          sizeHint: 5120,
+        },
+        {
+          id: 'claude-code:skill:commit',
+          kind: 'skill',
+          name: 'commit',
+          sourcePath: '~/.claude/skills/commit',
+          targetPath: '~/.shannon/skills/commit',
+          conflict: demoMigration.applied.has('claude-code:skill:commit') ? 'skip-existing' : 'none',
+          sizeHint: 482,
+        },
+        {
+          id: 'claude-code:command:deploy',
+          kind: 'command',
+          name: 'deploy',
+          sourcePath: '~/.claude/commands/deploy.md',
+          targetPath: '~/.shannon/commands/deploy.md',
+          conflict: demoMigration.applied.has('claude-code:command:deploy') ? 'skip-existing' : 'none',
+          sizeHint: 311,
+        },
+        {
+          id: 'claude-code:memory:project-memory',
+          kind: 'memory',
+          name: 'CLAUDE.md',
+          sourcePath: 'CLAUDE.md',
+          targetPath: '~/.shannon/memories',
+          conflict: demoMigration.applied.has('claude-code:memory:project-memory') ? 'skip-existing' : 'none',
+          sizeHint: 1024,
+        },
+        {
+          id: 'claude-code:settings-rules:settings-json',
+          kind: 'settings-rules',
+          name: 'claude-code-imported.toml',
+          sourcePath: '~/.claude/settings.json',
+          targetPath: '.shannon/profiles/claude-code-imported.toml',
+          conflict: demoMigration.applied.has('claude-code:settings-rules:settings-json')
+            ? 'skip-existing'
+            : 'none',
+          sizeHint: 890,
+        },
+      ],
+      notFound: [],
+      errors: [
+        { path: '~/.claude/settings.json', error: 'permissions block unreadable — rules skipped' },
+      ],
+    }
+  },
+  async migration_preview(args: { source: string; items: { id: string; action: string }[] }) {
+    await delay()
+    const summaries: Record<string, string> = {
+      'claude-code:mcp:github':
+        "Server 'github' exists with a different config — your conflict choice decides overwrite vs rename.",
+      'claude-code:skill:commit':
+        "New skill 'commit' (0 KB) — copies to ~/.shannon/skills/commit.",
+      'claude-code:command:deploy':
+        "New command 'deploy' — copies to ~/.shannon/commands/deploy.md.",
+      'claude-code:memory:project-memory':
+        'Adds one project-memory entry (1024 chars) for the current project — editable in the Memory page.',
+      'claude-code:settings-rules:settings-json':
+        "Creates permission profile 'claude-code-imported' from the source allow rules.",
+      'zcode:skill:commit': "New skill 'commit' — copies to ~/.shannon/skills/commit.",
+    }
+    return {
+      perItem: (args?.items ?? []).map(i => ({
+        id: i.id,
+        diffSummary: summaries[i.id] ?? 'No changes detected.',
+      })),
+    }
+  },
+  async migration_apply(args: { source: string; items: { id: string; action: string }[] }) {
+    await delay(160)
+    const imported = (args?.items ?? []).filter(i => i.action === 'import')
+    let skipped = 0
+    for (const item of imported) {
+      if (demoMigration.applied.has(item.id)) skipped += 1
+      else demoMigration.applied.add(item.id)
+    }
+    return { imported: imported.length - skipped, skipped, failed: [] }
+  },
+
+  // --- Persona / profile pack (P2-2): stateful demo — export reports a
+  // stripped-secret count, a second import of the same pack surfaces as
+  // skipped (conflict handling), never duplicates. ---
+  async persona_pack_export(args: { path: string; include: Record<string, boolean> }) {
+    await delay(200)
+    const include = args?.include ?? {}
+    const n = (flag: boolean) => (flag ? 1 : 0)
+    return {
+      path: args?.path ?? '~/shannon-pack.tar.gz',
+      counts: {
+        skills: n(include.skills),
+        commands: n(include.commands),
+        memories: include.memory ? 3 : 0,
+        routines: n(include.routines),
+        profiles: n(include.profiles),
+        persona: n(include.persona),
+      },
+      stripped: include.skills ? 2 : 0,
+    }
+  },
+  async persona_pack_inspect(_args: { path: string }) {
+    await delay()
+    return {
+      version: 1,
+      generator: 'shannon-0.11.0',
+      createdAtMs: Date.now(),
+      counts: { skills: 1, commands: 1, memories: 3, routines: 1, profiles: 1, persona: 1 },
+    }
+  },
+  async persona_pack_import(args: {
+    path: string
+    conflict: 'skip' | 'overwrite' | 'rename'
+    include: Record<string, boolean>
+  }) {
+    await delay(200)
+    const include = args?.include ?? {}
+    const n = (flag: boolean) => (flag ? 1 : 0)
+    const secondRun = demoPersonaPack.imported
+    demoPersonaPack.imported = true
+    const counts = (multi: number): Record<string, number> => ({
+      skills: n(include.skills) * multi,
+      commands: n(include.commands) * multi,
+      memories: (include.memory ? 3 : 0) * multi,
+      routines: n(include.routines) * multi,
+      profiles: n(include.profiles) * multi,
+      persona: n(include.persona) * multi,
+    })
+    return {
+      imported: counts(secondRun ? 0 : 1),
+      skipped: counts(secondRun ? 1 : 0),
+      failed: [],
+    }
   },
 
   // --- Notification preferences (Notifications P2 DND / quiet hours) ---
@@ -585,6 +1171,210 @@ export const handlers: Record<string, MockHandler> = {
   async install_native_agent() { await delay(400); return { success: true, message: 'Agent installed (mock)' } },
 
   async list_installed_addons() { await delay(); return clone(MOCK_INSTALLED_ADDONS) },
+
+  // --- Batch runs (P1-2 desktop best-of-N) ---
+  async list_batch_runs() {
+    await delay()
+    return clone(batchRuns).sort((a, b) => (b.createdAtMs as number) - (a.createdAtMs as number))
+  },
+  async start_batch_run(args: { title: string; prompt: string; count: number }) {
+    await delay()
+    const batchId = `0196batch-0000-7000-8000-${String(batchRuns.length + 3).padStart(12, '0')}`
+    const count = Math.min(4, Math.max(2, args.count))
+    batchRuns.unshift({
+      batchId,
+      title: args.title.trim() || args.prompt.slice(0, 50),
+      prompt: args.prompt,
+      count,
+      status: 'running',
+      createdAtMs: Date.now(),
+      branches: Array.from({ length: count }, (_, i) => demoBatchBranch(i, 'running', 0, 0)),
+      adoptedIndex: null,
+    })
+    // Demo "progress": branches finish one by one.
+    setTimeout(() => {
+      const run = batchRuns.find(r => r.batchId === batchId)
+      if (!run) return
+      const branches = run.branches as ReturnType<typeof demoBatchBranch>[]
+      branches.forEach((b, i) => {
+        setTimeout(() => {
+          if (i === branches.length - 1 && branches.length > 2) {
+            b.status = 'failed'
+            b.error = 'provider overloaded (429)'
+          } else {
+            b.status = 'completed'
+          }
+          b.summary = { filesChanged: 2 + i, additions: (2 + i) * 7, deletions: (2 + i) * 2 }
+          b.spentUsd = 0.1 + 0.09 * i
+          if (branches.every(x => x.status !== 'running')) run.status = branches.some(x => x.status === 'failed') ? 'partially_failed' : 'completed'
+        }, 2500 * (i + 1))
+      })
+    }, 1500)
+    return { batchId }
+  },
+  async get_batch_branch_diff(args: { batchId: string; index: number }) {
+    await delay()
+    return { diff: demoPatch(args.index) }
+  },
+  async adopt_batch_branch(args: { batchId: string; index: number }) {
+    await delay()
+    const run = batchRuns.find(r => r.batchId === args.batchId)
+    if (!run) throw new Error(`batch not found: ${args.batchId}`)
+    if (run.status === 'running') throw new Error('batch is still running — wait for all branches to finish before adopting')
+    const conflict = (run.branches as ReturnType<typeof demoBatchBranch>[]).length > 2 && args.index === 2
+    if (conflict) {
+      return { merged: false, conflicts: ['src/search.ts'] }
+    }
+    run.status = 'adopted'
+    run.adoptedIndex = args.index
+    return { merged: true, conflicts: null }
+  },
+  // --- Live preview (P1-5 C-1) ---
+  async preview_detect() {
+    await delay()
+    return {
+      devServer: demoPreview.running
+        ? null
+        : { command: 'npm run dev', url: PREVIEW_URL },
+    }
+  },
+  async preview_start() {
+    await delay(500)
+    demoPreview.running = true
+    demoPreview.url = PREVIEW_URL
+    demoPreview.startedAtMs = Date.now()
+    return { url: PREVIEW_URL }
+  },
+  async preview_stop() {
+    await delay()
+    demoPreview.running = false
+    demoPreview.url = null
+    demoPreview.startedAtMs = null
+  },
+  async preview_status() {
+    await delay()
+    return clone(demoPreview)
+  },
+  async preview_capture() {
+    await delay()
+    return { imageBase64: PREVIEW_PNG, mediaType: 'image/png', width: 1, height: 1 }
+  },
+  async preview_logs() {
+    await delay()
+    return demoPreview.running
+      ? [
+          { tsMs: demoPreview.startedAtMs ?? Date.now(), stream: 'system', text: 'starting `npm run dev`' },
+          { tsMs: Date.now(), stream: 'stdout', text: 'VITE v6.0.1  ready in 231 ms' },
+          { tsMs: Date.now(), stream: 'stdout', text: `Local: ${PREVIEW_URL}/` },
+        ]
+      : []
+  },
+
+  // --- Integrated terminal (P1-5 D, simulated) ---
+  async terminal_spawn(args: { projectDir?: string | null; shell?: string | null }) {
+    await delay()
+    if (demoTerminals.size >= 4) {
+      throw new Error('terminal limit reached (4) — close a terminal before opening another')
+    }
+    const terminalId = `demo-terminal-${nextTerminalSeq}`
+    nextTerminalSeq += 1
+    const info: TerminalInfo & { buffer: string } = {
+      terminalId,
+      projectDir: args?.projectDir || '/tmp/demo-project',
+      shell: args?.shell || '/bin/bash',
+      startedAtMs: Date.now(),
+      buffer: '',
+    }
+    demoTerminals.set(terminalId, info)
+    demoTerminalEmit(terminalId, '$ ')
+    return { terminalId }
+  },
+  async terminal_write(args: { terminalId: string; data: string }) {
+    await delay(10)
+    if (!demoTerminals.has(args.terminalId)) {
+      throw new Error(`no such terminal: ${args.terminalId}`)
+    }
+    demoShellRun(args.terminalId, args.data)
+  },
+  async terminal_resize(_args: { terminalId: string; cols: number; rows: number }) {
+    await delay(10)
+    if (!demoTerminals.has(_args.terminalId)) {
+      throw new Error(`no such terminal: ${_args.terminalId}`)
+    }
+  },
+  async terminal_kill(args: { terminalId: string }) {
+    await delay()
+    const terminal = demoTerminals.get(args.terminalId)
+    if (!terminal) throw new Error(`no such terminal: ${args.terminalId}`)
+    demoTerminals.delete(args.terminalId)
+    return { terminalId: terminal.terminalId, projectDir: terminal.projectDir, shell: terminal.shell, startedAtMs: terminal.startedAtMs }
+  },
+  async terminal_list() {
+    await delay()
+    return [...demoTerminals.values()].map(({ buffer: _buffer, ...info }) => info)
+  },
+
+  // --- Draggable panel workspace (P1-5 C-2, per-project, session-scoped) ---
+  async workspace_get_layout(args: { projectKey: string }) {
+    await delay()
+    return clone(demoWorkspaceLayouts.get(args.projectKey) ?? null)
+  },
+  async workspace_set_layout(args: { projectKey: string; layout: WorkspaceLayout }) {
+    await delay()
+    demoWorkspaceLayouts.set(args.projectKey, clone(args.layout))
+  },
+
+  async discard_batch_run(args: { batchId: string }) {
+    await delay()
+    const idx = batchRuns.findIndex(r => r.batchId === args.batchId)
+    if (idx < 0) throw new Error(`batch not found: ${args.batchId}`)
+    const run = batchRuns[idx]
+    if (run.status === 'adopted') throw new Error('batch was already adopted — nothing to discard')
+    const running = (run.branches as ReturnType<typeof demoBatchBranch>[]).filter(b => b.status === 'running').length
+    batchRuns.splice(idx, 1)
+    return { removed: (run.count as number) - running, skipped: running > 0 ? [`branch: still running`] : [] }
+  },
+
+  // ── Gateway / Settings → Connections (P2-1: incl. the mobile dispatch card) ──
+  async gateway_read_config() {
+    await delay()
+    return {
+      engine: { wsUrl: 'ws://127.0.0.1:33420/api/ws', httpBaseUrl: 'http://127.0.0.1:33420' },
+      adapters: [],
+      mobile: { enabled: true, host: '127.0.0.1', port: 33430 },
+    }
+  },
+  async gateway_write_config(cfg: unknown) { await delay(); return clone(cfg) },
+  async gateway_set_secret() { await delay() },
+  async gateway_has_secret() { await delay(40); return false },
+  async gateway_delete_secret() { await delay() },
+  async gateway_supervisor_status() { await delay(40); return { managed: true, status: 'stopped' as const } },
+  async gateway_supervisor_start() { await delay(120); return { managed: true, status: { running: { pid: 3345 } } } },
+  async gateway_supervisor_stop() { await delay(120); return { managed: true, status: 'stopped' as const } },
+  async gateway_set_managed() { await delay(); return { managed: true, status: 'stopped' as const } },
+
+  // P2-1 mobile dispatch — pairing entry + paired-device registry the gateway
+  // owns. Demo QR is a 1x1 transparent PNG data URL like the preview capture.
+  async mobile_generate_pair_token() {
+    await delay()
+    demoPairToken = {
+      token: `demo-${Math.random().toString(36).slice(2, 10)}`,
+      expiresAt: Date.now() + 75_000,
+      lanEndpoint: `ws://${location.hostname || '192.168.1.10'}:33430`,
+      qrDataUrl: `data:image/svg+xml;base64,${btoa('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>')}`,
+    }
+    return clone(demoPairToken)
+  },
+  async mobile_list_paired_devices() {
+    await delay(40)
+    return clone(demoDevices)
+  },
+  async mobile_revoke_device(args: { deviceId: string }) {
+    await delay()
+    const before = demoDevices.length
+    demoDevices = demoDevices.filter(d => d.deviceId !== args.deviceId)
+    return demoDevices.length < before
+  },
 }
 
 export const mockDiagnostics = MOCK_DIAGNOSTICS

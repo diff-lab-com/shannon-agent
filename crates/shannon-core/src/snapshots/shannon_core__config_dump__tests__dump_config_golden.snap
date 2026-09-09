@@ -66,6 +66,7 @@ expression: dump
   "effective": {
     "debug": true,
     "enable_tools": null,
+    "hooks": null,
     "max_context_tokens": null,
     "max_tokens": 8192,
     "notifications": null,

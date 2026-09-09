@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import type { WorkspaceLayout } from '@/components/workspace/layout'
 import type {
   ChatMessage,
   StatusResponse,
@@ -18,6 +19,7 @@ import type {
   MobileDeviceEntry,
   MobilePairToken,
   ContainerInfo,
+  SessionWindowInfo,
   RemoteHealth,
   RemoteTargetListItem,
   SshHostCandidate,
@@ -37,6 +39,7 @@ import type {
   AgentInfo,
   FileDiff,
   FileNode,
+  TerminalInfo,
   WorkingDirInfo,
   CatalogEntry,
   DataSourceResult,
@@ -49,18 +52,24 @@ import type {
   TriageItem,
   TriageFilter,
   TriageStats,
+  GoalRunDto,
+  BatchRunDto,
+  InboxItem,
+  InboxListFilter,
+  InboxItemStatus,
+  InboxStats,
   TaskExecution,
   TaskExecutionDetail,
   TriggeredRoutineDto,
   TriggerResponse,
   TaskWorktreeDto,
   AgentMessageEntry,
-  BillingPlan,
-  CostRecord,
-  BillingHistory,
   UsageStats,
+  SessionUsageRow,
+  ContextBreakdown,
   HookEventInfo,
   ProfilesList,
+  ActiveProfileStatus,
   CustomProfileInfo,
   OpcMetrics,
   TaskEvaluation,
@@ -87,16 +96,28 @@ export interface AttachmentPayload {
 }
 
 
-export async function sendMessage(message: string, filePaths?: string[]): Promise<SendMessageResponse> {
-  return invoke('send_message', { message, filePaths: filePaths ?? null })
+export async function sendMessage(
+  message: string,
+  filePaths?: string[],
+  budgetBypass?: boolean,
+  // P1-1 fix: explicit session routing (multi-window). Undefined keeps the
+  // backend's legacy active-session fallback.
+  sessionId?: string,
+): Promise<SendMessageResponse> {
+  return invoke('send_message', {
+    message,
+    filePaths: filePaths ?? null,
+    budgetBypass: budgetBypass ?? null,
+    sessionId: sessionId ?? null,
+  })
 }
 
 export async function getConversation(): Promise<ChatMessage[]> {
   return invoke('get_conversation')
 }
 
-export async function cancelQuery(): Promise<void> {
-  await invoke('cancel_query')
+export async function cancelQuery(sessionId?: string): Promise<void> {
+  await invoke('cancel_query', { sessionId: sessionId ?? null })
 }
 
 // --- Config ---
@@ -501,6 +522,25 @@ export async function loadSession(id: string): Promise<ChatMessage[]> {
 
 export async function switchSession(id: string): Promise<ChatMessage[]> {
   return invoke('switch_session', { id })
+}
+
+// --- P1-1 session multi-window (frozen backend contract) ---
+
+export async function openSessionWindow(sessionId: string): Promise<SessionWindowInfo> {
+  return invoke('open_session_window', { sessionId })
+}
+
+export async function listSessionWindows(): Promise<SessionWindowInfo[]> {
+  return invoke('list_session_windows')
+}
+
+export async function closeSessionWindow(label: string): Promise<void> {
+  await invoke('close_session_window', { label })
+}
+
+/** Focus the main window and have it switch to `sessionId`. */
+export async function revealSessionInMain(sessionId: string): Promise<void> {
+  await invoke('reveal_session_in_main', { sessionId })
 }
 
 export async function setSessionWorkingDir(id: string, path: string): Promise<void> {
@@ -1176,22 +1216,33 @@ export async function updateTask(payload: UpdateTaskPayload): Promise<TaskItem> 
   return invoke('update_task', { payload })
 }
 
-// --- Billing ---
-
-export async function getBillingPlan(): Promise<BillingPlan> {
-  return invoke('get_billing_plan')
-}
-
-export async function getCostHistory(days: number): Promise<CostRecord[]> {
-  return invoke('get_cost_history', { days })
-}
-
-export async function getBillingHistory(): Promise<BillingHistory[]> {
-  return invoke('get_billing_history')
-}
-
 export async function getUsageStats(days: number): Promise<UsageStats> {
   return invoke('get_usage_stats', { days })
+}
+
+// --- P0-4 Cost observability ---
+//
+// Session budget + six-category context breakdown + per-session usage
+// aggregation (Rust: shannon-desktop/src/cost_commands.rs).
+
+/** Set (or clear with `null`) the session's USD spend cap. */
+export async function setSessionBudget(sessionId: string, budgetUsd: number | null): Promise<void> {
+  await invoke('set_session_budget', { sessionId, budgetUsd })
+}
+
+/** Read the session's budget cap (`null` when none is set). */
+export async function getSessionBudget(sessionId: string): Promise<number | null> {
+  return invoke('get_session_budget', { sessionId })
+}
+
+/** Six-category context estimate for the session's current state. */
+export async function getSessionContextBreakdown(sessionId: string): Promise<ContextBreakdown> {
+  return invoke('get_session_context_breakdown', { sessionId })
+}
+
+/** Per-session usage aggregation for the last `days` days (recency order). */
+export async function getUsageBySession(days: number): Promise<SessionUsageRow[]> {
+  return invoke('get_usage_by_session', { days })
 }
 
 // --- Scheduled Tasks (Sprint 2) ---
@@ -1248,6 +1299,129 @@ export async function getTriageStats(): Promise<TriageStats> {
   return invoke('get_triage_stats')
 }
 
+// Inbox (P0-3 SQLite inbox)
+
+export async function listInboxItems(filter?: InboxListFilter): Promise<InboxItem[]> {
+  return invoke('list_inbox_items', {
+    status: filter?.status ?? null,
+    source: filter?.source ?? null,
+    limit: filter?.limit ?? null,
+  })
+}
+
+export async function updateInboxItemStatus(id: number, status: InboxItemStatus): Promise<void> {
+  return invoke('update_inbox_item_status', { id, status })
+}
+
+export async function getInboxStats(): Promise<InboxStats> {
+  return invoke('get_inbox_stats')
+}
+
+export async function rerunInboxItem(id: number): Promise<string> {
+  return invoke('rerun_inbox_item', { id })
+}
+
+export async function continueInboxItemSession(id: number): Promise<string> {
+  return invoke('continue_inbox_item_session', { id })
+}
+
+// Goal runs (P0-2 desktop goal runner)
+
+export interface GoalRunStartInput {
+  title: string
+  objective: string
+  maxTurns?: number
+  budgetUsd?: number
+}
+
+/// Start an unattended goal run on `sessionId` (a new session is created
+/// when omitted). Resolves once the run is registered (status `running`).
+export async function startGoalRun(
+  input: GoalRunStartInput & { sessionId?: string | null },
+): Promise<{ sessionId: string }> {
+  return invoke('start_goal_run', {
+    sessionId: input.sessionId ?? null,
+    title: input.title,
+    objective: input.objective,
+    maxTurns: input.maxTurns ?? null,
+    budgetUsd: input.budgetUsd ?? null,
+  })
+}
+
+export async function listGoalRuns(): Promise<GoalRunDto[]> {
+  return invoke('list_goal_runs')
+}
+
+export async function getGoalRun(sessionId: string): Promise<GoalRunDto | null> {
+  return invoke('get_goal_run', { sessionId })
+}
+
+export async function stopGoalRun(sessionId: string): Promise<void> {
+  await invoke('stop_goal_run', { sessionId })
+}
+
+export async function pauseGoalRun(sessionId: string): Promise<void> {
+  await invoke('pause_goal_run', { sessionId })
+}
+
+export async function resumeGoalRun(sessionId: string): Promise<void> {
+  await invoke('resume_goal_run', { sessionId })
+}
+
+export async function updateGoalObjective(sessionId: string, objective: string): Promise<void> {
+  await invoke('update_goal_objective', { sessionId, objective })
+}
+
+// Batch runs (P1-2 desktop best-of-N worktree parallelism)
+
+export interface BatchRunStartInput {
+  title: string
+  prompt: string
+  count: number
+  /** Session whose working directory the batch runs against. */
+  baseSessionId?: string | null
+}
+
+/// Start a best-of-N batch: N (2..=4) parallel unattended runs of the same
+/// prompt, each in its own git worktree forked from the current HEAD.
+/// Resolves once the batch is registered (branches `running`).
+export async function startBatchRun(input: BatchRunStartInput): Promise<{ batchId: string }> {
+  return invoke('start_batch_run', {
+    title: input.title,
+    prompt: input.prompt,
+    count: input.count,
+    baseSessionId: input.baseSessionId ?? null,
+  })
+}
+
+export async function listBatchRuns(): Promise<BatchRunDto[]> {
+  return invoke('list_batch_runs')
+}
+
+/// The branch worktree's full diff (raw unified patch) against the batch's
+/// base commit.
+export async function getBatchBranchDiff(batchId: string, index: number): Promise<{ diff: string }> {
+  return invoke('get_batch_branch_diff', { batchId, index })
+}
+
+/// Merge the branch back into the base repo and clean up the other
+/// branches. On conflicts nothing is merged or deleted — `conflicts` lists
+/// the files and the worktrees stay for manual handling.
+export async function adoptBatchBranch(
+  batchId: string,
+  index: number,
+): Promise<{ merged: boolean; conflicts: string[] | null }> {
+  return invoke('adopt_batch_branch', { batchId, index })
+}
+
+/// Remove the batch's un-adopted branches. `skipped` lists branches that
+/// were left alone (`"<branchName>: <reason>"`).
+export async function discardBatchRun(
+  batchId: string,
+): Promise<{ removed: number; skipped: string[] }> {
+  return invoke('discard_batch_run', { batchId })
+}
+
 // History
 
 export async function listTaskExecutions(taskId?: string, limit?: number): Promise<TaskExecution[]> {
@@ -1294,6 +1468,18 @@ export async function listHookEvents(): Promise<HookEventInfo[]> {
 
 export async function listPermissionProfiles(): Promise<ProfilesList> {
   return invoke('list_permission_profiles')
+}
+
+/**
+ * P1-3: activate (or deactivate) the session-wide permission profile.
+ * Frozen contract: `activate_permission_profile(name: string|null)`.
+ * Passing `null` clears the active profile; builtin ids and custom profile
+ * names sync `approval_mode` per the mode-switcher mapping.
+ */
+export async function activatePermissionProfile(
+  name: string | null,
+): Promise<ActiveProfileStatus> {
+  return invoke('activate_permission_profile', { name })
 }
 
 export async function saveCustomProfile(payload: {
@@ -1445,6 +1631,164 @@ export async function seedSampleData(): Promise<SeedReport> {
   return invoke('seed_sample_data')
 }
 
+// ─── Migration wizard (P1-6) ───────────────────────────────────────────────
+//
+// Frozen contract with desktop/src/migration_commands.rs: scan a Claude Code
+// or ZCode install, preview per-item conflicts, then apply the user-approved
+// imports. Read-scan + copy/merge only — nothing from the source side is
+// ever executed, and the backend only ever reads its known source paths.
+
+export type MigrationSourceId = 'claude-code' | 'zcode'
+
+export type MigrationAssetKind = 'mcp' | 'skill' | 'command' | 'memory' | 'settings-rules'
+
+export type MigrationConflictState = 'none' | 'overwrite' | 'skip-existing'
+
+export interface MigrationAsset {
+  /** Stable `<source>:<kind>:<slug>` id — deterministic across scans. */
+  id: string
+  kind: MigrationAssetKind
+  name: string
+  sourcePath: string
+  targetPath: string
+  /** `none` (target free) | `overwrite` (exists, differs) | `skip-existing` (identical). */
+  conflict: MigrationConflictState
+  /** Approximate source size in bytes. */
+  sizeHint: number
+}
+
+export interface MigrationScanError {
+  path: string
+  error: string
+}
+
+export interface MigrationScanResult {
+  source: MigrationSourceId
+  items: MigrationAsset[]
+  /** Well-known slots probed but absent (「未发现」). */
+  notFound: string[]
+  /** Non-fatal per-file problems (corrupted JSON, unsupported servers…). */
+  errors: MigrationScanError[]
+}
+
+export interface MigrationPreviewItem {
+  id: string
+  diffSummary: string
+}
+
+export interface MigrationPreviewResult {
+  perItem: MigrationPreviewItem[]
+}
+
+/** `action` is frozen; `conflict` is an additive hint for existing, differing
+ *  targets (default `rename`, i.e. write `<name>-imported`). */
+export interface MigrationItemInput {
+  id: string
+  action: 'import' | 'skip'
+  conflict?: 'overwrite' | 'rename' | 'skip'
+}
+
+export interface MigrationApplyFailure {
+  id: string
+  error: string
+}
+
+export interface MigrationApplyReport {
+  imported: number
+  skipped: number
+  failed: MigrationApplyFailure[]
+}
+
+export async function migrationScan(source: MigrationSourceId): Promise<MigrationScanResult> {
+  return invoke('migration_scan', { source })
+}
+
+export async function migrationPreview(
+  source: MigrationSourceId,
+  items: MigrationItemInput[],
+): Promise<MigrationPreviewResult> {
+  return invoke('migration_preview', { source, items })
+}
+
+export async function migrationApply(
+  source: MigrationSourceId,
+  items: MigrationItemInput[],
+): Promise<MigrationApplyReport> {
+  return invoke('migration_apply', { source, items })
+}
+
+// ─── Persona / profile pack (P2-2) ─────────────────────────────────────────
+//
+// Frozen contract with desktop/src/persona_pack_commands.rs: pack Shannon's
+// personalization surfaces (skills, commands, memories, routines, profiles,
+// persona) into one secret-stripped .tar.gz, preview it, and import it with a
+// user-chosen conflict strategy.
+
+/** Category selection shared by export and import; omitted = false. */
+export interface PersonaPackInclude {
+  skills: boolean
+  commands: boolean
+  memory: boolean
+  routines: boolean
+  profiles: boolean
+  persona: boolean
+}
+
+export interface PersonaPackCounts {
+  skills: number
+  commands: number
+  memories: number
+  routines: number
+  profiles: number
+  persona: number
+}
+
+export interface PersonaPackExportResult {
+  path: string
+  counts: PersonaPackCounts
+  /** Total secret redactions applied while packing. */
+  stripped: number
+}
+
+export type PersonaPackConflict = 'skip' | 'overwrite' | 'rename'
+
+export interface PersonaPackFailure {
+  item: string
+  error: string
+}
+
+export interface PersonaPackImportReport {
+  imported: PersonaPackCounts
+  skipped: PersonaPackCounts
+  failed: PersonaPackFailure[]
+}
+
+export interface PersonaPackInspectResult {
+  version: number
+  counts: PersonaPackCounts
+  createdAtMs: number
+  generator: string
+}
+
+export async function personaPackExport(
+  path: string,
+  include: PersonaPackInclude,
+): Promise<PersonaPackExportResult> {
+  return invoke('persona_pack_export', { path, include })
+}
+
+export async function personaPackImport(
+  path: string,
+  conflict: PersonaPackConflict,
+  include: PersonaPackInclude,
+): Promise<PersonaPackImportReport> {
+  return invoke('persona_pack_import', { path, conflict, include })
+}
+
+export async function personaPackInspect(path: string): Promise<PersonaPackInspectResult> {
+  return invoke('persona_pack_inspect', { path })
+}
+
 // --- Routine templates (P1.4) ---
 
 export interface RoutineTemplate {
@@ -1489,6 +1833,10 @@ export interface MemoryEntry {
   created_at: string
   accessed_at: string
   access_count: number
+  /** P2-4 provenance: session that produced this entry, when known. */
+  source_session_id?: string | null
+  /** P2-4 provenance: 'manual' | 'import' | 'auto-extract'. */
+  source_kind?: string | null
 }
 
 export interface MemoryStats {
@@ -1496,6 +1844,45 @@ export interface MemoryStats {
   by_category: Record<string, number>
   by_project: Record<string, number>
   most_recent_at: string | null
+}
+
+// --- P2-4 memory provenance + graph ---
+
+export type MemorySourceKind = 'manual' | 'import' | 'auto-extract'
+
+/** Frozen contract payload of `get_memory_source`. */
+export interface MemorySource {
+  sessionId: string
+}
+
+export interface MemoryGraphNode {
+  /** `project:<path>` | `category:<project>|<category>` | `entry:<id>` */
+  id: string
+  kind: 'project' | 'category' | 'entry'
+  label: string
+  category?: MemoryCategory | null
+  /** Entry count for project/category nodes, confidence for entries. */
+  weight: number
+  /** Entry tags (empty for project/category nodes). */
+  tags?: string[] | null
+  sourceKind?: MemorySourceKind | null
+  sourceSessionId?: string | null
+}
+
+export interface MemoryGraphEdge {
+  source: string
+  target: string
+  /** 'cluster' (project→category→entry) | 'session' (same source session). */
+  kind: 'cluster' | 'session'
+}
+
+export interface MemoryGraph {
+  project: string | null
+  nodes: MemoryGraphNode[]
+  edges: MemoryGraphEdge[]
+  entryCount: number
+  maxEntries: number
+  truncated: boolean
 }
 
 export async function listMemoryProjects(): Promise<string[]> {
@@ -1543,6 +1930,16 @@ export async function searchMemories(query: string, project?: string | null): Pr
 
 export async function getMemoryStats(): Promise<MemoryStats> {
   return invoke('get_memory_stats')
+}
+
+/** Frozen contract (P2-4): source session of a memory, null when untracked. */
+export async function getMemorySource(sessionId: string | null, memoryId: string): Promise<MemorySource | null> {
+  return invoke('get_memory_source', { sessionId: sessionId ?? '', memoryId })
+}
+
+/** P2-4 graph payload for the Memory page's graph view. */
+export async function getMemoryGraph(project?: string | null): Promise<MemoryGraph> {
+  return invoke('get_memory_graph', { project: project ?? null })
 }
 
 // --- Skill Loop (E2) ---
@@ -1714,4 +2111,110 @@ export async function remoteSetDefaultTarget(name: string | null): Promise<void>
 /** Probe a target's connectivity and platform facts. */
 export async function remoteTestTarget(name: string): Promise<RemoteHealth> {
   return invoke('remote_test_target', { name })
+}
+
+// Dev-server preview (P1-5 C-1 — live preview in the artifact panel).
+// `projectDir` may be omitted: the backend then resolves the current
+// session's working directory (desktop config mirror).
+
+/** A detected dev-server launch recipe (frozen backend contract). */
+export interface PreviewDevServerInfo {
+  command: string
+  url: string
+}
+
+export interface PreviewDetectResponse {
+  devServer: PreviewDevServerInfo | null
+}
+
+export interface PreviewStatusResponse {
+  running: boolean
+  url: string | null
+  startedAtMs: number | null
+}
+
+export interface PreviewLogLine {
+  tsMs: number
+  /** `stdout` | `stderr` | `system` */
+  stream: string
+  text: string
+}
+
+export interface PreviewCaptureResponse {
+  imageBase64: string
+  mediaType: string
+  width: number
+  height: number
+  /** Set when the whole monitor was captured instead of the app window. */
+  fallback?: string
+}
+
+export async function previewDetect(projectDir?: string | null): Promise<PreviewDetectResponse> {
+  return invoke('preview_detect', { projectDir: projectDir ?? null })
+}
+
+export async function previewStart(projectDir?: string | null): Promise<{ url: string }> {
+  return invoke('preview_start', { projectDir: projectDir ?? null })
+}
+
+export async function previewStop(): Promise<void> {
+  await invoke('preview_stop')
+}
+
+export async function previewStatus(): Promise<PreviewStatusResponse> {
+  return invoke('preview_status')
+}
+
+export async function previewCapture(): Promise<PreviewCaptureResponse> {
+  return invoke('preview_capture')
+}
+
+export async function previewLogs(limit?: number | null): Promise<PreviewLogLine[]> {
+  return invoke('preview_logs', { limit: limit ?? null })
+}
+
+// Integrated terminal (P1-5 D — frozen contract). `data` on the wire is
+// UTF-8 (xterm.js onData output incl. control bytes); PTY output arrives
+// base64-encoded on the `terminal:output` event (see runtime/terminalEvents).
+
+/** Spawn a PTY session rooted at `projectDir` (≤4 live instances). */
+export async function terminalSpawn(projectDir?: string | null, shell?: string): Promise<{ terminalId: string }> {
+  return invoke('terminal_spawn', { projectDir: projectDir ?? null, shell: shell ?? null })
+}
+
+/** Write to the terminal's stdin (keystrokes, paste, control bytes). */
+export async function terminalWrite(terminalId: string, data: string): Promise<void> {
+  await invoke('terminal_write', { terminalId, data })
+}
+
+/** Resize the pty (cols/rows from the fit addon). */
+export async function terminalResize(terminalId: string, cols: number, rows: number): Promise<void> {
+  await invoke('terminal_resize', { terminalId, cols, rows })
+}
+
+/** Kill the terminal's whole process tree. */
+export async function terminalKill(terminalId: string): Promise<void> {
+  await invoke('terminal_kill', { terminalId })
+}
+
+/** Live terminals, oldest first. */
+export async function terminalList(): Promise<TerminalInfo[]> {
+  return invoke('terminal_list')
+}
+
+// Draggable panel workspace (P1-5 C-2 — frozen contract). Layout geometry
+// types live with the model in components/workspace/layout.ts; the backend
+// stores per-project layouts in ~/.shannon/desktop/workspace-layouts.json.
+
+/**
+ * The saved layout for `projectKey`, or `null` when none is stored **or the
+ * stored version is unsupported** (both reset the UI to the default preset).
+ */
+export async function workspaceGetLayout(projectKey: string): Promise<WorkspaceLayout | null> {
+  return invoke('workspace_get_layout', { projectKey })
+}
+
+/** Persist the layout for `projectKey` (validated backend-side). */
+export async function workspaceSetLayout(projectKey: string, layout: WorkspaceLayout): Promise<void> {
+  await invoke('workspace_set_layout', { projectKey, layout })
 }

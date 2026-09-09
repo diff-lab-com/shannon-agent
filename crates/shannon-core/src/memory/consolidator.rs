@@ -106,6 +106,8 @@ mod tests {
             created_at,
             accessed_at,
             access_count,
+            source_session_id: None,
+            source_kind: None,
         }
     }
 

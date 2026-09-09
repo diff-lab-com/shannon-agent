@@ -106,6 +106,26 @@ export function useT(): (id: string, values?: Record<string, PrimitiveType>) => 
   )
 }
 
+/**
+ * Provider-independent message lookup for non-component contexts — e.g. a
+ * context provider rendered beside (not inside) `<IntlProvider>` that still
+ * needs a translated user-facing string. Reads the persisted locale the same
+ * way `I18nProvider` does; falls back to `en`, then to the raw id.
+ */
+export function messageFor(id: string, values?: Record<string, PrimitiveType>): string {
+  let locale: Locale = 'en'
+  if (typeof window !== 'undefined') {
+    const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY)
+    if (stored === 'en' || stored === 'zh-CN') locale = stored
+    else if ((window.navigator?.language?.toLowerCase() ?? '').startsWith('zh')) locale = 'zh-CN'
+  }
+  const tpl = MESSAGES[locale][id] ?? MESSAGES.en[id] ?? id
+  if (!values) return tpl
+  return tpl.replace(/\{(\w+)\}/g, (_, k: string) =>
+    values[k] !== undefined ? String(values[k]) : `{${k}}`,
+  )
+}
+
 /** Convenience: list of supported locales for switcher UIs. */
 export const SUPPORTED_LOCALES: ReadonlyArray<{ id: Locale; labelKey: string }> = [
   { id: 'en', labelKey: 'settings.language.en' },

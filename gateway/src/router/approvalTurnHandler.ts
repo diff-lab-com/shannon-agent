@@ -2,6 +2,7 @@ import { type EngineEvent } from "../engine/runtime.js";
 import { respondToApproval } from "../engine/httpClient.js";
 import { newAccumulator, sendReply } from "./reply.js";
 import { canStream, StreamingReply } from "./streaming.js";
+import { toEngineAttachments } from "./media.js";
 import { type TurnContext, type TurnHandler } from "./types.js";
 
 /**
@@ -35,6 +36,8 @@ export function createApprovalTurnHandler(
   return {
     async handle(ctx: TurnContext): Promise<void> {
       const { client, adapter, replyTarget, inbound, logger } = ctx;
+      // P1-4 lifecycle: announce the start, then completed/failed at the end.
+      ctx.reporter?.started();
       const acc = newAccumulator();
       const stream = canStream(adapter)
         ? new StreamingReply(adapter, replyTarget, {
@@ -43,7 +46,13 @@ export function createApprovalTurnHandler(
           })
         : null;
 
-      for await (const ev of client.runQuery(inbound.text) as AsyncIterable<EngineEvent>) {
+      const query = client.runQuery(
+        inbound.text,
+        // B4: parity with the default handler — inbound media rides as
+        // engine attachments.
+        { attachments: await toEngineAttachments(inbound.media, { logger }) },
+      ) as AsyncIterable<EngineEvent>;
+      for await (const ev of query) {
         switch (ev.type) {
           case "text":
             if (stream) await stream.ingestText(ev.content);
@@ -93,6 +102,8 @@ export function createApprovalTurnHandler(
       } else {
         await sendReply(adapter, replyTarget, acc, failurePrefix);
       }
+      if (acc.failed !== null) ctx.reporter?.failed(acc.failed);
+      else if (!acc.cancelled) ctx.reporter?.completed();
     },
   };
 }

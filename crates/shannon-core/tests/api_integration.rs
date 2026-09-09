@@ -863,6 +863,7 @@ mod e2e_client_tests {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         LlmClient::new(config)
     }
@@ -1232,6 +1233,7 @@ mod retry_tests {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         LlmClient::new(config)
     }
@@ -1252,6 +1254,7 @@ mod retry_tests {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         LlmClient::new(config)
     }
@@ -1511,6 +1514,7 @@ mod query_pipeline_tests {
             max_stream_reconnects: 3,
             budget_tokens: None,
             reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         LlmClient::new(config)
     }
@@ -1520,6 +1524,7 @@ mod query_pipeline_tests {
             query_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
             user_message: message.to_string(),
+            attachments: Vec::new(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: false,
@@ -2361,6 +2366,7 @@ mod conversation_export_tests {
             shannon_types::session_event::UserMessagePayload {
                 source: shannon_types::session_event::UserMessagePayload::SOURCE_USER.into(),
                 content: "ask".into(),
+                attachment_count: 0,
             },
         ));
         w.record(
@@ -2414,6 +2420,7 @@ mod conversation_export_tests {
                 shannon_types::session_event::UserMessagePayload {
                     source: shannon_types::session_event::UserMessagePayload::SOURCE_USER.into(),
                     content: prompt.into(),
+                    attachment_count: 0,
                 },
             ));
             w.record(

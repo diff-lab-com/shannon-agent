@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils'
 import { useT } from '@/i18n'
 import * as api from '@/lib/tauri-api'
 import { exportSessionAsMarkdown, printSession } from '@/lib/sessionActions'
+import { toastError } from '@/lib/errorToast'
 import type { SessionInfo } from '@/types'
 import DeleteSessionModal from '@/pages/chat/DeleteSessionModal'
 import HighlightText from './HighlightText'
@@ -216,6 +217,9 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
       { id: 'pin', label: pinned ? t('chat.session.unpin') : t('chat.session.pin'), icon: 'push_pin', onSelect: () => togglePin(session.id) },
       // §4.14 — visualize the session's turns/tools/token-cost curve.
       { id: 'timeline', label: t('chat.session.timeline'), icon: 'timeline', onSelect: () => navigate(`/timeline/${session.id}`) },
+      // P1-1 — dedicated window for this session (backend dedupes by
+      // focusing an existing `session-<uuid>` window).
+      { id: 'open-in-window', label: t('chat.session.openInWindow'), icon: 'open_in_new', onSelect: () => { void api.openSessionWindow(session.id).catch(e => toastError(t('chat.session.openInWindow.failed'), e)) } },
       { id: 'export', label: t('chat.session.export'), icon: 'download', onSelect: () => { void exportSessionAsMarkdown(session.id, sessions, t) } },
       { id: 'print', label: t('chat.session.print'), icon: 'print', onSelect: () => { void printSession(session.id, sessions, t) } },
       { id: 'delete', label: t('chat.session.delete'), icon: 'delete', destructive: true, onSelect: () => setDeleteTarget(session.id) },
@@ -291,7 +295,7 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
                           'flex-1 min-w-0 text-left px-3 py-2 rounded-lg font-label-md text-label-md transition-all duration-200 flex items-center gap-2 cursor-pointer select-none',
                           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
                           isActive
-                            ? 'bg-primary/10 text-primary font-bold'
+                            ? 'bg-primary-container text-on-primary-container font-bold'
                             : 'text-on-surface-variant hover:bg-surface-container-low hover:text-primary',
                         )}
                       >

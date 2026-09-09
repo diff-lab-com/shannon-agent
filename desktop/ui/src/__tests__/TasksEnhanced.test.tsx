@@ -15,6 +15,14 @@ vi.mock('@/context/CatalogContext', () => ({
   useCatalog: () => mockContext,
 }))
 
+// P0-2: Tasks opens a goal run's session via useSessions().switchSession.
+const mockSessions: any = {
+  switchSession: vi.fn().mockResolvedValue([]),
+}
+vi.mock('@/context/SessionContext', () => ({
+  useSessions: () => mockSessions,
+}))
+
 vi.mock('@/lib/tauri-api', async () => {
   const actual = await vi.importActual('@/lib/tauri-api')
   return {

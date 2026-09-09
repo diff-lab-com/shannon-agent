@@ -7,6 +7,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import AddProviderModal from '@/components/settings/AddProviderModal'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { useSessions } from '@/context/SessionContext'
 import type { ProviderConnection, ProvidersFile } from '@/types'
 import { KIND_INFO } from './types'
 import { toastTestResult } from './utils'
@@ -33,6 +34,10 @@ export function ProvidersSection({
   const [deleteTarget, setDeleteTarget] = useState<ProviderConnection | null>(null)
   const [testAllRunning, setTestAllRunning] = useState(false)
   const [testAllRows, setTestAllRows] = useState<api.ProviderTestRow[] | null>(null)
+  // P0-4: pending activation gated behind the prompt-cache bust warning
+  // (only shown when the current chat session already has usage).
+  const { currentSessionId } = useSessions()
+  const [cacheBustTarget, setCacheBustTarget] = useState<ProviderConnection | null>(null)
 
   const handleTest = async (conn: ProviderConnection) => {
     // Only the active provider's key is mirrored into config; for a connection
@@ -62,7 +67,8 @@ export function ProvidersSection({
     }
   }
 
-  const handleActivate = async (conn: ProviderConnection) => {
+  const confirmActivate = async (conn: ProviderConnection) => {
+    setCacheBustTarget(null)
     setActivatingId(conn.id)
     try {
       await api.setActiveProvider(conn.id)
@@ -76,6 +82,23 @@ export function ProvidersSection({
     } finally {
       setActivatingId(null)
     }
+  }
+
+  // P0-4: switching the provider busts the session's prompt cache. When the
+  // current chat session already has usage, ask before invalidating it.
+  const handleActivate = async (conn: ProviderConnection) => {
+    if (currentSessionId) {
+      try {
+        const summary = await api.getSessionUsage(currentSessionId)
+        if (summary.events > 0) {
+          setCacheBustTarget(conn)
+          return
+        }
+      } catch {
+        // Usage read failed — proceed with the switch rather than blocking it.
+      }
+    }
+    await confirmActivate(conn)
   }
 
   // Delete confirmation flows through the ConfirmDialog (state-driven) instead
@@ -190,6 +213,18 @@ export function ProvidersSection({
           editing={editing}
           onClose={() => { setModalOpen(false); setEditing(null) }}
           onSaved={handleSaved}
+        />
+      ) : null}
+
+      {cacheBustTarget ? (
+        <ConfirmDialog
+          open
+          title={t('settings.models.providers.cacheWarning.title')}
+          message={t('settings.models.providers.cacheWarning.message')}
+          confirmLabel={t('settings.models.providers.cacheWarning.confirm')}
+          cancelLabel={t('settings.models.providers.cacheWarning.cancel')}
+          onConfirm={() => void confirmActivate(cacheBustTarget)}
+          onCancel={() => setCacheBustTarget(null)}
         />
       ) : null}
 

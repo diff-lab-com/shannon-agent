@@ -34,6 +34,20 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(),
 }))
 
+// P1-1 window mode: Layout syncs the native window title via
+// getCurrentWindow().setTitle(). The mocked getCurrentWindow hands out the
+// same `setTitle` spy on every call, so tests can inspect it through
+// `getCurrentWindow().setTitle` after a `mockReset`/`mockClear`.
+vi.mock('@tauri-apps/api/window', () => {
+  const setTitle = vi.fn().mockResolvedValue(undefined)
+  return {
+    getCurrentWindow: vi.fn(() => ({
+      label: 'session-00000000-0000-0000-0000-000000000000',
+      setTitle,
+    })),
+  }
+})
+
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn().mockResolvedValue(null),
   save: vi.fn().mockResolvedValue(null),
@@ -194,10 +208,15 @@ vi.mock('@/lib/tauri-api', () => ({
   gatewayReadConfig: vi.fn().mockResolvedValue({
     engine: { wsUrl: 'ws://127.0.0.1:33420/api/ws', httpBaseUrl: 'http://127.0.0.1:33420' },
     adapters: [],
+    // P2-1 — the desktop writes this mobile block by default
+    // (commands_mobile_pairing default_mobile_config), so the dispatch card
+    // shows a live channel status out of the box.
+    mobile: { enabled: true, host: '127.0.0.1', port: 33430 },
   }),
   gatewayWriteConfig: vi.fn().mockResolvedValue({
     engine: { wsUrl: 'ws://127.0.0.1:33420/api/ws', httpBaseUrl: 'http://127.0.0.1:33420' },
     adapters: [],
+    mobile: { enabled: true, host: '127.0.0.1', port: 33430 },
   }),
   // E-1 方案 C — default: managed on, not installed (no binary in the test env).
   gatewaySupervisorStart: vi.fn().mockResolvedValue({ managed: true, status: 'notInstalled' }),
@@ -238,6 +257,11 @@ vi.mock('@/lib/tauri-api', () => ({
   loadSession: vi.fn().mockResolvedValue([]),
   switchSession: vi.fn().mockResolvedValue([]),
   setSessionWorkingDir: vi.fn().mockResolvedValue(undefined),
+  // P1-1 session multi-window.
+  openSessionWindow: vi.fn().mockResolvedValue({ label: 'session-1', sessionId: 'session-1' }),
+  listSessionWindows: vi.fn().mockResolvedValue([]),
+  closeSessionWindow: vi.fn().mockResolvedValue(undefined),
+  revealSessionInMain: vi.fn().mockResolvedValue(undefined),
   createSessionWorktree: vi.fn().mockResolvedValue({ task_id: 's-1', task_name: 'Session', path: '/tmp/wt', branch: 'wt-s-1' }),
   deleteSession: vi.fn().mockResolvedValue(true),
   renameSession: vi.fn().mockResolvedValue(true),
@@ -252,9 +276,44 @@ vi.mock('@/lib/tauri-api', () => ({
   listFeedbackSessions: vi.fn().mockResolvedValue([]),
   getSessionContextStats: vi.fn().mockResolvedValue({ estimated_tokens: 1200, context_window: 200000 }),
   getSessionUsage: vi.fn().mockResolvedValue({ input_tokens: 100, output_tokens: 50, cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: 0.01, events: 2 }),
+  // P0-4 cost observability
+  getSessionBudget: vi.fn().mockResolvedValue(null),
+  setSessionBudget: vi.fn().mockResolvedValue(undefined),
+  getSessionContextBreakdown: vi.fn().mockResolvedValue({
+    totalTokens: 1000,
+    contextWindow: 200000,
+    categories: [
+      { key: 'system', tokens: 200 },
+      { key: 'tools', tokens: 300 },
+      { key: 'skills', tokens: 0 },
+      { key: 'memory', tokens: 0 },
+      { key: 'mcp', tokens: 0 },
+      { key: 'conversation', tokens: 500 },
+    ],
+  }),
+  getUsageBySession: vi.fn().mockResolvedValue([]),
   getSessionGitDiff: vi.fn().mockResolvedValue({ is_repo: false, files: [], patch: '', truncated: false }),
   compactSession: vi.fn().mockResolvedValue({ performed: true, nothing_to_compact: false, original_tokens: 100, compacted_tokens: 20, reduction_ratio: 0.8, messages_removed: 3, kept_turns: 1, messages: [] }),
   saveTextFile: vi.fn().mockResolvedValue(undefined),
+  // P2-2 — persona/profile pack. Defaults are inert (empty counts) so the
+  // Settings section renders quietly; per-test `vi.mocked(...)` overrides
+  // cover the export / inspect / import flows.
+  personaPackExport: vi.fn().mockResolvedValue({
+    path: '/tmp/shannon-pack.tar.gz',
+    counts: { skills: 0, commands: 0, memories: 0, routines: 0, profiles: 0, persona: 0 },
+    stripped: 0,
+  }),
+  personaPackImport: vi.fn().mockResolvedValue({
+    imported: { skills: 0, commands: 0, memories: 0, routines: 0, profiles: 0, persona: 0 },
+    skipped: { skills: 0, commands: 0, memories: 0, routines: 0, profiles: 0, persona: 0 },
+    failed: [],
+  }),
+  personaPackInspect: vi.fn().mockResolvedValue({
+    version: 1,
+    counts: { skills: 0, commands: 0, memories: 0, routines: 0, profiles: 0, persona: 0 },
+    createdAtMs: 0,
+    generator: 'shannon-test',
+  }),
   respondPermission: vi.fn().mockResolvedValue(undefined),
   getFileDiff: vi.fn().mockResolvedValue({ path: '', hunks: [] }),
   applyDiff: vi.fn().mockResolvedValue(undefined),
@@ -272,9 +331,6 @@ vi.mock('@/lib/tauri-api', () => ({
   cancelBackgroundTask: vi.fn().mockResolvedValue(true),
   listAgents: vi.fn().mockResolvedValue([]),
   listTasks: vi.fn().mockResolvedValue([]),
-  getBillingPlan: vi.fn().mockResolvedValue({ name: 'Free', price: 0, token_limit: 100000, features: ['Basic models', '5 sessions'] }),
-  getCostHistory: vi.fn().mockResolvedValue([]),
-  getBillingHistory: vi.fn().mockResolvedValue([]),
   getUsageStats: vi.fn().mockResolvedValue({ days: 30, totals: { label: 'total', input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: 0, requests: 0 }, by_model: [], by_provider: [], by_day: [] }),
   requestPermission: vi.fn().mockResolvedValue(true),
   featuredVendorToEntry: vi.fn().mockResolvedValue({ id: 'test', kind: 'mcp', name: 'Test', description: '', trust: 'community', homepage_url: null, source: null, metadata: {}, tags: [] }),
@@ -284,6 +340,12 @@ vi.mock('@/lib/tauri-api', () => ({
   getWebhookConfig: vi.fn().mockResolvedValue(null),
   saveWebhookConfig: vi.fn().mockResolvedValue(undefined),
   clearWebhookConfig: vi.fn().mockResolvedValue(undefined),
+  // P1-3 — permission profiles, execution mode, sandbox.
+  listPermissionProfiles: vi.fn().mockResolvedValue({ builtin: [], custom: [] }),
+  activatePermissionProfile: vi.fn().mockResolvedValue({ active: null, approval_mode: null }),
+  saveCustomProfile: vi.fn().mockResolvedValue({ name: 'p', description: '', auto_approve: [], confirm: [], deny: [] }),
+  deleteCustomProfile: vi.fn().mockResolvedValue([]),
+  listHookEvents: vi.fn().mockResolvedValue([]),
   listPluginMarketplace: vi.fn().mockResolvedValue([]),
   listCatalogUpstreams: vi.fn().mockResolvedValue([]),
   installSkillFromRepo: vi.fn().mockResolvedValue({ id: 'skill-1', name: 'Test Skill', install_path: '/path/to/skill' }),
@@ -312,8 +374,40 @@ vi.mock('@/lib/tauri-api', () => ({
   getMemoryStats: vi.fn().mockResolvedValue({
     total: 0, by_category: {}, by_project: {}, most_recent_at: null,
   }),
-  markTriageRead: vi.fn().mockResolvedValue(undefined),
-  archiveTriageItem: vi.fn().mockResolvedValue(undefined),
+  // P2-4 memory provenance + graph — defaults so the Memory page graph tab
+  // renders sanely without per-test mocking.
+  getMemorySource: vi.fn().mockResolvedValue(null),
+  getMemoryGraph: vi.fn().mockResolvedValue({
+    project: null, nodes: [], edges: [], entryCount: 0, maxEntries: 200, truncated: false,
+  }),
+  // P0-3 inbox — defaults so components consuming useInboxStats (e.g. the
+  // sidebar badge) render sanely without per-test mocking.
+  listInboxItems: vi.fn().mockResolvedValue([]),
+  updateInboxItemStatus: vi.fn().mockResolvedValue(undefined),
+  getInboxStats: vi.fn().mockResolvedValue({ pending: 0, today: 0 }),
+  rerunInboxItem: vi.fn().mockResolvedValue('run-1'),
+  continueInboxItemSession: vi.fn().mockResolvedValue('sess-1'),
+  // P0-2 goal runs — default empty so AppProvider's bootstrap and the
+  // Tasks-page panel render sanely without per-test mocking.
+  listGoalRuns: vi.fn().mockResolvedValue([]),
+  getGoalRun: vi.fn().mockResolvedValue(null),
+  startGoalRun: vi.fn().mockResolvedValue({ sessionId: 'sess-goal' }),
+  // P2-5 off-peak windows — default empty history so the routine drawer's
+  // OffpeakWindowEditor renders without a queued status and without
+  // per-test mocking.
+  listTaskExecutions: vi.fn().mockResolvedValue([]),
+  updateScheduledTask: vi.fn().mockResolvedValue(null),
+  stopGoalRun: vi.fn().mockResolvedValue(undefined),
+  pauseGoalRun: vi.fn().mockResolvedValue(undefined),
+  resumeGoalRun: vi.fn().mockResolvedValue(undefined),
+  updateGoalObjective: vi.fn().mockResolvedValue(undefined),
+  // P1-2 batch runs — default empty so the Tasks-page batch panel stays
+  // hidden and other tests are unaffected.
+  listBatchRuns: vi.fn().mockResolvedValue([]),
+  startBatchRun: vi.fn().mockResolvedValue({ batchId: 'batch-1' }),
+  getBatchBranchDiff: vi.fn().mockResolvedValue({ diff: '' }),
+  adoptBatchBranch: vi.fn().mockResolvedValue({ merged: true, conflicts: null }),
+  discardBatchRun: vi.fn().mockResolvedValue({ removed: 1, skipped: [] }),
   transcribeAudio: vi.fn().mockResolvedValue({ text: 'mock transcript' }),
   // P2-5e — local voice (whisper-rs). Default: returns the same
   // mock transcript as the cloud path so existing tests don't
@@ -341,4 +435,21 @@ vi.mock('@/lib/tauri-api', () => ({
   // the populated-action / failure paths.
   lspCodeActions: vi.fn().mockResolvedValue({ actions: [] }),
   applyCodeAction: vi.fn().mockResolvedValue(0),
+  // P1-5 C-2 — workspace layout persistence. Default: nothing stored, so
+  // the Chat page boots on the default focus preset in every test.
+  workspaceGetLayout: vi.fn().mockResolvedValue(null),
+  workspaceSetLayout: vi.fn().mockResolvedValue(undefined),
+  // P1-5 C-2 — preview panel content (LivePreview sync on mount).
+  previewStatus: vi.fn().mockResolvedValue({ running: false, url: null, startedAtMs: null }),
+  previewDetect: vi.fn().mockResolvedValue({ devServer: null }),
+  previewStart: vi.fn().mockResolvedValue({ url: 'http://localhost:5173' }),
+  previewStop: vi.fn().mockResolvedValue(undefined),
+  previewLogs: vi.fn().mockResolvedValue([]),
+  previewCapture: vi.fn().mockResolvedValue({ imageBase64: '', mediaType: 'image/png', width: 1, height: 1 }),
+  // P1-5 D — terminal drawer/panel (reconciles on open).
+  terminalList: vi.fn().mockResolvedValue([]),
+  terminalSpawn: vi.fn().mockResolvedValue({ terminalId: 'term-1' }),
+  terminalWrite: vi.fn().mockResolvedValue(undefined),
+  terminalResize: vi.fn().mockResolvedValue(undefined),
+  terminalKill: vi.fn().mockResolvedValue(undefined),
 }))

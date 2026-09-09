@@ -16,7 +16,7 @@
 //! - Cron mode: When the minute field is `:00` or `:30`, fire up to 90 seconds
 //!   early (aligns with Claude Code behavior to avoid API thundering herd).
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -122,6 +122,12 @@ pub struct ExecutionPolicy {
     /// Auto-archive execution when it has no findings (Codex pattern).
     #[serde(default = "default_auto_archive")]
     pub auto_archive_when_empty: bool,
+    /// Off-peak execution window (P2-5, frozen contract). `None` = execute
+    /// immediately when due (legacy behavior). When set, a due routine
+    /// outside the window is recorded as `RunStatus::Queued` instead of
+    /// executing, and runs at the first due check inside the window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_window: Option<ExecutionWindow>,
 }
 
 impl Default for ExecutionPolicy {
@@ -133,12 +139,156 @@ impl Default for ExecutionPolicy {
             notify_on_failure: false,
             budget_usd: None,
             auto_archive_when_empty: true,
+            execution_window: None,
         }
     }
 }
 
 fn default_auto_archive() -> bool {
     true
+}
+
+/// Error returned when an [`ExecutionWindow`] is constructed with invalid
+/// hours (must be 0..=23).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid execution window hour {hour}: must be 0-23")]
+pub struct ExecutionWindowError {
+    /// The offending hour value.
+    pub hour: u8,
+}
+
+/// Off-peak execution window for a routine (P2-5).
+///
+/// # Semantics (frozen contract: `ExecutionPolicy.execution_window`)
+///
+/// - `start_hour` and `end_hour` are **wall-clock hours in the window's
+///   timezone, both inclusive**: the window covers `[start_hour:00:00,
+///   (end_hour + 1):00:00)`. With `start = 22, end = 6` a routine may
+///   execute from 22:00:00 up to (and including) 06:59:59.999.
+/// - **Cross-midnight windows are supported**: `start_hour > end_hour`
+///   wraps past midnight (22→6 spans 22:00 through 07:00 the next morning).
+/// - `start_hour == end_hour` denotes the single hour
+///   `[start_hour:00, start_hour+1:00)` (inclusive-hours rule).
+/// - `start_hour == 0 && end_hour == 23` is the full 24-hour window
+///   (every moment is inside).
+/// - `timezone`: IANA name (e.g. `"America/New_York"`), `"UTC"`, or a fixed
+///   offset (`"+09:00"` / `"-0530"` / `"+09"`). `None`/empty (default) uses
+///   the machine's local timezone. Full IANA names other than `"UTC"` fall
+///   back to the local timezone (no tz database in this crate) — use a
+///   fixed offset for deterministic non-local zones.
+/// - Hours outside `0..=23` are rejected by [`ExecutionWindow::new`]
+///   (and by the desktop create/update commands).
+///
+/// Routines **without** a window execute immediately when due — unchanged
+/// legacy behavior.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionWindow {
+    /// First inclusive hour of the window (0-23) in `timezone` wall time.
+    pub start_hour: u8,
+    /// Last inclusive hour of the window (0-23) in `timezone` wall time.
+    pub end_hour: u8,
+    /// IANA zone name, `"UTC"`, or fixed offset (`"+09:00"`).
+    /// `None`/empty = machine-local timezone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+}
+
+impl ExecutionWindow {
+    /// Validate and construct a window. Rejects hours outside `0..=23`.
+    pub fn new(
+        start_hour: u8,
+        end_hour: u8,
+        timezone: Option<String>,
+    ) -> Result<Self, ExecutionWindowError> {
+        if start_hour > 23 {
+            return Err(ExecutionWindowError { hour: start_hour });
+        }
+        if end_hour > 23 {
+            return Err(ExecutionWindowError { hour: end_hour });
+        }
+        Ok(Self {
+            start_hour,
+            end_hour,
+            timezone,
+        })
+    }
+
+    /// Whether `now_utc` falls inside the window.
+    ///
+    /// Pure function of the instant — callers wanting testable due checks
+    /// pass an injected clock instead of `Utc::now()` (see
+    /// [`RoutineManager::drain_due_with_history_at`]).
+    pub fn contains_utc(&self, now_utc: DateTime<Utc>) -> bool {
+        let hour = self.wall_hour(now_utc);
+        self.hour_in_window(hour)
+    }
+
+    /// Whether the window covers every moment (start 0, end 23).
+    pub fn is_full_day(&self) -> bool {
+        self.start_hour == 0 && self.end_hour == 23
+    }
+
+    /// Resolve the wall-clock hour for `now_utc` in the window's timezone.
+    fn wall_hour(&self, now_utc: DateTime<Utc>) -> u32 {
+        let offset = self.resolve_offset();
+        offset.from_utc_datetime(&now_utc.naive_utc()).hour()
+    }
+
+    fn hour_in_window(&self, hour: u32) -> bool {
+        if self.start_hour <= self.end_hour {
+            hour >= self.start_hour as u32 && hour <= self.end_hour as u32
+        } else {
+            // Cross-midnight: e.g. 22→6 wraps through 0.
+            hour >= self.start_hour as u32 || hour <= self.end_hour as u32
+        }
+    }
+
+    /// Resolve the configured timezone to a fixed UTC offset.
+    ///
+    /// `None`/empty/`"local"` → machine-local offset; `"UTC"` → zero;
+    /// `"+HH:MM" | "+HHMM" | "+HH"` (or `-`) → fixed offset; anything else
+    /// (IANA names we cannot resolve without a tz database) falls back to
+    /// the machine-local offset.
+    fn resolve_offset(&self) -> chrono::FixedOffset {
+        let name = self
+            .timezone
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("local");
+        match name.to_ascii_lowercase().as_str() {
+            "utc" | "gmt" | "z" => chrono::FixedOffset::east_opt(0).unwrap_or_else(local_offset),
+            "local" | "system" | "system-local" => local_offset(),
+            _ => parse_fixed_offset(name).unwrap_or_else(local_offset),
+        }
+    }
+}
+
+fn local_offset() -> chrono::FixedOffset {
+    *Local::now().offset()
+}
+
+/// Parse `"+09:00"`, `"-0530"`, `"+09"` style fixed offsets.
+fn parse_fixed_offset(s: &str) -> Option<chrono::FixedOffset> {
+    let (sign, rest) = match s.as_bytes().first()? {
+        b'+' => (1i32, &s[1..]),
+        b'-' => (-1i32, &s[1..]),
+        _ => return None,
+    };
+    let (h, m) = match rest.split_once(':') {
+        Some((h, m)) => (h, m),
+        None => match rest.len() {
+            2 => (rest, "00"),
+            4 => (&rest[..2], &rest[2..]),
+            _ => return None,
+        },
+    };
+    let hours: i32 = h.parse().ok()?;
+    let mins: i32 = m.parse().ok()?;
+    if !(0..=23).contains(&hours) || !(0..=59).contains(&mins) {
+        return None;
+    }
+    chrono::FixedOffset::east_opt(sign * (hours * 3600 + mins * 60))
 }
 
 /// Trigger type for scheduled routines.
@@ -154,6 +304,11 @@ pub enum TriggerType {
     Webhook,
     /// Event trigger: fires when a matching hook event fires.
     Event,
+    /// GitHub webhook trigger (P2-7): fires when the shannon-server
+    /// `POST /hooks/github` endpoint receives a delivery matching the
+    /// routine's `github` config. Event-driven only — never fires from the
+    /// time-based drain (see [`ScheduledRoutine::should_fire`]).
+    Github,
 }
 
 /// A single scheduled routine.
@@ -222,6 +377,14 @@ pub struct ScheduledRoutine {
     /// non-terminal/failed state, this routine is blocked.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
+
+    // ── GitHub event trigger (P2-7) ─────────────────────────────────────
+    /// GitHub event trigger config. Present only when `trigger_type` is
+    /// [`TriggerType::Github`]; matched against incoming
+    /// `POST /hooks/github` deliveries by
+    /// [`crate::github_triggers::matching_github_routines`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<crate::github_triggers::GitHubTrigger>,
 }
 
 /// Result of checking a routine's dependencies.
@@ -283,6 +446,7 @@ impl ScheduledRoutine {
             last_run_id: None,
             last_error: None,
             depends_on: Vec::new(),
+            github: None,
         }
     }
 
@@ -317,6 +481,7 @@ impl ScheduledRoutine {
             last_run_id: None,
             last_error: None,
             depends_on: Vec::new(),
+            github: None,
         })
     }
 
@@ -332,6 +497,17 @@ impl ScheduledRoutine {
     /// - Cron mode: applies Claude Code-style jitter (up to 90s early when
     ///   minute field is `:00` or `:30`).
     pub fn should_fire(&self) -> bool {
+        self.should_fire_at(Utc::now())
+    }
+
+    /// Clock-injectable variant of [`Self::should_fire`] (P2-5 minimal
+    /// refactor): callers pass the current instant so window/queue behavior
+    /// is unit-testable without sleeping. Production callers use
+    /// [`Self::should_fire`].
+    ///
+    /// Note: the interval/cron jitter still draws randomness internally; the
+    /// injection only pins the clock, preserving fire semantics.
+    pub fn should_fire_at(&self, now: DateTime<Utc>) -> bool {
         if !self.enabled {
             return false;
         }
@@ -341,22 +517,39 @@ impl ScheduledRoutine {
             }
         }
         if let Some(exp) = self.expires_at {
-            if Utc::now() >= exp {
+            if now >= exp {
                 return false;
             }
         }
         match self.trigger_type {
-            TriggerType::Cron => self.should_fire_cron(),
-            _ => self.should_fire_interval(),
+            TriggerType::Cron => self.should_fire_cron_at(now),
+            // Github routines are event-driven: only `POST /hooks/github`
+            // fires them, never the interval drain.
+            TriggerType::Github => false,
+            _ => self.should_fire_interval_at(now),
+        }
+    }
+
+    /// Whether the routine is currently inside its execution window.
+    ///
+    /// Routines without a window are always "inside" (immediate execution).
+    pub fn in_execution_window(&self, now: DateTime<Utc>) -> bool {
+        match self
+            .policy
+            .as_ref()
+            .and_then(|p| p.execution_window.as_ref())
+        {
+            Some(w) => w.contains_utc(now),
+            None => true,
         }
     }
 
     /// Interval-mode should-fire check.
-    fn should_fire_interval(&self) -> bool {
+    fn should_fire_interval_at(&self, now: DateTime<Utc>) -> bool {
         match self.last_fired {
             None => true,
             Some(last) => {
-                let elapsed = Utc::now().signed_duration_since(last).num_seconds().max(0) as u64;
+                let elapsed = now.signed_duration_since(last).num_seconds().max(0) as u64;
                 let jitter = apply_jitter(self.interval_secs, JITTER_CAP_SECS);
                 elapsed >= self.interval_secs + jitter
             }
@@ -367,8 +560,7 @@ impl ScheduledRoutine {
     ///
     /// Compares now against `next_fire_at`, with Claude Code-style early-fire
     /// jitter (up to 90s when the minute field is `:00` or `:30`).
-    fn should_fire_cron(&self) -> bool {
-        let now = Utc::now();
+    fn should_fire_cron_at(&self, now: DateTime<Utc>) -> bool {
         let next = match self.next_fire_at {
             Some(t) => t,
             None => return true,
@@ -388,11 +580,16 @@ impl ScheduledRoutine {
     /// Logs a warning if recomputation fails (the expression was valid at
     /// construction, so this should be rare).
     pub fn mark_fired(&mut self) {
-        self.last_fired = Some(Utc::now());
+        self.mark_fired_at(Utc::now())
+    }
+
+    /// Clock-injectable variant of [`Self::mark_fired`].
+    pub fn mark_fired_at(&mut self, now: DateTime<Utc>) {
+        self.last_fired = Some(now);
         self.fire_count += 1;
         if self.trigger_type == TriggerType::Cron {
             if let Some(cron_expr) = &self.cron_expr {
-                match compute_next_fire_utc(cron_expr, Utc::now()) {
+                match compute_next_fire_utc(cron_expr, now) {
                     Ok(next) => self.next_fire_at = next,
                     Err(e) => {
                         tracing::warn!(
@@ -428,7 +625,16 @@ pub struct DueRun {
     pub prompt: String,
     /// ID of the `Running` run record created for this firing. Caller must
     /// finish it via `ScheduledRunsStore::update(run_id, |r| r.finish(...))`.
+    ///
+    /// When [`Self::queued_for_window`] is `true` this id instead belongs to
+    /// the `Queued` tombstone record and the caller must NOT execute the
+    /// prompt.
     pub run_id: String,
+    /// P2-5: the routine was due **but outside its execution window**. A
+    /// `Queued` run record was written (history only, no inbox item), the
+    /// routine was deliberately NOT marked fired, and the caller must skip
+    /// execution — the first due check inside the window will fire it.
+    pub queued_for_window: bool,
 }
 
 impl RoutineManager {
@@ -543,11 +749,26 @@ impl RoutineManager {
     /// - Returns [`DueRun`] structs carrying `task_id` / `task_name` / `prompt` / `run_id`
     /// - **Skips routines blocked by pending dependencies (C4)**, recording
     ///   the blocker IDs in `last_error` instead of firing.
+    /// - **Queues routines outside their `execution_window` (P2-5)**: a due
+    ///   routine that is not inside its window gets a single `Queued` run
+    ///   record (not executed, not marked fired); the returned [`DueRun`]
+    ///   carries `queued_for_window = true`.
     ///
     /// Callers must call `ScheduledRunsStore::update` with the `run_id` to
     /// transition the run to `Succeeded` / `Failed` after executing the prompt.
     pub fn drain_due_with_history(
         &mut self,
+        runs: &crate::scheduled_runs::ScheduledRunsStore,
+    ) -> Result<Vec<DueRun>, crate::scheduled_runs::RunsStoreError> {
+        self.drain_due_with_history_at(Utc::now(), runs)
+    }
+
+    /// Clock-injectable variant of [`Self::drain_due_with_history`] (P2-5
+    /// minimal refactor). `now` pins the due check and the window lookup so
+    /// queued → in-window execution transitions are unit-testable.
+    pub fn drain_due_with_history_at(
+        &mut self,
+        now: DateTime<Utc>,
         runs: &crate::scheduled_runs::ScheduledRunsStore,
     ) -> Result<Vec<DueRun>, crate::scheduled_runs::RunsStoreError> {
         let mut due = Vec::new();
@@ -559,7 +780,7 @@ impl RoutineManager {
             .map(|(id, r)| (id.clone(), routine_last_run_succeeded(Some(r), runs)))
             .collect();
         for routine in self.routines.values_mut() {
-            if routine.should_fire() {
+            if routine.should_fire_at(now) {
                 // C4: dependency check — gather blocker IDs before firing.
                 let blocker_ids: Vec<String> = routine
                     .depends_on
@@ -572,17 +793,49 @@ impl RoutineManager {
                         Some(format!("Blocked by deps: {}", blocker_ids.join(", ")));
                     continue;
                 }
+
+                // P2-5: due but outside the execution window → queue instead
+                // of firing. Idempotent: while the routine's latest run is
+                // still the pending `Queued` tombstone, do not append another
+                // one. The routine is NOT marked fired, so the first due
+                // check inside the window fires it normally.
+                if !routine.in_execution_window(now) {
+                    let already_queued = routine
+                        .last_run_id
+                        .as_deref()
+                        .and_then(|id| runs.find_by_id(id).ok().flatten())
+                        .is_some_and(|r| r.status == crate::scheduled_runs::RunStatus::Queued);
+                    if already_queued {
+                        continue;
+                    }
+                    let mut run =
+                        crate::scheduled_runs::ScheduledRun::start(&routine.id, &routine.name);
+                    run.started_at = now;
+                    run.status = crate::scheduled_runs::RunStatus::Queued;
+                    let run_id = runs.record(&run)?;
+                    routine.last_run_id = Some(run_id.clone());
+                    due.push(DueRun {
+                        task_id: routine.id.clone(),
+                        task_name: routine.name.clone(),
+                        prompt: routine.prompt.clone(),
+                        run_id,
+                        queued_for_window: true,
+                    });
+                    continue;
+                }
+
                 let run_id = runs.start_run(&routine.id, &routine.name)?;
                 routine.last_run_id = Some(run_id.clone());
                 let task_id = routine.id.clone();
                 let task_name = routine.name.clone();
                 let prompt = routine.prompt.clone();
-                routine.mark_fired();
+                routine.mark_fired_at(now);
                 due.push(DueRun {
                     task_id,
                     task_name,
                     prompt,
                     run_id,
+                    queued_for_window: false,
                 });
             }
         }
@@ -1321,5 +1574,270 @@ mod tests {
         let due = mgr.drain_due_with_history(&store).unwrap();
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].task_id, child_id);
+    }
+
+    // ── P2-5: execution windows ──────────────────────────────────────────
+
+    use crate::scheduled_runs::RunStatus as P2RunStatus;
+    use crate::scheduled_runs::ScheduledRunsStore as P2RunsStore;
+
+    fn utc(h: u32, m: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 1, 15, h, m, 0).unwrap()
+    }
+
+    fn window(start: u8, end: u8, tz: Option<&str>) -> ExecutionWindow {
+        ExecutionWindow::new(start, end, tz.map(str::to_string)).unwrap()
+    }
+
+    fn windowed_routine(start: u8, end: u8, tz: Option<&str>) -> ScheduledRoutine {
+        let mut r = ScheduledRoutine::new("nightly".into(), "p".into(), 3600);
+        r.policy = Some(ExecutionPolicy {
+            execution_window: Some(window(start, end, tz)),
+            ..ExecutionPolicy::default()
+        });
+        r
+    }
+
+    #[test]
+    fn test_execution_window_rejects_invalid_hours() {
+        assert!(ExecutionWindow::new(24, 6, None).is_err());
+        assert!(ExecutionWindow::new(22, 255, None).is_err());
+        assert!(ExecutionWindow::new(0, 23, None).is_ok());
+        assert!(ExecutionWindow::new(22, 6, None).is_ok());
+        let err = ExecutionWindow::new(30, 6, None).unwrap_err();
+        assert_eq!(err.hour, 30);
+    }
+
+    #[test]
+    fn test_execution_window_inclusive_bounds_same_day() {
+        // 9→17: in at 9:00 (inclusive start) through 17:59, out at 18:00.
+        let w = window(9, 17, Some("UTC"));
+        assert!(w.contains_utc(utc(9, 0)));
+        assert!(w.contains_utc(utc(12, 30)));
+        assert!(w.contains_utc(utc(17, 59)));
+        assert!(!w.contains_utc(utc(18, 0)));
+        assert!(!w.contains_utc(utc(8, 59)));
+    }
+
+    #[test]
+    fn test_execution_window_crosses_midnight() {
+        // 22→6 in UTC: in 22:00..23:59, wraps through 0, in 0:00..6:59.
+        let w = window(22, 6, Some("UTC"));
+        assert!(w.contains_utc(utc(22, 0)), "start hour inclusive");
+        assert!(w.contains_utc(utc(23, 30)));
+        assert!(w.contains_utc(utc(0, 0)), "midnight inside wrap");
+        assert!(w.contains_utc(utc(5, 59)));
+        assert!(w.contains_utc(utc(6, 0)), "end hour inclusive");
+        assert!(w.contains_utc(utc(6, 59)));
+        assert!(!w.contains_utc(utc(7, 0)));
+        assert!(!w.contains_utc(utc(12, 0)));
+        assert!(!w.contains_utc(utc(21, 59)));
+    }
+
+    #[test]
+    fn test_execution_window_full_day_is_always_inside() {
+        // 0→23 covers [00:00, 24:00) — exactly 24 hours, always inside.
+        let w = window(0, 23, Some("UTC"));
+        for h in [0u32, 6, 12, 18, 23] {
+            assert!(w.contains_utc(utc(h, 0)), "hour {h} must be inside");
+        }
+        assert!(w.is_full_day());
+        assert!(!window(22, 6, Some("UTC")).is_full_day());
+    }
+
+    #[test]
+    fn test_execution_window_single_hour_when_start_equals_end() {
+        // start == end → exactly one hour: [6:00, 7:00).
+        let w = window(6, 6, Some("UTC"));
+        assert!(!w.contains_utc(utc(5, 59)));
+        assert!(w.contains_utc(utc(6, 0)));
+        assert!(w.contains_utc(utc(6, 59)));
+        assert!(!w.contains_utc(utc(7, 0)));
+    }
+
+    #[test]
+    fn test_execution_window_timezone_fixed_offset_boundary() {
+        // Window 22→6 at UTC+8. Wall 22:00 (+8) == UTC 14:00.
+        let w = window(22, 6, Some("+08:00"));
+        assert!(!w.contains_utc(utc(13, 59)), "21:59 +8 is outside");
+        assert!(w.contains_utc(utc(14, 0)), "22:00 +8 opens the window");
+        assert!(w.contains_utc(utc(15, 59)), "23:59 +8 inside");
+        assert!(w.contains_utc(utc(16, 0)), "00:00 +8 inside (wrap)");
+        assert!(w.contains_utc(utc(21, 59)), "05:59 +8 inside");
+        assert!(w.contains_utc(utc(22, 0)), "06:00 +8 end-hour inclusive");
+        assert!(w.contains_utc(utc(22, 59)), "06:59 +8 still inside");
+        assert!(!w.contains_utc(utc(23, 0)), "07:00 +8 closed");
+    }
+
+    #[test]
+    fn test_execution_window_utc_named_zone_and_compact_offset() {
+        assert!(window(9, 17, Some("UTC")).contains_utc(utc(10, 0)));
+        assert!(window(9, 17, Some("utc")).contains_utc(utc(10, 0)));
+        assert!(window(9, 17, Some("+0930")).contains_utc(utc(0, 0)));
+        assert!(window(9, 17, Some("-05")).contains_utc(utc(14, 0)));
+        // Unresolvable IANA names fall back to local rather than erroring —
+        // behavior stays defined (documented degradation, no tz database).
+        let fallback = window(0, 23, Some("America/New_York"));
+        assert!(fallback.contains_utc(utc(12, 0)), "full-day window: any tz");
+    }
+
+    #[test]
+    fn test_routine_without_window_is_always_in_window() {
+        let r = ScheduledRoutine::new("plain".into(), "p".into(), 60);
+        assert!(r.in_execution_window(utc(3, 21)));
+    }
+
+    #[test]
+    fn test_policy_execution_window_serde_backward_compat() {
+        // Old ExecutionPolicy JSON (no execution_window) must parse; the new
+        // field defaults to None and is omitted when serializing None.
+        let legacy = r#"{"max_retries":1,"timeout_secs":30,"notify_on_failure":true,"auto_archive_when_empty":false}"#;
+        let p: ExecutionPolicy = serde_json::from_str(legacy).expect("legacy policy parses");
+        assert!(p.execution_window.is_none());
+        assert_eq!(p.max_retries, 1);
+
+        let json = serde_json::to_string(&ExecutionPolicy::default()).unwrap();
+        assert!(
+            !json.contains("execution_window"),
+            "None window must be skipped: {json}"
+        );
+
+        // Round-trip a policy that carries a window.
+        let mut p2 = ExecutionPolicy::default();
+        p2.execution_window = Some(window(22, 6, Some("Asia/Shanghai")));
+        let s = serde_json::to_string(&p2).unwrap();
+        assert!(s.contains("\"start_hour\":22"));
+        assert!(s.contains("\"timezone\":\"Asia/Shanghai\""));
+        let back: ExecutionPolicy = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.execution_window, p2.execution_window);
+    }
+
+    #[test]
+    fn test_legacy_routine_json_with_policy_parses() {
+        // Full legacy routine whose policy predates execution_window.
+        let json = r#"{
+            "id": "abc12345",
+            "name": "old",
+            "prompt": "hello",
+            "interval_secs": 60,
+            "created_at": "2026-01-01T00:00:00Z",
+            "enabled": true,
+            "fire_count": 5,
+            "policy": {"max_retries": 2, "timeout_secs": 600, "auto_archive_when_empty": true}
+        }"#;
+        let r: ScheduledRoutine = serde_json::from_str(json).expect("legacy routine parses");
+        let policy = r.policy.expect("policy present");
+        assert!(policy.execution_window.is_none());
+    }
+
+    #[test]
+    fn test_queued_run_status_serde_roundtrip() {
+        let s = serde_json::to_string(&P2RunStatus::Queued).unwrap();
+        assert_eq!(s, "\"queued\"");
+        let back: P2RunStatus = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, P2RunStatus::Queued);
+    }
+
+    #[test]
+    fn test_due_outside_window_queues_then_executes_in_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runs = P2RunsStore::with_base(tmp.path().to_path_buf());
+        let mut mgr = RoutineManager::new();
+        let r = windowed_routine(22, 6, Some("UTC"));
+        let id = r.id.clone();
+        mgr.add(r);
+
+        // 12:00 UTC — due (never fired) but outside the 22→6 window.
+        let due = mgr.drain_due_with_history_at(utc(12, 0), &runs).unwrap();
+        assert_eq!(due.len(), 1);
+        assert!(due[0].queued_for_window, "must be queued, not executed");
+        assert_eq!(due[0].task_id, id);
+
+        // History has exactly one Queued tombstone; routine untouched.
+        let queued = runs.find_by_id(&due[0].run_id).unwrap().unwrap();
+        assert_eq!(queued.status, P2RunStatus::Queued);
+        assert!(queued.finished_at.is_none());
+        let routine = mgr.get(&id).unwrap();
+        assert_eq!(routine.last_run_id.as_deref(), Some(due[0].run_id.as_str()));
+        assert!(routine.last_fired.is_none(), "queued must NOT mark fired");
+        assert_eq!(routine.fire_count, 0);
+
+        // A later still-outside check is idempotent — no duplicate records.
+        let due2 = mgr.drain_due_with_history_at(utc(13, 0), &runs).unwrap();
+        assert!(due2.is_empty(), "already queued: no new records");
+        assert_eq!(runs.list_by_task(&id, 10).unwrap().len(), 1);
+
+        // First check inside the window executes normally.
+        let due3 = mgr.drain_due_with_history_at(utc(22, 30), &runs).unwrap();
+        assert_eq!(due3.len(), 1);
+        assert!(!due3[0].queued_for_window);
+        assert_ne!(due3[0].run_id, due[0].run_id, "fresh run for execution");
+        let running = runs.find_by_id(&due3[0].run_id).unwrap().unwrap();
+        assert_eq!(running.status, P2RunStatus::Running);
+        let fired = mgr.get(&id).unwrap();
+        assert_eq!(fired.fire_count, 1, "exactly one real firing");
+        assert_eq!(
+            fired.last_fired.map(|t| t.to_rfc3339()),
+            Some(utc(22, 30).to_rfc3339()),
+            "injected clock used for mark_fired"
+        );
+
+        // The queued tombstone stays in history for visibility.
+        let still_queued = runs.find_by_id(&due[0].run_id).unwrap().unwrap();
+        assert_eq!(still_queued.status, P2RunStatus::Queued);
+    }
+
+    #[test]
+    fn test_full_day_window_executes_immediately() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runs = P2RunsStore::with_base(tmp.path().to_path_buf());
+        let mut mgr = RoutineManager::new();
+        let r = windowed_routine(0, 23, Some("UTC"));
+        let id = r.id.clone();
+        mgr.add(r);
+        let due = mgr.drain_due_with_history_at(utc(3, 15), &runs).unwrap();
+        assert_eq!(due.len(), 1);
+        assert!(!due[0].queued_for_window);
+        assert_eq!(mgr.get(&id).unwrap().fire_count, 1);
+    }
+
+    #[test]
+    fn test_disabled_routine_with_window_never_queues() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runs = P2RunsStore::with_base(tmp.path().to_path_buf());
+        let mut mgr = RoutineManager::new();
+        let mut r = windowed_routine(22, 6, Some("UTC"));
+        r.enabled = false;
+        mgr.add(r);
+        let due = mgr.drain_due_with_history_at(utc(12, 0), &runs).unwrap();
+        assert!(due.is_empty(), "disabled routines are not even queued");
+    }
+
+    #[test]
+    fn test_cron_routine_with_window_queues_and_fires_in_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runs = P2RunsStore::with_base(tmp.path().to_path_buf());
+        let mut mgr = RoutineManager::new();
+        let mut r = windowed_routine(22, 6, Some("UTC"));
+        r.trigger_type = TriggerType::Cron;
+        r.cron_expr = Some("0 * * * *".into());
+        r.next_fire_at = Some(utc(11, 0)); // due at 11:00 UTC — outside window
+        let id = r.id.clone();
+        mgr.add(r);
+
+        let due = mgr.drain_due_with_history_at(utc(11, 30), &runs).unwrap();
+        assert_eq!(due.len(), 1);
+        assert!(due[0].queued_for_window);
+        assert!(mgr.get(&id).unwrap().next_fire_at.is_some());
+
+        // Inside the window the cron fires and recomputes next_fire_at from
+        // the injected clock.
+        let due2 = mgr.drain_due_with_history_at(utc(23, 30), &runs).unwrap();
+        assert_eq!(due2.len(), 1);
+        assert!(!due2[0].queued_for_window);
+        let fired = mgr.get(&id).unwrap();
+        assert_eq!(fired.fire_count, 1);
+        let next = fired.next_fire_at.expect("cron recomputes next fire");
+        assert!(next > utc(23, 30), "next fire strictly after injected now");
     }
 }

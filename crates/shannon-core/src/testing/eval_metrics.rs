@@ -1070,10 +1070,12 @@ mod tests {
                 provider: Some("mock".into()),
                 cwd: None,
                 app_version: Some("0.0.0".into()),
+                ..Default::default()
             }),
             SessionEventBody::UserMessage(shannon_types::session_event::UserMessagePayload {
                 source: "user".into(),
                 content: "task".into(),
+                attachment_count: 0,
             }),
             // turn/start events advance the writer's envelope-turn counter
             // exactly as the tee does per user-visible round.
@@ -1557,6 +1559,7 @@ mod tests {
                 provider: Some("mock".into()),
                 cwd: None,
                 app_version: None,
+                ..Default::default()
             }),
         );
 
@@ -1606,6 +1609,7 @@ mod tests {
             SessionEventBody::UserMessage(UserMessagePayload {
                 source: UserMessagePayload::SOURCE_USER.into(),
                 content: "task".into(),
+                attachment_count: 0,
             }),
         )];
         assert!(extract_anchor(&no_metadata).is_unknown());

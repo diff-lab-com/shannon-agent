@@ -603,6 +603,7 @@ mod tests {
         w.record(SessionEventBody::UserMessage(UserMessagePayload {
             source: UserMessagePayload::SOURCE_USER.into(),
             content: "run ls".into(),
+            attachment_count: 0,
         }));
         w.record(SessionEventBody::ToolCall(ToolCallPayload {
             tool_use_id: "t1".into(),

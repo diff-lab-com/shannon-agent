@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { CodeBlock } from '@/components/code/CodeBlock'
+import GoalStartForm from '@/components/chat/GoalStartForm'
 import { cn } from '@/lib/utils'
 import type { SlashResult } from '@/lib/slash/commands'
 
@@ -143,6 +144,8 @@ export default function SlashResultCard({ result, onDismiss }: SlashResultCardPr
         </div>
       )
     }
+  } else if (result.kind === 'goalForm') {
+    body = <GoalStartForm sessionId={result.sessionId} onDismiss={onDismiss} />
   } else {
     body = <p className="font-label-sm text-on-surface">{t(result.messageKey)}</p>
   }
@@ -152,6 +155,7 @@ export default function SlashResultCard({ result, onDismiss }: SlashResultCardPr
     : result.kind === 'cost' ? 'slash.card.cost.title'
     : result.kind === 'diff' ? 'slash.card.diff.title'
     : result.kind === 'compact' ? 'slash.card.compact.title'
+    : result.kind === 'goalForm' ? 'slash.card.goal.title'
     : 'slash.card.error.title'
 
   return (
@@ -166,6 +170,7 @@ export default function SlashResultCard({ result, onDismiss }: SlashResultCardPr
               : result.kind === 'cost' ? 'payments'
               : result.kind === 'diff' ? 'difference'
               : result.kind === 'compact' ? 'compress'
+              : result.kind === 'goalForm' ? 'flag'
               : 'error'}
           </span>
           {t(titleKey)}

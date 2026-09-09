@@ -23,6 +23,7 @@ use crate::ssh::fs::SshFs;
 use crate::ssh::process::SshProcess;
 use crate::ssh::session::{HealthReport, SshRuntime, WorldStatus};
 use crate::target::{RemoteTarget, TargetKind};
+use shannon_tool_interface::providers::BrowserProvider;
 
 /// One immutable world snapshot: providers plus bookkeeping.
 #[derive(Clone)]
@@ -32,6 +33,10 @@ struct CurrentWorld {
     caps: ExecCaps,
     target: Option<RemoteTarget>,
     runtime: Option<Arc<SshRuntime>>,
+    /// Browser world (T14 Phase 3): `None` unless a browser provider was
+    /// attached to this world. Lives beside fs/process because a browser
+    /// is a peer execution surface, not a filesystem or a process.
+    browser: Option<Arc<dyn BrowserProvider>>,
 }
 
 /// Shared, observable world state (status pill, `/remote` dashboard).
@@ -92,6 +97,8 @@ pub fn active_target_display() -> Option<(String, bool)> {
 pub struct DynamicWorld {
     local_fs: Arc<dyn FileSystemProvider>,
     local_process: Arc<dyn ProcessProvider>,
+    /// Optional browser world attached at construction (T14 Phase 3).
+    browser: Option<Arc<dyn BrowserProvider>>,
     current: RwLock<Arc<CurrentWorld>>,
     state: Arc<WorldState>,
 }
@@ -103,12 +110,23 @@ impl DynamicWorld {
         local_fs: Arc<dyn FileSystemProvider>,
         local_process: Arc<dyn ProcessProvider>,
     ) -> (Arc<Self>, Arc<WorldState>) {
+        Self::new_with_browser(local_fs, local_process, None)
+    }
+
+    /// Same as [`Self::new`], attaching an optional browser world
+    /// (T14 Phase 3). Callers without a browser pass `None`.
+    pub fn new_with_browser(
+        local_fs: Arc<dyn FileSystemProvider>,
+        local_process: Arc<dyn ProcessProvider>,
+        browser: Option<Arc<dyn BrowserProvider>>,
+    ) -> (Arc<Self>, Arc<WorldState>) {
         let initial = CurrentWorld {
             fs: local_fs.clone(),
             process: local_process.clone(),
             caps: ExecCaps { is_remote: false },
             target: None,
             runtime: None,
+            browser: None,
         };
         let (status_tx, _) = watch::channel(WorldStatus::Local);
         let state = Arc::new(WorldState {
@@ -119,11 +137,19 @@ impl DynamicWorld {
             Arc::new(Self {
                 local_fs,
                 local_process,
+                browser,
                 current: RwLock::new(Arc::new(initial)),
                 state: state.clone(),
             }),
             state,
         )
+    }
+
+    /// The active world's browser, if any (T14 Phase 3). Reads the
+    /// snapshot so the accessor follows target switches — the browser
+    /// rides along inside `CurrentWorld` when `/remote use` swaps worlds.
+    pub fn browser(&self) -> Option<Arc<dyn BrowserProvider>> {
+        self.snapshot().browser.clone()
     }
 
     /// Shared state handle (UI status pill, dashboards).
@@ -175,6 +201,10 @@ impl DynamicWorld {
                         caps: ExecCaps { is_remote: true },
                         target: Some(target.clone()),
                         runtime: Some(runtime),
+                        // The browser world rides along across target
+                        // switches (a remote browser endpoint is additive
+                        // to the fs/process world).
+                        browser: self.browser.clone(),
                     },
                     WorldStatus::Connected,
                 );
@@ -206,6 +236,7 @@ impl DynamicWorld {
                         caps: ExecCaps { is_remote: true },
                         target: Some(target.clone()),
                         runtime: None,
+                        browser: self.browser.clone(),
                     },
                     WorldStatus::Connected,
                 );
@@ -239,6 +270,7 @@ impl DynamicWorld {
                 caps: ExecCaps { is_remote: false },
                 target: None,
                 runtime: None,
+                browser: self.browser.clone(),
             },
             WorldStatus::Local,
         );

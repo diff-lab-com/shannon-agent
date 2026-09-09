@@ -37,7 +37,13 @@ fn main() {
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
     use shannon_desktop::extensions_commands;
     use shannon_desktop::loopback_api;
+    use shannon_desktop::migration_commands;
+    use shannon_desktop::persona_pack_commands;
+    use shannon_desktop::preview_commands;
+    use shannon_desktop::session_window_commands;
     use shannon_desktop::skill_pattern_detection;
+    use shannon_desktop::terminal_commands;
+    use shannon_desktop::workspace_commands;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
         menu::{MenuBuilder, MenuItemBuilder},
@@ -270,9 +276,41 @@ fn main() {
             shannon_desktop::scheduled_commands::toggle_triggered_routine,
             shannon_desktop::scheduled_commands::create_triggered_routine,
             shannon_desktop::scheduled_commands::get_opc_metrics,
+            // P0-3 — SQLite inbox (items + automation run history)
+            shannon_desktop::inbox_commands::list_inbox_items,
+            shannon_desktop::inbox_commands::update_inbox_item_status,
+            shannon_desktop::inbox_commands::get_inbox_stats,
+            shannon_desktop::inbox_commands::rerun_inbox_item,
+            shannon_desktop::inbox_commands::continue_inbox_item_session,
+            // P0-2 — desktop goal runner (run cards on the Tasks page)
+            shannon_desktop::goal_commands::start_goal_run,
+            shannon_desktop::goal_commands::list_goal_runs,
+            shannon_desktop::goal_commands::get_goal_run,
+            shannon_desktop::goal_commands::stop_goal_run,
+            shannon_desktop::goal_commands::pause_goal_run,
+            shannon_desktop::goal_commands::resume_goal_run,
+            shannon_desktop::goal_commands::update_goal_objective,
+            // P1-2 — desktop best-of-N batch runs (frozen contract)
+            shannon_desktop::batch_commands::start_batch_run,
+            shannon_desktop::batch_commands::list_batch_runs,
+            shannon_desktop::batch_commands::get_batch_branch_diff,
+            shannon_desktop::batch_commands::adopt_batch_branch,
+            shannon_desktop::batch_commands::discard_batch_run,
+            // P0-4 — cost observability: session budget + context
+            // breakdown + per-session usage aggregation
+            shannon_desktop::cost_commands::set_session_budget,
+            shannon_desktop::cost_commands::get_session_budget,
+            shannon_desktop::cost_commands::get_session_context_breakdown,
+            shannon_desktop::cost_commands::get_usage_by_session,
+            // P1-1 — session multi-window (frozen contract)
+            session_window_commands::open_session_window,
+            session_window_commands::list_session_windows,
+            session_window_commands::close_session_window,
+            session_window_commands::reveal_session_in_main,
             // Automation: hook-event catalog + custom permission profiles
             shannon_desktop::automation_commands::list_hook_events,
             shannon_desktop::automation_commands::list_permission_profiles,
+            shannon_desktop::automation_commands::activate_permission_profile,
             shannon_desktop::automation_commands::save_custom_profile,
             shannon_desktop::automation_commands::delete_custom_profile,
             shannon_desktop::lsp_commands::lsp_code_actions,
@@ -307,15 +345,90 @@ fn main() {
             commands_memory::delete_memory,
             commands_memory::search_memories,
             commands_memory::get_memory_stats,
+            commands_memory::get_memory_source,
+            commands_memory::get_memory_graph,
+            // P1-5 C-1 — dev-server preview (frozen contract) + log ring.
+            preview_commands::preview_detect,
+            preview_commands::preview_start,
+            preview_commands::preview_stop,
+            preview_commands::preview_status,
+            preview_commands::preview_capture,
+            preview_commands::preview_logs,
+            // P1-6 — migration wizard (Claude Code / ZCode → Shannon)
+            migration_commands::migration_scan,
+            migration_commands::migration_preview,
+            migration_commands::migration_apply,
+            // P2-2 — persona/profile pack (frozen contract).
+            persona_pack_commands::persona_pack_export,
+            persona_pack_commands::persona_pack_import,
+            persona_pack_commands::persona_pack_inspect,
+            // P1-5 D — integrated terminal (frozen contract).
+            terminal_commands::terminal_spawn,
+            terminal_commands::terminal_write,
+            terminal_commands::terminal_resize,
+            terminal_commands::terminal_kill,
+            terminal_commands::terminal_list,
+            // P1-5 C-2 — draggable panel workspace (frozen contract).
+            workspace_commands::workspace_get_layout,
+            workspace_commands::workspace_set_layout,
         ])
+        // P1-1 — session window lifecycle: a destroyed `session-*` window
+        // (titlebar close, close_session_window, OS teardown) drops its
+        // registry entry and refreshes the persisted restore list.
+        .on_window_event(|window, event| {
+            if !matches!(event, tauri::WindowEvent::Destroyed) {
+                return;
+            }
+            if window.label() == "main" {
+                // P1-5 C-1 — the preview dev-server child must never outlive
+                // the app: kill it before teardown (kill_on_drop on the
+                // managed AppState is the backstop if this doesn't run).
+                if let Some(state) = window.app_handle().try_state::<commands::AppState>() {
+                    preview_commands::shutdown_on_exit(&state);
+                    // P1-5 D — PTY process trees must never outlive the app.
+                    terminal_commands::shutdown_on_exit(&state);
+                }
+                // 主窗口关闭 = 退出应用 (existing semantic, P1-1): persist the
+                // open-session list for next-launch restore, then close the
+                // session windows so the app actually exits.
+                session_window_commands::handle_main_window_destroyed(window.app_handle());
+                return;
+            }
+            if window
+                .label()
+                .starts_with(session_window_commands::SESSION_WINDOW_PREFIX)
+            {
+                let label = window.label().to_string();
+                let app = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(state) = app.try_state::<commands::AppState>() {
+                        session_window_commands::cleanup_destroyed_window(&state, &label).await;
+                    }
+                });
+            }
+        })
         .setup(|app| {
             let mut state = commands::AppState::new();
             state.attach_notification_handler(app.handle().clone());
+            // P1-5 D — the terminal pump emits `terminal:output` through the
+            // AppHandle (attached as early as possible so a shell spawned
+            // before any command runs can already stream).
+            terminal_commands::attach_sink(&state, app.handle().clone());
             app.manage(state);
+
+            // P1-1 — reopen the session windows that were open at last
+            // shutdown. Silent on failure (stale ids are dropped from the
+            // persisted list); must run after `app.manage(state)`.
+            session_window_commands::restore_session_windows(app.handle());
 
             // E-1 方案 C — auto-start the gateway supervisor when `managed` is on.
             let app_handle = app.handle().clone();
             let state_ref: tauri::State<'_, commands::AppState> = app.state();
+            // The P2-5 scheduler below also needs an AppHandle and runs
+            // outside this `async move` block; clone once so the outer
+            // binding isn't consumed by the block_on future (rustc's
+            // `async move` capture moves the original by value).
+            let app_handle_for_block = app_handle.clone();
             tauri::async_runtime::block_on(async move {
                 // Q4-A — before hosting our own loopback engine API server,
                 // probe 127.0.0.1:33420. If another engine (typically the
@@ -338,7 +451,9 @@ fn main() {
                     // is reachable when the supervised gateway boots. The
                     // brief sleep lets the listener bind first; serve() then
                     // runs for the lifetime of the process on a detached task.
-                    loopback_api::spawn(state_ref.inner()).await;
+                    // P0-3 — the same listener also serves the HMAC-gated
+                    // POST /api/routines/:id/trigger endpoint.
+                    loopback_api::spawn(state_ref.inner(), app_handle_for_block.clone()).await;
                     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                 } else {
                     tracing::info!(
@@ -346,8 +461,24 @@ fn main() {
                          skipping loopback host"
                     );
                 }
-                commands_connections::bootstrap_gateway_supervisor(&state_ref, &app_handle).await;
+                commands_connections::bootstrap_gateway_supervisor(
+                    &state_ref,
+                    &app_handle_for_block,
+                )
+                .await;
             });
+
+            // P2-5 — routine scheduler: periodic due check (every 30s).
+            // Routines due inside their execution window (or without one)
+            // execute through the shared routine-run path; routines due
+            // outside their window are queued until the window opens.
+            {
+                let sched_state: tauri::State<'_, commands::AppState> = app.state();
+                shannon_desktop::scheduled_commands::spawn_scheduler(
+                    sched_state.inner(),
+                    app_handle.clone(),
+                );
+            }
 
             // Bundle A — Click-to-foreground: when a Shannon notification is
             // clicked, bring the main window to the foreground. On macOS and

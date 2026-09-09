@@ -12,7 +12,10 @@ import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates';
 import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal';
 import { useSidebar } from './Layout';
 import * as api from '@/lib/tauri-api';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { toastError } from '@/lib/errorToast';
+import { useSessionBudget } from '@/hooks/useSessionBudget';
+import { ExecutionModeSwitcher } from '@/components/chat/ExecutionModeSwitcher';
 
 const TITLE_MAP: [string, string][] = [
   ['/opc/task', 'header.title.opcTask'],
@@ -42,9 +45,12 @@ export function Header() {
   const location = useLocation();
   const navigate = useNavigate();
   const { status, models, permissionRequest, respondPermission, refreshConfig, refreshStatus } = useCatalog();
-  const { sessions, currentSessionId } = useSessions();
+  const { sessions, currentSessionId, windowSessionId } = useSessions();
   const { contextPanelOpen, toggleContextPanel } = useChat();
   const { toggle: toggleSidebar } = useSidebar();
+  // P1-1 window mode: this window is a dedicated session window (slim
+  // chrome; header carries「在主窗口打开」+「关闭窗口」).
+  const isWindowMode = windowSessionId != null;
   const [modelOpen, setModelOpen] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);
   const [modelFocus, setModelFocus] = useState(-1);
@@ -75,6 +81,10 @@ export function Header() {
   const title = isChat && chatSession?.title
     ? chatSession.title
     : t(getTitleKey(location.pathname));
+  // P0-4: spent/budget badge for the current chat session (rendered only
+  // while a budget cap is set on the session sidecar).
+  const chatSessionId = isChat ? chatSession?.id ?? null : null;
+  const { budget: sessionBudget, usage: sessionUsage } = useSessionBudget(chatSessionId);
   const isOpcTask = location.pathname.includes('/opc/task');
 
   // Click outside to close model selector
@@ -105,12 +115,27 @@ export function Header() {
     } catch (e) { toastError(t('header.model.failed'), e) }
   }
 
+  // P1-1: focus the main window and have it switch to this window's
+  // session (backend focuses `main` and emits `session-window:reveal`).
+  const handleOpenInMain = () => {
+    if (!windowSessionId) return
+    api.revealSessionInMain(windowSessionId).catch(e => toastError(t('windowMode.openInMain.failed'), e))
+  }
+
+  const handleCloseWindow = () => {
+    // Only ever closes this window's own `session-*` label — the backend
+    // rejects non-session labels.
+    api.closeSessionWindow(getCurrentWindow().label).catch(e => toastError(t('windowMode.close.failed'), e))
+  }
+
   return (
     <>
       <header className="fixed top-0 right-0 z-header flex justify-between items-center h-16 px-lg bg-surface/80 backdrop-blur-md shadow-sm border-b border-outline-variant/10" style={{ left: 'var(--sidebar-w)' }}>
-        <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
-          <span className="material-symbols-outlined icon-lg">menu</span>
-        </Button>
+        {!isWindowMode && (
+          <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
+            <span className="material-symbols-outlined icon-lg">menu</span>
+          </Button>
+        )}
         <div className="flex items-center gap-md relative w-full overflow-hidden">
           {isOpcTask ? (
             <div className="flex items-center gap-2">
@@ -129,6 +154,37 @@ export function Header() {
           )}
         </div>
         <div className="flex items-center gap-lg shrink-0 pl-4 border-l border-outline-variant/20 md:border-none md:pl-0">
+          {/* P1-1 window mode: identify the dedicated window and offer the
+              two window controls from the task brief. */}
+          {isWindowMode && (
+            <div className="flex items-center gap-sm">
+              <span
+                className="hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-[11px] font-bold uppercase tracking-wider"
+                title={t('windowMode.badge.title')}
+              >
+                <span className="material-symbols-outlined text-[14px]" aria-hidden="true">picture_in_picture</span>
+                {t('windowMode.badge')}
+              </span>
+              <Button
+                variant="ghost"
+                aria-label={t('windowMode.openInMain.aria')}
+                title={t('windowMode.openInMain.title')}
+                className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
+                onClick={handleOpenInMain}
+              >
+                <span className="material-symbols-outlined icon-md" aria-hidden="true">open_in_new</span>
+              </Button>
+              <Button
+                variant="ghost"
+                aria-label={t('windowMode.close.aria')}
+                title={t('windowMode.close.title')}
+                className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-error transition-colors"
+                onClick={handleCloseWindow}
+              >
+                <span className="material-symbols-outlined icon-md" aria-hidden="true">close</span>
+              </Button>
+            </div>
+          )}
           {/* ContextPanel toggle — U2, moved here from the retired ChatHeader.
               Only meaningful on /chat, where the panel is mounted. */}
           {isChat && (
@@ -146,6 +202,34 @@ export function Header() {
               </span>
             </Button>
           )}
+          {/* P0-4: spent/budget badge while the session has a budget cap */}
+          {isChat && sessionBudget != null && sessionBudget > 0 && (
+            <span
+              role="status"
+              aria-label={t('budget.badge.aria', {
+                spent: `$${(sessionUsage?.cost_usd ?? 0).toFixed(2)}`,
+                budget: `$${sessionBudget.toFixed(2)}`,
+              })}
+              title={t('budget.badge.title', {
+                spent: `$${(sessionUsage?.cost_usd ?? 0).toFixed(2)}`,
+                budget: `$${sessionBudget.toFixed(2)}`,
+              })}
+              className={cn(
+                'hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full font-mono font-label-sm text-[11px] border tabular-nums',
+                (sessionUsage?.cost_usd ?? 0) >= sessionBudget
+                  ? 'bg-error/10 text-error border-error/30'
+                  : (sessionUsage?.cost_usd ?? 0) >= sessionBudget * 0.8
+                    ? 'bg-warning/10 text-warning border-warning/30'
+                    : 'bg-surface-container-low text-on-surface-variant border-outline-variant/30'
+              )}
+            >
+              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">payments</span>
+              {(sessionUsage?.cost_usd ?? 0).toFixed(2)} / ${sessionBudget.toFixed(2)}
+            </span>
+          )}
+          {/* P1-3: execution-mode switcher (严格/平衡/宽松/自定义) — chat
+              header only, kept next to the model selector. */}
+          {isChat && <ExecutionModeSwitcher />}
           {/* Model selector */}
           <div className="relative" ref={modelRef}>
             <Button
@@ -254,6 +338,28 @@ export function Header() {
                 <pre className="text-body-sm text-on-surface-variant bg-surface-container p-sm rounded-lg overflow-x-auto max-h-[200px] mt-sm">{JSON.stringify(permissionRequest.input as object, null, 2)}</pre>
               ) : null}
             </div>
+            {/* P1-3: why this prompt fired — matched rule / classifier
+                confidence / policy default. One restrained line; absent on
+                legacy payloads without a reason. */}
+            {permissionRequest.reason && (
+              <div
+                className="flex items-center gap-xs mb-lg px-md py-sm rounded-lg bg-surface-container-low text-on-surface-variant"
+                aria-label={t('header.permRequest.reason.aria')}
+              >
+                <span className="material-symbols-outlined icon-sm" aria-hidden="true">info</span>
+                <span className="text-label-md truncate">
+                  {permissionRequest.reason.source === 'rule'
+                    ? t('header.permRequest.reason.rule', {
+                        rule: permissionRequest.reason.ruleName ?? t('header.permRequest.reason.unnamedRule'),
+                      })
+                    : permissionRequest.reason.source === 'llm' && permissionRequest.reason.confidence != null
+                      ? t('header.permRequest.reason.llm', {
+                          confidence: Math.round(permissionRequest.reason.confidence * 100),
+                        })
+                      : t('header.permRequest.reason.default')}
+                </span>
+              </div>
+            )}
             {/* U3 follow-up: "Always allow" persists an allow rule for the
                 tool (respond_permission scope="always_tool" → user
                 settings.json permissions.allow). The engine's rule checker

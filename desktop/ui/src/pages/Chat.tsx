@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect, useCallback, lazy } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, lazy } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
 import { ArtifactPanel } from '@/components/artifact/ArtifactPanel'
+import { LivePreview } from '@/components/artifact/LivePreview'
 import DiffDialog from '@/components/diff/DiffDialog'
 import DiffDialogMulti from '@/components/diff/DiffDialogMulti'
 import { useChat } from '@/context/ChatContext'
@@ -11,6 +12,20 @@ import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
 import { parseSlashInput, type SlashCommand, type SlashResult } from '@/lib/slash/commands'
 import { toastError } from '@/lib/errorToast'
+import { useBudgetGuard } from '@/hooks/useBudgetGuard'
+import BudgetBanner from '@/components/chat/BudgetBanner'
+import { TerminalPanel } from '@/components/terminal/TerminalPanel'
+import {
+  addPanel,
+  matchesPreset,
+  presetLayout,
+  workspaceProjectKey,
+  type PanelKind,
+} from '@/components/workspace/layout'
+import { useWorkspaceLayout } from '@/components/workspace/useWorkspaceLayout'
+import { WorkspaceGrid } from '@/components/workspace/WorkspaceGrid'
+import { WorkspaceToolbar } from '@/components/workspace/WorkspaceToolbar'
+import { SessionDiffPanel } from '@/components/workspace/SessionDiffPanel'
 import {
   ApiKeyBanner,
   ComposerPanel,
@@ -31,7 +46,7 @@ export default function Chat() {
     messages, streamingText, isQuerying, usage, activeToolCalls,
     sendMessage, contextPanelOpen, compactSession,
   } = useChat()
-  const { sessions, currentSessionId, createSession } = useSessions()
+  const { sessions, currentSessionId, windowSessionId, createSession } = useSessions()
   const { config } = useCatalog()
   const intl = useIntl()
   const t = useCallback((id: string) => intl.formatMessage({ id }), [intl])
@@ -64,6 +79,15 @@ export default function Chat() {
   }, [location.state, location.pathname, navigate])
 
   const [bannerDismissed, setBannerDismissed] = useState(false)
+
+  // P0-4: session-budget advisory/choice bars. "Continue once" resends the
+  // last user message with the budget-bypass flag (exempts exactly that
+  // send's pre-turn check backend-side).
+  const budgetGuard = useBudgetGuard(currentSessionId)
+  const continuePastBudget = useCallback(() => {
+    const lastUser = [...messages].reverse().find(m => m.role === 'user')
+    if (lastUser) void sendMessage(lastUser.content, undefined, { budgetBypass: true })
+  }, [messages, sendMessage])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollParentRef = useRef<HTMLDivElement>(null)
 
@@ -143,6 +167,85 @@ export default function Chat() {
     !config.api_key &&
     config.provider !== 'ollama'
 
+  // ── P1-5 C-2 — workspace host ─────────────────────────────────────────
+  //
+  // Window mode (windowSessionId) keeps the slim single-chat view with no
+  // workspace at all (brief: 仅显示 chat 面板，禁用布局编辑). The main
+  // window hosts the WorkspaceGrid; the default focus preset renders the
+  // chat panel chrome-less over the full grid, so the default appearance
+  // matches the pre-workspace page.
+
+  const windowMode = windowSessionId != null
+  const workingDir = sessions.find(s => s.id === currentSessionId)?.working_dir
+    ?? config?.working_dir
+    ?? null
+  const { layout, update } = useWorkspaceLayout(windowMode ? null : (workingDir ? workspaceProjectKey(workingDir) : null))
+  const hasTerminalPanel = layout.panels.some(p => p.kind === 'terminal')
+  const showChrome = !matchesPreset(layout, 'focus')
+
+  // The terminal drawer and the terminal grid panel are the SAME
+  // TerminalPanel instance (see TerminalPanelProps.variant). React 19
+  // UNMOUNTS and remounts portal children when a portal's container prop
+  // changes — which would dispose every xterm instance — so instead the
+  // panel is rendered ONCE into a parked wrapper and a layout effect
+  // physically MOVES that wrapper DOM node between the two slot containers
+  // (manual reparenting never remounts React-managed nodes). The xterm
+  // instances — including scrollback — survive the handoff, and the
+  // Rust-side TerminalManager keeps the PTY processes alive regardless
+  // (never re-spawned). The embedded variant additionally reconciles with
+  // `terminal_list` on mount as defense in depth.
+  const [drawerSlot, setDrawerSlot] = useState<HTMLDivElement | null>(null)
+  const [gridTerminalSlot, setGridTerminalSlot] = useState<HTMLDivElement | null>(null)
+  const terminalDockRef = useRef<HTMLDivElement | null>(null)
+
+  useLayoutEffect(() => {
+    const dock = terminalDockRef.current
+    const target = hasTerminalPanel ? gridTerminalSlot : drawerSlot
+    if (dock && target && dock.parentElement !== target) {
+      // Physical reparent — preserves the mounted TerminalPanel subtree.
+      target.appendChild(dock)
+    }
+  }, [hasTerminalPanel, gridTerminalSlot, drawerSlot])
+
+  const renderPanelContent = useCallback((kind: PanelKind) => {
+    switch (kind) {
+      case 'chat':
+        return (
+          <>
+            <MessageArea
+              scrollParentRef={scrollParentRef}
+              messagesEndRef={messagesEndRef}
+              virtualizer={virtualizer}
+              setDiffPath={setDiffPath}
+              setDiffPaths={setDiffPaths}
+            />
+            <ComposerPanel
+              setQuickFixOpen={setQuickFixOpen}
+              setEditorOpen={setEditorOpen}
+            />
+            {/* Terminal drawer slot: hosts the docked TerminalPanel while
+                the layout has no terminal grid panel. */}
+            <div
+              ref={setDrawerSlot}
+              className={hasTerminalPanel ? 'hidden' : 'contents'}
+            />
+          </>
+        )
+      case 'diff':
+        return <SessionDiffPanel workingDir={workingDir} />
+      case 'preview':
+        return <LivePreview />
+      case 'terminal':
+        return (
+          <div
+            ref={setGridTerminalSlot}
+            data-testid="workspace-terminal-slot"
+            className="h-full min-h-0"
+          />
+        )
+    }
+  }, [virtualizer, workingDir, hasTerminalPanel])
+
   return (
     <ArtifactProvider>
       <ComposerContext.Provider value={composerValue}>
@@ -157,18 +260,60 @@ export default function Chat() {
               onOpenSettings={() => navigate('/settings/models')}
             />
 
-            <MessageArea
-              scrollParentRef={scrollParentRef}
-              messagesEndRef={messagesEndRef}
-              virtualizer={virtualizer}
-              setDiffPath={setDiffPath}
-              setDiffPaths={setDiffPaths}
+            <BudgetBanner
+              warning={budgetGuard.warning}
+              exceeded={budgetGuard.exceeded}
+              clearWarning={budgetGuard.clearWarning}
+              clearExceeded={budgetGuard.clearExceeded}
+              onContinueOnce={continuePastBudget}
+              sessionId={currentSessionId}
             />
 
-            <ComposerPanel
-              setQuickFixOpen={setQuickFixOpen}
-              setEditorOpen={setEditorOpen}
-            />
+            {windowMode ? (
+              <>
+                {/* P1-1 window mode: slim single-chat view, no workspace. */}
+                <MessageArea
+                  scrollParentRef={scrollParentRef}
+                  messagesEndRef={messagesEndRef}
+                  virtualizer={virtualizer}
+                  setDiffPath={setDiffPath}
+                  setDiffPaths={setDiffPaths}
+                />
+                <ComposerPanel
+                  setQuickFixOpen={setQuickFixOpen}
+                  setEditorOpen={setEditorOpen}
+                />
+                <TerminalPanel projectDir={workingDir} />
+              </>
+            ) : (
+              <>
+                <WorkspaceToolbar
+                  layout={layout}
+                  onPreset={name => update(presetLayout(name))}
+                  onAdd={kind => update(addPanel(layout, kind))}
+                  onReset={() => update(presetLayout('focus'))}
+                />
+                <div className="flex-1 min-h-0">
+                  <WorkspaceGrid
+                    layout={layout}
+                    chrome={showChrome}
+                    onChange={update}
+                    renderPanelContent={renderPanelContent}
+                    ariaLabel={t('workspace.grid.aria')}
+                  />
+                </div>
+                {/* One docked TerminalPanel instance. It renders here only
+                    until the layout effect moves the dock node into the
+                    active slot (drawer slot inside the chat panel, or the
+                    terminal grid panel's slot) — the move never remounts it. */}
+                <div ref={terminalDockRef} data-testid="terminal-dock" className="contents">
+                  <TerminalPanel
+                    projectDir={workingDir}
+                    variant={hasTerminalPanel ? 'panel' : 'drawer'}
+                  />
+                </div>
+              </>
+            )}
           </section>
 
           <InlinePanelModal

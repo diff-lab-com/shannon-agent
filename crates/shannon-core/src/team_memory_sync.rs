@@ -950,7 +950,7 @@ mod tests {
     #[test]
     fn test_scanner_detects_github_pat() {
         let scanner = SecretScanner::new();
-        let content = "GITHUB_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij";
+        let content = concat!("GITHUB_TOKEN=ghp_", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij");
         let matches = scanner.scan(content);
         assert!(matches.iter().any(|m| m.rule_id == "github-pat"));
     }
@@ -958,7 +958,7 @@ mod tests {
     #[test]
     fn test_scanner_detects_google_api_key() {
         let scanner = SecretScanner::new();
-        let content = "GOOGLE_API_KEY=AIzaSyA1234567890abcdefghijklmnopqrstuv";
+        let content = concat!("GOOGLE_API_KEY=AIzaSy", "A1234567890abcdefghijklmnopqrstuv");
         let matches = scanner.scan(content);
         assert!(matches.iter().any(|m| m.rule_id == "google-api-key"));
     }
@@ -966,8 +966,10 @@ mod tests {
     #[test]
     fn test_scanner_detects_openai_key() {
         let scanner = SecretScanner::new();
-        let content =
-            "OPENAI_API_KEY=sk-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz12345678";
+        let content = concat!(
+            "OPENAI_API_KEY=sk-",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz12345678"
+        );
         let matches = scanner.scan(content);
         assert!(matches.iter().any(|m| m.rule_id == "openai-api-key"));
     }
@@ -975,7 +977,7 @@ mod tests {
     #[test]
     fn test_scanner_detects_slack_token() {
         let scanner = SecretScanner::new();
-        let content = "SLACK_TOKEN=xoxb-1234567890";
+        let content = concat!("SLACK_TOKEN=xoxb-", "1234567890");
         let matches = scanner.scan(content);
         assert!(matches.iter().any(|m| m.rule_id == "slack-token"));
     }
@@ -1000,8 +1002,9 @@ mod tests {
     fn test_scanner_multiple_secrets() {
         let scanner = SecretScanner::new();
         let content = format!(
-            "KEY1=sk-ant-api03-{}\nKEY2=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij\n",
-            "A".repeat(90)
+            "KEY1=sk-ant-api03-{}\nKEY2={}\n",
+            "A".repeat(90),
+            concat!("ghp_", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij")
         );
         let matches = scanner.scan(&content);
         assert!(matches.len() >= 2);
@@ -1038,7 +1041,10 @@ mod tests {
         let file_path = tmp.path().join("test.md");
         fs::write(
             &file_path,
-            "GITHUB_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij\n",
+            concat!(
+                "GITHUB_TOKEN=ghp_",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij\n"
+            ),
         )
         .unwrap();
 

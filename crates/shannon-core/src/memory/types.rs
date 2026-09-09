@@ -179,9 +179,28 @@ pub struct MemoryEntry {
     pub accessed_at: DateTime<Utc>,
     /// Number of times this memory has been accessed
     pub access_count: u32,
+    /// Provenance (P2-4): the session that produced this entry, when known.
+    /// `None` for hand-created entries and for imports that predate session
+    /// tracking. Serde-defaulted so pre-P2-4 store files load unchanged, and
+    /// skipped when `None` so rewrites stay byte-compatible with old files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_session_id: Option<String>,
+    /// Provenance (P2-4): how this entry came to exist —
+    /// [`Self::SOURCE_MANUAL`](Memory page CRUD), [`Self::SOURCE_IMPORT`]
+    /// (migration), or [`Self::SOURCE_AUTO_EXTRACT`] (engine extraction).
+    /// Serde-defaulted / skipped on `None`, same as `source_session_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<String>,
 }
 
 impl MemoryEntry {
+    /// `source_kind` for entries created by hand (desktop Memory page).
+    pub const SOURCE_MANUAL: &'static str = "manual";
+    /// `source_kind` for entries created by the migration import.
+    pub const SOURCE_IMPORT: &'static str = "import";
+    /// `source_kind` for entries created by automatic conversation extraction.
+    pub const SOURCE_AUTO_EXTRACT: &'static str = "auto-extract";
+
     /// Create a new memory entry with the given content, project, and category.
     ///
     /// Generates a new UUID, sets timestamps to now, and initializes access count to 0.
@@ -196,6 +215,8 @@ impl MemoryEntry {
             created_at: Utc::now(),
             accessed_at: Utc::now(),
             access_count: 0,
+            source_session_id: None,
+            source_kind: None,
         }
     }
 
@@ -220,6 +241,8 @@ impl MemoryEntry {
             created_at: Utc::now(),
             accessed_at: Utc::now(),
             access_count: 0,
+            source_session_id: None,
+            source_kind: None,
         })
     }
 
@@ -472,6 +495,55 @@ mod tests {
         assert_eq!(deserialized.tags, entry.tags);
         assert!((deserialized.confidence - entry.confidence).abs() < f64::EPSILON);
         assert_eq!(deserialized.access_count, entry.access_count);
+    }
+
+    // --- Provenance fields (P2-4): serde backward compatibility ---
+
+    #[test]
+    fn test_provenance_none_fields_omitted_from_serialization() {
+        // A fresh entry has no provenance; the JSON must not carry the new
+        // keys at all, so rewrites stay byte-compatible with pre-P2-4 files.
+        let entry = MemoryEntry::new("proj", MemoryCategory::Preference, "use tabs");
+        let json = serde_json::to_string(&entry).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value.get("source_session_id").is_none());
+        assert!(value.get("source_kind").is_none());
+    }
+
+    #[test]
+    fn test_provenance_fields_survive_roundtrip() {
+        let mut entry = MemoryEntry::new("proj", MemoryCategory::Decision, "use rust");
+        entry.source_kind = Some(MemoryEntry::SOURCE_AUTO_EXTRACT.to_string());
+        entry.source_session_id = Some("018f3c4e-9c7a-7d3e-8f2a-1b2c3d4e5f60".to_string());
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: MemoryEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed.source_kind.as_deref(),
+            Some(MemoryEntry::SOURCE_AUTO_EXTRACT)
+        );
+        assert_eq!(
+            parsed.source_session_id.as_deref(),
+            Some("018f3c4e-9c7a-7d3e-8f2a-1b2c3d4e5f60")
+        );
+    }
+
+    #[test]
+    fn test_provenance_legacy_line_without_fields_loads_as_none() {
+        // A pre-P2-4 JSONL line: no provenance keys. Must deserialize with
+        // both fields defaulted to None (serde default), not fail.
+        let legacy = r#"{"id":"m1","project":"proj","category":"Context","content":"old entry","tags":[],"confidence":1.0,"created_at":"2025-01-01T00:00:00Z","accessed_at":"2025-01-01T00:00:00Z","access_count":0}"#;
+        let parsed: MemoryEntry = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.id, "m1");
+        assert!(parsed.source_session_id.is_none());
+        assert!(parsed.source_kind.is_none());
+    }
+
+    #[test]
+    fn test_provenance_source_kind_constants_are_stable() {
+        // Frozen vocabulary — the UI and migration rely on these strings.
+        assert_eq!(MemoryEntry::SOURCE_MANUAL, "manual");
+        assert_eq!(MemoryEntry::SOURCE_IMPORT, "import");
+        assert_eq!(MemoryEntry::SOURCE_AUTO_EXTRACT, "auto-extract");
     }
 
     #[test]
