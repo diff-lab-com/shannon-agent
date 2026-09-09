@@ -167,8 +167,7 @@ mod tests {
         // Usability tracks the compiled feature AND, on macOS, the actual
         // Accessibility grant (without it CGEvents are silently dropped):
         // `available()` must never overpromise.
-        let expected =
-            cfg!(feature = "computer-use") && super::accessibility_granted();
+        let expected = cfg!(feature = "computer-use") && super::accessibility_granted();
         assert_eq!(adapter.available(), expected);
     }
 }

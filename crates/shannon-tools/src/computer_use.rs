@@ -566,8 +566,7 @@ impl ComputerUseTool {
 
         let (button, clicks, label) = Self::click_spec(action);
 
-        let (actual_w, actual_h) = Self::screen_size()
-            .map_err(ToolError::ExecutionFailed)?;
+        let (actual_w, actual_h) = Self::screen_size().map_err(ToolError::ExecutionFailed)?;
         let scaled = Self::scale_coordinate(coord, actual_w, actual_h);
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
@@ -688,8 +687,7 @@ impl ComputerUseTool {
 
         // Move to coordinate if provided
         if let Some(c) = coord {
-            let (actual_w, actual_h) = Self::screen_size()
-            .map_err(ToolError::ExecutionFailed)?;
+            let (actual_w, actual_h) = Self::screen_size().map_err(ToolError::ExecutionFailed)?;
             let scaled = Self::scale_coordinate(c, actual_w, actual_h);
             enigo
                 .move_mouse(scaled[0], scaled[1], enigo::Coordinate::Abs)
@@ -817,8 +815,7 @@ impl ComputerUseTool {
         }
         Self::ensure_input_permitted()?;
 
-        let (actual_w, actual_h) = Self::screen_size()
-            .map_err(ToolError::ExecutionFailed)?;
+        let (actual_w, actual_h) = Self::screen_size().map_err(ToolError::ExecutionFailed)?;
         let scaled = Self::scale_coordinate(coord, actual_w, actual_h);
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
@@ -861,8 +858,7 @@ impl ComputerUseTool {
         }
         Self::ensure_input_permitted()?;
 
-        let (actual_w, actual_h) = Self::screen_size()
-            .map_err(ToolError::ExecutionFailed)?;
+        let (actual_w, actual_h) = Self::screen_size().map_err(ToolError::ExecutionFailed)?;
         let scaled_start = Self::scale_coordinate(start, actual_w, actual_h);
         let scaled_end = Self::scale_coordinate(end, actual_w, actual_h);
 

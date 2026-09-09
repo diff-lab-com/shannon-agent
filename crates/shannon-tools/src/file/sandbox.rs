@@ -283,7 +283,9 @@ impl PathSandbox {
     /// Canonical spelling of `path`, or `path` itself when it cannot be
     /// resolved (not yet created, virtual).
     fn canonical_of(&self, path: &Path) -> PathBuf {
-        self.fs.canonicalize_blocking(path).unwrap_or_else(|_| path.to_path_buf())
+        self.fs
+            .canonicalize_blocking(path)
+            .unwrap_or_else(|_| path.to_path_buf())
     }
 
     /// Whether `path` is the command sandbox's tmpfs root (/tmp), in any
@@ -670,7 +672,9 @@ impl PathSandbox {
         // must still match the same file after resolution (roadmap F11).
         let spellings = [
             canonical_str,
-            canonical_str.strip_prefix("/private").unwrap_or(canonical_str),
+            canonical_str
+                .strip_prefix("/private")
+                .unwrap_or(canonical_str),
         ];
         for pattern in &self.config.denied_patterns {
             let bare = pattern.trim_end_matches('/');
