@@ -1759,4 +1759,153 @@ mod tests {
             Some(std::time::Duration::from_secs(30))
         );
     }
+
+    // ---- secret-guard execution-boundary wiring (blueprint §9.6) ----------
+    // End-to-end through ToolRegistry::execute: a model-echoed surrogate in
+    // the tool arguments must reach the tool as the real value (restored on
+    // the execution face only), and a FailMode::Closed plugin failure must
+    // block execution with a tool-level error.
+
+    const BOUNDARY_TOKEN: &str = "SG1:FAKEFAKEFAKEFAKE";
+    const BOUNDARY_REAL: &str = "REAL-SECRET-VALUE";
+
+    struct BoundaryRestore {
+        fail: bool,
+    }
+
+    fn walk_replace(v: &mut Value, from: &str, to: &str) -> bool {
+        match v {
+            Value::String(s) => {
+                if s.contains(from) {
+                    *s = s.replace(from, to);
+                    true
+                } else {
+                    false
+                }
+            }
+            Value::Array(a) => a.iter_mut().any(|x| walk_replace(x, from, to)),
+            Value::Object(m) => m.values_mut().any(|x| walk_replace(x, from, to)),
+            _ => false,
+        }
+    }
+
+    impl shannon_plugin_api::ContextTransform for BoundaryRestore {
+        fn transform_ingest(
+            &self,
+            _block: &mut shannon_plugin_api::IngestBlock,
+        ) -> shannon_plugin_api::TransformAction {
+            shannon_plugin_api::TransformAction::Passthrough
+        }
+
+        fn restore_tool_args(
+            &self,
+            _tool: &str,
+            args: &mut Value,
+        ) -> shannon_plugin_api::RestoreAction {
+            if self.fail {
+                return shannon_plugin_api::RestoreAction::Failed {
+                    reason: "registry unavailable".to_string(),
+                };
+            }
+            if walk_replace(args, BOUNDARY_TOKEN, BOUNDARY_REAL) {
+                shannon_plugin_api::RestoreAction::Restored(shannon_plugin_api::RestoreStats {
+                    replaced: 1,
+                    fuzzy: 0,
+                    unresolved: Vec::new(),
+                })
+            } else {
+                shannon_plugin_api::RestoreAction::Unchanged
+            }
+        }
+
+        fn restore_display(&self, _text: &mut String) -> shannon_plugin_api::RestoreAction {
+            shannon_plugin_api::RestoreAction::Unchanged
+        }
+
+        fn audit_wire(&self, _wire: &serde_json::Value) -> Vec<shannon_plugin_api::AuditFinding> {
+            Vec::new()
+        }
+    }
+
+    struct EchoInputTool;
+
+    #[async_trait]
+    impl Tool for EchoInputTool {
+        fn name(&self) -> &str {
+            "secret-guard-echo"
+        }
+
+        fn description(&self) -> &str {
+            "Echoes input.content into the output — asserts what the tool actually received"
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({"type": "object", "properties": {"content": {"type": "string"}}})
+        }
+
+        async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
+            let content = input
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            Ok(ToolOutput::success(content))
+        }
+    }
+
+    #[tokio::test]
+    async fn execution_boundary_restores_model_echoed_surrogates() {
+        let _g = crate::secret_guard::test_support::acquire();
+        crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(BoundaryRestore {
+            fail: false,
+        })));
+        let registry = ToolRegistry::default();
+        registry
+            .register(Box::new(EchoInputTool))
+            .expect("register");
+        let out = registry
+            .execute(
+                "secret-guard-echo",
+                json!({"file_path": "/app/.env", "content": format!("id={BOUNDARY_TOKEN}")}),
+            )
+            .await
+            .expect("execute");
+        crate::secret_guard::set_context_transform(None);
+
+        assert!(!out.is_error);
+        assert!(
+            out.content.contains(BOUNDARY_REAL),
+            "tool must receive the restored value, got: {}",
+            out.content
+        );
+        assert!(
+            !out.content.contains(BOUNDARY_TOKEN),
+            "surrogate must not leak through to execution: {}",
+            out.content
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_closed_plugin_blocks_execution() {
+        let _g = crate::secret_guard::test_support::acquire();
+        crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(BoundaryRestore {
+            fail: true,
+        })));
+        let registry = ToolRegistry::default();
+        registry
+            .register(Box::new(EchoInputTool))
+            .expect("register");
+        let out = registry
+            .execute("secret-guard-echo", json!({"content": "id=x"}))
+            .await
+            .expect("execute returns a tool-level error output");
+        crate::secret_guard::set_context_transform(None);
+
+        assert!(out.is_error, "fail-closed must refuse execution");
+        assert!(
+            out.content.contains("fail-closed"),
+            "reason must surface: {}",
+            out.content
+        );
+    }
 }

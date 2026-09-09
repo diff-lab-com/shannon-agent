@@ -169,15 +169,28 @@ pub fn restore_tool_args_for_execution(
     }
 }
 
+/// Serializes tests that mutate the process-global transform. Shared with
+/// other crates' test modules in this workspace member (e.g. tools.rs
+/// execution-boundary tests).
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    pub fn acquire() -> MutexGuard<'static, ()> {
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_support::acquire as global_lock;
     use super::*;
     use serde_json::json;
     use shannon_plugin_api::{AuditFinding, IngestBlock, RestoreAction, TransformAction};
-    use std::sync::Mutex;
-
-    /// Tests that touch the process-global transform hold this lock.
-    static GLOBAL_LOCK: Mutex<()> = Mutex::new(());
 
     const SECRET: &str = "AKIAIOSFODNN7EXAMPLE";
     const TOKEN: &str = "SG1:FAKEFAKEFAKEFAKE";
@@ -252,7 +265,7 @@ mod tests {
 
     #[test]
     fn outgoing_messages_noop_without_plugin() {
-        let _g = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = global_lock();
         set_context_transform(None);
         let messages = vec![Message {
             role: "user".to_string(),
@@ -267,7 +280,7 @@ mod tests {
 
     #[test]
     fn outgoing_messages_transform_text_and_tool_results() {
-        let _g = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = global_lock();
         set_context_transform(Some(std::sync::Arc::new(RoundTrip)));
         let messages = vec![
             Message {
@@ -305,7 +318,7 @@ mod tests {
 
     #[test]
     fn restore_at_execution_boundary_roundtrips_tool_args() {
-        let _g = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = global_lock();
         set_context_transform(Some(std::sync::Arc::new(RoundTrip)));
         let mut args = json!({ "file_path": "/app/.env", "content": format!("id={TOKEN}") });
         let res = restore_tool_args_for_execution("Write", &mut args);
@@ -316,7 +329,7 @@ mod tests {
 
     #[test]
     fn restore_failure_maps_to_err_for_fail_closed() {
-        let _g = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = global_lock();
         set_context_transform(Some(std::sync::Arc::new(Failing)));
         let mut args = json!({ "x": 1 });
         let res = restore_tool_args_for_execution("Bash", &mut args);
@@ -345,7 +358,7 @@ mod tests {
 
     #[test]
     fn audit_noops_without_plugin_then_reports_findings() {
-        let _g = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = global_lock();
         // Default state: no plugin installed → zero findings, no logs.
         assert_eq!(audit_wire_and_log(&json!({ "messages": [] })), 0);
 
