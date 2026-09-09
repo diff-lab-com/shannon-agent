@@ -218,3 +218,79 @@ mod tests {
         assert_eq!(FailMode::default(), FailMode::Open);
     }
 }
+
+/// Registry of surrogate → real-value mappings.
+///
+/// Blueprint §9.2: derivation is stateless (HMAC); this registry is a
+/// **rebuildable cache**, never the source of truth. The default in-process
+/// store suits the pilot; hosts may inject a persistent/rebuildable store.
+pub trait SurrogateStore: Send + Sync {
+    /// Record a minted surrogate (idempotent on repeated registration).
+    fn register(&self, surrogate: &str, secret: &str);
+    /// Snapshot of all (surrogate, real) pairs, longest-key-first not
+    /// required (callers sort).
+    fn pairs(&self) -> Vec<(String, String)>;
+    /// Number of registered surrogates.
+    fn len(&self) -> usize;
+    /// True when nothing is registered.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// In-memory [`SurrogateStore`] — the pilot default.
+#[derive(Debug, Default)]
+pub struct InMemorySurrogateStore {
+    map: std::sync::RwLock<std::collections::BTreeMap<String, String>>,
+}
+
+impl SurrogateStore for InMemorySurrogateStore {
+    fn register(&self, surrogate: &str, secret: &str) {
+        if let Ok(mut g) = self.map.write() {
+            g.insert(surrogate.to_string(), secret.to_string());
+        }
+    }
+
+    fn pairs(&self) -> Vec<(String, String)> {
+        self.map
+            .read()
+            .map(|g| g.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default()
+    }
+
+    fn len(&self) -> usize {
+        self.map.read().map(|g| g.len()).unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod surrogate_store_tests {
+    use super::*;
+
+    #[test]
+    fn in_memory_store_roundtrip_and_concurrent_registration() {
+        let store = std::sync::Arc::new(InMemorySurrogateStore::default());
+        let mut handles = Vec::new();
+        for i in 0..8u32 {
+            let s = store.clone();
+            handles.push(std::thread::spawn(move || {
+                for j in 0..64 {
+                    s.register(&format!("SG1:{i:04}{j:012}"), &format!("secret-{i}-{j}"));
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("no panic");
+        }
+        assert_eq!(store.len(), 8 * 64);
+        assert!(!store.is_empty());
+        assert_eq!(store.pairs().len(), 8 * 64);
+    }
+
+    #[test]
+    fn empty_store_reports_empty() {
+        let store = InMemorySurrogateStore::default();
+        assert!(store.is_empty());
+        assert!(store.pairs().is_empty());
+    }
+}

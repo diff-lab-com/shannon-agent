@@ -1390,6 +1390,10 @@ impl QueryEngine {
         permission_request_tx: Option<mpsc::UnboundedSender<super::types::PermissionRequest>>,
     ) -> QueryStream {
         let query_id = context.query_id;
+        // Secret-guard Phase 2 enablement: env-gated
+        // (`SHANNON_SECRET_GUARD=audit|redact`), installs once per process,
+        // no-op unless explicitly enabled (blueprint §9.6).
+        crate::secret_guard::init_from_env();
         let config = self.config.clone();
         let session_id_for_permissions = context.session_id;
 
@@ -2625,11 +2629,19 @@ impl QueryEngine {
                                                 ContentDelta::TextDelta { text } => {
                                                     has_content = true;
                                                     assistant_text.push_str(&text);
+                                                    // Display-face restore: the
+                                                    // emitted copy carries real
+                                                    // values; `assistant_text`
+                                                    // (history) keeps surrogates.
+                                                    let mut display = text.clone();
+                                                    crate::secret_guard::restore_display_for_output(
+                                                        &mut display,
+                                                    );
                                                     send_event!(
                                                         tx,
                                                         QueryEvent::Text {
                                                             query_id,
-                                                            content: text,
+                                                            content: display,
                                                         }
                                                     );
                                                 }
@@ -4275,11 +4287,13 @@ impl QueryEngine {
                                                 for block in &final_blocks {
                                                     if let ContentBlock::Text { text } = block {
                                                         retry_text.push_str(text);
+                                                        let mut display = text.clone();
+                                                        crate::secret_guard::restore_display_for_output(&mut display);
                                                         send_event!(
                                                             tx,
                                                             QueryEvent::Text {
                                                                 query_id,
-                                                                content: text.clone(),
+                                                                content: display,
                                                             }
                                                         );
                                                     }
@@ -4704,11 +4718,13 @@ impl QueryEngine {
                                                     if let ContentDelta::TextDelta { text } = delta
                                                     {
                                                         retry_text.push_str(&text);
+                                                        let mut display = text.clone();
+                                                        crate::secret_guard::restore_display_for_output(&mut display);
                                                         send_event!(
                                                             tx,
                                                             QueryEvent::Text {
                                                                 query_id,
-                                                                content: text
+                                                                content: display,
                                                             }
                                                         );
                                                     }
@@ -4886,11 +4902,15 @@ impl QueryEngine {
                                     for block in &final_blocks {
                                         if let ContentBlock::Text { text } = block {
                                             retry_text.push_str(text);
+                                            let mut display = text.clone();
+                                            crate::secret_guard::restore_display_for_output(
+                                                &mut display,
+                                            );
                                             send_event!(
                                                 tx,
                                                 QueryEvent::Text {
                                                     query_id,
-                                                    content: text.clone(),
+                                                    content: display,
                                                 }
                                             );
                                         }
@@ -5143,6 +5163,7 @@ async fn maybe_run_auto_test(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::query_engine::QueryMetadata;
     use crate::tools::ToolRegistry;
     use shannon_engine::api::ImageSource;
     use shannon_engine::api::{LlmClient, LlmClientConfig, MessageContent};
@@ -6925,5 +6946,301 @@ mod tests {
             entry.to_tool_result_content(),
             Some(ToolResultContent::Single(_))
         ));
+    }
+
+    // ---- T4 slice: client-boundary end-to-end with an installed transform --
+    // A local mock Anthropic /v1/messages captures the request body that
+    // LlmClient actually puts on the wire after `transform_outgoing_messages`
+    // has run. The full query-loop drive (run_query) needs a broader harness
+    // and remains follow-up work; this proves serialization + HTTP honor the
+    // transform chain byte-for-byte.
+
+    #[tokio::test]
+    async fn secret_guard_client_boundary_sends_surrogates_not_secrets() {
+        use std::io::Read as _;
+        use std::io::Write as _;
+
+        const SECRET: &str = "SUPER-SECRET-VALUE";
+        const TOKEN: &str = "SG1:FAKEFAKEFAKEFAKE";
+
+        struct ReplaceSecret;
+        impl shannon_plugin_api::ContextTransform for ReplaceSecret {
+            fn transform_ingest(
+                &self,
+                block: &mut shannon_plugin_api::IngestBlock,
+            ) -> shannon_plugin_api::TransformAction {
+                if block.text.contains(SECRET) {
+                    block.text = block.text.replace(SECRET, TOKEN);
+                    shannon_plugin_api::TransformAction::Modified
+                } else {
+                    shannon_plugin_api::TransformAction::Passthrough
+                }
+            }
+            fn restore_tool_args(
+                &self,
+                _tool: &str,
+                _args: &mut serde_json::Value,
+            ) -> shannon_plugin_api::RestoreAction {
+                shannon_plugin_api::RestoreAction::Unchanged
+            }
+            fn restore_display(&self, _text: &mut String) -> shannon_plugin_api::RestoreAction {
+                shannon_plugin_api::RestoreAction::Unchanged
+            }
+            fn audit_wire(
+                &self,
+                _wire: &serde_json::Value,
+            ) -> Vec<shannon_plugin_api::AuditFinding> {
+                Vec::new()
+            }
+        }
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let captured: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let captured_clone = captured.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = match listener.accept() {
+                Ok(x) => x,
+                Err(_) => return,
+            };
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .ok();
+            let mut buf = vec![0u8; 1 << 16];
+            let mut read = 0usize;
+            loop {
+                let n = match stream.read(&mut buf[read..]) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                read += n;
+
+                let s = String::from_utf8_lossy(&buf[..read]).to_string();
+                if let Some(header_end) = s.find("\r\n\r\n") {
+                    let cl: usize = s[..header_end]
+                        .to_ascii_lowercase()
+                        .split("\r\n")
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(0);
+                    if read >= header_end + 4 + cl {
+                        break;
+                    }
+                }
+                if read == buf.len() {
+                    break;
+                }
+            }
+            let body = String::from_utf8_lossy(&buf[..read]).to_string();
+            *captured_clone.lock().unwrap() = Some(body);
+            let resp = r#"{"id":"msg_test","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"test-model","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#;
+            let http = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                resp.len(),
+                resp
+            );
+            stream.write_all(http.as_bytes()).ok();
+            stream.flush().ok();
+        });
+
+        let _g = crate::secret_guard::test_support::acquire();
+        crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text(format!("the key is {SECRET}")),
+        }];
+        let to_send = crate::secret_guard::transform_outgoing_messages(messages);
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: format!("http://127.0.0.1:{port}"),
+            model: "test-model".to_string(),
+            provider: shannon_engine::api::LlmProvider::Anthropic,
+            ..Default::default()
+        };
+        let client = LlmClient::new(config);
+        let result = client.send_message(to_send, None, None).await;
+        crate::secret_guard::set_context_transform(None);
+        assert!(result.is_ok(), "mock must answer: {:?}", result.err());
+
+        server.join().expect("server thread");
+        let body = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("request body captured");
+        assert!(
+            body.contains(TOKEN),
+            "surrogate must reach the wire: {body}"
+        );
+        assert!(
+            !body.contains(SECRET),
+            "raw secret must never reach the wire: {body}"
+        );
+    }
+
+    // ---- T4 full loop: process_query drive against the local mock ----------
+    // The whole engine loop (message assembly → wire → response → events)
+    // with a transform installed: the mock must receive surrogates, never
+    // the raw secret, and the query must complete cleanly.
+
+    #[tokio::test]
+    async fn secret_guard_query_loop_completes_with_redacted_wire() {
+        use futures::StreamExt as _;
+        use std::io::Read as _;
+        use std::io::Write as _;
+
+        const SECRET: &str = "LOOP-SECRET-VALUE";
+        const TOKEN: &str = "SG1:LOOPFAKELOOPFAKE";
+
+        struct ReplaceSecret;
+        impl shannon_plugin_api::ContextTransform for ReplaceSecret {
+            fn transform_ingest(
+                &self,
+                block: &mut shannon_plugin_api::IngestBlock,
+            ) -> shannon_plugin_api::TransformAction {
+                if block.text.contains(SECRET) {
+                    block.text = block.text.replace(SECRET, TOKEN);
+                    shannon_plugin_api::TransformAction::Modified
+                } else {
+                    shannon_plugin_api::TransformAction::Passthrough
+                }
+            }
+            fn restore_tool_args(
+                &self,
+                _tool: &str,
+                _args: &mut serde_json::Value,
+            ) -> shannon_plugin_api::RestoreAction {
+                shannon_plugin_api::RestoreAction::Unchanged
+            }
+            fn restore_display(&self, _text: &mut String) -> shannon_plugin_api::RestoreAction {
+                shannon_plugin_api::RestoreAction::Unchanged
+            }
+            fn audit_wire(
+                &self,
+                _wire: &serde_json::Value,
+            ) -> Vec<shannon_plugin_api::AuditFinding> {
+                Vec::new()
+            }
+        }
+
+        // Hermetic-ish run: the query's tee writes one session dir under the
+        // real shannon home; it is removed after the assertions. Mutating the
+        // process env here would race parallel tee tests that resolve their
+        // own log paths from SHANNON_HOME.
+        let session_for_cleanup = uuid::Uuid::new_v4();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let captured: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_clone = captured.clone();
+        // Detached: the accept loop lives until process exit; joining it
+        // would block forever on the final accept().
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut buf = vec![0u8; 1 << 16];
+                let mut read = 0usize;
+                loop {
+                    let n = match stream.read(&mut buf[read..]) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    read += n;
+                    let s = String::from_utf8_lossy(&buf[..read]).to_string();
+                    if let Some(header_end) = s.find("\r\n\r\n") {
+                        let cl: usize = s[..header_end]
+                            .to_ascii_lowercase()
+                            .split("\r\n")
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .and_then(|v| v.trim().parse().ok())
+                            .unwrap_or(0);
+                        if read >= header_end + 4 + cl {
+                            break;
+                        }
+                    }
+                }
+                captured_clone
+                    .lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&buf[..read]).to_string());
+                let resp = r#"{"id":"msg_loop","role":"assistant","content":[{"type":"text","text":"done"}],"model":"test-model","stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}"#;
+                let http = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    resp.len(),
+                    resp
+                );
+                stream.write_all(http.as_bytes()).ok();
+                stream.flush().ok();
+            }
+        });
+
+        let _g = crate::secret_guard::test_support::acquire();
+        crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: format!("http://127.0.0.1:{port}"),
+            model: "test-model".to_string(),
+            provider: shannon_engine::api::LlmProvider::Anthropic,
+            ..Default::default()
+        };
+        let client = LlmClient::new(config);
+        let engine = QueryEngine::new(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+            QueryEngineConfig::default(),
+        );
+        let context = QueryContext {
+            query_id: uuid::Uuid::new_v4(),
+            session_id: session_for_cleanup,
+            user_message: format!("the key is {SECRET}"),
+            attachments: Vec::new(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: false,
+                max_tokens: None,
+                model: "test-model".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        };
+        let mut stream = engine.process_query(context, None).await;
+        let mut completed = false;
+        let mut failed = String::new();
+        while let Some(ev) = stream.next().await {
+            match ev {
+                Ok(QueryEvent::Completed { .. }) => {
+                    completed = true;
+                    break;
+                }
+                Ok(QueryEvent::Failed { error, .. }) => {
+                    failed = error;
+                    break;
+                }
+                Err(e) => {
+                    failed = e.to_string();
+                    break;
+                }
+                _ => {}
+            }
+        }
+        crate::secret_guard::set_context_transform(None);
+
+        assert!(completed, "query must complete; failed: {failed}");
+        let bodies = captured.lock().unwrap().clone();
+        assert!(
+            !bodies.is_empty(),
+            "at least one request must reach the mock"
+        );
+        assert!(
+            bodies.iter().any(|b| b.contains(TOKEN)),
+            "wire must carry surrogates: {bodies:?}"
+        );
+        assert!(
+            bodies.iter().all(|b| !b.contains(SECRET)),
+            "raw secret must never reach the wire: {bodies:?}"
+        );
     }
 }

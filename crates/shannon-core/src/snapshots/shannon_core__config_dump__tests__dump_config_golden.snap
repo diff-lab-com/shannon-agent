@@ -80,6 +80,7 @@ expression: dump
       "profiles": {},
       "version": 2
     },
+    "secret_guard": null,
     "temperature": 0.75,
     "timeout": null
   }

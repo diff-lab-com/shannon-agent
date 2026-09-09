@@ -169,10 +169,344 @@ pub fn restore_tool_args_for_execution(
     }
 }
 
+/// Wiring point 3 (display boundary, blueprint §5.5): restore real values in
+/// text about to be shown to the user. No-op when no transform is installed.
+/// Callers must apply this to the emitted copy only — the conversation
+/// history keeps surrogates (I2).
+pub fn restore_display_for_output(text: &mut String) {
+    if let Some(t) = context_transform() {
+        let _ = t.restore_display(text);
+    }
+}
+
+// ---- Phase 2 productization: built-in host transform (T6) -----------------
+///
+/// `SHANNON_SECRET_GUARD=audit|redact shannon …` enables the built-in
+/// transform for the process. Detection reuses the session-log
+/// [`crate::session_log::redaction::RedactionPolicy`] sources (built-in
+/// token shapes + `redaction.toml` + env snapshot); surrogates are SG1
+/// (HMAC-SHA256, format-compatible with the `secret-guard` artifact-a
+/// crate). The external `secret-guard-plugin` remains the full-fidelity
+/// implementation (gitleaks corpus); this built-in keeps the default
+/// install dependency-free. Enablement is process-wide and one-shot.
+use hmac::Mac as _;
+use sha2::Digest as _;
+use shannon_plugin_api::{AuditFinding, RestoreStats, TransformAction};
+
+/// Outbound policy for the built-in guard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretGuardMode {
+    /// Detect and count only (default posture for `audit`).
+    Audit,
+    /// Replace detected secrets with deterministic surrogates at ingest.
+    Redact,
+}
+
+impl SecretGuardMode {
+    fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "audit" => Some(Self::Audit),
+            "redact" => Some(Self::Redact),
+            _ => None,
+        }
+    }
+}
+
+/// Format-compatible SG1 derivation (see `secret-guard` artifact a):
+/// `SG1:` + base32(HMAC-SHA256(master, "sg1:v1\0" || secret)[..10]).
+fn sg1_surrogate(secret: &str, master: &[u8]) -> String {
+    type HmacSha256 = hmac::Hmac<sha2::Sha256>;
+    let mut data = Vec::with_capacity(secret.len() + 8);
+    data.extend_from_slice(b"sg1:v1\0");
+    data.extend_from_slice(secret.as_bytes());
+    let mac = HmacSha256::new_from_slice(master)
+        .map(|mut m| {
+            m.update(&data);
+            m.finalize().into_bytes()
+        })
+        .unwrap_or_else(|_| sha2::Sha256::digest(&data));
+    const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let mut out = String::from("SG1:");
+    let mut acc: u32 = 0;
+    let mut acc_bits: u32 = 0;
+    for b in &mac[..10] {
+        acc = (acc << 8) | u32::from(*b);
+        acc_bits += 8;
+        while acc_bits >= 5 {
+            acc_bits -= 5;
+            out.push(ALPHABET[((acc >> acc_bits) & 0x1f) as usize] as char);
+        }
+    }
+    out
+}
+
+/// Built-in host implementation of the content-transform contract.
+pub struct HostSecretGuard {
+    master_key: Vec<u8>,
+    redact: bool,
+    exact_values: Vec<String>,
+    store: std::sync::Arc<dyn shannon_plugin_api::SurrogateStore>,
+}
+
+impl HostSecretGuard {
+    /// Default constructor over the in-memory store (pilot posture).
+    /// `exact_values` seeds known secrets (blueprint §5.7 L2: env snapshot +
+    /// redaction.toml declared values — exact-match, no regex involved).
+    pub fn new(master_key: Vec<u8>, exact_values: Vec<String>, redact: bool) -> Self {
+        Self::with_store(
+            master_key,
+            exact_values,
+            redact,
+            std::sync::Arc::new(shannon_plugin_api::InMemorySurrogateStore::default()),
+        )
+    }
+
+    /// Host-injected registry (T8 seam): a persistent/rebuildable store
+    /// owned by the host; the derivation stays stateless regardless.
+    pub fn with_store(
+        master_key: Vec<u8>,
+        exact_values: Vec<String>,
+        redact: bool,
+        store: std::sync::Arc<dyn shannon_plugin_api::SurrogateStore>,
+    ) -> Self {
+        Self {
+            master_key,
+            redact,
+            exact_values,
+            store,
+        }
+    }
+
+    fn surrogate_of(&self, secret: &str) -> String {
+        sg1_surrogate(secret, &self.master_key)
+    }
+
+    fn redact_text(&self, text: &mut String) -> bool {
+        let mut changed = false;
+        // Exact known values first, longest first (F5: substring nesting).
+        let mut exact = self.exact_values.clone();
+        exact.sort_by_key(|v| std::cmp::Reverse(v.len()));
+        for value in exact {
+            if text.contains(value.as_str()) {
+                let token = self.surrogate_of(&value);
+                self.store.register(&token, &value);
+                *text = text.replace(value.as_str(), &token);
+                changed = true;
+            }
+        }
+        // Built-in token shapes (sk- / ghp_ / xox / glpat- …) on the result.
+        let findings: Vec<String> = crate::session_log::redaction::BUILTIN_PREFIX_REGEX
+            .find_iter(text)
+            .map(|m| m.as_str().to_string())
+            .collect();
+        for secret in findings {
+            let token = self.surrogate_of(&secret);
+            if self.store.pairs().iter().any(|(k, _)| *k == token) {
+                continue;
+            }
+            self.store.register(&token, &secret);
+            *text = text.replace(&secret, &token);
+            changed = true;
+        }
+        changed
+    }
+
+    fn restore_text(&self, text: &mut String) -> RestoreAction {
+        let mut pairs = self.store.pairs();
+        if pairs.is_empty() {
+            return RestoreAction::Unchanged;
+        }
+        pairs.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
+        let mut replaced = 0usize;
+        for (token, real) in &pairs {
+            let hits = text.matches(token.as_str()).count();
+            if hits > 0 {
+                *text = text.replace(token.as_str(), real);
+                replaced += hits;
+            }
+        }
+        if replaced == 0 {
+            RestoreAction::Unchanged
+        } else {
+            RestoreAction::Restored(RestoreStats {
+                replaced,
+                fuzzy: 0,
+                unresolved: Vec::new(),
+            })
+        }
+    }
+}
+
+impl ContextTransform for HostSecretGuard {
+    fn transform_ingest(&self, block: &mut shannon_plugin_api::IngestBlock) -> TransformAction {
+        if !self.redact {
+            return TransformAction::Passthrough; // audit mode never modifies
+        }
+        if self.redact_text(&mut block.text) {
+            TransformAction::Modified
+        } else {
+            TransformAction::Passthrough
+        }
+    }
+
+    fn restore_tool_args(&self, _tool: &str, args: &mut serde_json::Value) -> RestoreAction {
+        let pairs = self.store.pairs();
+        if pairs.is_empty() {
+            return RestoreAction::Unchanged;
+        }
+        let mut stats = RestoreStats {
+            replaced: 0,
+            fuzzy: 0,
+            unresolved: Vec::new(),
+        };
+        walk_restore(args, &pairs, &mut stats);
+        if stats.replaced == 0 {
+            RestoreAction::Unchanged
+        } else {
+            RestoreAction::Restored(stats)
+        }
+    }
+
+    fn restore_display(&self, text: &mut String) -> RestoreAction {
+        self.restore_text(text)
+    }
+
+    fn audit_wire(&self, wire: &serde_json::Value) -> Vec<AuditFinding> {
+        let body = serde_json::to_string(wire).unwrap_or_default();
+        let mut findings = Vec::new();
+        if crate::session_log::redaction::BUILTIN_PREFIX_REGEX.is_match(&body) {
+            findings.push(AuditFinding {
+                rule_id: "builtin-shape".to_string(),
+            });
+        }
+        for v in &self.exact_values {
+            if body.contains(v.as_str()) {
+                findings.push(AuditFinding {
+                    rule_id: "env-value".to_string(),
+                });
+                break;
+            }
+        }
+        findings
+    }
+}
+
+fn walk_restore(v: &mut serde_json::Value, pairs: &[(String, String)], stats: &mut RestoreStats) {
+    match v {
+        serde_json::Value::String(s) => {
+            for (token, real) in pairs {
+                if s.contains(token.as_str()) {
+                    *s = s.replace(token.as_str(), real);
+                    stats.replaced += 1;
+                }
+            }
+        }
+        serde_json::Value::Array(a) => a.iter_mut().for_each(|x| walk_restore(x, pairs, stats)),
+        serde_json::Value::Object(m) => m.values_mut().for_each(|x| walk_restore(x, pairs, stats)),
+        _ => {}
+    }
+}
+
+fn shannon_home() -> std::path::PathBuf {
+    std::env::var_os("SHANNON_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".shannon")
+        })
+}
+
+/// Load (or create, `0600`) the per-machine master key at
+/// `<shannon-home>/secret_guard.key`. The key is the only durable state;
+/// the surrogate registry is rebuildable from local secret sources.
+fn load_or_create_key(home: &std::path::Path) -> Option<Vec<u8>> {
+    let path = home.join("secret_guard.key");
+    if let Ok(hex) = std::fs::read_to_string(&path) {
+        let hex = hex.trim();
+        if hex.len() == 64 {
+            return decode_hex(hex);
+        }
+    }
+    // 4 random UUIDs (122 random bits each) → SHA-256 → 32 key bytes.
+    let mut raw = String::new();
+    for _ in 0..4 {
+        raw.push_str(&uuid::Uuid::new_v4().simple().to_string());
+    }
+    let key: [u8; 32] = sha2::Sha256::digest(raw.as_bytes()).into();
+    let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+    std::fs::create_dir_all(home).ok()?;
+    std::fs::write(&path, &hex).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
+    }
+    Some(key.to_vec())
+}
+
+fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    s.as_bytes()
+        .chunks(2)
+        .map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
+        .collect()
+}
+
+static ENABLED: std::sync::OnceLock<SecretGuardMode> = std::sync::OnceLock::new();
+
+/// Parse `$SHANNON_SECRET_GUARD` (`audit` | `redact`; anything else = off).
+fn mode_from_env() -> Option<SecretGuardMode> {
+    std::env::var("SHANNON_SECRET_GUARD")
+        .ok()
+        .and_then(|v| SecretGuardMode::parse(&v))
+}
+
+/// Install the built-in guard when `$SHANNON_SECRET_GUARD` requests it.
+/// One-shot per process (subsequent calls are cheap no-ops). Returns the
+/// active mode when installed (or previously installed).
+pub fn init_from_env() -> Option<SecretGuardMode> {
+    let mode = mode_from_env()?;
+    if let Some(existing) = ENABLED.get() {
+        return Some(*existing);
+    }
+    let key = load_or_create_key(&shannon_home())?;
+    let exact = crate::session_log::redaction::global_policy()
+        .exact_values()
+        .to_vec();
+    let guard = HostSecretGuard::new(key, exact, mode == SecretGuardMode::Redact);
+    set_context_transform(Some(std::sync::Arc::new(guard)));
+    let _ = ENABLED.set(mode);
+    tracing::info!(target: "shannon::secret_guard", ?mode, "secret-guard enabled (built-in transform)");
+    Some(mode)
+}
+
+pub fn init_from_config(
+    cfg: Option<&crate::unified_config::SecretGuardSection>,
+) -> Option<SecretGuardMode> {
+    let mode = cfg
+        .and_then(|c| c.mode.as_deref())
+        .and_then(SecretGuardMode::parse)?;
+    if let Some(existing) = ENABLED.get() {
+        return Some(*existing);
+    }
+    let key = load_or_create_key(&shannon_home())?;
+    let exact = crate::session_log::redaction::global_policy()
+        .exact_values()
+        .to_vec();
+    let guard = HostSecretGuard::new(key, exact, mode == SecretGuardMode::Redact);
+    set_context_transform(Some(std::sync::Arc::new(guard)));
+    let _ = ENABLED.set(mode);
+    tracing::info!(target: "shannon::secret_guard", ?mode, "secret-guard enabled (built-in transform)");
+    Some(mode)
+}
+
+#[cfg(test)]
 /// Serializes tests that mutate the process-global transform. Shared with
 /// other crates' test modules in this workspace member (e.g. tools.rs
 /// execution-boundary tests).
-#[cfg(test)]
 pub(crate) mod test_support {
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -354,6 +688,180 @@ mod tests {
                 rule_id: "aws-access-token".to_string(),
             }]
         }
+    }
+
+    #[test]
+    fn mode_parses_env_values() {
+        assert_eq!(
+            SecretGuardMode::parse("redact"),
+            Some(SecretGuardMode::Redact)
+        );
+        assert_eq!(
+            SecretGuardMode::parse(" Audit "),
+            Some(SecretGuardMode::Audit)
+        );
+        assert_eq!(SecretGuardMode::parse("off"), None);
+        assert_eq!(SecretGuardMode::parse(""), None);
+    }
+
+    #[test]
+    fn host_guard_redacts_builtin_shape_and_restores_roundtrip() {
+        let _g = global_lock();
+        let guard = HostSecretGuard::new(b"master-key-0123456789abcdef".to_vec(), vec![], true);
+        let mut block = shannon_plugin_api::IngestBlock {
+            source: IngestSource::ToolResult {
+                tool: "Read".to_string(),
+            },
+            text: "token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij".to_string(),
+        };
+        let action = ContextTransform::transform_ingest(&guard, &mut block);
+        assert_eq!(action, TransformAction::Modified);
+        assert!(
+            !block.text.contains("ghp_ABC"),
+            "raw token must be gone: {}",
+            block.text
+        );
+        assert!(block.text.contains("SG1:"));
+
+        let mut display = block.text.clone();
+        let act = ContextTransform::restore_display(&guard, &mut display);
+        assert!(
+            matches!(act, RestoreAction::Restored(_)),
+            "expected Restored, got {act:?}"
+        );
+        assert!(display.contains("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"));
+    }
+
+    #[test]
+    fn host_guard_audit_mode_never_modifies_but_wire_reports() {
+        let guard = HostSecretGuard::new(b"master-key-0123456789abcdef".to_vec(), vec![], false);
+        let mut block = shannon_plugin_api::IngestBlock {
+            source: IngestSource::UserMessage,
+            text: "token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij".to_string(),
+        };
+        assert_eq!(
+            ContextTransform::transform_ingest(&guard, &mut block),
+            TransformAction::Passthrough
+        );
+        assert!(
+            block.text.contains("ghp_ABC"),
+            "audit mode must not touch content"
+        );
+
+        let wire = json!({ "messages": [{ "role": "user", "content": "token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij" }] });
+        let findings = ContextTransform::audit_wire(&guard, &wire);
+        assert!(findings.iter().any(|f| f.rule_id == "builtin-shape"));
+    }
+
+    #[test]
+    fn host_guard_redacts_declared_exact_values() {
+        let guard = HostSecretGuard::new(
+            b"master-key-0123456789abcdef".to_vec(),
+            vec!["MY-DECLARED-SECRET-VALUE".to_string()],
+            true,
+        );
+        let mut block = shannon_plugin_api::IngestBlock {
+            source: IngestSource::UserMessage,
+            text: "password = MY-DECLARED-SECRET-VALUE".to_string(),
+        };
+        assert_eq!(
+            ContextTransform::transform_ingest(&guard, &mut block),
+            TransformAction::Modified
+        );
+        assert!(!block.text.contains("MY-DECLARED-SECRET-VALUE"));
+        assert!(block.text.contains("SG1:"));
+    }
+
+    #[test]
+    fn host_guard_injected_store_receives_registrations() {
+        // T8 seam: a host-owned store (persistent/rebuildable) must capture
+        // everything the guard mints — the guard itself stays stateless.
+        #[derive(Default)]
+        struct CollectingStore(std::sync::Mutex<Vec<(String, String)>>);
+        impl shannon_plugin_api::SurrogateStore for CollectingStore {
+            fn register(&self, surrogate: &str, secret: &str) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((surrogate.to_string(), secret.to_string()));
+            }
+            fn pairs(&self) -> Vec<(String, String)> {
+                self.0.lock().unwrap().clone()
+            }
+            fn len(&self) -> usize {
+                self.0.lock().unwrap().len()
+            }
+        }
+
+        use shannon_plugin_api::SurrogateStore as _;
+        let store = std::sync::Arc::new(CollectingStore::default());
+        let guard = HostSecretGuard::with_store(
+            b"master-key-0123456789abcdef".to_vec(),
+            vec!["MY-DECLARED-SECRET-VALUE".to_string()],
+            true,
+            store.clone(),
+        );
+        let mut block = shannon_plugin_api::IngestBlock {
+            source: IngestSource::UserMessage,
+            text: "a = MY-DECLARED-SECRET-VALUE; b = ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"
+                .to_string(),
+        };
+        assert_eq!(
+            ContextTransform::transform_ingest(&guard, &mut block),
+            TransformAction::Modified
+        );
+        let pairs = store.pairs();
+        assert_eq!(
+            pairs.len(),
+            2,
+            "both detections must land in the injected store"
+        );
+        assert!(block.text.contains("SG1:"));
+    }
+
+    /// Perf regression (soft budget): redacting a ~500 KB tool result with
+    /// exact + shape layers must stay far below a user-noticeable pause.
+    /// Measured baseline: scan throughput ~379 MiB/s (see artifact-a
+    /// benches); the 2 s ceiling is ~100x headroom.
+    #[test]
+    fn redact_large_payload_within_budget() {
+        let guard = HostSecretGuard::new(b"master-key-0123456789abcdef".to_vec(), vec![], true);
+        let line = "const padding_line = compute(padding_arg); // ordinary code line\n";
+        let secret_line = "token = ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij\n";
+        let mut text = String::with_capacity(512 * 1024);
+        while text.len() < 512 * 1024 {
+            text.push_str(line);
+            text.push_str(secret_line);
+        }
+        let mut block = shannon_plugin_api::IngestBlock {
+            source: IngestSource::ToolResult {
+                tool: "Read".to_string(),
+            },
+            text,
+        };
+        let start = std::time::Instant::now();
+        assert_eq!(
+            ContextTransform::transform_ingest(&guard, &mut block),
+            TransformAction::Modified
+        );
+        let elapsed = start.elapsed();
+        assert!(elapsed.as_secs() < 2, "500 KB redaction took {elapsed:?}");
+        assert!(!block.text.contains("ghp_ABC"));
+    }
+
+    #[test]
+    fn key_file_created_once_and_reloaded() {
+        let home = std::env::temp_dir().join(format!(
+            "sg-key-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let k1 = load_or_create_key(&home).expect("key created");
+        assert_eq!(k1.len(), 32);
+        let k2 = load_or_create_key(&home).expect("key reloaded");
+        assert_eq!(k1, k2, "same home must yield the same master key");
+        assert!(home.join("secret_guard.key").exists());
+        std::fs::remove_dir_all(home).ok();
     }
 
     #[test]
