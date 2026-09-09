@@ -251,6 +251,13 @@ impl RedactionPolicy {
     }
 
     /// Number of exact-value rules currently bundled (tests + diagnostics).
+    /// Crate-internal read access to the known exact secret values
+    /// (redaction.toml `values.secrets` + the env snapshot). The LLM-path
+    /// secret guard seeds its registry from these (blueprint §5.7 L2).
+    pub fn exact_values(&self) -> &[String] {
+        &self.exact_values
+    }
+
     pub fn exact_value_count(&self) -> usize {
         self.exact_values.len()
     }

@@ -84,6 +84,18 @@ pub struct ShannonConfig {
     pub provider_model: shannon_types::provider_config::ProviderModelConfig,
 }
 
+/// `[secret_guard]` config section (blueprint artifact c, Phase 2).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct SecretGuardSection {
+    /// `"off"` (default) | `"audit"` | `"redact"`.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Plugin failure behavior — reserved for Phase 3: `"open"` (default) |
+    /// `"closed"`.
+    #[serde(default)]
+    pub fail_mode: Option<String>,
+}
+
 /// `[hooks]` config section: inbound webhook endpoints (P2-7).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HooksConfig {

@@ -1,0 +1,21 @@
+[package]
+name = "shannon-plugin-api"
+version = "0.11.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Shannon Contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/diff-lab-com/shannon-agent"
+description = "Content-transform middleware contract for Shannon plugins (secret-guard blueprint artifact c)"
+
+# Blueprint: docs/research/llm-secret-redaction-research-2026-09.md §9.
+# Deliberately tiny and MANIFEST-STANDALONE (no workspace inheritance): the
+# contract must be trivially dependable by external plugin crates that check
+# out only this directory. Keep the version in lockstep with the workspace
+# release version when bumping.
+# Deliberately tiny: the contract must be stable and cheap for external
+# plugin crates to depend on. Types are self-contained (no engine types) so
+# out-of-process implementations can adopt the same shape later.
+
+[dependencies]
+serde_json = "1"

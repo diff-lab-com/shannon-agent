@@ -606,7 +606,12 @@ jobs:
       # both `baseline-rev` and the cache `prefix-key`, so a baseline bump
       # always invalidates the cached baseline rustdoc and never serves a
       # stale one.
-      SEMVER_BASELINE: semver-baseline-2026-09
+      # Second move (2026-09-09, PR #85): shannon-plugin-api (the
+      # secret-guard contract crate) is a new workspace member absent from
+      # semver-baseline-2026-09 — same "no package table" retrieval
+      # failure class. New TAG NAME (not a re-point) so the prefix-key
+      # cache invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-2
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
