@@ -76,10 +76,6 @@ pub struct ShannonConfig {
     /// `[hooks.github] secret` guards `POST /hooks/github` on shannon-server).
     #[serde(default)]
     pub hooks: Option<HooksConfig>,
-    /// `[secret_guard]` section — outbound LLM secret protection
-    /// (`mode = "off" | "audit" | "redact"`; blueprint artifact c).
-    #[serde(default)]
-    pub secret_guard: Option<SecretGuardSection>,
     /// v2 multi-provider/model config. The `"default"` profile's active
     /// target, when present, drives the engine `LlmClientConfig`. CLI / TOML
     /// / env inputs feed this through
@@ -150,7 +146,6 @@ impl ShannonConfig {
         };
 
         ShannonConfig {
-            secret_guard: None,
             max_tokens: other.max_tokens.or(self.max_tokens),
             temperature: other.temperature.or(self.temperature),
             timeout: other.timeout.or(self.timeout),
@@ -317,7 +312,6 @@ impl ConfigBuilder {
         if let Some(pm) = crate::provider_config_store::load(None) {
             self.connected_present = true;
             self.connected = ShannonConfig {
-                secret_guard: None,
                 max_tokens: None,
                 temperature: None,
                 timeout: None,
@@ -351,7 +345,6 @@ impl ConfigBuilder {
         )
         .unwrap_or_default();
         self.env_vars = ShannonConfig {
-            secret_guard: None,
             max_tokens: std::env::var("SHANNON_MAX_TOKENS")
                 .ok()
                 .and_then(|v| v.parse().ok()),
@@ -549,7 +542,6 @@ fn load_config_file(path: &std::path::Path) -> ShannonConfig {
     )
     .unwrap_or_default();
     ShannonConfig {
-        secret_guard: None,
         max_tokens,
         temperature,
         timeout,

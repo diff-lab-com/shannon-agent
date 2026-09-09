@@ -1155,7 +1155,6 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
     };
 
     let cli_overrides = ShannonConfig {
-        secret_guard: None,
         max_tokens: cli_config.max_tokens(),
         temperature: cli_config.temperature(),
         timeout: cli_config.timeout(),
@@ -1178,11 +1177,6 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
         .load_connected_profile()
         .set_cli_overrides(cli_overrides)
         .build();
-
-    // Secret-guard (blueprint artifact c): the `[secret_guard]` TOML section
-    // enables the built-in transform for this process; `$SHANNON_SECRET_GUARD`
-    // remains the engine-side fallback (first install wins).
-    shannon_core::secret_guard::init_from_config(merged.secret_guard.as_ref());
 
     let out = LlmClientConfig::from(merged);
 
