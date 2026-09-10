@@ -17,7 +17,7 @@ Build Shannon from source if you want to contribute, hack on the code, or run a 
 ## Build
 
 ```bash
-git clone https://github.com/shannon-agent/shannon-code.git
+git clone https://github.com/diff-lab-com/shannon-agent.git
 cd shannon-code
 cargo build --release
 ```

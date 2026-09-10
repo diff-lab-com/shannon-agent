@@ -1,8 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { type Lang, getTranslations } from '../i18n';
+import facts from '../data/facts.json';
 
 interface ComparisonTableProps {
   lang: Lang;
+}
+
+// Stats values come from generated facts (docs/metrics.md) where a metric
+// exists there; i18n carries the labels and the metrics that have no
+// machine-generated source (surfaces, IM channels).
+function statValue(i: number, fallback: string): string {
+  if (i === 0) return facts.testsDisplay;
+  if (i === 1) return String(facts.workspaceMembers);
+  return fallback;
 }
 
 export default function ComparisonTable({ lang }: ComparisonTableProps) {
@@ -54,7 +64,7 @@ export default function ComparisonTable({ lang }: ComparisonTableProps) {
               fontWeight: 700,
               color: 'var(--ink)',
               lineHeight: 1.2,
-            }}>{item.value}</div>
+            }}>{statValue(i, item.value)}</div>
             <div style={{ color: 'var(--muted)', fontSize: 14, marginTop: 4 }}>{item.label}</div>
           </div>
         ))}

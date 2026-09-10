@@ -317,8 +317,18 @@ CTABanner / Footer（口号收尾；Footer 仓库链接修正）
 
 ### 遗留事项（不阻塞，移交后续）
 
-- facts.json 生成机制 + 禁词 CI 检查（§7）：机制已设计，待接入 CI（本次为手工同步）。
-- 素材生产（§6）：README/官网截图与 GIF 占位待真实素材替换。
-- GitHub 仓库元信息（description/topics/social preview）需仓库管理员在 GitHub 设置中更新。
+- ~~facts.json 生成机制 + 禁词 CI 检查（§7）~~ → **已实施，见 §11.1**。
+- 素材生产（§6）：README/官网截图与 GIF 占位待真实素材替换（需真机录屏，无法在本环境生产）。
+- ~~GitHub 仓库元信息~~ → **已更新，见 §11.1**（description + topics）。
 - `docs-mdbook/src/configuration.md`、`architecture.md`、`crates/*` 等开发者向页面内容未逐页更新（本次只修正错误事实与命名）。
-- 模型注册表中已退役型号清理（grok research §9.1）属产品代码范畴，另行走修复流程。
+- ~~模型注册表中已退役型号清理~~ → **已实施，见 §11.1**。
+
+### 11.1 第二批实施（2026-09-10，合并 dev 前）
+
+- **facts.json 防漂移机制**：新增 `scripts/gen-facts.mjs`（从 `docs/metrics.md` Summary 表生成 `website/src/data/facts.json`，支持 `--check`）；官网统计条（ComparisonTable）前两位数字改为从 facts.json 读取，i18n 仅保留标签与无机器源的项（4 surfaces / 5 IM channels）。
+- **门面卫生检查**：新增 `scripts/check-facade.sh`（禁词表：`7,889`、`8,600`、`v0.1.0`、`10-20x`、`10-20 倍`、`github.com/shannon-agent/shannon-code`、`ericdong/shannon-code`，覆盖 README 双语 + website/src + docs-mdbook/src）。
+- **CI 接入**：`ci.yml` 新增 `facade-facts` job（gen-facts --check + check-facade），push dev/main 与 PR 均触发；actions SHA 沿用仓库既有 pin 约定。
+- **website 内置文档链接修复**：`src/content/docs/getting-started.md`、`building-from-source.md` 中 `github.com/shannon-agent/shannon-code` → `github.com/diff-lab-com/shannon-agent`。
+- **模型注册表 2026-09 刷新**（`crates/shannon-core/src/model_registry/catalog.rs`，依据 grok-bots-research §9.1）：新增旗舰 `grok-4.6`（500K ctx，$2/$6，`grok`/`grok4` 别名改指 4.6）；`grok-4.5` 定价修正 $3/$15 → $2/$6；退役型号 `grok-4.1-fast`（2026-05-15 退役）移除，低价位槽位由 `grok-build-0.1`（256K，$1/$2，承接官方 grok-code-fast-1 重定向）顶替，别名 `grok-fast` 随之改指。配套更新 `model_registry.rs` 两个单测；`cargo test -p shannon-core --lib model_registry` 通过。
+- **GitHub 仓库元信息**（gh CLI）：description 更新为双核心口径；topics 新增 `ai-agent`、`ai-workspace`、`byok`、`mcp`、`ratatui`（保留既有 `ai`/`bun`/`coding-agent`/`llm`/`monorepo`/`rust`/`tauri`/`typescript`）。
+- **仍待办**：真实素材（截图/GIF/竖屏视频）需真机生产；social preview 卡片需在 GitHub 网页端上传；`docs-mdbook` 开发者向页面逐页刷新；ci.yml 中遗留的 `vscode` job（对应已放弃的扩展，测试的是存量目录）建议随 `editors/` 目录处置一并决策。
