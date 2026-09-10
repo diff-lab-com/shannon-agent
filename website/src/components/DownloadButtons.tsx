@@ -8,7 +8,7 @@ interface DownloadButtonsProps {
   lang: Lang;
 }
 
-const GH_RELEASE = 'https://github.com/shannon-agent/shannon-code/releases/latest/download';
+const GH_RELEASE = 'https://github.com/diff-lab-com/shannon-agent/releases/latest/download';
 const CDN_BASE = import.meta.env.PUBLIC_CDN_BASE || GH_RELEASE;
 
 function detectOS(): OS {

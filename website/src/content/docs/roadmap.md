@@ -8,7 +8,7 @@ section: reference
 
 ## Current Status
 
-Shannon Code is in active development with 8,600+ tests and 300K+ lines of Rust code.
+Shannon is in active development with 11,752+ automated tests and 418K+ lines of Rust code.
 
 ## Completed
 

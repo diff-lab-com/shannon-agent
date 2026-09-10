@@ -6,7 +6,7 @@ section: development
 
 # Building from Source
 
-Build Shannon Code from source if you want to contribute, hack on the code, or run a custom build.
+Build Shannon from source if you want to contribute, hack on the code, or run a custom build.
 
 ## Prerequisites
 
@@ -17,7 +17,7 @@ Build Shannon Code from source if you want to contribute, hack on the code, or r
 ## Build
 
 ```bash
-git clone https://github.com/shannon-agent/shannon-code.git
+git clone https://github.com/diff-lab-com/shannon-agent.git
 cd shannon-code
 cargo build --release
 ```

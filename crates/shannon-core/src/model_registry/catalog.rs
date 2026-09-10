@@ -729,29 +729,47 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_output: 2.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
     },
-    // ── xAI / Grok (grok-4 retired → 4.5 is current frontier) ──
+    // ── xAI / Grok ──
+    // 2026-09 refresh per xAI official pricing/migration pages: grok-4.6 is
+    // the current flagship (500K ctx, $2/$6); grok-4.5 repriced $3/$15 →
+    // $2/$6; grok-4.1-fast retired 2026-05-15 — the low-cost slot goes to
+    // grok-build-0.1 ($1/$2, 256K), which is also xAI's official redirect
+    // target for the retired grok-code-fast-1 coding line.
     ModelInfo {
-        id: "grok-4.5",
-        display_name: "Grok 4.5",
-        aliases: &["grok", "grok4", "grok-4.5"],
+        id: "grok-4.6",
+        display_name: "Grok 4.6",
+        aliases: &["grok", "grok4", "grok-4.6"],
         provider: LlmProvider::Xai,
-        context_window: 256_000,
+        context_window: 500_000,
         max_output: 100_000,
-        cost_per_m_input: 3.0,
-        cost_per_m_output: 15.0,
+        cost_per_m_input: 2.0,
+        cost_per_m_output: 6.0,
         capabilities: ModelCapabilities::coding()
             .or(ModelCapabilities::reasoning())
             .or(ModelCapabilities::vision()),
     },
     ModelInfo {
-        id: "grok-4.1-fast",
-        display_name: "Grok 4.1 Fast",
-        aliases: &["grok-fast"],
+        id: "grok-4.5",
+        display_name: "Grok 4.5",
+        aliases: &["grok-4.5"],
         provider: LlmProvider::Xai,
         context_window: 256_000,
         max_output: 100_000,
-        cost_per_m_input: 0.20,
-        cost_per_m_output: 1.50,
+        cost_per_m_input: 2.0,
+        cost_per_m_output: 6.0,
+        capabilities: ModelCapabilities::coding()
+            .or(ModelCapabilities::reasoning())
+            .or(ModelCapabilities::vision()),
+    },
+    ModelInfo {
+        id: "grok-build-0.1",
+        display_name: "Grok Build 0.1",
+        aliases: &["grok-fast", "grok-build"],
+        provider: LlmProvider::Xai,
+        context_window: 256_000,
+        max_output: 100_000,
+        cost_per_m_input: 1.0,
+        cost_per_m_output: 2.0,
         capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
     },
     // ── Perplexity ───────────────────────────────────────────

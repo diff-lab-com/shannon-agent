@@ -1,6 +1,6 @@
 # Tool System
 
-Shannon Code's tool system lets the LLM interact with your filesystem, execute commands, and search code.
+Shannon's tool system lets the LLM interact with your filesystem, execute commands, and search code.
 
 ## Core Tools
 

@@ -9,8 +9,8 @@
 ## Build
 
 ```bash
-git clone https://github.com/ericdong/shannon-code.git
-cd shannon-code
+git clone https://github.com/diff-lab-com/shannon-agent.git
+cd shannon-agent
 cargo build --release
 ```
 

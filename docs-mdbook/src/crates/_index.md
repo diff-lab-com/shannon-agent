@@ -1,6 +1,6 @@
 # Crate Reference
 
-Shannon Code is a Cargo workspace with 12 crates. This section covers each crate's purpose, public API, and key types.
+Shannon is a Cargo workspace. This section covers each crate's purpose, public API, and key types.
 
 | Crate | Lines | Tests | Description |
 |-------|-------|-------|-------------|

@@ -33,6 +33,15 @@ env:
 # release tag's commit). Never use a moving tag like `@v4` for these —
 # always pin to an exact commit.
 jobs:
+  facade-facts:
+    name: Facade facts & hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - name: Generated facade facts are fresh
+        run: node scripts/gen-facts.mjs --check
+      - name: No stale/banned phrases in facade surfaces
+        run: bash scripts/check-facade.sh
   test:
     name: Test
     runs-on: ubuntu-latest

@@ -1640,6 +1640,7 @@ mod tests {
         // Phase A: providers that previously had zero catalog entries.
         let xai = models_for_provider(LlmProvider::Xai);
         assert!(!xai.is_empty(), "xAI should have models");
+        assert!(xai.iter().any(|m| m.id == "grok-4.6"));
         assert!(xai.iter().any(|m| m.id == "grok-4.5"));
         for provider in [
             LlmProvider::Perplexity,
@@ -1667,13 +1668,14 @@ mod tests {
         );
         // OpenAI GPT-5 alias resolves.
         assert!(model_info_for_alias("gpt5").is_some());
-        // grok alias → grok-4.5 (grok-4 retired).
+        // grok alias → grok-4.6 (current flagship; grok-4 retired).
         let grok = model_info_for_alias("grok").unwrap();
-        assert_eq!(grok.id, "grok-4.5");
-        // grok-4.5 (coding+reasoning) → Standard; grok-4.1-fast (speed+cheap) → Fast.
+        assert_eq!(grok.id, "grok-4.6");
+        // grok-4.6 (coding+reasoning) → Standard; grok-build-0.1
+        // (speed+cheap, replaces the retired grok-4.1-fast slot) → Fast.
         assert_eq!(grok.tier_label(), TierLabel::Standard);
         assert_eq!(
-            model_info_for("grok-4.1-fast").unwrap().tier_label(),
+            model_info_for("grok-build-0.1").unwrap().tier_label(),
             TierLabel::Fast
         );
     }

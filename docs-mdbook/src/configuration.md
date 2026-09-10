@@ -1,6 +1,6 @@
 # Configuration
 
-Shannon Code uses a layered configuration system. Later sources override earlier ones:
+Shannon uses a layered configuration system. Later sources override earlier ones:
 
 **CLI args > Environment variables > Project config > Global config**
 

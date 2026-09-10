@@ -3,6 +3,7 @@ import { type Lang, getStoredLang, setStoredLang } from '../i18n';
 import Navbar from './Navbar';
 import Hero from './Hero';
 import Terminal from './Terminal';
+import TrustSection from './TrustSection';
 import FeatureGrid from './FeatureGrid';
 import ComparisonTable from './ComparisonTable';
 import CTABanner from './CTABanner';
@@ -24,6 +25,7 @@ export default function LandingPage() {
       <Navbar lang={lang} onLangChange={handleLangChange} />
       <Hero lang={lang} />
       <Terminal lang={lang} />
+      <TrustSection lang={lang} />
       <FeatureGrid lang={lang} />
       <ComparisonTable lang={lang} />
       <CTABanner lang={lang} />
@@ -34,7 +36,7 @@ export default function LandingPage() {
         color: 'var(--muted)',
         fontSize: 14,
       }}>
-        <p>{lang === 'en' ? '\u00a9 2026 Shannon Code Contributors.' : '\u00a9 2026 Shannon Code \u8d21\u732e\u8005\u3002'} Apache-2.0</p>
+        <p>{lang === 'en' ? '\u00a9 2026 Shannon Contributors.' : '\u00a9 2026 Shannon \u8d21\u732e\u8005\u3002'} Apache-2.0</p>
       </footer>
     </>
   );

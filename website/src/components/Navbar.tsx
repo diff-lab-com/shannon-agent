@@ -65,7 +65,7 @@ export default function Navbar({ lang, onLangChange }: NavbarProps) {
             fontSize: 14,
             fontWeight: 700,
           }}>S</div>
-          <span style={{ fontWeight: 600, fontSize: 16 }}>Shannon Code</span>
+          <span style={{ fontWeight: 600, fontSize: 16 }}>Shannon</span>
         </a>
 
         <div className={`nav-links${menuOpen ? ' open' : ''}`} style={{
@@ -90,7 +90,7 @@ export default function Navbar({ lang, onLangChange }: NavbarProps) {
           >
             {lang === 'en' ? '中文' : 'EN'}
           </button>
-          <a href="https://github.com/shannon-agent/shannon-code" target="_blank" rel="noopener noreferrer"
+          <a href="https://github.com/diff-lab-com/shannon-agent" target="_blank" rel="noopener noreferrer"
             style={navLinkStyle}>{t.nav.github}</a>
           <a href={BASE + 'docs/getting-started'} className="btn-primary" style={{ fontSize: 14, padding: '8px 18px' }}
             onClick={() => setMenuOpen(false)}>{t.nav.getStarted}</a>

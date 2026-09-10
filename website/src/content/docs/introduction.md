@@ -6,11 +6,11 @@ section: getting-started
 
 # Introduction
 
-**Shannon Code** is a high-performance, open-source AI-assisted coding tool written in Rust. It provides a terminal-based interface for interacting with large language models with tool orchestration, multi-agent coordination, session management, and MCP extensibility.
+**Shannon** is a high-performance, open-source AI-assisted coding tool written in Rust. It provides a terminal-based interface for interacting with large language models with tool orchestration, multi-agent coordination, session management, and MCP extensibility.
 
-## Why Shannon Code?
+## Why Shannon?
 
-| Feature | Shannon Code |
+| Feature | Shannon |
 |---------|-------------|
 | Language | Rust (memory-safe, zero-cost abstractions) |
 | LLM Support | Multi-provider (Anthropic, OpenAI, Ollama, any OpenAI-compatible) |
@@ -18,7 +18,7 @@ section: getting-started
 | Tools | Read, Edit, Write, Bash, Grep, Glob + MCP tools |
 | Agents | Multi-agent orchestration with per-agent model/tool config |
 | UI | Terminal UI with vim mode, diff viewer, markdown rendering |
-| Tests | 8,600+ tests across 12 crates |
+| Tests | 11,752+ automated tests across 20 workspace members |
 | i18n | 10 languages |
 
 ## Design Principles
@@ -35,4 +35,4 @@ Dual-licensed under MIT or Apache-2.0 at your option.
 
 ## Project Status
 
-Shannon Code is in active development. See the [Roadmap](roadmap/) for planned features.
+Shannon is in active development. See the [Roadmap](roadmap/) for planned features.
