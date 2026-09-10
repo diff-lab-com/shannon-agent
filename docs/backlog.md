@@ -165,6 +165,24 @@ agent 更彻底但更慢（AgentTimeout 15→24），需 A2 原版 vs R1 版的�
 - [x] **E2** preflight-network.sh 四点探针 + run-v2-glm 发车门禁（当前窗口实测 4/4）
 - [ ] **T1b** A2 提示归因二分——低优（2×2 已证提示因子中性；仅在出现新证据时重开）
 
+### 回测最终数据（2026-09-10，当前二进制 = 全部 20 项改进 + N1/N2 + P1-3，glm-5.3-flash）
+
+| 基准 | 改进前基线 | wave-1 | **当前（回测）** | n |
+|---|---|---|---|---|
+| SWE-bench Verified 50 | 30/50 (60%) | 37/50 (74%) | **38/50 (76%)** | 1 |
+| 内部回归池 | 3/10 | 6/10 | **7/10** | 1 |
+| TB 9-pin | – | 3/9（×3 轮稳定） | 未重跑（批 3 随链截断取消） | – |
+| TB 2.1 全量 | 36/89 (40.4%) | –（R1/R2 后未跑） | **未重跑（批 4 暂缓）** | – |
+
+SWE50 逐题对照（vs 改进前）：+11（astropy-14508/14995、django-10914/12125/13279/13363、
+matplotlib-14623、seaborn-3069、pytest-10051、scikit-learn-10908、sympy-12096）
+/ −3（matplotlib-20488、sympy-12481、sympy-13031——方差带翻转题）。
+数据：`~/.shannon/eval/shards/backtest-round1-matrix.json`。
+
+**诚实标注**：n=1；SWE50 同代码方差参照 ±4-6 题（minimax b8/b10/b11），故 30→38 的
++8 中方向可信（多源机制证据 + 靶题全中）、精确幅度未定。TB2.1 的 n=3 验收
+（31 题分层样本 ×3 rep）脚本与清单就绪（`docs/backlog.md` §四 T1），按需启动。
+
 ### 建议排队（真实能力/健壮性）
 - [ ] musl 二进制的 CI 产出（`CFLAGS_x86_64_unknown_linux_musl` fortify 处理已文档化，待接 CI）
 - [ ] provider A/B 执行（需按量 key：`~/.shannon/credentials/zhipu-payg.json`；脚本就绪 `012bce57`）

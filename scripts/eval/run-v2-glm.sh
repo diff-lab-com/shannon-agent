@@ -61,6 +61,11 @@ if ! "$SELF_DIR/preflight-network.sh" --quiet; then
   exit 8
 fi
 
+# Image assurance (P1-4): rebuild/re-pull whatever a stray docker prune
+# removed, before the batch — idempotent, ~seconds when everything is
+# already present.
+bash "$SELF_DIR/ensure-images.sh"
+
 case "${1:-}" in
   swe)
     export SHANNON_BIN="$(pick_engine snapshot)"
