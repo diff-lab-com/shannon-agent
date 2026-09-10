@@ -331,4 +331,5 @@ CTABanner / Footer（口号收尾；Footer 仓库链接修正）
 - **website 内置文档链接修复**：`src/content/docs/getting-started.md`、`building-from-source.md` 中 `github.com/shannon-agent/shannon-code` → `github.com/diff-lab-com/shannon-agent`。
 - **模型注册表 2026-09 刷新**（`crates/shannon-core/src/model_registry/catalog.rs`，依据 grok-bots-research §9.1）：新增旗舰 `grok-4.6`（500K ctx，$2/$6，`grok`/`grok4` 别名改指 4.6）；`grok-4.5` 定价修正 $3/$15 → $2/$6；退役型号 `grok-4.1-fast`（2026-05-15 退役）移除，低价位槽位由 `grok-build-0.1`（256K，$1/$2，承接官方 grok-code-fast-1 重定向）顶替，别名 `grok-fast` 随之改指。配套更新 `model_registry.rs` 两个单测；`cargo test -p shannon-core --lib model_registry` 通过。
 - **GitHub 仓库元信息**（gh CLI）：description 更新为双核心口径；topics 新增 `ai-agent`、`ai-workspace`、`byok`、`mcp`、`ratatui`（保留既有 `ai`/`bun`/`coding-agent`/`llm`/`monorepo`/`rust`/`tauri`/`typescript`）。
-- **仍待办**：真实素材（截图/GIF/竖屏视频）需真机生产；social preview 卡片需在 GitHub 网页端上传；`docs-mdbook` 开发者向页面逐页刷新；ci.yml 中遗留的 `vscode` job（对应已放弃的扩展，测试的是存量目录）建议随 `editors/` 目录处置一并决策。
+- **VS Code 扩展目录处置**（2026-09-10 追加决策）：删除 `editors/`（仅含 `editors/vscode`，18 个文件）与 ci.yml 的 `vscode` job——扩展已于 2026-09-05 评审永久放弃，目录属存量死代码；已确认分支保护 required checks 不含 "VS Code Extension"，移除 job 不影响 PR 门禁。历史文档（docs/spikes/p2-8-*、docs/reviews/）按惯例保留不动。
+- **仍待办**：真实素材（截图/GIF/竖屏视频）需真机生产；social preview 卡片需在 GitHub 网页端上传；`docs-mdbook` 开发者向页面逐页刷新。

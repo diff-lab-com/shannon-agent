@@ -166,21 +166,6 @@ jobs:
       - name: Eval harness tests
         run: cargo nextest run -p shannon-core -E 'test(eval)' --profile ci
 
-  vscode:
-    name: VS Code Extension
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
-        with:
-          node-version: "24"
-      - name: Install dependencies
-        run: cd editors/vscode && npm install
-      - name: Compile
-        run: cd editors/vscode && npm run compile
-      - name: Test
-        run: cd editors/vscode && npm test
-
   desktop-e2e:
     name: Desktop E2E
     runs-on: ubuntu-latest
