@@ -651,9 +651,9 @@ impl FileHistoryManager {
     ) -> Result<FileSnapshot, FileHistoryError> {
         self.ensure_cache_loaded()?;
 
-        let history = self.lookup_history(file_path).ok_or_else(|| {
-            FileHistoryError::NoHistory(file_path.to_string_lossy().to_string())
-        })?;
+        let history = self
+            .lookup_history(file_path)
+            .ok_or_else(|| FileHistoryError::NoHistory(file_path.to_string_lossy().to_string()))?;
 
         history
             .get_by_id(id)

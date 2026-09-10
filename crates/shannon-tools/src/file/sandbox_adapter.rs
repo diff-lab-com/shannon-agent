@@ -386,8 +386,9 @@ fn matches_policy_path(
     if resolved.starts_with(configured) || resolved == configured {
         return true;
     }
-    let canonical_configured =
-        fs.canonicalize_blocking(configured).unwrap_or_else(|_| configured.to_path_buf());
+    let canonical_configured = fs
+        .canonicalize_blocking(configured)
+        .unwrap_or_else(|_| configured.to_path_buf());
     resolved.starts_with(&canonical_configured) || resolved == canonical_configured
 }
 

@@ -1274,7 +1274,6 @@ mod tests {
     // that `git show HEAD:<relative-path>` inside `get_git_head_version` resolves
     // correctly. A static mutex serialises them to avoid parallel-cwd races.
 
-
     /// Helper: create a temp git repo, commit an initial file, return TempDir.
     /// The repo root can be used as cwd so that `git show HEAD:<file>` works.
     async fn init_git_repo_with_file(filename: &str, content: &str) -> tempfile::TempDir {
@@ -1327,7 +1326,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_attempt_merge_fallback_no_git() {
-
         // Non-git temp directory — no HEAD version available
         let dir = tempfile::TempDir::new().unwrap();
         tokio::fs::write(dir.path().join("test.txt"), "hello world")
@@ -1338,7 +1336,6 @@ mod tests {
 
         let result =
             attempt_merge_fallback("test.txt", "hello world", "hello", "goodbye", false).await;
-
 
         match result {
             MergeFallbackResult::NotAvailable(msg) => {
@@ -1355,7 +1352,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_attempt_merge_fallback_base_lacks_old_string() {
-
         let dir = init_git_repo_with_file("test.txt", "original content").await;
 
         let _cwd_guard = crate::test_support::CwdGuard::acquire(dir.path());
@@ -1368,7 +1364,6 @@ mod tests {
             false,
         )
         .await;
-
 
         match result {
             MergeFallbackResult::NotAvailable(msg) => {
@@ -1385,7 +1380,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_attempt_merge_fallback_clean_merge() {
-
         // base   = "line1\nline2\nline3\n"
         // ours   = "line1\nline2\nMODIFIED3\n"  (external change on line3)
         // theirs = "line1\nreplaced\nline3\n"   (edit: line2 → replaced)
@@ -1402,7 +1396,6 @@ mod tests {
 
         let result =
             attempt_merge_fallback("test.txt", disk_content, "line2", "replaced", false).await;
-
 
         match result {
             MergeFallbackResult::Applied {
@@ -1431,7 +1424,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_attempt_merge_fallback_conflict_merge() {
-
         // base   = "line1\nline2\nline3\n"
         // ours   = "line1\nchanged_by_us\nline3\n"
         // theirs = "line1\nchanged_by_edit\nline3\n"
@@ -1449,7 +1441,6 @@ mod tests {
         let result =
             attempt_merge_fallback("test.txt", disk_content, "line2", "changed_by_edit", false)
                 .await;
-
 
         match result {
             MergeFallbackResult::Applied {
@@ -1477,7 +1468,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_merge_fallback_integration() {
-
         // Integration: commit a file, modify it externally, call execute() with
         // old_string from the committed version. Direct edit fails (old_string not
         // in current content) → merge fallback path is triggered.
@@ -1500,7 +1490,6 @@ mod tests {
             preview: false,
         };
         let result = execute(input).await;
-
 
         assert!(
             result.is_ok(),

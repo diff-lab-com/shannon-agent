@@ -346,7 +346,11 @@ impl PathSandbox {
         let tmp_canonical = self.canonical_of(&tmp);
         if self.bind_alias_output {
             for input in &inputs {
-                for t in [tmp.as_path(), tmp_canonical.as_path(), Path::new(SANDBOX_TMP_ROOT)] {
+                for t in [
+                    tmp.as_path(),
+                    tmp_canonical.as_path(),
+                    Path::new(SANDBOX_TMP_ROOT),
+                ] {
                     if let Ok(rest) = input.strip_prefix(t) {
                         return match rest.as_os_str().is_empty() {
                             true => SANDBOX_TMP_ROOT.to_string(),
