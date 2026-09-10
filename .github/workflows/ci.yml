@@ -486,14 +486,13 @@ jobs:
       - name: Install system headers (Linux only)
         if: runner.os == 'Linux'
         # libdbus-1-dev: keyring → dbus-secret-service (shannon-mcp-saas).
-        # libgbm-dev/libdrm-dev/libwayland-dev/libpipewire-0.3-dev: xcap's
-        # Linux capture stack (xcap → libwayshot-xcap → gbm →
-        # wayland-backend → wayland-sys, plus pipewire/libspa-sys) —
-        # wayland-sys's build.rs runs wayland-scanner and pkg-config-links
-        # libwayland-client; without these the computer-use feature legs
-        # below die in build.rs panics. Same set the Test/Clippy jobs
-        # already install for the same dependency chain.
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev libgbm-dev libdrm-dev libwayland-dev libpipewire-0.3-dev
+        # libgbm-dev/libdrm-dev/libwayland-dev/libpipewire-0.3-dev/libegl-dev:
+        # xcap's Linux capture stack (xcap → libwayshot-xcap → gbm →
+        # wayland-backend → wayland-sys, khronos-egl[static] pkg-config
+        # probe "egl", plus pipewire/libspa-sys) — without these the
+        # computer-use feature legs below die in build.rs panics. Same set
+        # the Test/Clippy jobs already install for the same dependency chain.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev libgbm-dev libdrm-dev libwayland-dev libpipewire-0.3-dev libegl-dev
       - name: Check workspace (all platforms)
         # shannon-desktop requires Tauri/webview system libs that are
         # difficult to install on `windows-latest` and `macos-latest`
