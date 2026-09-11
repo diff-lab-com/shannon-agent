@@ -4,6 +4,32 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Desktop UI: competitive-parity overhaul (2026-09-10/11)
+
+Terminology, onboarding, visual system and workflow gaps from
+`docs/design/ui-audit-2026-09` (vs Claude Desktop/Code, Codex app, ZCode):
+
+- **Composer always visible** — replaced the fragile absolute-positioned
+  composer (it escaped the viewport when the panel scrolled) with flex flow;
+  glass material; mode + thought-level chips (ZCode composer pattern).
+- **Unified terminology** (zh + en): 已排程→任务, 分流队列→收件箱, 扩展→连接,
+  单人公司→指挥台, 并行方案→多方案对比, 聚焦聊天/评审/构建→对话/Diff/预览.
+- **Dark-first default** (`tokyo-night` when no stored preference).
+- **2-step onboarding** (was 4): task + provider on one screen, tools
+  prefilled from the task recommendation.
+- **Goal creation entry** — `start_goal_run` was unreachable from the UI;
+  NewGoalDialog adds title/objective/max-turns/budget-cap.
+- **Usage: current-session context panel** — six-category breakdown +
+  window fill + session budget cap (`set_session_budget` was UI-dead).
+- **Connectors catalog**: 8 → 12 vendors (Rust registry + mock), install-time
+  injection-scan/signature badge surfaced.
+- **Editor page retired** — `/editor` redirects; mod+5, palette and slash
+  open the chat-inline panel.
+- **Design-token guardrails** — `check:tokens` CI script (retired terms +
+  raw colors); `--color-success/--color-warning` tokens added (were silently
+  missing); Modal overlay glassed; Playwright visual baselines for key pages;
+  e2e selectors synced to the new terms.
+
 ### macOS real-machine verification, first batch (2026-09-10)
 
 - **xcap 0.0.13 → 0.9.8**: 0.0.13 fails to compile on macOS with the pinned
