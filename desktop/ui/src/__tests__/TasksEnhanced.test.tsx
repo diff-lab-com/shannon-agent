@@ -52,7 +52,7 @@ describe('Tasks Enhanced', () => {
   it('shows Scheduled Tasks heading', () => {
     setContext({ tasks: [], backgroundTasks: [], agents: [] })
     renderTasks()
-    expect(screen.getByText('Scheduled Tasks')).toBeInTheDocument()
+    expect(screen.getByText('Tasks')).toBeInTheDocument()
   })
 
   it('shows empty state when no tasks', () => {

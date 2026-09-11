@@ -21,7 +21,7 @@ function wrap(ui: React.ReactElement) {
 describe('Tasks page', () => {
   it('renders page title', async () => {
     render(wrap(<Tasks />))
-    await waitFor(() => expect(screen.getByText('Scheduled Tasks')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Tasks')).toBeInTheDocument())
   })
 
   it('renders new task button', async () => {

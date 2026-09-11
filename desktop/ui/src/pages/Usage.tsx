@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
 import { cn } from '@/lib/utils'
 import type { UsageStats, UsageBucket, SessionUsageRow } from '@/types'
+import CurrentSessionCostPanel from '@/components/usage/CurrentSessionCostPanel'
 
 const RANGES = [7, 30, 90] as const
 
@@ -296,6 +297,7 @@ export default function Usage() {
         ))}
       </div>
 
+      <CurrentSessionCostPanel />
       {loading ? (
         <LoadingState size="lg" />
       ) : !hasData ? (

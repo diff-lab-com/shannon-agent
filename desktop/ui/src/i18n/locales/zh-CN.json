@@ -2909,5 +2909,17 @@
   "goal.new.placeholder.budget": "如 5.00",
   "goal.new.cancel": "取消",
   "goal.new.submit": "启动目标",
-  "goal.new.submitting": "启动中…"
+  "goal.new.submitting": "启动中…",
+  "usage.ctx.heading": "当前会话上下文",
+  "usage.ctx.ofWindow": "模型窗口 {window}",
+  "usage.ctx.noWindow": "模型窗口未知",
+  "usage.ctx.system": "系统提示",
+  "usage.ctx.tools": "工具定义",
+  "usage.ctx.skills": "技能",
+  "usage.ctx.memory": "记忆",
+  "usage.ctx.mcp": "MCP",
+  "usage.ctx.conversation": "对话",
+  "usage.ctx.budgetLabel": "会话预算上限（USD）",
+  "usage.ctx.budgetPlaceholder": "不限",
+  "usage.ctx.budgetSave": "保存"
 }

@@ -2909,5 +2909,17 @@
   "goal.new.placeholder.budget": "e.g. 5.00",
   "goal.new.cancel": "Cancel",
   "goal.new.submit": "Start goal",
-  "goal.new.submitting": "Starting…"
+  "goal.new.submitting": "Starting…",
+  "usage.ctx.heading": "Current session context",
+  "usage.ctx.ofWindow": "of {window} window",
+  "usage.ctx.noWindow": "model window unknown",
+  "usage.ctx.system": "System prompt",
+  "usage.ctx.tools": "Tool definitions",
+  "usage.ctx.skills": "Skills",
+  "usage.ctx.memory": "Memory",
+  "usage.ctx.mcp": "MCP",
+  "usage.ctx.conversation": "Conversation",
+  "usage.ctx.budgetLabel": "Session budget cap (USD)",
+  "usage.ctx.budgetPlaceholder": "No cap",
+  "usage.ctx.budgetSave": "Save"
 }

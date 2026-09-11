@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import { MemoryRouter } from 'react-router-dom'
 import Usage from '@/pages/Usage'
+import { AppProvider } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
 import type { UsageStats } from '@/types'
 
@@ -27,7 +28,12 @@ function renderUsage() {
   return render(
     <I18nProvider>
       <MemoryRouter>
-        <Usage />
+        {/* CurrentSessionCostPanel consumes useSessions — provide the
+            context (AppProvider hosts the SessionContext.Provider) so the
+            page mounts standalone in tests. */}
+        <AppProvider>
+          <Usage />
+        </AppProvider>
       </MemoryRouter>
     </I18nProvider>,
   )
