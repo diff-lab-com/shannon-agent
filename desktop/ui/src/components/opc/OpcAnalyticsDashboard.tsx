@@ -20,7 +20,7 @@ const STATUS_TONES: Record<string, string> = {
   done: 'bg-tertiary/15 text-tertiary border-tertiary/40',
   in_progress: 'bg-primary/15 text-primary border-primary/40',
   running: 'bg-primary/15 text-primary border-primary/40',
-  pending: 'bg-secondary-container text-on-secondary-container border-outline-variant/40',
+  pending: 'bg-primary text-on-primary border-outline-variant/40',
   todo: 'bg-outline/15 text-on-surface-variant border-outline/40',
   deprecated: 'bg-error/15 text-error border-error/40',
 }
@@ -193,8 +193,8 @@ export default function OpcAnalyticsDashboard() {
             <ul className="flex flex-col gap-xs">
               {metrics.by_status.map(s => (
                 <li key={s.status} className="flex items-center gap-sm">
-                  <span className={cn("inline-flex items-center px-xs py-1 rounded-full border font-label-sm text-[10px] font-bold uppercase tracking-wide w-32 justify-center", toneFor(s.status))}>
-                    {s.status}
+                  <span className={cn("inline-flex items-center px-xs py-1 rounded-full border font-label-sm text-[10px] font-bold tracking-wide w-32 justify-center", toneFor(s.status))}>
+                    {t(`status.${s.status.toLowerCase()}`)}
                   </span>
                   <div className="flex-1 bg-surface-container-low rounded-full h-2 overflow-hidden">
                     <div
@@ -220,7 +220,7 @@ export default function OpcAnalyticsDashboard() {
             <ul className="flex flex-col gap-xs">
               {metrics.by_priority.map(p => (
                 <li key={p.priority} className="flex items-center gap-sm">
-                  <span className="font-label-sm text-on-surface-variant w-24 capitalize">{p.priority}</span>
+                  <span className="font-label-sm text-on-surface-variant w-24">{t(`status.${p.priority.toLowerCase()}`)}</span>
                   <div className="flex-1 bg-surface-container-low rounded-full h-2 overflow-hidden">
                     <div
                       className="h-full bg-tertiary/60"

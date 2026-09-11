@@ -227,6 +227,81 @@
   border: 1px solid color-mix(in srgb, var(--color-outline-variant) 50%, transparent);
 }
 
+/* ── Liquid Glass material system (docs/design/ui-audit-2026-09 §6.5) ──
+   Three tiers. Glass carries FLOATING chrome only (sidebar/header/composer/
+   overlays); content cards stay solid for readability and perf.
+   Hard budget: ≤4 backdrop-filter elements per screen. */
+
+:root {
+  --glass-blur-surface: blur(28px) saturate(1.6);
+  --glass-blur-overlay: blur(44px) saturate(1.8);
+  /* Spring-ish easing (Apple sheet curve) + duration scale */
+  --ease-glass: cubic-bezier(0.32, 0.72, 0, 1);
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 280ms;
+}
+
+@utility glass-surface {
+  background: color-mix(in srgb, var(--color-surface-container-lowest) 62%, transparent);
+  backdrop-filter: var(--glass-blur-surface);
+  -webkit-backdrop-filter: var(--glass-blur-surface);
+  border: 1px solid color-mix(in srgb, var(--color-outline-variant) 55%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--color-surface-container-lowest) 30%, transparent),
+    0 8px 32px color-mix(in srgb, black 32%, transparent);
+  contain: paint;
+}
+
+@utility glass-overlay {
+  background: color-mix(in srgb, var(--color-surface-container-low) 78%, transparent);
+  backdrop-filter: var(--glass-blur-overlay);
+  -webkit-backdrop-filter: var(--glass-blur-overlay);
+  border: 1px solid color-mix(in srgb, var(--color-outline-variant) 65%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--color-surface-container-lowest) 36%, transparent),
+    0 16px 48px color-mix(in srgb, black 40%, transparent);
+  contain: paint;
+}
+
+/* Dark mode: lighten the tint instead of darkening so glass stays legible
+   over near-black backdrops (vibrancy reads off the blur, not the fill). */
+@utility glass-surface-dark {
+  background: color-mix(in srgb, var(--color-surface-container-low) 48%, transparent);
+}
+
+/* Elevation scale for solid (non-glass) cards — replaces ad-hoc
+   shadow-sm/md/lg/xl mixes (06-26 audit: no elevation rule). */
+@utility shadow-e1 { box-shadow: 0 1px 2px color-mix(in srgb, black 18%, transparent); }
+@utility shadow-e2 { box-shadow: 0 2px 8px color-mix(in srgb, black 22%, transparent); }
+@utility shadow-e3 { box-shadow: 0 8px 24px color-mix(in srgb, black 28%, transparent); }
+@utility shadow-e4 { box-shadow: 0 16px 48px color-mix(in srgb, black 36%, transparent); }
+
+/* Unified press feedback (06-26 audit: 4 competing active states). */
+@utility press-scale {
+  transition: transform var(--duration-fast) var(--ease-glass);
+}
+@utility press-scale-active {
+  transform: scale(0.98);
+}
+
+/* Graceful degradation: engines without backdrop-filter get near-solid
+   surfaces — zero functional loss. */
+@supports not (backdrop-filter: blur(1px)) {
+  .glass-surface, .glass-overlay, .glass-panel, .glass-card {
+    background: color-mix(in srgb, var(--color-surface-container-lowest) 96%, transparent);
+  }
+}
+
+/* Users who disable transparency (or low-power windows) get solid fills. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass-surface, .glass-overlay {
+    background: var(--color-surface-container-lowest);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
 @utility node-connector {
     background: linear-gradient(to bottom, var(--color-outline-variant) 50%, transparent 50%);
     background-size: 1px 12px;

@@ -60,7 +60,7 @@ export default function MessageArea({
   const shouldVirtualize = messages.length > VIRTUALIZE_THRESHOLD
 
   return (
-    <div ref={scrollParentRef} className="flex-1 overflow-y-auto px-xl pt-lg pb-32">
+    <div ref={scrollParentRef} className="flex-1 overflow-y-auto px-xl pt-lg pb-md">
       {messages.length === 0 && !streamingText && <ComposerWelcome />}
 
       {messages.length > 0 && shouldVirtualize && (

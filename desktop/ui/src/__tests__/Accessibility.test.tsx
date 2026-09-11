@@ -33,7 +33,7 @@ describe('Accessibility', () => {
     it('nav links have visible text labels', () => {
       render(wrap(<Sidebar />))
       expect(screen.getByText('Chat')).toBeInTheDocument()
-      expect(screen.getByText('Scheduled')).toBeInTheDocument()
+      expect(screen.getByText('Tasks')).toBeInTheDocument()
     })
 
     it('settings sub-nav items have visible text when expanded', () => {

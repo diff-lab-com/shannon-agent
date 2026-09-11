@@ -105,30 +105,34 @@ export default function GeneralSettings() {
               description: t(currentMode.descriptionKey),
             })}
           </p>
-          <div className="space-y-sm">
-            <input
-              className="w-full appearance-none bg-outline-variant/30 h-1 rounded-full cursor-pointer outline-none slider-thumb-primary"
-              max={APPROVAL_MODE_KEYS.length - 1} min={0} type="range" value={approvalMode}
-              aria-label={intl.formatMessage({ id: 'settings.general.approvalMode.sliderAria' })}
-              aria-valuenow={approvalMode} aria-valuemin={0} aria-valuemax={APPROVAL_MODE_KEYS.length - 1}
-              onChange={e => handleModeChange(Number(e.target.value))}
-            />
-            <div className="flex justify-between font-label-sm text-on-surface-variant px-1">
+          {/* Segmented control replaces the old range slider whose 5 label
+              columns overlapped at common widths (audit P0 §3.10). Equal
+              flex segments carry the short label only; the selected mode's
+              description moves to a single helper line below. */}
+          <div role="radiogroup" aria-label={intl.formatMessage({ id: 'settings.general.approvalMode.sliderAria' })}>
+            <div className="flex rounded-xl bg-surface-container-low p-1 gap-1 border border-outline-variant/30">
               {APPROVAL_MODE_KEYS.map((m, i) => (
-                <Button
+                <button
                   key={m.value}
-                  variant="ghost"
+                  type="button"
+                  role="radio"
+                  aria-checked={i === approvalMode}
                   onClick={() => handleModeChange(i)}
                   className={cn(
-                    'h-auto px-0 text-center cursor-pointer transition-colors whitespace-normal',
-                    i === approvalMode ? 'text-primary font-bold' : 'text-on-surface-variant hover:text-primary',
+                    'flex-1 min-w-0 px-1 py-sm rounded-lg font-label-md text-center cursor-pointer transition-all duration-200',
+                    'focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
+                    i === approvalMode
+                      ? 'bg-primary text-on-primary font-bold shadow-e1'
+                      : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-high',
                   )}
                 >
-                  <p className="font-bold">{t(m.labelKey)}</p>
-                  <p className="text-[10px]">{t(m.descriptionKey)}</p>
-                </Button>
+                  <span className="block truncate">{t(m.labelKey)}</span>
+                </button>
               ))}
             </div>
+            <p className="font-body-sm text-on-surface-variant mt-sm px-1">
+              {t(currentMode.descriptionKey)}
+            </p>
           </div>
         </section>
 

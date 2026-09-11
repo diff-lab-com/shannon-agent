@@ -202,7 +202,7 @@ export function WorkspacePanel({
         </header>
       )}
 
-      <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden">
+      <div className="relative flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
         {children}
       </div>
 

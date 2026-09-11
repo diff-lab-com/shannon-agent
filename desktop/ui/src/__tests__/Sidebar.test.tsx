@@ -55,7 +55,7 @@ describe('Sidebar', () => {
   it('renders primary nav links', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Scheduled')).toBeInTheDocument()
+    expect(screen.getByText('Tasks')).toBeInTheDocument()
   })
 
   it('renders Settings section', () => {
@@ -91,12 +91,12 @@ describe('Sidebar — Simple mode (default)', () => {
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
   })
 
-  it('shows flat Extensions entry in Simple mode (no dev sub-links)', () => {
+  it('shows flat Connectors entry in Simple mode (no dev sub-links)', () => {
     render(wrap(<Sidebar />))
     // P1-2: Simple mode surfaces a flat Extensions link to the Hub index so
     // general users can reach it without dev mode. The dev-mode collapsible
     // group (with Skills / My Agents / Connections sub-links) stays hidden.
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
     expect(screen.queryByText('My Agents')).not.toBeInTheDocument()
   })
@@ -116,14 +116,14 @@ describe('Sidebar — Simple mode (default)', () => {
   it('still shows core nav in Simple mode', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Scheduled')).toBeInTheDocument()
+    expect(screen.getByText('Tasks')).toBeInTheDocument()
   })
 
   it('toggles to Advanced mode on mode button click', () => {
     render(wrap(<Sidebar />))
     fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
     // Now in Advanced mode — Extensions visible
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -136,7 +136,7 @@ describe('Sidebar — Simple mode (default)', () => {
   it('remembers Advanced mode from localStorage on subsequent mount', () => {
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -155,14 +155,14 @@ describe('Sidebar — Advanced mode', () => {
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
   })
 
-  it('renders Extensions section', () => {
+  it('renders Connectors section', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
   })
 
-  it('renders OPC section', () => {
+  it('renders Mission Control section', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('OPC')).toBeInTheDocument()
+    expect(screen.getByText('Mission Control')).toBeInTheDocument()
   })
 
   it('renders extension sub-links when expanded', () => {
@@ -172,12 +172,11 @@ describe('Sidebar — Advanced mode', () => {
     expect(screen.getByText('Connections')).toBeInTheDocument()
   })
 
-  it('renders OPC as a direct link in the Experiments group (U6 flatten)', () => {
+  it('renders Mission Control as a direct link in the Experiments group (U6 flatten)', () => {
     render(wrap(<Sidebar />))
     // U6 flattened the OPC disclosure (it held a single sub-link); the link
     // now lives directly inside the Experiments group.
-    expect(screen.queryByText('One Person Company')).not.toBeInTheDocument()
-    const opc = screen.getByText('OPC').closest('a')
+    const opc = screen.getByText('Mission Control').closest('a')
     expect(opc).toHaveAttribute('href', '/opc')
   })
 
@@ -189,26 +188,26 @@ describe('Sidebar — Advanced mode', () => {
     expect(screen.getByText('Advanced')).toBeInTheDocument()
   })
 
-  it('collapses and expands Extensions section', () => {
+  it('collapses and expands Connectors section', () => {
     render(wrap(<Sidebar />))
     // Extensions is open by default
     expect(screen.getByText('Skills')).toBeInTheDocument()
 
     // Click Extensions button to collapse
-    const integrationsButtons = screen.getAllByText('Extensions')
+    const integrationsButtons = screen.getAllByText('Connectors')
     fireEvent.click(integrationsButtons[0])
 
     // Sub-links should be gone
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
 
     // Click again to expand
-    fireEvent.click(screen.getByText('Extensions'))
+    fireEvent.click(screen.getByText('Connectors'))
     expect(screen.getByText('Skills')).toBeInTheDocument()
   })
 
   it('shows experiment badge on OPC', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Experiment')).toBeInTheDocument()
+    expect(screen.getByText('Experimental')).toBeInTheDocument()
   })
 
   it('toggles back to Simple mode on click', () => {
@@ -216,7 +215,7 @@ describe('Sidebar — Advanced mode', () => {
     fireEvent.click(screen.getByRole('button', { name: /Switch to Simple mode/ }))
     // P1-2: Simple mode still shows the flat Extensions link; what disappears
     // is the dev-mode Extensions group and its sub-links (Skills).
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
   })
@@ -227,7 +226,7 @@ describe('Sidebar — Navigation', () => {
     window.localStorage.clear()
   })
 
-  it('navigates to /tasks when clicking Scheduled', async () => {
+  it('navigates to /tasks when clicking Tasks', async () => {
     render(
       wrap(
         <>
@@ -237,8 +236,8 @@ describe('Sidebar — Navigation', () => {
       )
     )
 
-    const scheduledLink = screen.getByText('Scheduled')
-    fireEvent.click(scheduledLink)
+    const tasksLink = screen.getByText('Tasks')
+    fireEvent.click(tasksLink)
 
     await waitFor(() => {
       const location = screen.getByTestId('current-location')
@@ -246,17 +245,17 @@ describe('Sidebar — Navigation', () => {
     })
   })
 
-  it('renders Triage button with badge when there are unread items', () => {
+  it('renders Inbox button with badge when there are unread items', () => {
     render(wrap(<Sidebar />))
 
-    expect(screen.getByText('Triage')).toBeInTheDocument()
+    expect(screen.getByText('Inbox')).toBeInTheDocument()
     expect(screen.getByText('3')).toBeInTheDocument() // Badge shows unread count
   })
 
   it('Triage link has proper aria-label', () => {
     render(wrap(<Sidebar />))
 
-    const triageLink = screen.getByRole('link', { name: /Open Triage page/i })
+    const triageLink = screen.getByRole('link', { name: /Open Inbox/i })
     expect(triageLink).toBeInTheDocument()
   })
 })
@@ -642,12 +641,12 @@ describe('Sidebar — nav IA groups (U6)', () => {
     expect(resources).toHaveAttribute('aria-expanded', 'false')
     // Work group is open: Chat / Scheduled / Triage visible.
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Scheduled')).toBeInTheDocument()
-    expect(screen.getByText('Triage')).toBeInTheDocument()
+    expect(screen.getByText('Tasks')).toBeInTheDocument()
+    expect(screen.getByText('Inbox')).toBeInTheDocument()
     // Resources folded: Memory / Usage hidden; Extensions stays a flat entry.
     expect(screen.queryByText('Memory')).not.toBeInTheDocument()
     expect(screen.queryByText('Usage')).not.toBeInTheDocument()
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
   })
 
   it('expanding Resources reveals Memory and Usage', () => {
@@ -664,13 +663,13 @@ describe('Sidebar — nav IA groups (U6)', () => {
     expect(screen.queryByText('Scheduled')).not.toBeInTheDocument()
   })
 
-  it('Experiments group is dev-only and holds the OPC link', () => {
+  it('Experiments group is dev-only and holds the Mission Control link', () => {
     render(wrap(<Sidebar />))
     expect(screen.queryByRole('button', { name: /Experiments/ })).not.toBeInTheDocument()
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
     const { unmount } = render(wrap(<Sidebar />))
     expect(screen.getByRole('button', { name: /Experiments/ })).toBeInTheDocument()
-    expect(screen.getByText('OPC')).toBeInTheDocument()
+    expect(screen.getByText('Mission Control')).toBeInTheDocument()
     unmount()
   })
 

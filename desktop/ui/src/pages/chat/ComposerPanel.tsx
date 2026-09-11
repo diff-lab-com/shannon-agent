@@ -37,12 +37,14 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
     return () => window.removeEventListener('shannon:change-wd', handler)
   }, [currentSessionId, t])
 
-  // U9: offset derives from the footer height token (32px) — mobile sits
-  // 8px above it, ≥md 16px — instead of bare bottom-6/12 magic numbers.
+  // Composer is a normal flex child pinned to the panel bottom (shrink-0) —
+  // never an absolutely-positioned overlay. The old `absolute bottom-*`
+  // placement escaped the viewport whenever the positioning context scrolled,
+  // leaving the composer unreachable (audit P0: composer always visible).
   return (
-    <div className="absolute bottom-[calc(var(--spacing-footer)-8px)] md:bottom-[calc(var(--spacing-footer)+16px)] w-full px-lg md:px-xl py-lg transition-colors">
+    <div className="shrink-0 w-full px-lg md:px-xl pb-md pt-xs">
       <div className="max-w-4xl mx-auto">
-        <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl shadow-sm">
+        <div className="glass-surface rounded-2xl">
           {slashResult && <SlashResultCard result={slashResult} onDismiss={dismissSlashResult} />}
           <ChatInput
             value={input}

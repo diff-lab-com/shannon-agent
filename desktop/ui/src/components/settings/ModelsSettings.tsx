@@ -195,7 +195,7 @@ export default function ModelsSettings() {
                       {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary text-on-primary rounded text-[10px] font-bold">{t('settings.models.defaultBadge')}</span> : null}
                       {m.tier ? (
                         <span
-                          className="px-xs py-[2px] bg-secondary-container text-on-secondary-container rounded text-[10px] font-bold uppercase tracking-wider"
+                          className="px-xs py-[2px] bg-primary text-on-primary rounded text-[10px] font-bold uppercase tracking-wider"
                           title={t('settings.models.tier')}
                         >
                           {t(`settings.models.tier${m.tier.charAt(0).toUpperCase()}${m.tier.slice(1)}` as 'settings.models.tierFast' | 'settings.models.tierStandard' | 'settings.models.tierPro')}

@@ -77,16 +77,16 @@ describe('OpcAnalyticsDashboard', () => {
 
   it('renders status breakdown list', async () => {
     render(<OpcAnalyticsDashboard />)
-    expect(await screen.findByText('completed')).toBeInTheDocument()
-    expect(screen.getByText('in_progress')).toBeInTheDocument()
-    expect(screen.getByText('pending')).toBeInTheDocument()
+    expect((await screen.findAllByText('Completed')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('In progress')[0]).toBeInTheDocument()
+    expect(screen.getByText('Pending')).toBeInTheDocument()
   })
 
   it('renders priority breakdown list', async () => {
     render(<OpcAnalyticsDashboard />)
-    expect(await screen.findByText('high')).toBeInTheDocument()
-    expect(screen.getByText('normal')).toBeInTheDocument()
-    expect(screen.getByText('low')).toBeInTheDocument()
+    expect(await screen.findByText('High')).toBeInTheDocument()
+    expect(screen.getByText('Normal')).toBeInTheDocument()
+    expect(screen.getByText('Low')).toBeInTheDocument()
   })
 
   it('renders assignee workload list', async () => {

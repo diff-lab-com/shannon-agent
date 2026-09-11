@@ -109,7 +109,7 @@ export default function OffpeakWindowEditor({ routine, onUpdated }: OffpeakWindo
         </span>
         {initial ? (
           <span
-            className="inline-flex items-center gap-1 px-sm py-0.5 rounded-full border border-secondary/30 bg-secondary-container text-on-secondary-container text-[11px] font-bold"
+            className="inline-flex items-center gap-1 px-sm py-0.5 rounded-full border border-secondary/30 bg-primary text-on-primary text-[11px] font-bold"
             title={t('tasks.offpeakEditor.badgeTip', { window: windowLabel(initial) })}
           >
             <span className="material-symbols-outlined icon-xs" aria-hidden="true">bedtime</span>

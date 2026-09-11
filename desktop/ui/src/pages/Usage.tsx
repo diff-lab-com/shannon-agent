@@ -269,7 +269,7 @@ export default function Usage() {
               className={cn(
                 'px-md py-xs rounded-full font-label-md text-label-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
                 view === v
-                  ? 'bg-secondary-container text-on-secondary-container font-bold'
+                  ? 'bg-primary text-on-primary font-bold'
                   : 'text-on-surface-variant hover:text-primary',
               )}
             >

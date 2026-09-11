@@ -156,7 +156,7 @@ describe('Chat page workspace host', () => {
     expect(dockBefore!.closest('[data-testid="workspace-terminal-slot"]')).toBeNull()
 
     // Handoff: switch to the Build preset (adds a terminal grid panel).
-    fireEvent.click(screen.getByRole('button', { name: 'Build' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
     await waitFor(() => expect(screen.getByTestId('workspace-terminal-slot')).toBeInTheDocument())
 
     // The SAME section element moved containers — variant flipped in place,

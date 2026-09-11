@@ -24,7 +24,8 @@ export async function invoke<T = unknown>(cmd: string, args?: InvokeArgs): Promi
   // fallback — this is just defense in depth).
   const detail = `[mock] unhandled Tauri command: "${cmd}". Add it to src/lib/mock/handlers.ts.`
   console.error(detail)
-  throw new Error('This feature is not available in demo mode.')
+  const zh = navigator.language.startsWith('zh')
+  throw new Error(zh ? '演示模式下该功能不可用。' : 'This feature is not available in demo mode.')
 }
 
 // Re-export other things from @tauri-apps/api/core that the app might use,

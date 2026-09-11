@@ -93,7 +93,7 @@ function BodyWithFootnoteRefs({ body, listId }: BodyProps): ReactNode {
             key={i}
             href={`#fn-${listId}-${seg.id}`}
             id={`fnref-${listId}-${seg.id}`}
-            className="inline-flex items-center align-super mx-[1px] px-[3px] h-[16px] rounded-full bg-secondary-container text-on-secondary-container text-[10px] font-bold leading-none hover:bg-secondary hover:text-on-secondary transition-colors no-underline"
+            className="inline-flex items-center align-super mx-[1px] px-[3px] h-[16px] rounded-full bg-primary text-on-primary text-[10px] font-bold leading-none hover:bg-secondary hover:text-on-secondary transition-colors no-underline"
             aria-label={`Footnote ${seg.id}`}
           >
             {seg.id}

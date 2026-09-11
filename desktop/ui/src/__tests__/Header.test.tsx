@@ -101,7 +101,7 @@ describe('Header component', () => {
     ]
     mockSessionCtx.currentSessionId = 's1'
     render(wrap(<Header />, { route: '/tasks' }))
-    expect(screen.getByText('Scheduled')).toBeInTheDocument()
+    expect(screen.getByText('Tasks')).toBeInTheDocument()
   })
 
   // U2 — ContextPanel toggle moved here from the retired ChatHeader.
@@ -156,7 +156,7 @@ describe('Header component', () => {
 
   it('renders OPC title on /opc route', () => {
     render(wrap(<Header />, { route: '/opc' }))
-    expect(screen.getByText('One Person Company')).toBeInTheDocument()
+    expect(screen.getByText('Mission Control')).toBeInTheDocument()
   })
 
   it('renders sync status badge on /opc/task route', () => {
@@ -223,9 +223,9 @@ describe('Header component', () => {
     expect(screen.getByText('Chat')).toBeInTheDocument()
   })
 
-  it('renders Scheduled title on /tasks route', () => {
+  it('renders Tasks title on /tasks route', () => {
     render(wrap(<Header />, { route: '/tasks' }))
-    expect(screen.getByText('Scheduled')).toBeInTheDocument()
+    expect(screen.getByText('Tasks')).toBeInTheDocument()
   })
 
   it('renders Settings title on /settings route', () => {
@@ -235,7 +235,7 @@ describe('Header component', () => {
 
   it('renders Extensions title on /extensions route', () => {
     render(wrap(<Header />, { route: '/extensions/skills' }))
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Connectors')).toBeInTheDocument()
   })
 
   it('renders notifications and help buttons', () => {

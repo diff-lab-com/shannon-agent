@@ -131,14 +131,16 @@ function InboxCard({ item, selected, focused, onToggleSelected, onMarkRead, onAr
         </div>
         <div className="flex items-center gap-sm shrink-0">
           {item.sessionId && (
+            /* Primary action (audit §3.4): the Codex review-queue loop is
+               "result → resume the original thread", so resume gets a
+               labelled primary button instead of a ghost icon. */
             <Button
               aria-label={t('inbox.continue.aria')}
-              variant="ghost"
-              className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant cursor-pointer"
+              className="px-sm py-1.5 rounded-lg bg-primary text-on-primary text-label-sm font-medium cursor-pointer hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary inline-flex items-center gap-xs"
               onClick={() => onContinue(item)}
-              title={t('inbox.continue.title')}
             >
-              <span className="material-symbols-outlined text-[18px]">forum</span>
+              <span className="material-symbols-outlined text-[16px]">forum</span>
+              {t('inbox.action.resume')}
             </Button>
           )}
           <Button

@@ -267,7 +267,7 @@ function TrustBadge({ trust }: { trust: FeaturedVendor["trust"] }) {
 
   const labels: Record<FeaturedVendor["trust"], { text: string; cls: string }> = {
     verified: { text: t('extensions.featured.trust.verified'), cls: "bg-primary-container text-on-primary-container" },
-    official: { text: t('extensions.featured.trust.official'), cls: "bg-secondary-container text-on-secondary-container" },
+    official: { text: t('extensions.featured.trust.official'), cls: "bg-primary text-on-primary" },
     community: { text: t('extensions.featured.trust.community'), cls: "bg-tertiary-container/50 text-on-tertiary-container" },
     unknown: { text: t('extensions.featured.trust.unknown'), cls: "bg-surface-container-highest text-on-surface-variant" },
   };
