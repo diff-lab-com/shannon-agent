@@ -2894,5 +2894,20 @@
   "status.normal": "普通",
   "status.low": "低",
   "sidebar.sessions.project.untitled": "默认会话",
-  "extensions.featured.securityBadge": "安装时自动注入扫描 · 签名校验"
+  "extensions.featured.securityBadge": "安装时自动注入扫描 · 签名校验",
+  "goal.new.button": "新建目标",
+  "goal.empty.description": "还没有目标。创建一个，Shannon 将无人值守地持续推进——可设定轮数与预算上限。",
+  "goal.new.title": "新建目标",
+  "goal.new.description": "描述最终状态。Shannon 将跨轮次持续推进，直到完成、受阻或触及上限。",
+  "goal.new.label.title": "标题",
+  "goal.new.placeholder.title": "例如：计费库迁移到 v2",
+  "goal.new.label.objective": "目标",
+  "goal.new.placeholder.objective": "描述「完成」的样子——具体、可验证。",
+  "goal.new.label.maxTurns": "最大轮数（可选）",
+  "goal.new.placeholder.maxTurns": "如 12",
+  "goal.new.label.budget": "预算上限 USD（可选）",
+  "goal.new.placeholder.budget": "如 5.00",
+  "goal.new.cancel": "取消",
+  "goal.new.submit": "启动目标",
+  "goal.new.submitting": "启动中…"
 }

@@ -9,6 +9,7 @@ import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useGoalRuns } from '@/hooks/goalRuns'
+import NewGoalDialog from './NewGoalDialog'
 import type { GoalRunDto, GoalRunStatus } from '@/types'
 
 /** MD3 badge classes per goal-run status (theme semantic tokens). */
@@ -222,30 +223,52 @@ export function GoalRunCard({ run, onPause, onResume, onStop, onUpdateObjective,
   )
 }
 
-export default function GoalRunPanel({ onViewSession }: { onViewSession: (id: string) => void }) {
+function GoalRunPanelImpl({ onViewSession }: { onViewSession: (id: string) => void }) {
   const intl = useIntl()
-  const { runs, pause, resume, stop, updateObjective } = useGoalRuns()
-  if (runs.length === 0) return null
+  const { runs, pause, resume, stop, updateObjective, start } = useGoalRuns()
+  const [creating, setCreating] = useState(false)
 
   return (
     <section aria-labelledby="goal-runs-heading" className="mb-lg" data-testid="goal-run-panel">
-      <h2 id="goal-runs-heading" className="font-label-lg font-bold text-on-surface mb-sm flex items-center gap-xs">
-        <span className="material-symbols-outlined text-[18px] text-primary" aria-hidden="true">flag</span>
-        {intl.formatMessage({ id: 'goal.panel.heading' })}
-      </h2>
-      <div className="space-y-sm">
-        {runs.map(run => (
-          <GoalRunCard
-            key={run.sessionId}
-            run={run}
-            onPause={pause}
-            onResume={resume}
-            onStop={stop}
-            onUpdateObjective={updateObjective}
-            onViewSession={onViewSession}
-          />
-        ))}
+      <div className="flex items-center justify-between mb-sm">
+        <h2 id="goal-runs-heading" className="font-label-lg font-bold text-on-surface flex items-center gap-xs">
+          <span className="material-symbols-outlined text-[18px] text-primary" aria-hidden="true">flag</span>
+          {intl.formatMessage({ id: 'goal.panel.heading' })}
+        </h2>
+        <Button
+          type="button"
+          onClick={() => setCreating(true)}
+          className="px-sm py-1.5 rounded-lg bg-primary text-on-primary text-label-sm font-medium cursor-pointer hover:bg-primary/90 inline-flex items-center gap-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          data-testid="goal-new-button"
+        >
+          <span className="material-symbols-outlined text-[16px]" aria-hidden="true">add</span>
+          {intl.formatMessage({ id: 'goal.new.button' })}
+        </Button>
       </div>
+      {runs.length === 0 ? (
+        <p className="font-body-sm text-on-surface-variant px-sm py-md rounded-xl border border-outline-variant/30 bg-surface-container-lowest/60">
+          {intl.formatMessage({ id: 'goal.empty.description' })}
+        </p>
+      ) : (
+        <div className="space-y-sm">
+          {runs.map(run => (
+            <GoalRunCard
+              key={run.sessionId}
+              run={run}
+              onPause={pause}
+              onResume={resume}
+              onStop={stop}
+              onUpdateObjective={updateObjective}
+              onViewSession={onViewSession}
+            />
+          ))}
+        </div>
+      )}
+      <NewGoalDialog open={creating} onClose={() => setCreating(false)} onStart={start} />
     </section>
   )
+}
+
+export default function GoalRunPanel({ onViewSession }: { onViewSession: (id: string) => void }) {
+  return <GoalRunPanelImpl onViewSession={onViewSession} />
 }

@@ -2894,5 +2894,20 @@
   "status.normal": "Normal",
   "status.low": "Low",
   "sidebar.sessions.project.untitled": "Chats",
-  "extensions.featured.securityBadge": "Injection-scanned · signature-verified on install"
+  "extensions.featured.securityBadge": "Injection-scanned · signature-verified on install",
+  "goal.new.button": "New goal",
+  "goal.empty.description": "No goals yet. Create one and Shannon will work toward it unattended — with optional turn and budget caps.",
+  "goal.new.title": "New goal",
+  "goal.new.description": "Describe the end state. Shannon keeps working across turns until it is met, blocked, or a cap is reached.",
+  "goal.new.label.title": "Title",
+  "goal.new.placeholder.title": "e.g. Migrate billing schema to v2",
+  "goal.new.label.objective": "Objective",
+  "goal.new.placeholder.objective": "What done looks like — be specific and verifiable.",
+  "goal.new.label.maxTurns": "Max turns (optional)",
+  "goal.new.placeholder.maxTurns": "e.g. 12",
+  "goal.new.label.budget": "Budget cap USD (optional)",
+  "goal.new.placeholder.budget": "e.g. 5.00",
+  "goal.new.cancel": "Cancel",
+  "goal.new.submit": "Start goal",
+  "goal.new.submitting": "Starting…"
 }
