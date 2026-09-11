@@ -329,7 +329,7 @@ describe('MigrationWizard entry points', () => {
         <Welcome />
       </MemoryRouter>,
     )
-    // Walk the flow: general task → model (env key pre-detected) → tools → done.
+    // Walk the flow: general task → model (env key pre-detected) → done.
     fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
     fireEvent.click(screen.getAllByRole('button', { name: /Continue/ })[0])
     await waitFor(() => {
@@ -338,7 +338,6 @@ describe('MigrationWizard entry points', () => {
         .at(-1)!
       expect(modelContinue).not.toBeDisabled()
     })
-    fireEvent.click(screen.getAllByRole('button', { name: /Continue/ }).at(-1)!)
     fireEvent.click(screen.getAllByRole('button', { name: /Continue/ }).at(-1)!)
     await waitFor(() =>
       expect(screen.getByTestId('welcome-migration-entry')).toBeInTheDocument(),

@@ -29,13 +29,13 @@ describe('ThemeContext', () => {
     }
   })
 
-  it('provides default material theme', () => {
+  it('defaults to the dark-first tokyo-night theme', () => {
     render(
       <ThemeProvider>
         <ThemeConsumer />
       </ThemeProvider>
     )
-    expect(screen.getByTestId('current-theme')).toHaveTextContent('material')
+    expect(screen.getByTestId('current-theme')).toHaveTextContent('tokyo-night')
   })
 
   it('provides all 13 themes', () => {

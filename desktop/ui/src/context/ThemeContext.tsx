@@ -72,11 +72,14 @@ function getSystemTheme(): ResolvedTheme {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
+  // Dark-first default (UI audit §2.5: all four competitors ship dark as the
+  // default or flagship look). Users who picked a theme keep theirs via
+  // localStorage; 'system' still resolves per OS preference.
   const [theme, setThemeState] = useState<ThemeName>(() => {
     if (typeof window !== 'undefined') {
-      return (localStorage.getItem('shannon-theme') as ThemeName) || 'material'
+      return (localStorage.getItem('shannon-theme') as ThemeName) || 'tokyo-night'
     }
-    return 'material'
+    return 'tokyo-night'
   })
 
   const [fontScale, setFontScaleState] = useState<number>(() => {

@@ -9,7 +9,7 @@
 //   shannon-sessions-order  — Record<sessionId, index> written on drag reorder
 //   shannon-sessions-pinned — string[] of pinned session ids
 
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -251,13 +251,43 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
           </div>
         ) : (
           <div className="space-y-0.5 pr-1" role="list" aria-label={t('sidebar.sessions.list.aria')}>
-            {filtered.map((session) => {
-              const isActive = session.id === currentSessionId
-              const isEditing = editingId === session.id
-              const isMenuOpen = menuFor === session.id
-              return (
-                <div
-                  key={session.id}
+            {(() => {
+              // Project grouping (UI audit Wave 3): sessions sharing a
+              // working_dir get a project header — the Codex/Claude "project"
+              // mental model. Only when browsing (not searching) and only
+              // when there is more than one distinct project, so small lists
+              // stay flat.
+              const projectOf = (s: { working_dir?: string | null }) => {
+                const dir = s.working_dir?.trim()
+                if (!dir) return null
+                const parts = dir.split('/').filter(Boolean)
+                return parts.length > 0 ? parts[parts.length - 1] : null
+              }
+              const distinct = new Set(filtered.map(projectOf))
+              const showGroups = !query.trim() && distinct.size > 1
+              let lastProject: string | null | undefined = undefined
+              return filtered.map((session) => {
+                const isActive = session.id === currentSessionId
+                const isEditing = editingId === session.id
+                const isMenuOpen = menuFor === session.id
+                const project = projectOf(session)
+                const groupHeader = showGroups && project !== lastProject
+                  ? (
+                    <div
+                      key={`group-${project ?? 'default'}`}
+                      role="presentation"
+                      className="px-3 pt-2 pb-1 font-label-sm text-[10px] font-bold uppercase tracking-wider text-on-surface-variant/80 flex items-center gap-1.5"
+                    >
+                      <span className="material-symbols-outlined text-[12px]" aria-hidden="true">folder</span>
+                      <span className="truncate">{project ?? t('sidebar.sessions.project.untitled')}</span>
+                    </div>
+                  )
+                  : null
+                lastProject = project
+                return (
+                  <Fragment key={session.id}>
+                    {groupHeader}
+                    <div
                   role="listitem"
                   draggable={!isEditing}
                   onDragStart={() => setDraggedId(session.id)}
@@ -339,8 +369,10 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
                     </>
                   )}
                 </div>
+                </Fragment>
               )
-            })}
+            })
+          })()}
           </div>
         )}
       </ScrollArea>

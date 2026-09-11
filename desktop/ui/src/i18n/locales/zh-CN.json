@@ -2892,5 +2892,6 @@
   "status.critical": "紧急",
   "status.high": "高",
   "status.normal": "普通",
-  "status.low": "低"
+  "status.low": "低",
+  "sidebar.sessions.project.untitled": "默认会话"
 }

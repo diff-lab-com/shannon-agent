@@ -13,13 +13,17 @@ import { GradientText } from '@/components/reactbits/GradientText'
 import { Stepper } from './welcome/components'
 import { TaskStep } from './welcome/TaskStep'
 import { ModelStep } from './welcome/ModelStep'
-import { ToolsStep } from './welcome/ToolsStep'
 import { DoneStep } from './welcome/DoneStep'
 import MigrationWizard from '@/components/migration/MigrationWizard'
 import { TASKS, type TaskId, type DocumentsSkill } from './welcome/constants'
 import type { ProvidersFile } from '@/types'
 
 export const WELCOME_SEEN_KEY = 'shannon.hasSeenWelcome'
+
+// Two-step onboarding (UI audit §3.1: competitors onboard in 2 screens).
+// Screen 1 combines task + model; tools use the task's recommended defaults
+// (prefilled on advance — ToolsStep remains available from Settings).
+const WELCOME_STEP_LABELS = ['welcome.step.task', 'welcome.step.done']
 
 export function shouldShowWelcome(loading: boolean, hasProvider: boolean): boolean {
   if (typeof window === 'undefined') return false
@@ -110,7 +114,7 @@ export default function Welcome() {
       setEnabledTools(prev => ({ ...initial, ...prev }))
       setShowAddProviderModal(false)
       setProviderSaved(true)
-      setStep(2)
+      setStep(1)
     } catch (e) {
       toastError(intl.formatMessage({ id: 'welcome.toast.provider.failed' }), e)
     } finally {
@@ -151,24 +155,14 @@ export default function Welcome() {
     }
   }
 
-  const advanceFromTask = () => {
-    if (task === null) return
-    // Default provider to the task recommendation when advancing.
-    setProvider(currentTask.recommendedProvider)
-    setStep(1)
-  }
-
   const advanceFromModel = () => {
     if (!canAdvanceFromModel) return
-    // Pre-check tools recommended for this task so the user can opt in/out.
+    // Pre-check tools recommended for this task so the user can opt in/out
+    // later from Settings — the dedicated tools screen is gone (2-step flow).
     const initial: Record<string, boolean> = {}
     for (const t of currentTask.tools) initial[t] = true
     setEnabledTools(prev => ({ ...initial, ...prev }))
-    setStep(2)
-  }
-
-  const toggleTool = (id: string) => {
-    setEnabledTools(prev => ({ ...prev, [id]: !prev[id] }))
+    setStep(1)
   }
 
   const installDocumentsSkill = async (skill: DocumentsSkill) => {
@@ -182,11 +176,6 @@ export default function Welcome() {
       setSkillState(prev => ({ ...prev, [skill.id]: { status: 'failed', error: msg } }))
       toastError(intl.formatMessage({ id: 'welcome.skills.toast.failed' }, { name: intl.formatMessage({ id: skill.labelKey }) }), e)
     }
-  }
-
-  const openSettingsGeneral = () => {
-    markWelcomeSeen()
-    navigate('/settings/general')
   }
 
   const openFeaturedSkills = () => {
@@ -216,35 +205,36 @@ export default function Welcome() {
 
       <main className="flex-1 flex items-center justify-center px-xl py-xl">
         <div className="w-full max-w-xl">
-          <Stepper step={step} />
+          <Stepper step={step} labels={WELCOME_STEP_LABELS} />
 
           {step === 0 && (
-            <TaskStep task={task} setTask={setTask} onContinue={advanceFromTask} />
+            <>
+              <TaskStep
+                task={task}
+                setTask={setTask}
+                onContinue={() => {
+                  // Task picked: guide the eye down to the model section
+                  // instead of navigating away (single-screen flow).
+                  document.getElementById('welcome-model-section')
+                    ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                }}
+              />
+              {task !== null && (
+                <div id="welcome-model-section" className="mt-lg scroll-mt-lg">
+                  <ModelStep
+                    task={task}
+                    saving={saving}
+                    canContinue={canAdvanceFromModel}
+                    onOpenAddProvider={() => setShowAddProviderModal(true)}
+                    onBack={() => setTask(null)}
+                    onContinue={advanceFromModel}
+                  />
+                </div>
+              )}
+            </>
           )}
 
           {step === 1 && task !== null && (
-            <ModelStep
-              task={task}
-              saving={saving}
-              canContinue={canAdvanceFromModel}
-              onOpenAddProvider={() => setShowAddProviderModal(true)}
-              onBack={() => setStep(0)}
-              onContinue={advanceFromModel}
-            />
-          )}
-
-          {step === 2 && task !== null && (
-            <ToolsStep
-              task={task}
-              enabledTools={enabledTools}
-              toggleTool={toggleTool}
-              onBack={() => setStep(1)}
-              onContinue={() => setStep(3)}
-              onOpenSettings={openSettingsGeneral}
-            />
-          )}
-
-          {step === 3 && task !== null && (
             <DoneStep
               task={task}
               provider={provider}
@@ -255,7 +245,7 @@ export default function Welcome() {
               setDevMode={setDevMode}
               skillState={skillState}
               onPickDirectory={pickDirectory}
-              onBack={() => setStep(2)}
+              onBack={() => setStep(0)}
               onFinish={finish}
               onInstallSkill={installDocumentsSkill}
               onBrowseFeaturedSkills={openFeaturedSkills}

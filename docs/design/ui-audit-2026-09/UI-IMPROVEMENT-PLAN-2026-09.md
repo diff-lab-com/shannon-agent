@@ -29,7 +29,18 @@
 **验收证据**: `screenshots/shannon-after/`（chat/tasks/triage/usage/opc/settings 6 页 after 对比图）
 **回归**: `vitest` 1665 passed / 0 failed；`tsc --noEmit` 通过；改动文件 eslint 通过。
 
-**遗留（Wave 2/3 未实施项）**：Welcome 4 步→2 步重构、全站深色优先重绘、可拖拽面板按项目保存布局增强、Project 概念、多窗口、Extensions 目录化内容扩充——需按 §7 路线图排期。
+**第二批实施（2026-09-11，commit 待填）**：
+
+| 项 | 文件 | 验证 |
+|---|---|---|
+| 深色优先：无存储默认 tokyo-night（对齐 Codex/ZCode 开箱深色；'system' 仍按 OS 解析） | ThemeContext.tsx | 02-chat-dark.png |
+| Welcome 4 步→2 步：任务+模型同屏 → 完成（工具按任务推荐预填，ToolsStep 从流程退役，Stepper 支持自定义标签） | Welcome.tsx / welcome/components.tsx | 01-welcome-2step-dark.png |
+| Project 分组：侧栏会话按 working_dir 尾段分组显示项目头（仅浏览态且 >1 项目时） | SidebarSessions.tsx | vitest ✓ |
+| Welcome/MigrationWizard/ThemeContext 测试重写为两步流程断言 | 3 个测试文件 | 155 文件全过 |
+
+**Wave 3 说明**：可拖拽面板（拖动/调宽/最大化）与「布局按项目（working_dir）持久化」经代码核实在 WorkspaceGrid/useWorkspaceLayout 中**已存在**（P1-1/P1-5 workspace host），本批无需改动；侧栏 Project 分组（本批）补齐了会话维度的项目心智。多窗口仍为后续项。
+
+**遗留（Wave 2/3 未实施项）**：全站逐页深色打磨（token 已随主题切换，个别页面存在局部对比度待调）、Extensions 目录化内容扩充、多窗口——需按 §7 路线图排期。
 
 ---
 

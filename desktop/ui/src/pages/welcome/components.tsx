@@ -8,9 +8,12 @@ import { useIntl } from 'react-intl'
 import { cn } from '@/lib/utils'
 import { STEP_LABEL_KEYS } from './constants'
 
-export function Stepper({ step }: { step: number }) {
+export function Stepper({ step, labels }: { step: number; labels?: string[] }) {
   const intl = useIntl()
-  const stepLabel = intl.formatMessage({ id: STEP_LABEL_KEYS[step] })
+  // Two-step onboarding (UI audit §3.1): callers pass the trimmed label list;
+  // the four-step legacy flow keeps working via the constants default.
+  const labelKeys = labels ?? STEP_LABEL_KEYS
+  const stepLabel = intl.formatMessage({ id: labelKeys[step] })
   // Dots on top, labels always visible underneath — an inline label after
   // the current dot (the old layout) shifted the whole row's geometry on
   // every step change and left the dots unaligned.
@@ -19,10 +22,10 @@ export function Stepper({ step }: { step: number }) {
       className="flex items-start justify-center mb-xl"
       aria-label={intl.formatMessage(
         { id: 'welcome.stepper.step' },
-        { current: step + 1, total: STEP_LABEL_KEYS.length, label: stepLabel },
+        { current: step + 1, total: labelKeys.length, label: stepLabel },
       )}
     >
-      {STEP_LABEL_KEYS.map((key, i) => (
+      {labelKeys.map((key, i) => (
         <div key={key} className="flex items-start">
           <div className="flex flex-col items-center gap-xs w-20">
             <div
@@ -40,7 +43,7 @@ export function Stepper({ step }: { step: number }) {
               {intl.formatMessage({ id: key })}
             </span>
           </div>
-          {i < STEP_LABEL_KEYS.length - 1 && (
+          {i < labelKeys.length - 1 && (
             <div className="w-8 h-px bg-outline-variant mt-1.5" aria-hidden="true" />
           )}
         </div>
