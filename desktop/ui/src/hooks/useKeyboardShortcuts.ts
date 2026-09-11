@@ -31,7 +31,9 @@ export function useKeyboardShortcuts(
       'mod+2': () => navigate('/tasks'),
       'mod+3': () => navigate('/extensions'),
       'mod+4': () => navigate('/memory'),
-      'mod+5': () => navigate('/editor'),
+      // Editor is a chat-inline panel now (standalone /editor page retired,
+      // audit §3.8) — reuse the shannon:* window-event pattern.
+      'mod+5': () => window.dispatchEvent(new Event('shannon:open-editor')),
       'mod+6': () => navigate('/settings'),
       '?': () => onToggleHelp?.(),
       'escape': () => {

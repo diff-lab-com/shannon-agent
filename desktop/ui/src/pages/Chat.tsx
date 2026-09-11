@@ -62,6 +62,13 @@ export default function Chat() {
   const [diffPaths, setDiffPaths] = useState<string[] | null>(null)
   const [quickFixOpen, setQuickFixOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
+  // Standalone /editor route retired — external entry points (mod+5, command
+  // palette, /editor slash) open the chat-inline panel via this event.
+  useEffect(() => {
+    const open = () => setEditorOpen(true)
+    window.addEventListener('shannon:open-editor', open)
+    return () => window.removeEventListener('shannon:open-editor', open)
+  }, [])
 
   // Pre-fill the composer when navigated from elsewhere (e.g. Editor's
   // "Ask AI about this diagnostic" button passes { prefill } in location.state).

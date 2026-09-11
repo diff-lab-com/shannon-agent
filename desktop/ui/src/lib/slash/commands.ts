@@ -175,7 +175,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'memory', icon: 'psychology', labelKey: 'nav.memory', descriptionKey: 'slash.command.memory.description', run: (ctx) => ctx.navigate('/memory') },
   { name: 'usage', icon: 'monitoring', labelKey: 'nav.usage', descriptionKey: 'slash.command.usage.description', run: (ctx) => ctx.navigate('/usage') },
   { name: 'extensions', aliases: ['agents'], icon: 'grid_view', labelKey: 'nav.extensions', descriptionKey: 'slash.command.extensions.description', run: (ctx) => ctx.navigate('/extensions') },
-  { name: 'editor', icon: 'code', labelKey: 'nav.editor', descriptionKey: 'slash.command.editor.description', run: (ctx) => ctx.navigate('/editor') },
+  { name: 'editor', icon: 'code', labelKey: 'nav.editor', descriptionKey: 'slash.command.editor.description', run: (ctx) => { ctx.navigate('/chat'); window.dispatchEvent(new Event('shannon:open-editor')) } },
   { name: 'settings', icon: 'settings', labelKey: 'nav.settings', descriptionKey: 'slash.command.settings.description', run: (ctx) => ctx.navigate('/settings') },
 ]
 

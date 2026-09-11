@@ -25,7 +25,6 @@ const TITLE_MAP: [string, string][] = [
   ['/extensions', 'header.title.extensions'],
   ['/memory', 'header.title.memory'],
   ['/triage', 'header.title.triage'],
-  ['/editor', 'header.title.editor'],
   ['/quickfix', 'header.title.quickfix'],
   ['/welcome', 'header.title.welcome'],
   ['/usage', 'header.title.usage'],

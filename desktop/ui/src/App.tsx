@@ -15,7 +15,6 @@ const Extensions = lazy(() => import('./pages/Extensions'));
 const Settings = lazy(() => import('./pages/Settings'));
 const OPC = lazy(() => import('./pages/OPC'));
 const OPCTask = lazy(() => import('./pages/OPCTask'));
-const Editor = lazy(() => import('./pages/Editor'));
 const Memory = lazy(() => import('./pages/Memory'));
 const Usage = lazy(() => import('./pages/Usage'));
 // §4.14 — Turn Timeline (inside-of-a-turn visualization over the L0 log).
@@ -90,11 +89,10 @@ export default function App() {
                 <Route path="/opc" element={<OPC />} />
                 <Route path="/opc/task" element={<OPCTask />} />
                 <Route path="/opc/task/:id" element={<OPCTask />} />
-                {/* IA: the Editor keeps a standalone route (palette +
-                    mod+5 entry points); QuickFix is chat-inline only — its
-                    old route had no navigation entry, deep links fall back
-                    to /chat via the catch-all. */}
-                <Route path="/editor" element={<Editor />} />
+                {/* Editor standalone page retired (audit §3.8): file editing
+                    lives in the chat-inline EditorPanel (mod+5 / palette /
+                    /editor slash open it there). Deep links redirect. */}
+                <Route path="/editor" element={<Navigate to="/chat" replace />} />
                 <Route path="/memory" element={<Memory />} />
                 <Route path="/timeline/:id" element={<TurnTimeline />} />
                 <Route path="/settings" element={<Settings />}>
