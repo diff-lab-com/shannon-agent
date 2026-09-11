@@ -168,8 +168,17 @@ export default function Featured() {
                 <h3 className="font-bold text-label-lg text-on-surface mb-xs leading-tight">
                   {vendor.display_name}
                 </h3>
-                <p className="text-label-sm text-on-surface-variant flex-1 mb-lg leading-relaxed min-h-[40px]">
+                <p className="text-label-sm text-on-surface-variant flex-1 mb-sm leading-relaxed min-h-[40px]">
                   {vendor.description}
+                </p>
+
+                {/* Shannon installs every connector through the prompt-injection
+                    scanner + signature verifier — surface it as a visible
+                    differentiator (audit §3.6: the capability existed but was
+                    never shown). */}
+                <p className="text-[11px] text-on-surface-variant/90 mb-lg inline-flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[14px] text-success" aria-hidden="true">verified_user</span>
+                  {t('extensions.featured.securityBadge')}
                 </p>
 
                 {showTokenPrompt && (

@@ -2893,5 +2893,6 @@
   "status.high": "High",
   "status.normal": "Normal",
   "status.low": "Low",
-  "sidebar.sessions.project.untitled": "Chats"
+  "sidebar.sessions.project.untitled": "Chats",
+  "extensions.featured.securityBadge": "Injection-scanned · signature-verified on install"
 }
