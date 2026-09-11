@@ -19,7 +19,7 @@ function goalStatusBadge(status: GoalRunStatus): { bg: string; dot: string; icon
     case 'paused':
       return { bg: 'bg-tertiary/10 text-tertiary border-tertiary/20', dot: 'bg-tertiary', icon: 'pause_circle', labelId: 'goal.status.paused' }
     case 'completed':
-      return { bg: 'bg-green-600/10 text-green-600 border-green-600/20', dot: 'bg-green-600', icon: 'check_circle', labelId: 'goal.status.completed' }
+      return { bg: 'bg-success/10 text-success border-success/20', dot: 'bg-success', icon: 'check_circle', labelId: 'goal.status.completed' }
     case 'blocked':
       return { bg: 'bg-error/10 text-error border-error/20', dot: 'bg-error', icon: 'block', labelId: 'goal.status.blocked' }
     case 'stopped':

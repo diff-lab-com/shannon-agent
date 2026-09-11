@@ -250,11 +250,11 @@ export default function ChatInput({
   }, [value, autosizeTextarea])
 
   const modeOptions = [
-    { value: 'readonly', label: t('chat.input.mode.readonly'), icon: 'lock', color: 'border-green-500/50' },
-    { value: 'plan', label: t('chat.input.mode.plan'), icon: 'description', color: 'border-green-500/50' },
-    { value: 'suggest', label: t('chat.input.mode.suggest'), icon: 'shield', color: 'border-amber-500/50' },
-    { value: 'auto', label: t('chat.input.mode.auto'), icon: 'flash_auto', color: 'border-amber-500/50' },
-    { value: 'full_auto', label: t('chat.input.mode.full_auto'), icon: 'bolt', color: 'border-red-500/50' },
+    { value: 'readonly', label: t('chat.input.mode.readonly'), icon: 'lock', color: 'border-success/50' },
+    { value: 'plan', label: t('chat.input.mode.plan'), icon: 'description', color: 'border-success/50' },
+    { value: 'suggest', label: t('chat.input.mode.suggest'), icon: 'shield', color: 'border-warning/50' },
+    { value: 'auto', label: t('chat.input.mode.auto'), icon: 'flash_auto', color: 'border-warning/50' },
+    { value: 'full_auto', label: t('chat.input.mode.full_auto'), icon: 'bolt', color: 'border-error/50' },
   ]
 
   const selectedMode = modeOptions.find(m => m.value === currentMode) || modeOptions[2]

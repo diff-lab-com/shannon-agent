@@ -1,6 +1,6 @@
 /**
- * P1-5 C-2 — the slim workspace controls row: preset switcher (聚焦聊天 /
- * 评审 / 构建), add-panel menu and the reset button.
+ * P1-5 C-2 — the slim workspace controls row: preset switcher (对话 /
+ * Diff / 预览), add-panel menu and the reset button.
  *
  * Rendered only in the main window above the grid. Kept deliberately slim
  * (one h-7 row, muted tokens) so the default-focus appearance stays

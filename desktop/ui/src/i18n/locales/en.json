@@ -539,7 +539,7 @@
   "tasks.scheduleForm.requiredFields": "Please fill all required fields",
   "tasks.scheduleForm.cancel": "Cancel",
   "tasks.scheduleForm.createRoutine": "Create Routine",
-  "tasks.tasksHeader.title": "Scheduled Tasks",
+  "tasks.tasksHeader.title": "Tasks",
   "tasks.tasksHeader.subtitle": "Create and monitor automations, goals, and background tasks.",
   "tasks.tasksHeader.filterByTeam": "Filter by team",
   "tasks.tasksHeader.allTeams": "All teams",

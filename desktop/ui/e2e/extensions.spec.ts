@@ -70,7 +70,7 @@ test.describe('Goals and Scheduled pages', () => {
   test('goals page redirects to the tasks page', async ({ page }) => {
     await page.goto('/goals')
     await expect(page).toHaveURL(/\/tasks$/)
-    await expect(page.getByRole('heading', { name: 'Scheduled Tasks' })).toBeVisible()
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible()
   })
 
   test('redirected goals page shows the new task button', async ({ page }) => {
@@ -80,7 +80,7 @@ test.describe('Goals and Scheduled pages', () => {
 
   test('tasks page shows scheduled tasks heading', async ({ page }) => {
     await page.goto('/tasks')
-    await expect(page.getByRole('heading', { name: 'Scheduled Tasks' })).toBeVisible()
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible()
   })
 
   test('tasks page shows new task button', async ({ page }) => {

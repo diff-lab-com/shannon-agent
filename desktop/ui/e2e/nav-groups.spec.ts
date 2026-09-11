@@ -1,6 +1,6 @@
 // U6 — sidebar nav is grouped (Work / Resources / Experiments), group
 // folding persists across reloads, and simple mode folds Resources by
-// default while keeping a flat Extensions entry.
+// default while keeping a flat Connectors entry.
 // Role queries (not raw CSS) — Layout mounts a CSS-hidden mobile sidebar
 // copy too; the a11y tree excludes it.
 import { test, expect } from '@playwright/test'
@@ -15,11 +15,11 @@ test.describe('Sidebar nav groups (U6)', () => {
     await expect(work).toHaveAttribute('aria-expanded', 'true')
     await expect(resources).toHaveAttribute('aria-expanded', 'false')
 
-    // Work links visible; Resources links hidden; Extensions stays reachable.
+    // Work links visible; Resources links hidden; Connectors stays reachable.
     await expect(page.getByRole('link', { name: /Chat/ })).toBeVisible()
-    await expect(page.getByRole('link', { name: /Triage/ })).toBeVisible()
+    await expect(page.getByRole('link', { name: /Inbox/ })).toBeVisible()
     await expect(page.getByRole('link', { name: /Memory/ })).toBeHidden()
-    await expect(page.getByRole('link', { name: /Extensions/ })).toBeVisible()
+    await expect(page.getByRole('link', { name: /Connectors/ })).toBeVisible()
   })
 
   test('expanding Resources reveals Memory/Usage and survives reload', async ({ page }) => {

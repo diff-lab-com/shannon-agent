@@ -31,7 +31,7 @@ export function DiffPatchView({ patch, className }: { patch: string; className?:
     if (line.startsWith('+++') || line.startsWith('---')) return 'text-on-surface-variant'
     if (line.startsWith('diff ') || line.startsWith('index ')) return 'text-on-surface-variant font-bold'
     if (line.startsWith('@@')) return 'text-primary'
-    if (line.startsWith('+')) return 'bg-green-600/10 text-green-700 dark:text-green-400'
+    if (line.startsWith('+')) return 'bg-success/10 text-success'
     if (line.startsWith('-')) return 'bg-error/10 text-error'
     return 'text-on-surface'
   }
@@ -107,7 +107,7 @@ function BranchColumn({ batchId, branch, canAdopt, adopted, onAdopt }: BranchCol
           </p>
         </div>
         {adopted ? (
-          <span className="font-label-xs font-bold text-green-600 shrink-0 flex items-center gap-1">
+          <span className="font-label-xs font-bold text-success shrink-0 flex items-center gap-1">
             <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
               call_merge
             </span>

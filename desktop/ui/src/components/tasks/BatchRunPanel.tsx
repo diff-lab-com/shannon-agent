@@ -3,7 +3,7 @@
 // `batch:updated` push), so branch chips (status color + filesChanged +
 // spentUsd) update the moment anything changes, without polling. Hidden
 // entirely when there is nothing to show — the entry point is the
-// Tasks-page「并行方案」form.
+// Tasks-page「多方案对比」form.
 //
 // When every branch is terminal the card's primary action is Compare, which
 // opens the side-by-side BatchDiffCompare dialog (diff review + adopt).
@@ -38,8 +38,8 @@ function batchStatusBadge(status: BatchRunStatus): {
       }
     case 'completed':
       return {
-        bg: 'bg-green-600/10 text-on-surface border-green-600/20',
-        dot: 'bg-green-600',
+        bg: 'bg-success/10 text-on-surface border-success/20',
+        dot: 'bg-success',
         icon: 'check_circle',
         labelId: 'batch.status.completed',
       }
@@ -59,8 +59,8 @@ function batchStatusBadge(status: BatchRunStatus): {
       }
     case 'adopted':
       return {
-        bg: 'bg-green-600/10 text-on-surface border-green-600/20',
-        dot: 'bg-green-600',
+        bg: 'bg-success/10 text-on-surface border-success/20',
+        dot: 'bg-success',
         icon: 'call_merge',
         labelId: 'batch.status.adopted',
       }
@@ -85,7 +85,7 @@ function branchChipClasses(status: BatchBranch['status']): string {
     case 'running':
       return 'bg-primary/10 text-on-surface border-primary/30'
     case 'completed':
-      return 'bg-green-600/10 text-on-surface border-green-600/20'
+      return 'bg-success/10 text-on-surface border-success/20'
     case 'failed':
       return 'bg-error/10 text-on-surface border-error/20'
   }
@@ -151,7 +151,7 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
           >
             <span className="font-bold">#{branch.index}</span>
             <span
-              className={cn('w-1.5 h-1.5 rounded-full', branch.status === 'running' && 'animate-pulse', branch.status === 'completed' ? 'bg-green-600' : branch.status === 'failed' ? 'bg-error' : 'bg-current')}
+              className={cn('w-1.5 h-1.5 rounded-full', branch.status === 'running' && 'animate-pulse', branch.status === 'completed' ? 'bg-success' : branch.status === 'failed' ? 'bg-error' : 'bg-current')}
             />
             {branch.summary ? (
               <span className="tabular-nums">

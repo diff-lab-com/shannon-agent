@@ -98,7 +98,7 @@ export default function SlashResultCard({ result, onDismiss }: SlashResultCardPr
             {result.diff.files.map(f => (
               <li key={f.path} className="flex items-center gap-sm font-mono text-label-sm">
                 <span className="text-on-surface truncate flex-1">{f.path}</span>
-                <span className="text-green-600 tabular-nums">+{f.insertions}</span>
+                <span className="text-success tabular-nums">+{f.insertions}</span>
                 <span className="text-error tabular-nums">−{f.deletions}</span>
               </li>
             ))}

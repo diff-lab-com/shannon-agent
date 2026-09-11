@@ -393,7 +393,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
                 })}
                 className="flex gap-lg font-body-md text-on-surface bg-surface-container-low rounded-xl p-md"
               >
-                <span className="text-green-700 dark:text-green-400">
+                <span className="text-success">
                   ✓ {t('welcome.migration.result.imported', { count: report.imported })}
                 </span>
                 <span className="text-on-surface-variant">

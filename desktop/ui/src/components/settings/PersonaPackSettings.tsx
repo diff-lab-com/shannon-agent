@@ -219,7 +219,7 @@ export default function PersonaPackSettings() {
             </ul>
             {exportResult.stripped > 0 ? (
               <p
-                className="font-body-sm text-amber-700 dark:text-amber-400"
+                className="font-body-sm text-warning"
                 data-testid="persona-pack-stripped-note"
               >
                 {t('settings.personaPack.export.stripped', { count: exportResult.stripped })}
