@@ -15,6 +15,8 @@ import EmptyState from '@/components/ui/empty-state'
 import { cn } from '@/lib/utils'
 import type { UsageStats, UsageBucket, SessionUsageRow } from '@/types'
 import CurrentSessionCostPanel from '@/components/usage/CurrentSessionCostPanel'
+import { DataTable } from '@/components/ui/data-table'
+import type { ColumnDef } from '@tanstack/react-table'
 
 const RANGES = [7, 30, 90] as const
 
@@ -137,6 +139,54 @@ function SessionTable({ rows, locale, emptyTitle, emptyLabel }: {
   const t = useT()
   const fmtDay = (ms: number) =>
     new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(new Date(ms))
+
+  // Token-styled sortable table on the shared DataTable primitive (Phase B).
+  const columns: ColumnDef<SessionUsageRow, unknown>[] = [
+    {
+      accessorKey: 'title',
+      header: t('usage.col.session'),
+      enableSorting: false,
+      cell: ({ row }) => (
+        <span className="font-label-md text-on-surface truncate max-w-[220px] block">
+          {row.original.title ?? `${row.original.sessionId.slice(0, 8)}…`}
+        </span>
+      ),
+      meta: { align: 'left', pad: 'lg' },
+    },
+    {
+      id: 'tokens',
+      header: t('usage.col.tokens'),
+      accessorFn: r => r.inputTokens + r.outputTokens,
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtTokens(locale, getValue() as number)}</span>
+      ),
+    },
+    {
+      id: 'cache',
+      header: t('usage.col.cache'),
+      accessorFn: r => r.cacheCreationTokens + r.cacheReadTokens,
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtTokens(locale, getValue() as number)}</span>
+      ),
+    },
+    {
+      accessorKey: 'costUsd',
+      header: t('usage.col.cost'),
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtCost(locale, getValue() as number)}</span>
+      ),
+    },
+    { accessorKey: 'requests', header: t('usage.col.reqs') },
+    {
+      id: 'lastUsed',
+      header: t('usage.col.lastUsed'),
+      accessorFn: r => r.lastUsedAtMs,
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtDay(getValue() as number)}</span>
+      ),
+    },
+  ]
+
   return (
     <div className="bg-surface-container-low rounded-2xl border border-outline-variant/30 overflow-hidden">
       <div className="flex items-center gap-xs px-lg py-md border-b border-outline-variant/20">
@@ -146,46 +196,8 @@ function SessionTable({ rows, locale, emptyTitle, emptyLabel }: {
       {rows.length === 0 ? (
         <EmptyState icon="bar_chart" title={emptyTitle} description={emptyLabel} />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="text-outline-variant">
-              <tr className="border-b border-outline-variant/20">
-                <th className="px-lg py-xs font-label-sm font-medium">{t('usage.col.session')}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.tokens')}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.cache')}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.cost')}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.reqs')}</th>
-                <th className="px-lg py-xs font-label-sm font-medium text-right">{t('usage.col.lastUsed')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(r => (
-                <tr
-                  key={r.sessionId}
-                  className="border-b border-outline-variant/10 last:border-0 hover:bg-surface-container/40"
-                >
-                  <td className="px-lg py-sm font-label-md text-on-surface truncate max-w-[220px]">
-                    {r.title ?? `${r.sessionId.slice(0, 8)}…`}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtTokens(locale, r.inputTokens + r.outputTokens)}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtTokens(locale, r.cacheCreationTokens + r.cacheReadTokens)}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtCost(locale, r.costUsd)}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {r.requests}
-                  </td>
-                  <td className="px-lg py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtDay(r.lastUsedAtMs)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="overflow-x-auto p-sm">
+          <DataTable columns={columns} data={rows} emptyMessage={emptyLabel} />
         </div>
       )}
     </div>
