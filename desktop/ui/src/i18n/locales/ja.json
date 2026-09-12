@@ -2922,6 +2922,8 @@
   "usage.ctx.budgetLabel": "Session budget cap (USD)",
   "usage.ctx.budgetPlaceholder": "No cap",
   "usage.ctx.budgetSave": "Save",
+  "_meta.language": "Japanese",
+  "_meta.status": "fallback-en",
   "settings.language.zhTW": "繁體中文",
   "settings.language.ja": "日本語",
   "settings.language.ko": "한국어",

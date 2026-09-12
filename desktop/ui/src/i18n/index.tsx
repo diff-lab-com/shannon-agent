@@ -17,22 +17,51 @@ import zhCN from './locales/zh-CN.json'
  * migrate incrementally in follow-up PRs.
  */
 
-export type Locale = 'en' | 'zh-CN'
+export type Locale = 'en' | 'zh-CN' | 'es' | 'fr' | 'de' | 'ja' | 'ko' | 'pt-BR' | 'ru' | 'zh-TW'
 
 const LOCALE_STORAGE_KEY = 'shannon.locale'
+
+// Locale files are loaded eagerly to keep the typed MESSAGES map simple.
+// New locales copy en.json as a fallback (with a `_meta.status: fallback-en`
+// marker) and get translated over time. Missing keys resolve to English at
+// runtime via the `?? MESSAGES.en[id]` fallback in `t()` below.
+import es from './locales/es.json'
+import fr from './locales/fr.json'
+import de from './locales/de.json'
+import ja from './locales/ja.json'
+import ko from './locales/ko.json'
+import ptBR from './locales/pt-BR.json'
+import ru from './locales/ru.json'
+import zhTW from './locales/zh-TW.json'
 
 const MESSAGES: Record<Locale, Record<string, string>> = {
   en: en as Record<string, string>,
   'zh-CN': zhCN as Record<string, string>,
+  es: es as Record<string, string>,
+  fr: fr as Record<string, string>,
+  de: de as Record<string, string>,
+  ja: ja as Record<string, string>,
+  ko: ko as Record<string, string>,
+  'pt-BR': ptBR as Record<string, string>,
+  ru: ru as Record<string, string>,
+  'zh-TW': zhTW as Record<string, string>,
 }
 
 /** Detect a sensible default locale. Browser language → supported; else `en`. */
 function detectDefault(): Locale {
   if (typeof window === 'undefined') return 'en'
-  const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY)
-  if (stored === 'en' || stored === 'zh-CN') return stored
+  const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY) as Locale | null
+  if (stored && stored in MESSAGES) return stored
   const nav = window.navigator?.language?.toLowerCase() ?? ''
+  if (nav.startsWith('zh-tw') || nav.startsWith('zh-hk')) return 'zh-TW'
   if (nav.startsWith('zh')) return 'zh-CN'
+  if (nav.startsWith('ja')) return 'ja'
+  if (nav.startsWith('ko')) return 'ko'
+  if (nav.startsWith('es')) return 'es'
+  if (nav.startsWith('fr')) return 'fr'
+  if (nav.startsWith('de')) return 'de'
+  if (nav.startsWith('pt')) return 'pt-BR'
+  if (nav.startsWith('ru')) return 'ru'
   return 'en'
 }
 
@@ -130,4 +159,12 @@ export function messageFor(id: string, values?: Record<string, PrimitiveType>): 
 export const SUPPORTED_LOCALES: ReadonlyArray<{ id: Locale; labelKey: string }> = [
   { id: 'en', labelKey: 'settings.language.en' },
   { id: 'zh-CN', labelKey: 'settings.language.zhCN' },
+  { id: 'zh-TW', labelKey: 'settings.language.zhTW' },
+  { id: 'ja', labelKey: 'settings.language.ja' },
+  { id: 'ko', labelKey: 'settings.language.ko' },
+  { id: 'es', labelKey: 'settings.language.es' },
+  { id: 'fr', labelKey: 'settings.language.fr' },
+  { id: 'de', labelKey: 'settings.language.de' },
+  { id: 'pt-BR', labelKey: 'settings.language.ptBR' },
+  { id: 'ru', labelKey: 'settings.language.ru' },
 ]

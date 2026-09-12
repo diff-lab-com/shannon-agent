@@ -29,6 +29,8 @@ Adjacent workflows (not in `ci.yml`, but referenced by branch protection):
   dispatch. Produces the offline build artifact (`cargo-vendor-*.tar.gz`).
   See [§3 Using the vendor artifact](#3-using-the-vendor-artifact).
 
+| `desktop-design-tokens` (Design-token Guard) | `node scripts/check-design-tokens.mjs` | yes | yes | Retired dual-track terms reappearing; raw palette / hex outside the whitelist |
+
 ### How to add a new gate
 
 1. Write the gate locally. Get it green on a clean clone:

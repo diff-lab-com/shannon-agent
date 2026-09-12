@@ -258,6 +258,13 @@ jobs:
         # see desktop/ui/scripts/check-overlays.sh for the whitelist.
         working-directory: desktop/ui
         run: bash scripts/check-overlays.sh
+      - name: Design-token guard
+        # UI audit §6.1 acceptance: retired dual-track terms must never
+        # reappear in src, and raw palette classes / hard-coded hex are
+        # blocked in favour of theme tokens. Already invoked by pnpm lint
+        # too — duplicated here so CI logs identify the failure clearly.
+        working-directory: desktop/ui
+        run: node scripts/check-design-tokens.mjs
       - name: Theme source drift check
         # src/theme/generated/{themes.css,registry.ts} must match
         # scripts/theme-source.json — blocks hand-edits to generated files.

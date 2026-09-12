@@ -23,6 +23,10 @@ interface PaletteItem {
   icon: string
   category: string
   action: () => void
+  /** Old or alternative terms the search should still match (UI audit §6.1
+      migration window: a user who remembered "分流队列" can still reach the
+      Inbox page by typing either word). */
+  synonyms?: string[]
 }
 
 export default function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -51,9 +55,16 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
     const pages: PaletteItem[] = [
       { id: 'p-chat', label: t('nav.chat'), icon: 'chat_bubble', category: t('palette.category.pages'), action: () => navigate('/chat') },
       { id: 'p-today', label: t('palette.page.today'), icon: 'today', category: t('palette.category.pages'), action: () => navigate('/tasks') },
-      { id: 'p-tasks', label: t('nav.scheduled'), icon: 'task_alt', category: t('palette.category.pages'), action: () => navigate('/tasks') },
-      { id: 'p-ext', label: t('palette.page.extensionsHub'), icon: 'grid_view', category: t('palette.category.pages'), action: () => navigate('/extensions') },
-      { id: 'p-editor', label: t('palette.page.codeEditor'), icon: 'code', category: t('palette.category.pages'), action: () => { navigate('/chat'); window.dispatchEvent(new Event('shannon:open-editor')) } },
+      { id: 'p-tasks', label: t('nav.scheduled'), icon: 'task_alt', category: t('palette.category.pages'), action: () => navigate('/tasks'),
+        synonyms: ['已排程', 'scheduled', '定时任务'] },
+      { id: 'p-inbox', label: t('nav.triage'), icon: 'inbox', category: t('palette.category.pages'), action: () => navigate('/triage'),
+        synonyms: ['triage', '分流队列', '分诊'] },
+      { id: 'p-ext', label: t('palette.page.extensionsHub'), icon: 'grid_view', category: t('palette.category.pages'), action: () => navigate('/extensions'),
+        synonyms: ['extensions', '扩展', 'connectors', '连接'] },
+      { id: 'p-opc', label: t('nav.opc'), icon: 'dashboard', category: t('palette.category.pages'), action: () => navigate('/opc'),
+        synonyms: ['opc', 'mission control', '指挥台', '单人公司'] },
+      { id: 'p-editor', label: t('palette.page.codeEditor'), icon: 'code', category: t('palette.category.pages'), action: () => { navigate('/chat'); window.dispatchEvent(new Event('shannon:open-editor')) },
+        synonyms: ['editor', '编辑器'] },
       { id: 'p-set', label: t('nav.settings'), icon: 'settings', category: t('palette.category.pages'), action: () => navigate('/settings') },
       { id: 'p-theme', label: t('palette.page.themeSettings'), icon: 'palette', category: t('palette.category.settings'), action: () => navigate('/settings/theme') },
       { id: 'p-models', label: t('palette.page.modelSettings'), icon: 'neurology', category: t('palette.category.settings'), action: () => navigate('/settings/models') },
@@ -125,7 +136,9 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
               {items.map(item => (
                 <CommandItem
                   key={item.id}
-                  value={`${item.label} ${category}`}
+                  // cmdk fuzzy-filters against `value`; appending synonyms keeps
+                  // old terms reachable (audit §6.1 migration window).
+                  value={`${item.label} ${category} ${(item.synonyms ?? []).join(' ')}`}
                   onSelect={() => { item.action(); onClose() }}
                 >
                   <span className="material-symbols-outlined text-[18px]">{item.icon}</span>

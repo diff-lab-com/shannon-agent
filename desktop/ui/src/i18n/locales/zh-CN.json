@@ -149,7 +149,7 @@
   "settings.language.label": "语言",
   "settings.language.help": "选择界面语言。更改会立即生效。",
   "settings.language.en": "English",
-  "settings.language.zhCN": "中文（简体）",
+  "settings.language.zhCN": "简体中文",
   "settings.notifications.label": "通知",
   "settings.notifications.help": "发送一条原生系统通知以验证渲染器已接通。完整的事件驱动触发（查询完成、错误、Agent 空闲）将在未来版本上线。",
   "settings.notifications.testButton": "发送测试通知",
@@ -2921,5 +2921,13 @@
   "usage.ctx.conversation": "对话",
   "usage.ctx.budgetLabel": "会话预算上限（USD）",
   "usage.ctx.budgetPlaceholder": "不限",
-  "usage.ctx.budgetSave": "保存"
+  "usage.ctx.budgetSave": "保存",
+  "settings.language.zhTW": "繁體中文",
+  "settings.language.ja": "日本語",
+  "settings.language.ko": "한국어",
+  "settings.language.es": "Español",
+  "settings.language.fr": "Français",
+  "settings.language.de": "Deutsch",
+  "settings.language.ptBR": "Português (Brasil)",
+  "settings.language.ru": "Русский"
 }

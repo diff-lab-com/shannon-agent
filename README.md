@@ -78,7 +78,7 @@ The terminal-native coding agent: rich TUI with diff viewer and markdown renderi
 A native desktop workspace built on **Tauri 2 + React 19 — not Electron**. Two modes for two audiences:
 
 - **Simple mode** — for everyone: chat with inline tool calls you can approve or revoke one by one, drag-and-drop attachments, voice input (cloud or fully local), scheduled tasks with calendar and dependency views, and a triage inbox for everything your agents did while you were away.
-- **Advanced mode** — for developers: extensions (MCP servers, skills, agents), multi-panel workspace with integrated terminal, git worktree management, memory graph, and OPC multi-agent orchestration.
+- **Advanced mode** — for developers: Connectors (MCP servers, skills, agents), multi-panel workspace with integrated terminal, git worktree management, memory graph, and Mission Control multi-agent orchestration.
 
 Plus: mobile pairing (scan a QR code to dispatch and approve tasks from your phone), IM channels (Telegram / Discord / Slack / 飞书 / 钉钉), system tray, global shortcuts, auto-update, and 8 themes.
 
