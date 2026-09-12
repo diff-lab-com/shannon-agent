@@ -235,6 +235,11 @@
 :root {
   --glass-blur-surface: blur(28px) saturate(1.6);
   --glass-blur-overlay: blur(44px) saturate(1.8);
+  /* Fill opacity of the glass tint. Dark mode sits lower: vibrancy reads off
+     the blur over near-black backdrops, and a heavy tint turns it murky.
+     (Phase C7 — replaces per-theme hand-tuned values.) */
+  --glass-tint-alpha: 0.62;
+  --glass-overlay-alpha: 0.78;
   /* Spring-ish easing (Apple sheet curve) + duration scale */
   --ease-glass: cubic-bezier(0.32, 0.72, 0, 1);
   --duration-fast: 120ms;
@@ -242,8 +247,13 @@
   --duration-slow: 280ms;
 }
 
+[data-theme-mode="dark"] {
+  --glass-tint-alpha: 0.48;
+  --glass-overlay-alpha: 0.6;
+}
+
 @utility glass-surface {
-  background: color-mix(in srgb, var(--color-surface-container-lowest) 62%, transparent);
+  background: color-mix(in srgb, var(--color-surface-container-lowest) calc(var(--glass-tint-alpha) * 100%), transparent);
   backdrop-filter: var(--glass-blur-surface);
   -webkit-backdrop-filter: var(--glass-blur-surface);
   border: 1px solid color-mix(in srgb, var(--color-outline-variant) 55%, transparent);
@@ -254,7 +264,7 @@
 }
 
 @utility glass-overlay {
-  background: color-mix(in srgb, var(--color-surface-container-low) 78%, transparent);
+  background: color-mix(in srgb, var(--color-surface-container-low) calc(var(--glass-overlay-alpha) * 100%), transparent);
   backdrop-filter: var(--glass-blur-overlay);
   -webkit-backdrop-filter: var(--glass-blur-overlay);
   border: 1px solid color-mix(in srgb, var(--color-outline-variant) 65%, transparent);
@@ -276,6 +286,22 @@
 @utility shadow-e2 { box-shadow: 0 2px 8px color-mix(in srgb, black 22%, transparent); }
 @utility shadow-e3 { box-shadow: 0 8px 24px color-mix(in srgb, black 28%, transparent); }
 @utility shadow-e4 { box-shadow: 0 16px 48px color-mix(in srgb, black 36%, transparent); }
+
+/* Panel entrance (workspace grid) — one-shot fade+rise on the Apple sheet
+   curve. CSS-only by design (Phase C decision): no motion runtime for a
+   once-per-mount effect. Reduced-motion users get opacity-only. */
+@utility animate-panel-in {
+  animation: panel-in var(--duration-slow) var(--ease-glass) both;
+}
+
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.995); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-panel-in { animation: none; }
+}
 
 /* Unified press feedback (06-26 audit: 4 competing active states). */
 @utility press-scale {

@@ -232,6 +232,16 @@ function WebhookSection() {
           <p id="webhook-url-hint" className="text-on-surface-variant font-body-sm flex-1">
             {t(presetMeta.urlHintKey)}
           </p>
+          {/* Audit D9 — the loopback listener exposes the same secret for
+              INBOUND routine triggers (POST /api/routines/:id/trigger, HMAC).
+              Surface the endpoint so automation authors can wire GitHub /
+              IM webhooks to it. */}
+          <p className="text-on-surface-variant font-body-sm mt-sm flex items-start gap-xs">
+            <span className="material-symbols-outlined text-[16px] text-primary" aria-hidden="true">sync_alt</span>
+            <span>
+              {t('settings.notifications.inboundHint', { endpoint: 'POST http://127.0.0.1:33420/api/routines/:id/trigger' })}
+            </span>
+          </p>
           {url.trim() && (
             <span
               id="webhook-url-status"

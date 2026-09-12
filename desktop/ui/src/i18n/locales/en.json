@@ -2941,5 +2941,13 @@
   "goal.new.template.refactor.label": "Refactor",
   "goal.new.template.refactor.desc": "Improve structure without changing behaviour.",
   "goal.new.template.refactor.title": "Refactor task",
-  "goal.new.template.refactor.objective": "Apply the proposed refactor with behaviour preserved; existing tests must still pass."
+  "goal.new.template.refactor.objective": "Apply the proposed refactor with behaviour preserved; existing tests must still pass.",
+  "chat.input.effort.label": "Reasoning",
+  "chat.input.effort.title": "Reasoning effort — how many tokens the model may spend thinking (low / medium / high / max)",
+  "chat.input.effort.low": "Light",
+  "chat.input.effort.medium": "Standard",
+  "chat.input.effort.high": "Deep",
+  "chat.input.effort.max": "Max",
+  "chat.input.effort.failed": "Failed to set reasoning effort",
+  "settings.notifications.inboundHint": "Inbound triggers: POST {endpoint} with the HMAC signature computed from this secret fires the routine (GitHub pushes, IM bots, CI). Disabled until a secret is set."
 }

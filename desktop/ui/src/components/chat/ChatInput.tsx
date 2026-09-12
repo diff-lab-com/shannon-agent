@@ -109,6 +109,20 @@ export default function ChatInput({
     }
   }
 
+  // Audit D8 — reasoning-effort picker. The engine already persists
+  // `effort_level` (CLI /effort → config) and maps it to the provider's
+  // reasoning parameter; the desktop composer previously had no surface for it.
+  const currentEffort = (config as Record<string, unknown> | undefined)?.effort_level as string | undefined ?? 'medium'
+  const handleEffortChange = async (effort: string | null) => {
+    if (!effort) return
+    try {
+      await api.configure({ key: 'effort_level', value: effort })
+      await refreshConfig()
+    } catch (err) {
+      toastError(t('chat.input.effort.failed'), err)
+    }
+  }
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(true)
@@ -407,6 +421,30 @@ export default function ChatInput({
                       <span className="material-symbols-outlined icon-sm">{mode.icon}</span>
                       <span>{mode.label}</span>
                     </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select value={currentEffort} onValueChange={handleEffortChange}>
+              <SelectTrigger
+                size="sm"
+                aria-label={t('chat.input.effort.label')}
+                title={t('chat.input.effort.title')}
+                className="border border-outline-variant/50 bg-transparent hover:bg-surface-container-low/50 transition-colors"
+              >
+                <span className="material-symbols-outlined icon-sm">neurology</span>
+                <SelectValue placeholder={t('chat.input.effort.label')} />
+              </SelectTrigger>
+              <SelectContent>
+                {[
+                  { value: 'low', label: t('chat.input.effort.low') },
+                  { value: 'medium', label: t('chat.input.effort.medium') },
+                  { value: 'high', label: t('chat.input.effort.high') },
+                  { value: 'max', label: t('chat.input.effort.max') },
+                ].map(effort => (
+                  <SelectItem key={effort.value} value={effort.value}>
+                    {effort.label}
                   </SelectItem>
                 ))}
               </SelectContent>

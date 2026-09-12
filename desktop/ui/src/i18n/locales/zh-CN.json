@@ -2941,5 +2941,13 @@
   "goal.new.template.refactor.label": "重构",
   "goal.new.template.refactor.desc": "改善结构，不改外部行为。",
   "goal.new.template.refactor.title": "重构任务",
-  "goal.new.template.refactor.objective": "实施所提重构，行为不变；现有测试必须仍通过。"
+  "goal.new.template.refactor.objective": "实施所提重构，行为不变；现有测试必须仍通过。",
+  "chat.input.effort.label": "推理力度",
+  "chat.input.effort.title": "推理力度——模型思考可消耗的 token 档位（轻 / 标准 / 深 / 最高）",
+  "chat.input.effort.low": "轻",
+  "chat.input.effort.medium": "标准",
+  "chat.input.effort.high": "深",
+  "chat.input.effort.max": "最高",
+  "chat.input.effort.failed": "设置推理力度失败",
+  "settings.notifications.inboundHint": "入站触发：向 {endpoint} 发送带本密钥 HMAC 签名的请求即可触发例行任务（GitHub 推送、IM 机器人、CI）。设置密钥前保持禁用。"
 }

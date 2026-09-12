@@ -149,7 +149,7 @@ export function WorkspacePanel({
       data-workspace-kind={panel.kind}
       aria-label={title}
       className={cn(
-        'relative flex min-h-0 min-w-0 flex-col overflow-hidden',
+        'relative flex min-h-0 min-w-0 flex-col overflow-hidden animate-panel-in',
         chrome && 'rounded-xl border bg-surface-container-lowest',
         chrome && (dropTarget ? 'border-primary ring-2 ring-primary/40' : 'border-outline-variant/30'),
         dragging && 'opacity-50',

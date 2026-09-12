@@ -112,6 +112,12 @@ Anthropic 未官方公开内部栈。公开可查：claude.ai 为 React + Tailwi
 9. G5 消息渠道入站（Telegram/Discord/Slack/飞书 → NewGoalDialog 派活）。
 10. 连接目录从内置注册表迁移到远端策展（对抗 MCP 生态增速）。
 
+**Phase B/C/D 实施记录（2026-09-11，当日完成）**：
+- B：Base UI 1.5→1.8（滚动锁行为级断言更新）；4 个新 primitive（DataTable/Form/DatePicker/ComboboxSelect）+ Usage 会话表迁移；overlay 白名单清零
+- C：Header/Sidebar 玻璃统一到 --glass-blur-surface token；面板入场 CSS spring 动画（animate-panel-in，reduced-motion 降级）；玻璃 tint 改 --glass-tint-alpha 模式级变量（决策：不引 motion 运行时，CSS 足够且零 bundle 成本）
+- D：推理档落地（引擎已有 effort_level/CLI /effort，composer 新增「推理力度」Select 直写 config）；D9 入站触发端点已在 loopback_api.rs（HMAC POST /api/routines/:id/trigger），NotificationsSettings 补端点展示；D10 远端策展已有（McpRegistryClient 24h 缓存 + SearchTab）
+- turn-timeline e2e 为既有 flaky（force-click 菜单竞态，retry 即过），非本轮回归
+
 **验收基线（已就位）**：`check:tokens` 术语/裸色值门禁、contrast-audit AA、Playwright 视觉快照（chat/tasks/settings-models）、e2e 63 例、vitest 1663 例。
 
 ---
