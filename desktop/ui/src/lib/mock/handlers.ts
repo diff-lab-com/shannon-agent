@@ -736,11 +736,11 @@ export const handlers: Record<string, MockHandler> = {
       days,
       totals,
       by_model: [
-        { label: 'claude-sonnet-4-6', ...totals },
+        { ...totals, label: 'claude-sonnet-4-6' },
         { label: 'glm-5.3', input_tokens: Math.round(totals.input_tokens * 0.18), output_tokens: Math.round(totals.output_tokens * 0.18), cache_creation_tokens: Math.round(totals.cache_creation_tokens * 0.12), cache_read_tokens: Math.round(totals.cache_read_tokens * 0.12), cost_usd: Number((totals.cost_usd * 0.15).toFixed(3)), requests: Math.round(totals.requests * 0.22) },
       ],
       by_provider: [
-        { label: 'anthropic', ...totals, requests: totals.requests - Math.round(totals.requests * 0.22) },
+        { ...totals, label: 'anthropic', requests: totals.requests - Math.round(totals.requests * 0.22) },
       ],
       by_day: byDay,
     }

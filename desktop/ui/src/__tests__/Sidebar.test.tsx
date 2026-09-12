@@ -663,14 +663,11 @@ describe('Sidebar — nav IA groups (U6)', () => {
     expect(screen.queryByText('Scheduled')).not.toBeInTheDocument()
   })
 
-  it('Experiments group is dev-only and holds the Mission Control link', () => {
+  // Audit §14 — Mission Control is now reachable from both simple and dev
+  // modes; the "Experimental" badge still flags it as higher-density.
+  it('Experiments group holds the Mission Control link in both modes', () => {
     render(wrap(<Sidebar />))
-    expect(screen.queryByRole('button', { name: /Experiments/ })).not.toBeInTheDocument()
-    window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
-    const { unmount } = render(wrap(<Sidebar />))
-    expect(screen.getByRole('button', { name: /Experiments/ })).toBeInTheDocument()
     expect(screen.getByText('Mission Control')).toBeInTheDocument()
-    unmount()
   })
 
   it('persists group + settings expansion to shannon-nav-open across remounts', () => {

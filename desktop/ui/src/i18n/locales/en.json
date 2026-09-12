@@ -2929,5 +2929,17 @@
   "settings.language.fr": "Français",
   "settings.language.de": "Deutsch",
   "settings.language.ptBR": "Português (Brasil)",
-  "settings.language.ru": "Русский"
+  "settings.language.ru": "Русский",
+  "goal.new.template.code.label": "Coding",
+  "goal.new.template.code.desc": "Build features, fix bugs, write tests.",
+  "goal.new.template.code.title": "Coding task",
+  "goal.new.template.code.objective": "Complete the requested code change with passing tests and a green lint run.",
+  "goal.new.template.research.label": "Research",
+  "goal.new.template.research.desc": "Survey docs, web, and code. Synthesize and cite.",
+  "goal.new.template.research.title": "Research task",
+  "goal.new.template.research.objective": "Produce a cited summary that answers the question and lists every source consulted.",
+  "goal.new.template.refactor.label": "Refactor",
+  "goal.new.template.refactor.desc": "Improve structure without changing behaviour.",
+  "goal.new.template.refactor.title": "Refactor task",
+  "goal.new.template.refactor.objective": "Apply the proposed refactor with behaviour preserved; existing tests must still pass."
 }

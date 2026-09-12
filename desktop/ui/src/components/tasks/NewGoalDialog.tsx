@@ -5,6 +5,16 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useT } from '@/i18n'
 
+// Audit §13 — Goal templates mirror the Welcome task cards (Code / Writing
+// / Research / General) but framed as long-running objectives. The objective
+// text is what `start_goal_run` passes to the engine, so these are real
+// working prompts, not placeholders.
+const GOAL_TEMPLATES = [
+  { id: 'code', icon: 'code', labelKey: 'goal.new.template.code.label', descKey: 'goal.new.template.code.desc', titleKey: 'goal.new.template.code.title', objectiveKey: 'goal.new.template.code.objective' },
+  { id: 'research', icon: 'search', labelKey: 'goal.new.template.research.label', descKey: 'goal.new.template.research.desc', titleKey: 'goal.new.template.research.title', objectiveKey: 'goal.new.template.research.objective' },
+  { id: 'refactor', icon: 'auto_fix', labelKey: 'goal.new.template.refactor.label', descKey: 'goal.new.template.refactor.desc', titleKey: 'goal.new.template.refactor.title', objectiveKey: 'goal.new.template.refactor.objective' },
+] as const
+
 interface NewGoalDialogProps {
   open: boolean
   onClose: () => void
@@ -53,6 +63,28 @@ export default function NewGoalDialog({ open, onClose, onStart }: NewGoalDialogP
     <Modal open={open} onClose={onClose} title={t('goal.new.title')} size="md">
       <ModalBody>
         <p className="font-body-sm text-on-surface-variant mb-md">{t('goal.new.description')}</p>
+
+        {/* Templates — click to fill in the form. Cards stay compact so the
+            form below remains the primary reading order. */}
+        <div className="grid grid-cols-3 gap-sm mb-lg">
+          {GOAL_TEMPLATES.map(tpl => (
+            <button
+              key={tpl.id}
+              type="button"
+              onClick={() => {
+                setTitle(intl.formatMessage({ id: tpl.titleKey }))
+                setObjective(intl.formatMessage({ id: tpl.objectiveKey }))
+              }}
+              className="text-left p-sm rounded-xl border border-outline-variant/40 bg-surface-container-lowest hover:border-primary hover:bg-primary/5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+              data-testid={`goal-template-${tpl.id}`}
+            >
+              <span className="material-symbols-outlined text-primary text-[18px] mb-1 block" aria-hidden="true">{tpl.icon}</span>
+              <span className="font-label-sm text-on-surface font-bold block">{intl.formatMessage({ id: tpl.labelKey })}</span>
+              <span className="font-body-xs text-on-surface-variant line-clamp-2">{intl.formatMessage({ id: tpl.descKey })}</span>
+            </button>
+          ))}
+        </div>
+
         <div className="space-y-md">
           <label className="block">
             <span className="font-label-md text-on-surface mb-xs block">{t('goal.new.label.title')}</span>

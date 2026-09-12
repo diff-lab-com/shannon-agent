@@ -402,7 +402,10 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
           )}
         </NavGroup>
 
-        {mode === 'dev' && (
+        {/* Audit §14: Mission Control no longer dev-mode-gated; the
+            "Experimental" badge still flags it as a higher-density
+            surface. Both simple and dev modes see the entry; the
+            toggle to dev mode is for OTHER advanced entries only. */}
         <NavGroup labelId="nav.group.experiments" open={navOpen.experiments} onToggle={() => toggleNav('experiments')}>
           {/* U6: OPC flattened to a direct link — its old disclosure held a
               single sub-link, and a disclosure inside a group is two levels
@@ -417,7 +420,6 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
              </span>
           </NavLink>
         </NavGroup>
-        )}
         </ScrollArea>
       </nav>
 

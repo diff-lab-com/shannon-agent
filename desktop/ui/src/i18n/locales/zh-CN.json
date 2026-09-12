@@ -2929,5 +2929,17 @@
   "settings.language.fr": "Français",
   "settings.language.de": "Deutsch",
   "settings.language.ptBR": "Português (Brasil)",
-  "settings.language.ru": "Русский"
+  "settings.language.ru": "Русский",
+  "goal.new.template.code.label": "编码",
+  "goal.new.template.code.desc": "编写功能、修 bug、写测试。",
+  "goal.new.template.code.title": "编码任务",
+  "goal.new.template.code.objective": "完成所要求的代码改动，全部测试通过且 lint 通过。",
+  "goal.new.template.research.label": "调研",
+  "goal.new.template.research.desc": "查阅文档/网络/代码，归纳并给出引用。",
+  "goal.new.template.research.title": "调研任务",
+  "goal.new.template.research.objective": "输出带引用的总结回答，并列出所有查阅的来源。",
+  "goal.new.template.refactor.label": "重构",
+  "goal.new.template.refactor.desc": "改善结构，不改外部行为。",
+  "goal.new.template.refactor.title": "重构任务",
+  "goal.new.template.refactor.objective": "实施所提重构，行为不变；现有测试必须仍通过。"
 }
