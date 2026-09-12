@@ -55,7 +55,7 @@ function StatCard({
         {value}
       </div>
       {hint && (
-        <div className="font-label-sm text-label-sm text-outline-variant mt-xs">{hint}</div>
+        <div className="font-label-sm text-label-sm text-on-surface-variant mt-xs">{hint}</div>
       )}
     </div>
   )
@@ -78,7 +78,6 @@ function BucketTable({
   emptyTitle: string
   emptyLabel: string
 }) {
-  const t = useT()
   return (
     <div className="bg-surface-container-low rounded-2xl border border-outline-variant/30 overflow-hidden">
       <div className="flex items-center gap-xs px-lg py-md border-b border-outline-variant/20">
@@ -88,46 +87,56 @@ function BucketTable({
       {buckets.length === 0 ? (
         <EmptyState icon="monitoring" title={emptyTitle} description={emptyLabel} />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="text-outline-variant">
-              <tr className="border-b border-outline-variant/20">
-                <th className="px-lg py-xs font-label-sm font-medium">{labelTitle}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.tokens')}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.cache')}</th>
-                <th className="px-md py-xs font-label-sm font-medium text-right">{t('usage.col.cost')}</th>
-                <th className="px-lg py-xs font-label-sm font-medium text-right">Reqs</th>
-              </tr>
-            </thead>
-            <tbody>
-              {buckets.map((b) => (
-                <tr
-                  key={b.label}
-                  className="border-b border-outline-variant/10 last:border-0 hover:bg-surface-container/40"
-                >
-                  <td className="px-lg py-sm font-label-md text-on-surface truncate max-w-[220px]">
-                    {b.label}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtTokens(locale, b.input_tokens + b.output_tokens)}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtTokens(locale, b.cache_creation_tokens + b.cache_read_tokens)}
-                  </td>
-                  <td className="px-md py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {fmtCost(locale, b.cost_usd)}
-                  </td>
-                  <td className="px-lg py-sm text-right font-mono text-label-sm text-on-surface-variant">
-                    {b.requests}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="overflow-x-auto p-sm">
+          <BucketDataTable labelTitle={labelTitle} buckets={buckets} locale={locale} emptyLabel={emptyLabel} />
         </div>
       )}
     </div>
   )
+}
+
+function BucketDataTable({ labelTitle, buckets, locale, emptyLabel }: {
+  labelTitle: string
+  buckets: UsageBucket[]
+  locale: string
+  emptyLabel: string
+}) {
+  const tB = useT()
+  const columns: ColumnDef<UsageBucket, unknown>[] = [
+    {
+      accessorKey: 'label',
+      header: labelTitle,
+      enableSorting: false,
+      cell: ({ getValue }) => (
+        <span className="font-label-md text-on-surface truncate max-w-[220px] block">{getValue() as string}</span>
+      ),
+    },
+    {
+      id: 'tokens',
+      header: tB('usage.col.tokens'),
+      accessorFn: b => b.input_tokens + b.output_tokens,
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtTokens(locale, getValue() as number)}</span>
+      ),
+    },
+    {
+      id: 'cache',
+      header: tB('usage.col.cache'),
+      accessorFn: b => b.cache_creation_tokens + b.cache_read_tokens,
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtTokens(locale, getValue() as number)}</span>
+      ),
+    },
+    {
+      accessorKey: 'cost_usd',
+      header: tB('usage.col.cost'),
+      cell: ({ getValue }) => (
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtCost(locale, getValue() as number)}</span>
+      ),
+    },
+    { accessorKey: 'requests', header: 'Reqs' },
+  ]
+  return <DataTable columns={columns} data={buckets} emptyMessage={emptyLabel} />
 }
 
 function SessionTable({ rows, locale, emptyTitle, emptyLabel }: {

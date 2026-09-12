@@ -170,7 +170,10 @@ pub fn featured_vendors() -> Vec<FeaturedVendor> {
             trust: TrustLevel::Official,
             install_kind: FeaturedInstallKind::Stdio {
                 command: "npx".into(),
-                args: vec!["-y".into(), "@modelcontextprotocol/server-filesystem".into()],
+                args: vec![
+                    "-y".into(),
+                    "@modelcontextprotocol/server-filesystem".into(),
+                ],
                 env_vars: vec![],
                 display_name: "Install Filesystem".into(),
             },
@@ -657,9 +660,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn featured_vendors_includes_eight_canonical_vendors() {
+    fn featured_vendors_includes_twelve_canonical_vendors() {
         let vendors = featured_vendors();
-        assert_eq!(vendors.len(), 8, "5 OAuth vendors + 3 search data sources");
+        assert_eq!(
+            vendors.len(),
+            12,
+            "5 OAuth vendors + 3 search + filesystem/puppeteer/postgres/memory (MCP official)"
+        );
         let slugs: Vec<&str> = vendors.iter().map(|v| v.slug.as_str()).collect();
         assert!(slugs.contains(&"notion"));
         assert!(slugs.contains(&"linear"));
@@ -669,6 +676,10 @@ mod tests {
         assert!(slugs.contains(&"tavily"));
         assert!(slugs.contains(&"brave-search"));
         assert!(slugs.contains(&"exa"));
+        assert!(slugs.contains(&"filesystem"));
+        assert!(slugs.contains(&"puppeteer"));
+        assert!(slugs.contains(&"postgres"));
+        assert!(slugs.contains(&"memory"));
     }
 
     #[test]

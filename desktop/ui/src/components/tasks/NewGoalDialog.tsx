@@ -1,8 +1,11 @@
 import { useState } from 'react'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
 import { useIntl } from 'react-intl'
 import { Modal, ModalBody } from '@/components/ui/modal'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Form, FormField, FormInput } from '@/components/ui/form'
 import { useT } from '@/i18n'
 
 // Audit §13 — Goal templates mirror the Welcome task cards (Code / Writing
@@ -27,37 +30,38 @@ interface NewGoalDialogProps {
  * the UI). Budget/turn caps are optional and map to the CLI goal system's
  * budget-cap / max-turns contract.
  */
+const goalSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+  objective: z.string().trim().min(1),
+  maxTurns: z.coerce.number().int().min(1).optional(),
+  budgetUsd: z.coerce.number().min(0).optional(),
+})
+type GoalFormValues = z.input<typeof goalSchema>
+
 export default function NewGoalDialog({ open, onClose, onStart }: NewGoalDialogProps) {
   const intl = useIntl()
   const t = useT()
-  const [title, setTitle] = useState('')
-  const [objective, setObjective] = useState('')
-  const [maxTurns, setMaxTurns] = useState('')
-  const [budgetUsd, setBudgetUsd] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const form = useForm<GoalFormValues>({
+    resolver: zodResolver(goalSchema),
+    defaultValues: { title: '', objective: '', maxTurns: '', budgetUsd: '' },
+  })
 
-  const valid = title.trim().length > 0 && objective.trim().length > 0
-
-  const reset = () => {
-    setTitle(''); setObjective(''); setMaxTurns(''); setBudgetUsd('')
-  }
-
-  const handleSubmit = async () => {
-    if (!valid || submitting) return
+  const handleSubmit = form.handleSubmit(async values => {
     setSubmitting(true)
     try {
       await onStart({
-        title: title.trim(),
-        objective: objective.trim(),
-        maxTurns: maxTurns ? Number(maxTurns) : undefined,
-        budgetUsd: budgetUsd ? Number(budgetUsd) : undefined,
+        title: values.title,
+        objective: values.objective,
+        maxTurns: values.maxTurns != null ? Number(values.maxTurns) : undefined,
+        budgetUsd: values.budgetUsd != null ? Number(values.budgetUsd) : undefined,
       })
-      reset()
+      form.reset()
       onClose()
     } finally {
       setSubmitting(false)
     }
-  }
+  })
 
   return (
     <Modal open={open} onClose={onClose} title={t('goal.new.title')} size="md">
@@ -72,8 +76,9 @@ export default function NewGoalDialog({ open, onClose, onStart }: NewGoalDialogP
               key={tpl.id}
               type="button"
               onClick={() => {
-                setTitle(intl.formatMessage({ id: tpl.titleKey }))
-                setObjective(intl.formatMessage({ id: tpl.objectiveKey }))
+                // Templates fill both fields; mark them valid by clearing errors.
+                form.setValue('title', intl.formatMessage({ id: tpl.titleKey }), { shouldValidate: true })
+                form.setValue('objective', intl.formatMessage({ id: tpl.objectiveKey }), { shouldValidate: true })
               }}
               className="text-left p-sm rounded-xl border border-outline-variant/40 bg-surface-container-lowest hover:border-primary hover:bg-primary/5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
               data-testid={`goal-template-${tpl.id}`}
@@ -85,58 +90,77 @@ export default function NewGoalDialog({ open, onClose, onStart }: NewGoalDialogP
           ))}
         </div>
 
-        <div className="space-y-md">
-          <label className="block">
-            <span className="font-label-md text-on-surface mb-xs block">{t('goal.new.label.title')}</span>
-            <Input
-              value={title}
-              onChange={e => setTitle(e.target.value)}
+        <Form id="new-goal-form" onSubmit={handleSubmit} className="space-y-md mt-0">
+          <FormField
+            name="title"
+            label={t('goal.new.label.title')}
+            required
+            error={form.formState.errors.title ? t('goal.new.error.title') : undefined}
+          >
+            <FormInput
+              id="title"
+              {...form.register('title')}
               placeholder={intl.formatMessage({ id: 'goal.new.placeholder.title' })}
               maxLength={120}
               autoFocus
+              invalid={!!form.formState.errors.title}
             />
-          </label>
-          <label className="block">
-            <span className="font-label-md text-on-surface mb-xs block">{t('goal.new.label.objective')}</span>
+          </FormField>
+          <FormField
+            name="objective"
+            label={t('goal.new.label.objective')}
+            required
+            error={form.formState.errors.objective ? t('goal.new.error.objective') : undefined}
+          >
             <textarea
-              value={objective}
-              onChange={e => setObjective(e.target.value)}
+              id="objective"
+              {...form.register('objective')}
               placeholder={intl.formatMessage({ id: 'goal.new.placeholder.objective' })}
               rows={4}
-              className="w-full rounded-lg border border-outline-variant/50 bg-surface-container-lowest px-sm py-xs font-body-md text-on-surface placeholder:text-on-surface-variant/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+              aria-invalid={!!form.formState.errors.objective || undefined}
+              className="w-full rounded-lg border border-outline-variant/50 bg-surface-container-lowest px-sm py-xs font-body-md text-on-surface placeholder:text-on-surface-variant/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary aria-[invalid=true]:border-error"
             />
-          </label>
+          </FormField>
           <div className="grid grid-cols-2 gap-md">
-            <label className="block">
-              <span className="font-label-md text-on-surface mb-xs block">{t('goal.new.label.maxTurns')}</span>
-              <Input
+            <FormField
+              name="maxTurns"
+              label={t('goal.new.label.maxTurns')}
+              error={form.formState.errors.maxTurns ? t('goal.new.error.maxTurns') : undefined}
+            >
+              <FormInput
+                id="maxTurns"
                 type="number"
                 min={1}
-                value={maxTurns}
-                onChange={e => setMaxTurns(e.target.value)}
+                {...form.register('maxTurns')}
                 placeholder={intl.formatMessage({ id: 'goal.new.placeholder.maxTurns' })}
+                invalid={!!form.formState.errors.maxTurns}
               />
-            </label>
-            <label className="block">
-              <span className="font-label-md text-on-surface mb-xs block">{t('goal.new.label.budget')}</span>
-              <Input
+            </FormField>
+            <FormField
+              name="budgetUsd"
+              label={t('goal.new.label.budget')}
+              error={form.formState.errors.budgetUsd ? t('goal.new.error.budget') : undefined}
+            >
+              <FormInput
+                id="budgetUsd"
                 type="number"
                 min={0}
                 step="0.5"
-                value={budgetUsd}
-                onChange={e => setBudgetUsd(e.target.value)}
+                {...form.register('budgetUsd')}
                 placeholder={intl.formatMessage({ id: 'goal.new.placeholder.budget' })}
+                invalid={!!form.formState.errors.budgetUsd}
               />
-            </label>
+            </FormField>
           </div>
-        </div>
+        </Form>
         <div className="flex justify-end gap-sm mt-lg">
           <Button variant="ghost" onClick={onClose} className="cursor-pointer">
             {t('goal.new.cancel')}
           </Button>
           <Button
-            onClick={() => void handleSubmit()}
-            disabled={!valid || submitting}
+            type="submit"
+            form="new-goal-form"
+            disabled={submitting}
             className="cursor-pointer bg-primary text-on-primary hover:bg-primary/90 disabled:opacity-50"
           >
             {submitting ? t('goal.new.submitting') : t('goal.new.submit')}

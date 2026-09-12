@@ -2949,5 +2949,9 @@
   "chat.input.effort.high": "Deep",
   "chat.input.effort.max": "Max",
   "chat.input.effort.failed": "Failed to set reasoning effort",
-  "settings.notifications.inboundHint": "Inbound triggers: POST {endpoint} with the HMAC signature computed from this secret fires the routine (GitHub pushes, IM bots, CI). Disabled until a secret is set."
+  "settings.notifications.inboundHint": "Inbound triggers: POST {endpoint} with the HMAC signature computed from this secret fires the routine (GitHub pushes, IM bots, CI). Disabled until a secret is set.",
+  "goal.new.error.title": "Title is required (max 120 chars).",
+  "goal.new.error.objective": "Describe the objective.",
+  "goal.new.error.maxTurns": "Must be a whole number ≥ 1.",
+  "goal.new.error.budget": "Must be a number ≥ 0."
 }

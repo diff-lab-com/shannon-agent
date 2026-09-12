@@ -8,11 +8,16 @@ test.describe('Turn Timeline (§4.14)', () => {
   test('opens from the session rail menu', async ({ page }) => {
     await page.goto('/chat')
 
-    // The ⋯ button is hover-only; force-click past the hover gate.
-    await page
-      .getByRole('button', { name: 'Actions for Q3 roadmap brainstorm' })
-      .click({ force: true })
-    await page.getByRole('menuitem', { name: 'Turn Timeline' }).click()
+    // The ⋯ button is hover-only: hover the row first, wait for the button
+    // to actually mount, then click it normally. (force:true raced the
+    // session-list render and intermittently timed out the menu wait.)
+    await page.getByText('Q3 roadmap brainstorm').hover()
+    const actions = page.getByRole('button', { name: 'Actions for Q3 roadmap brainstorm' })
+    await expect(actions).toBeVisible()
+    await actions.click()
+    const item = page.getByRole('menuitem', { name: 'Turn Timeline' })
+    await expect(item).toBeVisible()
+    await item.click()
 
     await expect(page).toHaveURL(/\/timeline\/sess-001$/)
     const panel = page.getByTestId('turn-timeline')

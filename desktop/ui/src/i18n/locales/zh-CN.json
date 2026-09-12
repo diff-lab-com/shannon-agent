@@ -2949,5 +2949,9 @@
   "chat.input.effort.high": "深",
   "chat.input.effort.max": "最高",
   "chat.input.effort.failed": "设置推理力度失败",
-  "settings.notifications.inboundHint": "入站触发：向 {endpoint} 发送带本密钥 HMAC 签名的请求即可触发例行任务（GitHub 推送、IM 机器人、CI）。设置密钥前保持禁用。"
+  "settings.notifications.inboundHint": "入站触发：向 {endpoint} 发送带本密钥 HMAC 签名的请求即可触发例行任务（GitHub 推送、IM 机器人、CI）。设置密钥前保持禁用。",
+  "goal.new.error.title": "标题必填（最长 120 字）。",
+  "goal.new.error.objective": "请描述目标。",
+  "goal.new.error.maxTurns": "须为 ≥ 1 的整数。",
+  "goal.new.error.budget": "须为 ≥ 0 的数字。"
 }
