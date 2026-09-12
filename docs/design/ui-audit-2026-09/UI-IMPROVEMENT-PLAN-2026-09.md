@@ -4,6 +4,7 @@
 **审计对象**: Shannon Desktop `dev` 分支（Tauri 2 + React 19，mock 模式实测截图）
 **对标竞品**: Claude Desktop（消费版）· Claude Code Desktop · OpenAI Codex app · ZCode Desktop v3.11.2（真机）
 **目标**: 全面参考竞品流行的 UI/页面设计，相同功能使用一致的 UI/术语/用户流程，降低用户认知成本；美术方向对齐苹果玻璃风格（Liquid Glass / Glassmorphism）。
+**增补专题**: [COMPONENT-LIBRARY-RESEARCH.md](./COMPONENT-LIBRARY-RESEARCH.md)——竞品组件库取证（ZCode/Codex/ChatGPT 均为 Radix+Tailwind 系）、候选库对比与选型结论（维持 Base UI + shadcn 模式）、实施规划 v2。
 **配套**: [screenshots/shannon/](./screenshots/shannon/)（18 页实测截图）· [screenshots/competitors/](./screenshots/competitors/)（竞品截图与官方资料）· [docs/competitive-research-2026-09.md](../../competitive-research-2026-09.md)（功能层竞研）
 
 ---
