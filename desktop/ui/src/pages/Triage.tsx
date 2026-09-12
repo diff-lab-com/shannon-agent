@@ -135,8 +135,9 @@ function InboxCard({ item, selected, focused, onToggleSelected, onMarkRead, onAr
                "result → resume the original thread", so resume gets a
                labelled primary button instead of a ghost icon. */
             <Button
+              size="sm"
               aria-label={t('inbox.continue.aria')}
-              className="px-sm py-1.5 rounded-lg bg-primary text-on-primary text-label-sm font-medium cursor-pointer hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary inline-flex items-center gap-xs"
+              className="cursor-pointer inline-flex items-center gap-xs"
               onClick={() => onContinue(item)}
             >
               <span className="material-symbols-outlined text-[16px]">forum</span>

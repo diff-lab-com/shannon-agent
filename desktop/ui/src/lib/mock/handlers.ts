@@ -700,6 +700,51 @@ export const handlers: Record<string, MockHandler> = {
     return item.sessionId
   },
 
+  // --- Usage (UI audit C13 — keeps the cost panel non-empty in demo mode) ---
+  async get_usage_stats(args: { days: number }) {
+    await delay()
+    const days = Math.min(args.days ?? 30, 365)
+    const today = new Date()
+    const byDay = Array.from({ length: Math.min(days, 30) }, (_, i) => {
+      const d = new Date(today)
+      d.setDate(today.getDate() - (days - 1 - i))
+      const label = d.toISOString().slice(0, 10)
+      const peak = Math.sin((i / days) * Math.PI) * 0.4 + 0.6
+      return {
+        label,
+        input_tokens: Math.round(3800 + 12000 * peak + (i % 3) * 400),
+        output_tokens: Math.round(900 + 2400 * peak),
+        cache_creation_tokens: Math.round(800 + 4200 * peak),
+        cache_read_tokens: Math.round(8000 + 35000 * peak),
+        cost_usd: Number((0.05 + 0.42 * peak).toFixed(3)),
+        requests: 4 + Math.round(20 * peak),
+      }
+    })
+    const totals = byDay.reduce(
+      (acc, d) => ({
+        label: 'total',
+        input_tokens: acc.input_tokens + d.input_tokens,
+        output_tokens: acc.output_tokens + d.output_tokens,
+        cache_creation_tokens: acc.cache_creation_tokens + d.cache_creation_tokens,
+        cache_read_tokens: acc.cache_read_tokens + d.cache_read_tokens,
+        cost_usd: Number((acc.cost_usd + d.cost_usd).toFixed(3)),
+        requests: acc.requests + d.requests,
+      }),
+      { label: 'total', input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: 0, requests: 0 },
+    )
+    return {
+      days,
+      totals,
+      by_model: [
+        { label: 'claude-sonnet-4-6', ...totals },
+        { label: 'glm-5.3', input_tokens: Math.round(totals.input_tokens * 0.18), output_tokens: Math.round(totals.output_tokens * 0.18), cache_creation_tokens: Math.round(totals.cache_creation_tokens * 0.12), cache_read_tokens: Math.round(totals.cache_read_tokens * 0.12), cost_usd: Number((totals.cost_usd * 0.15).toFixed(3)), requests: Math.round(totals.requests * 0.22) },
+      ],
+      by_provider: [
+        { label: 'anthropic', ...totals, requests: totals.requests - Math.round(totals.requests * 0.22) },
+      ],
+      by_day: byDay,
+    }
+  },
   // --- Goal runs (P0-2 desktop goal runner) ---
   async list_goal_runs() {
     await delay()

@@ -27,8 +27,10 @@ function DialogOverlay({
   return (
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
+      // Glass overlay unified with modal.tsx — same `glass-overlay` token
+      // keeps the two dialog primitives visually consistent across the app.
       className={cn(
-        "fixed inset-0 isolate z-modal bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        "fixed inset-0 isolate z-modal bg-black/40 [backdrop-filter:var(--glass-blur-overlay)] [-webkit-backdrop-filter:var(--glass-blur-overlay)] duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className
       )}
       {...props}

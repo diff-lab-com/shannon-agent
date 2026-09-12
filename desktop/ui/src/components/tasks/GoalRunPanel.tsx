@@ -237,8 +237,9 @@ function GoalRunPanelImpl({ onViewSession }: { onViewSession: (id: string) => vo
         </h2>
         <Button
           type="button"
+          size="sm"
           onClick={() => setCreating(true)}
-          className="px-sm py-1.5 rounded-lg bg-primary text-on-primary text-label-sm font-medium cursor-pointer hover:bg-primary/90 inline-flex items-center gap-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          className="cursor-pointer inline-flex items-center gap-xs"
           data-testid="goal-new-button"
         >
           <span className="material-symbols-outlined text-[16px]" aria-hidden="true">add</span>
