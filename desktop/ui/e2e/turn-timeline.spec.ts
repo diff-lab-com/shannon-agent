@@ -8,6 +8,13 @@ test.describe('Turn Timeline (§4.14)', () => {
   test('opens from the session rail menu', async ({ page }) => {
     await page.goto('/chat')
 
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+    ).toBeVisible({ timeout: 15000 })
+
     // The ⋯ button is hover-only: hover the row first, wait for the button
     // to actually mount, then click it normally. (force:true raced the
     // session-list render and intermittently timed out the menu wait.)

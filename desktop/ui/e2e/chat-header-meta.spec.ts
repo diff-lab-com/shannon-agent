@@ -5,11 +5,25 @@ import { test, expect } from '@playwright/test'
 test.describe('Chat header meta (U2)', () => {
   test('/chat has exactly one banner', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+    ).toBeVisible({ timeout: 15000 })
     await expect(page.getByRole('banner')).toHaveCount(1)
   })
 
   test('switching a session updates the global Header title', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+    ).toBeVisible({ timeout: 15000 })
     await page
       .getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
       .click()
@@ -19,6 +33,13 @@ test.describe('Chat header meta (U2)', () => {
 
   test('ContextPanel toggle is available on /chat only', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+    ).toBeVisible({ timeout: 15000 })
     await expect(
       page.getByRole('button', { name: 'Toggle context panel' })
     ).toBeVisible()
@@ -31,6 +52,13 @@ test.describe('Chat header meta (U2)', () => {
 
   test('working directory shows only in the composer footer', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+    ).toBeVisible({ timeout: 15000 })
     // The composer footer WD button (aria-label) exists…
     await expect(
       page.getByRole('button', { name: 'Working directory' })

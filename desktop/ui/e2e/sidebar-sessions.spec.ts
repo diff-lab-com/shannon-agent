@@ -7,6 +7,13 @@ import AxeBuilder from '@axe-core/playwright'
 test.describe('Sidebar sessions rail (U1)', () => {
   test('has exactly one New Chat button', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+    ).toBeVisible({ timeout: 15000 })
     await expect(
       page.getByRole('button', { name: 'New Chat' })
     ).toHaveCount(1)
@@ -14,6 +21,13 @@ test.describe('Sidebar sessions rail (U1)', () => {
 
   test('switches session from the rail and marks it current', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+    ).toBeVisible({ timeout: 15000 })
     // exact: true — otherwise the substring also matches the row's
     // "Actions for …" ⋯ button.
     const row = page.getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
@@ -27,6 +41,13 @@ test.describe('Sidebar sessions rail (U1)', () => {
 
   test('filters the rail by search', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+    ).toBeVisible({ timeout: 15000 })
     // getByRole filters the CSS-hidden mobile-drawer copy of the sidebar
     // that getByLabel would also match (Layout mounts both variants).
     const search = page.getByRole('searchbox', { name: 'Search chats' })
@@ -45,6 +66,13 @@ test.describe('Sidebar sessions rail (U1)', () => {
 
   test('delete asks for confirmation and removes the row', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+    ).toBeVisible({ timeout: 15000 })
     // The ⋯ button is hover-only (opacity-0); force-click past the hover gate.
     await page
       .getByRole('button', { name: 'Actions for Investor update draft' })
@@ -64,6 +92,13 @@ test.describe('Sidebar sessions rail (U1)', () => {
 
   test('Alt+ArrowDown moves the focused row (U5 keyboard reorder)', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+    ).toBeVisible({ timeout: 15000 })
     const rows = page.getByRole('listitem')
     await expect(rows.first()).toBeVisible()
     // Compare by the row button's aria-label ("Chat: <title>") — innerText
@@ -87,6 +122,13 @@ test.describe('Sidebar sessions rail (U1)', () => {
 
   test('session rail has no critical axe violations (U5)', async ({ page }) => {
     await page.goto('/chat')
+
+    // Mock sessions render in batches; clicking before the list settles lets
+    // late rows shift the target mid-click (CI-only flake). Wait for the
+    // last seeded session row before interacting.
+    await expect(
+      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+    ).toBeVisible({ timeout: 15000 })
     await expect(page.getByRole('listitem').first()).toBeVisible()
     const results = await new AxeBuilder({ page })
       .include('[data-sidebar]')
