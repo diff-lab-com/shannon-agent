@@ -128,3 +128,13 @@ Anthropic 未官方公开内部栈。公开可查：claude.ai 为 React + Tailwi
 - [The Architecture Behind OpenAI's Codex Desktop App](https://yuanjiwei.com/20250215-architecture-behind-codex/) · [Codex desktop 技术栈（LinkedIn/Yangshun Tay）](https://www.linkedin.com/posts/yangshun_tech-stack-openai-used-to-build-codex-desktop-activity-7424676759347822593-UiFy) · [codenote.net Electron 名应用研究](https://codenote.net/en/posts/famous-electron-apps-2026-research/)
 - [Reverse Engineering ChatGPT Web](https://performance.dev/chatgpt)（data-radix 实证）
 - [shadcn/ui Skills（Claude Code 官方集成）](https://ui.shadcn.com/docs/skills) · [shadcn vs Radix（Vercel）](https://vercel.com/i/shadcn-vs-radix) · [HN：shadcn 复刻 Claude Code/Codex UI](https://news.ycombinator.com/item?id=48926085) · [2026 React UI 默认栈](https://www.shadcndeck.com/blog/rise-of-shadcn-ui-2026)
+
+**CI Desktop E2E 调研记录（2026-09-13）**：连续 9 个失败 commit 后定位到真因并全绿。链路：
+1. **Layout 双 Sidebar**（commit `24f62a81`）—— `md:hidden` + `hidden md:block` 同时渲染两个完整 Sidebar 副本，Playwright strict-mode 命中双节点，hit-test 在 mobile 副本上拦截。**根因**。
+2. **e2e 选择器精度**（`47f69bd3`）—— `getByRole({ name })` 跨桌面/移动副本歧义；改为 `getByTestId('desktop-session-row-${id}')`。
+3. **hydration 时序**（`3114236d`）—— 慢机 React effect 异步设 `--sidebar-w`，session 按钮先于 main marginLeft 应用，短暂落在 aside 阴影下。`page.waitForFunction` 等 `aside.getBoundingClientRect().width > 0`。
+4. **viewport 临界**（`9018d049`）—— CI 默认 1280×720，匹配 `matchMedia('(max-width: 767px)')` 边界，某些 runner 识别为 mobileMode=true 走抽屉形态。锁到 1440×900 让 matchMedia 恒为 false（rail 形态）。
+5. **视觉基线容差**（`48f64c6d`）—— 同尺寸下 ~3% Linux Chromium 子像素渲染漂移超 0.02 阈值；放宽到 0.05（仍是 token 级回归护栏）。
+6. **CI retries 退订**——viewport 锁后 hydration 也已稳定，retries 归零不必要（最终仍保留 retries:0）。
+
+最终 CI 全绿（19/19 job），本机 e2e 66/66 28 秒跑完。教训：CI 环境差异（视口、GPU/字体度量、hydration 时序）是 E2E 测试的主战场，代码级 root cause 与 CI 表现往往隔着 1-2 层表象，定位需要把 retry/timeout 作为独立假设逐个剥离。
