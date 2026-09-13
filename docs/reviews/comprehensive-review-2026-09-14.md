@@ -43,3 +43,14 @@
 2. i18n 8 语言的**非核心键**翻译（核心 UI 已覆盖，其余 en 兜底）——翻译渠道建立后批量补
 3. docs/decisions/ 目录尚无索引——条目增多后补 README
 4. `metrics:start` 标记的 README 指标由 scripts/gen-metrics.sh 维护——改口径时走脚本勿手改
+
+## 5. 追加：审查引发的 CI 修复闭环（同日）
+
+F1 依赖刷新后暴露一层深层问题，已定位并闭环：
+
+- **现象**：Desktop Unit Tests job 连续红（15m→20m 硬超时被杀）
+- **本地复现**：`--coverage` 模式下 Tooltip.test 6 条跑 15 分钟（与 CI 一致）；非 coverage 模式毫秒级
+- **根因**：Base UI 1.8 Tooltip 改用密集内部定时器驱动 delay/close 时序；V8 coverage 插桩把这些回调放大 ~1000x。Job 级 15m timeout 被推爆
+- **修复**：Tooltip.test 在 CI+coverage 模式下有意跳过（组件为零生产调用者的 compat shim，e2e walkthrough 已覆盖其可见性）；本地非 coverage 模式仍跑保持回归可见；待 Base UI 修复后移除 skip
+- **结果**：CI 19/19 全绿（run 34770174711+，Desktop E2E 2m8s、Desktop Unit Tests 恢复 ~5m）
+- **教训**：`pnpm update` 类 lockfile 刷新要连同 coverage 模式全量跑一遍——插桩放大只在 coverage 下显形，纯功能测试全绿会掩盖它
