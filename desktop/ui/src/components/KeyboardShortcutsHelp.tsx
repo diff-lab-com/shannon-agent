@@ -99,6 +99,29 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
           </div>
         </div>
         <div className="overflow-y-auto -mx-xs px-xs max-h-[60vh]">
+          {/* Composer trio explainer (audit §6 user-visible capability doc):
+              the composer's three controls are all live-wired to engine
+              config; document them where users ask "what do these do?" */}
+          <section className="mb-md p-sm rounded-lg bg-surface-container-low/60 border border-outline-variant/20">
+            <h4 className="font-label-md text-on-surface-variant uppercase tracking-wider text-[11px] mb-xs px-xs">
+              {t('shortcutsHelp.composer.title')}
+            </h4>
+            <ul className="grid grid-cols-1 sm:grid-cols-3 gap-xs">
+              {[
+                { icon: 'shield', titleKey: 'shortcutsHelp.composer.mode.title', descKey: 'shortcutsHelp.composer.mode.desc' },
+                { icon: 'neurology', titleKey: 'shortcutsHelp.composer.effort.title', descKey: 'shortcutsHelp.composer.effort.desc' },
+                { icon: 'smart_toy', titleKey: 'shortcutsHelp.composer.model.title', descKey: 'shortcutsHelp.composer.model.desc' },
+              ].map(item => (
+                <li key={item.icon} className="p-sm rounded-md bg-surface-container-lowest/60">
+                  <div className="flex items-center gap-xs mb-1">
+                    <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">{item.icon}</span>
+                    <span className="font-label-md text-on-surface font-bold">{t(item.titleKey)}</span>
+                  </div>
+                  <p className="text-body-xs text-on-surface-variant leading-snug">{t(item.descKey)}</p>
+                </li>
+              ))}
+            </ul>
+          </section>
           {filteredSections.length === 0 ? (
             <p className="text-body-sm text-on-surface-variant italic py-md text-center">{t('shortcutsHelp.noResults')}</p>
           ) : (

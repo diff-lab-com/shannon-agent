@@ -67,6 +67,9 @@ export default function CurrentSessionCostPanel() {
         <span className="material-symbols-outlined text-primary" aria-hidden="true">donut_small</span>
         {t('usage.ctx.heading')}
       </h2>
+      <p className="font-body-sm text-on-surface-variant mb-md">
+        {t('usage.ctx.explainer')}
+      </p>
       <div className="flex items-baseline gap-sm mb-sm">
         <span className="font-headline-md text-[24px] font-bold text-on-surface">
           {intl.formatNumber(breakdown.totalTokens)}

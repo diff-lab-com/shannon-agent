@@ -2953,5 +2953,16 @@
   "goal.new.error.title": "标题必填（最长 120 字）。",
   "goal.new.error.objective": "请描述目标。",
   "goal.new.error.maxTurns": "须为 ≥ 1 的整数。",
-  "goal.new.error.budget": "须为 ≥ 0 的数字。"
+  "goal.new.error.budget": "须为 ≥ 0 的数字。",
+  "settings.models.quickSwitch.label": "切换模型",
+  "settings.models.quickSwitch.placeholder": "搜索模型…",
+  "settings.models.quickSwitch.empty": "无匹配模型",
+  "usage.ctx.explainer": "本会话的实时上下文估算，按窗口消耗来源拆解：系统提示、工具定义、技能、记忆、MCP 服务器与对话本身。设置预算上限后，agent 会在超出前暂停询问。",
+  "shortcutsHelp.composer.title": "Composer 三要素 —— 全部实时生效",
+  "shortcutsHelp.composer.mode.title": "权限模式",
+  "shortcutsHelp.composer.mode.desc": "agent 无需询问即可执行的范围：建议 / 计划 / 自动编辑 / 完全访问，按工作区记忆。",
+  "shortcutsHelp.composer.effort.title": "推理力度",
+  "shortcutsHelp.composer.effort.desc": "轻 / 标准 / 深 / 最高——限制模型回答前可用于思考的 token。",
+  "shortcutsHelp.composer.model.title": "模型",
+  "shortcutsHelp.composer.model.desc": "顶栏下拉即可切换 provider 模型，价格与上下文窗口随之更新。"
 }

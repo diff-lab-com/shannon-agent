@@ -2953,5 +2953,16 @@
   "goal.new.error.title": "Title is required (max 120 chars).",
   "goal.new.error.objective": "Describe the objective.",
   "goal.new.error.maxTurns": "Must be a whole number ≥ 1.",
-  "goal.new.error.budget": "Must be a number ≥ 0."
+  "goal.new.error.budget": "Must be a number ≥ 0.",
+  "settings.models.quickSwitch.label": "Switch model",
+  "settings.models.quickSwitch.placeholder": "Search models…",
+  "settings.models.quickSwitch.empty": "No models match",
+  "usage.ctx.explainer": "Estimated live context for this session, broken down by what consumes the window: system prompt, tool definitions, skills, memory, MCP servers, and the conversation itself. Set a budget cap and the agent pauses to ask before exceeding it.",
+  "shortcutsHelp.composer.title": "Composer controls — all three are live",
+  "shortcutsHelp.composer.mode.title": "Permission mode",
+  "shortcutsHelp.composer.mode.desc": "How much the agent may do without asking: suggest, plan, auto-edit, or full access. Persisted per workspace.",
+  "shortcutsHelp.composer.effort.title": "Reasoning effort",
+  "shortcutsHelp.composer.effort.desc": "Light / Standard / Deep / Max — caps the tokens the model may spend thinking before answering.",
+  "shortcutsHelp.composer.model.title": "Model",
+  "shortcutsHelp.composer.model.desc": "Switch provider model from the header dropdown; price and context window update with it."
 }

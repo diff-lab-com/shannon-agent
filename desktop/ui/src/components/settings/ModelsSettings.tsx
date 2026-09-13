@@ -12,6 +12,7 @@ import { formatPrice } from './models-settings/types'
 import { ProvidersSection } from './models-settings/ProvidersSection'
 import { ProviderVisibilitySection } from './models-settings/ProviderVisibilitySection'
 import { ParameterSlider } from './models-settings/ParameterSlider'
+import { ComboboxSelect } from '@/components/ui/combobox-select'
 
 export default function ModelsSettings() {
   const intl = useIntl()
@@ -115,6 +116,20 @@ export default function ModelsSettings() {
           ) : (
             <p className="text-body-sm text-on-surface-variant">{t('settings.models.noModelSelected')}</p>
           )}
+
+          {/* Quick switcher (Phase B): searchable ComboboxSelect over the full
+              catalog — the provider sections below stay as the detailed view. */}
+          <div className="mt-md max-w-md">
+            <ComboboxSelect
+              label={t('settings.models.quickSwitch.label')}
+              placeholder={t('settings.models.quickSwitch.placeholder')}
+              emptyText={t('settings.models.quickSwitch.empty')}
+              options={models.map(m => ({ value: m.id, label: `${m.name} · ${m.provider}` }))}
+              value={currentModel ?? null}
+              onChange={(v) => { if (v) void handleModelSwitch(v) }}
+              disabled={switching != null}
+            />
+          </div>
         </section>
 
         {/* Providers (managed, Models P2) */}

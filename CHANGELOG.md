@@ -30,6 +30,25 @@ Terminology, onboarding, visual system and workflow gaps from
   missing); Modal overlay glassed; Playwright visual baselines for key pages;
   e2e selectors synced to the new terms.
 
+### Follow-up batch (2026-09-13/14)
+
+- **ModelsSettings**: searchable model quick-switch (ComboboxSelect over the
+  full catalog) in the Active Model card.
+- **Composer trio documented**: the (?) help panel now explains permission
+  mode / reasoning effort / model — all three are live-wired to engine config.
+- **Usage panel explainer**: what the six context categories mean and what a
+  session budget cap does.
+- **i18n**: 8 new locales (es/fr/de/ja/ko/pt-BR/ru/zh-TW) now carry real
+  translations for core UI (nav, status badges, composer controls); the rest
+  falls back to English. zh-TW available in the language switcher.
+- **CI Desktop E2E root cause fixed**: Layout rendered TWO full Sidebar trees
+  (mobile + desktop copies) — deduplicated to a single instance with runtime
+  drawer/rail switch; e2e selectors moved to `desktop-session-row-*` testids;
+  viewport locked to 1440×900; visual baselines regenerated with a 5%
+  font-metric tolerance. CI 19/19 green.
+- **Theme gallery**: 12-theme screenshot contact sheet
+  (`docs/design/ui-audit-2026-09/THEME-GALLERY.md`).
+
 ### macOS real-machine verification, first batch (2026-09-10)
 
 - **xcap 0.0.13 → 0.9.8**: 0.0.13 fails to compile on macOS with the pinned
