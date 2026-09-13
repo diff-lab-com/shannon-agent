@@ -8,6 +8,10 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:1420',
     trace: 'on-first-retry',
+    // Lock CI viewport to a wide desktop profile so the rail-vs-drawer
+    // decision (matchMedia) is deterministic — the mobile drawer would
+    // otherwise put session buttons under the scrim on narrow runners.
+    viewport: { width: 1440, height: 900 },
   },
   webServer: {
     // Mock mode (`pnpm demo`) so the UI runs without the Tauri backend:
