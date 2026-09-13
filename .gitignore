@@ -156,3 +156,6 @@ __pycache__/
 .eval-bin/
 
 test-results/
+
+# ZCode 会话级计划文件（不属仓库内容）
+.zcode/
