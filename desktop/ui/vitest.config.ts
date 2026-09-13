@@ -21,6 +21,11 @@ export default defineConfig({
     },
     maxConcurrency: 1,
     coverage: {
+    // Base UI 1.8's Tooltip drives open/close with dense internal timers;
+    // under V8 coverage instrumentation those callbacks are amplified ~1000x
+    // (6 tests took 15 minutes). The shim is 12 lines of composition — its
+    // behaviour is covered by Tooltip.test + e2e, not by coverage percentages.
+    exclude: ['src/components/ui/tooltip.prim.tsx'],
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'lcov'],
       include: ['src/**/*.tsx', 'src/**/*.ts'],
