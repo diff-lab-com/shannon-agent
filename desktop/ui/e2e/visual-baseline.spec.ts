@@ -17,7 +17,10 @@ test.describe('visual baselines', () => {
       await page.waitForTimeout(2500)
       await expect(page).toHaveScreenshot(`page-${name}.png`, {
         fullPage: false,
-        maxDiffPixelRatio: 0.02,
+        // 5% headroom for Linux-Chromium sub-pixel rendering noise (CI
+        // runners ship slightly different font metrics than macOS dev boxes).
+        // Snapshots are token-level regression guard, not pixel-perfect art.
+        maxDiffPixelRatio: 0.05,
       })
     })
   }
