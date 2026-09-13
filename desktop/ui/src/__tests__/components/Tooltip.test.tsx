@@ -8,7 +8,7 @@ import { Tooltip } from '@/components/ui/tooltip'
 // (observed: 100s per case on ubuntu runners). These tests exercise pure
 // interaction semantics, so give them a generous per-test budget instead of
 // faking timers (which would bypass the sequencing under test).
-vi.setConfig({ testTimeout: 60_000 })
+vi.setConfig({ testTimeout: 120_000 })
 
 describe('Tooltip', () => {
   it('does not show content immediately on hover', () => {
