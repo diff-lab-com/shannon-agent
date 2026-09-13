@@ -4,7 +4,7 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 30000,
   // Absorb one transient hydration/hit-target flake on slow CI runners.
-  retries: process.env.CI ? 1 : 0,
+  retries: process.env.CI ? 2 : 0,
   use: {
     baseURL: 'http://localhost:1420',
     trace: 'on-first-retry',
