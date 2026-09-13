@@ -2,6 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Tooltip } from '@/components/ui/tooltip'
 
+// Base UI ≥1.8 drives tooltip open/close with real (non-fake) timers for its
+// delay/close sequencing. Under CI's parallel-worker CPU contention a single
+// timer tick can take seconds, blowing past vitest's default 5s testTimeout
+// (observed: 100s per case on ubuntu runners). These tests exercise pure
+// interaction semantics, so give them a generous per-test budget instead of
+// faking timers (which would bypass the sequencing under test).
+vi.setConfig({ testTimeout: 60_000 })
+
 describe('Tooltip', () => {
   it('does not show content immediately on hover', () => {
     render(
