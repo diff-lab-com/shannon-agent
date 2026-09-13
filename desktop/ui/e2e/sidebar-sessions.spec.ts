@@ -30,12 +30,12 @@ test.describe('Sidebar sessions rail (U1)', () => {
     ).toBeVisible({ timeout: 15000 })
     // exact: true — otherwise the substring also matches the row's
     // "Actions for …" ⋯ button.
-    const row = page.getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
+    const row = page.getByTestId('desktop-session-row-sess-001')
     await expect(row).toBeVisible()
     await row.click()
     await expect(page).toHaveURL(/\/chat/)
     await expect(
-      page.getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
+      page.getByTestId('desktop-session-row-sess-001')
     ).toHaveAttribute('aria-current', 'page')
   })
 
@@ -54,13 +54,13 @@ test.describe('Sidebar sessions rail (U1)', () => {
     await search.fill('pricing')
 
     await expect(
-      page.getByRole('button', { name: 'Chat: Pricing page copy review', exact: true })
+      page.getByTestId('desktop-session-row-sess-003')
     ).toBeVisible()
     await expect(
-      page.getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
+      page.getByTestId('desktop-session-row-sess-001')
     ).toBeHidden()
     await expect(
-      page.getByRole('button', { name: 'Chat: Investor update draft', exact: true })
+      page.getByTestId('desktop-session-row-sess-005')
     ).toBeHidden()
   })
 

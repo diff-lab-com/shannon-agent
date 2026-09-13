@@ -25,7 +25,7 @@ test.describe('Chat header meta (U2)', () => {
       page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
     await page
-      .getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
+      .getByTestId('desktop-session-row-sess-001')
       .click()
     const banner = page.getByRole('banner')
     await expect(banner.locator('h2')).toHaveText('Q3 roadmap brainstorm')
