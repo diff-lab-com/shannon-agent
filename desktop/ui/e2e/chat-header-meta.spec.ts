@@ -11,7 +11,18 @@ test.describe('Chat header meta (U2)', () => {
     // last seeded session row before interacting.
     await expect(
       page.getByTestId('desktop-session-row-sess-008')
-    ).toBeVisible({ timeout: 15000 })
+    ).toBeVisible({ timeout: 15000 })    // CI only: slow CI hydrates the sidebar's CSS variables asynchronously,
+    // so the session button stays under the aside for the first click. Wait
+    // for the sidebar to report a non-zero width and for the layout to
+    // settle before interacting.
+    await page.waitForFunction(() => {
+      const aside = document.querySelector('aside[data-sidebar]')
+      if (!aside) return false
+      // aside must be sized AND the main column must be offset
+      return aside.getBoundingClientRect().width > 0 &&
+             getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w').trim().endsWith('px')
+    }, { timeout: 15000 })
+
     await expect(page.getByRole('banner')).toHaveCount(1)
   })
 
