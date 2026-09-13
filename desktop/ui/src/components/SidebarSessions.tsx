@@ -317,6 +317,7 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
                       <button
                         type="button"
                         aria-current={isActive ? 'page' : undefined}
+                        data-testid={`desktop-session-row-${session.id}`}
                         aria-label={t('chat.session.aria', { title: session.title || untitled })}
                         title={session.title || untitled}
                         onClick={() => handleSwitch(session.id)}

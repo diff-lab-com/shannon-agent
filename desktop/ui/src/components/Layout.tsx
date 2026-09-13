@@ -39,6 +39,18 @@ export function Layout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Single Sidebar instance; the drawer mode is chosen at runtime via the
+  // media-query state below. Earlier code rendered two full trees, and the
+  // duplicate was responsible for a cascade of CI flakes (Playwright strict-
+  // mode duplicate hits, hit-test shadow on the mobile copy).
+  const [mobileMode, setMobileMode] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)')
+    const update = () => setMobileMode(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
   const togglePalette = useCallback(() => setPaletteOpen(p => !p), []);
   const toggleHelp = useCallback(() => setHelpOpen(p => !p), []);
   const toggleSidebar = useCallback(() => setSidebarOpen(p => !p), []);
@@ -105,17 +117,13 @@ export function Layout() {
           <div className="fixed inset-0 z-scrim bg-black/40 backdrop-blur-sm md:hidden" onClick={closeSidebar} />
         )}
         {/* P1-1 window mode: no sidebar rail — the window is pinned to one
-            session and the Header carries the window controls. */}
-        {!isWindowMode && (
-          <>
-            <div className="md:hidden">
-              <Sidebar mobile />
-            </div>
-            <div className="hidden md:block">
-              <Sidebar />
-            </div>
-          </>
-        )}
+            session and the Header carries the window controls. Single
+            Sidebar instance; the drawer mode is chosen at runtime via the
+            media-query state below. Earlier code rendered two full trees,
+            and the duplicate was responsible for a cascade of CI flakes
+            (Playwright strict-mode duplicate hits, hit-test shadow on the
+            mobile copy). */}
+        {!isWindowMode && <Sidebar mobile={mobileMode} />}
         <Header />
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
         <KeyboardShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />

@@ -12,7 +12,7 @@ test.describe('Turn Timeline (§4.14)', () => {
     // late rows shift the target mid-click (CI-only flake). Wait for the
     // last seeded session row before interacting.
     await expect(
-      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+      page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
 
     // The ⋯ button is hover-only: hover the row first, wait for the button

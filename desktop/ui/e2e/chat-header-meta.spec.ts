@@ -10,7 +10,7 @@ test.describe('Chat header meta (U2)', () => {
     // late rows shift the target mid-click (CI-only flake). Wait for the
     // last seeded session row before interacting.
     await expect(
-      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+      page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
     await expect(page.getByRole('banner')).toHaveCount(1)
   })
@@ -22,7 +22,7 @@ test.describe('Chat header meta (U2)', () => {
     // late rows shift the target mid-click (CI-only flake). Wait for the
     // last seeded session row before interacting.
     await expect(
-      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+      page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
     await page
       .getByRole('button', { name: 'Chat: Q3 roadmap brainstorm', exact: true })
@@ -38,7 +38,7 @@ test.describe('Chat header meta (U2)', () => {
     // late rows shift the target mid-click (CI-only flake). Wait for the
     // last seeded session row before interacting.
     await expect(
-      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+      page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
     await expect(
       page.getByRole('button', { name: 'Toggle context panel' })
@@ -57,7 +57,7 @@ test.describe('Chat header meta (U2)', () => {
     // late rows shift the target mid-click (CI-only flake). Wait for the
     // last seeded session row before interacting.
     await expect(
-      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+      page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
     // The composer footer WD button (aria-label) exists…
     await expect(

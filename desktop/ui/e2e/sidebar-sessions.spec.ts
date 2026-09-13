@@ -12,7 +12,7 @@ test.describe('Sidebar sessions rail (U1)', () => {
     // late rows shift the target mid-click (CI-only flake). Wait for the
     // last seeded session row before interacting.
     await expect(
-      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+      page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
     await expect(
       page.getByRole('button', { name: 'New Chat' })
@@ -26,7 +26,7 @@ test.describe('Sidebar sessions rail (U1)', () => {
     // late rows shift the target mid-click (CI-only flake). Wait for the
     // last seeded session row before interacting.
     await expect(
-      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+      page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
     // exact: true — otherwise the substring also matches the row's
     // "Actions for …" ⋯ button.
@@ -46,7 +46,7 @@ test.describe('Sidebar sessions rail (U1)', () => {
     // late rows shift the target mid-click (CI-only flake). Wait for the
     // last seeded session row before interacting.
     await expect(
-      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+      page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
     // getByRole filters the CSS-hidden mobile-drawer copy of the sidebar
     // that getByLabel would also match (Layout mounts both variants).
@@ -71,7 +71,7 @@ test.describe('Sidebar sessions rail (U1)', () => {
     // late rows shift the target mid-click (CI-only flake). Wait for the
     // last seeded session row before interacting.
     await expect(
-      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+      page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
     // The ⋯ button is hover-only (opacity-0); force-click past the hover gate.
     await page
@@ -97,7 +97,7 @@ test.describe('Sidebar sessions rail (U1)', () => {
     // late rows shift the target mid-click (CI-only flake). Wait for the
     // last seeded session row before interacting.
     await expect(
-      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+      page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
     const rows = page.getByRole('listitem')
     await expect(rows.first()).toBeVisible()
@@ -127,7 +127,7 @@ test.describe('Sidebar sessions rail (U1)', () => {
     // late rows shift the target mid-click (CI-only flake). Wait for the
     // last seeded session row before interacting.
     await expect(
-      page.getByRole("button", { name: "Chat: Refactor: extract billing service" })
+      page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
     await expect(page.getByRole('listitem').first()).toBeVisible()
     const results = await new AxeBuilder({ page })
