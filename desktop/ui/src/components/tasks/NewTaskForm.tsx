@@ -11,6 +11,7 @@
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
+import { Form, FormField } from '@/components/ui/form'
 import { cn } from '@/lib/utils'
 
 export type Priority = 'low' | 'medium' | 'high'
@@ -43,7 +44,11 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
   }
 
   return (
-    <div className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-sm">
+    <Form
+      onSubmit={e => { e.preventDefault(); submit() }}
+      className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-sm !space-y-md"
+      data-testid="new-task-form"
+    >
       <div className="flex items-center justify-between">
         <h3 className="font-body-lg font-bold text-on-surface">{t('tasks.newTaskForm.title')}</h3>
         <Button
@@ -60,6 +65,8 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
         </Button>
       </div>
       <textarea
+        name="prompt"
+        aria-label={t('tasks.newTaskForm.placeholder')}
         className={cn('w-full h-20 p-sm bg-surface-container-low rounded-lg border text-body-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/30', !value.trim() ? 'border-outline-variant/30' : 'border-primary/30')}
         placeholder={t('tasks.newTaskForm.placeholder')}
         value={value}
@@ -69,18 +76,17 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
       />
       {showMeta ? (
         <div id="new-task-meta" className="grid grid-cols-1 md:grid-cols-2 gap-md">
-          <label className="flex flex-col gap-xs">
-            <span className="font-label-md text-on-surface-variant">{t('tasks.newTaskForm.assigneeLabel')}</span>
+          <FormField name="assignee" label={t('tasks.newTaskForm.assigneeLabel')}>
             <input
+              id="assignee"
               type="text"
               placeholder={t('tasks.newTaskForm.assigneePlaceholder')}
               value={assignee}
               onChange={e => setAssignee(e.target.value)}
               className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
-          </label>
-          <label className="flex flex-col gap-xs">
-            <span className="font-label-md text-on-surface-variant">{t('tasks.newTaskForm.priority')}</span>
+          </FormField>
+          <FormField name="priority" label={t('tasks.newTaskForm.priority')}>
             <select
               value={priority}
               onChange={e => setPriority(e.target.value as Priority)}
@@ -90,15 +96,15 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
               <option value="medium">{t('tasks.newTaskForm.medium')}</option>
               <option value="high">{t('tasks.newTaskForm.high')}</option>
             </select>
-          </label>
+          </FormField>
         </div>
       ) : null}
       <div className="flex items-center justify-between">
         <span className="font-label-sm text-on-surface-variant">{value.length > 0 ? intl.formatMessage({ id: 'tasks.newTaskForm.chars' }, { count: value.length }) : ''}</span>
         <div className="flex gap-sm">
           <Button
+            type="submit"
             className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50"
-            onClick={submit}
             disabled={!value.trim()}
           >
             {t('tasks.newTaskForm.createTask')}
@@ -112,6 +118,6 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
           </Button>
         </div>
       </div>
-    </div>
+    </Form>
   )
 }

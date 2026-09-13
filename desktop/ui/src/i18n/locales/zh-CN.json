@@ -2964,5 +2964,10 @@
   "shortcutsHelp.composer.effort.title": "推理力度",
   "shortcutsHelp.composer.effort.desc": "轻 / 标准 / 深 / 最高——限制模型回答前可用于思考的 token。",
   "shortcutsHelp.composer.model.title": "模型",
-  "shortcutsHelp.composer.model.desc": "顶栏下拉即可切换 provider 模型，价格与上下文窗口随之更新。"
+  "shortcutsHelp.composer.model.desc": "顶栏下拉即可切换 provider 模型，价格与上下文窗口随之更新。",
+  "tasks.webhookTrigger.heading": "入站 Webhook 触发",
+  "tasks.webhookTrigger.hint": "向该 URL 发送带 HMAC-SHA256 签名（密钥见 设置 → 通知）的 POST 请求即可按需触发例行任务——适用于 GitHub 推送、IM 机器人、CI 任务。",
+  "tasks.webhookTrigger.copy": "复制 URL",
+  "tasks.webhookTrigger.copy.aria": "复制 webhook 触发 URL",
+  "tasks.webhookTrigger.copied": "已复制"
 }

@@ -2964,5 +2964,10 @@
   "shortcutsHelp.composer.effort.title": "Reasoning effort",
   "shortcutsHelp.composer.effort.desc": "Light / Standard / Deep / Max — caps the tokens the model may spend thinking before answering.",
   "shortcutsHelp.composer.model.title": "Model",
-  "shortcutsHelp.composer.model.desc": "Switch provider model from the header dropdown; price and context window update with it."
+  "shortcutsHelp.composer.model.desc": "Switch provider model from the header dropdown; price and context window update with it.",
+  "tasks.webhookTrigger.heading": "Inbound webhook triggers",
+  "tasks.webhookTrigger.hint": "POST to the URL with an HMAC-SHA256 signature (secret from Settings → Notifications) to fire the routine on demand — GitHub pushes, IM bots, CI jobs.",
+  "tasks.webhookTrigger.copy": "Copy URL",
+  "tasks.webhookTrigger.copy.aria": "Copy webhook trigger URL",
+  "tasks.webhookTrigger.copied": "Copied"
 }

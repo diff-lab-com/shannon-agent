@@ -52,6 +52,7 @@ import WorktreePanel from '@/components/tasks/WorktreePanel'
 import GoalRunPanel from '@/components/tasks/GoalRunPanel'
 import BatchRunPanel from '@/components/tasks/BatchRunPanel'
 import BatchForm from '@/components/tasks/BatchForm'
+import WebhookTriggerCard from '@/components/tasks/WebhookTriggerCard'
 import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
 import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
 
@@ -254,6 +255,7 @@ export default function Tasks() {
         ) : tab === 'routines' ? (
           <div className="space-y-gutter">
             <ScheduleDAGView routines={scheduledTasks} onSelectRoutine={setSelectedRoutineId} queuedTaskIds={queuedRoutineIds} />
+            <WebhookTriggerCard routines={scheduledTasks} />
             <RoutineTemplatesBrowser onInstantiated={() => void refreshScheduled()} />
           </div>
         ) : tab === 'pipelines' ? (
