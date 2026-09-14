@@ -123,7 +123,7 @@ export function Layout() {
             and the duplicate was responsible for a cascade of CI flakes
             (Playwright strict-mode duplicate hits, hit-test shadow on the
             mobile copy). */}
-        {!isWindowMode && <Sidebar mobile={mobileMode} />}
+        {!isWindowMode && <Sidebar mobile={mobileMode} open={mobileMode ? sidebarOpen : true} />}
         <Header />
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
         <KeyboardShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />

@@ -75,6 +75,11 @@ Shannon 是完全开源（Apache-2.0）、基于 Rust 的 **AI agent 工作台**
 
 ### Shannon Desktop
 
+<p align="center">
+  <img src="docs/design/ui-audit-2026-09/screenshots/themes/chat-tokyo-night.png" alt="Shannon Desktop — default tokyo-night theme" width="600" />
+  <br/><sub>Default theme (tokyo-night). More: <a href="docs/design/ui-audit-2026-09/THEME-GALLERY.md">12-theme gallery</a></sub>
+</p>
+
 基于 **Tauri 2 + React 19（而非 Electron）** 的原生桌面工作台。双模式服务两类用户：
 
 - **Simple 模式** —— 面向所有人：聊天中的工具调用内联可见、可逐个批准或撤销；拖拽附件；语音输入（云端或完全本地）；任务带日历视图与依赖图；收件箱汇总你不在时 agent 干的所有活。

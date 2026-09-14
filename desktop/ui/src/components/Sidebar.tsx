@@ -108,7 +108,7 @@ function NavGroup({ labelId, open, onToggle, children }: {
   )
 }
 
-export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
+export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?: boolean; open?: boolean }) {
   const { close: closeMobile } = useSidebar();
   const [mode, toggleMode] = useSidebarMode();
   const [navOpen, setNavOpen] = useState<NavOpenMap>(() => readNavOpen(mode));
@@ -233,7 +233,9 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   return (
     <aside data-sidebar className={cn(
       "fixed left-0 top-0 h-full bg-surface-container-lowest/85 border-r border-outline-variant/30 flex flex-col py-lg px-md shadow-[4px_0_24px_-12px_color-mix(in_srgb,var(--color-inverse-surface)_15%,transparent)] transition-transform duration-300",
-      mobile ? "z-drawer w-[280px]" : "z-20",
+      mobile
+        ? cn("z-drawer w-[280px]", open ? "translate-x-0" : "-translate-x-full")
+        : "z-20",
     )} style={mobile ? undefined : { width }}>
       {/* Drag handle — 8px hot zone with a 4px visual bar (U5/P3-1: the old
           4px zone was nearly un-hittable). Focusable separator: ←/→ resize,

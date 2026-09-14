@@ -75,6 +75,11 @@ The terminal-native coding agent: rich TUI with diff viewer and markdown renderi
 
 ### Shannon Desktop
 
+<p align="center">
+  <img src="docs/design/ui-audit-2026-09/screenshots/themes/chat-tokyo-night.png" alt="Shannon Desktop — default tokyo-night theme" width="600" />
+  <br/><sub>Default theme (tokyo-night). More: <a href="docs/design/ui-audit-2026-09/THEME-GALLERY.md">12-theme gallery</a></sub>
+</p>
+
 A native desktop workspace built on **Tauri 2 + React 19 — not Electron**. Two modes for two audiences:
 
 - **Simple mode** — for everyone: chat with inline tool calls you can approve or revoke one by one, drag-and-drop attachments, voice input (cloud or fully local), scheduled tasks with calendar and dependency views, and a triage inbox for everything your agents did while you were away.
