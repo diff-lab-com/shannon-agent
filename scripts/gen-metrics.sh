@@ -309,11 +309,9 @@ if [ "${CHECK_MODE}" = "1" ]; then
 
   check_number "intro"  "${TEST_TOTAL}" "test count (metrics:intro)"
   check_number "diffrow" "${TEST_TOTAL}" "test count (metrics:diffrow)"
-  # badges: crates count comes from TEST_CRATE_SECTION crate rows.
-  CRATE_ROWS="$(printf '%s' "${TEST_CRATE_SECTION}" | grep -c '^| ' || true)"
-  if [ "${CRATE_ROWS}" -gt 0 ]; then
-    check_number "badge" "${CRATE_ROWS}" "crate/test-binary count (metrics:badge)"
-  fi
+  # Note: the badge marker (crates=20) counts workspace CRATES, while
+  # TEST_CRATE_SECTION rows count nextest test-binaries — different sources,
+  # not comparable. Only the two test-count markers are drift-checked.
 
   if [ "${fail}" = "1" ]; then
     echo "[gen-metrics] --check: FAILED" >&2
