@@ -5,21 +5,20 @@
 
 ## Snapshot
 
-- **Generated (UTC)**: `2026-08-08T04:03:59Z`
+- **Generated (UTC)**: `2026-09-14T06:34:33Z`
 - **Branch**: `dev`
-- **Commit**: `c90adf82`
-- **Describe**: `v0.8.0-11-gc90adf82`
+- **Commit**: `0537ff47`
+- **Describe**: `semver-baseline-2026-09-2-501-g0537ff47-dirty`
 
 ## Summary
 
 | metric | value |
 |---|---:|
-| Tests (nextest, runnable) | 11752 |
-| Tests (source `#[test]`/`#[tokio::test]` attrs) | 11171 |
-| Rust source files | 624 |
-| Rust LOC (code) | 418458 |
-| Workspace members | 20 |
-| `cargo clippy --workspace -- -D warnings` | pass |
+| Tests (nextest, runnable) | 0 |
+| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12251 |
+| Rust source files | 1553 |
+| Rust LOC (code) | 965016 |
+| `cargo clippy --workspace -- -D warnings` | fail |
 | `cargo deny check` | pass |
 
 ## Test counts
@@ -27,28 +26,9 @@
 Counts below come from `cargo nextest list --workspace --message-format=json`
 (the same set of tests that run in CI). Counts are deduplicated by test id.
 
-| crate | tests | binaries |
-|---|---:|---:|
-| shannon-core | 3766 | 45 |
-| shannon-tools | 1630 | 14 |
-| shannon-ui | 1497 | 8 |
-| shannon-engine | 1113 | 3 |
-| shannon-agents | 897 | 10 |
-| shannon-desktop | 599 | 4 |
-| shannon-mcp | 578 | 9 |
-| shannon-cli | 486 | 9 |
-| shannon-commands | 416 | 5 |
-| shannon-mcp-saas | 185 | 2 |
-| shannon-skills | 172 | 5 |
-| shannon-codegen | 100 | 4 |
-| shannon-types | 84 | 3 |
-| shannon-agent | 65 | 2 |
-| shannon-remote | 55 | 1 |
-| shannon-tool-interface | 42 | 1 |
-| shannon-api-protocol | 37 | 3 |
-| shannon-repomap | 30 | 3 |
-| shannon-server | 0 | 1 |
-| shannon-stability-attr | 0 | 1 |
+| crate | count |
+|---|---:|
+| _(no tests discovered)_ | 0 |
 
 ## Line counts
 
@@ -57,19 +37,19 @@ Legacy archives and vendored directories are excluded.
 
 | language | files | code |
 |---|---:|---:|
-| Rust (.rs) | 624 | 418458 |
-| TypeScript/TSX | 6151 | 4556 |
+| Rust (.rs) | 1553 | 965016 |
+| TypeScript/TSX | 16054 | 82199 |
 
 ## Lint / audit status
 
 ### `cargo clippy --workspace -- -D warnings`
 
-- **Status**: pass
+- **Status**: fail
 
 ```text
-    Checking shannon-ui v0.8.0 (/home/ed/workspace/app/work/shannon/shannon-mono/crates/shannon-ui)
-    Checking shannon-cli v0.8.0 (/home/ed/workspace/app/work/shannon/shannon-mono/crates/shannon-cli)
-    Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 40.54s
+  )
+  note: run with \`RUST_BACKTRACE=1\` environment variable to display a backtrace
+warning: build failed, waiting for other jobs to finish...
 ```
 
 ### `cargo deny check`

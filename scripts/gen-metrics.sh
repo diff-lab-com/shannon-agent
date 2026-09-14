@@ -11,8 +11,19 @@
 # in the report with status cells). Exit non-zero only on hard infrastructure
 # failures (missing cwd, missing nextest, etc.).
 #
-# Usage: bash scripts/gen-metrics.sh
+# Usage: bash scripts/gen-metrics.sh [--check]
+#   --check: after generating, compare the fresh numbers against the
+#   README metrics markers (<!-- metrics:start:* -->) and exit 1 on drift.
+#   Wired into CI so hand-edited or stale README numbers fail the build.
 set -u
+
+CHECK_MODE=0
+for arg in "$@"; do
+  case "${arg}" in
+    --check) CHECK_MODE=1 ;;
+    *) echo "[gen-metrics] unknown arg: ${arg}" >&2; exit 2 ;;
+  esac
+done
 
 # Resolve repo root from script location so it works regardless of CWD.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -252,4 +263,58 @@ fi
 } >"${OUTPUT}"
 
 echo "[gen-metrics] Wrote ${OUTPUT}" >&2
+
+# ----------------------------------------------------------------------------
+# --check: compare fresh numbers against README metric markers. The README
+# carries hand-copied figures inside <!-- metrics:start:ID --> … end markers;
+# this guards them against drift when the generated numbers move.
+# ----------------------------------------------------------------------------
+if [ "${CHECK_MODE}" = "1" ]; then
+  README_FILE="${REPO_ROOT}/README.md"
+  if [ ! -f "${README_FILE}" ]; then
+    echo "[gen-metrics] --check: README.md not found" >&2
+    exit 1
+  fi
+
+  # Skip when nextest couldn't run locally (TEST_TOTAL=0): CI's Generate
+  # Metrics job is the authoritative checker.
+  if [ "${TEST_TOTAL}" = "0" ]; then
+    echo "[gen-metrics] --check: TEST_TOTAL=0 (nextest unavailable locally) — skipping" >&2
+    exit 0
+  fi
+
+  fail=0
+  check_number() {
+    local marker_id="$1" expected="$2" label="$3"
+    local block
+    block="$(sed -n "/metrics:start:${marker_id}/,/metrics:end:${marker_id}/p" "${README_FILE}")"
+    if [ -z "${block}" ]; then
+      echo "[gen-metrics] --check: marker ${marker_id} missing from README" >&2
+      fail=1
+      return
+    fi
+    local actual
+    actual="$(printf '%s' "${block}" | grep -oE '[0-9][0-9,]*' | head -1 | tr -d ',')"
+    if [ "${actual}" != "${expected}" ]; then
+      echo "[gen-metrics] --check: ${label} drifted — README says ${actual}, fresh run says ${expected}" >&2
+      echo "[gen-metrics]           → re-run bash scripts/gen-metrics.sh and update the README markers" >&2
+      fail=1
+    fi
+  }
+
+  check_number "intro"  "${TEST_TOTAL}" "test count (metrics:intro)"
+  check_number "diffrow" "${TEST_TOTAL}" "test count (metrics:diffrow)"
+  # badges: crates count comes from TEST_CRATE_SECTION crate rows.
+  CRATE_ROWS="$(printf '%s' "${TEST_CRATE_SECTION}" | grep -c '^| ' || true)"
+  if [ "${CRATE_ROWS}" -gt 0 ]; then
+    check_number "badge" "${CRATE_ROWS}" "crate/test-binary count (metrics:badge)"
+  fi
+
+  if [ "${fail}" = "1" ]; then
+    echo "[gen-metrics] --check: FAILED" >&2
+    exit 1
+  fi
+  echo "[gen-metrics] --check: README markers match fresh numbers" >&2
+fi
+
 exit 0
