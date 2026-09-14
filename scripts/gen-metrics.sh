@@ -25,11 +25,6 @@ for arg in "$@"; do
   esac
 done
 
-if [ "${CHECK_MODE}" = "1" ]; then
-  OUTPUT="$(mktemp -t metrics-check.XXXXXX.md)"
-  trap 'rm -f "${OUTPUT}"' EXIT
-fi
-
 # Resolve repo root from script location so it works regardless of CWD.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -289,30 +284,22 @@ if [ "${CHECK_MODE}" = "1" ]; then
   fi
 
   fail=0
-  check_number() {
-    local marker_id="$1" expected="$2" label="$3"
-    local block
-    block="$(sed -n "/metrics:start:${marker_id}/,/metrics:end:${marker_id}/p" "${README_FILE}")"
-    if [ -z "${block}" ]; then
-      echo "[gen-metrics] --check: marker ${marker_id} missing from README" >&2
-      fail=1
-      return
-    fi
-    local actual
-    actual="$(printf '%s' "${block}" | grep -oE '[0-9][0-9,]*' | head -1 | tr -d ',')"
-    if [ "${actual}" != "${expected}" ]; then
-      echo "[gen-metrics] --check: ${label} drifted — README says ${actual}, fresh run says ${expected}" >&2
+  # Every README occurrence of "**N** automated tests" must match the fresh
+  # count (currently the metrics:intro and metrics:diffrow markers). Line-
+  # anchored block extraction over-matches when start/end share a line, so we
+  # check ALL occurrences globally instead.
+  counts="$(grep -oE '[0-9,]+ automated tests' "${README_FILE}" | grep -oE '[0-9,]+' | tr -d ',' | sort -u)"
+  if [ -z "${counts}" ]; then
+    echo "[gen-metrics] --check: no 'automated tests' figures found in README" >&2
+    exit 1
+  fi
+  while IFS= read -r n; do
+    if [ "${n}" != "${TEST_TOTAL}" ]; then
+      echo "[gen-metrics] --check: README test count drifted — README says ${n}, fresh run says ${TEST_TOTAL}" >&2
       echo "[gen-metrics]           → re-run bash scripts/gen-metrics.sh and update the README markers" >&2
       fail=1
     fi
-  }
-
-  check_number "intro"  "${TEST_TOTAL}" "test count (metrics:intro)"
-  check_number "diffrow" "${TEST_TOTAL}" "test count (metrics:diffrow)"
-  # Note: the badge marker (crates=20) counts workspace CRATES, while
-  # TEST_CRATE_SECTION rows count nextest test-binaries — different sources,
-  # not comparable. Only the two test-count markers are drift-checked.
-
+  done <<< "${counts}"
   if [ "${fail}" = "1" ]; then
     echo "[gen-metrics] --check: FAILED" >&2
     exit 1
