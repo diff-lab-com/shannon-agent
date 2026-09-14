@@ -25,6 +25,11 @@ for arg in "$@"; do
   esac
 done
 
+if [ "${CHECK_MODE}" = "1" ]; then
+  OUTPUT="$(mktemp -t metrics-check.XXXXXX.md)"
+  trap 'rm -f "${OUTPUT}"' EXIT
+fi
+
 # Resolve repo root from script location so it works regardless of CWD.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"

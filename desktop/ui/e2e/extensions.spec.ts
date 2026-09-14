@@ -46,7 +46,9 @@ test.describe('OPC pages', () => {
     // aria-required-children — and keeps its aria-label.)
     await expect(page.locator('[aria-label="Task board"]')).toBeVisible()
     // Check that at least one column header exists
-    await expect(page.getByText('Queued')).toBeVisible()
+    // The analytics status chips also render "Queued" (en locale) — scope
+    // to the board column region to avoid the strict-mode clash.
+    await expect(page.getByRole('region', { name: 'Queued' })).toBeVisible()
   })
 
   test('OPC board shows agent swarm section', async ({ page }) => {
