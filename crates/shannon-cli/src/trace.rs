@@ -50,12 +50,15 @@ pub fn resolve_container(dir: Option<&Path>) -> PathBuf {
 pub fn resolve_session(container: &Path, reference: &str) -> anyhow::Result<(String, PathBuf)> {
     let store = SessionStore::new(container);
     let id: String = match reference {
-        "latest" | "-" => store
-            .list()?
-            .into_iter()
-            .next()
-            .map(|info| info.session_id.to_string())
-            .ok_or_else(|| anyhow::anyhow!("no sessions found in {}", container.display()))?,
+        "latest" | "-" => {
+            // WP-15: `list()` fully parses every session's events.jsonl just
+            // to pick the newest — 30s+ of silent CPU on real containers. The
+            // mtime-ordered directory scan answers "latest" without reading
+            // any log content.
+            store
+                .latest_id()
+                .ok_or_else(|| anyhow::anyhow!("no sessions found in {}", container.display()))?
+        }
         other => {
             // Accept any prefix long enough to be unambiguous.
             uuid::Uuid::parse_str(other)

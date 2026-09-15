@@ -4284,6 +4284,15 @@ fn is_port_free(port: u16) -> bool {
     std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
+/// Probe whether something is LISTENING on a loopback port. Doctor uses this
+/// to correct its static PATH lookups (WP-15): a gateway/desktop running from
+/// a non-PATH install (AppImage, portable dir, service unit) must not be
+/// reported as "not found".
+fn is_port_listening(port: u16) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500)).is_ok()
+}
+
 // ── doctor: dual-install detection (Phase B B7) ────────────────────────────
 //
 // After Phase B a machine commonly holds TWO `shannon` binaries: the one on
@@ -4475,7 +4484,18 @@ fn run_doctor_command(json: bool) -> Result<()> {
 
     match &gateway {
         Some(p) => println!("[OK]    shannon-gateway found: {}", p.display()),
-        None => println!("[INFO]  shannon-gateway not found on PATH (run `shannon gateway setup`)"),
+        None => {
+            // WP-15: a running service is not "not found" — the gateway may be
+            // installed/running off PATH (AppImage, portable dir, service
+            // unit). 33430 is the gateway's default mobile `shannon/*` port.
+            if is_port_listening(33430) {
+                println!(
+                    "[OK]    shannon-gateway service detected on port 33430 (binary not on PATH — only service-management commands are unavailable)"
+                );
+            } else {
+                println!("[INFO]  shannon-gateway not found on PATH (run `shannon gateway setup`)");
+            }
+        }
     }
 
     if port_free {
@@ -4491,7 +4511,19 @@ fn run_doctor_command(json: bool) -> Result<()> {
 
     match find_desktop_binary() {
         Some(p) => println!("[OK]    shannon-desktop found: {}", p.display()),
-        None => println!("[INFO]  shannon-desktop not found (run `shannon desktop --install`)"),
+        None => {
+            // WP-15: same correction as the gateway check — the desktop may be
+            // running from an AppImage or portable install. 33420 is the
+            // engine's loopback API port (the bind probe above already
+            // noticed activity; make that signal mean something here).
+            if is_port_listening(33420) {
+                println!(
+                    "[OK]    shannon-desktop engine detected on port 33420 (binary not found on PATH — likely a non-PATH install)"
+                );
+            } else {
+                println!("[INFO]  shannon-desktop not found (run `shannon desktop --install`)");
+            }
+        }
     }
 
     // `shannon` installations (PATH first — that is the one that wins).

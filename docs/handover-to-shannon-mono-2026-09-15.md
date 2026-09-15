@@ -180,3 +180,18 @@ bridge 内部自行容忍缺失），或至少在 JSDoc 标注运行时强制条
 - 断线自愈阶梯（1s→2s→…→15s 退避自动重连，pairingRequired 即停）——
   网关重启后手机 ≤15s 无感恢复（实测通过）；
 - forget/断开现在真正回到欢迎页（原来卡在 mock 数据壳，重配无入口）。
+
+---
+
+## mono 处理记录（2026-09-15 第二轮，journey 驱动追加条目）
+
+| 条目 | 状态 | 落点 |
+| --- | --- | --- |
+| P0-1 升级：mobile/WS 路径 `tools=[]` | ✅ 已修（根因） | api_server.rs 三个 query 处理器（REST/SSE/WS）原先各自 new 空 `ToolRegistry`，现改用 server 注册表（desktop loopback 经 `with_tools` 注入完整目录）。mobile 路径模型即刻拿到全部工具 |
+| P0-1 升级：MiniMax 厂商 token 文本 tool_call | ✅ 已修 | 引擎新增 `parse_text_tool_calls`（`<tool_call><invoke name=…><parameter …>`，容忍 `]<]minimax[>[` 前缀噪声），无原生调用时优先恢复；裸 bash 块降为次级回退。均过权限/审批门 |
+| P0-1 升级：final-answer continue-loop | ✅ 已修 | `SHANNON_THINK_ONLY_MIN_ANSWER_CHARS` 默认 200→0：仅可见正文**空白**才 nudge。"cli-ok" 这类短真答不再触发"no final answer"循环（7k–21k token 损耗的来源）。env 可调回旧行为；截断续写上限（5 次）维持不变 |
+| CLI P2：`trace show latest` 挂起 | ✅ 已修 | 新增 `SessionStore::latest_id()`（目录 mtime 排序，不解析任何日志）；`list()` 的全量解析路径保留给需要完整元数据的调用方 |
+| CLI：`shannon doctor` 误报 not found | ✅ 已修 | 二进制不在 PATH 时改探测运行中的服务（网关 33430 / 引擎 33420 TCP），在跑则报 "service detected (binary not on PATH)" |
+| 设计问题：设备吊销入口 | ✅ 已存在 | 桌面 设置 → 连接 → 移动调度卡 已有配对设备列表 + 逐设备吊销（确认对话框，走 `mobile_revoke_device`）；mobile 侧反馈与桌面代码现状不符，未做改动 |
+
+回归：core lib 2926 ✓ / cli 15 ✓ / desktop check ✓ / clippy 干净。附带：release matrix 新增 AppImage 腿（通用 Linux 产物）；deb/rpm 依赖声明 + 容器门禁见 CHANGELOG「Linux packaging hardening」。

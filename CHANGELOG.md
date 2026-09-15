@@ -58,6 +58,37 @@ stack (`docs/handover-to-shannon-mono-2026-09-15.md`):
 - **P2-8 progress routing key** — `task.progress` frames now carry the
   turn's `turn_id` (additive, backward compatible).
 
+#### Second joint-debug round (journey-driven, same day)
+
+- **P0-1 upgraded — `tools=[]` root cause fixed** — the API server's query
+  handlers (REST / SSE / WS) each built a *fresh empty* `ToolRegistry`
+  instead of using the server's registered one, so every gateway-originated
+  session went to the model with zero tool definitions — the real reason
+  tool calls arrived as text and the mobile approval chain was unreachable.
+  All three handlers now serve the registered registry.
+- **P0-1 upgraded — vendor-text tool calls recovered** — new
+  `parse_text_tool_calls` recovers GLM/MiniMax-style
+  `<tool_call><invoke name="…"><parameter …>` blocks (including the
+  vendor-token garbage prefix) into real tool calls through the permission
+  gate; bare-bash blocks remain the lower-priority fallback.
+- **P0-1 upgraded — think-only nudge tightened** — the shipped
+  `SHANNON_THINK_ONLY_MIN_ANSWER_CHARS` default dropped 200 → 0: nudge only
+  when the visible answer is *blank*. A terse-but-real reply ("cli-ok") no
+  longer triggers the "no final answer" loop that burned 7k–21k tokens per
+  Q&A on MiniMax M3.
+- **`shannon trace show latest` no longer hangs** — it parsed *every*
+  session's full event log just to pick the newest; `SessionStore::latest_id`
+  now answers from directory mtimes alone.
+- **`shannon doctor` reflects running services** — when the gateway/desktop
+  binary is off PATH but the service is listening (33430 / 33420), doctor
+  reports it as running instead of "not found" (AppImage/portable installs).
+- **Device revoke entry confirmed present** — the mobile paired-device list
+  with per-device revoke already exists (Settings → Connections → Mobile
+  dispatch card); no gap to fix.
+- **AppImage joins the release matrix** — universal Linux artifact for
+  non-deb/rpm distros (`APPIMAGE_EXTRACT_AND_RUN`/`NO_STRIP` for the
+  runner), complementing the gated deb/rpm pair.
+
 ### Desktop UI: competitive-parity overhaul (2026-09-10/11)
 
 Terminology, onboarding, visual system and workflow gaps from

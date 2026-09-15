@@ -506,10 +506,12 @@ async fn query_handler(
     };
 
     // Create a fresh engine per request (stateless).
-    let tools = ToolRegistry::new();
+    // Same tools=[] fix as the WS path: serve the server's registry, not a
+    // fresh empty one.
     let permissions = PermissionManager::new();
     let state_mgr = StateManager::new();
-    let mut engine = QueryEngine::with_defaults(client, tools, permissions, state_mgr);
+    let mut engine =
+        QueryEngine::with_defaults_arc(client, state.tools.clone(), permissions, state_mgr);
 
     let session_id = resolve_session_id(req.session_id.as_deref(), Uuid::new_v4());
     attach_session(&mut engine, session_id);
@@ -597,10 +599,12 @@ async fn query_stream_handler(
     };
 
     // Create a fresh engine per request (stateless).
-    let tools = ToolRegistry::new();
+    // Same tools=[] fix as the WS path: serve the server's registry, not a
+    // fresh empty one.
     let permissions = PermissionManager::new();
     let state_mgr = StateManager::new();
-    let mut engine = QueryEngine::with_defaults(client, tools, permissions, state_mgr);
+    let mut engine =
+        QueryEngine::with_defaults_arc(client, state.tools.clone(), permissions, state_mgr);
 
     let session_id =
         resolve_session_id(params.get("session_id").map(String::as_str), Uuid::new_v4());
@@ -802,10 +806,20 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                     LlmClient::new_unauthenticated(config.clone())
                 };
 
-                let tools = ToolRegistry::new();
+                // WP-15 P0-1 root cause: this used to build a FRESH EMPTY
+                // ToolRegistry, so gateway/WS sessions went out with
+                // `tools=[]` — the model never saw a single tool definition,
+                // could only emit tool calls as text, and the approval chain
+                // was structurally unreachable. Use the server's registry
+                // (populated by the desktop's loopback setup via with_tools).
                 let permissions = PermissionManager::new();
                 let state_mgr = StateManager::new();
-                let mut engine = QueryEngine::with_defaults(client, tools, permissions, state_mgr);
+                let mut engine = QueryEngine::with_defaults_arc(
+                    client,
+                    state.tools.clone(),
+                    permissions,
+                    state_mgr,
+                );
 
                 // Restore conversation history
                 {

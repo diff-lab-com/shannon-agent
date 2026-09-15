@@ -406,6 +406,21 @@ impl SessionStore {
         Ok(infos)
     }
 
+    /// The most recently active session id, WITHOUT parsing any event logs.
+    ///
+    /// `list()` decodes and projects every session's full `events.jsonl` —
+    /// O(total bytes of all sessions) — which made `shannon trace show
+    /// latest` appear to hang on containers with large/many logs (WP-15:
+    /// 30s+ with zero output). Directory mtimes already give the same
+    /// "most recent" answer, so callers that only need the newest id should
+    /// use this.
+    pub fn latest_id(&self) -> Option<String> {
+        scan_session_summaries(&self.container)
+            .into_iter()
+            .find(|entry| Uuid::parse_str(&entry.session_id).is_ok())
+            .map(|entry| entry.session_id)
+    }
+
     fn to_info(stored: StoredSession) -> StoredSessionInfo {
         StoredSessionInfo {
             session_id: stored.session_id,
@@ -937,13 +952,39 @@ mod tests {
         assert!(store.load(&Uuid::new_v4()).unwrap().is_none());
     }
 
+    /// WP-15: `latest_id` must answer from directory mtimes alone — no event
+    /// parsing. Guards the `shannon trace show latest` 30s-hang fix.
+    #[test]
+    fn latest_id_picks_newest_by_mtime_without_parsing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let container = tmp.path().join("sessions"); // matches the store helper
+        assert!(store.latest_id().is_none());
+
+        let older = Uuid::new_v4().to_string();
+        let newer = Uuid::new_v4().to_string();
+        for id in [&older, &newer] {
+            let dir = container.join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("events.jsonl"), "").unwrap();
+            // Give the second directory a strictly newer mtime.
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        assert_eq!(store.latest_id().as_deref(), Some(newer.as_str()));
+
+        // Non-UUID directories (foreign/leftover) never win the scan.
+        let junk = container.join("not-a-uuid");
+        std::fs::create_dir_all(&junk).unwrap();
+        std::fs::write(junk.join("events.jsonl"), "").unwrap();
+        assert_eq!(store.latest_id().as_deref(), Some(newer.as_str()));
+    }
+
     #[test]
     fn test_sidecar_save_merge_and_title_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(&tmp);
         let id = Uuid::new_v4();
         seed_session(&store, &id);
-
         store
             .save_sidecar(
                 &id,

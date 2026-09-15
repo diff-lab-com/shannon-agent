@@ -224,6 +224,12 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
             ext: rpm
+          # Universal Linux artifact: bundles webkit2gtk/pipewire etc., runs
+          # on any glibc >= 2.35 distro (Arch/Fedora/non-deb derivatives) —
+          # the distro-agnostic counterpart to the deb/rpm pair.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            ext: appimage
           - target: x86_64-apple-darwin
             os: macos-14
             ext: dmg
@@ -350,6 +356,11 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # AppImage leg: linuxdeploy is itself an AppImage — extract-and-run
+          # avoids needing FUSE on the runner; NO_STRIP skips strip calls that
+          # can fail on already-stripped bundled libs.
+          APPIMAGE_EXTRACT_AND_RUN: ${{ matrix.ext == 'appimage' && '1' || '' }}
+          NO_STRIP: ${{ matrix.ext == 'appimage' && '1' || '' }}
         with:
           projectPath: desktop
           tagName: ${{ github.ref_name }}

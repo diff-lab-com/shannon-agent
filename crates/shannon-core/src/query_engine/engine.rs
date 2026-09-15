@@ -457,7 +457,15 @@ const DEFAULT_THINK_ONLY_NUDGE_MAX: u32 = 2;
 /// Default minimum length (chars) of the visible — i.e. non-reasoning —
 /// answer for a response to count as substantive. Override with
 /// `SHANNON_THINK_ONLY_MIN_ANSWER_CHARS`.
-const DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS: usize = 200;
+///
+/// WP-15 P0-1 (upgraded): the default dropped from 200 to 0 — nudge only when
+/// the visible answer is *blank*. The old 200-char threshold re-prompted
+/// models that had already answered tersely ("Reply with exactly: cli-ok" →
+/// `cli-ok` is 6 visible chars), and the "no final answer" nudge then sent
+/// reasoning models into a self-doubt loop (7k–21k tokens for one Q&A, field-
+/// observed on MiniMax M3). An unhelpfully-short-but-present answer is the
+/// model's call; blank-only replies still get one chance to recover.
+const DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS: usize = 0;
 
 /// Read a non-negative integer env override, falling back to `default` when
 /// unset, empty, or unparseable (same conventions as
@@ -703,6 +711,86 @@ fn markdown_bash_command(text: &str) -> Option<String> {
     Some(command)
 }
 
+/// WP-15 P0-1 (upgraded): parse GLM/MiniMax-style *textual* tool calls out of
+/// an assistant reply. When these models bypass the native tool-calling API,
+/// they don't always fall back to a bare shell block — MiniMax M3 was observed
+/// emitting its vendor-token-wrapped XML form as plain text:
+///
+/// ```text
+/// ]<]minimax[>[<tool_call>
+/// <invoke name="Write">
+/// <parameter name="file_path">/tmp/demo.txt</parameter>
+/// <parameter name="content">hello</parameter>
+/// </invoke>
+/// </tool_call>
+/// ```
+///
+/// (The `] < ]minimax[ > [` prefix is the model's vendor special token leaking
+/// into the text stream — the scan anchors on `<tool_call>` and ignores
+/// anything before it.) Returns one `(name, input)` per `<invoke>`, or `None`
+/// when the text contains no complete invoke. Parameter values that parse as
+/// JSON keep their type; everything else becomes a string. Unclosed blocks are
+/// skipped — a stream cut mid-call is a truncation case, not a tool call.
+fn parse_text_tool_calls(text: &str) -> Option<Vec<(String, serde_json::Value)>> {
+    const CALL_OPEN: &str = "<tool_call>";
+    const CALL_CLOSE: &str = "</tool_call>";
+    const INVOKE_OPEN: &str = "<invoke name=\"";
+    const INVOKE_CLOSE: &str = "</invoke>";
+    const PARAM_OPEN: &str = "<parameter name=\"";
+    const PARAM_CLOSE: &str = "</parameter>";
+
+    let mut calls: Vec<(String, serde_json::Value)> = Vec::new();
+    let mut rest = text;
+    while let Some(pos) = rest.find(CALL_OPEN) {
+        let after = &rest[pos + CALL_OPEN.len()..];
+        let Some(call_end) = after.find(CALL_CLOSE) else {
+            break; // unclosed block — truncation, not a call
+        };
+        let block = &after[..call_end];
+        rest = &after[call_end + CALL_CLOSE.len()..];
+
+        let mut brest = block;
+        while let Some(ipos) = brest.find(INVOKE_OPEN) {
+            let iafter = &brest[ipos + INVOKE_OPEN.len()..];
+            let Some(name_end) = iafter.find("\">") else {
+                break;
+            };
+            let name = iafter[..name_end].trim().to_string();
+            let Some(invoke_end) = iafter.find(INVOKE_CLOSE) else {
+                break;
+            };
+            let body = &iafter[name_end + 2..invoke_end];
+            brest = &iafter[invoke_end + INVOKE_CLOSE.len()..];
+            if name.is_empty() {
+                continue;
+            }
+
+            let mut input = serde_json::Map::new();
+            let mut prest = body;
+            while let Some(ppos) = prest.find(PARAM_OPEN) {
+                let pafter = &prest[ppos + PARAM_OPEN.len()..];
+                let Some(key_end) = pafter.find("\">") else {
+                    break;
+                };
+                let key = pafter[..key_end].trim().to_string();
+                let Some(param_end) = pafter.find(PARAM_CLOSE) else {
+                    break;
+                };
+                let raw = pafter[key_end + 2..param_end].trim();
+                prest = &pafter[param_end + PARAM_CLOSE.len()..];
+                if key.is_empty() {
+                    continue;
+                }
+                let value = serde_json::from_str(raw)
+                    .unwrap_or_else(|_| serde_json::Value::String(raw.to_string()));
+                input.insert(key, value);
+            }
+            calls.push((name, serde_json::Value::Object(input)));
+        }
+    }
+    if calls.is_empty() { None } else { Some(calls) }
+}
+
 /// True when the response carries no tool calls and no substantive
 /// user-facing answer:
 ///
@@ -726,7 +814,9 @@ fn is_think_only_response(text: &str, tool_use_count: usize, min_answer_chars: u
     if !saw_think {
         return false;
     }
-    visible.trim().chars().count() < min_answer_chars
+    // `.max(1)` makes threshold 0 mean "nudge only when the visible answer is
+    // blank" (0 < 0 would never fire — see DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS).
+    visible.trim().chars().count() < min_answer_chars.max(1)
 }
 
 // ── Query complexity classification ──────────────────────────────────
@@ -3329,26 +3419,66 @@ impl QueryEngine {
                                                 }
                                             }
 
-                                            // WP-15 P0-1: markdown code-block fallback.
+                                            // WP-15 P0-1: text-form tool-call fallback.
                                             // A model on the OpenAI wire may answer a
-                                            // tool-worthy prompt with a bare ```bash
-                                            // block instead of a native tool call; the
+                                            // tool-worthy prompt without a native tool
+                                            // call — either as GLM/MiniMax-style
+                                            // `<tool_call><invoke>` text (MiniMax M3's
+                                            // vendor-token-wrapped form observed in the
+                                            // field) or as a bare ```bash block; the
                                             // turn then loops forever ("no tool calls"
-                                            // → retry → same block). Convert the block
-                                            // into a real Bash tool call so the normal
-                                            // permission gate + approval chain applies.
-                                            // Only fires when the request actually had
-                                            // tools, nothing native arrived, and the
-                                            // reply is a single bare shell block (see
-                                            // `markdown_bash_command`); disable via
+                                            // → retry → same text). Convert these into
+                                            // real tool calls so the normal permission
+                                            // gate + approval chain applies. Only fires
+                                            // when the request actually had tools and
+                                            // nothing native arrived; disable via
                                             // `markdown_tool_fallback: false`.
                                             if tool_inputs.is_empty()
                                                 && config.markdown_tool_fallback
                                                 && tools_schema.is_some()
                                             {
-                                                if let Some(command) =
+                                                // Priority 1: `<tool_call><invoke>` text —
+                                                // an unambiguous tool-call attempt.
+                                                let text_calls =
+                                                    parse_text_tool_calls(&assistant_text);
+                                                if let Some(calls) = text_calls {
+                                                    tracing::warn!(
+                                                        "no native tool call in response; \
+                                                         recovered {} textual tool call(s) \
+                                                         (markdown_tool_fallback)",
+                                                        calls.len()
+                                                    );
+                                                    for (name, input) in calls {
+                                                        let id =
+                                                            format!("txt-call-{}", Uuid::new_v4());
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::ToolUseRequest {
+                                                                query_id,
+                                                                tool_use_id: id.clone(),
+                                                                tool_name: name.clone(),
+                                                                tool_input: input.clone(),
+                                                            }
+                                                        );
+                                                        tool_inputs.push((
+                                                            id.clone(),
+                                                            name.clone(),
+                                                            input.clone(),
+                                                        ));
+                                                        assistant_tool_uses.push(
+                                                            ContentBlock::ToolUse {
+                                                                id,
+                                                                name,
+                                                                input,
+                                                            },
+                                                        );
+                                                    }
+                                                } else if let Some(command) =
                                                     markdown_bash_command(&assistant_text)
                                                 {
+                                                    // Priority 2: a single bare shell code
+                                                    // block (less certain — see
+                                                    // `markdown_bash_command`).
                                                     tracing::warn!(
                                                         "no native tool call in response; \
                                                          executing bash from markdown code \
@@ -5737,6 +5867,59 @@ mod tests {
     }
 
     #[test]
+    fn parse_text_tool_calls_glm_minimax_form() {
+        // The exact WP-15 P0-1 (upgraded) field shape: vendor special-token
+        // garbage before the anchor, XML invoke inside.
+        let minimax = "] < ]minimax[ > [<tool_call>\n<invoke name=\"Write\">\n<parameter name=\"file_path\">/tmp/shannon_demo.txt</parameter>\n<parameter name=\"content\">hello from my phone</parameter>\n</invoke>\n</tool_call>";
+        let calls = parse_text_tool_calls(minimax).expect("should recover the call");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "Write");
+        assert_eq!(calls[0].1["file_path"], "/tmp/shannon_demo.txt".to_string());
+        assert_eq!(calls[0].1["content"], "hello from my phone".to_string());
+
+        // JSON-typed parameter values keep their type.
+        let typed = "<tool_call><invoke name=\"Bash\"><parameter name=\"timeout_ms\"> 30000 </parameter></invoke></tool_call>";
+        let calls = parse_text_tool_calls(typed).unwrap();
+        assert_eq!(calls[0].1["timeout_ms"], 30000);
+
+        // Multiple calls in one reply.
+        let multi = "<tool_call><invoke name=\"Read\"><parameter name=\"path\">a.rs</parameter></invoke></tool_call>\ntext\n<tool_call><invoke name=\"Grep\"><parameter name=\"pattern\">foo</parameter></invoke></tool_call>";
+        assert_eq!(parse_text_tool_calls(multi).unwrap().len(), 2);
+
+        // No calls → None.
+        assert_eq!(parse_text_tool_calls("plain answer"), None);
+        // Unclosed block (stream cut) → None.
+        assert_eq!(
+            parse_text_tool_calls("<tool_call><invoke name=\"Write\"><parameter name=\"x\">1"),
+            None
+        );
+    }
+
+    #[test]
+    fn think_only_default_threshold_only_nudges_blank_answers() {
+        // WP-15 P0-1 (upgraded): the shipped default (0) must nudge ONLY blank
+        // visible answers — a terse-but-real reply like "cli-ok" is final.
+        let threshold = DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS;
+        assert_eq!(threshold, 0);
+        // Blank visible answer (everything was reasoning) → nudge.
+        assert!(is_think_only_response(
+            "<think>deliberating</think>",
+            0,
+            threshold
+        ));
+        // Terse real answer after reasoning → NOT think-only.
+        assert!(!is_think_only_response(
+            "<think>deliberating</think>cli-ok",
+            0,
+            threshold
+        ));
+        // Plain short answer without reasoning markup → never nudged.
+        assert!(!is_think_only_response("cli-ok", 0, threshold));
+        // An explicit larger threshold keeps the legacy short-answer behavior.
+        assert!(is_think_only_response("<think>x</think>cli-ok", 0, 200));
+    }
+
+    #[test]
     fn think_only_detection_matrix() {
         const THRESHOLD: usize = 200;
 
@@ -5811,7 +5994,8 @@ mod tests {
             env::remove_var("SHANNON_THINK_ONLY_MIN_ANSWER_CHARS");
         };
         assert_eq!(think_only_nudge_max(), 2);
-        assert_eq!(think_only_min_answer_chars(), 200);
+        // WP-15 P0-1 (upgraded): shipped default is 0 (nudge only blank answers).
+        assert_eq!(think_only_min_answer_chars(), 0);
 
         // Explicit overrides.
         unsafe {
@@ -5837,7 +6021,8 @@ mod tests {
             env::set_var("SHANNON_THINK_ONLY_MIN_ANSWER_CHARS", "bogus");
         };
         assert_eq!(think_only_nudge_max(), 2);
-        assert_eq!(think_only_min_answer_chars(), 200);
+        // WP-15 P0-1 (upgraded): shipped default is 0 (nudge only blank answers).
+        assert_eq!(think_only_min_answer_chars(), 0);
 
         // Restore the prior process state for other tests.
         match saved_max {
