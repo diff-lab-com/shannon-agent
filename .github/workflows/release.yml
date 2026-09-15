@@ -357,6 +357,33 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}  # rc/beta/alpha (dash) -> prerelease
           args: --target ${{ matrix.target }} --bundles ${{ matrix.ext }}
 
+      # Release hardening (WP-15 follow-up): the deb hard-links pipewire/spa/
+      # gbm/EGL/wayland since preview-capture shipped; a package that installs
+      # but dies at launch must not reach users. Runs after upload on purpose —
+      # the artifact only lands in a DRAFT here, and the draft is flipped to
+      # published manually after CI is green, so a red gate still blocks the
+      # release.
+      - name: Runtime dependency gate (deb @ ubuntu:22.04 floor)
+        if: runner.os == 'Linux' && matrix.ext == 'deb'
+        run: |
+          DEB=$(find target -path '*/release/bundle/deb/*.deb' | head -1)
+          test -n "$DEB" || { echo "no deb bundle found under target/"; exit 1; }
+          ./scripts/check-deb-runtime-deps.sh "$DEB" --distro ubuntu:22.04
+
+      # rpm has no container gate (the Fedora runtime differs from the build
+      # host); list its NEEDED sonames so drift vs the declared rpm depends is
+      # at least visible in the run log.
+      - name: rpm NEEDED audit (informational)
+        if: runner.os == 'Linux' && matrix.ext == 'rpm'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends rpm2cpio cpio
+          RPM=$(find target -path '*/release/bundle/rpm/*.rpm' | head -1)
+          test -n "$RPM" || { echo "no rpm bundle found under target/"; exit 1; }
+          rm -rf /tmp/rpmroot && mkdir -p /tmp/rpmroot
+          rpm2cpio "$RPM" | cpio -id -D /tmp/rpmroot
+          echo "declared rpm depends: gtk3 webkit2gtk4.1 pipewire-libs mesa-libgbm mesa-libEGL libwayland-client"
+          readelf -d /tmp/rpmroot/usr/bin/shannon-desktop | grep NEEDED
+
   # ───────────────────────────── Gateway (Bun) ─────────────────────────────
   # softprops find-or-creates; the draft already exists (create-release), so
   # it uploads into it. draft:true keeps it a draft until `publish`.

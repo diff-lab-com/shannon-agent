@@ -20,6 +20,30 @@
             "icons/128x128@2x.png",
             "icons/icon.png"
         ],
+        "linux": {
+            "deb": {
+                "depends": [
+                    "libayatana-appindicator3-1",
+                    "libwebkit2gtk-4.1-0",
+                    "libgtk-3-0",
+                    "libpipewire-0.3-0",
+                    "libspa-0.2-0",
+                    "libgbm1",
+                    "libegl1",
+                    "libwayland-client0"
+                ]
+            },
+            "rpm": {
+                "depends": [
+                    "gtk3",
+                    "webkit2gtk4.1",
+                    "pipewire-libs",
+                    "mesa-libgbm",
+                    "mesa-libEGL",
+                    "libwayland-client"
+                ]
+            }
+        },
         "windows": {
             "nsis": {
                 "installerHooks": "./nsis/hooks.nsh"

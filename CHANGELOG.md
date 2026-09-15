@@ -4,6 +4,25 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Linux packaging hardening (2026-09-15)
+
+Since preview-capture shipped (0.11), the desktop binary hard-links
+libpipewire-0.3 / libspa-0.2 / libgbm / libEGL / libwayland-client — Tauri's
+default deb Depends only cover the GTK/webkit trio, so on systems without
+PipeWire the package installed fine and died at launch.
+
+- **Explicit Linux package depends** — `bundle.linux.deb.depends` now lists the
+  Tauri defaults plus the capture stack (`libpipewire-0.3-0`, `libspa-0.2-0`,
+  `libgbm1`, `libegl1`, `libwayland-client0`); `rpm.depends` mirrors it with
+  Fedora names (`pipewire-libs`, `mesa-libgbm`, `mesa-libEGL`,
+  `libwayland-client`).
+- **Release artifact gate** — `scripts/check-deb-runtime-deps.sh` installs the
+  built .deb in a pristine `ubuntu:22.04` container (the distro floor) and
+  `ldd -r`s every packaged binary: any "not found" library or "undefined
+  symbol" fails the release (wired into release.yml after the deb build; the
+  rpm leg logs its NEEDED list for drift review). Verified against the
+  released v0.10.0 deb (pass) and a deliberately corrupted package (fail).
+
 ### Mobile joint-debug fixes (2026-09-15, WP-15 handover)
 
 Fixes for the issues found pairing shannon-mobile against the real desktop

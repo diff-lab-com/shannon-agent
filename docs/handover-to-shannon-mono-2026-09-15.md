@@ -129,17 +129,54 @@ bridge 内部自行容忍缺失），或至少在 JSDoc 标注运行时强制条
 
 ---
 
-## mono 处理记录（2026-09-15，同日修复）
+## 2026-09-15 追加（journey 驱动二次联合调试的新证据与新条目）
 
-| 条目 | 状态 | 落点 |
-| --- | --- | --- |
-| P0-1 | ✅ 已修 | 提示词强制原生工具格式（默认 system prompt）+ 裸 shell 代码块回退：`markdown_bash_command`（保守启发式：单块、shell 语言、块外 prose ≤200 字符）合成 `Bash` ToolUseRequest，走完整权限/审批链；开关 `markdown_tool_fallback` / `SHANNON_MARKDOWN_TOOL_FALLBACK=false` |
-| P0-2 | ✅ 已修（方案 1） | 引擎加流式 `ThinkStreamSplitter`（跨 chunk 分裂安全），内联 `<think>` 路由到既有 `QueryEvent::Thinking`（桌面 `query:thinking` 已有消费者）；WS 协议 0.6.0→0.7.0 新增 `thinking` 变体（此前被丢弃）；gateway `mapEngineEvent` 暂不转发给手机（mobile 渲染层过滤器保留作旧引擎防御） |
-| P1-3 | ✅ 已修 | `main()` 对 `-` 开头的 argv[2] 回落 runGateway；`tsx src/index.ts --config X` 直接可用 |
-| P1-4 | ✅ 已修 | 报错附 install.sh 一键安装 + `shannon gateway install` + 开发替代（`cd gateway && pnpm build:binary` / `pnpm dev`） |
-| P1-5 | ✅ 已修 | 桌面 `gateway_read_config` 读时自愈迁移 `127.0.0.1`→`0.0.0.0` 并持久化（`localhost`/`::1` 等疑似人为值不动）；service 健康探测对通配 bind 改拨 127.0.0.1 |
-| P2-6 | ✅ 已修 | 文件模式 `issue()` 追加前 prune 过期/畸形行（复用 tmp+rename，无移除不重写） |
-| P2-7 | ✅ 已修 | `signature: string` 必填，运行时防御式校验保留（线上字节不可信） |
-| P2-8 | ✅ 已做 | `task.progress` 增加 `turn_id?`（网关在流中盖章，向后兼容）；mobile 侧可选消费 |
+本轮按 `docs/user-journeys-2026-09-15.md` 的 9 条旅程逐条实测（模拟器 + 真实栈 + CLI 0.11.0），
+以下为 mono/desktop/CLI 侧新增/升级的条目，请一并转交。
 
-回归测试：`cargo test -p shannon-core --lib`（2923 ✓，含 splitter/回退启发式新用例）、`cargo test -p shannon-api-protocol`（37 ✓）、desktop connections 单测 ✓、`cd gateway && pnpm typecheck && pnpm test`（380 ✓，含 issue() prune / thinking 丢弃 / turn_id 盖章新用例）。
+### P0-1 升级：走 mobile 网关的会话引擎侧 tools=[]（根因级证据）
+
+- 引擎 L0 日志 `request/header` 事件显示：
+  - 桌面/CLI 创建的会话：`tools=[60+ 个完整工具目录]`；
+  - 经 mobile 网关路径的会话（mobile 触发的每个 query 一个新 session id）：
+    **`tools=[]`——引擎根本没给模型下发任何工具定义**。
+- 后果链：模型只能以**文本形式**输出工具调用 → 引擎不解析 → 不产生 tool_use →
+  永远不会触发 approval_request → 手机审批链路（J4）结构性不可达；
+  模型的工具调用文本（含 MiniMax 厂商特殊 token 原文
+  `]<]minimax[>[<tool_call>…<invoke name="Write">…`）直接漏进对话气泡
+  （截图证据在调试记录中）。
+- 附带损耗：模型在 think 中自述 "the system says my responses weren't recognized as
+  final answers" → 引擎 continue-loop 反复重试，单个一问一答 turn 累计
+  input_tokens 7 万–21 万；turn 常以半句话截断收尾。
+  **CLI 自建会话同样出现该循环**（`shannon query "Reply with exactly: cli-ok"`
+  → 19.8k tokens，think 文本自述同一句话），说明这是引擎对 MiniMax-M3 收束判定
+  的通病，不是 mobile 特有。
+- 修复方向（mono 侧定夺）：mobile 路径的 engine query 带上工具目录；引擎对
+  MiniMax 厂商 token 形态的 tool_call 做解析；重审 "final answer 未识别" 的
+  continue-loop 触发条件。
+
+### CLI 新增 P2：`shannon trace show latest` 挂起
+
+- `shannon 0.11.0`：`trace show latest` 必挂起（30s+ 无输出，exit 124），
+  而 `trace show <完整UUID>`（含 mobile 创建的会话）秒回且内容正确
+  （E9-S1：手机触发的会话在 CLI 可追溯 ✓）。
+- 另：`shannon doctor` 在"桌面在跑 + 网关在跑"的真实部署下报
+  "shannon-gateway not found on PATH / shannon-desktop not found"，误导排障
+  （原有条目，本轮实测再确认）。
+
+### 设计问题（低优先级，请拍板）
+
+- 手机端断开后（Z1 清凭据），网关侧 `~/.shannon/mobile-devices.json` 的设备记录
+  **不摘除**。丢机场景目前没有任何入口能吊销旧设备——建议桌面端补一个设备管理/
+  吊销入口，或手机断开时携带吊销语义。
+- 上游已修：`mobile.host=127.0.0.1` 现在有启动告警（原 P1-5，本轮看到
+  "mobile server bound to loopback … set mobile.host to 0.0.0.0"，谢谢）。
+
+### mobile 侧本轮新增防御（无需 mono 处理，知会）
+
+- 多 think-block turn 只渲染最后一个 `</think>` 之后的正文
+  （`lib/src/live/think_filter.dart`，7 项单测）——中间被模型自己否决的草稿不再上屏；
+- 会话列表预览同样过 think 过滤器；
+- 断线自愈阶梯（1s→2s→…→15s 退避自动重连，pairingRequired 即停）——
+  网关重启后手机 ≤15s 无感恢复（实测通过）；
+- forget/断开现在真正回到欢迎页（原来卡在 mock 数据壳，重配无入口）。
