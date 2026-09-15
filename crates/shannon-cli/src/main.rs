@@ -4318,10 +4318,21 @@ fn shannon_on_path_list() -> Vec<std::path::PathBuf> {
     let Some(path_var) = std::env::var_os("PATH") else {
         return Vec::new();
     };
-    std::env::split_paths(&path_var)
+    // PATH often carries duplicate directories (profile + rc both prepending
+    // ~/.local/bin); one file must not show up as two installations.
+    let mut seen: Vec<std::path::PathBuf> = Vec::new();
+    let mut out = Vec::new();
+    for p in std::env::split_paths(&path_var)
         .map(|dir| dir.join(exe))
         .filter(|p| p.is_file())
-        .collect()
+    {
+        let canonical = p.canonicalize().unwrap_or_else(|_| p.clone());
+        if !seen.contains(&canonical) {
+            seen.push(canonical);
+            out.push(p);
+        }
+    }
+    out
 }
 
 /// Known locations where a desktop installer drops the bundled CLI.
