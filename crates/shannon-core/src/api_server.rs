@@ -855,6 +855,13 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                                 Ok(QueryEvent::Text { content, .. }) => {
                                     Some(WsServerMessage::Text { content })
                                 }
+                                Ok(QueryEvent::Thinking { content, .. }) => {
+                                    // WP-15 P0-2: forward the reasoning channel
+                                    // (native thinking deltas + inline `<think>`
+                                    // re-split by the engine) instead of dropping
+                                    // it — clients decide whether to render it.
+                                    Some(WsServerMessage::Thinking { content })
+                                }
                                 Ok(QueryEvent::ToolUseRequest {
                                     tool_name,
                                     tool_input,

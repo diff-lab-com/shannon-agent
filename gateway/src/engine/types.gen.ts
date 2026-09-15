@@ -3,7 +3,7 @@
  *
  * Source of truth: `shannon-api-protocol` (Rust).
  * Generator:     `cargo run -p shannon-api-protocol --bin gen-ts`.
- * Protocol:      v0.6.0
+ * Protocol:      v0.7.0
  *
  * Field names, casing, and discriminated unions match the serde-derived
  * Rust types 1:1. Anything that mutates must mutate there first and be
@@ -98,6 +98,10 @@ export interface WsServerMessageText {
   type: "text";
   content: string;
 }
+export interface WsServerMessageThinking {
+  type: "thinking";
+  content: string;
+}
 export interface WsServerMessageToolUse {
   type: "tool_use";
   input: unknown;
@@ -147,6 +151,7 @@ export interface WsServerMessageError {
 
 export type WsServerMessage =
   | WsServerMessageText
+  | WsServerMessageThinking
   | WsServerMessageToolUse
   | WsServerMessageToolResult
   | WsServerMessageUsage
@@ -157,4 +162,4 @@ export type WsServerMessage =
   | WsServerMessageSessionInfo
   | WsServerMessageError;
 
-export const PROTOCOL_VERSION = "0.6.0" as const;
+export const PROTOCOL_VERSION = "0.7.0" as const;

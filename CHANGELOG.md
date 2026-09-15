@@ -4,6 +4,41 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Mobile joint-debug fixes (2026-09-15, WP-15 handover)
+
+Fixes for the issues found pairing shannon-mobile against the real desktop
+stack (`docs/handover-to-shannon-mono-2026-09-15.md`):
+
+- **P0-1 tool calls as markdown blocks** — reasoning-family models on the
+  OpenAI wire (MiniMax M-series) answered tool-worthy prompts with a bare
+  ```bash block instead of a native tool call, stalling the turn loop and
+  blocking the whole approval chain. The engine now (a) instructs models to
+  invoke tools only via the native API, and (b) converts a single bare shell
+  code block into a real Bash tool call — through the normal permission gate
+  — when no native call arrives (`markdown_tool_fallback`, opt-out via
+  `SHANNON_MARKDOWN_TOOL_FALLBACK=false`).
+- **P0-2 inline `<think>` leaked as text** — the engine re-splits inline
+  `<think>…</think>` reasoning out of the content-delta stream into the
+  existing Thinking channel (desktop `query:thinking`). New additive WS
+  variant `thinking` (protocol 0.6.0 → 0.7.0) replaces the previous drop,
+  so clients can render collapsible reasoning; the gateway does not forward
+  it to phones yet (their render-side filter stays as legacy defense).
+- **P1-3 gateway argv** — `tsx src/index.ts --config X` no longer misreads
+  the flag as an unknown subcommand; flag-led argv falls through to run.
+- **P1-4 `shannon gateway run` guidance** — the missing-binary error now
+  lists the install one-liner and the dev alternatives instead of a dead end.
+- **P1-5 unreachable mobile bind** — `gateway_read_config` migrates the
+  legacy machine-written `mobile.host: "127.0.0.1"` to the §A8b wildcard
+  `0.0.0.0` (human-looking values are left alone); the service health probe
+  dials the loopback form of a wildcard bind.
+- **P2-6 pair-token growth** — file-mode `PairTokenStore.issue()` prunes
+  expired (and malformed) lines before appending, so unclaimed QR tokens no
+  longer grow `mobile-pair-tokens.jsonl` forever.
+- **P2-7 approval signature typing** — `ApprovalDecideParams.signature` is
+  now required, matching the runtime enforcement under `requireSession`.
+- **P2-8 progress routing key** — `task.progress` frames now carry the
+  turn's `turn_id` (additive, backward compatible).
+
 ### Desktop UI: competitive-parity overhaul (2026-09-10/11)
 
 Terminology, onboarding, visual system and workflow gaps from

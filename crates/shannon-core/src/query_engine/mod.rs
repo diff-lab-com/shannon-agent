@@ -939,6 +939,7 @@ mod tests {
             auto_test: None,
             turn_checkpoint_turn: None,
             token_budget_warning: true,
+            markdown_tool_fallback: true,
         };
         assert_eq!(config.max_turns, 5);
         assert_eq!(config.max_budget_usd, Some(1.0));
@@ -1359,6 +1360,7 @@ mod tests {
             auto_test: None,
             turn_checkpoint_turn: None,
             token_budget_warning: true,
+            markdown_tool_fallback: true,
         };
         assert_eq!(config.max_turns, 1);
         assert_eq!(config.max_budget_usd, Some(0.01));

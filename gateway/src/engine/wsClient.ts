@@ -34,6 +34,7 @@ export interface EngineWsClientOptions {
 
 const KNOWN_EVENT_TYPES: ReadonlySet<EngineEventType> = new Set([
   "text",
+  "thinking",
   "tool_use",
   "tool_result",
   "usage",

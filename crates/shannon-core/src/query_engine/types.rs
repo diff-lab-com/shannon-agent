@@ -741,6 +741,13 @@ pub struct QueryEngineConfig {
     /// user messages nudging the agent to wrap up. Default `true`; opt-out
     /// via env `SHANNON_TOKEN_BUDGET_WARNING=false`.
     pub token_budget_warning: bool,
+    /// WP-15 P0-1: when a turn produces no native tool call but the reply is
+    /// a single bare shell code block (```bash), execute it as a Bash tool
+    /// call through the normal permission gate. Targets reasoning-family
+    /// models on the OpenAI wire (MiniMax M-series) that ignore the native
+    /// tool-calling API. Default `true`; opt-out via env
+    /// `SHANNON_MARKDOWN_TOOL_FALLBACK=false`.
+    pub markdown_tool_fallback: bool,
 }
 
 impl Default for QueryEngineConfig {
@@ -770,6 +777,7 @@ impl Default for QueryEngineConfig {
                      - Use Read/Grep/Glob to understand code before editing.\n\
                      - Prefer Edit over Write for existing files.\n\
                      - Use Bash for system commands, builds, and tests.\n\
+                     - Invoke tools ONLY through the native tool-calling API of this endpoint. NEVER emit a tool invocation as a markdown code block (```bash) or as plain text — the runtime cannot execute or approve it, and the turn will stall.\n\
                      - After writing code, run tests or builds only if a toolchain is available: probe first (e.g. `command -v cargo`); when it is missing, verify by re-reading your changes instead of hunting for missing tools.\n\
                      - Before giving your final answer, verify your work against the original request: every required artifact must exist and work. If something could not be verified, say so explicitly instead of claiming success.\n\
                      - Completing the environment (installing a package, provisioning a tool) is NOT task completion. Never stop while a required deliverable is still missing.\n\
@@ -801,6 +809,7 @@ impl Default for QueryEngineConfig {
             auto_test: None,
             turn_checkpoint_turn: None,
             token_budget_warning: true,
+            markdown_tool_fallback: true,
         }
     }
 }

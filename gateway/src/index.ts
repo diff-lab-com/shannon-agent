@@ -190,7 +190,10 @@ async function main(): Promise<void> {
 
   // `run` is the explicit entry point used by the service unit; bare invocation
   // (no subcommand) is kept for dev/direct use and behaves identically.
-  if (!sub || sub === "run") {
+  // WP-15 P1-3: an argv[2] that starts with `-` (e.g. `tsx src/index.ts --config
+  // X`) is a flag of the bare invocation, not an unknown subcommand — fall
+  // through to runGateway with the full argv instead of rejecting it.
+  if (!sub || sub === "run" || sub.startsWith("-")) {
     const rest = sub === "run" ? process.argv.slice(3) : process.argv.slice(2);
     await runGateway(rest);
     return;

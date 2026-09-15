@@ -206,6 +206,10 @@ describe("mapEngineEvent", () => {
   it("drops session_info (metadata-only) → null", () => {
     expect(mapEngineEvent({ type: "session_info", message_count: 3, model: "gpt-x" })).toBeNull();
   });
+
+  it("drops thinking (WP-15 P0-2) — reasoning never leaks into task.progress", () => {
+    expect(mapEngineEvent({ type: "thinking", content: "chain of thought" })).toBeNull();
+  });
 });
 
 // ── bridge through a real MobileServer ──────────────────────────────────────
@@ -241,6 +245,14 @@ describe("createEngineHandlers (P1.1b)", () => {
     ]);
     expect((events[0] as { turn_id: string }).turn_id).toMatch(/^[0-9a-f-]{36}$/);
     expect((events[1] as { content: string }).content).toBe("Hel");
+    // WP-15 P2-8: every task.progress carries the routing key so clients can
+    // correlate without the one-in-flight-turn-per-socket convention.
+    const turnId = (events[0] as { turn_id: string }).turn_id;
+    for (const ev of events) {
+      if (ev.type === "task.progress") {
+        expect((ev as { turn_id?: string }).turn_id).toBe(turnId);
+      }
+    }
     expect(holder.current?.lastPrompt).toBe("hi");
     expect(holder.current?.lastModel).toBe("gpt-x");
     socket.close();

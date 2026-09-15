@@ -565,6 +565,144 @@ fn split_think_content(text: &str) -> (bool, String) {
     }
 }
 
+/// Streaming splitter for inline `<think>...</think>` reasoning blocks
+/// (WP-15 P0-2). Reasoning-family providers on the OpenAI wire (MiniMax
+/// M-series, GLM) stream `<think>` inline in the content deltas instead of
+/// using a thinking channel, so the raw delta stream has to be re-split:
+/// reasoning goes out as [`QueryEvent::Thinking`], the answer stays a plain
+/// `Text` event. Tag-aware across chunk boundaries — `<think>` / `</think>`
+/// may split across deltas, so a tail that could be a tag prefix is held
+/// back (up to 7 chars of display lag; flushed by `finish`).
+#[derive(Default)]
+struct ThinkStreamSplitter {
+    /// Bytes held back because they may be a partial `<think>`/`</think>` tag.
+    pending: String,
+    /// True while inside a `<think>` block.
+    in_think: bool,
+}
+
+impl ThinkStreamSplitter {
+    const OPEN: &'static str = "<think>";
+    const CLOSE: &'static str = "</think>";
+
+    /// Consume one content delta. Returns `(thinking, visible)` — either
+    /// side may be empty for a given chunk.
+    fn feed(&mut self, chunk: &str) -> (String, String) {
+        let mut thinking = String::new();
+        let mut visible = String::new();
+        let mut buf = std::mem::take(&mut self.pending);
+        buf.push_str(chunk);
+        loop {
+            let (tag, is_open) = if self.in_think {
+                (Self::CLOSE, false)
+            } else {
+                (Self::OPEN, true)
+            };
+            match buf.find(tag) {
+                Some(pos) => {
+                    let head = &buf[..pos];
+                    if self.in_think {
+                        thinking.push_str(head);
+                    } else {
+                        visible.push_str(head);
+                    }
+                    buf = buf[pos + tag.len()..].to_string();
+                    self.in_think = is_open;
+                }
+                None => {
+                    // Hold back a tail that could be a tag prefix split across
+                    // the next chunk boundary.
+                    let max_keep = tag.len().saturating_sub(1).min(buf.len());
+                    let keep = (1..=max_keep)
+                        .find(|n| tag.starts_with(&buf[buf.len() - n..]))
+                        .unwrap_or(0);
+                    let split_at = buf.len() - keep;
+                    if self.in_think {
+                        thinking.push_str(&buf[..split_at]);
+                    } else {
+                        visible.push_str(&buf[..split_at]);
+                    }
+                    self.pending = buf[split_at..].to_string();
+                    return (thinking, visible);
+                }
+            }
+        }
+    }
+
+    /// Flush at stream end. A dangling partial tag is literal text; an
+    /// unclosed `<think>` swallows the tail (a response cut mid-reasoning
+    /// has no visible answer by definition). Idempotent.
+    fn finish(&mut self) -> (String, String) {
+        let pending = std::mem::take(&mut self.pending);
+        if self.in_think {
+            self.in_think = false;
+            (pending, String::new())
+        } else {
+            (String::new(), pending)
+        }
+    }
+}
+
+/// WP-15 P0-1 fallback: extract a Bash tool command from an assistant reply
+/// that tried to call the tool as a markdown code block instead of through
+/// the native tool-calling API (observed in the field with MiniMax M-series).
+///
+/// Deliberately conservative — false positives mean executing example code
+/// from an ordinary answer, so the fallback only fires when the *whole*
+/// visible reply is one bare shell block (prose outside the fence ≤
+/// `MAX_PROSE_CHARS`, one block, shell-ish or missing language tag):
+///
+/// - "```\nrm -rf build/\n```" → Some("rm -rf build/")
+/// - "Creating the file:\n```bash\ncat > a.txt <<EOF\nhi\nEOF\n```" → Some(...)
+/// - a long explanation that merely *contains* an example block → None
+fn markdown_bash_command(text: &str) -> Option<String> {
+    const MAX_PROSE_CHARS: usize = 200;
+    const SHELL_LANGS: &[&str] = &["bash", "sh", "shell", "zsh", "console"];
+
+    let mut blocks: Vec<(bool, String)> = Vec::new(); // (shell_candidate, content)
+    let mut prose_len = 0usize;
+    let mut in_fence = false;
+    let mut fence_shell = false;
+    let mut fence_content = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("```") {
+            if in_fence {
+                blocks.push((fence_shell, std::mem::take(&mut fence_content)));
+                in_fence = false;
+            } else {
+                in_fence = true;
+                let lang = rest.trim().to_ascii_lowercase();
+                fence_shell = lang.is_empty() || SHELL_LANGS.contains(&lang.as_str());
+            }
+            continue;
+        }
+        if in_fence {
+            fence_content.push_str(line);
+            fence_content.push('\n');
+        } else {
+            prose_len += trimmed.chars().count();
+        }
+    }
+    // Unclosed fence still counts (stream cut after the opening).
+    if in_fence {
+        blocks.push((fence_shell, std::mem::take(&mut fence_content)));
+    }
+
+    if blocks.len() != 1 || prose_len > MAX_PROSE_CHARS {
+        return None;
+    }
+    let (shell, content) = blocks.into_iter().next()?;
+    if !shell {
+        return None;
+    }
+    let command = content.trim().to_string();
+    if command.is_empty() {
+        return None;
+    }
+    Some(command)
+}
+
 /// True when the response carries no tool calls and no substantive
 /// user-facing answer:
 ///
@@ -964,6 +1102,17 @@ impl QueryEngine {
             if !v.is_empty() {
                 let lower = v.to_lowercase();
                 config.token_budget_warning =
+                    !matches!(lower.as_str(), "false" | "0" | "no" | "off");
+            }
+        }
+        // WP-15 P0-1: `SHANNON_MARKDOWN_TOOL_FALLBACK=false` disables the
+        // bare-bash-code-block → Bash tool call fallback (same `${VAR-default}`
+        // convention as above).
+        let mtf = std::env::var("SHANNON_MARKDOWN_TOOL_FALLBACK").ok();
+        if let Some(v) = mtf {
+            if !v.is_empty() {
+                let lower = v.to_lowercase();
+                config.markdown_tool_fallback =
                     !matches!(lower.as_str(), "false" | "0" | "no" | "off");
             }
         }
@@ -2729,6 +2878,12 @@ impl QueryEngine {
                         let mut has_content = false;
                         // Accumulate the full assistant response for conversation tracking
                         let mut assistant_text = String::new();
+                        // WP-15 P0-2: re-split inline `<think>` reasoning out of
+                        // the content-delta stream (MiniMax M-series / GLM on the
+                        // OpenAI wire). Reasoning becomes Thinking events; only
+                        // the visible answer lands in `assistant_text` — which
+                        // also keeps reasoning markup out of saved history.
+                        let mut think_splitter = ThinkStreamSplitter::default();
                         let mut assistant_tool_uses: Vec<ContentBlock> = Vec::new();
                         // Terminal stop reason for this response, latched from
                         // whichever MessageDelta carried it (providers split
@@ -2797,22 +2952,39 @@ impl QueryEngine {
                                             match delta {
                                                 ContentDelta::TextDelta { text } => {
                                                     has_content = true;
-                                                    assistant_text.push_str(&text);
-                                                    // Display-face restore: the
-                                                    // emitted copy carries real
-                                                    // values; `assistant_text`
-                                                    // (history) keeps surrogates.
-                                                    let mut display = text.clone();
-                                                    crate::secret_guard::restore_display_for_output(
-                                                        &mut display,
-                                                    );
-                                                    send_event!(
-                                                        tx,
-                                                        QueryEvent::Text {
-                                                            query_id,
-                                                            content: display,
-                                                        }
-                                                    );
+                                                    // WP-15 P0-2: route inline
+                                                    // `<think>` reasoning to the
+                                                    // Thinking channel instead of
+                                                    // leaking it as visible text.
+                                                    let (thinking, visible) =
+                                                        think_splitter.feed(&text);
+                                                    if !thinking.is_empty() {
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::Thinking {
+                                                                query_id,
+                                                                content: thinking,
+                                                            }
+                                                        );
+                                                    }
+                                                    if !visible.is_empty() {
+                                                        assistant_text.push_str(&visible);
+                                                        // Display-face restore: the
+                                                        // emitted copy carries real
+                                                        // values; `assistant_text`
+                                                        // (history) keeps surrogates.
+                                                        let mut display = visible.clone();
+                                                        crate::secret_guard::restore_display_for_output(
+                                                            &mut display,
+                                                        );
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::Text {
+                                                                query_id,
+                                                                content: display,
+                                                            }
+                                                        );
+                                                    }
                                                 }
                                                 ContentDelta::InputJsonDelta { partial_json } => {
                                                     if let Some(entry) =
@@ -2968,6 +3140,37 @@ impl QueryEngine {
                                             }
                                         }
                                         StreamEvent::MessageDelta { delta, usage } => {
+                                            // Flush the <think> splitter's held-back
+                                            // tail before this arm reads the final
+                                            // `assistant_text` (fallback below, save
+                                            // paths). A dangling partial tag at stream
+                                            // end is literal text; an unclosed block
+                                            // routes to Thinking.
+                                            let (tail_thinking, tail_visible) =
+                                                think_splitter.finish();
+                                            if !tail_thinking.is_empty() {
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::Thinking {
+                                                        query_id,
+                                                        content: tail_thinking,
+                                                    }
+                                                );
+                                            }
+                                            if !tail_visible.is_empty() {
+                                                assistant_text.push_str(&tail_visible);
+                                                let mut display = tail_visible.clone();
+                                                crate::secret_guard::restore_display_for_output(
+                                                    &mut display,
+                                                );
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::Text {
+                                                        query_id,
+                                                        content: display,
+                                                    }
+                                                );
+                                            }
                                             if delta.stop_reason.is_some() {
                                                 assistant_stop_reason = delta.stop_reason.clone();
                                             }
@@ -3123,6 +3326,59 @@ impl QueryEngine {
                                                             metadata: Default::default(),
                                                         });
                                                     }
+                                                }
+                                            }
+
+                                            // WP-15 P0-1: markdown code-block fallback.
+                                            // A model on the OpenAI wire may answer a
+                                            // tool-worthy prompt with a bare ```bash
+                                            // block instead of a native tool call; the
+                                            // turn then loops forever ("no tool calls"
+                                            // → retry → same block). Convert the block
+                                            // into a real Bash tool call so the normal
+                                            // permission gate + approval chain applies.
+                                            // Only fires when the request actually had
+                                            // tools, nothing native arrived, and the
+                                            // reply is a single bare shell block (see
+                                            // `markdown_bash_command`); disable via
+                                            // `markdown_tool_fallback: false`.
+                                            if tool_inputs.is_empty()
+                                                && config.markdown_tool_fallback
+                                                && tools_schema.is_some()
+                                            {
+                                                if let Some(command) =
+                                                    markdown_bash_command(&assistant_text)
+                                                {
+                                                    tracing::warn!(
+                                                        "no native tool call in response; \
+                                                         executing bash from markdown code \
+                                                         block (markdown_tool_fallback)"
+                                                    );
+                                                    let id = format!("md-bash-{}", Uuid::new_v4());
+                                                    let input = serde_json::json!({
+                                                        "command": command
+                                                    });
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::ToolUseRequest {
+                                                            query_id,
+                                                            tool_use_id: id.clone(),
+                                                            tool_name: "Bash".to_string(),
+                                                            tool_input: input.clone(),
+                                                        }
+                                                    );
+                                                    tool_inputs.push((
+                                                        id.clone(),
+                                                        "Bash".to_string(),
+                                                        input.clone(),
+                                                    ));
+                                                    assistant_tool_uses.push(
+                                                        ContentBlock::ToolUse {
+                                                            id,
+                                                            name: "Bash".to_string(),
+                                                            input,
+                                                        },
+                                                    );
                                                 }
                                             }
 
@@ -5375,6 +5631,109 @@ mod tests {
         let (saw, visible) = split_think_content("plain answer");
         assert!(!saw);
         assert_eq!(visible, "plain answer");
+    }
+
+    /// Feed `chunks` through the splitter, concatenating the results —
+    /// the concatenation must equal feeding the joined text in one chunk.
+    fn feed_all(splitter: &mut ThinkStreamSplitter, chunks: &[&str]) -> (String, String) {
+        let mut thinking = String::new();
+        let mut visible = String::new();
+        for c in chunks {
+            let (t, v) = splitter.feed(c);
+            thinking.push_str(&t);
+            visible.push_str(&v);
+        }
+        let (t, v) = splitter.finish();
+        thinking.push_str(&t);
+        visible.push_str(&v);
+        (thinking, visible)
+    }
+
+    #[test]
+    fn think_stream_splitter_routes_reasoning_to_thinking_channel() {
+        // The WP-15 P0-2 shape: reasoning inline, then the visible answer.
+        let mut s = ThinkStreamSplitter::default();
+        let (t, v) = feed_all(
+            &mut s,
+            &["<think>I should use the bash tool</think>\n\nCreating the file now."],
+        );
+        assert_eq!(t, "I should use the bash tool");
+        assert_eq!(v, "\n\nCreating the file now.");
+    }
+
+    #[test]
+    fn think_stream_splitter_handles_tags_split_across_chunks() {
+        // Every tag split point must produce the same output as one chunk.
+        let text = "Sure.<think>plan more</think>Done.";
+        for split in 1..text.len() {
+            let mut s = ThinkStreamSplitter::default();
+            // Split at a char boundary.
+            let mut end = split;
+            while !text.is_char_boundary(end) {
+                end += 1;
+            }
+            let (a, b) = text.split_at(end);
+            let (t, v) = feed_all(&mut s, &[a, b]);
+            assert_eq!(t, "plan more", "split at {end}");
+            assert_eq!(v, "Sure.Done.", "split at {end}");
+        }
+    }
+
+    #[test]
+    fn think_stream_splitter_unclosed_block_swallows_tail() {
+        // Stream cut mid-reasoning: no visible answer, all reasoning.
+        let mut s = ThinkStreamSplitter::default();
+        let (t, v) = feed_all(&mut s, &["<think>still thinking", " about it"]);
+        assert_eq!(t, "still thinking about it");
+        assert_eq!(v, "");
+    }
+
+    #[test]
+    fn think_stream_splitter_partial_tag_at_end_is_literal_text() {
+        // A trailing "<thi" with no continuation is ordinary text.
+        let mut s = ThinkStreamSplitter::default();
+        let (t, v) = feed_all(&mut s, &["a < b and c<thi"]);
+        assert_eq!(t, "");
+        assert_eq!(v, "a < b and c<thi");
+    }
+
+    #[test]
+    fn markdown_bash_command_fallback_matrix() {
+        // Bare block, no language tag.
+        assert_eq!(
+            markdown_bash_command("```\nmkdir -p /tmp/demo\n```").as_deref(),
+            Some("mkdir -p /tmp/demo")
+        );
+        // Explicit bash tag + short lead-in prose (the field-observed shape).
+        assert_eq!(
+            markdown_bash_command(
+                "Creating the file:\n```bash\nprintf 'hello' > /tmp/shannon_demo.txt\n```"
+            )
+            .as_deref(),
+            Some("printf 'hello' > /tmp/shannon_demo.txt")
+        );
+        // Multi-line block content is kept verbatim (heredocs).
+        assert_eq!(
+            markdown_bash_command("```sh\ncat > a.txt <<EOF\nhi\nEOF\n```").as_deref(),
+            Some("cat > a.txt <<EOF\nhi\nEOF")
+        );
+        // Long explanation containing an example → NOT a tool call.
+        let explained = format!(
+            "Here is how you can do it. {}\n```bash\nls -la\n```\n",
+            "This command lists files. ".repeat(12)
+        );
+        assert_eq!(markdown_bash_command(&explained), None);
+        // Two blocks → ambiguous → no fallback.
+        assert_eq!(
+            markdown_bash_command("```bash\nls\n```\nand\n```bash\npwd\n```"),
+            None
+        );
+        // Non-shell language → never executed.
+        assert_eq!(markdown_bash_command("```python\nprint('hi')\n```"), None);
+        // Empty block → no-op.
+        assert_eq!(markdown_bash_command("```bash\n\n```"), None);
+        // Plain answer, no fence → None.
+        assert_eq!(markdown_bash_command("Done."), None);
     }
 
     #[test]

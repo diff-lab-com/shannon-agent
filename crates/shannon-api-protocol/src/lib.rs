@@ -45,7 +45,7 @@ use uuid::Uuid;
 /// change to the published types alters the on-the-wire bytes in a
 /// non-backward-compatible way. Read it from
 /// `WsServerMessage::SessionInfo::protocol_version`.
-pub const PROTOCOL_VERSION: &str = "0.6.0";
+pub const PROTOCOL_VERSION: &str = "0.7.0";
 
 // ── HTTP request / response types ───────────────────────────────────────
 
@@ -213,6 +213,14 @@ pub enum WsServerMessage {
     /// A text chunk from the LLM response.
     #[serde(rename = "text")]
     Text { content: String },
+    /// Reasoning-channel content (WP-15 P0-2): the model's chain-of-thought,
+    /// either from a native thinking stream or re-split from inline
+    /// `<think>` blocks by the engine. Additive in 0.7.0 — clients that
+    /// don't know the variant never receive it from older servers, and a
+    /// newer server may simply not emit it. Clients may render it as a
+    /// collapsible thinking section or ignore it.
+    #[serde(rename = "thinking")]
+    Thinking { content: String },
     /// Tool use event.
     #[serde(rename = "tool_use")]
     ToolUse {

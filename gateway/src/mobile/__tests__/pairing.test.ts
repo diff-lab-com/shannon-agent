@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
@@ -204,6 +204,36 @@ describe("PairTokenStore (file-backed)", () => {
 
     // The still-valid token must remain consumable (the miss didn't rewrite).
     expect(new PairTokenStore({ filePath: path }).consume(rec.token)).toEqual(rec);
+  });
+
+  // WP-15 P2-6: a desktop that mints QR tokens nobody consumes used to grow
+  // the JSONL forever — file-mode `issue()` now prunes expired lines first.
+  it("issue() prunes expired siblings instead of appending forever", () => {
+    let t = 1000;
+    const dir = mkdtempSync(join(tmpdir(), "shannon-tokens-"));
+    tmpDirs.push(dir);
+    const path = join(dir, "tokens.jsonl");
+
+    const issuer = new PairTokenStore({ filePath: path, ttlMs: 60_000, now: () => t });
+    const stale1 = issuer.issue();
+    t += 10_000;
+    const stale2 = issuer.issue();
+    t += 50_000; // stale1 expired; stale2 still valid
+    const fresh = issuer.issue();
+
+    const lines = readFileSync(path, "utf8")
+      .split("\n")
+      .filter((l) => l.trim().length > 0);
+    expect(lines).toHaveLength(2); // stale1 dropped, stale2 + fresh kept
+    expect(lines.some((l) => l.includes(stale1.token))).toBe(false);
+
+    // Survivors stay consumable.
+    expect(new PairTokenStore({ filePath: path, now: () => t }).consume(stale2.token)).toEqual(
+      stale2,
+    );
+    expect(new PairTokenStore({ filePath: path, now: () => t }).consume(fresh.token)).toEqual(
+      fresh,
+    );
   });
 });
 

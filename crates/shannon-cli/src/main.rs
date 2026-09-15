@@ -3992,9 +3992,13 @@ fn find_gateway_binary() -> Option<std::path::PathBuf> {
 fn run_gateway_command(command: GatewaySubcommand) -> Result<()> {
     let binary = match find_gateway_binary() {
         Some(b) => b,
-        None => {
-            anyhow::bail!("shannon-gateway not found on PATH. Install the gateway service first.")
-        }
+        None => anyhow::bail!(
+            "shannon-gateway not found on PATH.\n\
+             Next steps (any one):\n\
+             \x20 • install it: curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | sh\n\
+             \x20 • then manage the service with: shannon gateway install / start / status\n\
+             \x20 • dev alternative from a checkout: cd gateway && pnpm build:binary, or run it directly with `cd gateway && pnpm dev`"
+        ),
     };
 
     let sub: &str = match command {

@@ -168,7 +168,14 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         try {
           for await (const ev of client.runQuery(params.prompt as string, { model, sessionId })) {
             const mapped = mapEngineEvent(ev);
-            if (mapped) yield mapped;
+            if (mapped) {
+              // WP-15 P2-8: stamp the routing key on every progress frame so
+              // clients can correlate without the one-in-flight-turn-per-socket
+              // convention. Additive — clients that ignore `turn_id` are
+              // unaffected.
+              if (mapped.type === "task.progress") mapped.turn_id = turnId;
+              yield mapped;
+            }
           }
         } finally {
           activeQueries.delete(key);
@@ -218,7 +225,9 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       // P1.2: every approval decision MUST be signed by the bound device over
       // `${request_id}:${choice}`. Unsigned or invalid signatures are rejected
       // before the engine is touched, so a stolen/ungated connection can't
-      // auto-approve a destructive tool.
+      // auto-approve a destructive tool. The wire is still untrusted (the
+      // params cast is unchecked), so the runtime check stays defensive even
+      // though `ApprovalDecideParams.signature` is now a required field.
       if (requireSession) {
         const sig = typeof params.signature === "string" ? params.signature : "";
         const deviceId = ctx.sessionId as string;
@@ -320,6 +329,13 @@ export function mapEngineEvent(ev: EngineEvent): ShannonEvent | null {
   switch (ev.type) {
     case "text":
       return { type: "task.progress", content: ev.content };
+    case "thinking":
+      // WP-15 P0-2: the engine now routes inline `<think>` reasoning out of
+      // `text` into this dedicated variant. The phone doesn't render a
+      // thinking section yet (its render-side think_filter stays as defense
+      // for old engines), so the reasoning is intentionally not forwarded —
+      // the important property is that it no longer pollutes `text`.
+      return null;
     case "tool_use":
       return {
         type: "task.progress",

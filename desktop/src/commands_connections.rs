@@ -168,8 +168,28 @@ pub async fn gateway_delete_secret(key: String) -> Result<(), String> {
     }
 }
 
+/// WP-15 P1-5: legacy desktop builds wrote `mobile.host = "127.0.0.1"` into
+/// the gateway config, which phones can never reach — LAN direct-connect (and
+/// iOS preflight) needs the wildcard bind of §A8b. Migrate exactly that
+/// machine-written value to `0.0.0.0` and report whether anything changed.
+/// Deliberately narrow: a human-set `localhost` / `::1` looks deliberate and
+/// is left alone (shrinking the bind would be a security-posture change we
+/// must not make silently in the other direction).
+fn normalize_legacy_mobile_host(config: &mut GatewayConfig) -> bool {
+    if let Some(mobile) = config.mobile.as_mut() {
+        if mobile.host.as_deref() == Some("127.0.0.1") {
+            mobile.host = Some("0.0.0.0".into());
+            return true;
+        }
+    }
+    false
+}
+
 /// Read the gateway config. Returns a loopback default if no file exists yet
-/// (first-run); errors only on a present-but-unparseable file.
+/// (first-run); errors only on a present-but-unparseable file. A surviving
+/// legacy `mobile.host = "127.0.0.1"` (WP-15 P1-5) is migrated to `0.0.0.0`
+/// and persisted, because the gateway process reads this same file to pick
+/// its mobile bind — an in-memory-only fix would never reach it.
 #[tauri::command]
 pub async fn gateway_read_config() -> Result<GatewayConfig, String> {
     let path = gateway_config_path()?;
@@ -178,8 +198,11 @@ pub async fn gateway_read_config() -> Result<GatewayConfig, String> {
     }
     let raw = fs::read_to_string(&path)
         .map_err(|e| format!("gateway config: cannot read {path:?}: {e}"))?;
-    let cfg: GatewayConfig = serde_json::from_str(&raw)
+    let mut cfg: GatewayConfig = serde_json::from_str(&raw)
         .map_err(|e| format!("gateway config: invalid JSON in {path:?}: {e}"))?;
+    if normalize_legacy_mobile_host(&mut cfg) {
+        write_gateway_config_atomic(&cfg)?;
+    }
     Ok(cfg)
 }
 
@@ -468,5 +491,40 @@ mod tests {
         assert!(c.engine.ws_url.starts_with("ws://127.0.0.1"));
         assert!(c.engine.http_base_url.starts_with("http://127.0.0.1"));
         assert!(c.adapters.is_empty());
+    }
+
+    #[test]
+    fn legacy_loopback_mobile_host_migrates_to_wildcard() {
+        // WP-15 P1-5: the machine-written "127.0.0.1" from legacy desktop
+        // builds is migrated to the §A8b wildcard.
+        let mut cfg = default_gateway_config();
+        cfg.mobile.as_mut().unwrap().host = Some("127.0.0.1".into());
+        assert!(normalize_legacy_mobile_host(&mut cfg));
+        assert_eq!(
+            cfg.mobile.as_mut().unwrap().host.as_deref(),
+            Some("0.0.0.0")
+        );
+
+        // Already-wildcard: untouched, no migration reported.
+        let mut cfg = default_gateway_config();
+        assert!(!normalize_legacy_mobile_host(&mut cfg));
+        assert_eq!(
+            cfg.mobile.as_mut().unwrap().host.as_deref(),
+            Some("0.0.0.0")
+        );
+
+        // A human-looking choice (`localhost`) is left alone.
+        let mut cfg = default_gateway_config();
+        cfg.mobile.as_mut().unwrap().host = Some("localhost".into());
+        assert!(!normalize_legacy_mobile_host(&mut cfg));
+        assert_eq!(
+            cfg.mobile.as_mut().unwrap().host.as_deref(),
+            Some("localhost")
+        );
+
+        // No mobile block at all: no-op.
+        let mut cfg = default_gateway_config();
+        cfg.mobile = None;
+        assert!(!normalize_legacy_mobile_host(&mut cfg));
     }
 }

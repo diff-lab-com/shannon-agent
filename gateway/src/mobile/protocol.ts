@@ -64,8 +64,15 @@ export interface ApprovalDecideParams {
   request_id: string;
   /** `"allow" | "deny"` (maps to the engine `approval/respond` choice). */
   choice: "allow" | "deny";
-  /** Ed25519 signature over `{request_id, choice}` — verified in P1.2. */
-  signature?: string | null;
+  /**
+   * Ed25519 signature over `${request_id}:${choice}` (see `approvalMessage`).
+   * Required at runtime whenever the gateway runs with `requireSession` on
+   * (the live pairing-gated mode, WP-15 P2-7); the type is required to match
+   * that contract instead of hinting that unsigned decisions are acceptable.
+   * Open-mode dev gateways (`requireSession: false`) tolerate absence and
+   * only log a warning.
+   */
+  signature: string;
   note?: string | null;
 }
 
@@ -147,6 +154,10 @@ export type JsonRpcResponse<R> = JsonRpcSuccess<R> | JsonRpcError;
  * Server→phone notification carrying one event in a streaming turn. The phone
  * correlates a turn by the `query.started`/`turn_id` it sees first; subsequent
  * `task.progress` events belong to the in-flight turn on that socket.
+ *
+ * 0.7.0: `task.progress` now also carries `turn_id` directly (WP-15 P2-8), so
+ * clients can correlate without relying on the one-in-flight-turn-per-socket
+ * convention. Optional + additive — clients that ignore it keep working.
  */
 export interface ShannonEventNotification {
   jsonrpc: typeof JSONRPC_VERSION;
@@ -156,7 +167,14 @@ export interface ShannonEventNotification {
 
 export type ShannonEvent =
   | { type: "query.started"; turn_id: string }
-  | { type: "task.progress"; content?: string; tool?: ToolFrame; usage?: UsageFrame }
+  | {
+      type: "task.progress";
+      content?: string;
+      tool?: ToolFrame;
+      usage?: UsageFrame;
+      /** Turn this progress belongs to (WP-15 P2-8). Absent on legacy gateways. */
+      turn_id?: string;
+    }
   | { type: "query.completed"; model: string }
   | { type: "query.failed"; error: string }
   | { type: "query.cancelled" }

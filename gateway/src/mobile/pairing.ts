@@ -92,7 +92,6 @@ export class PairTokenStore {
    * can validate it; in memory mode it lives in the `pending` map.
    */
   issue(): PairTokenRecord {
-    if (!this.filePath) this.pruneExpired();
     const issuedAt = this.now();
     const record: PairTokenRecord = {
       token: generatePairToken(),
@@ -100,9 +99,13 @@ export class PairTokenStore {
       expiresAt: issuedAt + this.ttlMs,
     };
     if (this.filePath) {
+      // WP-15 P2-6: prune expired siblings before appending, so a desktop that
+      // mints QR tokens nobody consumes doesn't grow the JSONL forever.
+      this.pruneExpiredFromFile();
       mkdirSync(dirname(this.filePath), { recursive: true });
       appendFileSync(this.filePath, JSON.stringify(record) + "\n", "utf8");
     } else {
+      this.pruneExpired();
       this.pending.set(record.token, record);
     }
     return record;
@@ -176,6 +179,44 @@ export class PairTokenStore {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(tmp, payload, "utf8");
     renameSync(tmp, path);
+  }
+
+  /**
+   * WP-15 P2-6: file-mode prune, called from `issue()` before it appends.
+   * Rewrites the JSONL without expired (and malformed) lines only when at
+   * least one line is actually dropped — the same tmp+rename atomicity and
+   * the same accepted concurrency window as `consumeFromFile` (a desktop
+   * append landing in the read→rename window is lost; the user can always
+   * mint a fresh token). No file yet → no-op.
+   */
+  private pruneExpiredFromFile(): void {
+    let raw: string;
+    try {
+      raw = readFileSync(this.filePath!, "utf8");
+    } catch {
+      return; // no file yet → nothing to prune
+    }
+    const now = this.now();
+    const survivors: PairTokenRecord[] = [];
+    let removed = false;
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      let rec: PairTokenRecord;
+      try {
+        rec = JSON.parse(trimmed) as PairTokenRecord;
+      } catch {
+        removed = true; // malformed line: dropped, matching consume()'s rewrite
+        continue;
+      }
+      if (typeof rec.token !== "string" || typeof rec.expiresAt !== "number") {
+        removed = true;
+        continue;
+      }
+      if (now < rec.expiresAt) survivors.push(rec);
+      else removed = true;
+    }
+    if (removed) this.rewriteFile(this.filePath!, survivors);
   }
 
   /** Number of outstanding tokens — meaningful in memory mode only. */
