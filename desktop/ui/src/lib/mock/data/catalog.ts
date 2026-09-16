@@ -163,7 +163,7 @@ export const MOCK_INSTALLED_AGENTS: InstalledAgent[] = [
 ]
 
 export interface InstalledAddonInfo {
-  kind: 'mcp_server' | 'skill' | 'agent' | 'plugin' | 'datasource'
+  kind: 'mcp' | 'skill' | 'agent' | 'plugin' | 'datasource'
   name: string
   version: string | null
   installed_at: string | null
@@ -172,9 +172,9 @@ export interface InstalledAddonInfo {
 }
 
 export const MOCK_INSTALLED_ADDONS: InstalledAddonInfo[] = [
-  { kind: 'mcp_server', name: 'filesystem', version: '1.0.0', installed_at: '2026-06-01T09:00:00Z', source: 'official', enabled: true },
-  { kind: 'mcp_server', name: 'github', version: '2.3.1', installed_at: '2026-06-02T14:30:00Z', source: 'verified', enabled: true },
-  { kind: 'mcp_server', name: 'playwright', version: '0.4.0', installed_at: '2026-06-03T11:15:00Z', source: 'verified', enabled: false },
+  { kind: 'mcp', name: 'filesystem', version: '1.0.0', installed_at: '2026-06-01T09:00:00Z', source: 'official', enabled: true },
+  { kind: 'mcp', name: 'github', version: '2.3.1', installed_at: '2026-06-02T14:30:00Z', source: 'verified', enabled: true },
+  { kind: 'mcp', name: 'playwright', version: '0.4.0', installed_at: '2026-06-03T11:15:00Z', source: 'verified', enabled: false },
   { kind: 'skill', name: 'brainstorm', version: '0.3.1', installed_at: '2026-06-15T10:30:00Z', source: 'anthropics/skills', enabled: true },
   { kind: 'skill', name: 'tdd', version: '1.2.0', installed_at: '2026-06-15T10:31:00Z', source: 'obra/superpowers', enabled: true },
   { kind: 'agent', name: 'executor', version: '1.4.0', installed_at: '2026-06-14T08:15:00Z', source: 'obra/superpowers', enabled: true },

@@ -143,7 +143,7 @@ export default function GeneralSettings() {
             <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.language.label' })}</h3>
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.language.help' })}</p>
-          <div className="flex gap-sm">
+          <div className="flex flex-wrap gap-sm">
             {SUPPORTED_LOCALES.map(opt => (
               <Button
                 key={opt.id}

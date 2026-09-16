@@ -129,10 +129,12 @@ describe('Welcome component — 2-step flow', () => {
     expect(screen.getByText('General')).toBeInTheDocument()
   })
 
-  it('starts with no task selected and Continue disabled', () => {
+  it('starts with no task selected and the provider anchor disabled', () => {
     wrap()
     expect(screen.getByRole('button', { name: /General/ })).toHaveAttribute('aria-pressed', 'false')
-    expect(screen.getByText('Continue →')).toBeDisabled()
+    // Review 2026-09-16: step-0 button is a scroll anchor to the provider
+    // card ('Pick a provider ↓'), not a second submit.
+    expect(screen.getByText('Pick a provider ↓')).toBeDisabled()
   })
 
   it('marks task as pressed when clicked', () => {

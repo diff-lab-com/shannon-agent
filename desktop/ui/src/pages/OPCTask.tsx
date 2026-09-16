@@ -90,7 +90,7 @@ export default function OPCTask() {
                       task.status === 'running' || task.status === 'in_progress' ? 'primary' :
                       task.status === 'failed' ? 'error' :
                       'neutral'
-                    }>{task.status}</Badge>
+                    }>{t(`opcTask.status.${task.status}`, { defaultMessage: task.status })}</Badge>
                     {task.assignee ? <span className="font-label-sm text-on-surface-variant">{t('opcTask.assignedTo', { assignee: task.assignee })}</span> : null}
                     {task.priority ? <span className="font-label-sm text-on-surface-variant">{t('opcTask.priority', { priority: task.priority })}</span> : null}
                   </div>

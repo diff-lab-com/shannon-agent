@@ -221,7 +221,11 @@ function groupByKind(rows: InstalledAddonSummary[]): Record<AddonKind, Installed
     plugin: [],
   };
   for (const row of rows) {
-    out[row.kind].push(row);
+    // Unknown kinds must not crash the page (defensive against a newer
+    // backend emitting a kind this build doesn't know).
+    const bucket = out[row.kind];
+    if (bucket) bucket.push(row);
+    else console.warn("[installed] unknown addon kind:", row.kind);
   }
   return out;
 }

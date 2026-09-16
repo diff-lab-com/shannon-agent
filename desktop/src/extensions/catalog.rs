@@ -46,7 +46,7 @@ pub fn featured_vendors() -> Vec<FeaturedVendor> {
             slug: "linear".into(),
             display_name: "Linear".into(),
             description: "Issues, projects, and sprints from Linear.".into(),
-            icon: "linear".into(),
+            icon: "segment".into(),
             category: FeaturedCategory::Productivity,
             trust: TrustLevel::Verified,
             install_kind: FeaturedInstallKind::OAuthRemote {

@@ -152,7 +152,10 @@ export function Header() {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-lg shrink-0 pl-4 border-l border-outline-variant/20 md:border-none md:pl-0">
+        {/* Review 2026-09-16: on phones this cluster forced 579px of unshrinkable
+            width and pushed the whole app into horizontal overflow; mode/model
+            pickers live in the composer chips anyway. */}
+        <div className="hidden md:flex items-center gap-lg shrink-0 pl-4 border-l border-outline-variant/20 md:border-none md:pl-0">
           {/* P1-1 window mode: identify the dedicated window and offer the
               two window controls from the task brief. */}
           {isWindowMode && (

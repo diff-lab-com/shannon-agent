@@ -4,6 +4,37 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Full-surface UI review fixes (2026-09-16)
+
+Playwright sweep of all 24 routes (desktop + mobile viewport) with PM/user
+dual-persona review and 7 journey walkthroughs
+(`docs/design/ui-review-2026-09-16.md`):
+
+- **Installed page crashed** (`reading 'push'`) — mock addon used
+  `kind:'mcp_server'` against a 5-key grouping table; grouping is now
+  defensive against unknown kinds and the mock matches `AddonKind`.
+- **Command palette collapsed to an 8px sliver** — our MD3 token
+  `--spacing-sm: 8px` hijacked Tailwind v4's `max-w-sm` resolution
+  (`--max-width → --spacing → --container`), so every default-size dialog
+  was 8px wide. Container scale restored in `@theme`, `--max-width-sm`
+  pinned, palette carries an explicit width.
+- **Phones rendered a 95px-wide app** — mobile mode never zeroed
+  `--sidebar-w` (280px margin on `main`), plus an unshrinkable 579px header
+  cluster (now hidden under `md`; mode/model pickers live in the composer).
+- **Numbers that contradicted each other** — command-board completion rate
+  (27%) vs task page (19%): OPC metrics mock now derives from MOCK_TASKS;
+  the "In progress" stat renamed "Active" (it sums in_progress+running+
+  pending).
+- Linear vendor icon rendered as giant raw text (not a Material Symbols
+  glyph → `segment`); `<code>` tags leaking into copy; a truncated
+  datasources subtitle; `IN_PROGRESS` badge untranslated; language chips
+  overflowing (now wrap); chat send not anchoring to bottom (virtualizer
+  race); chat bubbles clipping rich content at phone width (now
+  horizontally scrollable); gateway Start/Stop enabled in the wrong states;
+  dead-end empty states on datasources (added Featured link); two missing
+  mock handlers logging on every page; welcome flow's duplicate-looking
+  primary CTA demoted to a scroll anchor.
+
 ### Linux packaging hardening (2026-09-15)
 
 Since preview-capture shipped (0.11), the desktop binary hard-links

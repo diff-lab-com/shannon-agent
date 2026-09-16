@@ -89,14 +89,17 @@ export const MOCK_INBOX_ITEMS: InboxItem[] = [
 ]
 
 export const MOCK_OPC_METRICS: OpcMetrics = {
+  // Review 2026-09-16: keep these DERIVED from MOCK_TASKS (core.ts) so the
+  // command board and the task page never contradict each other again:
+  // total 16, completed 3/16 = 19%, by_status sums to 16.
   total: 16,
-  completion_rate: 27.0,
+  completion_rate: 19.0,
   by_status: [
     { status: 'in_progress', count: 4 },
     { status: 'pending', count: 3 },
     { status: 'queued', count: 2 },
     { status: 'blocked', count: 2 },
-    { status: 'completed', count: 4 },
+    { status: 'completed', count: 3 },
     { status: 'failed', count: 2 },
   ],
   by_priority: [

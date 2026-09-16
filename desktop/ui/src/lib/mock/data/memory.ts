@@ -107,7 +107,7 @@ export const MOCK_FEATURED_VENDORS: FeaturedVendor[] = [
     slug: 'linear',
     display_name: 'Linear',
     description: 'Issues, projects, and sprints from Linear.',
-    icon: 'linear',
+    icon: 'segment',
     category: 'productivity',
     trust: 'verified',
     install_kind: {

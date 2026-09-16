@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
 import {
   listDataSourceCatalog,
   listInstalledDataSources,
@@ -52,6 +53,7 @@ function datasourceIcon(slug: string): string {
  */
 export default function DataSources() {
   const intl = useIntl()
+  const navigate = useNavigate()
   const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
 
   const { search } = useOutletContext<{ search: string }>();
@@ -215,6 +217,15 @@ export default function DataSources() {
           {filtered.length === 0 ? (
             <div className="text-center py-md text-on-surface-variant text-label-md">
               {t('extensions.datasources.noAdapters')}
+              <div className="mt-sm">
+                <button
+                  type="button"
+                  onClick={() => navigate('/extensions/featured')}
+                  className="text-primary hover:underline cursor-pointer"
+                >
+                  {t('extensions.datasources.goFeatured')}
+                </button>
+              </div>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-md">

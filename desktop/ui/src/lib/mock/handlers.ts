@@ -1420,6 +1420,18 @@ export const handlers: Record<string, MockHandler> = {
     demoDevices = demoDevices.filter(d => d.deviceId !== args.deviceId)
     return demoDevices.length < before
   },
+
+  // Review 2026-09-16: these fire from globally-mounted components on every
+  // page (SkillProposalsManager) and from the Welcome flow — the missing
+  // handlers logged "[mock] unhandled Tauri command" on every single route.
+  async list_skill_candidates() {
+    await delay();
+    return [];
+  },
+  async detect_provider_from_env() {
+    await delay();
+    return null;
+  },
 }
 
 export const mockDiagnostics = MOCK_DIAGNOSTICS

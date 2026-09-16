@@ -72,10 +72,13 @@ export function Layout() {
 
   // P1-1 window mode: the sidebar normally owns `--sidebar-w`; without it,
   // pin the variable to zero so Header/main/footer span the full width.
+  // Review 2026-09-16: mobile mode (drawer sidebar) must do the same — the
+  // drawer is an overlay, yet main kept a 280px margin and rendered as a
+  // 95px sliver on phones.
   useEffect(() => {
-    if (!isWindowMode) return
+    if (!isWindowMode && !mobileMode) return
     document.documentElement.style.setProperty('--sidebar-w', '0px')
-  }, [isWindowMode])
+  }, [isWindowMode, mobileMode])
 
   // P1-1 window mode: keep the native window title in sync with the session
   // title (follows renames and Tier-1 auto-titling via the sessions list).

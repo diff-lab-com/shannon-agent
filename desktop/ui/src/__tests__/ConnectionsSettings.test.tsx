@@ -170,13 +170,31 @@ describe('ConnectionsSettings', () => {
   })
 
   it('stops the supervised gateway on click', async () => {
+    // Review 2026-09-16: Stop is disabled while the gateway is stopped — mock
+    // a RUNNING supervisor so the action is enabled, then click it.
+    vi.spyOn(api, 'gatewaySupervisorStatus').mockResolvedValue({
+      managed: true,
+      status: { running: { pid: 1234 } },
+    })
     const stopSpy = vi
       .spyOn(api, 'gatewaySupervisorStop')
       .mockResolvedValue({ managed: true, status: 'stopped' })
     render(<ConnectionsSettings />)
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument())
+    await waitFor(() => {
+      expect(screen.getByTestId('gateway-status-badge')).toHaveTextContent('1234')
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled()
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
     await waitFor(() => expect(stopSpy).toHaveBeenCalled())
+  })
+
+  it('disables Stop while the gateway is stopped (state-driven enablement)', async () => {
+    vi.spyOn(api, 'gatewaySupervisorStatus').mockResolvedValue({
+      managed: true,
+      status: 'stopped',
+    })
+    render(<ConnectionsSettings />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled())
   })
 
   // ── P1.3/P2-1 — mobile dispatch card (pairing entry + channel status) ──────

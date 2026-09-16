@@ -158,7 +158,7 @@ export default function Featured() {
               <div className="p-lg flex flex-col flex-1">
                 <div className="flex items-start justify-between mb-md">
                   <div className={cn("relative w-14 h-14 rounded-2xl bg-gradient-to-br flex items-center justify-center shadow-md", accent.icon)}>
-                    <span className="material-symbols-outlined text-white text-[28px] drop-shadow-sm">
+                    <span className="material-symbols-outlined text-white text-[28px] drop-shadow-sm max-w-full overflow-hidden">
                       {vendor.icon}
                     </span>
                   </div>

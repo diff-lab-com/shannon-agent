@@ -109,7 +109,12 @@ export default function Chat() {
   })
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // Review 2026-09-16: scrollIntoView raced the virtualizer (the end sentinel
+    // is measured before it mounts), leaving the new user bubble mid-viewport.
+    // Scroll the virtualized parent directly instead.
+    const el = scrollParentRef.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    else messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streamingText])
 
   const [slashResult, setSlashResult] = useState<SlashResult | null>(null)
