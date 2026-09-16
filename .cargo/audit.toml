@@ -70,7 +70,18 @@ ignore = [
     # via ratatui → shannon-ui. Not exploitable: shannon-ui never calls
     # LruCache::iter_mut(). Upgrade blocked on ratatui bumping lru.
     "RUSTSEC-2026-0002",
-    # RUSTSEC-2026-0253 (lru 0.12.5 `pop()` use-after-free) was removed here
-    # on 2026-09-16: the dependency tree no longer matches the advisory
-    # (kept in sync with deny.toml's stale-ignore cleanup).
+    # event-listener 5.4.1 — `!Send` tags cross thread boundaries via
+    # StackSlot (unsound). Transitive via zbus → notify-rust →
+    # tauri-plugin-notification → shannon-desktop. Not exploitable: the
+    # Tauri notification path does not share these slots across threads.
+    # Upgrade blocked on zbus bumping event-listener.
+    # NOTE (2026-09-16): this entry lives HERE but not in deny.toml —
+    # cargo-deny 0.20 no longer matches the advisory on our tree (an unused
+    # ignore is a hard failure there), while cargo-audit still hits it and
+    # this job runs `--deny warnings`. The tools disagree; per-tool lists.
+    "RUSTSEC-2026-0221",
+    # lru 0.12.5 — use-after-free in `LruCache::pop()` under panic (unsound).
+    # Same crate/family as RUSTSEC-2026-0002; same per-tool situation as
+    # RUSTSEC-2026-0221 above (deny.toml dropped it, cargo-audit still hits).
+    "RUSTSEC-2026-0253",
 ]
