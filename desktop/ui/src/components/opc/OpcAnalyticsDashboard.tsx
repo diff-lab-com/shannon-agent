@@ -25,6 +25,20 @@ const STATUS_TONES: Record<string, string> = {
   deprecated: 'bg-error/15 text-error border-error/40',
 }
 
+// Review 2026-09-16 (UI-review #18): raw maxima produced odd axis labels
+// (max=5 -> ticks 5/3/0). Round the axis max up to an even number so the
+// three ticks (max / max/2 / 0) are always integers.
+export function niceAxisMax(max: number): number {
+  const ceil = Math.max(1, Math.ceil(max))
+  if (ceil % 2 === 0) return ceil
+  const pow = 10 ** Math.floor(Math.log10(ceil))
+  const candidates = [ceil + 1, ceil + 2, ceil + 3, pow * 2, pow * 5, pow * 10]
+  for (const cand of candidates) {
+    if (cand >= ceil && cand % 2 === 0) return cand
+  }
+  return ceil + 1
+}
+
 function toneFor(status: string): string {
   return STATUS_TONES[status.toLowerCase()] ?? 'bg-outline/15 text-on-surface-variant border-outline/40'
 }
@@ -73,7 +87,7 @@ export default function OpcAnalyticsDashboard() {
 
   if (!metrics) return null
 
-  const maxDaily = Math.max(1, ...metrics.daily.map(d => Math.max(d.created, d.completed)))
+  const maxDaily = niceAxisMax(Math.max(1, ...metrics.daily.map(d => Math.max(d.created, d.completed))))
 
   return (
     <section

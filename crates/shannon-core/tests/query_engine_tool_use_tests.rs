@@ -1000,8 +1000,16 @@ mod openai_truncation_continuation_tests {
         });
         assert_eq!(cost, Some((700, 4216)));
 
-        // Conversation keeps the truncated reasoning for context, the
-        // continuation re-prompt, and the final answer.
+        // WP-15 P0-2: the truncated `<think>` reasoning is routed to Thinking
+        // events (still observable), NOT persisted into the conversation —
+        // reasoning is never re-fed to the provider.
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                QueryEvent::Thinking { content, .. } if content.contains("Now I have a complete picture")
+            )),
+            "truncated reasoning must surface as Thinking events"
+        );
         let history: Vec<_> = events
             .iter()
             .rev()
@@ -1011,10 +1019,10 @@ mod openai_truncation_continuation_tests {
             })
             .expect("at least one ConversationUpdate event");
         assert!(
-            history
+            !history
                 .iter()
                 .any(|m| matches!(&m.content, MessageContent::Text(t) if t.contains("<think>"))),
-            "truncated reasoning must stay in context"
+            "reasoning markup must not be re-fed into the conversation"
         );
         assert!(
             history

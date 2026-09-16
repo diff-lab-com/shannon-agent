@@ -2978,5 +2978,6 @@
   "opcTask.status.completed": "已完成",
   "opcTask.status.failed": "失败",
   "welcome.task.pickProvider": "选择服务商 ↓",
-  "extensions.datasources.goFeatured": "去「精选」看看可安装的数据源"
+  "extensions.datasources.goFeatured": "去「精选」看看可安装的数据源",
+  "tasks.tasksHeader.newMore.aria": "更多新建方式"
 }

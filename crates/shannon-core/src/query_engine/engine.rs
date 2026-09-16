@@ -619,11 +619,21 @@ impl ThinkStreamSplitter {
                 }
                 None => {
                     // Hold back a tail that could be a tag prefix split across
-                    // the next chunk boundary.
+                    // the next chunk boundary. The tag is ASCII, so a real
+                    // prefix always starts on a char boundary — walk back only
+                    // along boundaries (a raw `buf[len-n..]` panics on
+                    // multi-byte text, e.g. Chinese replies).
                     let max_keep = tag.len().saturating_sub(1).min(buf.len());
-                    let keep = (1..=max_keep)
-                        .find(|n| tag.starts_with(&buf[buf.len() - n..]))
-                        .unwrap_or(0);
+                    let mut keep = 0;
+                    for n in 1..=max_keep {
+                        if !buf.is_char_boundary(buf.len() - n) {
+                            continue;
+                        }
+                        if tag.starts_with(&buf[buf.len() - n..]) {
+                            keep = n;
+                            break;
+                        }
+                    }
                     let split_at = buf.len() - keep;
                     if self.in_think {
                         thinking.push_str(&buf[..split_at]);
@@ -5816,6 +5826,30 @@ mod tests {
         let (t, v) = feed_all(&mut s, &["<think>still thinking", " about it"]);
         assert_eq!(t, "still thinking about it");
         assert_eq!(v, "");
+    }
+
+    #[test]
+    fn think_stream_splitter_never_panics_on_multi_byte_text() {
+        // WP-15 CI regression: Chinese replies end in multi-byte chars; the
+        // hold-back used to slice at raw byte offsets and panicked. Real
+        // streaming chunks also split text at arbitrary char boundaries.
+        let text = "在仙女座星系的外环站，指挥官苏瑞收到了信号。<think>规划一下</think>完成。";
+        for split in 0..text.len() {
+            if !text.is_char_boundary(split) {
+                continue;
+            }
+            let mut s = ThinkStreamSplitter::default();
+            let (a, b) = text.split_at(split);
+            let (t, v) = feed_all(&mut s, &[a, b]);
+            assert_eq!(t, "规划一下", "split at {split}");
+            assert_eq!(v, "在仙女座星系的外环站，指挥官苏瑞收到了信号。完成。", "split at {split}");
+        }
+        // A trailing multi-byte char must not panic and must be held back /
+        // flushed as visible text (never a phantom tag prefix).
+        let mut s = ThinkStreamSplitter::default();
+        let (t, v) = feed_all(&mut s, &["指令官苏瑞"]);
+        assert_eq!(t, "");
+        assert_eq!(v, "指令官苏瑞");
     }
 
     #[test]

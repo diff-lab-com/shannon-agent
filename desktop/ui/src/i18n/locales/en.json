@@ -2978,5 +2978,6 @@
   "opcTask.status.completed": "Completed",
   "opcTask.status.failed": "Failed",
   "welcome.task.pickProvider": "Pick a provider ↓",
-  "extensions.datasources.goFeatured": "Browse installable data sources in Featured"
+  "extensions.datasources.goFeatured": "Browse installable data sources in Featured",
+  "tasks.tasksHeader.newMore.aria": "More ways to create"
 }
