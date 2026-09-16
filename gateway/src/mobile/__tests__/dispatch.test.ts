@@ -60,7 +60,7 @@ function eventsOf(ctx: MethodContext): any[] {
     .map((f) => f.params);
 }
 
-function mockEngineClient(events: EngineEvent[]): EngineWsClient {
+export function mockEngineClient(events: EngineEvent[]): EngineWsClient {
   return {
     connect: vi.fn(async () => {}),
     close: vi.fn(async () => {}),

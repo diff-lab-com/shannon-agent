@@ -26,10 +26,11 @@
  *    signature over `${request_id}:${choice}`.
  */
 
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import type { Logger } from "../adapters/types.js";
+import { sharedPushSeq, GAP_WINDOW, type SeqCounter } from "./seq.js";
 import {
   deviceIdFromPublicKey,
   generatePairToken,
@@ -261,10 +262,30 @@ export class DeviceRegistry {
   private readonly filePath?: string;
   private readonly now: () => number;
 
+  /** mtime of the registry file at last read — drives `refreshIfChanged`. */
+  private lastMtimeMs = 0;
+
   constructor(opts: DeviceRegistryOptions = {}) {
     this.filePath = opts.filePath;
     this.now = opts.now ?? Date.now;
     if (this.filePath) this.load();
+  }
+
+  /**
+   * WP-15 T3: re-read the registry file when its mtime moved. The desktop's
+   * revoke path (mobile_revoke_device) rewrites this file out-of-band — an
+   * external revoke must take effect on a LIVE gateway without a restart,
+   * otherwise a stolen phone stays trusted. Cheap: one stat per call.
+   */
+  refreshIfChanged(): void {
+    if (!this.filePath) return;
+    let mtime = 0;
+    try {
+      mtime = statSync(this.filePath).mtimeMs;
+    } catch {
+      return; // no file yet — nothing to refresh
+    }
+    if (mtime !== this.lastMtimeMs) this.load();
   }
 
   /**
@@ -288,21 +309,25 @@ export class DeviceRegistry {
   }
 
   get(deviceId: string): DeviceEntry | null {
+    this.refreshIfChanged();
     return this.entries.get(deviceId) ?? null;
   }
 
   has(deviceId: string): boolean {
+    this.refreshIfChanged();
     return this.entries.has(deviceId);
   }
 
   /** Remove a device. Subsequent signatures from it are rejected. Returns false if absent. */
   revoke(deviceId: string): boolean {
+    this.refreshIfChanged();
     const removed = this.entries.delete(deviceId);
     if (removed) this.persist();
     return removed;
   }
 
   list(): DeviceEntry[] {
+    this.refreshIfChanged();
     return [...this.entries.values()];
   }
 
@@ -320,15 +345,22 @@ export class DeviceRegistry {
     }
     try {
       const parsed = JSON.parse(raw) as DeviceRegistryFile;
+      // Replace wholesale (WP-15 T3): a re-read must reflect external
+      // revocations — merging into the existing map resurrected devices the
+      // desktop had just removed from the file.
+      const fresh = new Map<string, DeviceEntry>();
       if (parsed?.entries && Array.isArray(parsed.entries)) {
         for (const e of parsed.entries) {
           if (e && typeof e.device_id === "string" && typeof e.public_key === "string") {
-            this.entries.set(e.device_id, e);
+            fresh.set(e.device_id, e);
           }
         }
       }
+      this.entries.clear();
+      for (const [k, v] of fresh) this.entries.set(k, v);
+      this.lastMtimeMs = statSync(this.filePath).mtimeMs;
     } catch {
-      // Corrupt file — start empty rather than crashing the gateway.
+      // Corrupt file — keep the in-memory registry rather than crashing.
     }
   }
 
@@ -352,6 +384,8 @@ export interface PairingHandlersOptions {
   resumeClockSkewMs?: number;
   /** Clock injection for tests. */
   now?: () => number;
+  /** WP-15 T4: push cursor (defaults to the process-wide counter). */
+  seq?: SeqCounter;
 }
 
 /** Generic, non-revealing rejection so pair/resume can't act as an oracle. */
@@ -364,6 +398,7 @@ const PAIR_REJECTED = {
 export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandlers {
   const skewMs = opts.resumeClockSkewMs ?? 60_000;
   const now = opts.now ?? Date.now;
+  const seq = opts.seq ?? sharedPushSeq;
 
   return {
     "shannon/pair": async (raw, ctx) => {
@@ -434,8 +469,86 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
         return { kind: "error", code: ShannonError.BAD_PARAMS, message: "invalid device signature" };
       }
       bindSession(ctx, params.device_id);
-      const result: DeviceSessionResult = { device_id: params.device_id, session_id: params.device_id };
+      const result = {
+        device_id: params.device_id,
+        session_id: params.device_id,
+        // WP-15 T4: the resume payload carries the push cursor (mobile
+        // device_resume.dart seeds its live-sync cursor from it).
+        lastSeq: seq.current(),
+      };
       return { kind: "result", result };
+    },
+
+    // ── WP-15 T4: live-sync snapshot / gap-resume ─────────────────────────
+    //
+    // Contract (shannon-mobile live_sync.dart + mock_server.dart): the phone
+    // reads ONLY `lastSeq` from the snapshot; `resume` returns
+    // `{sinceSeq, lastSeq, replayed}` and must fail with GAP_TOO_LARGE when
+    // the cursor is beyond the retained window (the phone then re-snapshots).
+
+    "shannon/snapshot": async () => {
+      return {
+        kind: "result",
+        result: {
+          agents: [],
+          pendingApprovals: [],
+          activeSessions: [],
+          lastSeq: seq.current(),
+        },
+      };
+    },
+
+    "shannon/resume": async (raw) => {
+      const params = (raw ?? {}) as { sinceSeq?: unknown };
+      const sinceSeq =
+        typeof params.sinceSeq === "number" && Number.isFinite(params.sinceSeq)
+          ? Math.floor(params.sinceSeq)
+          : 0;
+      const lastSeq = seq.current();
+      if (lastSeq - sinceSeq > GAP_WINDOW) {
+        return {
+          kind: "error",
+          code: ShannonError.GAP_TOO_LARGE,
+          message: "gap exceeds retained window; use snapshot",
+        };
+      }
+      // The gateway does not retain a replay buffer yet — the phone treats an
+      // empty replay as "cursor at head" and converges via the live stream.
+      return {
+        kind: "result",
+        result: { sinceSeq, lastSeq, replayed: [] },
+      };
+    },
+
+    // ── WP-15 T3: device management RPCs (the desktop revoke path also
+    // rewrites the registry file out-of-band; `refreshIfChanged` picks that
+    // up on the next read). Revoke requires an already-paired session — a
+    // device may revoke itself (logout-everywhere) or any other device.
+
+    "shannon/device.list": async (_raw, ctx) => {
+      if (ctx.sessionId == null || !opts.registry.has(ctx.sessionId)) {
+        return { kind: "error", code: ShannonError.PAIRING_REQUIRED, message: "pair a device first" };
+      }
+      return { kind: "result", result: { devices: opts.registry.list() } };
+    },
+
+    "shannon/device.revoke": async (raw, ctx) => {
+      const params = (raw ?? {}) as { device_id?: unknown };
+      if (typeof params.device_id !== "string" || params.device_id.length === 0) {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: "device_id is required",
+        };
+      }
+      if (ctx.sessionId == null || !opts.registry.has(ctx.sessionId)) {
+        return { kind: "error", code: ShannonError.PAIRING_REQUIRED, message: "pair a device first" };
+      }
+      const removed = opts.registry.revoke(params.device_id);
+      if (removed) {
+        opts.logger.info(`device revoked via RPC: ${params.device_id} (by ${ctx.sessionId})`);
+      }
+      return { kind: "result", result: { device_id: params.device_id, revoked: removed } };
     },
   };
 }
@@ -495,6 +608,9 @@ export function createMobileHandlers(opts: MobileHandlersOptions): MethodHandler
     ...opts.engine,
     requireSession: true,
     verifyDeviceSignature: createRegistryVerifier(opts.registry),
+    // WP-15 T3: revocation must bite on live sessions — every gated RPC
+    // re-checks the registry (which refreshes from disk on read).
+    isDeviceTrusted: (deviceId) => opts.registry.has(deviceId),
   });
   return { ...engine, ...pairing, ...opts.tasks };
 }

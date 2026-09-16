@@ -115,6 +115,11 @@ pub struct ModelsResponse {
 pub struct ModelInfo {
     pub id: String,
     pub provider: String,
+    /// Human-readable display name, when the source catalog carries one
+    /// (WP-15 T5: the gateway's model picker shows labels). Optional and
+    /// omitted when unset, so existing clients keep parsing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// JSON response for `POST /api/tools/list`.

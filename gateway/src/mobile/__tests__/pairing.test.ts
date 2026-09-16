@@ -375,7 +375,12 @@ describe("createMobileHandlers (P1.2 pairing lifecycle)", () => {
       timestamp: ts,
       signature: signMessage(phone.privateKey, resumeMessage(deviceId, ts)),
     });
-    expect(good.result).toEqual({ device_id: deviceId, session_id: deviceId });
+    // WP-15 T4: the resume payload seeds the phone's live-sync cursor.
+    expect(good.result).toEqual({
+      device_id: deviceId,
+      session_id: deviceId,
+      lastSeq: expect.any(Number),
+    });
     socket.close();
 
     // unknown device

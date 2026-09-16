@@ -162,7 +162,13 @@ export type JsonRpcResponse<R> = JsonRpcSuccess<R> | JsonRpcError;
 export interface ShannonEventNotification {
   jsonrpc: typeof JSONRPC_VERSION;
   method: "shannon/event";
-  params: ShannonEvent;
+  params: ShannonEvent & {
+    /**
+     * WP-15 T4: push cursor stamped by the gateway on every notification
+     * (mobile live_sync consumes it; absence is tolerated — legacy gateways).
+     */
+    seq?: number;
+  };
 }
 
 export type ShannonEvent =
@@ -174,6 +180,8 @@ export type ShannonEvent =
       usage?: UsageFrame;
       /** Turn this progress belongs to (WP-15 P2-8). Absent on legacy gateways. */
       turn_id?: string;
+      /** Push cursor (WP-15 T4). */
+      seq?: number;
     }
   | { type: "query.completed"; model: string }
   | { type: "query.failed"; error: string }
@@ -235,6 +243,8 @@ export interface DeviceSessionResult {
   session_id: string;
   /** Human-friendly label echoed back (pair only). */
   device_label?: string | null;
+  /** Push cursor at resume time (WP-15 T4) — seeds the phone's live-sync. */
+  lastSeq?: number;
 }
 
 export interface OkResult {
@@ -290,6 +300,8 @@ export const ShannonError = {
   PAIRING_REQUIRED: -32000,
   BAD_PARAMS: -32001,
   ENGINE_ERROR: -32002,
+  /** Resume cursor beyond the gateway's retained event window (WP-15 T4). */
+  GAP_TOO_LARGE: -32014,
 } as const;
 
 // ── NDJSON codec ───────────────────────────────────────────────────────────

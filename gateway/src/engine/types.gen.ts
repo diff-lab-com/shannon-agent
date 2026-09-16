@@ -45,6 +45,7 @@ export interface HealthResponse {
 
 export interface ModelInfo {
   id: string;
+  name?: string | null;
   provider: string;
 }
 

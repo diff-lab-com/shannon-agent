@@ -346,27 +346,27 @@ async fn models_handler(State(state): State<AppState>) -> Json<ModelsResponse> {
     let provider_str = state.client_config.provider.to_string();
     let model = state.client_config.model.clone();
 
-    // Return a small set of well-known models alongside the configured one.
-    let mut models = vec![
-        ModelInfo {
-            id: "claude-sonnet-4".to_string(),
-            provider: "anthropic".to_string(),
-        },
-        ModelInfo {
-            id: "gpt-4o".to_string(),
-            provider: "openai".to_string(),
-        },
-        ModelInfo {
-            id: "llama3".to_string(),
-            provider: "ollama".to_string(),
-        },
-    ];
+    // WP-15 T5: serve the FULL merged catalog (static registry + models.dev
+    // overlay) with display names — the gateway's model picker proxies this
+    // endpoint. Falls back to the configured model for providers with an
+    // empty catalog.
+    let mut models: Vec<ModelInfo> = crate::model_registry::merged_models_for_provider(
+        state.client_config.provider.clone(),
+    )
+    .into_iter()
+    .map(|m| ModelInfo {
+        id: m.id.to_string(),
+        provider: m.provider.to_string(),
+        name: Some(m.display_name.to_string()),
+    })
+    .collect();
 
     // Add the currently-configured model if it is not already in the list.
     if !models.iter().any(|m| m.id == model) {
         models.push(ModelInfo {
             id: model,
             provider: provider_str,
+            name: None,
         });
     }
 

@@ -32,6 +32,7 @@
  */
 
 import { WebSocket } from "ws";
+import { sharedPushSeq, type SeqCounter } from "./seq.js";
 
 import {
   type ApprovalReq,
@@ -87,6 +88,11 @@ export interface MobileDispatchHubOptions {
   now?: () => number;
   /** Test seam: task ids (default crypto.randomUUID). */
   newTaskId?: () => string;
+  /**
+   * WP-15 T4: push-notification seq counter (defaults to the process-wide
+   * `sharedPushSeq`; tests inject their own for isolation).
+   */
+  seqCounter?: SeqCounter;
 }
 
 export class MobileDispatchHub {
@@ -94,6 +100,7 @@ export class MobileDispatchHub {
   private readonly approvalTimeoutMs: number;
   private readonly now: () => number;
   private readonly newTaskId: () => string;
+  private readonly seq: SeqCounter;
 
   /** deviceId → open, session-bound contexts. */
   private readonly byDevice = new Map<string, Set<MethodContext>>();
@@ -109,6 +116,12 @@ export class MobileDispatchHub {
     this.approvalTimeoutMs = opts.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS;
     this.now = opts.now ?? Date.now;
     this.newTaskId = opts.newTaskId ?? (() => crypto.randomUUID());
+    this.seq = opts.seqCounter ?? sharedPushSeq;
+  }
+
+  /** Current push seq head — feeds `shannon/snapshot` / `shannon/resume`. */
+  get lastSeq(): number {
+    return this.seq.current();
   }
 
   /** Late-bind the router entry point (see `InboundSubmit`). */
@@ -172,14 +185,19 @@ export class MobileDispatchHub {
     return (this.byDevice.get(deviceId)?.size ?? 0) > 0;
   }
 
-  /** Push one ShannonEvent notification to every open socket of the device. */
+  /**
+   * Push one ShannonEvent notification to every open socket of the device.
+   * WP-15 T4: every pushed notification carries a top-level `seq` (the
+   * phone's live-sync cursor; a missing seq is invisible to it).
+   */
   pushEvent(deviceId: string, event: ShannonEvent): boolean {
     const sockets = this.byDevice.get(deviceId);
     if (!sockets || sockets.size === 0) return false;
+    const seq = this.seq.next();
     const frame = JSON.stringify({
       jsonrpc: JSONRPC_VERSION,
       method: "shannon/event",
-      params: event,
+      params: { seq, ...event },
     });
     let delivered = false;
     for (const ctx of sockets) {

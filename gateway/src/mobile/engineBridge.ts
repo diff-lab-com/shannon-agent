@@ -92,6 +92,13 @@ export interface EngineBridgeOptions {
   requireSession?: boolean;
   /** Registry-backed signature verifier; required for approval signing when requireSession is on. */
   verifyDeviceSignature?: DeviceSignatureVerifier;
+  /**
+   * WP-15 T3: is this bound device still in the registry? Checked on every
+   * gated RPC so an out-of-band revoke (desktop UI or `shannon/device.revoke`)
+   * takes effect immediately — the revoked phone gets PAIRING_REQUIRED on its
+   * next call instead of riding a stale bound session forever.
+   */
+  isDeviceTrusted?: (deviceId: string) => boolean;
 }
 
 /** Sentinel key for queries without a session_id (P1.2 replaces it with a device id). */
@@ -115,14 +122,26 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
   /** P1.2 gate: null = proceed; otherwise return this error outcome. */
   const sessionGate = (
     ctx: MethodContext,
-  ): { kind: "error"; code: number; message: string } | null =>
-    requireSession && ctx.sessionId == null
-      ? {
-          kind: "error",
-          code: ShannonError.PAIRING_REQUIRED,
-          message: "pair a device first (shannon/pair or shannon/device.resume)",
-        }
-      : null;
+  ): { kind: "error"; code: number; message: string } | null => {
+    if (!requireSession) return null;
+    if (ctx.sessionId == null) {
+      return {
+        kind: "error",
+        code: ShannonError.PAIRING_REQUIRED,
+        message: "pair a device first (shannon/pair or shannon/device.resume)",
+      };
+    }
+    // WP-15 T3: a bound session whose device was revoked mid-flight is no
+    // longer trusted — every gated RPC re-checks the registry.
+    if (opts.isDeviceTrusted && !opts.isDeviceTrusted(ctx.sessionId)) {
+      return {
+        kind: "error",
+        code: ShannonError.PAIRING_REQUIRED,
+        message: "device revoked — pair again (shannon/pair)",
+      };
+    }
+    return null;
+  };
 
   return {
     // ── streaming query ───────────────────────────────────────────────────
@@ -271,11 +290,36 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       };
     },
 
-    // ── models (minimal; real discovery is a later phase) ─────────────────
+    // ── models ────────────────────────────────────────────────────────────
+    // WP-15 T5: proxy the engine's /api/models catalog (full directory with
+    // display names) so the phone's model picker offers everything. Falls
+    // back to the configured/switched model when the engine is unreachable —
+    // the picker stays usable offline.
     "shannon/model.list": async () => {
       const current = modelOverride ?? opts.defaultModel ?? null;
-      const models = current ? [{ id: current }] : [];
-      return { kind: "result", result: { models, current } satisfies ModelListResult };
+      const fallback = {
+        models: (current ? [{ id: current }] : []) as ModelListResult["models"],
+        current,
+      } satisfies ModelListResult;
+      try {
+        const res = await fetchImpl(`${opts.engineHttpBaseUrl.replace(/\/$/, "")}/api/models`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        if (!res.ok) return { kind: "result", result: fallback };
+        const body = (await res.json()) as {
+          models?: Array<{ id?: unknown; name?: unknown }>;
+        };
+        const models = (body.models ?? [])
+          .filter((m): m is { id: string; name?: string } => typeof m.id === "string" && m.id.length > 0)
+          .map((m) => ({ id: m.id, label: typeof m.name === "string" && m.name.length > 0 ? m.name : m.id }));
+        if (models.length === 0) return { kind: "result", result: fallback };
+        return {
+          kind: "result",
+          result: { models, current } satisfies ModelListResult,
+        };
+      } catch {
+        return { kind: "result", result: fallback };
+      }
     },
 
     "shannon/model.switch": async (raw) => {

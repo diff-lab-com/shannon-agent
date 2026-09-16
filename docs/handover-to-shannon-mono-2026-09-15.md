@@ -181,17 +181,75 @@ bridge 内部自行容忍缺失），或至少在 JSDoc 标注运行时强制条
   网关重启后手机 ≤15s 无感恢复（实测通过）；
 - forget/断开现在真正回到欢迎页（原来卡在 mock 数据壳，重配无入口）。
 
+
 ---
 
-## mono 处理记录（2026-09-15 第二轮，journey 驱动追加条目）
+## 转交任务清单 v2（2026-09-16 汇总，按优先级；本节自包含，可直接转发）
 
-| 条目 | 状态 | 落点 |
+> 以下 5 项是需要 shannon-mono / desktop / CLI 侧处理的**全部**遗留。每项含证据、
+> 建议方向与验收标准。mobile 侧对每一项都已落地自己的防御或等待逻辑（见"mobile 现状"），
+> 因此任何一项的修复都不会要求 mobile 侧同步发版。
+
+### T1 · P0 — 引擎对"经网关的会话"不注入工具目录（tools=[]），审批链路不可达
+- **证据**：引擎 L0 日志 `request/header`：桌面/CLI 会话 `tools=[60+ 完整目录]`，
+  mobile 网关路径的会话 **`tools=[]`**。旁证：模型 think 自述 "the system says my
+  responses weren't recognized as final answers"；MiniMax 厂商工具调用 token 原文
+  `]<]minimax[>[<tool_call>…<invoke name="Write">…` 以文本漏进对话；单个一问一答
+  turn 累计 input_tokens 7万–21万。
+- **建议方向**：① 引擎 ws-query 路径与本地路径共用同一工具目录装配（最可能的根因位）；
+  ② 解析 MiniMax 厂商 token 形态的 tool_call；③ 复核 "final answer 未识别" 的
+  continue-loop——注意 **CLI 无 tools=[] 的会话也复现**（`shannon query` 两个字回答
+  烧 19.8k tokens），说明收束判定是独立缺陷。
+- **验收**：mobile 按 docs/user-journeys-2026-09-15.md §D3（J4）发写文件任务 →
+  手机 2 秒内收到审批卡 → 批准 → 桌面文件落地、任务继续、结果流回手机。
+- **mobile 现状**：审批环（推送→签名决定→幂等）已由 fake 引擎烟测全覆盖；等待中。
+
+### T2 · P1 — CLI `shannon trace show latest` 挂起
+- **证据**：0.11.0 上 100% 复现（>30s 无输出，exit 124）；`trace show <完整UUID>` 秒回
+  且内容正确（含 mobile 创建的会话）。
+- **方向**：排查 latest 解析分支（疑似等锁或等 stdin）。验收：与指定 UUID 等价秒回。
+
+### T3 · P1 — 设备吊销链路缺失（安全，设计确认项）
+- **现状**：手机端断开/解绑只清本地凭据；gateway `DeviceRegistry.revoke(deviceId)`
+  **已存在**（gateway/src/mobile/pairing.ts:299）但没有入口；被解绑的手机在网关侧
+  仍是受信设备——丢机场景目前无解。
+- **方向**：桌面设备管理 UI（列出/吊销）+ `shannon/device.list` /
+  `shannon/device.revoke`（吊销需桌面确认）。验收：吊销后旧手机任意 RPC 收
+  PAIRING_REQUIRED 并退回欢迎页（mobile 已实现该路径）。
+
+### T4 · P2 — 网关缺 snapshot/resume 面（mobile 的 seq 快照/续传无法上线）
+- **现状**：mobile 已实现完整客户端策略（live_sync.dart：`resume(sinceSeq)`，
+  `gapTooLarge` → 快照兜底），带契约测试；因网关无此面**有意未接线**。
+- **方向**：网关提供 `shannon/snapshot` + `shannon/resume(sinceSeq)`，推送事件附 `seq`。
+- **验收**：mobile liveSync 契约测试转绿 + 离线队列按游标重放。
+
+### T5 · P3 — `shannon/model.list` 只回当前模型
+- **现状**：返回 `{models:[{id:current}], current}`。mobile 切换器已兼容（自定义模型
+  ID 自由输入 + 当前模型行）。
+- **方向**：从 providers 配置回完整目录（含 label）。验收：手机切换器出现全目录且
+  可选。
+
+---
+
+## 无需转交（mobile 内部已闭环的决策）
+
+- 自愈梯子（含 retry 竞态守卫）、turn 活动状态机、任务日志双源订阅、明文连接确认
+  （双入口）、审批角标真实化、单复数/文案——均已实现并有测试（300 tests green）。
+- `relay_transport` 两处空 catch：socket 关闭路径的有意降级，保持原样。
+- bind-gen 样板抽 mixin：评估后永久搁置（库私有字段使抽取需公共化 5 个热点文件的
+  内部命名，风险收益不匹配）。
+- liveSync 未接线：等 T4，接线动作 ≈ 一行 watch + 契约测试已就位。
+
+---
+
+## 转交任务清单 v2 处理记录（2026-09-16）
+
+| 条目 | 状态 | 说明 |
 | --- | --- | --- |
-| P0-1 升级：mobile/WS 路径 `tools=[]` | ✅ 已修（根因） | api_server.rs 三个 query 处理器（REST/SSE/WS）原先各自 new 空 `ToolRegistry`，现改用 server 注册表（desktop loopback 经 `with_tools` 注入完整目录）。mobile 路径模型即刻拿到全部工具 |
-| P0-1 升级：MiniMax 厂商 token 文本 tool_call | ✅ 已修 | 引擎新增 `parse_text_tool_calls`（`<tool_call><invoke name=…><parameter …>`，容忍 `]<]minimax[>[` 前缀噪声），无原生调用时优先恢复；裸 bash 块降为次级回退。均过权限/审批门 |
-| P0-1 升级：final-answer continue-loop | ✅ 已修 | `SHANNON_THINK_ONLY_MIN_ANSWER_CHARS` 默认 200→0：仅可见正文**空白**才 nudge。"cli-ok" 这类短真答不再触发"no final answer"循环（7k–21k token 损耗的来源）。env 可调回旧行为；截断续写上限（5 次）维持不变 |
-| CLI P2：`trace show latest` 挂起 | ✅ 已修 | 新增 `SessionStore::latest_id()`（目录 mtime 排序，不解析任何日志）；`list()` 的全量解析路径保留给需要完整元数据的调用方 |
-| CLI：`shannon doctor` 误报 not found | ✅ 已修 | 二进制不在 PATH 时改探测运行中的服务（网关 33430 / 引擎 33420 TCP），在跑则报 "service detected (binary not on PATH)" |
-| 设计问题：设备吊销入口 | ✅ 已存在 | 桌面 设置 → 连接 → 移动调度卡 已有配对设备列表 + 逐设备吊销（确认对话框，走 `mobile_revoke_device`）；mobile 侧反馈与桌面代码现状不符，未做改动 |
+| T1 · P0 tools=[] / MiniMax 文本调用 / continue-loop | ✅ 已修（09-16 早间，commit 0b68686e） | ① api_server 三查询处理器改用 server 注册表（tools=[] 根因）；② `parse_text_tool_calls` 恢复厂商 token 形态调用；③ nudge 阈值 200→0（"cli-ok" 短真答不再循环）。**待 mobile 真机验收（§D3/J4 写文件闭环）**——代码侧无剩余项 |
+| T2 · P1 trace show latest 挂起 | ✅ 已修（0b68686e） | `SessionStore::latest_id()` 走 mtime 扫描，零日志解析；本机实测秒回 |
+| T3 · P1 设备吊销链路 | ✅ 本轮修复（bd1ef882 前后） | ① gateway 新增 `shannon/device.list` / `shannon/device.revoke`（需已配对会话；revoke 含自身=登出他机）；② `DeviceRegistry` 读时按 mtime 刷新 + load 整表替换——**桌面 UI 的带外吊销（改文件）即刻生效于在线网关**，修复了"内存注册表不感知外部吊销"的真缺口；③ engineBridge 信任门：已绑定会话的设备被吊销后，任意 gated RPC 立即 PAIRING_REQUIRED。验收路径（吊销→旧手机任意 RPC 收 PAIRING_REQUIRED→回欢迎页）已被 gateway 集成测试钉住（live-sync.test.ts） |
+| T4 · P2 snapshot/resume/seq | ✅ 本轮实现 | 按 mobile 契约（live_sync.dart/mock_server.dart）：全局单调 `seq`（从 1 起）盖在每条推送 params 顶层（hub.pushEvent 与 query 流两路）；`shannon/snapshot`→`{agents,pendingApprovals,activeSessions,lastSeq}`；`shannon/resume(sinceSeq)`→`{sinceSeq,lastSeq,replayed:[]}`，gap>1000 回 `-32014 gapTooLarge`（手机转 snapshot 兜底）；`shannon/device.resume` 结果附 `lastSeq`。网关重启 seq 归零属安全路径（远游标→gap→快照）。mobile 侧接线（live_sync 激活）由 mobile 侧执行（≈一行 watch） |
+| T5 · P3 model.list 完整目录 | ✅ 本轮实现 | 引擎 `/api/models` 改走 model_registry 合并目录（静态+models.dev overlay，含 `name` 展示名，wire 字段可选向后兼容）；gateway `shannon/model.list` 代理该端点（2s 超时），引擎不可达时回退 current-only |
 
-回归：core lib 2926 ✓ / cli 15 ✓ / desktop check ✓ / clippy 干净。附带：release matrix 新增 AppImage 腿（通用 Linux 产物）；deb/rpm 依赖声明 + 容器门禁见 CHANGELOG「Linux packaging hardening」。
+回归：gateway tsc ✓ + vitest 400 ✓（新增 live-sync.test.ts 20 项验收用例）；core `cargo test` 全量 ✓（含多字节 splitter 回归、截断契约更新用例）；CI run 35063910922 全绿（19 jobs）。
