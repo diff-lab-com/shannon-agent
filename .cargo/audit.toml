@@ -66,23 +66,11 @@ ignore = [
     # crates pinning memmap2 >= 0.9. Re-evaluate when the ecosystem lifts
     # the floor.
     "RUSTSEC-2026-0186",
-    # event-listener 5.4.1 — `!Send` tags cross thread boundaries via
-    # StackSlot (unsound). Transitive via zbus → notify-rust →
-    # tauri-plugin-notification → shannon-desktop. Not exploitable: the
-    # Tauri notification path does not share these slots across threads.
-    # Upgrade blocked on zbus bumping event-listener.
-    "RUSTSEC-2026-0221",
     # lru 0.12.5 — IterMut violates Stacked Borrows (unsound). Transitive
     # via ratatui → shannon-ui. Not exploitable: shannon-ui never calls
     # LruCache::iter_mut(). Upgrade blocked on ratatui bumping lru.
     "RUSTSEC-2026-0002",
-    # lru 0.12.5 — use-after-free in `LruCache::pop()` under panic (unsound).
-    # Same crate/family as RUSTSEC-2026-0002; transitive via ratatui →
-    # shannon-ui. Shannon has NO direct lru usage (grep-verified across
-    # crates/ + desktop/src/), and the bug only manifests when pop() panics
-    # mid-call — ratatui's cache get/put operations are not on a panic path,
-    # so the unsafe state is unreachable. `cargo audit --deny warnings`
-    # escalates `unsound` to an error; `cargo deny` treats it as a warning.
-    # Upgrade blocked on ratatui bumping lru (same blocker as -0002).
-    "RUSTSEC-2026-0253",
+    # RUSTSEC-2026-0253 (lru 0.12.5 `pop()` use-after-free) was removed here
+    # on 2026-09-16: the dependency tree no longer matches the advisory
+    # (kept in sync with deny.toml's stale-ignore cleanup).
 ]

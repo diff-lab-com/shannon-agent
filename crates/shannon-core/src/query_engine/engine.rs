@@ -5842,7 +5842,10 @@ mod tests {
             let (a, b) = text.split_at(split);
             let (t, v) = feed_all(&mut s, &[a, b]);
             assert_eq!(t, "规划一下", "split at {split}");
-            assert_eq!(v, "在仙女座星系的外环站，指挥官苏瑞收到了信号。完成。", "split at {split}");
+            assert_eq!(
+                v, "在仙女座星系的外环站，指挥官苏瑞收到了信号。完成。",
+                "split at {split}"
+            );
         }
         // A trailing multi-byte char must not panic and must be held back /
         // flushed as visible text (never a phantom tag prefix).
