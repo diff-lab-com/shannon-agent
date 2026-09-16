@@ -630,7 +630,11 @@ jobs:
       # semver-baseline-2026-09 — same "no package table" retrieval
       # failure class. New TAG NAME (not a re-point) so the prefix-key
       # cache invalidates.
-      SEMVER_BASELINE: semver-baseline-2026-09-2
+      # Third move (2026-09-16, c10cf94d): WP-15 added a `Thinking` variant to
+      # WsServerMessage (shannon-api-protocol) and reshaped query-engine
+      # internals — intentional minor-cycle breaks. New TAG NAME so the
+      # baseline-rustdoc cache invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-3
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
