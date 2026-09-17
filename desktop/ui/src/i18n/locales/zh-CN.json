@@ -2979,5 +2979,9 @@
   "opcTask.status.failed": "失败",
   "welcome.task.pickProvider": "选择服务商 ↓",
   "extensions.datasources.goFeatured": "去「精选」看看可安装的数据源",
-  "tasks.tasksHeader.newMore.aria": "更多新建方式"
+  "tasks.tasksHeader.newMore.aria": "更多新建方式",
+  "settings.connections.mobile.tlsToggle": "局域网加密（wss）",
+  "settings.connections.mobile.tlsHint": "使用自签名证书为移动通道启用 TLS——手机校验二维码中携带的证书指纹。网关重启后生效。",
+  "settings.connections.mobile.tlsFingerprint": "证书指纹",
+  "settings.connections.mobile.tlsSaved": "局域网加密已更新——重启网关后生效"
 }

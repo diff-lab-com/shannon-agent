@@ -92,9 +92,12 @@ export function pairPopMessage(pairToken: string, devicePublicKeyB64Url: string)
   return `${pairToken}:${devicePublicKeyB64Url}`;
 }
 
-/** `shannon/device.resume` anti-replay: signs deviceId + timestamp. */
-export function resumeMessage(deviceId: string, timestampMs: number): string {
-  return `${deviceId}:${timestampMs}`;
+/** `shannon/device.resume` anti-replay: signs deviceId + timestamp.
+ *  When the client supplies a `nonce` (recommended — the gateway enforces
+ *  single-use per device within the skew window), it is bound into the signed
+ *  message so a captured signature can't be replayed even once. */
+export function resumeMessage(deviceId: string, timestampMs: number, nonce?: string): string {
+  return nonce === undefined ? `${deviceId}:${timestampMs}` : `${deviceId}:${timestampMs}:${nonce}`;
 }
 
 /** `shannon/approval/decide`: mandatory per-decision device signature. */

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 
 import { createConsoleLogger } from "../../../logger.js";
@@ -33,6 +33,8 @@ afterEach(async () => {
 class MockRelay {
   private hosts = new Map<string, WebSocket>();
   private phones = new Map<string, WebSocket>();
+  /** Most recent register frame (for contract assertions). */
+  lastRegister: Record<string, unknown> | null = null;
 
   start(port = 0): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -92,6 +94,9 @@ class MockRelay {
     const role = msg["role"] as string | undefined;
     const sid = msg["sid"] as string;
 
+    if (type === "register") {
+      this.lastRegister = msg;
+    }
     if (type === "register" && role === "host") {
       this.hosts.set(sid, ws);
       ws.send(JSON.stringify({ t: "host_ready", sid }));
@@ -369,6 +374,87 @@ describe("startRelayHost", () => {
     await expect(hostHandle.paired).rejects.toThrow(/pair timeout/i);
   });
 
+  it("surfaces the relay's error code (contract: {t:'error', code})", async () => {
+    // The real shannon-relay sends {"t":"error","code":"bad_sid"|...} —
+    // reading the wrong field used to log a generic "relay error".
+    let hostSock: WebSocket | null = null;
+    const rawWss = new WebSocketServer({ port: 0 });
+    await new Promise<void>((resolve) => rawWss.on("listening", resolve));
+    const rawPort = (rawWss.address() as { port: number }).port;
+    rawWss.on("connection", (ws) => {
+      ws.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const msg = JSON.parse(String(data)) as { t?: string };
+        if (msg.t === "register") {
+          hostSock = ws;
+          ws.send(JSON.stringify({ t: "error", code: "bad_sid" }));
+        }
+      });
+    });
+
+    hostHandle = startRelayHost({
+      relayUrl: `ws://127.0.0.1:${rawPort}`,
+      sid: "sid-error-case",
+      sessionKey: deriveSessionKey("token-error"),
+      handlers: healthHandlers(),
+      logger,
+      pairTimeout: 5000,
+    });
+
+    await expect(hostHandle.paired).rejects.toThrow(/bad_sid/);
+    (hostSock as WebSocket | null)?.close();
+    await new Promise<void>((resolve) => rawWss.close(() => resolve()));
+  });
+
+  it("auto-reconnects and re-registers after the relay drops the host socket", async () => {
+    let registrations = 0;
+    let hostSock: WebSocket | null = null;
+    const rawWss = new WebSocketServer({ port: 0 });
+    await new Promise<void>((resolve) => rawWss.on("listening", resolve));
+    const rawPort = (rawWss.address() as { port: number }).port;
+    rawWss.on("connection", (ws) => {
+      ws.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const msg = JSON.parse(String(data)) as { t?: string; sid?: string };
+        if (msg.t === "register") {
+          registrations += 1;
+          hostSock = ws;
+          ws.send(JSON.stringify({ t: "host_ready", sid: msg.sid }));
+        }
+      });
+    });
+
+    hostHandle = startRelayHost({
+      relayUrl: `ws://127.0.0.1:${rawPort}`,
+      sid: "sid-reconnect-case",
+      sessionKey: deriveSessionKey("token-reconnect"),
+      handlers: healthHandlers(),
+      logger,
+      pairTimeout: 30_000,
+    });
+
+    const waitFor = (cond: () => boolean, ms: number): Promise<void> =>
+      new Promise((resolve, reject) => {
+        const started = Date.now();
+        const tick = (): void => {
+          if (cond()) return resolve();
+          if (Date.now() - started > ms) return reject(new Error("timeout waiting for condition"));
+          setTimeout(tick, 50);
+        };
+        tick();
+      });
+
+    await waitFor(() => registrations === 1, 2000);
+    // Hard-drop the host leg (relay restart / network blip). The host must
+    // re-register on its own — without auto-reconnect it stays unreachable
+    // until a gateway restart.
+    hostSock!.terminate();
+    await waitFor(() => registrations >= 2, 5000);
+    await hostHandle!.stop();
+    hostHandle = null;
+    await new Promise<void>((resolve) => rawWss.close(() => resolve()));
+  });
+
   it("re-pairs after phone reconnects (recv counter resets)", async () => {
     const relay = new MockRelay();
     const relayPort = await relay.start(0);
@@ -496,5 +582,117 @@ describe("startRelayHost", () => {
       version: "test",
     });
     phoneWs2.close();
+  });
+});
+
+// ── v0.3: handshake auth tag + X25519 E2E (forward secrecy) ──────────────────
+
+import { createPublicKey, diffieHellman, generateKeyPairSync } from "node:crypto";
+import {
+  deriveRelayAuthTag,
+  deriveSessionKeyV2,
+  e2eHelloFrame,
+  generateHostE2EKeyPair,
+} from "../e2e.js";
+
+/** Phone-side shared secret: X25519(phonePriv, hostPub). */
+function phoneShared(phonePriv: ReturnType<typeof generateKeyPairSync>["privateKey"], hostPubB64: string): Buffer {
+  return diffieHellman({
+    privateKey: phonePriv,
+    publicKey: createPublicKey({ key: { kty: "OKP", crv: "X25519", x: hostPubB64 }, format: "jwk" }),
+  });
+}
+
+describe("startRelayHost v0.3 handshake", () => {
+  it("sends the register frame with the relay auth tag", async () => {
+    const relay = new MockRelay();
+    const relayPort = await relay.start(0);
+    const relayUrl = `ws://127.0.0.1:${relayPort}`;
+    const pairToken = "tag-token";
+
+    hostHandle = startRelayHost({
+      relayUrl,
+      sid: "sid-tag",
+      sessionKey: deriveSessionKey(pairToken),
+      handlers: healthHandlers(),
+      logger,
+      pairTimeout: 5000,
+      relayAuthTag: deriveRelayAuthTag(pairToken),
+    });
+
+    // Wait for registration (host_ready) then assert the frame contract.
+    await vi.waitFor(() => expect(relay.lastRegister).not.toBeNull());
+    expect(relay.lastRegister!["tag"]).toBe(deriveRelayAuthTag(pairToken));
+    expect(relay.lastRegister!["role"]).toBe("host");
+  });
+
+  it("completes the e2e v2 handshake (e2e_hello → token-mixed ECDH key)", async () => {
+    const relay = new MockRelay();
+    const relayPort = await relay.start(0);
+    const relayUrl = `ws://127.0.0.1:${relayPort}`;
+    const pairToken = "ecdh-token";
+    const hostKeypair = generateHostE2EKeyPair();
+
+    hostHandle = startRelayHost({
+      relayUrl,
+      sid: "sid-ecdh",
+      sessionKey: Buffer.from("legacy-fallback-key-not-used-in-ecdh!!!", "utf8").subarray(0, 32),
+      handlers: healthHandlers(),
+      logger,
+      pairTimeout: 5000,
+      hostE2E: { privateKey: hostKeypair.privateKey, pairToken },
+    });
+
+    const { ws: phoneWs } = await connectPhone(relayUrl, "sid-ecdh");
+
+    // Phone generates its ephemeral keypair and sends the plaintext hello.
+    const phoneKeypair = generateKeyPairSync("x25519");
+    const phoneJwk = (phoneKeypair.publicKey.export({ format: "jwk" }) as { x: string }).x;
+    phoneWs.send(e2eHelloFrame(phoneJwk));
+
+    // Both sides derive the same v2 key from token || X25519 shared.
+    const shared = phoneShared(phoneKeypair.privateKey, hostKeypair.pubB64);
+    const k = deriveSessionKeyV2(pairToken, shared);
+    const phoneSend = new E2eChannel(k);
+    const phoneRecv = new E2eChannel(k);
+
+    phoneWs.send(
+      phoneSend.seal(Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: 7, method: "shannon/health" }), "utf8")),
+    );
+    const response = JSON.parse(await nextDecodedMessage(phoneWs, phoneRecv));
+    expect(response.id).toBe(7);
+    expect(response.result).toEqual({ gateway: "ok", engine: "ok", version: "test" });
+    phoneWs.close();
+  });
+
+  it("falls back to the legacy token key when the first frame is not a hello", async () => {
+    const relay = new MockRelay();
+    const relayPort = await relay.start(0);
+    const relayUrl = `ws://127.0.0.1:${relayPort}`;
+    const pairToken = "legacy-token";
+    const legacyKey = deriveSessionKey(pairToken);
+    const hostKeypair = generateHostE2EKeyPair();
+
+    hostHandle = startRelayHost({
+      relayUrl,
+      sid: "sid-legacy",
+      sessionKey: legacyKey,
+      handlers: healthHandlers(),
+      logger,
+      pairTimeout: 5000,
+      hostE2E: { privateKey: hostKeypair.privateKey, pairToken },
+    });
+
+    const { ws: phoneWs } = await connectPhone(relayUrl, "sid-legacy");
+    // Old phone: no hello — the first frame is already legacy-sealed.
+    const phoneSend = new E2eChannel(legacyKey);
+    const phoneRecv = new E2eChannel(legacyKey);
+    phoneWs.send(
+      phoneSend.seal(Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: 8, method: "shannon/health" }), "utf8")),
+    );
+    const response = JSON.parse(await nextDecodedMessage(phoneWs, phoneRecv));
+    expect(response.id).toBe(8);
+    expect(response.result.version).toBe("test");
+    phoneWs.close();
   });
 });

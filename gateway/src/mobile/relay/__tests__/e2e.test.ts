@@ -3,10 +3,17 @@ import { describe, expect, it } from "vitest";
 import {
   E2eChannel,
   FRAME_VERSION,
+  deriveRelayAuthTag,
   deriveSessionKey,
+  deriveSessionKeyV2,
+  e2eHelloFrame,
   hkdfExpand,
   hkdfExtract,
+  hostSharedSecret,
+  isE2eHello,
 } from "../e2e.js";
+
+import { createPrivateKey } from "node:crypto";
 
 const TEST_KEY = Buffer.alloc(32, 0x42);
 
@@ -248,5 +255,52 @@ describe("HKDF key derivation vectors", () => {
     expect(key.toString("hex")).toBe(
       "8fc2767fba0fe4c0a2d99331282c16e12ceaff9e7cdc7147db45320e3366bb1d",
     );
+  });
+});
+
+describe("v0.3 X25519 + relay auth tag vectors", () => {
+  // GOLDEN VECTOR — frozen 2026-09-17. Pins the v2 (forward-secrecy) key
+  // schedule end-to-end from FIXED X25519 scalars, so the Dart twin
+  // (shannon-mobile e2e_kdf_golden_test.dart) can pin the same mapping.
+  // Scalars: host = 0x11*32, phone = 0x22*32 (clamped by the algorithm);
+  // shared = X25519(hostPriv, phonePub) = X25519(phonePriv, hostPub).
+  const hostPrivRaw = Buffer.from("11".repeat(32), "hex");
+  const phonePubB64 = "D6poTtKIZ7l_Smot7l34zpdOdrcBjj8iocTPJnhXDyA";
+
+  function x25519PrivFromRaw(raw: Buffer) {
+    // PKCS8-wrapped raw x25519 scalar (prefix + 32-byte key).
+    return createPrivateKey({
+      key: Buffer.concat([
+        Buffer.from("302e020100300506032b656e04220420", "hex"),
+        raw,
+      ]),
+      format: "der",
+      type: "pkcs8",
+    });
+  }
+
+  it("derives the v2 session key from token + X25519 shared (cross-language pin)", () => {
+    const hostPriv = x25519PrivFromRaw(hostPrivRaw);
+    const shared = hostSharedSecret(hostPriv, phonePubB64);
+    expect(shared.toString("hex")).toBe(
+      "9e004098efc091d4ec2663b4e9f5cfd4d7064571690b4bea97ab146ab9f35056",
+    );
+    const k = deriveSessionKeyV2("golden-pair-token", shared);
+    expect(k.toString("hex")).toBe(
+      "6a5341b2e59fc3ce87ca83f0b917066a227c38d6d921368e4fff250ce72c1258",
+    );
+  });
+
+  it("derives the relay auth tag (cross-language pin)", () => {
+    expect(deriveRelayAuthTag("golden-pair-token")).toBe("Yhei15hHOWdqZchZKLiNNw");
+  });
+
+  it("e2e_hello frames round-trip through isE2eHello", () => {
+    const pub = "D6poTtKIZ7l_Smot7l34zpdOdrcBjj8iocTPJnhXDyA";
+    const hello = isE2eHello(e2eHelloFrame(pub));
+    expect(hello).toEqual({ pub });
+    // Non-hello payloads (e.g. a legacy sealed frame starting 0x01…) don't parse.
+    expect(isE2eHello(Buffer.from([0x01, 0x00, 0x00]))).toBeNull();
+    expect(isE2eHello(Buffer.from("{\"t\":\"hello\",\"pub\":\"x\"}"))).toBeNull();
   });
 });

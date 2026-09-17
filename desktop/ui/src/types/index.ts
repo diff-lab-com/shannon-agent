@@ -214,6 +214,17 @@ export interface GatewayMobileConfig {
   port?: number
   tokensFile?: string
   devicesFile?: string
+  /// v0.12 LAN hardening: serve the mobile face over wss with the persisted
+  /// self-signed cert; phones pin the QR-carried fingerprint. Default off.
+  tls?: { enabled?: boolean }
+}
+
+/// `mobile_tls_status` result — config flag + live cert material info.
+export interface MobileTlsStatus {
+  enabled: boolean
+  /// SHA-256 (lowercase hex) of the gateway's self-signed cert; present only
+  /// after the gateway first boots with TLS on (null until then).
+  fingerprint: string | null
 }
 
 export interface GatewayConfig {

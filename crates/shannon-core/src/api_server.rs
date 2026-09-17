@@ -350,16 +350,15 @@ async fn models_handler(State(state): State<AppState>) -> Json<ModelsResponse> {
     // overlay) with display names — the gateway's model picker proxies this
     // endpoint. Falls back to the configured model for providers with an
     // empty catalog.
-    let mut models: Vec<ModelInfo> = crate::model_registry::merged_models_for_provider(
-        state.client_config.provider.clone(),
-    )
-    .into_iter()
-    .map(|m| ModelInfo {
-        id: m.id.to_string(),
-        provider: m.provider.to_string(),
-        name: Some(m.display_name.to_string()),
-    })
-    .collect();
+    let mut models: Vec<ModelInfo> =
+        crate::model_registry::merged_models_for_provider(state.client_config.provider.clone())
+            .into_iter()
+            .map(|m| ModelInfo {
+                id: m.id.to_string(),
+                provider: m.provider.to_string(),
+                name: Some(m.display_name.to_string()),
+            })
+            .collect();
 
     // Add the currently-configured model if it is not already in the list.
     if !models.iter().any(|m| m.id == model) {
@@ -1391,9 +1390,18 @@ mod tests {
         let body = read_body(response.into_body()).await;
         let models: ModelsResponse = serde_json::from_slice(&body).unwrap();
         assert!(!models.models.is_empty());
-        assert!(models.models.iter().any(|m| m.id == "claude-sonnet-4"));
-        assert!(models.models.iter().any(|m| m.id == "gpt-4o"));
-        assert!(models.models.iter().any(|m| m.id == "llama3"));
+        // The test config uses LlmProvider::Ollama, which has no static
+        // MODEL_CATALOG entries (local Ollama models are detected at runtime,
+        // never hardcoded) — so the endpoint serves the documented fallback:
+        // the currently-configured model, tagged with its provider.
+        assert!(
+            models
+                .models
+                .iter()
+                .any(|m| m.id == "test-model" && m.provider == "ollama"),
+            "expected the configured-model fallback, got: {:?}",
+            models.models
+        );
     }
 
     #[tokio::test]
@@ -1990,10 +1998,12 @@ mod tests {
                 ModelInfo {
                     id: "gpt-4o".to_string(),
                     provider: "openai".to_string(),
+                    name: Some("GPT-4o".to_string()),
                 },
                 ModelInfo {
                     id: "llama3".to_string(),
                     provider: "ollama".to_string(),
+                    name: None,
                 },
             ],
         };

@@ -30,6 +30,8 @@ export interface EngineWsClientOptions {
   model?: string | null;
   /** Default session id (UUID string) for conversation continuity. */
   sessionId?: string | null;
+  /** Extra handshake headers (e.g. `authorization` for the engine bearer). */
+  headers?: Record<string, string>;
 }
 
 const KNOWN_EVENT_TYPES: ReadonlySet<EngineEventType> = new Set([
@@ -90,11 +92,13 @@ export class EngineWsClient {
   private readonly url: string;
   private readonly defaultModel: string | null;
   private readonly defaultSessionId: string | null;
+  private readonly headers: Record<string, string>;
 
   constructor(options: EngineWsClientOptions) {
     this.url = options.url;
     this.defaultModel = options.model ?? null;
     this.defaultSessionId = options.sessionId ?? null;
+    this.headers = options.headers ?? {};
   }
 
   get isConnected(): boolean {
@@ -104,7 +108,10 @@ export class EngineWsClient {
   /** Open the socket and wait for it to be ready. Idempotent. */
   async connect(): Promise<void> {
     if (this.socket) return;
-    const socket = new WebSocket(this.url);
+    const socket =
+      Object.keys(this.headers).length > 0
+        ? new WebSocket(this.url, { headers: this.headers })
+        : new WebSocket(this.url);
     await waitForOpen(socket);
     socket.on("message", (data) => this.onMessage(data));
     socket.on("close", () => this.onSocketClosed());

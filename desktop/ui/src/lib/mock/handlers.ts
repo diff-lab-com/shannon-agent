@@ -1420,6 +1420,10 @@ export const handlers: Record<string, MockHandler> = {
     demoDevices = demoDevices.filter(d => d.deviceId !== args.deviceId)
     return demoDevices.length < before
   },
+  async mobile_tls_status() {
+    await delay(20)
+    return { enabled: false, fingerprint: null }
+  },
 
   // Review 2026-09-16: these fire from globally-mounted components on every
   // page (SkillProposalsManager) and from the Welcome flow — the missing

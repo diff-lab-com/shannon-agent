@@ -74,6 +74,32 @@ export interface PairTokenStoreOptions {
   filePath?: string;
 }
 
+/**
+ * Parse one JSONL token record. Canonical keys are camelCase (what `issue`
+ * writes and what the gateway consumes); older desktop builds wrote snake_case
+ * (`issued_at`/`expires_at`) which the strict camelCase read silently dropped —
+ * desktop-minted QR tokens then never validated. Accept both on read.
+ */
+function parseTokenRecord(line: string): PairTokenRecord | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const token = r.token;
+  const issuedAt = r.issuedAt ?? r.issued_at;
+  const expiresAt = r.expiresAt ?? r.expires_at;
+  if (typeof token !== "string" || typeof expiresAt !== "number") return null;
+  return {
+    token,
+    issuedAt: typeof issuedAt === "number" ? issuedAt : 0,
+    expiresAt,
+  };
+}
+
 export class PairTokenStore {
   /** Used only in memory mode (no `filePath`). */
   private readonly pending = new Map<string, PairTokenRecord>();
@@ -148,13 +174,8 @@ export class PairTokenStore {
     for (const line of raw.split("\n")) {
       const trimmed = line.trim();
       if (trimmed.length === 0) continue;
-      let rec: PairTokenRecord;
-      try {
-        rec = JSON.parse(trimmed) as PairTokenRecord;
-      } catch {
-        continue; // tolerate a malformed line rather than failing the pair
-      }
-      if (typeof rec.token !== "string" || typeof rec.expiresAt !== "number") continue;
+      const rec = parseTokenRecord(trimmed);
+      if (!rec) continue; // tolerate a malformed line rather than failing the pair
       if (rec.token === token) {
         // Match: consume unconditionally (single-use). Valid only if not expired.
         consumed = now < rec.expiresAt ? rec : null;
@@ -203,15 +224,9 @@ export class PairTokenStore {
     for (const line of raw.split("\n")) {
       const trimmed = line.trim();
       if (trimmed.length === 0) continue;
-      let rec: PairTokenRecord;
-      try {
-        rec = JSON.parse(trimmed) as PairTokenRecord;
-      } catch {
+      const rec = parseTokenRecord(trimmed);
+      if (!rec) {
         removed = true; // malformed line: dropped, matching consume()'s rewrite
-        continue;
-      }
-      if (typeof rec.token !== "string" || typeof rec.expiresAt !== "number") {
-        removed = true;
         continue;
       }
       if (now < rec.expiresAt) survivors.push(rec);
@@ -242,6 +257,31 @@ export interface DeviceEntry {
   label: string | null;
   added_at: number;
   last_seen_at: number;
+}
+
+/**
+ * Canonical on-disk/wire entry keys are snake_case (the desktop's Rust struct
+ * mirrors this file). Older desktop builds wrote camelCase; those entries used
+ * to be silently dropped here — under wholesale-replace semantics that un-trusted
+ * every device. Accept both on read; `persist` always writes snake_case.
+ */
+function normalizeDeviceEntry(e: unknown): DeviceEntry | null {
+  if (typeof e !== "object" || e === null) return null;
+  const r = e as Record<string, unknown>;
+  const deviceId = r.device_id ?? r.deviceId;
+  const publicKey = r.public_key ?? r.publicKey;
+  const addedAt = r.added_at ?? r.addedAt;
+  const lastSeenAt = r.last_seen_at ?? r.lastSeenAt;
+  if (typeof deviceId !== "string" || typeof publicKey !== "string") return null;
+  if (typeof addedAt !== "number" || typeof lastSeenAt !== "number") return null;
+  const label = r.label;
+  return {
+    device_id: deviceId,
+    public_key: publicKey,
+    label: typeof label === "string" ? label : null,
+    added_at: addedAt,
+    last_seen_at: lastSeenAt,
+  };
 }
 
 interface DeviceRegistryFile {
@@ -351,9 +391,8 @@ export class DeviceRegistry {
       const fresh = new Map<string, DeviceEntry>();
       if (parsed?.entries && Array.isArray(parsed.entries)) {
         for (const e of parsed.entries) {
-          if (e && typeof e.device_id === "string" && typeof e.public_key === "string") {
-            fresh.set(e.device_id, e);
-          }
+          const entry = normalizeDeviceEntry(e);
+          if (entry) fresh.set(entry.device_id, entry);
         }
       }
       this.entries.clear();
@@ -400,6 +439,30 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
   const now = opts.now ?? Date.now;
   const seq = opts.seq ?? sharedPushSeq;
 
+  // Anti-replay state (per process, per device):
+  //  - resumeWatermarks: nonce-less (legacy) resumes must carry a strictly
+  //    newer timestamp than the last successful one — a captured resume can't
+  //    be replayed after its device has legitimately resumed again.
+  //  - usedNonces: nonce-bearing resumes are single-use within the skew window
+  //    (nonce → watermark ts, pruned once outside the window).
+  const resumeWatermarks = new Map<string, number>();
+  const usedNonces = new Map<string, Map<string, number>>();
+
+  function claimNonce(deviceId: string, nonce: string, timestamp: number): boolean {
+    let seen = usedNonces.get(deviceId);
+    if (!seen) {
+      seen = new Map();
+      usedNonces.set(deviceId, seen);
+    }
+    // Prune expired siblings opportunistically.
+    for (const [n, ts] of seen) {
+      if (now() - ts > skewMs) seen.delete(n);
+    }
+    if (seen.has(nonce)) return false;
+    seen.set(nonce, timestamp);
+    return true;
+  }
+
   return {
     "shannon/pair": async (raw, ctx) => {
       const params = (raw ?? {}) as Partial<PairParams>;
@@ -440,11 +503,16 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
 
     "shannon/device.resume": async (raw, ctx) => {
       const params = (raw ?? {}) as Partial<DeviceResumeParams>;
+      const nonce =
+        typeof params.nonce === "string" && params.nonce.length > 0 && params.nonce.length <= 128
+          ? params.nonce
+          : undefined;
       if (
         typeof params.device_id !== "string" ||
         typeof params.signature !== "string" ||
         typeof params.timestamp !== "number" ||
-        !Number.isFinite(params.timestamp)
+        !Number.isFinite(params.timestamp) ||
+        (params.nonce !== undefined && nonce === undefined)
       ) {
         return {
           kind: "error",
@@ -458,15 +526,42 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
       }
       const age = Math.abs(now() - params.timestamp);
       if (age > skewMs) {
-        return { kind: "error", code: ShannonError.BAD_PARAMS, message: "timestamp outside skew window" };
+        return {
+          kind: "error",
+          code: ShannonError.CLOCK_SKEW,
+          message: "timestamp outside skew window",
+        };
       }
       const ok = verifyMessage(
         entry.public_key,
-        resumeMessage(params.device_id, params.timestamp),
+        resumeMessage(params.device_id, params.timestamp, nonce),
         params.signature,
       );
       if (!ok) {
         return { kind: "error", code: ShannonError.BAD_PARAMS, message: "invalid device signature" };
+      }
+      // Replay defense, after the signature check so only well-signed resumes
+      // consume the single-use slots.
+      if (nonce !== undefined) {
+        if (!claimNonce(params.device_id, nonce, params.timestamp)) {
+          return {
+            kind: "error",
+            code: ShannonError.CLOCK_SKEW,
+            message: "resume replayed (nonce already used)",
+          };
+        }
+      } else {
+        // Legacy (no nonce) fallback: the timestamp must strictly advance past
+        // this device's last successful resume.
+        const watermark = resumeWatermarks.get(params.device_id) ?? Number.NEGATIVE_INFINITY;
+        if (params.timestamp <= watermark) {
+          return {
+            kind: "error",
+            code: ShannonError.CLOCK_SKEW,
+            message: "stale resume timestamp (replayed?)",
+          };
+        }
+        resumeWatermarks.set(params.device_id, params.timestamp);
       }
       bindSession(ctx, params.device_id);
       const result = {
@@ -486,7 +581,10 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
     // `{sinceSeq, lastSeq, replayed}` and must fail with GAP_TOO_LARGE when
     // the cursor is beyond the retained window (the phone then re-snapshots).
 
-    "shannon/snapshot": async () => {
+    "shannon/snapshot": async (_raw, ctx) => {
+      if (ctx.sessionId == null || !opts.registry.has(ctx.sessionId)) {
+        return { kind: "error", code: ShannonError.PAIRING_REQUIRED, message: "pair a device first" };
+      }
       return {
         kind: "result",
         result: {
@@ -498,7 +596,10 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
       };
     },
 
-    "shannon/resume": async (raw) => {
+    "shannon/resume": async (raw, ctx) => {
+      if (ctx.sessionId == null || !opts.registry.has(ctx.sessionId)) {
+        return { kind: "error", code: ShannonError.PAIRING_REQUIRED, message: "pair a device first" };
+      }
       const params = (raw ?? {}) as { sinceSeq?: unknown };
       const sinceSeq =
         typeof params.sinceSeq === "number" && Number.isFinite(params.sinceSeq)
@@ -544,9 +645,21 @@ export function createPairingHandlers(opts: PairingHandlersOptions): MethodHandl
       if (ctx.sessionId == null || !opts.registry.has(ctx.sessionId)) {
         return { kind: "error", code: ShannonError.PAIRING_REQUIRED, message: "pair a device first" };
       }
+      // Scope: an RPC holder may revoke ONLY itself (logout-everywhere).
+      // Revoking OTHER devices is an administrative action — the desktop UI
+      // owns it (it can require a human confirmation, which a stolen phone
+      // could never pass). Without this, any paired device (e.g. a stolen
+      // one) could eject every other device and take the gateway solo.
+      if (params.device_id !== ctx.sessionId) {
+        return {
+          kind: "error",
+          code: ShannonError.BAD_PARAMS,
+          message: "only your own device can be revoked here; revoke others from the desktop",
+        };
+      }
       const removed = opts.registry.revoke(params.device_id);
       if (removed) {
-        opts.logger.info(`device revoked via RPC: ${params.device_id} (by ${ctx.sessionId})`);
+        opts.logger.info(`device revoked via RPC: ${params.device_id} (self)`);
       }
       return { kind: "result", result: { device_id: params.device_id, revoked: removed } };
     },

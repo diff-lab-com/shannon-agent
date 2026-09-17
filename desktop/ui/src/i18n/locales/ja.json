@@ -2939,5 +2939,9 @@
   "chat.input.effort.max": "最大",
   "shortcutsHelp.composer.title": "コンポーザー操作 — 3 つすべて有効",
   "settings.models.quickSwitch.label": "モデル切替",
-  "settings.models.quickSwitch.placeholder": "モデルを検索…"
+  "settings.models.quickSwitch.placeholder": "モデルを検索…",
+  "settings.connections.mobile.tlsToggle": "LAN 暗号化（wss）",
+  "settings.connections.mobile.tlsHint": "自己署名証明書でモバイルチャネルに TLS を提供します。スマートフォンは QR コード内の証明書フィンガープリントを検証します。ゲートウェイの再起動後に有効になります。",
+  "settings.connections.mobile.tlsFingerprint": "証明書フィンガープリント",
+  "settings.connections.mobile.tlsSaved": "LAN 暗号化を更新しました。ゲートウェイの再起動後に適用されます"
 }
