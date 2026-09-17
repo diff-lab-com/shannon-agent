@@ -108,4 +108,20 @@ pier run -p ~/eval-corpora/deep-swe/tasks/<task-id> \
   超时后回退本地，非致命）——**每波发车前跑 preflight-network.sh 四点探针**（GLM API、
   docker hub、ECR public、ECR 镜像拉取）。
 - 预构建镜像在 `public.ecr.aws`：P1 冒烟前手动 `docker pull` 一枚验证可达性（ECR 匿名
-  限流是 T1 已知 infra 噪声源）。
+  限流是 T1 已知 infra 噪声源）。实测：镜像 ~2.6GB/题（含共享基础层），ECR 匿名拉取正常。
+
+## 五、冒烟 RCA 记录（smoke-1/2，2026-09-18）
+
+1. **smoke-1 exit 127（shannon: command not found）**：pier 把 `install_spec()` 步骤按指纹
+   内联进派生镜像（`agent-build-context/Dockerfile` FROM 任务镜像 + RUN 步骤，指纹
+   `d7b2941ec377796c`），随后 `environment.agent_install_spec` 非空 → 基类 `setup()` 判定
+   「已预装」→ 跳过 `install()` → 二进制从未进容器。**修复**：adapter 覆写 `setup()`
+   无条件执行真实安装（upload + install + version 探测）。
+2. **prompt 字节级核验（L3）**：start 事件 prompt 与 `instruction.md` 逐字节一致，仅
+   **末尾换行被 pier 剥掉**（1845 vs 1846 字符）——harness 层行为，对所有 agent 一致，
+   不做补偿。
+3. **容器内 LLM 出网**：`network_allowlist()=["open.bigmodel.cn"]` 生效，no-network 任务
+   中 GLM 调用正常（turn 循环推进）；shannon 的 bwrap 沙箱在容器内缺失时按设计降级
+   NoSandbox（TB 已验证的同一路径）。
+4. 冒烟早期实测：2.5 分钟推进到 turn 3 / ~30k tokens——与 GLM 单轮 30-110s 延迟一致，
+   P2 的并发/墙钟模型按此校准（单题期望 1-2.5h，3 并发全量约 2-4 天）。
