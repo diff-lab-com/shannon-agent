@@ -215,6 +215,20 @@ class Shannon(BaseInstalledAgent):
             env.update(self._extra_env)
         env.setdefault("SHANNON_STREAM_IDLE_SECS", DEFAULT_STREAM_IDLE_SECS)
 
+        # Web tools off: the official harness (mini-swe-agent) has no web
+        # access, and DeepSWE agent containers are no-network except the LLM
+        # endpoint — shannon's WebFetch/WebSearch would only burn turns failing
+        # (parity with wrapper-glm's eval default; not a capability change).
+        disallowed = os.environ.get(
+            "SHANNON_DISALLOWED_TOOLS", "WebFetch WebSearch"
+        )
+        disallowed_flags = ""
+        if disallowed.strip():
+            tools = " ".join(
+                shlex.quote(t) for t in disallowed.split()
+            )
+            disallowed_flags = f"--disallowed-tools {tools} "
+
         cli_flags = self.build_cli_flags()
         extra_flags = (cli_flags + " ") if cli_flags else ""
 
@@ -239,6 +253,7 @@ class Shannon(BaseInstalledAgent):
             f"--provider {shlex.quote(provider)} "
             f"--model {shlex.quote(model)} "
             "--output-format json-stream "
+            f"{disallowed_flags}"
             f"{extra_flags}"
             f"--prompt=\"$(cat {shlex.quote(prompt_target)})\" "
             "> /logs/agent/shannon.ndjson 2> /logs/agent/shannon.stderr"
