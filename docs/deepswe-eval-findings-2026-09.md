@@ -42,6 +42,16 @@ model.patch 0 字节、reward F2P 0/88（P2P 275/275）。
 **「假成功」分级**：F2 是「假失败」（作废成果，infra 噪声）；F2-b 更危险——「假成功」
 （rc=0 但任务未完成），对真实用户同样是直接危害（agent 停在半路还说完成了）。
 
+### F5（A8/A8b 生产验证，smoke-6）：同题从 0 分 infra 死亡到 86/88 近满解
+smoke-6（59m52s，bandit 同题第 6 次运行）：A8 在生产中真实触发一次
+（`Turn LLM call interrupted (upstream cutoff); continuing turn 1/2`，NDJSON 有续推
+Progress 事件），run 存活走完全程；交付 50706 字节真实 patch 并 commit；官方 verifier
+判 F2P **86/88（97.7%）**、P2P 275/275、partial 0.994；binary reward=0（2 个 CLI
+旗标优先级语义测试未过——模型能力层失败，非 infra）。
+**对照**：同题 smoke-2/4/5 分别死于上游切断（×2）与静默断流（×1），均为 0 分。
+**结论**：闸门 1 通过；A8+A8b 是本周期首个有对照证据的产品改进。
+bandit 题 2 个 CLI 语义测试失败归因（模型 vs 提示）入 P3 分析。
+
 ### F3（产品缺陷候选，待定夺 P3）：stderr turn 计数非单调
 smoke-2/4 中 stderr `turn N` 显示 7→5、12→11 回退。疑压缩/重试后的显示口径问题。
 C1 修复（`55c980fd`）只修了 events.jsonl 的 turn 字段。影响：轨迹可读性与分析准确性。
