@@ -332,6 +332,29 @@ export const handlers: Record<string, MockHandler> = {
       .map(s => renamedSessions.get(s.id) ?? s)
       .filter(s => s.title.toLowerCase().includes(q))
   },
+  // P0 plan dock: a demo plan so the dock's 计划 tab has content in mock mode.
+  async get_session_plan(args: { workingDir?: string }) {
+    await delay()
+    if (!args?.workingDir) return null
+    return {
+      id: 'demo-plan',
+      title: 'Q3 roadmap execution plan',
+      status: 'approved',
+      created_at: new Date(Date.now() - 3600_000).toISOString(),
+      content: [
+        '## Steps',
+        '',
+        '1. OAuth scaffolding for the 5 launch partners',
+        '2. Webhook reliability SLA (99.95%) — retries + dead-letter queue',
+        '3. Billing schema v2 dual-write, cutover behind a flag',
+        '4. Onboarding product tour ship + activation instrumentation',
+        '',
+        '- [x] Survey partner API surface',
+        '- [ ] Draft the OAuth gallery spec',
+        '- [ ] Load-test the webhook path',
+      ].join('\n'),
+    }
+  },
   async load_session() { await delay(); return clone(MOCK_MESSAGES) },
   async switch_session() { await delay(); return clone(MOCK_MESSAGES) },
   async delete_session(args: { id: string }) { await delay(60); deletedSessions.add(args.id); return true },

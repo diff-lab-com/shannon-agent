@@ -137,7 +137,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
   const dragging = useRef(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const { createSession, sessions, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree } = useSessions();
+  const { createSession, sessions, sessionActivity, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree } = useSessions();
   const { status } = useCatalog();
   const intl = useIntl();
   const { stats: inboxStats, refresh: refreshInboxStats } = useInboxStats();
@@ -316,6 +316,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
         ) : (
           <SessionsSection
             sessions={sessions}
+            sessionActivity={sessionActivity}
             currentSessionId={currentSessionId}
             switchSession={switchSession}
             renameSession={renameSession}

@@ -1,6 +1,7 @@
 import { useT } from '@/i18n'
 import { Banner } from '@/components/ui/banner'
 import type { RefObject } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/ui/button'
 import WelcomeState from '@/components/WelcomeState'
@@ -8,13 +9,45 @@ import { MessageBubble } from '@/components/chat/MessageBubble'
 import StreamingResponse from '@/components/chat/StreamingResponse'
 import { useChat } from '@/context/ChatContext'
 import { useCatalog } from '@/context/CatalogContext'
+import { useSessions } from '@/context/SessionContext'
 import { useComposer } from './ComposerContext'
-import { useMemo } from 'react'
+import * as api from '@/lib/tauri-api'
 
 // Virtualization only kicks in past the threshold. Below it, the overhead
 // of measuring/positioning outweighs the win from fewer DOM nodes — and
 // jsdom can't provide real dimensions, so tests would render zero items.
 const VIRTUALIZE_THRESHOLD = 30
+
+/**
+ * P1-⑤ telemetry: tool_use_id → duration (ms) from the session's L0 trace
+ * timeline — one IPC per session, giving every historical tool card its
+ * authoritative duration (live cards measure client-side instead).
+ * Best-effort: failures just leave the cards without a duration label.
+ */
+function useToolDurationLookup(sessionId: string | null): Map<string, number> {
+  const [lookup, setLookup] = useState<Map<string, number>>(() => new Map())
+  useEffect(() => {
+    if (!sessionId) {
+      setLookup(new Map())
+      return
+    }
+    let cancelled = false
+    api.getTraceTimeline(sessionId)
+      .then(tl => {
+        if (cancelled) return
+        const map = new Map<string, number>()
+        for (const turn of tl.turns) {
+          for (const tool of turn.tools) {
+            if (tool.duration_ms != null) map.set(tool.tool_use_id, tool.duration_ms)
+          }
+        }
+        setLookup(map)
+      })
+      .catch(() => { /* durations are opportunistic */ })
+    return () => { cancelled = true }
+  }, [sessionId])
+  return lookup
+}
 
 interface MessageAreaProps {
   scrollParentRef: RefObject<HTMLDivElement | null>
@@ -48,6 +81,8 @@ export default function MessageArea({
   setDiffPaths,
 }: MessageAreaProps) {
   const { messages, streamingText, thinkingText, activeToolCalls, checkpoints, rewindSession } = useChat()
+  const { currentSessionId } = useSessions()
+  const durationLookup = useToolDurationLookup(currentSessionId)
   const checkpointTurns = useMemo(() => checkpoints.map(c => c.turn_index), [checkpoints])
   const rewind = useMemo(() => {
     return (msgIndex: number) => {
@@ -80,7 +115,7 @@ export default function MessageArea({
                 className="pb-lg"
                 style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vItem.start}px)` }}
               >
-                <MessageBubble message={msg} messageIndex={vItem.index} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} rewindTurnIndex={rewind(vItem.index)} onRewind={rewindSession} />
+                <MessageBubble message={msg} messageIndex={vItem.index} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} rewindTurnIndex={rewind(vItem.index)} onRewind={rewindSession} durationLookup={durationLookup} />
               </div>
             )
           })}
@@ -91,7 +126,7 @@ export default function MessageArea({
         <div role="log" aria-live="polite" aria-label={t('chat.history.aria')}>
           {messages.map((msg, i) => (
             <div key={`${msg.timestamp}-${i}`} className="pb-lg">
-              <MessageBubble message={msg} messageIndex={i} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} rewindTurnIndex={rewind(i)} onRewind={rewindSession} />
+              <MessageBubble message={msg} messageIndex={i} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} rewindTurnIndex={rewind(i)} onRewind={rewindSession} durationLookup={durationLookup} />
             </div>
           ))}
         </div>

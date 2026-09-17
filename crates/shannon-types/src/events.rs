@@ -212,6 +212,17 @@ pub struct SessionInfo {
     pub parent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch_point: Option<usize>,
+    /// P0 sidebar telemetry: true while this session has a live query
+    /// (joined from the session registry at list time). `serde(default)` +
+    /// `skip_serializing_if` keep older desktop builds / wire consumers
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running: Option<bool>,
+    /// P0 sidebar telemetry: epoch **milliseconds** of the session's last
+    /// activity (events.jsonl mtime at list time). `None` when the L0 log
+    /// is missing (e.g. brand-new in-memory session).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
 }
 
 /// Session loaded event with messages.
@@ -557,11 +568,17 @@ mod tests {
             working_dir: None,
             parent_id: None,
             branch_point: None,
+            running: None,
+            updated_at: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(!json.contains("working_dir"));
         assert!(!json.contains("parent_id"));
         assert!(!json.contains("branch_point"));
+        // P0 sidebar telemetry fields are additive and skipped when None —
+        // the wire shape stays byte-identical for older consumers.
+        assert!(!json.contains("running"));
+        assert!(!json.contains("updated_at"));
     }
 
     #[test]

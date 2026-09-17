@@ -38,6 +38,10 @@ interface MessageBubbleProps {
   /** Conversation turn this message owns, when it is rewindable (/rewind). */
   rewindTurnIndex?: number | null
   onRewind?: (turnIndex: number) => Promise<void>
+  /** P1-⑤ telemetry: tool_use_id → duration (ms) from the session's L0
+   *  trace timeline — the authoritative durations for historical messages
+   *  (live tool calls carry their own client-measured duration_ms). */
+  durationLookup?: Map<string, number>
 }
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
@@ -164,7 +168,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   )
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind, durationLookup }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const [isBranching, setIsBranching] = useState(false)
   const [pendingBranch, setPendingBranch] = useState(false)
@@ -364,7 +368,18 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                 ) : null
               })()}
               {message.tool_calls.map(tc => (
-                <ToolCallDisplay key={tc.tool_use_id} toolCall={tc} onViewDiff={onViewDiff} />
+                tc.tool_name === 'agent_spawn' ? (
+                  // P1-⑥: sub-agents get a first-class collapsible block
+                  // instead of a generic tool card (ZCode's 子智能体段).
+                  <SubagentBlock key={tc.tool_use_id} toolCall={tc} />
+                ) : (
+                  <ToolCallDisplay
+                    key={tc.tool_use_id}
+                    toolCall={tc}
+                    onViewDiff={onViewDiff}
+                    durationMs={durationLookup?.get(tc.tool_use_id)}
+                  />
+                )
               ))}
             </div>
           )}
@@ -433,20 +448,37 @@ function extractFilePath(toolName: string, input: unknown): string | null {
   return FILE_MUTATING_TOOLS.has(toolName) ? raw : null
 }
 
-export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewDiff }: { toolCall: ToolCall; onViewDiff: (path: string) => void }) {
+/** P1-⑤ telemetry: compact wall-clock label — 842 ms · 5.2 s · 1m04s. */
+export function formatToolDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)} ms`
+  const s = ms / 1000
+  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`
+  const m = Math.floor(s / 60)
+  return `${m}m${String(Math.round(s % 60)).padStart(2, '0')}s`
+}
+
+export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewDiff, durationMs: durationMsProp }: { toolCall: ToolCall; onViewDiff: (path: string) => void; durationMs?: number }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const [expanded, setExpanded] = useState(false)
+  // P1-⑤: error cards default open — the failure text is the content the
+  // user asked about; healthy calls stay collapsed (ZCode delta ⑤).
+  const [expanded, setExpanded] = useState(toolCall.is_error === true)
   const statusIcon = toolCall.status === 'running' ? 'hourglass_empty' : toolCall.status === 'error' ? 'error' : 'check_circle'
   const statusColor = toolCall.status === 'running' ? 'text-secondary' : toolCall.status === 'error' ? 'text-error' : 'text-tertiary'
   const filePath = extractFilePath(toolCall.tool_name, toolCall.tool_input)
   const canDiff = filePath != null && toolCall.status === 'completed' && !toolCall.is_error
+  const durationMs = toolCall.duration_ms ?? durationMsProp
 
   return (
     <Tool name={toolCall.tool_name} status={toolCall.status} className="p-sm">
       <ToolHeader onClick={() => setExpanded(!expanded)}>
         <span className={cn('material-symbols-outlined icon-sm', statusColor, toolCall.status === 'running' ? 'animate-spin' : '')}>{statusIcon}</span>
         <span className="font-label-md text-on-surface flex-1 truncate">{toolCall.tool_name}</span>
+        {toolCall.status !== 'running' && durationMs != null && (
+          <span className="font-mono text-label-xs tabular-nums text-on-surface-variant/80 shrink-0" aria-hidden="true">
+            {formatToolDuration(durationMs)}
+          </span>
+        )}
         {canDiff && (
           <Button
             variant="ghost"
@@ -478,5 +510,76 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
         </ToolContent>
       )}
     </Tool>
+  )
+})
+
+/**
+ * P1-⑥ (ZCode delta): first-class collapsible block for `agent_spawn` tool
+ * calls — sub-agent runs render as their own timeline section (name, model,
+ * team, spawn prompt + result summary) instead of a generic tool card.
+ * Engine note: desktop only sees the spawn's tool pair today (no
+ * SubagentStart/Stop event bridge yet), so the block tracks the spawn
+ * lifecycle, not the sub-agent's internal progress.
+ */
+export const SubagentBlock = memo(function SubagentBlock({ toolCall }: { toolCall: ToolCall }) {
+  const intl = useIntl()
+  const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
+  const [expanded, setExpanded] = useState(false)
+  const input = (toolCall.tool_input ?? {}) as Record<string, unknown>
+  const name = typeof input.name === 'string' ? input.name : ''
+  const model = typeof input.model === 'string' ? input.model : null
+  const team = typeof input.team === 'string' ? input.team : null
+  const maxTurns = typeof input.max_turns === 'number' ? input.max_turns : null
+  const systemPrompt = typeof input.system_prompt === 'string' ? input.system_prompt : ''
+  const statusIcon = toolCall.status === 'running' ? 'hourglass_empty' : toolCall.status === 'error' ? 'error' : 'check_circle'
+  const statusColor = toolCall.status === 'running' ? 'text-secondary' : toolCall.status === 'error' ? 'text-error' : 'text-tertiary'
+  const durationMs = toolCall.duration_ms
+
+  return (
+    <div
+      className="rounded-xl border border-primary/20 bg-primary/5 overflow-hidden"
+      data-testid="subagent-block"
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+        className="w-full flex items-center gap-sm px-sm py-xs text-left cursor-pointer hover:bg-primary/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+      >
+        <span className="material-symbols-outlined icon-sm text-primary shrink-0" aria-hidden="true">account_tree</span>
+        <span className="font-label-md text-on-surface flex-1 truncate">
+          {t('chat.subagent.title', { name: name || t('chat.subagent.unnamed') })}
+        </span>
+        {model && (
+          <span className="font-mono text-label-xs text-on-surface-variant px-xs py-[1px] rounded bg-surface-container shrink-0" aria-hidden="true">{model}</span>
+        )}
+        {team && (
+          <span className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded bg-surface-container shrink-0" aria-hidden="true">{team}</span>
+        )}
+        {toolCall.status !== 'running' && durationMs != null && (
+          <span className="font-mono text-label-xs tabular-nums text-on-surface-variant/80 shrink-0" aria-hidden="true">
+            {formatToolDuration(durationMs)}
+          </span>
+        )}
+        <span className={cn('material-symbols-outlined icon-sm shrink-0', statusColor, toolCall.status === 'running' ? 'animate-spin' : '')} aria-hidden="true">{statusIcon}</span>
+        <span className="material-symbols-outlined icon-sm text-on-surface-variant" aria-hidden="true">{expanded ? 'expand_less' : 'expand_more'}</span>
+      </button>
+      {expanded && (
+        <div className="px-sm pb-sm space-y-sm">
+          {maxTurns != null && (
+            <p className="font-label-sm text-on-surface-variant">{t('chat.subagent.maxTurns', { count: maxTurns })}</p>
+          )}
+          {systemPrompt && (
+            <pre className="text-body-sm text-on-surface-variant bg-surface-container p-sm rounded-lg overflow-x-auto max-h-[160px] whitespace-pre-wrap">{systemPrompt}</pre>
+          )}
+          {toolCall.result && (
+            <pre className={cn(
+              'text-body-sm p-sm rounded-lg overflow-x-auto max-h-[200px]',
+              toolCall.is_error ? 'bg-error/5 text-error' : 'bg-surface-container text-on-surface-variant',
+            )}>{toolCall.result}</pre>
+          )}
+        </div>
+      )}
+    </div>
   )
 })

@@ -148,6 +148,9 @@ vi.mock('@/lib/tauri-api', () => ({
     approval_mode: 'normal',
   }),
   configure: vi.fn().mockResolvedValue(undefined),
+  // P0-③/P1-⑤: plan dock + tool-duration lookup (both opportunistic reads).
+  getSessionPlan: vi.fn().mockResolvedValue(null),
+  getTraceTimeline: vi.fn().mockResolvedValue({ session_id: 's', turns: [], cumulative: [] }),
   // ADR-0011 B3/B7 — surface identity + bundled CLI install.
   getSurfaceInfo: vi.fn().mockResolvedValue({ surface: 'desktop', version: '0.11.0' }),
   getCliInstallStatus: vi.fn().mockResolvedValue({
