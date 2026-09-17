@@ -1390,9 +1390,18 @@ mod tests {
         let body = read_body(response.into_body()).await;
         let models: ModelsResponse = serde_json::from_slice(&body).unwrap();
         assert!(!models.models.is_empty());
-        assert!(models.models.iter().any(|m| m.id == "claude-sonnet-4"));
-        assert!(models.models.iter().any(|m| m.id == "gpt-4o"));
-        assert!(models.models.iter().any(|m| m.id == "llama3"));
+        // The test config uses LlmProvider::Ollama, which has no static
+        // MODEL_CATALOG entries (local Ollama models are detected at runtime,
+        // never hardcoded) — so the endpoint serves the documented fallback:
+        // the currently-configured model, tagged with its provider.
+        assert!(
+            models
+                .models
+                .iter()
+                .any(|m| m.id == "test-model" && m.provider == "ollama"),
+            "expected the configured-model fallback, got: {:?}",
+            models.models
+        );
     }
 
     #[tokio::test]
