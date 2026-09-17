@@ -39,8 +39,8 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
 use crate::commands_connections::{
-    gateway_read_config, write_gateway_config_atomic, GatewayConfig, GatewayMobileConfig,
-    GatewayMobileTlsConfig,
+    GatewayConfig, GatewayMobileConfig, GatewayMobileTlsConfig, gateway_read_config,
+    write_gateway_config_atomic,
 };
 
 /// Default port the gateway binds its mobile `shannon/*` WS server on. Mirrors
@@ -346,10 +346,10 @@ pub async fn mobile_tls_status() -> Result<MobileTlsStatus, String> {
 #[tauri::command]
 pub async fn mobile_set_tls(enabled: bool) -> Result<MobileTlsStatus, String> {
     let mut config: GatewayConfig = gateway_read_config().await?;
-    let mobile = config.mobile.get_or_insert_with(|| default_mobile_config());
+    let mobile = config.mobile.get_or_insert(default_mobile_config());
     let tls = mobile
         .tls
-        .get_or_insert_with(|| GatewayMobileTlsConfig { enabled: false });
+        .get_or_insert(GatewayMobileTlsConfig { enabled: false });
     tls.enabled = enabled;
     write_gateway_config_atomic(&config)?;
     mobile_tls_status().await

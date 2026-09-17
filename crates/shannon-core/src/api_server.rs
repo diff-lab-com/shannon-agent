@@ -350,16 +350,15 @@ async fn models_handler(State(state): State<AppState>) -> Json<ModelsResponse> {
     // overlay) with display names — the gateway's model picker proxies this
     // endpoint. Falls back to the configured model for providers with an
     // empty catalog.
-    let mut models: Vec<ModelInfo> = crate::model_registry::merged_models_for_provider(
-        state.client_config.provider.clone(),
-    )
-    .into_iter()
-    .map(|m| ModelInfo {
-        id: m.id.to_string(),
-        provider: m.provider.to_string(),
-        name: Some(m.display_name.to_string()),
-    })
-    .collect();
+    let mut models: Vec<ModelInfo> =
+        crate::model_registry::merged_models_for_provider(state.client_config.provider.clone())
+            .into_iter()
+            .map(|m| ModelInfo {
+                id: m.id.to_string(),
+                provider: m.provider.to_string(),
+                name: Some(m.display_name.to_string()),
+            })
+            .collect();
 
     // Add the currently-configured model if it is not already in the list.
     if !models.iter().any(|m| m.id == model) {
