@@ -233,6 +233,12 @@ class Shannon(BaseInstalledAgent):
         if self._extra_env:
             env.update(self._extra_env)
         env.setdefault("SHANNON_STREAM_IDLE_SECS", DEFAULT_STREAM_IDLE_SECS)
+        # Total per-request wall-clock (engine default 300s) must exceed the
+        # content-idle watchdog AND GLM's observed ~312s thinking silences:
+        # smoke-2 died rc=3 at turn 8 when one long thinking call tripped the
+        # 300s total timeout, killing the run with 42 tool calls uncommitted
+        # (empty patch → F2P 0). 1800s backstops the 420s idle watchdog.
+        env.setdefault("SHANNON_TIMEOUT", "1800")
 
         # Web tools off: the official harness (mini-swe-agent) has no web
         # access, and DeepSWE agent containers are no-network except the LLM

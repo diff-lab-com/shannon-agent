@@ -121,7 +121,17 @@ pier run -p ~/eval-corpora/deep-swe/tasks/<task-id> \
    **末尾换行被 pier 剥掉**（1845 vs 1846 字符）——harness 层行为，对所有 agent 一致，
    不做补偿。
 3. **容器内 LLM 出网**：`network_allowlist()=["open.bigmodel.cn"]` 生效，no-network 任务
-   中 GLM 调用正常（turn 循环推进）；shannon 的 bwrap 沙箱在容器内缺失时按设计降级
-   NoSandbox（TB 已验证的同一路径）。
-4. 冒烟早期实测：2.5 分钟推进到 turn 3 / ~30k tokens——与 GLM 单轮 30-110s 延迟一致，
-   P2 的并发/墙钟模型按此校准（单题期望 1-2.5h，3 并发全量约 2-4 天）。
+   中 GLM 调用正常（pier 经 `pier-egress-proxy` sidecar 实现白名单代理）；shannon 的
+   bwrap 沙箱在容器内缺失时按设计降级 NoSandbox（TB 已验证的同一路径）。
+4. **smoke-2（1h0m，rc=3 死于第 8 轮）**：引擎默认单请求**总**超时 300s
+   （`unified_config.rs:607` `unwrap_or(300)` → `client.rs:903` request.timeout）撞上
+   GLM 思考型长调用（已录得 312s+ 静默）→ "Request timed out" → rc=3 → 42 次工具调用的
+   工作未 commit → `git diff base..HEAD` 空 patch → 判分 F2P 0/88、P2P 275/275。
+   **adapter 修复**：`SHANNON_TIMEOUT` 默认 1800s（>420s 看门狗，任务级 3h 不受影响）。
+   **P3 产品候选（附证据）**：看门狗默认 420s 与总超时默认 300s 自相矛盾——对 GLM 类
+   长思考模型，默认配置会把健康流当超时杀死；「总超时应让位于无字节进度判据」是通用
+   改进项，非 DeepSWE 特化。
+5. 冒烟早期实测：2.5 分钟推进到 turn 3 / ~30k tokens；smoke-2 全程 1h 推进 8 轮 /
+   ~54k tokens / 42 工具调用——GLM 单轮 3-8 分钟（思考延迟主导），单题期望 1-2.5h，
+   3 并发全量约 2-4 天，与方案预估一致。另观察到 stderr turn 计数 7→5 回退（疑压缩后
+   显示口径），列入 P3 观测性核对。
