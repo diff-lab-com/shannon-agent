@@ -284,6 +284,25 @@ impl ApiError {
         is_ollama_malformed_message(message)
     }
 
+    /// Check whether this error belongs to the timeout / transient-transport
+    /// class that the headless runner classifies as `Timeout`
+    /// (`shannon-cli` `classify_headless_failure`: "timed out" / "timeout" /
+    /// "error sending request").
+    ///
+    /// A8 (turn-level stream-death continuation, DeepSWE smoke-2/4 RCA —
+    /// docs/research/pier-adapter-notes-2026-09.md §五): the engine's turn
+    /// loop uses this to decide whether a dead LLM call may be retried in
+    /// place instead of failing the whole run. The words are matched against
+    /// this error's **Display string** — the exact string that ends up in
+    /// `QueryEvent::Failed` and that the CLI classifier sees — so the two
+    /// classifications cannot drift.
+    pub fn is_timeout_class(&self) -> bool {
+        let lower = self.to_string().to_lowercase();
+        lower.contains("timed out")
+            || lower.contains("timeout")
+            || lower.contains("error sending request")
+    }
+
     /// Return a user-facing suggestion for how to resolve this error.
     pub fn user_suggestion(&self) -> Option<String> {
         if self.is_token_overflow() {
@@ -582,6 +601,57 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── A8: timeout-class detection ─────────────────────────────────────
+
+    /// The three matching words must stay identical to the headless
+    /// classifier (`shannon-cli` `classify_headless_failure`, which maps the
+    /// `QueryEvent::Failed` string to `HeadlessExitCode::Timeout`): matching
+    /// happens on the error's Display string so both sides see the same text
+    /// and cannot drift.
+    #[test]
+    fn test_is_timeout_class_matches_headless_classification_words() {
+        // Word 1+2: "timeout" — the dedicated variant and provider strings.
+        assert!(ApiError::Timeout.is_timeout_class());
+        let provider_timeout = ApiError::ProviderError {
+            provider: "zhipu-coding".to_string(),
+            error_type: "timeout_error".to_string(),
+            message: "upstream request timeout".to_string(),
+        };
+        assert!(provider_timeout.is_timeout_class());
+        // "timed out" — reqwest's TimedOut source surfaces as this wording.
+        assert!(
+            ApiError::InvalidResponse("operation timed out while streaming".to_string())
+                .is_timeout_class()
+        );
+        // "error sending request" — reqwest Kind::Request (P1-3 class).
+        assert!(ApiError::InvalidResponse(
+            "client error (SendRequest): error sending request for url (http://x)".to_string()
+        )
+        .is_timeout_class());
+    }
+
+    /// Non-timeout classes must not be continuable: A8 must never swallow
+    /// rate limits, auth failures, or malformed output.
+    #[test]
+    fn test_is_timeout_class_rejects_other_classes() {
+        assert!(
+            !ApiError::RateLimitExceeded {
+                retry_after_secs: None
+            }
+            .is_timeout_class()
+        );
+        assert!(!ApiError::AuthenticationFailed.is_timeout_class());
+        assert!(
+            !ApiError::ProviderError {
+                provider: "ollama".to_string(),
+                error_type: "ollama_error".to_string(),
+                message: "Value looks like object, but can't find closing '}' symbol".to_string(),
+            }
+            .is_timeout_class()
+        );
+        assert!(!ApiError::InvalidResponse("model not found".to_string()).is_timeout_class());
     }
 
     /// Error message + suggestion must not duplicate content between the two.

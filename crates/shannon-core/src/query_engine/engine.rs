@@ -454,6 +454,55 @@ const THINK_ONLY_NUDGE_PROMPT: &str = "Your previous response contained no tool 
 /// it did before this feature existed.
 const DEFAULT_THINK_ONLY_NUDGE_MAX: u32 = 2;
 
+// ── Turn-level stream-death continuation (A8) ─────────────────────────────
+//
+// DeepSWE smoke RCA (smoke-2 turn 8 / smoke-4 turn 14, three attempts all
+// dead; docs/research/pier-adapter-notes-2026-09.md §五): the GLM
+// coding-plan gateway hard-cuts a single LLM call at ~6 minutes. With
+// thinking=max a long-thinking turn routinely crosses that line, the stream
+// dies mid-turn, the engine surfaced a Timeout-class `QueryEvent::Failed`,
+// and the whole headless run was lost — every prior turn and tool result
+// with it (rc=3, empty patch). The client-level reconnect and the run-level
+// A7 restart both replay from scratch and re-enter the same >6min call.
+//
+// A8 instead continues THE TURN in place: on a timeout-class stream death
+// (establishment or mid-stream), re-send with all history and prior tool
+// state intact, plus a one-shot continuation nudge from the second attempt
+// on. Bounded by `SHANNON_TURN_RETRIES` (default 2, 0 disables — naming
+// aligned with the run-level `SHANNON_RUN_RETRIES`); on exhaustion the
+// existing failure path runs unchanged so A7 remains the last line.
+
+/// Re-prompt appended when a turn's LLM call is retried after a
+/// timeout-class stream death. Verbatim from the A8 plan; pinned by test.
+const TURN_CONTINUATION_NUDGE_PROMPT: &str = "Your previous response stream was \
+     interrupted by a network fault. Continue from where you stopped. Keep this \
+     response focused and moderately sized.";
+
+/// Default per-turn retry budget for A8 continuation
+/// (`SHANNON_TURN_RETRIES`; "0" legitimately disables).
+const DEFAULT_TURN_RETRIES: u32 = 2;
+
+/// Append the A8 continuation nudge (role=user, same injection shape as the
+/// A1 think-only nudge) unless it is already the last message. The
+/// one-shot guard keeps a repeated stall from stacking copies: the first
+/// retry appends, a second consecutive retry reuses the existing nudge so
+/// every retry request carries exactly one.
+fn push_turn_continuation_nudge(messages: &mut Vec<Message>) {
+    if let Some(last) = messages.last() {
+        if last.role == "user" {
+            if let MessageContent::Text(text) = &last.content {
+                if text == TURN_CONTINUATION_NUDGE_PROMPT {
+                    return;
+                }
+            }
+        }
+    }
+    messages.push(Message {
+        role: "user".to_string(),
+        content: MessageContent::Text(TURN_CONTINUATION_NUDGE_PROMPT.to_string()),
+    });
+}
+
 /// Default minimum length (chars) of the visible — i.e. non-reasoning —
 /// answer for a response to count as substantive. Override with
 /// `SHANNON_THINK_ONLY_MIN_ANSWER_CHARS`.
@@ -486,6 +535,15 @@ fn env_num_override(name: &str, default: u32) -> u32 {
 /// [`DEFAULT_THINK_ONLY_NUDGE_MAX`]).
 fn think_only_nudge_max() -> u32 {
     env_num_override("SHANNON_THINK_ONLY_NUDGE_MAX", DEFAULT_THINK_ONLY_NUDGE_MAX)
+}
+
+/// Max per-turn continuation retries after a timeout-class stream death
+/// (A8; `SHANNON_TURN_RETRIES`, default [`DEFAULT_TURN_RETRIES`], `0`
+/// disables). Same parse contract as the run-level `SHANNON_RUN_RETRIES`
+/// (`shannon-cli` `parse_run_retries`): unset/empty/unparseable → default,
+/// so a typo'd env var cannot silently change behavior.
+fn turn_retries_max() -> u32 {
+    env_num_override("SHANNON_TURN_RETRIES", DEFAULT_TURN_RETRIES)
 }
 
 /// Visible-answer threshold in chars for the think-only classifier
@@ -2291,7 +2349,15 @@ impl QueryEngine {
             let mut seen_tool_use_ids_query: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
 
-            loop {
+            // A8: per-turn budget of timeout-class continuation retries.
+            // Incremented when a dead LLM call is re-sent in place; reset
+            // whenever a stream completes normally so every fresh turn gets
+            // its own budget. A retry does NOT consume the max_turns budget
+            // (the turn is re-entered, not advanced).
+            let mut turn_retries_used: u32 = 0;
+            let max_turn_retries = turn_retries_max();
+
+            'agent_loop: loop {
                 if turn >= config.max_turns {
                     let total_cost = CostTracker::calculate_cost(
                         &client_model,
@@ -4728,6 +4794,37 @@ impl QueryEngine {
                                     }
                                 }
                                 Err(e) => {
+                                    // A8: a timeout-class mid-stream death
+                                    // (GLM coding-plan hard-cuts calls at
+                                    // ~6min; smoke-2/4 RCA) is continued in
+                                    // place instead of failing the run.
+                                    // This check intentionally precedes the
+                                    // partial-content preservation below: a
+                                    // hard-cut tail is not a usable response
+                                    // (saving it produced the empty/truncated
+                                    // patches in the RCA), so on retry the
+                                    // partial accumulation is discarded and
+                                    // the model regenerates from the intact
+                                    // history.
+                                    if e.is_timeout_class()
+                                        && turn_retries_used < max_turn_retries
+                                    {
+                                        turn_retries_used += 1;
+                                        tracing::warn!(
+                                            "Turn LLM call interrupted by timeout-class stream error ({e}); continuing turn {turn_retries_used}/{max_turn_retries}"
+                                        );
+                                        send_event!(
+                                            tx,
+                                            QueryEvent::Progress {
+                                                query_id,
+                                                message: format!(
+                                                    "Turn LLM call interrupted (upstream cutoff); continuing turn {turn_retries_used}/{max_turn_retries}"
+                                                ),
+                                            }
+                                        );
+                                        push_turn_continuation_nudge(&mut conversation.messages);
+                                        continue 'agent_loop;
+                                    }
                                     // Content-first: if partial content was streamed before the error,
                                     // preserve it immediately. Local models (Ollama) often generate
                                     // valid text before hitting a malformed tool-call error, and
@@ -4962,6 +5059,12 @@ impl QueryEngine {
                                 }
                             }
                         }
+
+                        // The stream completed without a terminal error —
+                        // this LLM call succeeded, so the A8 continuation
+                        // budget is whole again for the next turn (per-turn
+                        // budget, not per-query).
+                        turn_retries_used = 0;
 
                         // Parse-error recovery: when the model emitted a malformed
                         // tool_call (no text content, no successfully-parsed tool
@@ -5220,6 +5323,30 @@ impl QueryEngine {
                         }
                     }
                     Err(e) => {
+                        // A8: timeout-class stream-establishment death is
+                        // continued in place (same rationale as the
+                        // mid-stream site above; the GLM coding-plan gateway
+                        // hard-cuts ~6min calls before a single byte of the
+                        // response arrives). History and prior tool state
+                        // are untouched; only the continuation nudge is
+                        // added.
+                        if e.is_timeout_class() && turn_retries_used < max_turn_retries {
+                            turn_retries_used += 1;
+                            tracing::warn!(
+                                "Turn LLM call interrupted by timeout-class error ({e}); continuing turn {turn_retries_used}/{max_turn_retries}"
+                            );
+                            send_event!(
+                                tx,
+                                QueryEvent::Progress {
+                                    query_id,
+                                    message: format!(
+                                        "Turn LLM call interrupted (upstream cutoff); continuing turn {turn_retries_used}/{max_turn_retries}"
+                                    ),
+                                }
+                            );
+                            push_turn_continuation_nudge(&mut conversation.messages);
+                            continue 'agent_loop;
+                        }
                         // Check if this is a token overflow — attempt auto-compaction and retry once
                         if e.is_token_overflow() {
                             let compact_keep = config.keep_recent_messages;
@@ -8263,6 +8390,551 @@ mod tests {
         assert!(
             bodies.iter().all(|b| !b.contains(SECRET)),
             "raw secret must never reach the wire: {bodies:?}"
+        );
+    }
+
+    // ---- A8: turn-level continuation after timeout-class stream death -----
+    //
+    // The GLM coding-plan gateway hard-cuts single LLM calls at ~6min
+    // (smoke-2/4 RCA). The turn loop must continue THE TURN on a
+    // timeout-class failure — keeping all history and prior tool state —
+    // instead of failing the whole run. These tests drive the full
+    // process_query loop against a local mock Anthropic server whose
+    // per-request behavior is indexed by request count.
+
+    /// Serializes tests that mutate `SHANNON_TURN_RETRIES` (plain `cargo
+    /// test` runs them on shared threads; nextest isolates per process).
+    static TURN_RETRIES_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A local mock Anthropic server; request `i` gets whatever
+    /// `responder(i)` returns, and every raw request body is captured for
+    /// wire-level assertions (nudge present/absent, history shape).
+    struct TurnRetryMockServer {
+        captured: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        base_url: String,
+    }
+
+    impl TurnRetryMockServer {
+        fn start(responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync>) -> Self {
+            use std::io::Read as _;
+            use std::io::Write as _;
+
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let port = listener.local_addr().expect("addr").port();
+            let captured: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let captured_clone = captured.clone();
+            // Detached: the accept loop lives until process exit (same
+            // contract as the T4 secret-guard loop mock above).
+            std::thread::spawn(move || {
+                for mut stream in listener.incoming().flatten() {
+                    let mut buf = vec![0u8; 1 << 16];
+                    let mut read = 0usize;
+                    loop {
+                        let n = match stream.read(&mut buf[read..]) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => n,
+                        };
+                        read += n;
+                        let s = String::from_utf8_lossy(&buf[..read]).to_string();
+                        if let Some(header_end) = s.find("\r\n\r\n") {
+                            let cl: usize = s[..header_end]
+                                .to_ascii_lowercase()
+                                .split("\r\n")
+                                .find_map(|l| l.strip_prefix("content-length:"))
+                                .and_then(|v| v.trim().parse().ok())
+                                .unwrap_or(0);
+                            if read >= header_end + 4 + cl {
+                                break;
+                            }
+                        }
+                        if read == buf.len() {
+                            break;
+                        }
+                    }
+                    let body = String::from_utf8_lossy(&buf[..read]).to_string();
+                    let index = {
+                        let mut guard = captured_clone.lock().unwrap();
+                        guard.push(body);
+                        guard.len() - 1
+                    };
+                    let http = responder(index);
+                    stream.write_all(http.as_bytes()).ok();
+                    stream.flush().ok();
+                }
+            });
+            Self {
+                captured,
+                base_url: format!("http://127.0.0.1:{port}"),
+            }
+        }
+
+        fn bodies(&self) -> Vec<String> {
+            self.captured.lock().unwrap().clone()
+        }
+    }
+
+    /// Raw HTTP/1.1 response with a `Connection: close` header.
+    fn a8_http_response(status_line: &str, content_type: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status_line}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// Anthropic-style 408 whose body parses into `ApiError::ProviderError`
+    /// carrying the words "upstream request timeout". ProviderError is not
+    /// retried by the client's request-level retry nor reconnected by the
+    /// resumable stream, so it surfaces to the engine's turn loop
+    /// immediately (fast, deterministic) with exactly the string the
+    /// headless classifier maps to `Timeout`.
+    fn a8_timeout_response() -> String {
+        a8_http_response(
+            "408 Request Timeout",
+            "application/json",
+            r#"{"type":"error","error":{"type":"timeout_error","message":"upstream request timeout"}}"#,
+        )
+    }
+
+    /// Anthropic-style 401 → `ApiError::AuthenticationFailed` — a
+    /// non-timeout class A8 must never continue on.
+    fn a8_auth_response() -> String {
+        a8_http_response(
+            "401 Unauthorized",
+            "application/json",
+            r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#,
+        )
+    }
+
+    /// Full Anthropic SSE stream ending in a `tool_use` block for a tool
+    /// that is not in the (empty) test registry — the engine records an
+    /// error tool_result and advances to the next turn.
+    fn a8_tool_call_sse() -> String {
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_a8_tool","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_a8_1","name":"no_such_tool","input":{}}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#,
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"event: message_delta"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":5}}"#,
+            r#"event: message_stop"#,
+            r#"data: {"type":"message_stop"}"#,
+        ]
+        .join("\n\n");
+        a8_http_response("200 OK", "text/event-stream", &sse)
+    }
+
+    /// Full Anthropic SSE stream with a plain text answer and `end_turn`.
+    fn a8_text_sse(text: &str) -> String {
+        let payload = format!(
+            r#"{{"type":"text_delta","text":"{text}"}}"#
+        );
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_a8_text","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            "event: content_block_delta",
+            format!("data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{payload}}}").as_str(),
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"event: message_delta"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":10,"output_tokens":7}}"#,
+            r#"event: message_stop"#,
+            r#"data: {"type":"message_stop"}"#,
+        ]
+        .join("\n\n");
+        a8_http_response("200 OK", "text/event-stream", &sse)
+    }
+
+    /// Drive one full `process_query` against the mock and return
+    /// (completed, failed_error, progress_messages, final_history).
+    async fn a8_run_query(
+        server: &TurnRetryMockServer,
+    ) -> (bool, String, Vec<String>, Vec<Message>) {
+        use futures::StreamExt as _;
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.base_url.clone(),
+            model: "test-model".to_string(),
+            provider: shannon_engine::api::LlmProvider::Anthropic,
+            ..Default::default()
+        };
+        let client = LlmClient::new(config);
+        let engine = QueryEngine::new(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+            QueryEngineConfig::default(),
+        );
+        let context = QueryContext {
+            query_id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::new_v4(),
+            user_message: "original user task".to_string(),
+            attachments: Vec::new(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: false,
+                max_tokens: None,
+                model: "test-model".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        };
+        let mut stream = engine.process_query(context, None).await;
+        let mut completed = false;
+        let mut failed = String::new();
+        let mut progress: Vec<String> = Vec::new();
+        let mut history: Vec<Message> = Vec::new();
+        while let Some(ev) = stream.next().await {
+            match ev {
+                Ok(QueryEvent::Completed { .. }) => {
+                    completed = true;
+                    break;
+                }
+                Ok(QueryEvent::Failed { error, .. }) => {
+                    failed = error;
+                    break;
+                }
+                Ok(QueryEvent::Progress { message, .. }) => {
+                    progress.push(message);
+                }
+                Ok(QueryEvent::ConversationUpdate { messages, .. }) => {
+                    history = messages;
+                }
+                Err(e) => {
+                    failed = e.to_string();
+                    break;
+                }
+                _ => {}
+            }
+        }
+        (completed, failed, progress, history)
+    }
+
+    /// Env contract: default 2; "0" legitimately disables; unparseable and
+    /// negative values fall back to the default (same contract as the
+    /// run-level `SHANNON_RUN_RETRIES` in the CLI).
+    #[test]
+    fn a8_turn_retries_env_parse_contract() {
+        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+
+        unsafe { env::remove_var("SHANNON_TURN_RETRIES") };
+        assert_eq!(turn_retries_max(), 2, "unset must yield the default of 2");
+
+        for garbage in ["0", "abc", "-1", " 3 "] {
+            unsafe { env::set_var("SHANNON_TURN_RETRIES", garbage) };
+            let expected = garbage.trim().parse::<u32>().unwrap_or(2);
+            assert_eq!(
+                turn_retries_max(),
+                expected,
+                "SHANNON_TURN_RETRIES={garbage:?} must parse like SHANNON_RUN_RETRIES"
+            );
+        }
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+    }
+
+    /// Core A8 behavior: attempt 1 dies with a timeout-class error, the
+    /// turn is continued in place (attempt 2 returns a tool_call, attempt 3
+    /// the final answer). The query must COMPLETE with the full history
+    /// preserved, a visible Progress event, and the nudge present only on
+    /// retry requests.
+    #[tokio::test]
+    async fn a8_turn_retry_continues_after_timeout_class_stream_death() {
+        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|i: usize| match i {
+                0 => a8_timeout_response(),
+                1 => a8_tool_call_sse(),
+                _ => a8_text_sse("final answer after continuation"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(
+            completed,
+            "the turn must complete after continuation; failed: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(
+            bodies.len(),
+            3,
+            "attempt 1 + continued attempt 2 + post-tool turn 3; got {} requests",
+            bodies.len()
+        );
+
+        // Nudge only on retry requests (attempts 2+), exactly once each;
+        // the first attempt must be nudge-free.
+        let nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        assert!(
+            !bodies[0].contains(nudge),
+            "the first attempt must not carry the continuation nudge"
+        );
+        for (idx, body) in bodies.iter().enumerate().skip(1) {
+            assert_eq!(
+                body.matches(nudge).count(),
+                1,
+                "retry request {idx} must carry the nudge exactly once: {body}"
+            );
+        }
+
+        // Progress visibility, formatted like the existing API-retry surfacing.
+        assert!(
+            progress.iter().any(|m| m.contains(
+                "Turn LLM call interrupted (upstream cutoff); continuing turn 1/2"
+            )),
+            "expected an A8 continuation Progress event; got: {progress:?}"
+        );
+
+        // History integrity: original task first, tool round-trip intact,
+        // final assistant answer last.
+        assert!(!history.is_empty(), "a ConversationUpdate must have fired");
+        assert_eq!(history[0].role, "user");
+        let first_text = match &history[0].content {
+            MessageContent::Text(t) => t.clone(),
+            other => panic!("expected text first message, got {other:?}"),
+        };
+        assert_eq!(first_text, "original user task");
+        let has_tool_result = history.iter().any(|m| {
+            matches!(
+                &m.content,
+                MessageContent::Blocks(blocks)
+                    if blocks.iter().any(|b| matches!(b, shannon_engine::api::ContentBlock::ToolResult { .. }))
+            )
+        });
+        assert!(has_tool_result, "tool round-trip must be preserved: {history:?}");
+        let last = history.last().expect("non-empty history");
+        assert_eq!(last.role, "assistant", "final message must be the answer");
+        let last_text = match &last.content {
+            MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+                shannon_engine::api::ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            }),
+            MessageContent::Text(t) => Some(t.clone()),
+        }
+        .unwrap_or_default();
+        assert!(
+            last_text.contains("final answer after continuation"),
+            "final answer must land in history; got: {last_text:?}"
+        );
+    }
+
+    /// Budget exhaustion: with SHANNON_TURN_RETRIES=2 and a server that
+    /// always times out, the engine makes 1 + 2 attempts, emits two
+    /// continuation Progress events (1/2, 2/2), then fails through the
+    /// EXISTING path with the original error text (so the headless A7
+    /// classifier still sees "timeout").
+    #[tokio::test]
+    async fn a8_turn_retry_budget_exhaustion_falls_through_to_failed() {
+        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|_i: usize| a8_timeout_response());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, _history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(!completed, "an always-timeout server must not complete");
+        assert!(
+            failed.contains("upstream request timeout"),
+            "the original error text must survive into Failed for A7 classification; got: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(
+            bodies.len(),
+            3,
+            "initial attempt + 2 retries, then fail; got {}",
+            bodies.len()
+        );
+        let nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        assert!(!bodies[0].contains(nudge), "first attempt is nudge-free");
+        assert_eq!(bodies[1].matches(nudge).count(), 1, "retry 1 carries one nudge");
+        assert_eq!(bodies[2].matches(nudge).count(), 1, "retry 2 carries one nudge — never accumulated");
+        let continuations = progress
+            .iter()
+            .filter(|m| m.contains("Turn LLM call interrupted (upstream cutoff)"))
+            .count();
+        assert_eq!(continuations, 2, "one Progress per continuation; got {progress:?}");
+    }
+
+    /// Mid-stream death (the production shape of the GLM ~6min hard cut):
+    /// attempt 1 returns HTTP 200, streams message_start and a partial text
+    /// delta, then dies on an upstream timeout error frame. The A8 check
+    /// must precede the partial-content preservation in the mid-stream
+    /// error arm: the partial tail is discarded (a hard-cut tail is what
+    /// produced the truncated/empty patches in the RCA) and the turn is
+    /// retried to a clean completion.
+    #[tokio::test]
+    async fn a8_turn_retry_covers_mid_stream_death_and_discards_partial() {
+        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        // Dead stream: valid frames, then an error frame our StreamEvent
+        // model cannot parse. The parse failure surfaces as InvalidResponse
+        // whose Display embeds the provider's "upstream request timeout"
+        // wording — timeout-class by the pinned word list, and NOT
+        // reconnectable, so it reaches the engine's mid-stream error arm
+        // immediately (no reconnect backoff in the test).
+        let dead_sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_dead","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial answer before the cut"}}"#,
+            r#"event: error"#,
+            r#"data: {"type":"error","error":{"type":"timeout_error","message":"upstream request timeout"}}"#,
+        ]
+        .join("\n\n");
+        let dead = a8_http_response("200 OK", "text/event-stream", &dead_sse);
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(move |i: usize| match i {
+                0 => dead.clone(),
+                _ => a8_text_sse("recovered after mid-stream continuation"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(
+            completed,
+            "the turn must complete after a mid-stream continuation; failed: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(bodies.len(), 2, "dead attempt + one continuation");
+        let nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        assert!(!bodies[0].contains(nudge), "first attempt is nudge-free");
+        assert_eq!(bodies[1].matches(nudge).count(), 1);
+        assert!(
+            progress.iter().any(|m| m.contains(
+                "Turn LLM call interrupted (upstream cutoff); continuing turn 1/2"
+            )),
+            "expected A8 Progress; got {progress:?}"
+        );
+        let history_text: String = history
+            .iter()
+            .map(|m| match &m.content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|b| match b {
+                        shannon_engine::api::ContentBlock::Text { text } => text.clone(),
+                        _ => String::new(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        assert!(
+            !history_text.contains("partial answer before the cut"),
+            "the hard-cut partial tail must NOT be committed as a complete response: {history_text:?}"
+        );
+        assert!(
+            history_text.contains("recovered after mid-stream continuation"),
+            "the continuation's answer must land in history: {history_text:?}"
+        );
+    }
+
+    /// SHANNON_TURN_RETRIES=0 disables continuation entirely: one request,
+    /// immediate failure through the existing path.
+    #[tokio::test]
+    async fn a8_turn_retry_zero_disables_continuation() {
+        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "0") };
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|_i: usize| a8_timeout_response());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, _history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(!completed, "disabled continuation must fail");
+        assert!(
+            failed.contains("upstream request timeout"),
+            "existing failure path must be preserved: {failed}"
+        );
+        assert_eq!(
+            server.bodies().len(),
+            1,
+            "SHANNON_TURN_RETRIES=0 must not re-send the turn"
+        );
+        assert!(
+            !progress
+                .iter()
+                .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            "no continuation Progress may fire when disabled; got {progress:?}"
+        );
+    }
+
+    /// Non-timeout errors (auth failure) are never continued: A8 must not
+    /// swallow deterministic failures.
+    #[tokio::test]
+    async fn a8_non_timeout_errors_do_not_continue_turn() {
+        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|_i: usize| a8_auth_response());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, _history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(!completed, "auth failure must not complete");
+        assert!(!failed.is_empty(), "auth failure must surface Failed");
+        assert_eq!(
+            server.bodies().len(),
+            1,
+            "an AuthenticationFailed must not be continued"
+        );
+        assert!(
+            !progress
+                .iter()
+                .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            "no A8 Progress for non-timeout errors; got {progress:?}"
         );
     }
 }
