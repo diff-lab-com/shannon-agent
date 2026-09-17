@@ -2939,5 +2939,9 @@
   "chat.input.effort.max": "Максимум",
   "shortcutsHelp.composer.title": "Управление в композере — все три активны",
   "settings.models.quickSwitch.label": "Сменить модель",
-  "settings.models.quickSwitch.placeholder": "Поиск моделей…"
+  "settings.models.quickSwitch.placeholder": "Поиск моделей…",
+  "settings.connections.mobile.tlsToggle": "Шифрование LAN (wss)",
+  "settings.connections.mobile.tlsHint": "Обслуживает мобильный канал по TLS с самоподписанным сертификатом — телефоны проверяют отпечаток сертификата из QR-кода. Вступает в силу после перезапуска шлюза.",
+  "settings.connections.mobile.tlsFingerprint": "Отпечаток сертификата",
+  "settings.connections.mobile.tlsSaved": "Шифрование LAN обновлено — перезапустите шлюз, чтобы применить"
 }

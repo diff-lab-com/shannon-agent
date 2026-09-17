@@ -2939,5 +2939,9 @@
   "chat.input.effort.max": "最高",
   "shortcutsHelp.composer.title": "Composer 三要素——全部即時生效",
   "settings.models.quickSwitch.label": "切換模型",
-  "settings.models.quickSwitch.placeholder": "搜尋模型…"
+  "settings.models.quickSwitch.placeholder": "搜尋模型…",
+  "settings.connections.mobile.tlsToggle": "區域網路加密（wss）",
+  "settings.connections.mobile.tlsHint": "使用自簽憑證為行動通道啟用 TLS——手機校驗 QR 碼中攜帶的憑證指紋。閘道重啟後生效。",
+  "settings.connections.mobile.tlsFingerprint": "憑證指紋",
+  "settings.connections.mobile.tlsSaved": "區域網路加密已更新——重啟閘道後生效"
 }

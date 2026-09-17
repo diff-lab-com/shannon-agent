@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { type AdapterContext, type ChannelAdapter, type Logger } from "./adapters/types.js";
@@ -16,6 +16,7 @@ import { createChainedSecretProvider } from "./secrets/chain.js";
 import { createConsoleLogger } from "./logger.js";
 import { GATEWAY_VERSION } from "./version.js";
 import { MobileServer } from "./mobile/server.js";
+import { ensureTlsMaterial } from "./mobile/mobileTls.js";
 import { advertiseMobileServer, type MdnsHandle } from "./mobile/mdns.js";
 import {
   createMobileHandlers,
@@ -26,7 +27,11 @@ import type { EngineClientFactory as MobileEngineClientFactory } from "./mobile/
 import { MobileDispatchHub } from "./mobile/hub.js";
 import { createMobileChannelAdapter } from "./mobile/channel.js";
 import { createTaskHandlers } from "./mobile/taskHandlers.js";
-import { deriveSessionKey } from "./mobile/relay/e2e.js";
+import {
+  deriveRelayAuthTag,
+  deriveSessionKey,
+  generateHostE2EKeyPair,
+} from "./mobile/relay/e2e.js";
 import { startRelayHost, type RelayHostHandle } from "./mobile/relay/relayHost.js";
 import { generateQrV2Payload, generateRelaySessionId } from "./mobile/relay/qrV2.js";
 import { evaluateTrigger, resolveTriggerConfig } from "./router/trigger.js";
@@ -115,6 +120,18 @@ export async function bootstrap(
     registry.register(adapter);
   }
 
+  // Engine api_server bearer (F14): config names the secret entry, the raw
+  // token resolves from the keyring/env once at boot and stays in memory.
+  const engineAuthToken = config.engine.authTokenKey
+    ? await secretProvider.get(config.engine.authTokenKey)
+    : null;
+  if (config.engine.authTokenKey && !engineAuthToken) {
+    logger.warn(
+      `engine.authTokenKey "${config.engine.authTokenKey}" resolved to no secret — ` +
+        "engine calls may 401 if the engine enforces its bearer",
+    );
+  }
+
   // P2-1 mobile dispatch: when the mobile channel is enabled, the paired-phone
   // channel becomes a first-class platform adapter ("mobile") so dispatched
   // tasks ride the same lane/approval/lifecycle pipeline as the IM adapters.
@@ -126,7 +143,7 @@ export async function bootstrap(
   }
 
   const clientFactory: EngineClientFactory =
-    opts.engineClientFactory ?? ((sessionKey: string) => createEngineClient(config, sessionKey));
+    opts.engineClientFactory ?? ((sessionKey: string) => createEngineClient(config, sessionKey, engineAuthToken));
 
   // P1-4: report 任务开始/完成/失败 back to the IM channel around every
   // adapter-routed turn (opt-out via config.im.taskLifecycle = false). The
@@ -169,7 +186,7 @@ export async function bootstrap(
   logger.info(`shannon-gateway up: ${registry.size} adapter(s) started`);
 
   const mobile = config.mobile?.enabled
-    ? await startMobileServer(config, logger, opts, dispatchHub!)
+    ? await startMobileServer(config, logger, opts, dispatchHub!, engineAuthToken)
     : null;
   if (mobile) {
     logger.info(
@@ -216,6 +233,7 @@ async function startMobileServer(
   logger: Logger,
   opts: BootstrapOptions,
   dispatchHub: MobileDispatchHub,
+  engineAuthToken: string | null,
 ): Promise<{ handle: { stop(): Promise<void> }; port: number }> {
   const mobileCfg = config.mobile!;
   const host = mobileCfg.host ?? "0.0.0.0";
@@ -225,6 +243,18 @@ async function startMobileServer(
 
   const tokens = new PairTokenStore({ filePath: tokensFile });
   const registry = new DeviceRegistry({ filePath: devicesFile });
+  // v0.12 LAN hardening: TLS with the persisted self-signed cert. Phones pin
+  // the cert fingerprint carried in the QR (out-of-band trust, same model as
+  // the pair token). Fail loud on cert trouble — silent plaintext fallback
+  // would defeat the hardening.
+  const tlsEnabled = mobileCfg.tls?.enabled === true;
+  const tlsMaterial = tlsEnabled ? ensureTlsMaterial() : null;
+  if (tlsMaterial) {
+    logger.info(
+      `mobile TLS enabled — cert fingerprint ${tlsMaterial.fingerprint} ` +
+        `(phones pin it from the QR)`,
+    );
+  }
   const handlers = createMobileHandlers({
     engine: {
       engineWsUrl: config.engine.wsUrl,
@@ -234,6 +264,7 @@ async function startMobileServer(
       logger,
       engineClientFactory: opts.mobileEngineClientFactory,
       fetchImpl: opts.mobileFetchImpl,
+      engineAuthToken,
     },
     tokens,
     registry,
@@ -247,6 +278,7 @@ async function startMobileServer(
     logger,
     handlers,
     onContext: (ctx) => dispatchHub.registerConnection(ctx),
+    ...(tlsMaterial ? { tls: { key: tlsMaterial.key, cert: tlsMaterial.cert } } : {}),
   });
   const handle = await server.start();
 
@@ -277,7 +309,13 @@ async function startMobileServer(
     const relayUrl = mobileCfg.relay.url;
     const relaySid = generateRelaySessionId();
     const pairRecord = tokens.issue();
+    // Legacy (token-only) key — kept as the fallback for pre-v0.3 phones.
     const sessionKey = deriveSessionKey(pairRecord.token);
+    // v0.3: per-session ephemeral X25519 keypair (forward secrecy) — the pub
+    // travels in the QR, the handshake completes via the phone's `e2e_hello`.
+    const hostE2E = generateHostE2EKeyPair();
+    // Relay handshake auth tag (pins the session to this pairing secret).
+    const relayAuthTag = deriveRelayAuthTag(pairRecord.token);
 
     const relayHandle: RelayHostHandle = startRelayHost({
       relayUrl,
@@ -285,11 +323,23 @@ async function startMobileServer(
       sessionKey,
       handlers,
       logger,
+      relayAuthTag,
+      hostE2E: { privateKey: hostE2E.privateKey, pairToken: pairRecord.token },
       onContext: (ctx) => dispatchHub.registerConnection(ctx),
     });
+    // Nobody awaits `paired` — without a handler here the 75s pair timeout
+    // rejection would surface as an unhandled rejection and take the
+    // gateway down (Node's default is to throw). A phone that never joins is
+    // a normal condition, not a crash.
+    relayHandle.paired.catch((err: Error) => {
+      logger.info(`relay host: initial pair window closed (${err.message}); ` +
+        "host stays registered for late joins via auto-reconnect/re-pair");
+    });
 
-    // Generate the QR v2 payload for the phone to scan.
-    const scheme = relayUrl.startsWith("wss") ? "wss" : "ws";
+    // Generate the QR v2 payload for the phone to scan. The LAN-endpoint
+    // scheme reflects TLS, not the relay scheme: with mobile.tls the phone
+    // dials wss and pins the cert fingerprint from this payload.
+    const scheme = tlsMaterial ? "wss" : relayUrl.startsWith("wss") ? "wss" : "ws";
     const qrPayload = generateQrV2Payload({
       scheme,
       host,
@@ -298,15 +348,28 @@ async function startMobileServer(
       expiresAt: pairRecord.expiresAt,
       relayUrl,
       relaySessionId: relaySid,
+      hostE2EPubKey: hostE2E.pubB64,
+      certFingerprint: tlsMaterial?.fingerprint ?? null,
     });
 
     const qrJson = JSON.stringify(qrPayload);
-    logger.info(`relay host: QR v2 payload: ${qrJson}`);
+    // The payload embeds the pair token, which IS the E2E session key material
+    // (e2e.ts): anyone who reads it can decrypt/forge the whole relay session.
+    // Never log it at info — it's available via the 0600 payload file (rendered
+    // by the desktop) or by enabling debug logs.
+    logger.info(
+      `relay host: session ${relaySid} at ${relayUrl} — pair token valid for ` +
+        `${Math.max(0, pairRecord.expiresAt - Date.now())}ms; QR available via ` +
+        `${mobileCfg.qrPayloadFile ?? "debug logging (mobile.qrPayloadFile unset)"}`,
+    );
 
     if (mobileCfg.qrPayloadFile) {
       mkdirSync(dirname(mobileCfg.qrPayloadFile), { recursive: true });
-      writeFileSync(mobileCfg.qrPayloadFile, qrJson, "utf8");
-      logger.info(`relay host: QR payload written to ${mobileCfg.qrPayloadFile}`);
+      writeFileSync(mobileCfg.qrPayloadFile, qrJson, { encoding: "utf8", mode: 0o600 });
+      chmodSync(mobileCfg.qrPayloadFile, 0o600);
+      logger.info(`relay host: QR payload written to ${mobileCfg.qrPayloadFile} (0600)`);
+    } else {
+      logger.debug(`relay host: QR v2 payload: ${qrJson}`);
     }
 
     // Extend the stop handle to also stop the relay host (and the mDNS
@@ -325,10 +388,15 @@ async function startMobileServer(
   return { handle: { stop: stopServerAndMdns }, port: handle.port };
 }
 
-function createEngineClient(config: GatewayConfig, sessionKey: string): EngineWsClient {
+function createEngineClient(
+  config: GatewayConfig,
+  sessionKey: string,
+  authToken: string | null,
+): EngineWsClient {
   return new EngineWsClient({
     url: config.engine.wsUrl,
     model: config.engine.model ?? null,
     sessionId: sessionKey,
+    headers: authToken ? { authorization: `Bearer ${authToken}` } : undefined,
   });
 }

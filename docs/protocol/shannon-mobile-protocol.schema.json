@@ -1,0 +1,225 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://shannon.dev/schemas/shannon-mobile-protocol-v1.json",
+  "title": "shannon/* mobile↔gateway JSON-RPC protocol (v1, 2026-09-17)",
+  "description": "Canonical contract for the shannon/* JSON-RPC 2.0 face the gateway (shannon-mono gateway/src/mobile) exposes to shannon-mobile. Sources of truth: gateway/src/mobile/protocol.ts (types, SHANNON_METHODS, ShannonError), pairing.ts, engineBridge.ts, crypto.ts (signed-message formats). Drift on either side is caught by protocolSchema.test.ts (gateway) and protocol_schema_contract_test.dart (mobile). Wire field names are snake_case; relay-transport envelopes (E2E frames, control frames) are specified in shannon-relay docs/wire-protocol.md.",
+  "definitions": {
+    "JsonRpcRequest": {
+      "type": "object",
+      "required": ["jsonrpc", "id", "method"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "type": ["string", "number"] },
+        "method": { "enum": { "$ref": "#/definitions/shannonMethods" } },
+        "params": { "type": ["object", "null"] }
+      }
+    },
+    "shannonMethods": {
+      "description": "Every method the gateway recognizes. Mobile keeps a hand-written mirror (Methods) whose real-surface constants must be a subset — pinned by contract test.",
+      "type": "array",
+      "items": { "type": "string" },
+      "enum": [
+        "shannon/pair",
+        "shannon/device.resume",
+        "shannon/query",
+        "shannon/cancel",
+        "shannon/approval/decide",
+        "shannon/agent.list",
+        "shannon/agent.detail",
+        "shannon/model.list",
+        "shannon/model.switch",
+        "shannon/health",
+        "shannon/task.dispatch",
+        "shannon/task.list",
+        "shannon/snapshot",
+        "shannon/resume",
+        "shannon/device.list",
+        "shannon/device.revoke"
+      ]
+    },
+    "errorCodes": {
+      "description": "Stable shannon band codes. Register new codes here AND in protocol.ts ShannonError AND mobile json_rpc.dart RpcError.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "PARSE_ERROR": -32700,
+        "INVALID_REQUEST": -32600,
+        "METHOD_NOT_FOUND": -32601,
+        "NOT_IMPLEMENTED": -32603,
+        "PAIRING_REQUIRED": -32000,
+        "BAD_PARAMS": -32001,
+        "ENGINE_ERROR": -32002,
+        "CLOCK_SKEW": -32003,
+        "GAP_TOO_LARGE": -32014
+      },
+      "required": ["PARSE_ERROR", "INVALID_REQUEST", "METHOD_NOT_FOUND", "NOT_IMPLEMENTED", "PAIRING_REQUIRED", "BAD_PARAMS", "ENGINE_ERROR", "CLOCK_SKEW", "GAP_TOO_LARGE"]
+    },
+    "pairParams": {
+      "type": "object",
+      "required": ["pair_token", "device_public_key", "pop_signature"],
+      "properties": {
+        "pair_token": { "type": "string" },
+        "device_public_key": { "type": "string", "description": "JWK x — base64url of the 32-byte Ed25519 public key" },
+        "pop_signature": { "type": "string", "description": "Ed25519 over \"${pair_token}:${device_public_key}\"" },
+        "device_label": { "type": ["string", "null"] }
+      }
+    },
+    "deviceResumeParams": {
+      "type": "object",
+      "required": ["device_id", "timestamp", "signature"],
+      "properties": {
+        "device_id": { "type": "string" },
+        "timestamp": { "type": "number", "description": "epoch ms, within ±60s skew" },
+        "signature": { "type": "string", "description": "Ed25519 over \"${device_id}:${timestamp}\" or \"${device_id}:${timestamp}:${nonce}\"" },
+        "nonce": { "type": "string", "maxLength": 128, "description": "client-generated random; single-use per device within the skew window (anti-replay)" }
+      }
+    },
+    "deviceSessionResult": {
+      "type": "object",
+      "required": ["device_id", "session_id"],
+      "properties": {
+        "device_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "device_label": { "type": ["string", "null"] },
+        "lastSeq": { "type": "number", "description": "push cursor (camelCase — historical)" }
+      }
+    },
+    "queryParams": {
+      "type": "object",
+      "required": ["prompt"],
+      "properties": {
+        "prompt": { "type": "string", "minLength": 1 },
+        "model": { "type": ["string", "null"] },
+        "session_id": { "type": ["string", "null"], "description": "ignored unless equal to the bound device session (ownership)" }
+      }
+    },
+    "approvalDecideParams": {
+      "type": "object",
+      "required": ["request_id", "choice", "signature"],
+      "properties": {
+        "request_id": { "type": "string" },
+        "choice": { "enum": ["allow", "deny"] },
+        "signature": { "type": "string", "description": "Ed25519 over \"${request_id}:${choice}\" — mandatory when requireSession is on" },
+        "note": { "type": ["string", "null"] }
+      }
+    },
+    "shannonEvent": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "enum": [
+            "query.started",
+            "task.progress",
+            "query.completed",
+            "query.failed",
+            "query.cancelled",
+            "approval.request",
+            "task.message"
+          ]
+        },
+        "turn_id": { "type": "string" },
+        "content": { "type": "string" },
+        "tool": { "type": "object" },
+        "usage": { "type": "object" },
+        "seq": { "type": "number", "description": "monotonic push cursor stamped by the gateway" },
+        "model": { "type": "string" },
+        "error": { "type": "string" },
+        "request_id": { "type": "string" },
+        "tool_name": { "type": "string" },
+        "tool_input": {},
+        "description": { "type": "string" },
+        "is_destructive": { "type": "boolean" },
+        "diff_preview": { "type": ["string", "null"] },
+        "text": { "type": "string" }
+      }
+    },
+    "qrV2Payload": {
+      "description": "Desktop QR (scan or file) — the out-of-band trust channel. Mobile mirror: methods.dart QrPairingPayload.",
+      "type": "object",
+      "required": ["v", "scheme", "host", "port", "token"],
+      "properties": {
+        "v": { "enum": [1, 2] },
+        "scheme": { "enum": ["ws", "wss"] },
+        "host": { "type": "string" },
+        "port": { "type": "number" },
+        "token": { "type": "string", "description": "one-time pair token — the pairing AND (legacy) E2E trust root" },
+        "exp": { "type": "number" },
+        "displayName": { "type": "string" },
+        "mode": { "enum": ["direct", "relay"] },
+        "relayEndpoint": { "type": "string" },
+        "relaySessionId": { "type": "string" },
+        "hostE2EPubKey": { "type": "string", "description": "v0.3: base64url ephemeral X25519 pubkey of the host; presence selects the v2 ECDH key schedule" },
+        "certFingerprint": { "type": "string", "description": "v0.12: lowercase hex SHA-256 of the gateway TLS cert; phones pin it when dialing wss" }
+      }
+    },
+    "wireFixtures": {
+      "description": "Frozen byte-level fixtures mirrored by mobile protocol_schema_contract_test.dart. Changing any of these requires a conscious cross-repo sync.",
+      "type": "array",
+      "items": { "type": "object" },
+      "minItems": 5,
+      "prefixItems": [],
+      "enum-note": "see examples",
+      "examples": [
+        [
+          "pair",
+          {
+            "pair_token": "tok",
+            "device_public_key": "pub-b64url",
+            "pop_signature": "sig-b64url",
+            "device_label": "Shannon phone"
+          }
+        ],
+        [
+          "device.resume (nonce anti-replay)",
+          {
+            "device_id": "abc",
+            "timestamp": 1700000000000,
+            "signature": "sig-b64url",
+            "nonce": "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+          }
+        ],
+        [
+          "approval.decide",
+          {
+            "request_id": "req-1",
+            "choice": "deny",
+            "signature": "sig-b64url"
+          }
+        ],
+        [
+          "task.progress notification",
+          {
+            "jsonrpc": "2.0",
+            "method": "shannon/event",
+            "params": {
+              "seq": 42,
+              "type": "task.progress",
+              "content": "hello",
+              "turn_id": "turn-1"
+            }
+          }
+        ],
+        [
+          "clock-skew rejection",
+          {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "error": {
+              "code": -32003,
+              "message": "timestamp outside skew window"
+            }
+          }
+        ]
+      ]
+    }
+  },
+  "type": "object",
+  "properties": {
+    "shannonMethods": { "$ref": "#/definitions/shannonMethods" },
+    "errorCodes": { "$ref": "#/definitions/errorCodes" },
+    "qrV2Payload": { "$ref": "#/definitions/qrV2Payload" },
+    "wireFixtures": { "$ref": "#/definitions/wireFixtures" }
+  },
+  "required": ["shannonMethods", "errorCodes", "qrV2Payload", "wireFixtures"]
+}

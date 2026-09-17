@@ -99,7 +99,7 @@ export default function ConnectionsSettings() {
 
       <GatewayProcessCard procState={procState} onProcStateChange={setProcState} />
 
-      <MobileDispatchCard config={config} procState={procState} />
+      <MobileDispatchCard config={config} procState={procState} onConfigChange={setConfig} />
 
       <PlatformsCard
         config={config}

@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Switch } from '@/components/ui/switch'
 import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 import type {
@@ -13,6 +14,7 @@ import type {
   GatewayProcessState,
   MobileDeviceEntry,
   MobilePairToken,
+  MobileTlsStatus,
 } from '@/types'
 
 interface MobileDispatchCardProps {
@@ -21,6 +23,8 @@ interface MobileDispatchCardProps {
   /** Supervised gateway process state (E-1 方案 C) — running means the mobile
    *  shannon/* server (and the PWA page) is actually listening. */
   procState: GatewayProcessState | null
+  /** Called after the card writes a new gateway config (v0.12 TLS toggle). */
+  onConfigChange?: (next: GatewayConfig) => void
 }
 
 /** Whether the supervised gateway process is currently running. */
@@ -41,7 +45,7 @@ function isLoopback(host: string): boolean {
  * paired-device list (existing commands), and the channel status — dispatch /
  * 看任务 / 审批 / 进度推送 all run over this one channel; no native app.
  */
-export function MobileDispatchCard({ config, procState }: MobileDispatchCardProps) {
+export function MobileDispatchCard({ config, procState, onConfigChange }: MobileDispatchCardProps) {
   const intl = useIntl()
   const t = (id: string): string => intl.formatMessage({ id })
   const tVal = (id: string, values: Record<string, string | number>): string =>
@@ -54,6 +58,9 @@ export function MobileDispatchCard({ config, procState }: MobileDispatchCardProp
   const [revokeTarget, setRevokeTarget] = useState<MobileDeviceEntry | null>(null)
   const [revokeBusy, setRevokeBusy] = useState(false)
   const [nowMs, setNowMs] = useState(() => Date.now())
+  // v0.12 LAN hardening: `mobile.tls.enabled` + the live cert fingerprint.
+  const [tlsStatus, setTlsStatus] = useState<MobileTlsStatus | null>(null)
+  const [tlsBusy, setTlsBusy] = useState(false)
 
   const mobileEnabled = config.mobile?.enabled === true
   const gatewayRunning = isGatewayRunning(procState)
@@ -90,6 +97,30 @@ export function MobileDispatchCard({ config, procState }: MobileDispatchCardProp
   useEffect(() => {
     api.mobileListPairedDevices().then(setPairedDevices).catch(() => {})
   }, [])
+
+  // v0.12: TLS state lives in the gateway config; the fingerprint appears
+  // only after the gateway first boots with TLS on (it writes tls-info.json).
+  useEffect(() => {
+    api.mobileTlsStatus?.().then(setTlsStatus).catch(() => {})
+  }, [])
+
+  async function toggleTls(enabled: boolean): Promise<void> {
+    setTlsBusy(true)
+    try {
+      const next: GatewayConfig = {
+        ...config,
+        mobile: { ...config.mobile, tls: { enabled } },
+      }
+      const written = await api.gatewayWriteConfig(next)
+      onConfigChange?.(written)
+      setTlsStatus(await api.mobileTlsStatus())
+      toast.success(t('settings.connections.mobile.tlsSaved'))
+    } catch (e) {
+      toastError('mobile: TLS toggle failed', e)
+    } finally {
+      setTlsBusy(false)
+    }
+  }
 
   // Tick the countdown once per second only while a QR is on screen.
   useEffect(() => {
@@ -157,6 +188,32 @@ export function MobileDispatchCard({ config, procState }: MobileDispatchCardProp
         <CardDescription>{t('settings.connections.mobile.description')}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-md">
+        <div
+          className="flex items-start justify-between gap-md rounded-md border border-surface-border p-md"
+          data-testid="mobile-tls-row"
+        >
+          <div className="min-w-0">
+            <p className="font-label-sm">{t('settings.connections.mobile.tlsToggle')}</p>
+            <p className="font-label-xs text-on-surface-variant">
+              {t('settings.connections.mobile.tlsHint')}
+            </p>
+            {tlsStatus?.enabled && tlsStatus.fingerprint && (
+              <code
+                className="font-label-xs text-on-surface-variant mt-xs block break-all"
+                data-testid="mobile-tls-fingerprint"
+              >
+                {t('settings.connections.mobile.tlsFingerprint')}: {tlsStatus.fingerprint}
+              </code>
+            )}
+          </div>
+          <Switch
+            checked={tlsStatus?.enabled ?? config.mobile?.tls?.enabled === true}
+            onCheckedChange={(v) => void toggleTls(v)}
+            disabled={tlsBusy}
+            className="shrink-0"
+            data-testid="mobile-tls-switch"
+          />
+        </div>
         <div className="flex flex-wrap items-start gap-md">
           <div className="flex items-center gap-sm">
             <Button

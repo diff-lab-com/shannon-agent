@@ -125,6 +125,8 @@ fn main() {
             commands_surface::open_release_page,
             // P1.3 — mobile device pairing (Design D shared-file channel)
             commands_mobile_pairing::mobile_generate_pair_token,
+            commands_mobile_pairing::mobile_tls_status,
+            commands_mobile_pairing::mobile_set_tls,
             commands_mobile_pairing::mobile_list_paired_devices,
             commands_mobile_pairing::mobile_revoke_device,
             // D4 — cloud speech-to-text (voice input)

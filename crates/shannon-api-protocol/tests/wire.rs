@@ -154,10 +154,12 @@ fn models_response_serialization() {
             ModelInfo {
                 id: "gpt-4o".to_string(),
                 provider: "openai".to_string(),
+                name: Some("GPT-4o".to_string()),
             },
             ModelInfo {
                 id: "llama3".to_string(),
                 provider: "ollama".to_string(),
+                name: None,
             },
         ],
     };

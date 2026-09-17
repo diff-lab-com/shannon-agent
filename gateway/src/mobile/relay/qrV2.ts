@@ -23,6 +23,12 @@ export interface QrV2Options {
   relaySessionId: string;
   /** Retained for forward compatibility; unused in key derivation. */
   hostE2EPubKey?: string | null;
+  /**
+   * v0.12: SHA-256 fingerprint (lowercase hex) of the gateway's self-signed
+   * TLS cert — the phone pins it when dialing the wss LAN endpoint. Present
+   * only when `mobile.tls.enabled` is on.
+   */
+  certFingerprint?: string | null;
 }
 
 /**
@@ -41,6 +47,7 @@ export function generateQrV2Payload(opts: QrV2Options): Record<string, unknown> 
     relayEndpoint: opts.relayUrl,
     relaySessionId: opts.relaySessionId,
     ...(opts.hostE2EPubKey ? { hostE2EPubKey: opts.hostE2EPubKey } : {}),
+    ...(opts.certFingerprint ? { certFingerprint: opts.certFingerprint } : {}),
   };
 }
 

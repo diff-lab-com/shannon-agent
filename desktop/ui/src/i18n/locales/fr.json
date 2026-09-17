@@ -2939,5 +2939,9 @@
   "chat.input.effort.max": "Max",
   "shortcutsHelp.composer.title": "Commandes du composeur — les trois sont actives",
   "settings.models.quickSwitch.label": "Changer de modèle",
-  "settings.models.quickSwitch.placeholder": "Rechercher des modèles…"
+  "settings.models.quickSwitch.placeholder": "Rechercher des modèles…",
+  "settings.connections.mobile.tlsToggle": "Chiffrement LAN (wss)",
+  "settings.connections.mobile.tlsHint": "Sert le canal mobile en TLS avec un certificat auto-signé — les téléphones vérifient l'empreinte du certificat transportée dans le QR. Prend effet après le redémarrage de la gateway.",
+  "settings.connections.mobile.tlsFingerprint": "Empreinte du certificat",
+  "settings.connections.mobile.tlsSaved": "Chiffrement LAN mis à jour — redémarrez la gateway pour l'appliquer"
 }

@@ -39,7 +39,44 @@ export type ShannonMethod =
   | "shannon/model.switch"
   | "shannon/health"
   | "shannon/task.dispatch"
-  | "shannon/task.list";
+  | "shannon/task.list"
+  | "shannon/snapshot"
+  | "shannon/resume"
+  | "shannon/device.list"
+  | "shannon/device.revoke";
+
+/**
+ * Runtime mirror of [ShannonMethod] — the SINGLE SOURCE both the type above
+ * (members must match exactly) and the protocol schema
+ * (`docs/protocol/shannon-mobile-protocol.schema.json`, pinned by
+ * `__tests__/protocolSchema.test.ts`) derive from. Adding a method: add it
+ * here, to the type, and to the schema enum — the tests force all three.
+ */
+export const SHANNON_METHODS = [
+  "shannon/pair",
+  "shannon/device.resume",
+  "shannon/query",
+  "shannon/cancel",
+  "shannon/approval/decide",
+  "shannon/agent.list",
+  "shannon/agent.detail",
+  "shannon/model.list",
+  "shannon/model.switch",
+  "shannon/health",
+  "shannon/task.dispatch",
+  "shannon/task.list",
+  "shannon/snapshot",
+  "shannon/resume",
+  "shannon/device.list",
+  "shannon/device.revoke",
+] as const satisfies readonly ShannonMethod[];
+
+// Compile-time guard: every member of the union is present in the runtime
+// list (the `satisfies` above covers the reverse direction).
+type _UncoveredMethod = Exclude<ShannonMethod, (typeof SHANNON_METHODS)[number]>;
+type _AllCovered = _UncoveredMethod extends never ? true : never;
+const _allCovered: _AllCovered = true;
+void _allCovered;
 
 // ── Requests (phone → gateway) ───────────────────────────────────────────
 
@@ -128,8 +165,16 @@ export interface DeviceResumeParams {
   device_id: string;
   /** Epoch milliseconds; must be within the gateway's clock-skew window. */
   timestamp: number;
-  /** Ed25519 signature over `${device_id}:${timestamp}`. */
+  /** Ed25519 signature over `${device_id}:${timestamp}` — or, when `nonce` is
+   *  sent, over `${device_id}:${timestamp}:${nonce}`. */
   signature: string;
+  /**
+   * Client-generated single-use value (random ≤128 chars). When present, the
+   * gateway enforces one resume per nonce per device inside the skew window —
+   * a captured resume can't be replayed. Absent on legacy clients, which fall
+   * back to the monotonic-timestamp watermark only.
+   */
+  nonce?: string;
 }
 
 // ── Responses (gateway → phone) ──────────────────────────────────────────
@@ -290,6 +335,13 @@ export interface TaskListResult {
  * use -32xxx too where they map cleanly (method-not-found, not-implemented) and
  * the -32000 custom band for shannon-specific conditions.
  */
+/**
+ * Error-code registry (shannon band -32000..-32099). Assign new codes from the
+ * lowest unused slot and mirror them in shannon-mobile `json_rpc.dart` RpcError;
+ * -32010..-32013 are reserved for the mock-only rich surface. Assigned:
+ *   -32000 PAIRING_REQUIRED   -32001 BAD_PARAMS      -32002 ENGINE_ERROR
+ *   -32003 CLOCK_SKEW          -32014 GAP_TOO_LARGE
+ */
 export const ShannonError = {
   PARSE_ERROR: -32700,
   INVALID_REQUEST: -32600,
@@ -300,6 +352,11 @@ export const ShannonError = {
   PAIRING_REQUIRED: -32000,
   BAD_PARAMS: -32001,
   ENGINE_ERROR: -32002,
+  /**
+   * `shannon/device.resume` timestamp outside the skew window (or replayed).
+   * Dedicated code so clients don't classify skew by matching message text.
+   */
+  CLOCK_SKEW: -32003,
   /** Resume cursor beyond the gateway's retained event window (WP-15 T4). */
   GAP_TOO_LARGE: -32014,
 } as const;

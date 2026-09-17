@@ -2939,5 +2939,9 @@
   "chat.input.effort.max": "Maximal",
   "shortcutsHelp.composer.title": "Composer-Steuerung — alle drei aktiv",
   "settings.models.quickSwitch.label": "Modell wechseln",
-  "settings.models.quickSwitch.placeholder": "Modelle suchen…"
+  "settings.models.quickSwitch.placeholder": "Modelle suchen…",
+  "settings.connections.mobile.tlsToggle": "LAN-Verschlüsselung (wss)",
+  "settings.connections.mobile.tlsHint": "Stellt den mobilen Kanal über TLS mit einem selbstsignierten Zertifikat bereit — Telefone prüfen den im QR-Code übermittelten Zertifikats-Fingerabdruck. Wird nach dem Neustart des Gateways wirksam.",
+  "settings.connections.mobile.tlsFingerprint": "Zertifikats-Fingerabdruck",
+  "settings.connections.mobile.tlsSaved": "LAN-Verschlüsselung aktualisiert — Gateway neu starten, um sie anzuwenden"
 }

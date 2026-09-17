@@ -634,7 +634,11 @@ jobs:
       # WsServerMessage (shannon-api-protocol) and reshaped query-engine
       # internals — intentional minor-cycle breaks. New TAG NAME so the
       # baseline-rustdoc cache invalidates.
-      SEMVER_BASELINE: semver-baseline-2026-09-3
+      # Fourth move (2026-09-18, f1e1e2f5): WP-15 T5 added an optional `name`
+      # field to ModelInfo (shannon-api-protocol) — intentional minor-cycle
+      # break (new pub field on an exhaustively-constructible struct). New TAG
+      # NAME so the baseline-rustdoc cache invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-4
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
@@ -666,7 +670,11 @@ jobs:
           # v0.10.0 baseline — cargo-semver-checks cannot load a baseline
           # manifest for them ("no `package` table"); they join the exclude
           # list until the next baseline tag.
-          exclude: shannon-desktop shannon-browser shannon-remote
+          # NOTE (2026-09-18): this input is COMMA-separated (space-separated
+          # silently matched nothing, so shannon-desktop was being semver-
+          # checked despite the documented exclusion — it is a Tauri binary
+          # crate whose public API is not consumed externally).
+          exclude: shannon-desktop,shannon-browser,shannon-remote
           verbose: true
 
   insta:

@@ -232,6 +232,30 @@ describe('ConnectionsSettings', () => {
     expect(screen.queryByTestId('mobile-qr')).not.toBeInTheDocument()
   })
 
+  it('v0.12: the TLS toggle writes mobile.tls.enabled into the gateway config', async () => {
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [],
+      mobile: { enabled: true, host: '0.0.0.0', port: 33430 },
+    })
+    const writeSpy = vi.spyOn(api, 'gatewayWriteConfig').mockImplementation(
+      async (cfg) => cfg,
+    )
+    vi.spyOn(api, 'mobileTlsStatus').mockResolvedValue({
+      enabled: false,
+      fingerprint: null,
+    })
+    render(<ConnectionsSettings />)
+
+    const toggle = await screen.findByTestId('mobile-tls-switch')
+    fireEvent.click(toggle)
+    await waitFor(() => expect(writeSpy).toHaveBeenCalled())
+    const written = writeSpy.mock.calls[0][0]
+    expect(written.mobile?.tls?.enabled).toBe(true)
+    // The status is re-read after the write.
+    await waitFor(() => expect(api.mobileTlsStatus).toHaveBeenCalled())
+  })
+
   it('lists a paired device and revokes it through a confirm dialog', async () => {
     vi.spyOn(api, 'mobileListPairedDevices').mockResolvedValue([
       { deviceId: 'dev-1', publicKey: 'pk', label: 'Pixel', addedAt: 1, lastSeenAt: 2 },

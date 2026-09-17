@@ -20,6 +20,8 @@ export interface RespondToApprovalOptions {
   engineBaseUrl: string;
   requestId: string;
   choice: GatewayApprovalChoice;
+  /** Engine bearer token; sent as `Authorization: Bearer …` when set. */
+  authToken?: string | null;
   /** Override for tests; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -30,9 +32,11 @@ export async function respondToApproval(
   const fetchImpl = opts.fetchImpl ?? fetch;
   const wireChoice = opts.choice === "allow" ? "allow_once" : "deny";
   const url = `${opts.engineBaseUrl.replace(/\/+$/, "")}/api/approval/respond`;
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (opts.authToken) headers.authorization = `Bearer ${opts.authToken}`;
   const res = await fetchImpl(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify({ request_id: opts.requestId, choice: wireChoice }),
   });
   if (!res.ok) {
