@@ -30,6 +30,18 @@ infra-DNF 率量化。
 **诚实边界**：静默断流（无错误浮出）不在 A8 覆盖内，仍靠 A1 think-only nudge 兜底；
 SMALLER 提示措辞（续推指引）按 L4 规则属「真实用户受益」类（网络中断续推），非评测特化。
 
+### F2-b（F2 续篇，smoke-5）：静默断流变体绕过 A8，截断生成被当作完成
+**现象**：smoke-5（27m52s）流中途异常 EOF，错误变体 `StreamEndedUnexpectedly`
+（非 timeout 类）→ A8 不触发 → has_partial 保全路径把截断文本入库 + Warning +
+Completed → headless **rc=0 假成功**。模型 Edit 完成但没走到 commit，patch 空判 0。
+证据：smoke-5 stderr 末行 "Stream ended unexpectedly. Partial response preserved."、
+model.patch 0 字节、reward F2P 0/88（P2P 275/275）。
+**语义裁定**：异常 EOF 的截断生成不是完成的回答；对 mid-work agent 按「完成」收尾是
+错误语义。修复 A8b：`is_stream_interrupted()`（类型级）并入续推触发，预算耗尽后仍回落
+保全路径；Ollama malformed 保全路径与正常 text-only 完成不受影响。
+**「假成功」分级**：F2 是「假失败」（作废成果，infra 噪声）；F2-b 更危险——「假成功」
+（rc=0 但任务未完成），对真实用户同样是直接危害（agent 停在半路还说完成了）。
+
 ### F3（产品缺陷候选，待定夺 P3）：stderr turn 计数非单调
 smoke-2/4 中 stderr `turn N` 显示 7→5、12→11 回退。疑压缩/重试后的显示口径问题。
 C1 修复（`55c980fd`）只修了 events.jsonl 的 turn 字段。影响：轨迹可读性与分析准确性。
