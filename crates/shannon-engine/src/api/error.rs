@@ -303,6 +303,21 @@ impl ApiError {
             || lower.contains("error sending request")
     }
 
+    /// Check whether this error reports an abnormally terminated response
+    /// stream (A8b): the byte stream ended before the provider's terminal
+    /// frame (smoke-5: mid-work truncated generation committed as a complete
+    /// answer — docs/research/pier-adapter-notes-2026-09.md §五 evidence
+    /// trail, `~/.shannon/eval/deepswe-smoke/jobs/deepswe-smoke-5/`).
+    ///
+    /// Strictly a **type-level** match on [`ApiError::StreamEndedUnexpectedly`]
+    /// — deliberately NOT string matching. A stream that ends this way is
+    /// never a legitimate completion (clean completions always carry a
+    /// terminal frame), so only the variant itself qualifies; any other
+    /// error whose Display happens to contain similar words stays out.
+    pub fn is_stream_interrupted(&self) -> bool {
+        matches!(self, ApiError::StreamEndedUnexpectedly)
+    }
+
     /// Return a user-facing suggestion for how to resolve this error.
     pub fn user_suggestion(&self) -> Option<String> {
         if self.is_token_overflow() {
@@ -652,6 +667,32 @@ mod tests {
             .is_timeout_class()
         );
         assert!(!ApiError::InvalidResponse("model not found".to_string()).is_timeout_class());
+    }
+
+    /// A8b: stream-interruption detection is TYPE-level — only the
+    /// dedicated variant qualifies, regardless of what any Display string
+    /// says. This is what makes "normal text-only completion" impossible
+    /// to mis-continue: a clean completion never produces this variant.
+    #[test]
+    fn test_is_stream_interrupted_type_level_only() {
+        assert!(ApiError::StreamEndedUnexpectedly.is_stream_interrupted());
+        // Same words in a string variant must NOT match (no string sniffing).
+        assert!(
+            !ApiError::InvalidResponse("Stream ended unexpectedly".to_string())
+                .is_stream_interrupted()
+        );
+        // Timeout is its own class, not a stream interruption.
+        assert!(ApiError::Timeout.is_timeout_class());
+        assert!(!ApiError::Timeout.is_stream_interrupted());
+        assert!(!ApiError::AuthenticationFailed.is_stream_interrupted());
+        assert!(
+            !ApiError::ProviderError {
+                provider: "zhipu-coding".to_string(),
+                error_type: "timeout_error".to_string(),
+                message: "upstream request timeout".to_string(),
+            }
+            .is_stream_interrupted()
+        );
     }
 
     /// Error message + suggestion must not duplicate content between the two.

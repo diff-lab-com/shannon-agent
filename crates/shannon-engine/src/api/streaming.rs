@@ -58,6 +58,19 @@ fn is_keepalive_event(event: &StreamEvent) -> bool {
     matches!(event, StreamEvent::Ping)
 }
 
+/// True for the frames that mark a clean completion (A8b): `MessageStop`, or
+/// a `MessageDelta` carrying a stop reason. Several providers never send
+/// `MessageStop` at all — Ollama's `done` chunk and Gemini's final chunk end
+/// with a `MessageDelta` — so BOTH frames count as terminal; a stream that
+/// ends without either is an abnormal EOF, never a completion.
+fn is_terminal_frame(event: &StreamEvent) -> bool {
+    match event {
+        StreamEvent::MessageStop => true,
+        StreamEvent::MessageDelta { delta, .. } => delta.stop_reason.is_some(),
+        _ => false,
+    }
+}
+
 /// Shared last-event-id tracker for reconnection support.
 ///
 /// Wrapped in `Arc<Mutex<>>` so both the inner `SseStream` and the
@@ -122,6 +135,15 @@ pub struct SseStream {
     /// inside `poll_next` so `SseStream` can be built outside a Tokio
     /// runtime.
     idle_timer: Option<Pin<Box<tokio::time::Sleep>>>,
+    /// A8b: set once a terminal frame was observed — `MessageStop`, or a
+    /// `MessageDelta` carrying a stop reason (the only terminal signal
+    /// several providers emit: Ollama's done chunk and Gemini's final chunk
+    /// end with MessageDelta, never MessageStop).
+    saw_terminal_frame: bool,
+    /// A8b: the byte stream ended without a terminal frame — the typed
+    /// `StreamEndedUnexpectedly` is surfaced once on the follow-up poll
+    /// (after any final buffered events), then the stream ends.
+    premature_eof: bool,
 }
 
 impl SseStream {
@@ -165,6 +187,8 @@ impl SseStream {
             last_event_id,
             idle_timeout,
             idle_timer: None,
+            saw_terminal_frame: false,
+            premature_eof: false,
         }
     }
 
@@ -181,6 +205,14 @@ impl SseStream {
             .idle_timer
             .get_or_insert_with(|| Box::pin(tokio::time::sleep(timeout)));
         timer.as_mut().reset(tokio::time::Instant::now() + timeout);
+    }
+
+    /// Record that a terminal frame was observed (A8b). Only streams that
+    /// saw one may end cleanly; anything else is an abnormal EOF.
+    fn note_terminal_frame(&mut self, event: &StreamEvent) {
+        if is_terminal_frame(event) {
+            self.saw_terminal_frame = true;
+        }
     }
 
     /// Parse all complete SSE lines from the buffer, queuing parsed events.
@@ -259,11 +291,19 @@ impl Stream for SseStream {
             let event = self.pending_events.pop_front().expect("checked non-empty");
             if let Ok(event) = &event {
                 self.note_content(event);
+                self.note_terminal_frame(event);
             }
             return Poll::Ready(Some(event));
         }
 
         if self.done {
+            // After a premature EOF the typed error is surfaced exactly once
+            // on the follow-up poll (the final buffered events themselves were
+            // delivered first), then the stream ends.
+            if self.premature_eof {
+                self.premature_eof = false;
+                return Poll::Ready(Some(Err(ApiError::StreamEndedUnexpectedly)));
+            }
             return Poll::Ready(None);
         }
 
@@ -279,6 +319,7 @@ impl Stream for SseStream {
                         let event = self.pending_events.pop_front().expect("checked non-empty");
                         if let Ok(event) = &event {
                             self.note_content(event);
+                            self.note_terminal_frame(event);
                         }
                         return Poll::Ready(Some(event));
                     }
@@ -286,10 +327,28 @@ impl Stream for SseStream {
                 }
                 Poll::Ready(Some(Err(e))) => {
                     self.done = true;
+                    // A8b (smoke-5): a failure of the response BODY mid-stream
+                    // is the upstream cutting the connection (GLM gateway hard
+                    // cut; reqwest reports it as a body/decode error) — type it
+                    // as an interrupted stream so the reconnect layer retries
+                    // and the engine's turn loop can continue the turn instead
+                    // of committing a truncated generation as a complete answer.
+                    if e.is_body() || e.is_decode() {
+                        tracing::warn!(
+                            "Response body failed mid-stream ({e}) — treating as interrupted stream"
+                        );
+                        return Poll::Ready(Some(Err(ApiError::StreamEndedUnexpectedly)));
+                    }
                     return Poll::Ready(Some(Err(ApiError::HttpError(e))));
                 }
                 Poll::Ready(None) => {
-                    // Stream ended — process any remaining data in buffer
+                    // Byte stream ended. A stream that never delivered a
+                    // terminal frame (MessageStop, or a MessageDelta carrying a
+                    // stop reason) did NOT complete — it was cut. Type the
+                    // premature EOF so callers never mistake it for a clean end.
+                    self.premature_eof = !self.saw_terminal_frame;
+                    // Process any remaining data in buffer first — a final
+                    // line without a trailing newline still carries content.
                     if !self.buffer.trim().is_empty() {
                         let remaining = std::mem::take(&mut self.buffer);
                         let events = self.parse_sse_line(&remaining);
@@ -298,12 +357,17 @@ impl Stream for SseStream {
                             let event = self.pending_events.pop_front().expect("checked non-empty");
                             if let Ok(event) = &event {
                                 self.note_content(event);
+                                self.note_terminal_frame(event);
                             }
                             self.done = true;
                             return Poll::Ready(Some(event));
                         }
                     }
                     self.done = true;
+                    if self.premature_eof {
+                        self.premature_eof = false;
+                        return Poll::Ready(Some(Err(ApiError::StreamEndedUnexpectedly)));
+                    }
                     return Poll::Ready(None);
                 }
                 Poll::Pending => {
@@ -1201,6 +1265,8 @@ mod tests {
                 last_event_id,
                 idle_timeout: None,
                 idle_timer: None,
+                saw_terminal_frame: false,
+                premature_eof: false,
             }
         }
 
@@ -1221,6 +1287,8 @@ mod tests {
                 last_event_id: Arc::new(Mutex::new(None)),
                 idle_timeout,
                 idle_timer: None,
+                saw_terminal_frame: false,
+                premature_eof: false,
             }
         }
     }

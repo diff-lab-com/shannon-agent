@@ -1930,4 +1930,159 @@ mod tests {
         assert_eq!(token.split('.').count(), 3);
         assert_ne!(token, "testid.testsecret");
     }
+
+    // ── A8b: interrupted-stream typing (smoke-5) ─────────────────────────
+
+    fn truncated_sse_body() -> String {
+        format!(
+            "data: {}\n\ndata: {}\n\n",
+            r#"{"type":"message_start","message":{"id":"msg_cut","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial before the cut"}}"#
+        )
+    }
+
+    /// A stream whose bytes end WITHOUT a terminal frame (no MessageStop,
+    /// no stop-reason MessageDelta) is an abnormal EOF — it must surface as
+    /// `ApiError::StreamEndedUnexpectedly`, never as a silent clean end
+    /// (the silent end is what let smoke-5 commit a truncated generation
+    /// as a complete answer).
+    #[tokio::test]
+    async fn premature_sse_end_without_terminal_frame_is_typed_interrupted() {
+        use futures::StreamExt;
+
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(truncated_sse_body())
+            .create_async()
+            .await;
+
+        let mut cfg = test_config(); // reconnects = 0
+        cfg.base_url = server.url();
+        let client = LlmClient::new(cfg);
+        let mut stream = client
+            .send_message_stream(vec![user_message()], None, None)
+            .await
+            .expect("stream must open");
+
+        let mut saw_delta = false;
+        let mut terminal = None;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(StreamEvent::ContentBlockDelta { .. }) => saw_delta = true,
+                Ok(_) => {}
+                Err(e) => {
+                    terminal = Some(e);
+                    break;
+                }
+            }
+        }
+        assert!(saw_delta, "the partial delta must still be delivered");
+        assert!(
+            matches!(terminal, Some(ApiError::StreamEndedUnexpectedly)),
+            "premature EOF must be typed StreamEndedUnexpectedly, got {terminal:?}"
+        );
+    }
+
+    /// The exact smoke-5 mechanism: the upstream cuts the connection
+    /// mid-body and reqwest reports a body/decode failure. The stream layer
+    /// knows this was a stream, so it types the failure as
+    /// `StreamEndedUnexpectedly` (type preserved for the engine's A8b
+    /// continuation) instead of an opaque HttpError string.
+    #[tokio::test]
+    async fn mid_stream_body_failure_is_typed_interrupted() {
+        use futures::StreamExt;
+
+        let mut server = mockito::Server::new_async().await;
+        let payload = truncated_sse_body();
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |w| {
+                w.write_all(payload.as_bytes())?;
+                w.flush()?;
+                // Cut the body mid-stream, like a hard connection kill.
+                Err(std::io::Error::other("connection cut by upstream"))
+            })
+            .create_async()
+            .await;
+
+        let mut cfg = test_config(); // reconnects = 0
+        cfg.base_url = server.url();
+        let client = LlmClient::new(cfg);
+        let mut stream = client
+            .send_message_stream(vec![user_message()], None, None)
+            .await
+            .expect("stream must open");
+
+        let mut saw_delta = false;
+        let mut terminal = None;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(StreamEvent::ContentBlockDelta { .. }) => saw_delta = true,
+                Ok(_) => {}
+                Err(e) => {
+                    terminal = Some(e);
+                    break;
+                }
+            }
+        }
+        // Whether the buffered chunk reached the wire before the cut is
+        // transport-dependent (mockito drops it); the contract under test is
+        // the ERROR TYPE.
+        let _ = saw_delta;
+        assert!(
+            matches!(terminal, Some(ApiError::StreamEndedUnexpectedly)),
+            "mid-body failure must be typed StreamEndedUnexpectedly, got {terminal:?}"
+        );
+    }
+
+    /// With reconnection enabled, a truncated stream is first treated as
+    /// reconnectable; when every reconnect dies the same way, the typed
+    /// abnormal EOF surfaces to the caller (which hands it to the engine's
+    /// A8b turn continuation).
+    #[tokio::test]
+    async fn resumable_stream_reconnects_on_premature_end_then_surfaces_typed_error() {
+        use futures::StreamExt;
+
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(truncated_sse_body())
+            .expect(2)
+            .create_async()
+            .await;
+
+        let mut cfg = test_config();
+        cfg.max_stream_reconnects = 1;
+        cfg.base_url = server.url();
+        let client = LlmClient::new(cfg);
+        let started = std::time::Instant::now();
+        let mut stream = client
+            .send_message_stream(vec![user_message()], None, None)
+            .await
+            .expect("stream must open");
+
+        let mut terminal = None;
+        while let Some(item) = stream.next().await {
+            if let Err(e) = item {
+                terminal = Some(e);
+                break;
+            }
+        }
+        mock.assert();
+        assert!(
+            matches!(terminal, Some(ApiError::StreamEndedUnexpectedly)),
+            "exhausted reconnects must surface the typed abnormal EOF, got {terminal:?}"
+        );
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(900),
+            "the reconnect backoff must have run before the typed error"
+        );
+    }
 }

@@ -4794,19 +4794,22 @@ impl QueryEngine {
                                     }
                                 }
                                 Err(e) => {
-                                    // A8: a timeout-class mid-stream death
+                                    // A8/A8b: a timeout-class mid-stream death
                                     // (GLM coding-plan hard-cuts calls at
-                                    // ~6min; smoke-2/4 RCA) is continued in
-                                    // place instead of failing the run.
+                                    // ~6min; smoke-2/4 RCA) or an abnormal
+                                    // stream interruption (A8b/smoke-5: the
+                                    // response body dies before any terminal
+                                    // frame) is continued in place instead of
+                                    // failing or masquerading as a completion.
                                     // This check intentionally precedes the
                                     // partial-content preservation below: a
-                                    // hard-cut tail is not a usable response
+                                    // cut tail is not a usable response
                                     // (saving it produced the empty/truncated
                                     // patches in the RCA), so on retry the
                                     // partial accumulation is discarded and
                                     // the model regenerates from the intact
                                     // history.
-                                    if e.is_timeout_class()
+                                    if (e.is_timeout_class() || e.is_stream_interrupted())
                                         && turn_retries_used < max_turn_retries
                                     {
                                         turn_retries_used += 1;
@@ -5323,14 +5326,16 @@ impl QueryEngine {
                         }
                     }
                     Err(e) => {
-                        // A8: timeout-class stream-establishment death is
+                        // A8/A8b: timeout-class stream-establishment death is
                         // continued in place (same rationale as the
                         // mid-stream site above; the GLM coding-plan gateway
                         // hard-cuts ~6min calls before a single byte of the
                         // response arrives). History and prior tool state
                         // are untouched; only the continuation nudge is
                         // added.
-                        if e.is_timeout_class() && turn_retries_used < max_turn_retries {
+                        if (e.is_timeout_class() || e.is_stream_interrupted())
+                            && turn_retries_used < max_turn_retries
+                        {
                             turn_retries_used += 1;
                             tracing::warn!(
                                 "Turn LLM call interrupted by timeout-class error ({e}); continuing turn {turn_retries_used}/{max_turn_retries}"
@@ -8313,9 +8318,32 @@ mod tests {
                     .lock()
                     .unwrap()
                     .push(String::from_utf8_lossy(&buf[..read]).to_string());
-                let resp = r#"{"id":"msg_loop","role":"assistant","content":[{"type":"text","text":"done"}],"model":"test-model","stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}"#;
+                // A8b: serve a proper terminal-framed SSE stream. The old
+                // non-SSE JSON body produced a zero-event stream that ended
+                // without any terminal frame and is now (correctly) typed as
+                // an interrupted stream instead of silently completing.
+                let resp = concat!(
+                    "event: message_start\n",
+                    r#"data: {"type":"message_start","message":{"id":"msg_loop","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":2,"output_tokens":0}}}"#,
+                    "\n\n",
+                    "event: content_block_start\n",
+                    r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+                    "\n\n",
+                    "event: content_block_delta\n",
+                    r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}"#,
+                    "\n\n",
+                    "event: content_block_stop\n",
+                    r#"data: {"type":"content_block_stop","index":0}"#,
+                    "\n\n",
+                    "event: message_delta\n",
+                    r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":2,"output_tokens":1}}"#,
+                    "\n\n",
+                    "event: message_stop\n",
+                    r#"data: {"type":"message_stop"}"#,
+                    "\n\n"
+                );
                 let http = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     resp.len(),
                     resp
                 );
@@ -8552,10 +8580,18 @@ mod tests {
     }
 
     /// Drive one full `process_query` against the mock and return
-    /// (completed, failed_error, progress_messages, final_history).
+    /// (completed, failed_error, progress_messages, warning_messages,
+    /// final_history).
+    #[allow(clippy::type_complexity)]
     async fn a8_run_query(
         server: &TurnRetryMockServer,
-    ) -> (bool, String, Vec<String>, Vec<Message>) {
+    ) -> (
+        bool,
+        String,
+        Vec<String>,
+        Vec<String>,
+        Vec<Message>,
+    ) {
         use futures::StreamExt as _;
         let config = LlmClientConfig {
             api_key: "test-key".to_string(),
@@ -8590,6 +8626,7 @@ mod tests {
         let mut completed = false;
         let mut failed = String::new();
         let mut progress: Vec<String> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
         let mut history: Vec<Message> = Vec::new();
         while let Some(ev) = stream.next().await {
             match ev {
@@ -8604,6 +8641,9 @@ mod tests {
                 Ok(QueryEvent::Progress { message, .. }) => {
                     progress.push(message);
                 }
+                Ok(QueryEvent::Warning { message, .. }) => {
+                    warnings.push(message);
+                }
                 Ok(QueryEvent::ConversationUpdate { messages, .. }) => {
                     history = messages;
                 }
@@ -8614,7 +8654,7 @@ mod tests {
                 _ => {}
             }
         }
-        (completed, failed, progress, history)
+        (completed, failed, progress, warnings, history)
     }
 
     /// Env contract: default 2; "0" legitimately disables; unparseable and
@@ -8663,7 +8703,7 @@ mod tests {
             });
         let server = TurnRetryMockServer::start(responder);
 
-        let (completed, failed, progress, history) = a8_run_query(&server).await;
+        let (completed, failed, progress, _warnings, history) = a8_run_query(&server).await;
 
         match saved {
             Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
@@ -8753,7 +8793,7 @@ mod tests {
             std::sync::Arc::new(|_i: usize| a8_timeout_response());
         let server = TurnRetryMockServer::start(responder);
 
-        let (completed, failed, progress, _history) = a8_run_query(&server).await;
+        let (completed, failed, progress, _warnings, _history) = a8_run_query(&server).await;
 
         match saved {
             Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
@@ -8822,7 +8862,7 @@ mod tests {
             });
         let server = TurnRetryMockServer::start(responder);
 
-        let (completed, failed, progress, history) = a8_run_query(&server).await;
+        let (completed, failed, progress, _warnings, history) = a8_run_query(&server).await;
 
         match saved {
             Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
@@ -8867,6 +8907,245 @@ mod tests {
         );
     }
 
+    /// Truncated stream (A8b / smoke-5 shape): valid partial frames, then
+    /// the connection ends WITHOUT any terminal frame (no message_delta
+    /// stop reason, no message_stop) — an abnormal EOF, never a completion.
+    fn a8_truncated_sse() -> String {
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_dead","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial answer before the cut"}}"#,
+        ]
+        .join("\n\n");
+        a8_http_response("200 OK", "text/event-stream", &sse)
+    }
+
+    /// A8b core behavior (smoke-5): a mid-stream abnormal EOF
+    /// (`ApiError::StreamEndedUnexpectedly`) must continue THE TURN — the
+    /// truncated partial is discarded as an unusable tail, the continuation
+    /// nudge is injected, and the retried stream completes the turn.
+    /// Without A8b this query "completes" with the partial saved as a final
+    /// answer (rc=0, empty patch — exactly smoke-5). The engine's default
+    /// config sends structured system blocks, so the stream is the plain
+    /// (non-reconnecting) SseStream: the typed EOF surfaces on the first
+    /// dead response and the retry is immediate.
+    #[tokio::test]
+    async fn a8_stream_interrupted_triggers_continuation_and_discards_partial() {
+        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|i: usize| match i {
+                0 => a8_truncated_sse(),
+                _ => a8_text_sse("recovered after interrupted continuation"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, warnings, history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(
+            completed,
+            "the turn must complete after the interrupted-stream continuation; failed: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(
+            bodies.len(),
+            2,
+            "dead attempt + 1 A8 continuation; got {}",
+            bodies.len()
+        );
+        let nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        assert!(
+            !bodies[0].contains(nudge),
+            "the first attempt must be nudge-free"
+        );
+        assert_eq!(
+            bodies[1].matches(nudge).count(),
+            1,
+            "the A8 continuation request must carry the nudge exactly once"
+        );
+        assert!(
+            progress.iter().any(|m| m.contains(
+                "Turn LLM call interrupted (upstream cutoff); continuing turn 1/2"
+            )),
+            "expected A8 Progress for the interrupted stream; got {progress:?}"
+        );
+        assert!(
+            warnings.is_empty(),
+            "no partial-preserve Warning may fire when the turn was continued: {warnings:?}"
+        );
+        let history_text: String = history
+            .iter()
+            .map(|m| match &m.content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|b| match b {
+                        shannon_engine::api::ContentBlock::Text { text } => text.clone(),
+                        _ => String::new(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        assert!(
+            !history_text.contains("partial answer before the cut"),
+            "the truncated tail must NOT be committed as a complete response: {history_text:?}"
+        );
+        assert!(
+            history_text.contains("recovered after interrupted continuation"),
+            "the continuation's answer must land in history: {history_text:?}"
+        );
+    }
+
+    /// A8b budget exhausted / disabled: the abnormal EOF falls through to
+    /// the EXISTING has_partial path — partial preserved, Warning fired,
+    /// query Completed — so the degraded behavior is byte-identical to
+    /// pre-A8b when SHANNON_TURN_RETRIES=0.
+    #[tokio::test]
+    async fn a8_stream_interrupted_budget_exhausted_falls_back_to_partial_preserve() {
+        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "0") };
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|_i: usize| a8_truncated_sse());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, warnings, history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(
+            completed,
+            "the preserve fallback must complete the query as before; failed: {failed}"
+        );
+        assert_eq!(
+            server.bodies().len(),
+            1,
+            "SHANNON_TURN_RETRIES=0: single dead attempt, no continuation"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("Partial response preserved")),
+            "the existing partial-preserve Warning must fire; got {warnings:?}"
+        );
+        assert!(
+            !progress
+                .iter()
+                .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            "no A8 continuation may fire when disabled; got {progress:?}"
+        );
+        let history_text: String = history
+            .iter()
+            .map(|m| match &m.content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|b| match b {
+                        shannon_engine::api::ContentBlock::Text { text } => text.clone(),
+                        _ => String::new(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        assert!(
+            history_text.contains("partial answer before the cut"),
+            "with the budget exhausted the partial must be preserved exactly as before: {history_text:?}"
+        );
+    }
+
+    /// Boundary guard for the terminal-frame latch: a stream that ends with
+    /// a `message_delta` carrying a stop reason but NO `message_stop` (the
+    /// only terminal signal several providers emit — Ollama's done chunk,
+    /// Gemini's final chunk) is a CLEAN completion. It must finish in one
+    /// request with no reconnects and no A8 continuation.
+    #[tokio::test]
+    async fn a8_clean_end_without_message_stop_is_not_continued() {
+        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_clean","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"clean end without message_stop"}}"#,
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"event: message_delta"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":10,"output_tokens":7}}"#,
+        ]
+        .join("\n\n");
+        let body = a8_http_response("200 OK", "text/event-stream", &sse);
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(move |_i: usize| body.clone());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, warnings, history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(
+            completed,
+            "a clean text completion must complete; failed: {failed}"
+        );
+        assert_eq!(
+            server.bodies().len(),
+            1,
+            "a terminal-frame stream must not be reconnected or continued"
+        );
+        assert!(
+            !progress
+                .iter()
+                .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            "no A8 continuation for a clean completion; got {progress:?}"
+        );
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected for a clean completion: {warnings:?}"
+        );
+        let history_text: String = history
+            .iter()
+            .map(|m| match &m.content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|b| match b {
+                        shannon_engine::api::ContentBlock::Text { text } => text.clone(),
+                        _ => String::new(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        assert!(
+            history_text.contains("clean end without message_stop"),
+            "the answer must land in history exactly once: {history_text:?}"
+        );
+        assert_eq!(
+            history_text.matches("clean end without message_stop").count(),
+            1,
+            "content must not be duplicated by reconnect replays"
+        );
+    }
+
     /// SHANNON_TURN_RETRIES=0 disables continuation entirely: one request,
     /// immediate failure through the existing path.
     #[tokio::test]
@@ -8879,7 +9158,7 @@ mod tests {
             std::sync::Arc::new(|_i: usize| a8_timeout_response());
         let server = TurnRetryMockServer::start(responder);
 
-        let (completed, failed, progress, _history) = a8_run_query(&server).await;
+        let (completed, failed, progress, _warnings, _history) = a8_run_query(&server).await;
 
         match saved {
             Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
@@ -8916,7 +9195,7 @@ mod tests {
             std::sync::Arc::new(|_i: usize| a8_auth_response());
         let server = TurnRetryMockServer::start(responder);
 
-        let (completed, failed, progress, _history) = a8_run_query(&server).await;
+        let (completed, failed, progress, _warnings, _history) = a8_run_query(&server).await;
 
         match saved {
             Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
