@@ -141,6 +141,25 @@ class Shannon(BaseInstalledAgent):
         )
 
     @override
+    async def setup(self, environment: BaseEnvironment) -> None:
+        # Pier inlines install_spec() steps into the derived agent image and
+        # then marks the agent preinstalled (environment.agent_install_spec),
+        # skipping the default install() path — but a binary upload cannot be
+        # expressed as a build-time text step, so the placeholder spec installs
+        # nothing. Force the real install on every trial.
+        await environment.exec(command="mkdir -p /installed-agent", user="root")
+        await self.install(environment)
+        if self._version is None:
+            version_cmd = self.get_version_command()
+            if version_cmd:
+                try:
+                    version_result = await environment.exec(command=version_cmd)
+                    if version_result.return_code == 0 and version_result.stdout:
+                        self._version = self.parse_version(version_result.stdout)
+                except Exception:
+                    pass  # Version detection is best-effort
+
+    @override
     def network_allowlist(self) -> NetworkAllowlist:
         # zhipu-coding-plan endpoint host (open.bigmodel.cn/api/coding/paas/v4).
         # The API-key→JWT signature is computed locally; no other host needed.
