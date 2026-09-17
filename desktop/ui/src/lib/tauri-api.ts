@@ -43,6 +43,7 @@ import type {
   WorkingDirInfo,
   CatalogEntry,
   DataSourceResult,
+  MobileTlsStatus,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -227,6 +228,12 @@ export async function mobileListPairedDevices(): Promise<MobileDeviceEntry[]> {
 /** Remove a paired device by id; returns true if a device was removed. */
 export async function mobileRevokeDevice(deviceId: string): Promise<boolean> {
   return invoke('mobile_revoke_device', { deviceId })
+}
+
+/** Current `mobile.tls` state + cert fingerprint (v0.12 LAN hardening). */
+/** Current `mobile.tls` state + cert fingerprint (v0.12 LAN hardening). */
+export async function mobileTlsStatus(): Promise<MobileTlsStatus> {
+  return invoke('mobile_tls_status')
 }
 
 export interface WebhookConfigDto {

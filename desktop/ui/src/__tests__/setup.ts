@@ -232,6 +232,7 @@ vi.mock('@/lib/tauri-api', () => ({
   }),
   mobileListPairedDevices: vi.fn().mockResolvedValue([]),
   mobileRevokeDevice: vi.fn().mockResolvedValue(true),
+  mobileTlsStatus: vi.fn().mockResolvedValue({ enabled: false, fingerprint: null }),
   testProviderConnection: vi.fn().mockResolvedValue({ kind: 'success' }),
   listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   saveProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),

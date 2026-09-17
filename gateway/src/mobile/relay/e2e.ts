@@ -16,7 +16,15 @@
  * Uses only `node:crypto` — no external dependencies.
  */
 
-import { createCipheriv, createDecipheriv, createHmac } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHmac,
+  createPublicKey,
+  diffieHellman,
+  generateKeyPairSync,
+  KeyObject,
+} from "node:crypto";
 
 export const FRAME_VERSION = 0x01;
 const HEADER_LEN = 9; // ver(1) + counter(8)
@@ -161,4 +169,85 @@ export function deriveSessionKey(pairToken: string): Buffer {
   const salt = Buffer.from("shannon-relay", "utf8");
   const info = Buffer.from("shannon-e2e-v1", "utf8");
   return hkdfExpand(hkdfExtract(ikm, salt), info, 32);
+}
+
+// ── v0.3: X25519 ephemeral ECDH (forward secrecy) + relay auth tag ─────────
+
+/** One relay-host session's X25519 handshake material. The public key travels
+ *  in the QR (`hostE2EPubKey`); the private key never leaves the host process
+ *  and is discarded with the session. */
+export interface HostE2EKeyPair {
+  privateKey: KeyObject;
+  /** base64url raw 32-byte X25519 public key — the QR field value. */
+  pubB64: string;
+}
+
+/** Generate the per-relay-session ephemeral X25519 keypair (host side). */
+export function generateHostE2EKeyPair(): HostE2EKeyPair {
+  const { publicKey, privateKey } = generateKeyPairSync("x25519");
+  const jwk = publicKey.export({ format: "jwk" }) as { x: string };
+  return { privateKey, pubB64: jwk.x };
+}
+
+/**
+ * Host side of the ECDH: shared = X25519(hostEphPriv, phoneEphPub).
+ * `phonePubB64` arrives in the phone's plaintext `e2e_hello` first frame.
+ */
+export function hostSharedSecret(hostPriv: KeyObject, phonePubB64: string): Buffer {
+  const peer = createPublicKey({
+    key: { kty: "OKP", crv: "X25519", x: phonePubB64 },
+    format: "jwk",
+  });
+  return diffieHellman({ privateKey: hostPriv, publicKey: peer });
+}
+
+/**
+ * v2 session key: `HKDF-SHA256(ikm = UTF8(pairToken) || shared, salt =
+ * "shannon-relay", info = "shannon-e2e-v2")` → 32 bytes. Mixing the token in
+ * keeps the channel authenticated against an active MITM substituting the
+ * phone's hello pubkey (a substitution can only cause a DoS — the attacker
+ * still can't derive either side's key without the token).
+ *
+ * Ephemeral-ephemeral X25519 gives forward secrecy: capturing the QR/token no
+ * longer decrypts the session; frames stay byte-compatible (same AEAD framing).
+ */
+export function deriveSessionKeyV2(pairToken: string, shared: Buffer): Buffer {
+  const ikm = Buffer.concat([Buffer.from(pairToken, "utf8"), shared]);
+  const salt = Buffer.from("shannon-relay", "utf8");
+  const info = Buffer.from("shannon-e2e-v2", "utf8");
+  return hkdfExpand(hkdfExtract(ikm, salt), info, 32);
+}
+
+/** The plaintext first frame the phone sends (before any sealed frame). */
+export function e2eHelloFrame(pubB64: string): Buffer {
+  return Buffer.from(JSON.stringify({ t: "e2e_hello", pub: pubB64 }), "utf8");
+}
+
+/** True when `frame` parses as an `e2e_hello` (v2 handshake) first frame. */
+export function isE2eHello(frame: Buffer): { pub: string } | null {
+  if (frame.length > 512) return null;
+  try {
+    const parsed = JSON.parse(frame.toString("utf8")) as { t?: unknown; pub?: unknown };
+    if (parsed.t === "e2e_hello" && typeof parsed.pub === "string" && parsed.pub.length > 0) {
+      return { pub: parsed.pub };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Relay handshake auth tag (wire-protocol.md §Security): proves to the relay
+ * that register/join for a sid share the pairing secret — a sid-only knower
+ * can no longer squat a slot once a tag is pinned. Derived from the pair token
+ * (NOT the session key): the phone persists the derived tag so reconnects that
+ * no longer hold the token can still present it, and the host re-registers
+ * (auto-reconnect) with the same value.
+ */
+export function deriveRelayAuthTag(pairToken: string): string {
+  const ikm = Buffer.from(pairToken, "utf8");
+  const salt = Buffer.from("shannon-relay", "utf8");
+  const info = Buffer.from("shannon-relay-auth-v1", "utf8");
+  return hkdfExpand(hkdfExtract(ikm, salt), info, 16).toString("base64url");
 }

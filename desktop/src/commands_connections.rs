@@ -85,6 +85,18 @@ pub struct GatewayMobileConfig {
     pub tokens_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub devices_file: Option<String>,
+    /// v0.12 LAN hardening (mirrors `mobile.tls` in
+    /// `shannon-gateway/src/config/types.ts`): serve the mobile face over
+    /// wss with the persisted self-signed cert; phones pin the QR-carried
+    /// fingerprint. None/absent = plaintext ws (legacy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<GatewayMobileTlsConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayMobileTlsConfig {
+    pub enabled: bool,
 }
 
 /// Split `"<service>/<account>"` into its parts. With no `/`, the whole key
@@ -209,7 +221,7 @@ pub async fn gateway_read_config() -> Result<GatewayConfig, String> {
 /// Validate + persist the gateway config. Writes atomically (temp file +
 /// rename) so a crash mid-write can't leave a half-written config. Returns
 /// the canonicalized config that was written.
-fn write_gateway_config_atomic(config: &GatewayConfig) -> Result<(), String> {
+pub(crate) fn write_gateway_config_atomic(config: &GatewayConfig) -> Result<(), String> {
     let path = gateway_config_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)

@@ -2939,5 +2939,9 @@
   "chat.input.effort.max": "Máximo",
   "shortcutsHelp.composer.title": "Controles do compositor — os três ativos",
   "settings.models.quickSwitch.label": "Trocar modelo",
-  "settings.models.quickSwitch.placeholder": "Buscar modelos…"
+  "settings.models.quickSwitch.placeholder": "Buscar modelos…",
+  "settings.connections.mobile.tlsToggle": "Criptografia de LAN (wss)",
+  "settings.connections.mobile.tlsHint": "Serve o canal móvel sobre TLS com um certificado autoassinado — os celulares verificam a impressão do certificado transportada no QR code. Tem efeito após reiniciar o gateway.",
+  "settings.connections.mobile.tlsFingerprint": "Impressão digital do certificado",
+  "settings.connections.mobile.tlsSaved": "Criptografia de LAN atualizada — reinicie o gateway para aplicar"
 }

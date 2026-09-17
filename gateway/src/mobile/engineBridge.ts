@@ -99,6 +99,14 @@ export interface EngineBridgeOptions {
    * next call instead of riding a stale bound session forever.
    */
   isDeviceTrusted?: (deviceId: string) => boolean;
+  /**
+   * Bearer token for engine calls (WS handshake + HTTP), resolved from the
+   * secret provider at bootstrap. The engine api_server enforces an optional
+   * bearer on non-loopback binds; without this the gateway's engine calls
+   * would 401 the moment that auth is enabled. Null/absent = engine runs
+   * unauthenticated (loopback default).
+   */
+  engineAuthToken?: string | null;
 }
 
 /** Sentinel key for queries without a session_id (P1.2 replaces it with a device id). */
@@ -119,6 +127,10 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
   let modelOverride: string | null = null;
 
   const requireSession = opts.requireSession === true;
+  const engineAuthToken = opts.engineAuthToken ?? null;
+  /** Authorization headers for engine HTTP calls (empty when no token set). */
+  const engineAuthHeaders = (): Record<string, string> =>
+    engineAuthToken ? { authorization: `Bearer ${engineAuthToken}` } : {};
   /** P1.2 gate: null = proceed; otherwise return this error outcome. */
   const sessionGate = (
     ctx: MethodContext,
@@ -156,7 +168,19 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
           message: "params.prompt (non-empty string) is required",
         };
       }
-      const sessionId = params.session_id ?? null;
+      // Ownership: in gated mode the turn runs under the CALLER's device
+      // session. A caller-supplied session_id can't target another device's
+      // in-flight query (steer/cancel hijack) — mismatch is ignored with a
+      // warning. Open mode (dev/test) keeps the caller-controlled behavior.
+      let sessionId = params.session_id ?? null;
+      if (requireSession) {
+        if (sessionId != null && sessionId !== ctx.sessionId) {
+          opts.logger.warn(
+            `shannon/query: ignoring foreign session_id (caller=${ctx.sessionId})`,
+          );
+        }
+        sessionId = ctx.sessionId;
+      }
       const model = params.model ?? modelOverride ?? opts.defaultModel ?? null;
       const key = sessionId ?? ANON_KEY;
 
@@ -169,7 +193,12 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         await prior.close().catch(() => {});
       }
 
-      const client = factory({ url: opts.engineWsUrl, model, sessionId });
+      const client = factory({
+        url: opts.engineWsUrl,
+        model,
+        sessionId,
+        headers: engineAuthHeaders(),
+      });
       try {
         await client.connect();
       } catch (err) {
@@ -210,7 +239,9 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       const gate = sessionGate(ctx);
       if (gate) return gate;
       const params = (raw ?? {}) as Partial<CancelParams>;
-      const key = params.session_id ?? ANON_KEY;
+      // Ownership (mirror of query): a bound device may only cancel its own
+      // in-flight turn — params.session_id can't reach another device's query.
+      const key = requireSession ? ctx.sessionId! : params.session_id ?? ANON_KEY;
       const client = activeQueries.get(key);
       if (client) {
         client.cancel();
@@ -269,6 +300,7 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
           engineBaseUrl: opts.engineHttpBaseUrl,
           requestId: params.request_id,
           choice: params.choice as GatewayApprovalChoice,
+          authToken: engineAuthToken,
           fetchImpl,
         });
       } catch (err) {
@@ -283,7 +315,7 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
 
     // ── health ────────────────────────────────────────────────────────────
     "shannon/health": async () => {
-      const engine = await probeEngineHttp(opts.engineHttpBaseUrl, fetchImpl);
+      const engine = await probeEngineHttp(opts.engineHttpBaseUrl, fetchImpl, engineAuthHeaders());
       return {
         kind: "result",
         result: { gateway: "ok", engine, version: opts.version } satisfies HealthResult,
@@ -294,8 +326,11 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
     // WP-15 T5: proxy the engine's /api/models catalog (full directory with
     // display names) so the phone's model picker offers everything. Falls
     // back to the configured/switched model when the engine is unreachable —
-    // the picker stays usable offline.
-    "shannon/model.list": async () => {
+    // the picker stays usable offline. Gated: model.list/switch mutate or
+    // reflect gateway-wide engine state, so they require a paired session.
+    "shannon/model.list": async (_raw, ctx) => {
+      const gate = sessionGate(ctx);
+      if (gate) return gate;
       const current = modelOverride ?? opts.defaultModel ?? null;
       const fallback = {
         models: (current ? [{ id: current }] : []) as ModelListResult["models"],
@@ -303,6 +338,7 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       } satisfies ModelListResult;
       try {
         const res = await fetchImpl(`${opts.engineHttpBaseUrl.replace(/\/$/, "")}/api/models`, {
+          headers: engineAuthHeaders(),
           signal: AbortSignal.timeout(2000),
         });
         if (!res.ok) return { kind: "result", result: fallback };
@@ -322,7 +358,9 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       }
     },
 
-    "shannon/model.switch": async (raw) => {
+    "shannon/model.switch": async (raw, ctx) => {
+      const gate = sessionGate(ctx);
+      if (gate) return gate;
       const params = (raw ?? {}) as { model?: unknown };
       if (typeof params.model !== "string" || params.model.trim().length === 0) {
         return {
@@ -336,17 +374,23 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
     },
 
     // ── agents (stub surface; P1.x wires enumeration) ─────────────────────
-    "shannon/agent.list": async () => {
+    "shannon/agent.list": async (_raw, ctx) => {
+      const gate = sessionGate(ctx);
+      if (gate) return gate;
       // P1.x: enumerate the host's active sessions from the engine. P1.1b returns
       // an empty roster so the phone UI can ship against a stable shape.
       return { kind: "result", result: { agents: [] } satisfies AgentListResult };
     },
 
-    "shannon/agent.detail": async () => ({
-      kind: "error",
-      code: ShannonError.NOT_IMPLEMENTED,
-      message: "shannon/agent.detail (session watch) is not implemented in P1.1b",
-    }),
+    "shannon/agent.detail": async (_raw, ctx) => {
+      const gate = sessionGate(ctx);
+      if (gate) return gate;
+      return {
+        kind: "error",
+        code: ShannonError.NOT_IMPLEMENTED,
+        message: "shannon/agent.detail (session watch) is not implemented in P1.1b",
+      };
+    },
 
     // ── pairing (P1.2) ────────────────────────────────────────────────────
     "shannon/pair": async () => ({
@@ -440,11 +484,13 @@ export function mapEngineEvent(ev: EngineEvent): ShannonEvent | null {
 async function probeEngineHttp(
   baseUrl: string,
   fetchImpl: typeof fetch,
+  headers: Record<string, string> = {},
   timeoutMs = 2000,
 ): Promise<"ok" | "down"> {
   try {
     const res = await fetchImpl(baseUrl, {
       method: "GET",
+      headers,
       signal: AbortSignal.timeout(timeoutMs),
     });
     // 5xx means the server reached us but is itself failing; treat as down so the

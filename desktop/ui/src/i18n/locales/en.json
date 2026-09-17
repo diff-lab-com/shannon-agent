@@ -2979,5 +2979,9 @@
   "opcTask.status.failed": "Failed",
   "welcome.task.pickProvider": "Pick a provider ↓",
   "extensions.datasources.goFeatured": "Browse installable data sources in Featured",
-  "tasks.tasksHeader.newMore.aria": "More ways to create"
+  "tasks.tasksHeader.newMore.aria": "More ways to create",
+  "settings.connections.mobile.tlsToggle": "LAN encryption (wss)",
+  "settings.connections.mobile.tlsHint": "Serve the mobile channel over TLS with a self-signed certificate — phones verify the certificate fingerprint carried in the QR. Takes effect after the gateway restarts.",
+  "settings.connections.mobile.tlsFingerprint": "Certificate fingerprint",
+  "settings.connections.mobile.tlsSaved": "LAN encryption updated — restart the gateway to apply"
 }

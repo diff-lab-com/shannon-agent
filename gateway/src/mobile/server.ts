@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { createServer, type RequestListener, type Server } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { WebSocket, WebSocketServer } from "ws";
 
 import type { Logger } from "../adapters/types.js";
@@ -76,6 +77,12 @@ export interface MobileServerOptions {
   /** WS path (default "/"). */
   path?: string;
   /**
+   * v0.12 LAN hardening: serve the face over TLS (wss) with the persisted
+   * self-signed material from `ensureTlsMaterial` — the phone pins the cert
+   * fingerprint carried in the QR. Absent → plaintext ws (legacy behavior).
+   */
+  tls?: { key: string; cert: string };
+  /**
    * Optional connection gate. P1.1 leaves this unset (open for testing); P1.2
    * injects Ed25519 device verification. Returning `false` closes the socket
    * with code 4001 and dispatches no methods.
@@ -124,10 +131,31 @@ export class MobileServer {
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       res.end("not found");
     };
-    const httpServer = createServer(requestListener);
+    // TLS (v0.12): https server when material is provided — the phone dials
+    // wss and pins the cert fingerprint from the QR.
+    const httpServer: Server = this.opts.tls
+      ? createHttpsServer(
+          { key: this.opts.tls.key, cert: this.opts.tls.cert },
+          requestListener,
+        )
+      : createServer(requestListener);
     this.httpServer = httpServer;
-    const wss = new WebSocketServer({ server: httpServer, path: this.opts.path ?? "/" });
+    // noServer + manual `upgrade` handling: the server binds 0.0.0.0 in
+    // production, so upgrades are cross-checked (path + Origin) BEFORE the
+    // handshake completes — a drive-by web page in the phone's/LAN user's
+    // browser must not be able to open the socket and speak shannon/*.
+    const wss = new WebSocketServer({ noServer: true });
     this.wss = wss;
+    const wsPath = this.opts.path ?? "/";
+    httpServer.on("upgrade", (req, socket, head) => {
+      const pathname = (req.url ?? "/").split("?")[0];
+      if (pathname !== wsPath || !isOriginAllowed(req)) {
+        socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+    });
     await new Promise<void>((resolve, reject) => {
       httpServer.once("listening", resolve);
       httpServer.once("error", reject);
@@ -142,7 +170,8 @@ export class MobileServer {
     });
 
     this.opts.logger.info(
-      `mobile server listening on ${this.opts.host}:${boundPort}${this.opts.path ?? "/"}`,
+      `mobile server listening on ${this.opts.tls ? "wss" : "ws"}://` +
+        `${this.opts.host}:${boundPort}${this.opts.path ?? "/"}`,
     );
     return {
       get port() {
@@ -210,6 +239,25 @@ export class MobileServer {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Cross-site WebSocket handshake defense. Browsers always send `Origin`;
+ * native clients (Dart `WebSocket.connect`, Node `ws`) send none. Policy:
+ *  - no Origin header → allow (native client);
+ *  - Origin authority === request Host → allow (the built-in PWA dialing home);
+ *  - anything else (another site's page, another LAN host's browser) → 403.
+ */
+function isOriginAllowed(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (origin === undefined) return true;
+  const host = req.headers.host;
+  if (typeof origin !== "string" || origin.length === 0 || typeof host !== "string") return false;
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
 
 function frameToString(data: unknown): string {
   if (typeof data === "string") return data;

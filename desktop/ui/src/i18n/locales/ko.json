@@ -2939,5 +2939,9 @@
   "chat.input.effort.max": "최대",
   "shortcutsHelp.composer.title": "컴포저 컨트롤 — 세 가지 모두 활성",
   "settings.models.quickSwitch.label": "모델 전환",
-  "settings.models.quickSwitch.placeholder": "모델 검색…"
+  "settings.models.quickSwitch.placeholder": "모델 검색…",
+  "settings.connections.mobile.tlsToggle": "LAN 암호화(wss)",
+  "settings.connections.mobile.tlsHint": "자체 서명 인증서로 모바일 채널에 TLS를 제공합니다. 휴대폰은 QR 코드에 담긴 인증서 지문을 검증합니다. 게이트웨이 재시작 후 적용됩니다.",
+  "settings.connections.mobile.tlsFingerprint": "인증서 지문",
+  "settings.connections.mobile.tlsSaved": "LAN 암호화가 업데이트되었습니다. 게이트웨이를 재시작하면 적용됩니다"
 }
