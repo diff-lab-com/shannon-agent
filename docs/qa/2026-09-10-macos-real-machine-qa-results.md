@@ -157,3 +157,40 @@ SHANNON_QA_SHORTCUT=<名称>   cargo test ... applescript_shortcuts_run_named
 5. **type 落屏重验**：系统设置 → 隐私与安全性 → 辅助功能 → 给宿主 app（ZCode/终端）
    开关打开后重跑 `computer_type_lands_in_textedit`。
 6. **/browser doctor macOS 行（QA-4）**：同需可用 provider 的 REPL。
+
+## 五·补 provider 配置后的完整 QA（2026-09-18）
+
+Provider：`zcode-glm`（Anthropic 兼容端点 `https://open.bigmodel.cn/api/anthropic`，
+model `glm-5.3`，凭据 `~/.shannon/credentials/zcode-glm.json` 0600，providers.toml
+经 `shannon providers add --set-active` 写入）。模型往返冒烟 ✓。
+
+| 项 | 结果 |
+|---|---|
+| QA-1 #1 纯脚本 / #4 JXA / #7 超时 | ✅（此前已过，复验 ✓） |
+| QA-1 #2 Notes Automation TCC | ✅（osascript 预授权后 harness 通过，计数返回） |
+| QA-1 #3 拒绝场景 | ✅（`tccutil reset AppleEvents dev.zcode.app` + 弹窗点"不允许"→ -1743 语义错误正确上抛；见 F16） |
+| type 落屏（完整输入链） | ✅ AX 授权后 enigo→CGEvent→TextEdit 读回一致（QA-1 输入链 + E3 预检放行路径） |
+| QA-4 macOS 行（/browser doctor） | ✅（修复 F14 后：`✓ System browser (macos-app): /Applications/Google Chrome.app/...`） |
+| QA-1 #6 REPL High-risk 审批 | 部分：非交互 FullAuto 自动批准 High-risk 属设计（FullAuto = 放行 Critical 以下）；headless 无审批通道时 Prompt 按"assume auto-allow"兜底（engine.rs，F17）；交互式 TUI 逐次确认仍需人工核验 |
+| QA-1 #5 Shortcuts | 保持 env 门控（`SHANNON_QA_SHORTCUT`）——本机 3 个快捷指令均有真实副作用，不宜自动执行 |
+
+新发现并当场修复：
+
+- **F14（已修复）**：`shannon repl` 管道模式下斜杠命令全部漏给模型——main.rs 的
+  stdin 劫持（非交互查询）先于 REPL 消费管道输入，且 `run_pipe_mode` 调用的
+  `submit_input` 读的是空的 TUI 输入框。修复：`--permission-mode` …（见 F15 同批）
+  main 对 `repl` + `/` 开头管道输入改走 `run_pipe_with`；pipe 分发改用
+  `submit_input_with_text`。
+- **F15（已修复）**：全局 `--permission-mode` 只被 `--team-agent` 消费，query 路径
+  **静默忽略**。已接入 `run_noninteractive_query`（显式指定时覆盖 FullAuto/`--yes`
+  默认），并把该参数从 hide 改为可用。
+- **F16（QA 指南）**：拒绝态的最可靠制造方式是 `tccutil reset AppleEvents
+  <bundle-id>` 后在弹窗点"不允许"；直接在系统设置里翻开关可能因选错请求方行而
+  不生效（本次实测翻开关后 osascript 仍成功）。
+- **F17（设计记录，未改）**：headless 查询在权限门返回 Prompt（需询问）且无审批
+  通道时按 "assume auto-allow" 兜底（engine.rs）；仅 Critical 被硬拒。若要求
+  headless 对 High-risk 一律拒绝需另立项（会改变 CI/eval 行为）。
+- **F18（存量，未修）**：`shannon-ui` 9 个存量失败（remote handler 三件套、
+  repl_ci 三件套、at_reference、rewind、permission-rules），基线对比确认与本批
+  无关；其中部分单跑即过（并行状态竞态），另见 remote/docker 依赖宿主 Docker
+  状态。属独立子系统，建议另行立项。
