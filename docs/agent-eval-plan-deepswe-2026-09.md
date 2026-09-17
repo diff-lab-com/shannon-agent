@@ -28,7 +28,11 @@ shannon+glm-5.3-flash 的 DeepSWE 分数；以失败分析驱动**通用场景**
 2. **官方榜**（2026-09-03 更新）统一 mini-swe-agent harness：glm-5.3-flash [max] = **63% ±4%**
    （$0.24/题、73k 输出 tokens、约 123 步）；top 74%（gpt-6-astra / gemini-3.8-flash /
    claude-opus-5）；glm-5.3 69%；claude-sonnet-5 54%（$26.40）；deepseek-v4-flash 53%；
-   glm-5.2 44%。z.ai blog（2026-08-14）曾报 53.7，P0 定因后固化引用锚。
+   glm-5.2 44%。
+   **锚点校准（P0-5 已定案）**：z.ai 官方 GLM-5.3-Flash 博客自报 DeepSWE = **63.4**，与
+   Datacurve 榜 63% 两个独立来源一致 → **主锚固化为 63% ±4%（Datacurve，同 runner）**，
+   z.ai 63.4 为副锚（其配置：mini-swe-agent、timeout=6h、400K context，与语料默认 3h 不同，
+   报告需标注）。原方案起草时引用的"53.7"经查证无公开出处，系引用误差，作废。
 3. **dev @ f1e1e2f5 已含全部所需资产**：20 项产品改进（A1-A7/N1/N2/P1-3，回测 SWE50 38/50）、
    `scripts/eval/harbor-adapter/shannon_harbor_agent.py`（容器内驱动 shannon 的成熟模式）、
    run-batch.sh 预算闸/续跑/429 自愈、preflight-network.sh、retry-infra-failed.sh、
@@ -41,6 +45,7 @@ shannon+glm-5.3-flash 的 DeepSWE 分数；以失败分析驱动**通用场景**
 |---|---|---|
 | model / provider | `glm-5.3-flash` @ `zhipu-coding-plan` | wrapper-glm 注入 key；**硬编码真实 API id**（batch-5 教训） |
 | thinking/effort | GLM 默认档（实测 max），写进 anchor | 与官方榜 [max] 档对齐 |
+| 跑批时段 | 尽量排非高峰（工作日 14:00-18:00 UTC+8 之外） | GLM Coding Plan 积分非高峰 5 折（z.ai 官方说明） |
 | 轮次 | `--max-turns 150` | 榜均 123 步 + 余量；DeepSWE 长程远超 SWE50 |
 | 看门狗 | `SHANNON_STREAM_IDLE_SECS=420` | L2：>312s 思考静默 |
 | 并发 | 本地 docker 3 并发 | TB 验证档；Modal 为升级选项（另行确认） |
