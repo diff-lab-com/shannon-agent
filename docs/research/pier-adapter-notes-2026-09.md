@@ -135,3 +135,13 @@ pier run -p ~/eval-corpora/deep-swe/tasks/<task-id> \
    ~54k tokens / 42 工具调用——GLM 单轮 3-8 分钟（思考延迟主导），单题期望 1-2.5h，
    3 并发全量约 2-4 天，与方案预估一致。另观察到 stderr turn 计数 7→5 回退（疑压缩后
    显示口径），列入 P3 观测性核对。
+6. **smoke-3（10m48s，engine panic）**：`engine.rs:625` UTF-8 char-boundary panic
+   （`byte index 3 is not a char boundary; it is inside '—'`）——**旧二进制问题**：
+   跑的是 9-15 构建的 `target/debug/shannon`，而修复 `c10cf94d` 已在分支点
+   f1e1e2f5 的源码里（worktree 文件可证）。GLM 输出高频 em dash，chunk 边界落进
+   多字节字符即崩，属概率性触发。
+   **固化规则（锚点完整性）**：评测二进制必须由被测分支源码构建——P2 发车前在
+   worktree `cargo build --bin shannon`，`SHANNON_PIER_BIN` 指向 worktree 产物，
+   报告记录 branch@commit；产品代码合并后必须重建再跑。
+   （smoke-2 的 rc=3 超时与 smoke-3 的 panic 是两个独立缺陷；前者靠
+   SHANNON_TIMEOUT=1800 修复，后者靠重建消除。）
