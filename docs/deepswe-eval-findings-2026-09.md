@@ -1,0 +1,55 @@
+# DeepSWE 评测发现与改进记录（shannon × glm-5.3-flash，2026-09 开始）
+
+- 证据规范：所有结论附数据路径；基线波次数据回填前先固化冒烟期发现。
+- 数据源：`~/.shannon/eval/deepswe-smoke/jobs/deepswe-smoke-{1..5}/`（trial 内
+  agent/shannon.ndjson + shannon.stderr + verifier/reward.json + exception.txt）。
+
+## 一、冒烟期发现（P1，2026-09-18）
+
+### F1（infra/契约，已修复）：pier install_spec 内联构建跳过运行时安装
+pier 按 adapter `install_spec()` 指纹把步骤内联进派生镜像后跳过 `install()`，二进制从未进
+容器（smoke-1 exit 127）。修复：adapter 覆写 `setup()` 无条件安装。
+见 `docs/research/pier-adapter-notes-2026-09.md` §五.1。
+
+### F2（产品缺陷，已修复 A8）：上游 6 分钟网关切断杀死整个 run
+**现象**：GLM coding-plan 网关对单个 LLM 调用约 6 分钟硬切断。GLM-5.3 thinking=max 的
+长思考调用撞墙后，turn 的流式中途死亡 → Timeout 分类（rc=3）→ **整个 run 失败，已完成的
+全部 turn/工具成果作废**（空 patch → verifier 判 F2P 0/P2P 275）。
+**证据**：smoke-2（1h11m，turn 8 死，错误 "Request timed out"）；smoke-4（1h11m，turn 14 死，
+A7 run 级重试 attempt 1/2/3 三连死——stderr 第 70/116 行可见 [run-retry] 日志，证明
+**整跑重启式重试对确定性硬 turn 无效**）；历史 TB2.1 3/50 题同类污染；sympy-13031
+~600s 超时空 patch。共 4 起独立事故。
+**修复（A8，commit `a5baf851`）**：turn 级流死亡续推重试——Timeout 类错误时仅重发当前
+turn（历史与工具状态全保留，turn 计数不前进），默认 2 次（`SHANNON_TURN_RETRIES`），
+续推请求带一次性指引（「继续，保持响应适度集中」），Progress 事件可见。8 个新测试，
+shannon-core 3922 / shannon-engine 1149 全绿，clippy 0 警告。
+**排序决策**：此项属 P4 性质但提前到 P2 基线之前实施——不修则基线带 ~5-10% 纯 infra
+DNF（冒烟 3/5 次运行死于该因），违反测量卫生纪律（T1 教训「infra 失败不得计入模型失败」
+的前置义务）。改进有效性以 smoke-2/4（死亡）vs smoke-5+（存活）对照 + 后续波次
+infra-DNF 率量化。
+**诚实边界**：静默断流（无错误浮出）不在 A8 覆盖内，仍靠 A1 think-only nudge 兜底；
+SMALLER 提示措辞（续推指引）按 L4 规则属「真实用户受益」类（网络中断续推），非评测特化。
+
+### F3（产品缺陷候选，待定夺 P3）：stderr turn 计数非单调
+smoke-2/4 中 stderr `turn N` 显示 7→5、12→11 回退。疑压缩/重试后的显示口径问题。
+C1 修复（`55c980fd`）只修了 events.jsonl 的 turn 字段。影响：轨迹可读性与分析准确性。
+动作：P3 阶段核对 stderr 计数来源与 compaction 交互。
+
+### F4（已澄清，无需修）：默认超时 300s 与看门狗 420s 不矛盾
+起初误判矛盾；实读 `client.rs:101-123` 后确认 timeout_seconds 语义是 **read_idle**
+（字节空闲界，流式无总超时，PERF-2 设计），300s 字节死判定 < 420s 内容死判定，分层合理。
+smoke-2 死因是上游切断（F2），非本地超时。
+
+## 二、基线波次记录（P2，待回填）
+
+- wave-1（113×n=1）：待跑。发车前置：preflight 门禁、`SHANNON_PIER_BIN` 指向
+  worktree 构建（a5baf851+）、`--job-name deepswe-base-w1`。
+- 逐题矩阵 / infra 分离口径：由 `deepswe-wave.sh aggregate` 产出。
+
+## 三、改进 backlog（P3 正式化，P4 执行）
+
+| # | 项 | 性质 | 状态 |
+|---|---|---|---|
+| A8 | turn 级流死亡续推重试 | 真实能力 | ✅ `a5baf851`（提前实施，理由见 F2） |
+| A9 | stderr turn 计数非单调核对 | 观测性 | 候选（F3） |
+| – | （P2 失败分析后按证据扩充；每项过「真实用户受益」+ L4 两道闸） | | |
