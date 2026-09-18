@@ -162,9 +162,9 @@ w4 发车 ~4.5h：11 启动 / 8 判分 / 3 在跑（健康：pier 存活、网�
 |---|---|---|---|
 | A8 | turn 级流死亡续推重试 | 真实能力 | ✅ `a5baf851`（提前实施，理由见 F2） |
 | A8b | 静默断流（异常 EOF）并入续推触发 | 真实能力 | ✅ `b512db61` |
-| A10 | **轮次耗尽收工协议**：末 turn 前注入 wrap-up（完成当前工作/commit/总结），硬停变降落。证据：w4 arcane+dynamodb turn 耗尽死（exit=2），工作未落地=0 分；硬停语义对真实用户同样有害 | 真实能力 | 候选（P4） |
-| A11 | **评测轮次口径对齐官方**：adapter `--max-turns` 150→250。官方榜 mini-swe-agent step_limit=250（+$3 成本上限），榜均 123 步、头部 268 步；150 卡在官方口径 60% 处，测的是轮次预算而非 scaffolding 质量。受 3h 墙钟天然封顶 | eval 口径 | 候选（P5 发车前定） |
-| A12 | **headless 默认轮次差异化**：产品默认 max_turns=20（types.rs:756）对交互合理（用户在场），对 headless 长任务是真实用户的坑（对照：Claude Code headless 默认无上限、mini-swe 250、OpenHands 100） | 真实能力 | 候选（P4；默认值改动需多基准证据，L4 纪律） |
+| A10 | **轮次耗尽收工协议**：末 turn 前注入 wrap-up（完成当前工作/commit/总结），硬停变降落。证据：w4 arcane+dynamodb turn 耗尽死（exit=2），工作未落地=0 分；硬停语义对真实用户同样有害 | 真实能力 | 🔄 实施中（2026-09-18 批准） |
+| A11 | **评测轮次口径对齐官方**：adapter `--max-turns` 150→250。官方榜 mini-swe-agent step_limit=250（+$3 成本上限），榜均 123 步、头部 268 步；150 卡在官方口径 60% 处，测的是轮次预算而非 scaffolding 质量。受 3h 墙钟天然封顶 | eval 口径 | ✅（`SHANNON_MAX_TURNS` 可覆盖；w4 口径 150 不动，P5 复测用 250） |
+| A12 | **headless 默认轮次差异化**：产品默认 max_turns=20（types.rs:756）对交互合理（用户在场），对 headless 长任务是真实用户的坑（对照：Claude Code headless 默认无上限、mini-swe 250、OpenHands 100）→ headless 未显式时默认 100 | 真实能力 | 🔄 实施中（2026-09-18 批准） |
 | A9 | stderr turn 计数非单调核对 | 观测性 | 候选（F3） |
-| – | 轮次经济学遥测（per-turn 时长/token/工具分布）支撑 P3 效率归因 | 观测性 | 候选 |
+| – | 轮次经济学遥测（per-turn 时长/token/工具分布）支撑 P3 效率归因 | 观测性 | ✅ `turn_economics.py` + adapter 上传 sessions 事件日志 |
 | – | （P2 失败分析后按证据扩充；每项过「真实用户受益」+ L4 两道闸） | | |
