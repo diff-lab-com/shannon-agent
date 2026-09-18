@@ -108,7 +108,9 @@ cmd_start() {
 
   if [ "$resume" = 1 ]; then
     echo "[wave] resuming job $job_name (completed trials are skipped by pier)"
-   pier job resume "$(jobs_dir_for)/$job_name" 2>&1 | grep -v LiteLLM
+    env PYTHONPATH="$SCRIPT_DIR/pier-adapter" \
+      SHANNON_PIER_BIN="$bin" \
+      pier job resume --job-path "$(jobs_dir_for)/$job_name" 2>&1 | grep -v LiteLLM
   else
     echo "[wave] launching job=$job_name include='$include' n=$concurrency budget=${budget}"
     env PYTHONPATH="$SCRIPT_DIR/pier-adapter" \

@@ -98,16 +98,22 @@ deepswe-wave.sh 默认二进制改为**本 worktree 构建**（SCRIPT_DIR 相对
 
 ## 二、基线波次记录（P2）
 
-- **wave-1 发车（2026-09-18 08:0x）**：`deepswe-base-w1`，113×n=1，3 并发，anchor =
-  glm-5.3-flash @ zhipu-coding-plan（默认 thinking=max），二进制 = worktree 构建
-  （feat/deepswe-eval @ b512db61+，含 A8/A8b），max-turns 150，SHANNON_TIMEOUT=1800，
-  SHANNON_STREAM_IDLE_SECS=420，SHANNON_TURN_RETRIES=2（默认）。
+- **wave-1 处置与提速改版（2026-09-18）**：首发的 wave-1 在旧二进制事故（F8）后以
+  3 并发重启，跑出 0 完成/12 启动后做并发提速改造：实测 3 并发下 **429 限流 0 次**、
+  本地资源大量闲置（load 4.5/33G 空闲）→ 瓶颈是单题思考时长而非本地资源或账号窗口，
+  **并发提到 6**（预期 2.4 天 → ~1.2 天）。pier 的 job lock 对 config 指纹校验，
+  改并发不能 resume（FileExistsError）→ 旧波次 0 完成无保留价值，弃用
+  （`deepswe-base-w1-killed-at-6concurrency-attempt/`），以 **`deepswe-base-w2`**
+  6 并发全新发车（进程环境已验证 SHANNON_PIER_BIN=worktree 构建）。
+  **新增 `ensure-deepswe-images.sh`**：镜像预拉与跑批重叠（顺序拉取、磁盘 <60G 自动
+  暂停），消除每题冷启动 pull 延迟。
+  **resume 分支两处修复**：`--job-path` 传参 + adapter 环境注入。
   发车前 preflight 4/4。
-  中断恢复：`pier job resume ~/.shannon/eval/deepswe/jobs/deepswe-base-w1`
-  （PYTHONPATH=scripts/eval/pier-adapter SHANNON_PIER_BIN=<worktree 二进制>）。
+  中断恢复：改并发须重建 job（lock 指纹）；同并发恢复
+  `PYTHONPATH=scripts/eval/pier-adapter SHANNON_PIER_BIN=<worktree 二进制>
+  pier job resume --job-path ~/.shannon/eval/deepswe/jobs/deepswe-base-w2`。
   聚合：`JOBS_DIR=~/.shannon/eval/deepswe/jobs scripts/eval/deepswe-wave.sh aggregate
-  --job-name deepswe-base-w1`。
-- 逐题矩阵 / infra 分离口径：聚合产出后回填。
+  --job-name deepswe-base-w2`。
 
 ## 三、改进 backlog（P3 正式化，P4 执行）
 
