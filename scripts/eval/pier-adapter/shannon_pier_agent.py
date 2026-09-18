@@ -52,9 +52,12 @@ DEFAULT_MODEL = "glm-5.3-flash"
 # retry re-thought from scratch (rc=3 death spiral). 420s covers observed
 # silences with margin. Overridable via --ae SHANNON_STREAM_IDLE_SECS=N.
 DEFAULT_STREAM_IDLE_SECS = "420"
-# DeepSWE long-horizon: official mini-swe-agent runs average ~123 steps;
-# the engine's default max_turns=20 would truncate them. 150 = steps + margin.
-DEFAULT_MAX_TURNS = 150
+# DeepSWE long-horizon: official harness (mini-swe-agent) allows step_limit=250
+# (+ $3 cost cap); leaderboard runs average ~123 steps with a max of 268
+# (claude-sonnet-5). 250 matches the official measurement aperture — a lower cap
+# measures our turn budget, not scaffolding quality (A11). The 3h task wall
+# clock still bounds total runtime. Override via --ak max_turns=N.
+DEFAULT_MAX_TURNS = 250
 
 
 class Shannon(BaseInstalledAgent):
@@ -63,7 +66,13 @@ class Shannon(BaseInstalledAgent):
     /logs/agent/shannon.ndjson. Verdicts stay with the task's own verifier."""
 
     CLI_FLAGS = [
-        CliFlag("max_turns", cli="--max-turns", type="int", default=DEFAULT_MAX_TURNS),
+        CliFlag(
+            "max_turns",
+            cli="--max-turns",
+            type="int",
+            default=DEFAULT_MAX_TURNS,
+            env_fallback="SHANNON_MAX_TURNS",
+        ),
     ]
 
     @staticmethod
