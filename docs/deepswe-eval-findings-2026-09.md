@@ -153,6 +153,31 @@ w4 发车 ~4.5h：11 启动 / 8 判分 / 3 在跑（健康：pier 存活、网�
    ——并发 3 下实测暂无限流；think-only 退出高发（A1 即为其建）；输出 token 截断
    高发（A13 触发源，(1/5) 续写机制已存在）。
 
+### F12（minimax 冒烟定案 + 基线发车，2026-09-18）
+1. **A13/A13-c 修复验证**：mm3（bandit 同题第三次）**2013 零出现**，124+ 次工具调用
+   顺畅执行——阻断解除，harness 对 minimax 全链路验证通过
+   （install/prompt/egress/tools/verifier/telemetry/sessions 上传全绿）。
+2. **A10 生产触发**：mm3 打满 250 轮时 wrap-up nudge 正确出现
+   （"final turn (250/250)"），验证收工协议机制生效。
+3. **新发现（模型行为，P3 议题）**：MiniMax-M3 在 shannon scaffold 上呈
+   「探索-测试循环」风格——250 轮中 Bash 139 / Read 50 / **Edit 仅 2** / 从未 commit
+   （112 条去重命令、8 次 pytest），13m48s 烧完全部轮次（~3.3s/轮，无长思考，
+   速度约为 GLM 的 20 倍）。同题 GLM smoke-6 为 86/88（实现主导）。
+   归因待 P3：模型风格 vs scaffold 提示（R1 correctness-first/A2 完成门禁）与
+   minimax 反应型风格的交互。A10 的单轮降落对不主动 commit 的模型不够——
+   「wrap-up 后仍不 commit」的行为差异已记录。
+4. **运营**：minimax 250 轮仅 13m48s + ~$0.4 → 墙钟不再是主要约束，轮次预算才是；
+   3 并发下暂无限流（持续监控）。
+5. **w5 发车（2026-09-18 晚）**：`deepswe-base-w5`，113×n=1，3 并发，锚 =
+   minimax/MiniMax-M3 @ api.minimax.chat，二进制 = worktree 构建（000619cb，含
+   A8/A8b/A10/A12/A13-c），250 轮口径。进程环境三重验证（provider/二进制/容器）。
+   恢复：`EVAL_PROVIDER_MODEL=minimax/MiniMax-M3
+   EVAL_KEY_FILE=$HOME/.shannon/credentials/minimax.json PYTHONPATH=scripts/eval/pier-adapter
+   SHANNON_PIER_BIN=<worktree 二进制> pier job resume --job-path
+   ~/.shannon/eval/deepswe/jobs/deepswe-base-w5`。
+   聚合：`JOBS_DIR=~/.shannon/eval/deepswe/jobs EVAL_* 同上 scripts/eval/deepswe-wave.sh
+   aggregate --job-name deepswe-base-w5`。
+
 ## 二、基线波次记录（P2）
 
 - **wave-1 处置与提速改版（2026-09-18）**：首发的 wave-1 在旧二进制事故（F8）后以
