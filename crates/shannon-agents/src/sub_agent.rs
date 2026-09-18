@@ -239,7 +239,7 @@ impl SubAgentRegistry {
 
     /// Record the outcome of an executed sub-agent run: transitions the
     /// registry entry out of `Idle` (the stale-status bug) and publishes
-    /// [`SubAgentLifecycle::Completed`] to observers.
+    /// `SubAgentLifecycle::Completed` to observers.
     pub async fn record_run_outcome(&self, agent_id: &str, ok: bool, result_summary: String) {
         let agents = self.agents.read().await;
         let agent = match agents.values().find(|a| a.id == agent_id) {
