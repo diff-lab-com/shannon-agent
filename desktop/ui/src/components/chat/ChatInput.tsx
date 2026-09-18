@@ -104,9 +104,12 @@ export default function ChatInput({
   })
 
   const handleModeChange = async (mode: string | null) => {
+    console.log('[dbg] handleModeChange', mode)
     if (!mode) return
     try {
+      console.log('[dbg] calling api.configure')
       await api.configure({ key: 'approval_mode', value: mode })
+      console.log('[dbg] configure resolved')
       await refreshConfig()
     } catch (err) {
       toastError(t('chat.input.mode.failed'), err)
@@ -439,7 +442,7 @@ export default function ChatInput({
                 {modeOptions.map(mode => (
                   <SelectItem key={mode.value} value={mode.value}>
                     <div className="flex items-center gap-xs">
-                      <span className="material-symbols-outlined icon-sm">{mode.icon}</span>
+                      <span className="material-symbols-outlined icon-sm" aria-hidden="true">{mode.icon}</span>
                       <span>{mode.label}</span>
                     </div>
                   </SelectItem>

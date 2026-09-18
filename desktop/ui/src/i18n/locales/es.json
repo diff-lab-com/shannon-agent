@@ -1675,6 +1675,8 @@
   "chat.message.retryChain": "{count} intentos fallidos seguidos",
   "chat.message.retryChain.view": "Ver línea de tiempo",
   "settings.density.title": "Densidad de pantalla",
+  "settings.density.auto": "Auto (seg\u00fan modo)",
+  "chat.message.retryChain.attempt": "Intento {n}",
   "chat.tool.sandboxDenied": "Bloqueado por el sandbox",
   "chat.tool.tokens.title": "Tokens aproximados atribuidos a esta llamada",
   "settings.density.help": "Compacto reduce el texto y los espaciados en toda la app; el valor predeterminado es Cómodo.",

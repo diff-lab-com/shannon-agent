@@ -48,6 +48,7 @@
   左栏一级入口第 4 项变为「技能市场」，任务列表为「计划/已完成」分段 + 「今天」日期分组 + 行内实时时长徽章；
   转录流遥测密度提高（耗时/行数/PID/attempt 重试链默认外显）并内嵌「子智能体」折叠段；composer 增「无头浏览器」chip。
   深度对比与改进建议见 [ZCODE-DELTA-ANALYSIS-2026-09.md](./ZCODE-DELTA-ANALYSIS-2026-09.md)。
+- **实施记录（2026-09-18，两批）**：第一批 PR #89（侧栏运行遥测/分组双视图/计划 dock/composer 模型芯片/dock tab 化/工具卡遥测/子智能体块）；第二批 fix/select-commit（**Radix Select 迁移修复全 app 下拉无法提交的预存缺陷**——Base UI anti-misclick pointer-tracker 拒绝常规 click；demo mock configure wire-shape 修复——此前 demo 里所有 configure 均为静默 no-op；goal 卡死徽标/mock 重试链/attempt 明细/密度按模式默认/compact×暗色/C5 guard 脚本）。桌面 agent_spawn TeamContext 注入待产品决策。
 
 ### 官方文档全文（code.claude.com/docs/en/desktop.md，100KB 已存 /tmp/cc-desktop.md）
 - **Claude Desktop 应用三 tab：Chat（对话）/ Cowork（Dispatch 长任务）/ Code（开发）**；Code tab 内会话= sidebar 并行列表，会话内 pane 自由拼装（chat/diff/browser/terminal/file editor/iOS simulator），diff 评论、PR 监控、side chats、浏览器自检（截图/DOM/点击/表单）、checkpoints、connectors。

@@ -190,3 +190,11 @@
   --spacing-lg: 20px;
   --spacing-xl: 27px;
 }
+
+/* E12: compact × dark — dark surfaces read denser; shave row/chrome height
+   a step further for Advanced users on the dark-first default theme. */
+[data-density="compact"][data-theme-mode="dark"] {
+  --spacing-xs: 2px;
+  --spacing-sm: 5px;
+  --spacing-md: 11px;
+}

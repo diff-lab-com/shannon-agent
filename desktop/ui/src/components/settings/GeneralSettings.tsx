@@ -10,7 +10,7 @@ import { useI18n, SUPPORTED_LOCALES, type Locale } from '@/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
-import { readDensity, setDensity, type Density } from '@/lib/density'
+import { readDensityPref, setDensityPref, type DensityPref } from '@/lib/density'
 import type { ApprovalMode } from '@/types'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 import MigrationWizard from '@/components/migration/MigrationWizard'
@@ -29,11 +29,14 @@ const APPROVAL_MODE_KEYS: { value: ApprovalModeKey; labelKey: string; descriptio
 
 export default function GeneralSettings() {
   const { config, refreshConfig } = useCatalog()
-  // P2-⑧ display density (local preference, applied at boot in main.tsx).
-  const [density, setDensityState] = useState<Density>(readDensity)
-  const handleDensityChange = (d: Density) => {
+  // P2-⑧/D6 display density: 'auto' follows the sidebar mode (Advanced →
+  // Compact); an explicit choice overrides and persists.
+  const [density, setDensityState] = useState<DensityPref>(readDensityPref)
+  const handleDensityChange = (d: DensityPref) => {
     setDensityState(d)
-    setDensity(d)
+    setDensityPref(d)
+    // Re-apply immediately: resolve against the current sidebar mode.
+    import('@/lib/density').then(m => m.initDensity())
   }
   const intl = useIntl()
   const navigate = useNavigate()
@@ -179,6 +182,7 @@ export default function GeneralSettings() {
           <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.density.help' })}</p>
           <div className="flex flex-wrap gap-sm">
             {([
+              { id: 'auto' as const, labelKey: 'settings.density.auto' },
               { id: 'comfortable' as const, labelKey: 'settings.density.comfortable' },
               { id: 'compact' as const, labelKey: 'settings.density.compact' },
             ]).map(opt => (

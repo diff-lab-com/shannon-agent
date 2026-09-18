@@ -398,7 +398,20 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                     ) { j++ }
                     const chainLen = j - i + 1
                     if (chainLen >= 2) {
-                      out.push(<RetryChainBanner key={`chain-${tc.tool_use_id}`} count={chainLen} />)
+                      // D7: inline each attempt's first error line so the
+                      // failure→retry→recovery narrative reads without
+                      // expanding every card.
+                      const reasons = tcs.slice(i, j + 1).map(tc => {
+                        const line = (tc.result ?? '').split('\n').find(l => l.trim()) ?? ''
+                        return line.trim().slice(0, 120)
+                      })
+                      out.push(
+                        <RetryChainBanner
+                          key={`chain-${tc.tool_use_id}`}
+                          count={chainLen}
+                          reasons={reasons}
+                        />,
+                      )
                       for (let k = i; k <= j; k++) out.push(renderTool(tcs[k], tcs[k].tool_use_id))
                       i = j + 1
                       continue
@@ -478,27 +491,41 @@ function extractFilePath(toolName: string, input: unknown): string | null {
 
 /** P2-⑨: banner preceding a run of consecutive same-tool failures — links
  *  to the session's turn timeline where the retry narrative is visualized. */
-function RetryChainBanner({ count }: { count: number }) {
+function RetryChainBanner({ count, reasons = [] }: { count: number; reasons?: string[] }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const navigate = useNavigate()
   const { currentSessionId } = useSessions()
   return (
-    <div className="flex items-center gap-sm px-md py-xs rounded-lg bg-error/5 border border-error/20" data-testid="retry-chain-banner">
-      <span className="material-symbols-outlined icon-sm text-error shrink-0" aria-hidden="true">replay</span>
-      <span className="font-label-sm text-error flex-1 truncate">
-        {intl.formatMessage({ id: 'chat.message.retryChain' }, { count })}
-      </span>
-      {currentSessionId && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="shrink-0 gap-xs px-sm py-xs text-on-surface-variant hover:text-primary"
-          onClick={() => navigate(`/timeline/${currentSessionId}`)}
-        >
-          <span className="material-symbols-outlined icon-sm" aria-hidden="true">timeline</span>
-          {t('chat.message.retryChain.view')}
-        </Button>
+    <div className="px-md py-xs rounded-lg bg-error/5 border border-error/20" data-testid="retry-chain-banner">
+      <div className="flex items-center gap-sm">
+        <span className="material-symbols-outlined icon-sm text-error shrink-0" aria-hidden="true">replay</span>
+        <span className="font-label-sm text-error flex-1 truncate">
+          {intl.formatMessage({ id: 'chat.message.retryChain' }, { count })}
+        </span>
+        {currentSessionId && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="shrink-0 gap-xs px-sm py-xs text-on-surface-variant hover:text-primary"
+            onClick={() => navigate(`/timeline/${currentSessionId}`)}
+          >
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">timeline</span>
+            {t('chat.message.retryChain.view')}
+          </Button>
+        )}
+      </div>
+      {reasons.length > 0 && (
+        <ul className="mt-xs space-y-[2px]">
+          {reasons.map((line, idx) => (
+            <li key={idx} className="flex items-start gap-xs font-label-xs text-on-surface-variant">
+              <span className="font-mono text-on-surface-variant/70 shrink-0" aria-hidden="true">
+                {intl.formatMessage({ id: 'chat.message.retryChain.attempt' }, { n: idx + 1 })}
+              </span>
+              <span className="truncate" title={line}>{line}</span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   )

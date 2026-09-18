@@ -1675,6 +1675,8 @@
   "chat.message.retryChain": "連續 {count} 次嘗試失敗",
   "chat.message.retryChain.view": "檢視時間線",
   "settings.density.title": "顯示密度",
+  "settings.density.auto": "\u81ea\u52d5\uff08\u8ddf\u96a8\u6a21\u5f0f\uff09",
+  "chat.message.retryChain.attempt": "\u7b2c {n} \u6b21",
   "chat.tool.sandboxDenied": "被沙箱攔截",
   "chat.tool.tokens.title": "近似歸因到該工具呼叫的 token 數",
   "settings.density.help": "緊湊模式會收緊全域字號與間距；預設為舒適模式。",
