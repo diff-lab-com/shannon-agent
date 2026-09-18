@@ -1891,7 +1891,6 @@ fn resolve_job_id(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repl::state::{LoopState, RalphState};
 
     // ---------------------------------------------------------------
     // interval_to_cron
@@ -2364,19 +2363,8 @@ mod p20_recursion {
     use super::*;
     use crate::repl::state::{LoopState, RalphState};
 
-    struct HomeGuard(#[allow(dead_code)] std::path::PathBuf); // KEEP: field owns the tempdir so HOME stays valid for the whole test
-    impl HomeGuard {
-        fn new() -> Self {
-            let dir = tempfile::tempdir().unwrap();
-            unsafe { std::env::set_var("HOME", dir.path()) };
-            Self(dir.path().to_path_buf())
-        }
-    }
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            unsafe { std::env::set_var("HOME", "/") };
-        }
-    }
+    // HOME swap via the shared, lock-serialized guard (see test_env docs).
+    use crate::test_env::HomeGuard;
 
     fn last_message(repl: &Repl) -> String {
         repl.chat

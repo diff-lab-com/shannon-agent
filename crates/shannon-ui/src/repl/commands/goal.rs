@@ -632,26 +632,8 @@ mod handler_tests {
 
     /// Point HOME at a scratch dir so any state writes never touch the real
     /// one. nextest runs each test in its own process, so the env swap is
-    /// process-local and race-free.
-    struct HomeGuard(
-        #[allow(dead_code)] // KEEP: path retained for Debug/future cleanup use
-        std::path::PathBuf,
-    );
-    impl HomeGuard {
-        fn new() -> Self {
-            let dir = tempfile::tempdir().unwrap();
-            // SAFETY: single-threaded test process (nextest isolation); no
-            // other thread reads HOME during this test.
-            unsafe { std::env::set_var("HOME", dir.path()) };
-            Self(dir.path().to_path_buf())
-        }
-    }
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            // SAFETY: see new()
-            unsafe { std::env::set_var("HOME", "/") };
-        }
-    }
+    // HOME swap via the shared, lock-serialized guard (see test_env docs).
+    use crate::test_env::HomeGuard;
 
     fn last_message(repl: &Repl) -> String {
         repl.chat

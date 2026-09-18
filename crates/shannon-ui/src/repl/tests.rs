@@ -615,6 +615,9 @@ fn test_complete_file_path_relative() {
 
 #[test]
 fn test_complete_file_path_tilde() {
+    // ~ expansion reads HOME — hold the shared env lock so concurrent
+    // HOME-swapping tests don't point it at an empty scratch dir.
+    let _env = crate::test_env::env_lock();
     let candidates = crate::repl::input::complete_file_path("~/");
     // Home directory should exist and have entries
     assert!(!candidates.is_empty());
@@ -2992,6 +2995,9 @@ fn test_rewind_command_zero() {
 
 #[test]
 fn test_rewind_untracked_file_path() {
+    // /rewind consults the file-history store under ~/.shannon — hold the
+    // shared env lock so concurrent HOME/cwd swaps can't yank it away.
+    let _env = crate::test_env::env_lock();
     // A non-numeric, non-keyword argument is now treated as a per-file rewind
     // target (W6-2 B.1). An untracked path reports no file history.
     let mut repl = Repl::new().unwrap();
@@ -3189,6 +3195,10 @@ fn test_repl_set_bypass_pending_action() {
 fn test_load_permission_rules_from_file() {
     use std::io::Write;
 
+    // The test swaps the process cwd (restored below) — hold the shared env
+    // lock so concurrent HOME/cwd-sensitive tests see a stable environment.
+    let _env = crate::test_env::env_lock();
+
     // Create a temp directory with a settings file
     let tmp_dir = tempfile::tempdir().unwrap();
     let settings_dir = tmp_dir.path().join(".shannon");
@@ -3234,6 +3244,7 @@ fn test_load_permission_rules_from_file() {
 
 #[test]
 fn test_load_permission_rules_missing_file() {
+    let _env = crate::test_env::env_lock();
     // Ensure loading from a directory with no settings files does not panic
     let tmp_dir = tempfile::tempdir().unwrap();
     let orig_cwd = std::env::current_dir().unwrap();
@@ -3248,6 +3259,7 @@ fn test_load_permission_rules_missing_file() {
 
 #[test]
 fn test_load_permission_rules_invalid_json() {
+    let _env = crate::test_env::env_lock();
     use std::io::Write;
 
     let tmp_dir = tempfile::tempdir().unwrap();
@@ -3270,6 +3282,7 @@ fn test_load_permission_rules_invalid_json() {
 
 #[test]
 fn test_load_permission_rules_claude_settings() {
+    let _env = crate::test_env::env_lock();
     use std::io::Write;
 
     // Test .claude/settings.json compatibility

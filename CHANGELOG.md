@@ -210,6 +210,14 @@ Terminology, onboarding, visual system and workflow gaps from
   the timestamp to avoid same-tick collisions. Full lib suite: 0 failures
   in both feature shapes on macOS (was 25 pre-existing failures at batch
   start).
+- **shannon-ui test-suite stabilization (E7 QA batch 3)**: fixed all 9
+  pre-existing macOS failures. `/etc/hostname` fixture swapped for the
+  cross-platform `/etc/hosts`; `/ci help` and no-arg usage branches render
+  before the gh-CLI check (help is now readable without gh installed);
+  HOME-swapping test guards restore the original home instead of "/" and
+  share one serialized env lock with the HOME/cwd-sensitive tests
+  (rewind, permission rules, tilde completion). Full shannon-ui suite:
+  1447 passed / 0 failed, stable across repeated runs; clippy clean.
 - **REPL pipe-mode slash commands + --permission-mode wiring (E7 QA batch 2)**:
   piping `/command` into `shannon repl` leaked the text to the model as chat
   input — main.rs intercepted piped stdin into the noninteractive query
