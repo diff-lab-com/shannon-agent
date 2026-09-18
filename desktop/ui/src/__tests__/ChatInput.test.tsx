@@ -268,11 +268,10 @@ describe('ChatInput', () => {
     renderChatInput()
     const modeSelect = screen.getByLabelText('Permission mode')
     expect(modeSelect).toBeInTheDocument()
-    // Radix Select (migrated from Base UI — see ui/select.tsx): the trigger
-    // renders the selected item's label via Select.Value (plus the option's
-    // icon ligature text in jsdom). The default suggest mode label is the
-    // signal here.
-    expect(modeSelect).toHaveTextContent('Suggest')
+    // The trigger renders the selected item's label via Select.Value (plus
+    // the option's icon ligature text). Case-insensitive: the ligature/icon
+    // rendering differs between jsdom environments.
+    expect(modeSelect).toHaveTextContent(/suggest/i)
   })
 
   it('shows correct icons for querying states', () => {
