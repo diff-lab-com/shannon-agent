@@ -203,6 +203,25 @@ w4 发车 ~4.5h：11 启动 / 8 判分 / 3 在跑（健康：pier 存活、网�
    （pier lock 指纹 + 方法学要求），切模型 = 新 job。GLM 基线（同二进制、250 轮口径）
    随时可发，minimax 恢复后补跑即可形成内部 A/B。
 
+### F14（切回 GLM 锚：w7 基线发车，2026-09-19 用户指示）
+1. **决策**：minimax 配额耗尽（F13）期间，基线切回主锚
+   zhipu-coding-plan/glm-5.3-flash 继续推进；minimax 恢复后补跑形成内部 A/B。
+2. **w7 发车**：`deepswe-base-w7`，113×n=1，3 并发（w2/w3 验证档，GLM 限流 0 命中），
+   **250 轮口径（A11）**，二进制 = worktree 构建 000619cb（含 A8/A8b/A10/A12/A13-c）。
+   后台任务 exec_eb6935d5，网络 watchdog（>24 修剪）同窗运行。
+3. **发车核验（全绿）**：3 trial 容器 + egress proxy Up；容器内 `shannon --version`
+   = 0.11.0 且 pier 进程 `SHANNON_PIER_BIN` 指向 worktree 二进制（锚完整性链闭合）；
+   **L3 断言通过**（start 事件 prompt 字段 3068 字符）；首 trial 5 分钟内推至 turn 36
+   /61k tokens、43 次工具调用成对、0×429——GLM 连通性与 A8 续推环境正常。
+4. **口径关系**：w4（GLM 10 题，150 轮 + 旧二进制）保持冻结为历史数据
+   （F6 last-mile 分析 + 新旧口径对照用）；**正式 GLM 基线 = w7**（250 轮 + 当前
+   二进制），预计墙钟 2-4 天。聚合：`JOBS_DIR=~/.shannon/eval/deepswe/jobs
+   scripts/eval/deepswe-wave.sh aggregate --job-name deepswe-base-w7`。
+   同并发恢复：`EVAL_PROVIDER_MODEL=zhipu-coding-plan/glm-5.3-flash
+   EVAL_KEY_FILE=$HOME/.shannon/credentials/zhipu.json PYTHONPATH=scripts/eval/pier-adapter
+   SHANNON_PIER_BIN=<worktree 二进制> pier job resume --job-path
+   ~/.shannon/eval/deepswe/jobs/deepswe-base-w7`。
+
 ## 二、基线波次记录（P2）
 
 - **wave-1 处置与提速改版（2026-09-18）**：首发的 wave-1 在旧二进制事故（F8）后以
