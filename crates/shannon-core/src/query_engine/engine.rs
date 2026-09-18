@@ -482,6 +482,22 @@ const TURN_CONTINUATION_NUDGE_PROMPT: &str = "Your previous response stream was 
 /// (`SHANNON_TURN_RETRIES`; "0" legitimately disables).
 const DEFAULT_TURN_RETRIES: u32 = 2;
 
+// ── Wrap-up protocol before the final turn (A10) ──────────────────────────
+//
+// DeepSWE w4: arcane / dynamodb died at the turn limit with the work done
+// but nothing committed — exit 2, empty patch (F10,
+// docs/deepswe-eval-findings-2026-09.md). A one-shot nudge entering the
+// LAST turn tells the model to land its work and summarize. The hard stop
+// itself is unchanged: exhausting the budget still ends the run exactly as
+// before (the nudge lands work, it does not lie about success).
+
+/// Re-prompt injected once when the upcoming iteration is the final turn.
+/// Verbatim from the A10 plan; pinned by test.
+const WRAP_UP_NUDGE_PROMPT: &str = "Your turn budget is nearly exhausted — this is \
+     your final turn. Finish your current work now: if you are working in a git \
+     repository, commit your changes; then give a brief summary of what was \
+     completed and what remains.";
+
 /// Append the A8 continuation nudge (role=user, same injection shape as the
 /// A1 think-only nudge) unless it is already the last message. The
 /// one-shot guard keeps a repeated stall from stacking copies: the first
@@ -2300,6 +2316,11 @@ impl QueryEngine {
             let mut session_file_edits_made = false;
             // P-B: fires once per query when the checkpoint turn is reached.
             let mut turn_checkpoint_fired = false;
+            // A10: fires once per query when the upcoming iteration is the
+            // final turn. The A8 continuation re-enters the same turn
+            // without advancing the counter, so the flag — not the turn
+            // arithmetic — is what keeps the nudge one-shot.
+            let mut wrap_up_nudge_fired = false;
             // P-M: fires once per threshold per query (60% and 80% independently).
             let mut token_warning_60_fired = false;
             let mut token_warning_80_fired = false;
@@ -2468,6 +2489,48 @@ impl QueryEngine {
                         conversation.messages.push(synth_msg);
                         turn_checkpoint_fired = true;
                     }
+                }
+
+                // ── A10: wrap-up protocol entering the final turn ──────────
+                // Fires ONCE per query when the upcoming iteration is the
+                // last one (`turn + 1 == max_turns`): the model is told to
+                // land its work (commit) and summarize. w4 evidence: arcane
+                // / dynamodb hit the turn limit with the work done but
+                // nothing committed — exit 2, empty patch (F10,
+                // docs/deepswe-eval-findings-2026-09.md; backlog A10). The
+                // hard stop below is UNCHANGED — exhausting the budget still
+                // ends the run exactly as before; the nudge lands work, it
+                // does not lie about success. Placed after the tool_results
+                // drain for the same wire-order reason as the P-B checkpoint
+                // above (synthetic user message must follow user(tool_result)).
+                // One-shot by flag: the A8 continuation re-enters this same
+                // iteration without advancing `turn`, and must not stack a
+                // second wrap-up nudge.
+                if !wrap_up_nudge_fired && turn + 1 == config.max_turns {
+                    wrap_up_nudge_fired = true;
+                    tracing::info!(
+                        turn,
+                        max_turns = config.max_turns,
+                        "final-turn wrap-up nudge injected"
+                    );
+                    send_event!(
+                        tx,
+                        QueryEvent::Progress {
+                            query_id,
+                            message: format!(
+                                "Agent turn budget nearly exhausted — final turn \
+                                 ({}/{}): wrap up, commit your work, and summarize.",
+                                turn + 1,
+                                config.max_turns
+                            ),
+                        }
+                    );
+                    let wrap_up_msg = Message {
+                        role: "user".to_string(),
+                        content: MessageContent::Text(WRAP_UP_NUDGE_PROMPT.to_string()),
+                    };
+                    messages.push(wrap_up_msg.clone());
+                    conversation.messages.push(wrap_up_msg);
                 }
 
                 // Resolve effective max context FIRST: Ollama num_ctx > model registry > fallback.
@@ -8579,12 +8642,27 @@ mod tests {
         a8_http_response("200 OK", "text/event-stream", &sse)
     }
 
-    /// Drive one full `process_query` against the mock and return
-    /// (completed, failed_error, progress_messages, warning_messages,
-    /// final_history).
+    /// Drive one full `process_query` against the mock (default turn budget)
+    /// and return (completed, failed_error, progress_messages,
+    /// warning_messages, final_history).
     #[allow(clippy::type_complexity)]
     async fn a8_run_query(
         server: &TurnRetryMockServer,
+    ) -> (
+        bool,
+        String,
+        Vec<String>,
+        Vec<String>,
+        Vec<Message>,
+    ) {
+        a8_run_query_with(server, 20).await
+    }
+
+    /// Variant with an explicit turn budget (A10 tests drive small budgets).
+    #[allow(clippy::type_complexity)]
+    async fn a8_run_query_with(
+        server: &TurnRetryMockServer,
+        max_turns: usize,
     ) -> (
         bool,
         String,
@@ -8606,7 +8684,10 @@ mod tests {
             ToolRegistry::new(),
             PermissionManager::new(),
             StateManager::new(),
-            QueryEngineConfig::default(),
+            QueryEngineConfig {
+                max_turns,
+                ..Default::default()
+            },
         );
         let context = QueryContext {
             query_id: uuid::Uuid::new_v4(),
@@ -9144,6 +9225,166 @@ mod tests {
             1,
             "content must not be duplicated by reconnect replays"
         );
+    }
+
+    // ---- A10: wrap-up protocol before the final turn ----------------------
+    //
+    // w4: arcane / dynamodb died at the turn limit with work done but
+    // nothing committed (exit 2, empty patch, F10). The nudge entering the
+    // final turn lands the work; the hard stop keeps its semantics.
+
+    /// ① The wrap-up nudge is injected exactly once, and only in the wire
+    /// body of the request that OPENS the final turn. ② After the budget
+    /// is exhausted the query still completes through the unchanged hard
+    /// stop (Completed, no Failed).
+    #[tokio::test]
+    async fn a10_wrap_up_nudge_injected_once_before_final_turn() {
+        // Every turn ends in a tool_use (the empty registry answers with an
+        // error tool_result), so no response ever ends the query early and
+        // the budget genuinely exhausts through the hard stop.
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|_i: usize| a8_tool_call_sse());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, warnings, _history) =
+            a8_run_query_with(&server, 3).await;
+
+        assert!(
+            completed,
+            "budget exhaustion must still complete via the hard stop; failed: {failed}"
+        );
+        assert!(failed.is_empty());
+        let bodies = server.bodies();
+        assert_eq!(
+            bodies.len(),
+            3,
+            "exactly max_turns requests must run; got {}",
+            bodies.len()
+        );
+        let wrap = WRAP_UP_NUDGE_PROMPT;
+        assert!(!bodies[0].contains(wrap), "turn 1 of 3 must be nudge-free");
+        assert!(!bodies[1].contains(wrap), "turn 2 of 3 must be nudge-free");
+        assert_eq!(
+            bodies[2].matches(wrap).count(),
+            1,
+            "the final-turn request must carry the wrap-up nudge exactly once"
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|m| m.contains("turn budget") && m.contains("final turn")),
+            "a wrap-up Progress event must fire; got {progress:?}"
+        );
+        assert_eq!(
+            progress
+                .iter()
+                .filter(|m| m.contains("turn budget") && m.contains("final turn"))
+                .count(),
+            1,
+            "the wrap-up Progress event is one-shot; got {progress:?}"
+        );
+        // Note: tool-only mock turns legitimately emit the pre-existing
+        // "Model produced no text output" Warning — not an A10 concern.
+        let _ = warnings;
+    }
+
+    /// ③ With max_turns = 1 the very first request IS the final turn and
+    /// must already carry the nudge.
+    #[tokio::test]
+    async fn a10_wrap_up_nudge_fires_on_first_turn_when_max_turns_is_one() {
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|_i: usize| a8_tool_call_sse());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, _warnings, _history) =
+            a8_run_query_with(&server, 1).await;
+
+        assert!(completed, "single-turn run must complete; failed: {failed}");
+        let bodies = server.bodies();
+        assert_eq!(bodies.len(), 1, "exactly one request must run");
+        assert_eq!(
+            bodies[0].matches(WRAP_UP_NUDGE_PROMPT).count(),
+            1,
+            "with max_turns=1 the first request is the final turn"
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|m| m.contains("turn budget") && m.contains("final turn")),
+            "wrap-up Progress must fire; got {progress:?}"
+        );
+    }
+
+    /// ④ A8 stacking: the wrap-up turn's stream dies with a timeout-class
+    /// error and the A8 continuation re-enters the SAME turn (turn count
+    /// unchanged, never越过 max_turns). The wrap-up nudge must NOT be
+    /// re-injected on the retry request, and the A8 nudge rides after it.
+    #[tokio::test]
+    async fn a10_wrap_up_and_a8_stacking_no_double_injection() {
+        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        // turn 0: dead → A8 retry succeeds (tool turn). turn 1 (final):
+        // dead → A8 retry succeeds → budget exhausted at max_turns=2 → hard
+        // stop. Recoveries are tool turns so no response ends the query.
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|i: usize| match i {
+                0 | 2 => a8_timeout_response(),
+                _ => a8_tool_call_sse(),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, warnings, _history) =
+            a8_run_query_with(&server, 2).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(completed, "both turns must land; failed: {failed}");
+        let bodies = server.bodies();
+        assert_eq!(
+            bodies.len(),
+            4,
+            "2 turns × (dead attempt + A8 retry); got {}",
+            bodies.len()
+        );
+        let wrap = WRAP_UP_NUDGE_PROMPT;
+        let a8nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        assert!(!bodies[0].contains(wrap) && !bodies[0].contains(a8nudge));
+        assert!(
+            !bodies[1].contains(wrap) && bodies[1].matches(a8nudge).count() == 1,
+            "turn-0 retry carries only the A8 nudge (wrap-up not yet due)"
+        );
+        // A8/A1 nudges are session-persistent by design, so turn 1's
+        // requests legitimately still carry turn 0's A8 nudge. The A10
+        // contract: the wrap-up nudge appears EXACTLY once per request —
+        // the in-turn A8 re-entry must not stack a second copy.
+        assert!(
+            bodies[2].matches(wrap).count() == 1 && bodies[2].matches(a8nudge).count() == 1,
+            "the final-turn request carries one wrap-up nudge (plus turn 0's persistent A8 nudge)"
+        );
+        assert!(
+            bodies[3].matches(wrap).count() == 1 && bodies[3].matches(a8nudge).count() == 2,
+            "the in-turn A8 retry must NOT re-inject the wrap-up nudge; the A8 nudge \
+             grows by exactly the one new continuation"
+        );
+        let continuations = progress
+            .iter()
+            .filter(|m| m.contains("Turn LLM call interrupted (upstream cutoff)"))
+            .count();
+        assert_eq!(continuations, 2, "one A8 continuation per turn");
+        assert_eq!(
+            progress
+                .iter()
+                .filter(|m| m.contains("turn budget") && m.contains("final turn"))
+                .count(),
+            1,
+            "wrap-up Progress stays one-shot across A8 re-entries"
+        );
+        let _ = warnings;
     }
 
     /// SHANNON_TURN_RETRIES=0 disables continuation entirely: one request,
