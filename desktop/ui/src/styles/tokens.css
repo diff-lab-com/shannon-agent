@@ -172,3 +172,21 @@
   50.01%, 100% { opacity: 0; }
 }
 
+
+/* ───── P2-⑧ compact density ───────────────────────────────────────────
+   html[data-density="compact"] scales the shared type & spacing tokens
+   down ~10% for Advanced-facing users; the default stays comfortable.
+   The toggle lives in Settings → General (persisted in localStorage). */
+[data-density="compact"] {
+  --text-label-xs: 10px;
+  --text-label-sm: 11px;
+  --text-label-md: 13px;
+  --text-body-sm: 13px;
+  --text-body-md: 15px;
+  --text-body-lg: 16px;
+  --spacing-xs: 3px;
+  --spacing-sm: 6px;
+  --spacing-md: 13px;
+  --spacing-lg: 20px;
+  --spacing-xl: 27px;
+}

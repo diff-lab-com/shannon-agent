@@ -700,6 +700,9 @@
       "is_error": {
         "type": "boolean"
       },
+      "meta": {
+        "description": "P1-⑤ mirror — must mirror src/events.rs exactly."
+      },
       "query_id": {
         "type": "string"
       },
@@ -710,6 +713,15 @@
         "description": "P1-1: optional owner session (multi-window filtering). Additive — must mirror src/events.rs exactly.",
         "type": [
           "string",
+          "null"
+        ]
+      },
+      "tokens_used": {
+        "description": "P1-⑤ mirror — must mirror src/events.rs exactly.",
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": [
+          "integer",
           "null"
         ]
       },

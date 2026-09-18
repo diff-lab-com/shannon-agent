@@ -1,5 +1,6 @@
 import { useState, memo } from 'react'
 import { useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { messageFeedbackKey } from '@/lib/feedbackKey'
@@ -367,20 +368,47 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                   </div>
                 ) : null
               })()}
-              {message.tool_calls.map(tc => (
-                tc.tool_name === 'agent_spawn' ? (
-                  // P1-⑥: sub-agents get a first-class collapsible block
-                  // instead of a generic tool card (ZCode's 子智能体段).
-                  <SubagentBlock key={tc.tool_use_id} toolCall={tc} />
-                ) : (
-                  <ToolCallDisplay
-                    key={tc.tool_use_id}
-                    toolCall={tc}
-                    onViewDiff={onViewDiff}
-                    durationMs={durationLookup?.get(tc.tool_use_id)}
-                  />
-                )
-              ))}
+              {/* P2-⑨ (ZCode delta): a run of consecutive same-tool failures is
+                  prefaced by a retry-chain banner linking to the turn timeline
+                  — the long-horizon "failed → retried → recovered" narrative
+                  stays readable without expanding every card. */}
+              {(() => {
+                const tcs = message.tool_calls
+                const out: React.ReactNode[] = []
+                const renderTool = (tc: ToolCall, key: string) =>
+                  tc.tool_name === 'agent_spawn' ? (
+                    <SubagentBlock key={key} toolCall={tc} />
+                  ) : (
+                    <ToolCallDisplay
+                      key={key}
+                      toolCall={tc}
+                      onViewDiff={onViewDiff}
+                      durationMs={durationLookup?.get(tc.tool_use_id)}
+                    />
+                  )
+                let i = 0
+                while (i < tcs.length) {
+                  const tc = tcs[i]
+                  if (tc.status === 'error') {
+                    let j = i
+                    while (
+                      j + 1 < tcs.length &&
+                      tcs[j + 1].status === 'error' &&
+                      tcs[j + 1].tool_name === tc.tool_name
+                    ) { j++ }
+                    const chainLen = j - i + 1
+                    if (chainLen >= 2) {
+                      out.push(<RetryChainBanner key={`chain-${tc.tool_use_id}`} count={chainLen} />)
+                      for (let k = i; k <= j; k++) out.push(renderTool(tcs[k], tcs[k].tool_use_id))
+                      i = j + 1
+                      continue
+                    }
+                  }
+                  out.push(renderTool(tc, tc.tool_use_id))
+                  i++
+                }
+                return out
+              })()}
             </div>
           )}
         </div>
@@ -448,6 +476,34 @@ function extractFilePath(toolName: string, input: unknown): string | null {
   return FILE_MUTATING_TOOLS.has(toolName) ? raw : null
 }
 
+/** P2-⑨: banner preceding a run of consecutive same-tool failures — links
+ *  to the session's turn timeline where the retry narrative is visualized. */
+function RetryChainBanner({ count }: { count: number }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+  const navigate = useNavigate()
+  const { currentSessionId } = useSessions()
+  return (
+    <div className="flex items-center gap-sm px-md py-xs rounded-lg bg-error/5 border border-error/20" data-testid="retry-chain-banner">
+      <span className="material-symbols-outlined icon-sm text-error shrink-0" aria-hidden="true">replay</span>
+      <span className="font-label-sm text-error flex-1 truncate">
+        {intl.formatMessage({ id: 'chat.message.retryChain' }, { count })}
+      </span>
+      {currentSessionId && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="shrink-0 gap-xs px-sm py-xs text-on-surface-variant hover:text-primary"
+          onClick={() => navigate(`/timeline/${currentSessionId}`)}
+        >
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">timeline</span>
+          {t('chat.message.retryChain.view')}
+        </Button>
+      )}
+    </div>
+  )
+}
+
 /** P1-⑤ telemetry: compact wall-clock label — 842 ms · 5.2 s · 1m04s. */
 export function formatToolDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)} ms`
@@ -468,15 +524,41 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
   const filePath = extractFilePath(toolCall.tool_name, toolCall.tool_input)
   const canDiff = filePath != null && toolCall.status === 'completed' && !toolCall.is_error
   const durationMs = toolCall.duration_ms ?? durationMsProp
+  // P1-⑤: the engine's §4.12 metadata — surface a sandbox-denied verdict on
+  // the card itself instead of burying it in the expanded JSON.
+  const sandboxDenied = (() => {
+    const meta = toolCall.meta
+    if (!meta || typeof meta !== 'object') return false
+    return (meta as Record<string, unknown>).classification === 'sandbox_denied'
+  })()
 
   return (
     <Tool name={toolCall.tool_name} status={toolCall.status} className="p-sm">
       <ToolHeader onClick={() => setExpanded(!expanded)}>
         <span className={cn('material-symbols-outlined icon-sm', statusColor, toolCall.status === 'running' ? 'animate-spin' : '')}>{statusIcon}</span>
         <span className="font-label-md text-on-surface flex-1 truncate">{toolCall.tool_name}</span>
+        {sandboxDenied && (
+          <span
+            role="img"
+            aria-label={t('chat.tool.sandboxDenied')}
+            title={t('chat.tool.sandboxDenied')}
+            className="flex items-center gap-[2px] shrink-0 px-xs py-[1px] rounded bg-error/10 text-error font-label-xs"
+          >
+            <span className="material-symbols-outlined text-[12px]" aria-hidden="true">shield</span>
+            {t('chat.tool.sandboxDenied')}
+          </span>
+        )}
         {toolCall.status !== 'running' && durationMs != null && (
           <span className="font-mono text-label-xs tabular-nums text-on-surface-variant/80 shrink-0" aria-hidden="true">
             {formatToolDuration(durationMs)}
+          </span>
+        )}
+        {toolCall.status !== 'running' && (toolCall.tokens_used ?? 0) > 0 && (
+          <span
+            className="font-mono text-label-xs tabular-nums text-on-surface-variant/80 shrink-0"
+            title={t('chat.tool.tokens.title')}
+          >
+            {toolCall.tokens_used!.toLocaleString()} tok
           </span>
         )}
         {canDiff && (

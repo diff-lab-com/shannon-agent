@@ -206,6 +206,12 @@ pub struct ToolResultPayload {
     /// must mirror src/events.rs exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// P1-⑤ mirror — must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
+    /// P1-⑤ mirror — must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_used: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

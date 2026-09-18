@@ -167,6 +167,31 @@ impl SubAgent {
 // SubAgentRegistry — in-process bookkeeping for spawned agents
 // ---------------------------------------------------------------------------
 
+/// Lifecycle transition of a sub-agent, published to registered observers.
+/// P0-⑥: embedders (the desktop shell) bridge these to UI events; this also
+/// fixes the stale-status bug where a registry entry stayed `Idle` forever
+/// after `agent_spawn` finished executing.
+#[derive(Debug, Clone)]
+pub enum SubAgentLifecycle {
+    /// The registry accepted a new sub-agent (`spawn`).
+    Spawned {
+        agent_id: String,
+        agent_name: String,
+        team: Option<String>,
+    },
+    /// A spawned run finished (`record_run_outcome`).
+    Completed {
+        agent_id: String,
+        agent_name: String,
+        ok: bool,
+        result_summary: String,
+    },
+}
+
+/// Synchronous callback invoked on every lifecycle transition. Keep it cheap
+/// (e.g. forward to an event emitter) — it runs on the caller's task.
+pub type SubAgentLifecycleObserver = Arc<dyn Fn(SubAgentLifecycle) + Send + Sync>;
+
 /// In-process registry that tracks all sub-agents and teams.
 /// This bridges the Tool trait (which takes `&self` and `Value`) to the
 /// async `AgentCoordinator` API.
@@ -177,6 +202,9 @@ pub struct SubAgentRegistry {
     agents: Arc<RwLock<HashMap<String, SubAgent>>>,
     /// Team name -> (team_name, description)
     teams: Arc<RwLock<HashMap<String, String>>>,
+    /// Lifecycle observers (std RwLock — notify is a short sync critical
+    /// section and must not require an await).
+    observers: Arc<std::sync::RwLock<Vec<SubAgentLifecycleObserver>>>,
 }
 
 impl SubAgentRegistry {
@@ -186,7 +214,58 @@ impl SubAgentRegistry {
             coordinator,
             agents: Arc::new(RwLock::new(HashMap::new())),
             teams: Arc::new(RwLock::new(HashMap::new())),
+            observers: Arc::new(std::sync::RwLock::new(Vec::new())),
         }
+    }
+
+    /// Register a lifecycle observer (P0-⑥). Observers fire synchronously on
+    /// spawn and on run completion.
+    pub fn register_observer(&self, observer: SubAgentLifecycleObserver) {
+        self.observers
+            .write()
+            .expect("sub-agent observers lock poisoned")
+            .push(observer);
+    }
+
+    fn notify_lifecycle(&self, event: SubAgentLifecycle) {
+        let observers = self
+            .observers
+            .read()
+            .expect("sub-agent observers lock poisoned");
+        for observer in observers.iter() {
+            observer(event.clone());
+        }
+    }
+
+    /// Record the outcome of an executed sub-agent run: transitions the
+    /// registry entry out of `Idle` (the stale-status bug) and publishes
+    /// [`SubAgentLifecycle::Completed`] to observers.
+    pub async fn record_run_outcome(&self, agent_id: &str, ok: bool, result_summary: String) {
+        let agents = self.agents.read().await;
+        let agent = match agents.values().find(|a| a.id == agent_id) {
+            Some(a) => a,
+            None => return,
+        };
+        let agent_name = agent.name.clone();
+        drop(agents);
+
+        {
+            let mut agents = self.agents.write().await;
+            if let Some(agent) = agents.get_mut(agent_name.as_str()) {
+                if ok {
+                    agent.mark_completed();
+                } else {
+                    agent.mark_failed(result_summary.clone());
+                }
+            }
+        }
+
+        self.notify_lifecycle(SubAgentLifecycle::Completed {
+            agent_id: agent_id.to_string(),
+            agent_name,
+            ok,
+            result_summary,
+        });
     }
 
     /// Subscribe to coordinator events (agent output, status changes, etc.).
@@ -269,6 +348,12 @@ impl SubAgentRegistry {
             .write()
             .await
             .insert(name.clone(), agent.clone());
+
+        self.notify_lifecycle(SubAgentLifecycle::Spawned {
+            agent_id: agent.id.clone(),
+            agent_name: name.clone(),
+            team: Some(team_name.clone()),
+        });
 
         tracing::info!(
             agent_id = %agent.id,

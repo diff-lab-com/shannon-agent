@@ -404,6 +404,21 @@ export const MOCK_MESSAGES: ChatMessage[] = [
     role: 'assistant',
     content: "Updated. Added **Risks** and **Timeline** sections:\n\n## Risks\n- **R1 — Hiring delay.** Eng hires slip → billing migration slips → Theme 1 & 2 both blocked. *Mitigation:* contractor bridge for 6 weeks.\n- **R2 — Schema migration regression.** Big-bang migration risk. *Mitigation:* dual-write shadow period (2 weeks).\n- **R3 — Partner readiness.** OAuth gallery needs 5 launch partners; 3 confirmed. *Mitigation:* downgrade success metric to 3 launch partners if needed.\n\n## Timeline\n| Month | Theme 1 (Partnerships) | Theme 2 (Onboarding) | Theme 3 (Foundation) |\n|---|---|---|---|\n| Jul | OAuth scaffolding | Tour design | Schema v2 dual-write |\n| Aug | Webhook SLA work | Tour ship | Migration cutover |\n| Sep | Partner gallery launch | Templates v1 | Audit log migration |\n\nThe three themes have **staggered peaks** so the shared design resource is never double-booked. Want this as a PDF?",
     timestamp: now - 880_000,
+    tool_calls: [
+      {
+        tool_use_id: 'tu-003',
+        tool_name: 'agent_spawn',
+        tool_input: {
+          name: 'research-analyst',
+          model: 'claude-haiku-4-5',
+          team: 'q3-roadmap',
+          max_turns: 6,
+          system_prompt: 'You are a research analyst. Summarize partner API docs and onboarding metrics into bullet points.',
+        },
+        result: 'Agent spawned and added to team q3-roadmap. First task assigned: summarize partner API surface.',
+        status: 'completed',
+      },
+    ],
   },
 ]
 

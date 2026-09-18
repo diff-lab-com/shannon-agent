@@ -22,6 +22,12 @@ export interface ToolResultPayload {
   tool_name: string
   result: string
   is_error: boolean
+  /** P1-⑤: engine tool metadata (e.g. sandbox classification). Absent on
+   *  older engines. */
+  meta?: unknown
+  /** P1-⑤ telemetry: approximate per-tool token attribution collapsed by
+   *  the desktop forwarder. */
+  tokens_used?: number
 }
 
 export interface ToolProgressPayload {
@@ -109,6 +115,11 @@ export interface ToolCall {
    *  arrives. Historical messages get durations from the L0 trace timeline
    *  instead (see MessageArea's duration lookup). */
   duration_ms?: number
+  /** P1-⑤: engine tool metadata (e.g. `{ classification: 'sandbox_denied' }`). */
+  meta?: unknown
+  /** P1-⑤ telemetry: approximate per-tool token attribution (collapsed by
+   *  the desktop forwarder). Historical cards don't carry this. */
+  tokens_used?: number
 }
 
 export interface ResearchReport {

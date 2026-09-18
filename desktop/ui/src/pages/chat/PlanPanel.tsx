@@ -6,7 +6,7 @@
 // any plan-tool result (enter/exit/get_plan_status), and on query
 // completion. The lifecycle stays engine-owned — this panel is read-only.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,6 +14,7 @@ import { Markdown } from '@/components/chat/Markdown'
 import { useT } from '@/i18n'
 import { EVENT_NAMES, type SessionPlan } from '@/types'
 import * as api from '@/lib/tauri-api'
+import { cn } from '@/lib/utils'
 
 interface PlanPanelProps {
   /** Session working directory (absolute path); null when unbound. */
@@ -61,7 +62,10 @@ export function useSessionPlan(workingDir: string | null) {
       }
       unlisteners.push(...results)
     }
-    register()
+    // Demo mode / tests have no Tauri event layer — listen() rejects there
+    // (the same tolerated noise AppContext produces); refresh() on session
+    // change and the manual button still cover those surfaces.
+    register().catch(() => { /* event layer unavailable */ })
     return () => {
       cancelled = true
       unlisteners.forEach(fn => fn())
@@ -76,6 +80,16 @@ export default function PlanPanel({ workingDir, planModeActive }: PlanPanelProps
   const { plan, refresh } = useSessionPlan(workingDir)
 
   const approved = plan?.status === 'approved'
+  // P0-③ progress sync: the plan's markdown checklist IS the step list —
+  // count `- [x]` vs `- [ ]` items to render a live "M/N steps" bar (ZCode's
+  // 计划-N-步 signal, derived from the same doc the engine persists).
+  const steps = useMemo(() => {
+    if (!plan) return { done: 0, total: 0 }
+    const items = plan.content.match(/^\s*[-*+]\s+\[([ xX])\]/gm) ?? []
+    const done = items.filter(item => /\[[xX]\]/.test(item)).length
+    return { done, total: items.length }
+  }, [plan])
+  const stepPct = steps.total > 0 ? Math.round((steps.done / steps.total) * 100) : 0
 
   return (
     <div className="space-y-md" data-testid="plan-panel">
@@ -101,6 +115,24 @@ export default function PlanPanel({ workingDir, planModeActive }: PlanPanelProps
           <span className="material-symbols-outlined text-[14px]" aria-hidden="true">refresh</span>
         </Button>
       </div>
+
+      {plan && steps.total > 0 && (
+        <div
+          role="status"
+          aria-label={t('chat.plan.progress.aria', { done: steps.done, total: steps.total })}
+          className="flex items-center gap-sm px-md py-xs rounded-lg bg-surface-container border border-outline-variant/10"
+        >
+          <span className="font-mono font-label-sm tabular-nums text-on-surface shrink-0">
+            {t('chat.plan.progress', { done: steps.done, total: steps.total })}
+          </span>
+          <div className="flex-1 h-1.5 bg-surface-container-high rounded-full overflow-hidden">
+            <div
+              className={cn('h-full rounded-full transition-all duration-500', stepPct >= 100 ? 'bg-tertiary' : 'bg-primary')}
+              style={{ width: `${stepPct}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {planModeActive && (
         <p

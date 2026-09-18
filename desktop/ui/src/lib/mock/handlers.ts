@@ -183,7 +183,8 @@ const demoPatch = (branch: number) =>
 // one finished; start_goal_run appends new running rows with live feel.
 const goalRuns = [
   {
-    sessionId: '0196aaaa-0000-7000-8000-000000000001',
+    // P2-⑥: bound to a seeded sidebar session so the goal badge shows in demo.
+    sessionId: 'sess-002',
     title: 'Harden the upload pipeline',
     objective: 'Add retry + tests to the upload pipeline so flaky network errors cannot lose files',
     status: 'running',
@@ -255,6 +256,11 @@ export const handlers: Record<string, MockHandler> = {
       demoConfig.sandbox = { mode }
     } else if (args?.key === 'approval_mode') {
       demoConfig.approval_mode = args.value
+    } else if (args?.key === 'model') {
+      // P0-③: model switching (composer chip / header) mirrors the engine.
+      demoConfig.model = args.value
+    } else if (args?.key === 'provider') {
+      demoConfig.provider = args.value
     } else if (args?.key === 'offpeak.model_override') {
       // P2-5: frozen config key — empty value disables the override.
       const trimmed = String(args.value ?? '').trim()
@@ -311,7 +317,17 @@ export const handlers: Record<string, MockHandler> = {
 
   // --- Models & Status ---
   async list_models() { await delay(); return clone(MOCK_MODELS) },
-  async get_status() { await delay(40); return clone(MOCK_STATUS) },
+  // Status mirrors demoConfig so model switching (composer chip / header)
+  // visibly updates both selectors in the demo — they stay in sync the way
+  // the real engine does.
+  async get_status() {
+    await delay(40)
+    return {
+      ...clone(MOCK_STATUS),
+      model: demoConfig.model ?? MOCK_STATUS.model,
+      provider: demoConfig.provider ?? MOCK_STATUS.provider,
+    }
+  },
   async list_tools() { await delay(); return clone(MOCK_TOOLS) },
 
   // --- Sessions ---

@@ -27,7 +27,7 @@ import { useT } from '@/i18n'
 import * as api from '@/lib/tauri-api'
 import { exportSessionAsMarkdown, printSession } from '@/lib/sessionActions'
 import { toastError } from '@/lib/errorToast'
-import type { SessionActivity, SessionInfo } from '@/types'
+import type { GoalRunDto, SessionActivity, SessionInfo } from '@/types'
 import DeleteSessionModal from '@/pages/chat/DeleteSessionModal'
 import HighlightText from './HighlightText'
 
@@ -66,6 +66,11 @@ function persist(key: string, value: unknown) {
   try { window.localStorage.setItem(key, JSON.stringify(value)) } catch { /* noop */ }
 }
 
+function persistGrouping(mode: GroupingMode) {
+  // Raw string (not JSON-encoded) — readGrouping compares bare values.
+  try { window.localStorage.setItem(SESSIONS_GROUPING_KEY, mode) } catch { /* noop */ }
+}
+
 /** Compact elapsed label for a running session: 42s · 8m · 1h12m. */
 function formatElapsed(ms: number): string {
   const sec = Math.max(0, Math.floor(ms / 1000))
@@ -99,6 +104,8 @@ interface SessionsSectionProps {
   sessions: SessionInfo[]
   /** P0 sidebar telemetry: live run state per session id. */
   sessionActivity: Record<string, SessionActivity>
+  /** P2-⑥: goal runs keyed by the session they own (badge + iterations). */
+  goalRunsBySession: Record<string, GoalRunDto>
   currentSessionId: string | null
   switchSession: (id: string) => Promise<void>
   renameSession: (id: string, title: string) => Promise<void>
@@ -106,7 +113,7 @@ interface SessionsSectionProps {
   closeMobile?: () => void
 }
 
-export function SessionsSection({ sessions, sessionActivity, currentSessionId, switchSession, renameSession, deleteSession, closeMobile }: SessionsSectionProps) {
+export function SessionsSection({ sessions, sessionActivity, goalRunsBySession = {}, currentSessionId, switchSession, renameSession, deleteSession, closeMobile }: SessionsSectionProps) {
   const t = useT()
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
@@ -144,7 +151,7 @@ export function SessionsSection({ sessions, sessionActivity, currentSessionId, s
 
   const setGroupingPersisted = useCallback((mode: GroupingMode) => {
     setGrouping(mode)
-    persist(SESSIONS_GROUPING_KEY, mode)
+    persistGrouping(mode)
   }, [])
 
   const clearLongPress = useCallback(() => {
@@ -359,6 +366,7 @@ export function SessionsSection({ sessions, sessionActivity, currentSessionId, s
     const isMenuOpen = menuFor === session.id
     const activity = sessionActivity[session.id]
     const isRunning = activity?.running === true || session.running === true
+    const goalRun = goalRunsBySession[session.id]
     const elapsed = isRunning && activity?.startedAt != null
       ? formatElapsed(nowTick - activity.startedAt)
       : null
@@ -427,6 +435,29 @@ export function SessionsSection({ sessions, sessionActivity, currentSessionId, s
                 // U8: filled pin marks the active state; the menu
                 // action stays outlined.
                 <span className="material-symbols-outlined text-[14px] text-primary shrink-0" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">push_pin</span>
+              )}
+              {/* P2-⑥: goal-run badge — a session a goal run owns shows the
+                  run's iteration progress right on the rail. */}
+              {goalRun && (
+                <span
+                  role="img"
+                  aria-label={t('sidebar.sessions.goal.badge.aria', {
+                    title: goalRun.title,
+                    done: goalRun.iterations,
+                    total: goalRun.maxTurns ?? goalRun.iterations,
+                  })}
+                  title={t('sidebar.sessions.goal.badge.aria', {
+                    title: goalRun.title,
+                    done: goalRun.iterations,
+                    total: goalRun.maxTurns ?? goalRun.iterations,
+                  })}
+                  className="flex items-center gap-[2px] shrink-0 text-primary"
+                >
+                  <span className="material-symbols-outlined text-[13px]" style={{ fontVariationSettings: goalRun.status === 'running' ? "'FILL' 1" : undefined }} aria-hidden="true">flag</span>
+                  <span className="font-mono text-[10px] tabular-nums text-on-surface" aria-hidden="true">
+                    {goalRun.iterations}/{goalRun.maxTurns ?? goalRun.iterations}
+                  </span>
+                </span>
               )}
               <span className="flex-1 truncate">
                 <HighlightText text={session.title || untitled} query={query.trim()} />

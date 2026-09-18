@@ -19,6 +19,7 @@ import type { CheckpointInfo, FeedbackRating } from '@/lib/tauri-api'
 import {
   EVENT_NAMES,
   type ChatMessage,
+  type GoalRunDto,
   type ToolCall,
   type SessionInfo,
   type SessionActivity,
@@ -102,6 +103,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Manual sends to these are blocked — goal and manual input are mutually
   // exclusive; the backend `send_message` guard is the backstop.
   const [goalOwnedSessionIds, setGoalOwnedSessionIds] = useState<string[]>([])
+  // P2-⑥: full goal-run info keyed by session — the sidebar renders a goal
+  // badge + iteration progress for sessions a run owns.
+  const [goalRunsBySession, setGoalRunsBySession] = useState<Record<string, GoalRunDto>>({})
   const [loading, setLoading] = useState(true)
   // First paint of the app depends on these loads succeeding; a silent
   // failure here used to leave the user on an empty UI with only a generic
@@ -425,6 +429,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [currentSessionId, refreshSessions, refreshCheckpoints])
 
+  // P0-2/P2-⑥: derive both the goal-owned id set (composer guard) and the
+  // full per-session run map (sidebar badge) from one fetch.
+  const applyGoalRuns = useCallback((runs: GoalRunDto[]) => {
+    setGoalOwnedSessionIds(runs.filter(r => r.status === 'running' || r.status === 'paused').map(r => r.sessionId))
+    setGoalRunsBySession(Object.fromEntries(runs.map(r => [r.sessionId, r])))
+  }, [])
+
   // Register Tauri event listeners
   useEffect(() => {
     const unlisteners: UnlistenFn[] = []
@@ -451,14 +462,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }])
         }),
         listen(EVENT_NAMES.QUERY_TOOL_RESULT, (e) => {
-          const p = e.payload as { tool_use_id: string; result: string; is_error: boolean; session_id?: string }
+          const p = e.payload as { tool_use_id: string; result: string; is_error: boolean; meta?: unknown; tokens_used?: number; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           noteSessionActivity(p.session_id, 'tool-end')
           setActiveToolCalls(prev => prev.map(tc => {
             if (tc.tool_use_id !== p.tool_use_id) return tc
             // P1-⑤ telemetry: client-side wall-clock duration for the card.
             const duration_ms = tc.started_at != null ? Date.now() - tc.started_at : undefined
-            return { ...tc, result: p.result, is_error: p.is_error, status: p.is_error ? 'error' : 'completed', duration_ms }
+            return { ...tc, result: p.result, is_error: p.is_error, status: p.is_error ? 'error' : 'completed', duration_ms, meta: p.meta, tokens_used: p.tokens_used }
           }))
         }),
         listen(EVENT_NAMES.QUERY_TOOL_PROGRESS, (e) => {
@@ -529,7 +540,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           void api.listGoalRuns()
             .then(runs => {
               if (cancelled) return
-              setGoalOwnedSessionIds(runs.filter(r => r.status === 'running' || r.status === 'paused').map(r => r.sessionId))
+              applyGoalRuns(runs)
             })
             .catch((e) => { logSoftFailure('refresh goal runs', e) })
         }),
@@ -576,14 +587,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       record('getConversation', windowSessionId != null
         ? switchToSession(windowSessionId)
         : api.getConversation().then(setMessages)),
-      record('goalOwnedSessions', api.listGoalRuns().then(runs =>
-        setGoalOwnedSessionIds(runs.filter(r => r.status === 'running' || r.status === 'paused').map(r => r.sessionId))
-      )),
+      record('goalOwnedSessions', api.listGoalRuns().then(runs => applyGoalRuns(runs))),
     ])
     if (failures.length > 0) setInitError(failures[0])
     setLoading(false)
   }, [refreshStatus, refreshConfig, refreshSessions, refreshModels, refreshTasks,
-    refreshAgents, refreshMcpServers, refreshBackgroundTasks, windowSessionId, switchToSession])
+    refreshAgents, refreshMcpServers, refreshBackgroundTasks, windowSessionId, switchToSession, applyGoalRuns])
 
   useEffect(() => {
     void loadInitialData()
@@ -597,9 +606,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel, openContextPanel, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 
   const sessionValue = useMemo<SessionContextValue>(() => ({
-    sessions, sessionActivity, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,
+    sessions, sessionActivity, goalRunsBySession, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,
     deleteSession: deleteSessionAction, renameSession: renameSessionAction, refreshSessions,
-  }), [sessions, sessionActivity, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchToSession,
+  }), [sessions, sessionActivity, goalRunsBySession, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchToSession,
     deleteSessionAction, renameSessionAction, refreshSessions])
 
   const catalogValue = useMemo<CatalogContextValue>(() => ({

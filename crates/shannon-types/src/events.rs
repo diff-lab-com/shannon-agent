@@ -87,6 +87,16 @@ pub struct ToolResultPayload {
     pub is_error: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// P1-⑤: engine tool metadata (§4.12 — currently the sandbox
+    /// classification). `serde(default)` keeps older engines parseable;
+    /// `None` is skipped so the wire shape is unchanged when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
+    /// P1-⑤ telemetry: approximate per-tool token attribution — usage
+    /// frames the desktop forwarder observed while this call was the
+    /// session's pending one. `None` when nothing was collapsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_used: Option<u64>,
 }
 
 /// Tool progress update (e.g., bash command output).
