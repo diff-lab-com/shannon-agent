@@ -225,7 +225,9 @@ pub async fn get_session_plan(working_dir: String) -> Result<Option<SessionPlanI
     // still blocking IO, and this command fires on every plan-tab refresh.
     let working_dir = working_dir;
     tokio::task::spawn_blocking(move || {
-        let plans_dir = std::path::Path::new(&working_dir).join(".shannon").join("plans");
+        let plans_dir = std::path::Path::new(&working_dir)
+            .join(".shannon")
+            .join("plans");
         let entries = match std::fs::read_dir(&plans_dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -245,7 +247,9 @@ pub async fn get_session_plan(working_dir: String) -> Result<Option<SessionPlanI
                 newest = Some((mtime, path));
             }
         }
-        let Some((_, path)) = newest else { return Ok(None) };
+        let Some((_, path)) = newest else {
+            return Ok(None);
+        };
         let raw = match std::fs::read_to_string(&path) {
             Ok(raw) => raw,
             Err(e) => return Err(format!("Failed to read plan file: {e}")),
