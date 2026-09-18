@@ -85,6 +85,17 @@ mini-swe 同样受此约束（官方 63% 即在此口径下）。P3 要回答：
 A8 预算按轮生效设计正确（cliffy 跨 9+ 次切断存活）。P2 的 113 题 3 并发下
 此类任务拉长尾部但被 3h 硬顶约束；infra 分离口径需把「续推耗尽死亡」单独标记。
 
+### F8（发车事故，已处置）：wave-1 跑在旧二进制上，7 trial 全部作废
+**现象**：wave-1 发车命令漏 export `SHANNON_PIER_BIN`，deepswe-wave.sh 按旧仓库约定
+回退到主 checkout 的 9-15 构建（无 char-boundary 修复、无 A8/A8b）。前 7 个完成 trial
+全部 reward=0：kombu 复现 engine.rs:625 char-boundary panic（旧代码行）；expr/sqlfmt/
+tengo 死于超时且 A8 触发 0 次（A7 两次耗尽）——全部为无效测量。
+**处置**：停波 + 隔离 `deepswe-base-w1-stale-binary-invalid/` + 根因修复——
+deepswe-wave.sh 默认二进制改为**本 worktree 构建**（SCRIPT_DIR 相对路径），发车时打印
+`[wave] anchor binary` 与 `shannon --version`；波次重发。
+**教训固化**：评测二进制锚点必须是**发车工具的默认行为**而不是发车人的记忆
+（smoke-3 教训的工程化）；波次发车后第一个 trial 的 agent-info 版本号必须核验。
+
 ## 二、基线波次记录（P2）
 
 - **wave-1 发车（2026-09-18 08:0x）**：`deepswe-base-w1`，113×n=1，3 并发，anchor =

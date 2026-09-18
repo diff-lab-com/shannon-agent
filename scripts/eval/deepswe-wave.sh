@@ -19,7 +19,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TASKS_DIR_DEFAULT="${HOME}/eval-corpora/deep-swe/tasks"
 JOBS_DIR_DEFAULT="${HOME}/.shannon/eval/deepswe/jobs"
-SHANNON_BIN_DEFAULT="/home/ed/workspace/app/work/shannon/shannon-mono/target/debug/shannon"
+# Anchor integrity (smoke-3 RCA + wave-1 stale-binary RCA): the evaluated
+# binary MUST be the one built from THIS branch (worktree), never another
+# checkout's target/. Override via SHANNON_PIER_BIN only with a build of the
+# same commit.
+SHANNON_BIN_DEFAULT="$(cd "$SCRIPT_DIR/../.." && pwd)/target/debug/shannon"
 KEY_FILE="${HOME}/.shannon/credentials/zhipu.json"
 PROVIDER_MODEL="zhipu-coding-plan/glm-5.3-flash"
 DEFAULT_CONCURRENCY=3
@@ -88,6 +92,11 @@ cmd_start() {
 
   [ -d "$tasks_dir" ] || die "tasks dir missing: $tasks_dir"
 
+  local bin="${SHANNON_PIER_BIN:-$SHANNON_BIN_DEFAULT}"
+  [ -x "$bin" ] || die "shannon binary not found at $bin — build it first (cargo build --bin shannon in the worktree)"
+  echo "[wave] anchor binary: $bin"
+  "$bin" --version || die "shannon --version failed"
+
   local launcher=(pier run -p "$tasks_dir"
     --agent-import-path shannon_pier_agent:Shannon
     -m "$PROVIDER_MODEL"
@@ -103,7 +112,7 @@ cmd_start() {
   else
     echo "[wave] launching job=$job_name include='$include' n=$concurrency budget=${budget}"
     env PYTHONPATH="$SCRIPT_DIR/pier-adapter" \
-      SHANNON_PIER_BIN="${SHANNON_PIER_BIN:-$SHANNON_BIN_DEFAULT}" \
+      SHANNON_PIER_BIN="$bin" \
       "${launcher[@]}" 2>&1 | grep -v LiteLLM
   fi
 
