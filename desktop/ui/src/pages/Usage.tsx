@@ -79,7 +79,7 @@ function StatCard({
         </span>
         {hint && (
           <span
-            className="font-label-xs text-label-xs text-on-surface-variant/70 truncate max-w-[60%] text-right"
+            className="font-label-xs text-label-xs text-on-surface-variant truncate max-w-[60%] text-right"
             title={hint}
           >
             {hint}

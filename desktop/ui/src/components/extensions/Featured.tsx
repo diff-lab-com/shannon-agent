@@ -226,7 +226,14 @@ export default function Featured() {
                       // block at the top of the card; the install button is
                       // always the Shannon primary so "安装" reads as a
                       // system action, not a third-party checkout button.
-                      "w-full px-md py-sm rounded-xl bg-primary text-on-primary text-label-md font-bold shadow-sm hover:shadow-md hover:brightness-110 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:opacity-60 transition-all",
+                      //
+                      // 2026-09 axe-ci: dropped `hover:brightness-110` and
+                      // `disabled:hover:brightness-100`. CSS brightness filter
+                      // lifts the bg ~10% and drops the white-on-primary
+                      // contrast below 4.5:1 on the disabled + hover state in
+                      // material/dark-tokyo-night themes; the shadow change
+                      // alone is enough to signal hover.
+                      "w-full px-md py-sm rounded-xl bg-primary text-on-primary text-label-md font-bold shadow-sm hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 transition-all",
                     )}
                   >
                     {isBusy ? (

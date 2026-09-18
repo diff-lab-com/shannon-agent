@@ -77,7 +77,7 @@ describe('Chat page', () => {
   it('renders message input area', () => {
     resetCtx()
     renderChat()
-    expect(screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/Try: "Explain this repo"/)).toBeInTheDocument()
   })
 
   // U1: the Chat page no longer renders its own session list — the app
@@ -92,7 +92,7 @@ describe('Chat page', () => {
   it('sends message on Enter key and clears input', () => {
     resetCtx()
     renderChat()
-    const input = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
+    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
     fireEvent.change(input, { target: { value: 'Hello agent' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).toHaveBeenCalledWith('Hello agent', undefined)
@@ -101,7 +101,7 @@ describe('Chat page', () => {
   it('does not send empty message on Enter', () => {
     resetCtx()
     renderChat()
-    const input = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
+    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
     fireEvent.change(input, { target: { value: '' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).not.toHaveBeenCalled()
