@@ -3345,10 +3345,20 @@ impl QueryEngine {
                                                         // synthetic ToolUse block. The
                                                         // Anthropic API requires the two to
                                                         // match on the next request; pairing
-                                                        // the real id with a null-input ToolUse
-                                                        // lets the model see "Malformed tool
-                                                        // input" as a tool_result and retry
+                                                        // the real id with an empty-object
+                                                        // ToolUse lets the model see "Malformed
+                                                        // tool input" as a tool_result and retry
                                                         // with corrected JSON.
+                                                        // A13-c: the input MUST be a JSON
+                                                        // object, never Null — minimax parses
+                                                        // tool_calls arguments and rejects the
+                                                        // "null" literal with 400 (2013) while
+                                                        // "{}" succeeds (live-API decisive
+                                                        // test, request_ids 06fc6407792530aa1d
+                                                        // 9df28fe350fd1a / 06fc64093ab64d878
+                                                        // b704669ba551957). The synthetic error
+                                                        // result below still tells the model the
+                                                        // call failed.
                                                         tool_results.push(ToolResultEntry {
                                                             tool_use_id: id.clone(),
                                                             content: format!(
@@ -3361,7 +3371,7 @@ impl QueryEngine {
                                                             ContentBlock::ToolUse {
                                                                 id,
                                                                 name,
-                                                                input: serde_json::Value::Null,
+                                                                input: serde_json::json!({}),
                                                             },
                                                         );
                                                     }
@@ -3546,14 +3556,27 @@ impl QueryEngine {
                                                         tracing::warn!(
                                                             "Malformed tool input (post-stream flush): {e}"
                                                         );
+                                                        // A13-c: pair the synthetic result
+                                                        // with an assistant ToolUse block
+                                                        // (empty-object input — Null is
+                                                        // wire-illegal for minimax, see the
+                                                        // ContentBlockStop site) so the result
+                                                        // is never orphaned on the wire.
                                                         tool_results.push(ToolResultEntry {
-                                                            tool_use_id: id,
+                                                            tool_use_id: id.clone(),
                                                             content: format!(
                                                                 "Malformed tool input: {e}"
                                                             ),
                                                             is_error: true,
                                                             metadata: Default::default(),
                                                         });
+                                                        assistant_tool_uses.push(
+                                                            ContentBlock::ToolUse {
+                                                                id,
+                                                                name,
+                                                                input: serde_json::json!({}),
+                                                            },
+                                                        );
                                                     }
                                                 }
                                             }
@@ -9227,6 +9250,17 @@ mod tests {
     /// orphan shape: the truncation continuation must not strand the
     /// tool_result after itself.
     fn a13_truncated_text_plus_tool_sse(zero_usage: bool) -> String {
+        a13_truncated_tool_sse_impl(zero_usage, true)
+    }
+
+    /// Variant without the tool block's ContentBlockStop: the partial JSON
+    /// never parses at block scope and fails again in the MessageDelta
+    /// post-stream flush (A13-c site 2).
+    fn a13_truncated_unclosed_tool_sse(zero_usage: bool) -> String {
+        a13_truncated_tool_sse_impl(zero_usage, false)
+    }
+
+    fn a13_truncated_tool_sse_impl(zero_usage: bool, close_tool_block: bool) -> String {
         let usage = if zero_usage {
             r#"{"input_tokens":0,"output_tokens":0}"#
         } else {
@@ -9257,10 +9291,14 @@ mod tests {
             r#"data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_trunc_1","name":"no_such_tool","input":{}}}"#,
             r#"event: content_block_delta"#,
             r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"na"}}"#,
-            r#"event: content_block_stop"#,
-            r#"data: {"type":"content_block_stop","index":1}"#,
         ]
         .join("\n\n");
+        let tool_stop = if close_tool_block {
+            "\n\nevent: content_block_stop\n\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n"
+        } else {
+            ""
+        };
+        let sse = format!("{sse}{tool_stop}");
         // Splice the stop frame (keeps the usage variants in one place).
         let sse = format!("{sse}\n\n{stop_frame}");
         a8_http_response("200 OK", "text/event-stream", &sse)
@@ -9313,6 +9351,17 @@ mod tests {
             "wire order must be assistant(tool_call) → user(tool_result) → \
              user(continuation); got call@{first}, result@{second}, cont@{cont}"
         );
+        // A13-c: minimax parses tool_calls arguments and requires a JSON
+        // object — "null" is rejected 400 (2013) while "{}" succeeds. The
+        // malformed synthesis must therefore serialize as an empty object.
+        assert!(
+            body.contains("\"input\":{}"),
+            "the synthesized tool_use input must be {{}} on the wire"
+        );
+        assert!(
+            !body.contains("\"input\":null"),
+            "a null tool_use input is wire-illegal for minimax (2013)"
+        );
     }
 
     /// A13 path 2 (safety net): the same truncated text+tool stream, but the
@@ -9352,6 +9401,54 @@ mod tests {
             first < second && second < cont,
             "safety-net wire order must be assistant(tool_call) → user(tool_result) → \
              user(continuation); got call@{first}, result@{second}, cont@{cont}"
+        );
+    }
+
+    /// A13-c site 2: the tool_use frame is cut WITHOUT a ContentBlockStop —
+    /// the partial JSON fails again in the MessageDelta post-stream flush.
+    /// The synthetic result must be PAIRED with an assistant ToolUse block
+    /// carrying an empty-object input (previously no block was pushed at
+    /// all, so the flushed result reached the wire orphaned).
+    #[tokio::test]
+    async fn a13_post_stream_flush_malformed_call_pairs_with_empty_object() {
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|i: usize| match i {
+                0 => a13_truncated_unclosed_tool_sse(false),
+                _ => a8_text_sse("wrapped up after continuation"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, _progress, _warnings, _history) = a8_run_query(&server).await;
+
+        assert!(
+            completed,
+            "the continuation turn must complete; failed: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(bodies.len(), 2);
+        let body = &bodies[1];
+        assert!(body.contains(TRUNCATION_CONTINUATION_PROMPT));
+        let first = body
+            .find("toolu_trunc_1")
+            .expect("tool call id must reach the wire");
+        let second = body
+            .rfind("toolu_trunc_1")
+            .expect("tool result id must reach the wire");
+        let cont = body
+            .find(TRUNCATION_CONTINUATION_PROMPT)
+            .expect("continuation prompt must reach the wire");
+        assert_ne!(
+            first, second,
+            "the id must appear as BOTH a tool_call declaration and a tool_result"
+        );
+        assert!(
+            first < second && second < cont,
+            "wire order must be assistant(tool_call) → user(tool_result) → \
+             user(continuation); got call@{first}, result@{second}, cont@{cont}"
+        );
+        assert!(
+            body.contains("\"input\":{}") && !body.contains("\"input\":null"),
+            "the paired tool_call input must be an empty object (A13-c)"
         );
     }
 

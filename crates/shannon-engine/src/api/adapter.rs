@@ -29,6 +29,34 @@ use super::types::{
 /// producing anything (A13 wire sanitizer).
 const INTERRUPTED_TOOL_RESULT: &str = "(interrupted)";
 
+/// A13-c: minimax's backend parses `tool_calls[].function.arguments` and
+/// requires a JSON object — the literal `"null"` (and any other non-object
+/// JSON value) is rejected with `400 (2013) invalid params`, while `"{}"`
+/// succeeds (decisive live-API comparison, request_id
+/// 06fc6407792530aa1d9df28fe350fd1a → 400 vs
+/// 06fc64093ab64d878b704669ba551957 → 200). Normalize any non-object
+/// arguments to the empty object; valid objects pass through untouched.
+fn normalize_tool_arguments(input: &Value) -> Value {
+    let rendered = input.to_string();
+    match serde_json::from_str::<Value>(&rendered) {
+        Ok(v) if v.is_object() => input.clone(),
+        Ok(other) => {
+            tracing::warn!(
+                arguments = %rendered,
+                "A13 wire sanitizer: tool_call arguments is a non-object JSON value ({other}) — normalizing to {{}}"
+            );
+            json!({})
+        }
+        Err(_) => {
+            tracing::warn!(
+                arguments = %rendered,
+                "A13 wire sanitizer: tool_call arguments is not valid JSON — normalizing to {{}}"
+            );
+            json!({})
+        }
+    }
+}
+
 /// Settle dangling tool-call declarations with synthetic `"(interrupted)"`
 /// results so the wire never carries an unanswered `tool_call`.
 fn synthesize_interrupted_results(out: &mut Vec<Message>, pending: &mut Vec<(String, String)>) {
@@ -82,10 +110,16 @@ pub(crate) fn sanitize_tool_sequence(messages: &[Message]) -> Vec<Message> {
                 }
                 let mut kept: Vec<ContentBlock> = Vec::with_capacity(blocks.len());
                 for b in blocks {
-                    if let ContentBlock::ToolUse { id, name, input: _ } = b {
+                    if let ContentBlock::ToolUse { id, name, input } = b {
                         pending.push((id.clone(), name.clone()));
+                        kept.push(ContentBlock::ToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: normalize_tool_arguments(input),
+                        });
+                    } else {
+                        kept.push(b.clone());
                     }
-                    kept.push(b.clone());
                 }
                 out.push(Message {
                     role: msg.role.clone(),
@@ -4289,8 +4323,80 @@ mod tests {
         assert_eq!(rendered[3], serde_json::to_string(&text_msg("continuation prompt")).unwrap());
     }
 
-    /// Wire-level: the OpenAI-compatible serializer runs the sanitizer, so a
-    /// garbage sequence still produces a legal wire body.
+    /// A13-c: minimax's backend parses `tool_calls[].function.arguments`
+    /// and requires a JSON object — the literal "null" (and any other
+    /// non-object) is rejected 400 (2013) while "{}" succeeds (decisive
+    /// live-API test: request_id 06fc6407792530aa1d9df28fe350fd1a → 400 vs
+    /// 06fc64093ab64d878b704669ba551957 → 200). Five argument shapes.
+    #[test]
+    fn normalize_tool_arguments_five_shapes() {
+        // 1. JSON null → {}.
+        assert_eq!(
+            normalize_tool_arguments(&serde_json::Value::Null),
+            serde_json::json!({})
+        );
+        // 2. Empty string → {}.
+        assert_eq!(
+            normalize_tool_arguments(&serde_json::Value::String(String::new())),
+            serde_json::json!({})
+        );
+        // 3. Garbage string (invalid JSON tail from a cut stream) → {}.
+        assert_eq!(
+            normalize_tool_arguments(&serde_json::Value::String("{\"na".to_string())),
+            serde_json::json!({})
+        );
+        // 4. Array (valid JSON, not an object) → {}.
+        assert_eq!(
+            normalize_tool_arguments(&serde_json::json!(["a", "b"])),
+            serde_json::json!({})
+        );
+        // 5. Valid object → preserved verbatim.
+        let obj = serde_json::json!({"path": "src/lib.rs", "limit": 10});
+        assert_eq!(normalize_tool_arguments(&obj), obj);
+    }
+
+    /// Wire-level: a Null-input tool_use serializes with arguments "{}",
+    /// never the "null" literal minimax rejects.
+    #[test]
+    fn serialize_openai_normalizes_non_object_arguments() {
+        let request = MessageRequest {
+            model: "test-model".to_string(),
+            max_tokens: 100,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                Message {
+                    role: "assistant".to_string(),
+                    content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                        id: "toolu_null".to_string(),
+                        name: "Edit".to_string(),
+                        input: serde_json::Value::Null,
+                    }]),
+                },
+                tool_result_msg("toolu_null"),
+            ],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let wire = serde_json::to_string(&serialize_openai_request(&request)).unwrap();
+        assert!(
+            wire.contains("\"arguments\":\"{}\""),
+            "arguments must normalize to an object literal: {wire}"
+        );
+        assert!(
+            !wire.contains("\"arguments\":\"null\""),
+            "arguments must never be the null literal: {wire}"
+        );
+    }
+
+
     #[test]
     fn serialize_openai_request_sanitizes_orphans() {
         let request = MessageRequest {
