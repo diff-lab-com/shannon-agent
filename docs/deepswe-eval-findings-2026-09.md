@@ -105,8 +105,15 @@ deepswe-wave.sh 默认二进制改为**本 worktree 构建**（SCRIPT_DIR 相对
   改并发不能 resume（FileExistsError）→ 旧波次 0 完成无保留价值，弃用
   （`deepswe-base-w1-killed-at-6concurrency-attempt/`），以 **`deepswe-base-w2`**
   6 并发全新发车（进程环境已验证 SHANNON_PIER_BIN=worktree 构建）。
-  **新增 `ensure-deepswe-images.sh`**：镜像预拉与跑批重叠（顺序拉取、磁盘 <60G 自动
-  暂停），消除每题冷启动 pull 延迟。
+- **并发定版（2026-09-18）**：6 并发版（w2）因**本机有其它任务、避免资源撞车**按用户
+  指示回退 3 并发；w2 弃用（0 完成，`deepswe-base-w2-killed-concurrency-revert/`）。
+  **最终波次 = `deepswe-base-w3`**，3 并发全新发车（进程环境 + config 双重验证：
+  SHANNON_PIER_BIN=worktree 构建、n_concurrent=3）。镜像预拉（ensure-deepswe-images.sh）
+  继续在后台与跑批重叠。预计墙钟 ~2-2.5 天。
+  同并发恢复：`PYTHONPATH=scripts/eval/pier-adapter SHANNON_PIER_BIN=<worktree 二进制>
+  pier job resume --job-path ~/.shannon/eval/deepswe/jobs/deepswe-base-w3`。
+  聚合：`JOBS_DIR=~/.shannon/eval/deepswe/jobs scripts/eval/deepswe-wave.sh aggregate
+  --job-name deepswe-base-w3`。
   **resume 分支两处修复**：`--job-path` 传参 + adapter 环境注入。
   发车前 preflight 4/4。
   中断恢复：改并发须重建 job（lock 指纹）；同并发恢复
