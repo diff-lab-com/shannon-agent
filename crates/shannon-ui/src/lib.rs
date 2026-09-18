@@ -88,6 +88,8 @@ pub(crate) mod test_env {
 
     /// Held for the duration of any test that mutates process-global
     /// environment (cwd / HOME / other env vars).
+    // KEEP: the guard field must stay alive for the lock's lifetime even
+    // though nothing reads it — dropping early would release ENV_LOCK.
     pub struct EnvLock(#[allow(dead_code)] pub(crate) MutexGuard<'static, ()>);
 
     pub fn env_lock() -> EnvLock {
