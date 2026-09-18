@@ -1675,6 +1675,8 @@
   "chat.message.retryChain": "{count} Fehlversuche in Folge",
   "chat.message.retryChain.view": "Timeline anzeigen",
   "settings.density.title": "Anzeigedichte",
+  "settings.density.auto": "Auto (Modus folgen)",
+  "chat.message.retryChain.attempt": "Versuch {n}",
   "chat.tool.sandboxDenied": "Durch Sandbox blockiert",
   "chat.tool.tokens.title": "Ungefähre diesem Toolaufruf zugerechnete Token",
   "settings.density.help": "Kompakt verringert Schrift und Abstände in der gesamten App; Standard ist Komfortabel.",

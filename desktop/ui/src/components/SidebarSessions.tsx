@@ -451,9 +451,20 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                     done: goalRun.iterations,
                     total: goalRun.maxTurns ?? goalRun.iterations,
                   })}
-                  className="flex items-center gap-[2px] shrink-0 text-primary"
+                  className={cn(
+                    'flex items-center gap-[2px] shrink-0 rounded px-[3px]',
+                    // E10: a stalled run (repeated no-progress strikes) gets a
+                    // red badge so the user can spot it on the rail itself.
+                    (goalRun.stallStrikes ?? 0) > 0 && 'bg-error/15',
+                  )}
                 >
-                  <span className="material-symbols-outlined text-[13px]" style={{ fontVariationSettings: goalRun.status === 'running' ? "'FILL' 1" : undefined }} aria-hidden="true">flag</span>
+                  <span
+                    className={cn('material-symbols-outlined text-[13px]', (goalRun.stallStrikes ?? 0) > 0 ? 'text-error' : 'text-primary')}
+                    style={{ fontVariationSettings: goalRun.status === 'running' ? "'FILL' 1" : undefined }}
+                    aria-hidden="true"
+                  >
+                    {(goalRun.stallStrikes ?? 0) > 0 ? 'warning' : 'flag'}
+                  </span>
                   <span className="font-mono text-[10px] tabular-nums text-on-surface" aria-hidden="true">
                     {goalRun.iterations}/{goalRun.maxTurns ?? goalRun.iterations}
                   </span>

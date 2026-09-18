@@ -8,6 +8,7 @@ export interface InvokeArgs {
 }
 
 export async function invoke<T = unknown>(cmd: string, args?: InvokeArgs): Promise<T> {
+  if (cmd === 'configure') console.log('[mock] invoke configure', JSON.stringify(args))
   const handler = handlers[cmd]
   if (handler) {
     try {

@@ -1675,6 +1675,8 @@
   "chat.message.retryChain": "{count} tentatives échouées d'affilée",
   "chat.message.retryChain.view": "Voir la chronologie",
   "settings.density.title": "Densité d'affichage",
+  "settings.density.auto": "Auto (selon le mode)",
+  "chat.message.retryChain.attempt": "Tentative {n}",
   "chat.tool.sandboxDenied": "Bloqué par le bac à sable",
   "chat.tool.tokens.title": "Tokens approximatifs attribués à cet appel d'outil",
   "settings.density.help": "Compact resserre le texte et les espacements dans toute l'app ; par défaut : Confortable.",

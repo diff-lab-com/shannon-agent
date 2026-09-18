@@ -248,22 +248,30 @@ export const handlers: Record<string, MockHandler> = {
 
   // --- Config ---
   async get_config() { await delay(); return clone(demoConfig) },
-  async configure(args: { key: string; value: string }) {
+  // Wire shape note: the desktop command takes `{ update: { key, value } }`
+  // (tauri-api configure wraps it); the flat shape is accepted too so older
+  // callers keep working. Before this was fixed, EVERY configure in demo
+  // mode was a silent no-op — approval_mode/model/effort switches "succeeded"
+  // but never persisted, which masked the Base UI Select commit bug.
+  async configure(args: { key?: string; value?: string; update?: { key: string; value: string } }) {
     await delay()
-    // P1-3: keep the persisted keys the new settings surfaces touch in sync.
-    if (args?.key === 'sandbox.mode') {
-      const mode = String(args.value || 'off') as 'off' | 'local' | 'landlock'
+    const { key, value } = (args && args.update) ? args.update : (args as { key: string; value: string })
+    if (key === 'sandbox.mode') {
+      const mode = String(value || 'off') as 'off' | 'local' | 'landlock'
       demoConfig.sandbox = { mode }
-    } else if (args?.key === 'approval_mode') {
-      demoConfig.approval_mode = args.value
-    } else if (args?.key === 'model') {
+    } else if (key === 'approval_mode') {
+      demoConfig.approval_mode = value
+    } else if (key === 'model') {
       // P0-③: model switching (composer chip / header) mirrors the engine.
-      demoConfig.model = args.value
-    } else if (args?.key === 'provider') {
-      demoConfig.provider = args.value
-    } else if (args?.key === 'offpeak.model_override') {
+      demoConfig.model = value
+    } else if (key === 'provider') {
+      demoConfig.provider = value
+    } else if (key === 'effort_level') {
+      // Audit D8: reasoning-effort picker persists the same key as the CLI.
+      (demoConfig as Record<string, unknown>).effort_level = value
+    } else if (key === 'offpeak.model_override') {
       // P2-5: frozen config key — empty value disables the override.
-      const trimmed = String(args.value ?? '').trim()
+      const trimmed = String(value ?? '').trim()
       demoConfig.offpeak = { model_override: trimmed ? trimmed : null }
     }
   },

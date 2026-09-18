@@ -49,7 +49,7 @@ test.describe('ZCode delta features (P0/P1)', () => {
     await expect(page.getByText('Approved')).toBeVisible()
   })
 
-  test('③ composer model chip renders and mirrors the active model', async ({ page }) => {
+  test('③ composer model chip commits a switch and syncs the header', async ({ page }) => {
     await page.goto('/chat')
     const chip = page.getByRole('combobox', { name: 'Model' })
     await expect(chip).toBeVisible({ timeout: 15000 })
@@ -59,20 +59,15 @@ test.describe('ZCode delta features (P0/P1)', () => {
     await expect(chip).toContainText('Claude Sonnet 4.6')
     await expect(page.getByRole('button', { name: 'Select model' })).toContainText('claude-sonnet-4-6')
 
-    // KNOWN PRE-EXISTING BUG (not this branch): Base UI Select never commits
-    // a new value in the real browser — clicking/keyboard-confirming an
-    // option leaves the value unchanged, which disables every dropdown in
-    // the app (approval mode, reasoning effort, execution mode, this chip).
-    // Repro: open any select, pick another entry — value snaps back.
-    // Tracked for a dedicated fix; asserted here only as a regression
-    // witness once fixed:
-    //   await chip.click()
-    //   const opt = page.getByRole('option', { name: 'GPT-5', exact: true })
-    //   await opt.waitFor()
-    //   const box = await opt.boundingBox()
-    //   await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2)
-    //   await expect(chip).toContainText('GPT-5')
-    //   await expect(headerModel).toContainText('GPT-5')
+    // Radix migration (fix/select-commit): options commit on plain clicks.
+    // Switch to GPT-5 — the chip AND the header selector must both reflect
+    // the new model (mock get_status mirrors demoConfig, like the engine).
+    await chip.click()
+    const opt = page.getByRole('option', { name: 'GPT-5', exact: true })
+    await opt.waitFor({ timeout: 5000 })
+    await opt.click()
+    await expect(chip).toContainText('GPT-5', { timeout: 10000 })
+    await expect(page.getByRole('button', { name: 'Select model' })).toContainText('GPT-5')
   })
 
   test('⑥ agent_spawn renders as a first-class subagent block', async ({ page }) => {

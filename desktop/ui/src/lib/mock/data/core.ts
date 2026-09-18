@@ -406,6 +406,29 @@ export const MOCK_MESSAGES: ChatMessage[] = [
     timestamp: now - 880_000,
     tool_calls: [
       {
+        tool_use_id: 'tu-002b',
+        tool_name: 'bash',
+        tool_input: { command: 'curl -m 5 https://api.internal/health' },
+        result: 'curl: (28) Connection timed out after 5001 milliseconds',
+        is_error: true,
+        status: 'error',
+      },
+      {
+        tool_use_id: 'tu-002c',
+        tool_name: 'bash',
+        tool_input: { command: 'curl -m 5 https://api.internal/health' },
+        result: 'curl: (28) Connection timed out after 5001 milliseconds',
+        is_error: true,
+        status: 'error',
+      },
+      {
+        tool_use_id: 'tu-002d',
+        tool_name: 'bash',
+        tool_input: { command: 'curl -m 15 --retry https://api.internal/health' },
+        result: '{"status":"ok"}',
+        status: 'completed',
+      },
+      {
         tool_use_id: 'tu-003',
         tool_name: 'agent_spawn',
         tool_input: {

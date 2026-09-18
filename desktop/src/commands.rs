@@ -379,6 +379,17 @@ impl AppState {
             )
             .expect("Failed to register default tools")
         };
+        // B2 (subagent lifecycle, PENDING PRODUCT + CI decision): desktop's
+        // `agent_spawn` is a no-op placeholder because no TeamContext is
+        // injected (the handle above is discarded). To enable real sub-agent
+        // execution + the subagent:start/stop event bridge, follow the TUI
+        // injection pattern in crates/shannon-ui/src/repl/mod.rs (~L828):
+        // build `AgentToolContext::new(client_config).await`, inject via the
+        // context handle, then register a
+        // `SubAgentRegistry::register_observer` that emits Tauri
+        // `subagent:start|stop` events (crates-side observer API already
+        // shipped in this branch). Gated: it turns agent_spawn into real
+        // subprocess execution (API cost + subprocess permissions).
 
         // P1-5 C-1 — dev-server preview manager + the desktop-only
         // `preview_screenshot` engine tool bound to it. Registration happens

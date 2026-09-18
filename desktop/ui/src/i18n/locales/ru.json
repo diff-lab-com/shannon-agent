@@ -1675,6 +1675,8 @@
   "chat.message.retryChain": "{count} неудачных попыток подряд",
   "chat.message.retryChain.view": "Открыть таймлайн",
   "settings.density.title": "Плотность отображения",
+  "settings.density.auto": "\u0410\u0432\u0442\u043e (\u043f\u043e \u0440\u0435\u0436\u0438\u043c\u0443)",
+  "chat.message.retryChain.attempt": "\u041f\u043e\u043f\u044b\u0442\u043a\u0430 {n}",
   "chat.tool.sandboxDenied": "Заблокировано песочницей",
   "chat.tool.tokens.title": "Приблизительное число токенов, отнесённых к этому вызову",
   "settings.density.help": "Компактный режим уменьшает шрифты и отступы во всём приложении; по умолчанию — Обычный.",

@@ -268,9 +268,11 @@ describe('ChatInput', () => {
     renderChatInput()
     const modeSelect = screen.getByLabelText('Permission mode')
     expect(modeSelect).toBeInTheDocument()
-    // Check the select has the suggest value in its hidden input
-    const hiddenInput = document.querySelector('input[value="suggest"]')
-    expect(hiddenInput).toBeInTheDocument()
+    // Radix Select (migrated from Base UI — see ui/select.tsx): the trigger
+    // renders the selected item's label via Select.Value (plus the option's
+    // icon ligature text in jsdom). The default suggest mode label is the
+    // signal here.
+    expect(modeSelect).toHaveTextContent('Suggest')
   })
 
   it('shows correct icons for querying states', () => {

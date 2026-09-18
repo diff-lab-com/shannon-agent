@@ -1675,6 +1675,8 @@
   "chat.message.retryChain": "{count} 回連続で失敗",
   "chat.message.retryChain.view": "タイムラインを表示",
   "settings.density.title": "表示密度",
+  "settings.density.auto": "\u81ea\u52d5\uff08\u30e2\u30fc\u30c9\u306b\u5f93\u3046\uff09",
+  "chat.message.retryChain.attempt": "\u8a66\u884c {n}",
   "chat.tool.sandboxDenied": "サンドボックスによりブロック",
   "chat.tool.tokens.title": "このツール呼び出しに概算帰属されたトークン数",
   "settings.density.help": "コンパクトはアプリ全体の文字と間隔を詰めます。標準はコンフォートです。",
