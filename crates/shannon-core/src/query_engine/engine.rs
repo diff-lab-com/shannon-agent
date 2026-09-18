@@ -4723,11 +4723,62 @@ impl QueryEngine {
                                                             ),
                                                         }
                                                     );
-                                                    if !assistant_text.is_empty() {
+                                                    if !assistant_text.is_empty()
+                                                        || !assistant_tool_uses.is_empty()
+                                                    {
+                                                        // A13: persist the truncated
+                                                        // assistant message with BOTH the
+                                                        // text and any tool_use blocks
+                                                        // captured before the cut (malformed
+                                                        // tails arrive as null-input ToolUse
+                                                        // paired with a synthetic result).
+                                                        // Dropping the ToolUse here is what
+                                                        // orphaned its tool_result on the
+                                                        // next request (minimax 400 2013
+                                                        // "tool result's tool id not found").
+                                                        let mut blocks: Vec<ContentBlock> =
+                                                            Vec::new();
+                                                        if !assistant_text.is_empty() {
+                                                            blocks.push(ContentBlock::Text {
+                                                                text: std::mem::take(
+                                                                    &mut assistant_text,
+                                                                ),
+                                                            });
+                                                        }
+                                                        blocks.append(&mut assistant_tool_uses);
                                                         conversation.messages.push(Message {
                                                             role: "assistant".to_string(),
-                                                            content: MessageContent::Text(
-                                                                std::mem::take(&mut assistant_text),
+                                                            content: MessageContent::Blocks(
+                                                                blocks,
+                                                            ),
+                                                        });
+                                                    }
+                                                    // A13: flush the results already executed
+                                                    // for this truncated response BEFORE the
+                                                    // continuation prompt, so the wire
+                                                    // sequence is assistant(tool_use) →
+                                                    // user(tool_result) →
+                                                    // user(continuation). Draining at the
+                                                    // next loop top (the old behavior)
+                                                    // appended the result after the prompt,
+                                                    // which strict providers reject as an
+                                                    // orphaned tool_result. Pure-text
+                                                    // truncations drain nothing here and are
+                                                    // unchanged.
+                                                    for entry in tool_results.drain(..) {
+                                                        let content =
+                                                            entry.to_tool_result_content();
+                                                        conversation.messages.push(Message {
+                                                            role: "user".to_string(),
+                                                            content: MessageContent::Blocks(
+                                                                vec![ContentBlock::ToolResult {
+                                                                    tool_use_id: entry
+                                                                        .tool_use_id,
+                                                                    content,
+                                                                    is_error: Some(
+                                                                        entry.is_error,
+                                                                    ),
+                                                                }],
                                                             ),
                                                         });
                                                     }
@@ -5306,6 +5357,26 @@ impl QueryEngine {
                                         ),
                                     }
                                 );
+                                // A13: the truncated response's tool results
+                                // (already executed inline) must land BEFORE
+                                // the continuation prompt — assistant(tool_use)
+                                // → user(tool_result) → user(continuation) — or
+                                // strict providers (minimax 400 2013) reject the
+                                // result as orphaned. Pure-text truncations
+                                // drain nothing here and are unchanged.
+                                for entry in tool_results.drain(..) {
+                                    let content = entry.to_tool_result_content();
+                                    conversation.messages.push(Message {
+                                        role: "user".to_string(),
+                                        content: MessageContent::Blocks(vec![
+                                            ContentBlock::ToolResult {
+                                                tool_use_id: entry.tool_use_id,
+                                                content,
+                                                is_error: Some(entry.is_error),
+                                            },
+                                        ]),
+                                    });
+                                }
                                 conversation.messages.push(Message {
                                     role: "user".to_string(),
                                     content: MessageContent::Text(
@@ -9146,6 +9217,193 @@ mod tests {
             history_text.contains("partial answer before the cut"),
             "with the budget exhausted the partial must be preserved exactly as before: {history_text:?}"
         );
+    }
+
+    /// A13 truncated-with-tool-call stream (path 1): partial text, then a
+    /// tool_use whose JSON was cut by the output limit (ContentBlockStop
+    /// fires on the truncated frame and pairs a synthetic "Malformed tool
+    /// input" result with a null-input ToolUse block), then
+    /// message_delta(stop_reason "length"). This is the exact minimax-M3
+    /// orphan shape: the truncation continuation must not strand the
+    /// tool_result after itself.
+    fn a13_truncated_text_plus_tool_sse(zero_usage: bool) -> String {
+        let usage = if zero_usage {
+            r#"{"input_tokens":0,"output_tokens":0}"#
+        } else {
+            r#"{"input_tokens":10,"output_tokens":9}"#
+        };
+        let stop_frame = if zero_usage {
+            // Sentinel zero-usage frame defers finalization (MiniMax splits
+            // usage across frames); no message_stop follows — the stream is
+            // cut, so the safety net finalizes instead (path 2).
+            format!(
+                "event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"length\"}},\"usage\":{usage}}}\n\n"
+            )
+        } else {
+            format!(
+                "event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"length\"}},\"usage\":{usage}}}\n\nevent: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n"
+            )
+        };
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_trunc","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial text before the cut"}}"#,
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_trunc_1","name":"no_such_tool","input":{}}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"na"}}"#,
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":1}"#,
+        ]
+        .join("\n\n");
+        // Splice the stop frame (keeps the usage variants in one place).
+        let sse = format!("{sse}\n\n{stop_frame}");
+        a8_http_response("200 OK", "text/event-stream", &sse)
+    }
+
+    #[tokio::test]
+    async fn a13_truncation_with_tool_use_flushes_results_before_continuation() {
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|i: usize| match i {
+                0 => a13_truncated_text_plus_tool_sse(false),
+                _ => a8_text_sse("wrapped up after continuation"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, _progress, _warnings, _history) = a8_run_query(&server).await;
+
+        assert!(
+            completed,
+            "the continuation turn must complete; failed: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(bodies.len(), 2, "truncated turn + continuation turn");
+        assert!(
+            !bodies[0].contains(TRUNCATION_CONTINUATION_PROMPT),
+            "the truncated request itself carries no continuation prompt"
+        );
+        let body = &bodies[1];
+        assert!(
+            body.contains(TRUNCATION_CONTINUATION_PROMPT),
+            "the continuation request must carry the continuation prompt"
+        );
+        // Wire order: the assistant's tool_call declaration first, then its
+        // tool_result, then the continuation prompt. The id appears exactly
+        // twice (declaration + result); anything else is an orphan.
+        let first = body
+            .find("toolu_trunc_1")
+            .expect("tool call id must reach the wire");
+        let second = body
+            .rfind("toolu_trunc_1")
+            .expect("tool result id must reach the wire");
+        let cont = body
+            .find(TRUNCATION_CONTINUATION_PROMPT)
+            .expect("continuation prompt must reach the wire");
+        assert_ne!(
+            first, second,
+            "the id must appear as BOTH a tool_call declaration and a tool_result"
+        );
+        assert!(
+            first < second && second < cont,
+            "wire order must be assistant(tool_call) → user(tool_result) → \
+             user(continuation); got call@{first}, result@{second}, cont@{cont}"
+        );
+    }
+
+    /// A13 path 2 (safety net): the same truncated text+tool stream, but the
+    /// only message_delta carries the sentinel zero-usage frame (MiniMax
+    /// splits usage across frames) and the stream is cut before message_stop.
+    /// The safety net finalizes; the same wire-order contract applies.
+    #[tokio::test]
+    async fn a13_safety_net_truncation_with_tool_use_flushes_results_before_continuation() {
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|i: usize| match i {
+                0 => a13_truncated_text_plus_tool_sse(true),
+                _ => a8_text_sse("wrapped up after continuation"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, _progress, _warnings, _history) = a8_run_query(&server).await;
+
+        assert!(
+            completed,
+            "the continuation turn must complete; failed: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(bodies.len(), 2);
+        let body = &bodies[1];
+        assert!(body.contains(TRUNCATION_CONTINUATION_PROMPT));
+        let first = body
+            .find("toolu_trunc_1")
+            .expect("tool call id must reach the wire");
+        let second = body
+            .rfind("toolu_trunc_1")
+            .expect("tool result id must reach the wire");
+        let cont = body
+            .find(TRUNCATION_CONTINUATION_PROMPT)
+            .expect("continuation prompt must reach the wire");
+        assert_ne!(first, second);
+        assert!(
+            first < second && second < cont,
+            "safety-net wire order must be assistant(tool_call) → user(tool_result) → \
+             user(continuation); got call@{first}, result@{second}, cont@{cont}"
+        );
+    }
+
+    /// Regression: a PURE-TEXT truncation keeps its existing shape — the
+    /// partial text lands before the continuation prompt, no tool traffic
+    /// is introduced, and the query completes.
+    #[tokio::test]
+    async fn a13_truncated_text_only_path_unchanged() {
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_ttext","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial reasoning was cut"}}"#,
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"event: message_delta"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"length"},"usage":{"input_tokens":10,"output_tokens":9}}"#,
+            r#"event: message_stop"#,
+            r#"data: {"type":"message_stop"}"#,
+        ]
+        .join("\n\n");
+        let truncated = a8_http_response("200 OK", "text/event-stream", &sse);
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(move |i: usize| match i {
+                0 => truncated.clone(),
+                _ => a8_text_sse("final answer"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, _progress, _warnings, history) = a8_run_query(&server).await;
+
+        assert!(completed, "text-only truncation must complete; failed: {failed}");
+        let bodies = server.bodies();
+        assert_eq!(bodies.len(), 2);
+        let body = &bodies[1];
+        assert!(body.contains(TRUNCATION_CONTINUATION_PROMPT));
+        assert!(
+            body.contains("partial reasoning was cut"),
+            "the partial text must be preserved"
+        );
+        assert!(
+            body.find("partial reasoning was cut").unwrap()
+                < body.find(TRUNCATION_CONTINUATION_PROMPT).unwrap(),
+            "partial text must precede the continuation prompt"
+        );
+        assert!(
+            !body.contains("toolu_"),
+            "text-only truncation must not introduce tool traffic"
+        );
+        let _ = history;
     }
 
     /// Boundary guard for the terminal-frame latch: a stream that ends with
