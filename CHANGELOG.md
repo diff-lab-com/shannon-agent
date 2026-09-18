@@ -4,6 +4,82 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### ZCode competitive delta (2026-09-18, PR #89)
+
+Comparison work vs ZCode v3.11.2 / ZCode 计划-dock screenshots (see
+`docs/design/ui-audit-2026-09/ZCODE-DELTA-ANALYSIS-2026-09.md`). Closes
+several gaps from the UI review (no behaviour removed; all changes are
+additive). Two CI fixes were also needed along the way (both follow
+existing patterns documented in the workflow):
+
+- **Sidebar = run monitor.** Each session row now carries a live running
+  dot (event-stream driven from `query:*`) and a "3/12" elapsed badge
+  plus a goal-run flag with iteration count for sessions a goal owns.
+  Goal-card cost / iterations / stall-strikes now reach the sidebar so
+  users can spot a stuck run without opening the Tasks page.
+- **Project vs time grouping, user toggle.** Top of the sidebar adds a
+  project/time switch that persists to `localStorage`. Time mode groups
+  Today / Yesterday / This week / Earlier (the ZCode mental model); the
+  default stays project mode (the Codex / Claude model). Pin / drag-reorder
+  is disabled in time mode (reordering across buckets is ambiguous).
+- **Plan dock is a first-class panel.** A new right-dock `Plan` tab
+  surfaces the engine's persisted plan doc (`<workingDir>/.shannon/plans/*.md`,
+  newest by mtime) with a live "N/M steps" progress bar parsed from the
+  markdown checklist. Entering Plan mode auto-docks the tab.
+- **Composer model chip.** Replaces the U2 decision to keep model
+  switching in the Header only — the Header model selector stays in sync
+  (both write `model` + `provider` to engine config), but the chip
+  restores the per-message model switch.
+- **Right dock is unified.** ContextPanel / ArtifactPanel / Diff
+  dialog now collapse into a single tabbed dock (`Context | Plan |
+  Artifact | Diff`). Diff "Review All" (multi-file) stays in its modal;
+  single-file diff clicks dock into the `Diff` tab via a shared
+  `DiffReviewBody` extracted from `DiffDialog`. Artifact detection and
+  a `Diff` click auto-open the dock and switch to the matching tab.
+- **Tool call telemetry.** Each tool card shows wall-clock duration
+  (live `started_at`/`finished_at`, plus L0 trace timeline durations for
+  historical messages), an approximate per-tool token attribution
+  collapsed by the desktop forwarder, and a `sandbox_denied` badge
+  surfaced from the engine's restored `ToolResult.meta`. Errors default
+  open.
+- **Subagent first-class block.** `agent_spawn` tool calls render as a
+  collapsible card (name / model / team / system prompt + result) instead
+  of the generic tool view. The crates-side `SubAgentRegistry` now
+  publishes `SubagentStart`/`SubagentStop` lifecycle events and writes
+  the run outcome back to the registry (fixes a long-standing stale-status
+  bug where a spawned entry stayed `Idle` forever). Desktop wiring is
+  gated on the product decision to inject `TeamContext` and make
+  agent_spawn a real subprocess (one-line observer registration once
+  approved).
+- **P2 batch.** Settings → General adds a Comfortable / Compact display
+  density toggle that rescales the shared MD3 type/spacing tokens via
+  `html[data-density]`; consecutive same-tool failures in a message
+  are prefaced by a "N attempts in a row → View timeline" banner; the
+  Sidebar's "New Chat" button is now a split button with quick-create
+  Goal / Routine entries (kept chat as the primary action).
+- **e2e guard.** New `zcode-delta-features.spec.ts` covers the four
+  user-facing behaviors (grouping persistence / plan tab / model chip
+  sync / subagent block) — passes 4/4 in demo mode.
+- **Wire additions.** `SessionInfo` gained optional `running` /
+  `updated_at` (serde-default, additive — wire-compatible with older
+  clients); `ToolResultPayload` gained optional `meta` and
+  `tokens_used`. `shannon-types` schema + build.rs mirror updated.
+  Semver baseline moved to `semver-baseline-2026-09-5` per the
+  documented "minor-cycle has intentional breaks" precedent.
+
+### Known issue (carry-forward, not this branch)
+
+Base UI `Select`'s anti-misclick pointer-tracker rejects regular
+mouse `click` on options unless the pointer first produced a `pointerdown`
+on the option. jsdom-based vitest never exposed it; Playwright
+`page.mouse.click` and several synthetic event paths exhibit it in
+real Chromium too. Result: every Select in the app (permission mode,
+reasoning effort, execution mode, model chip, voice providers) fails to
+commit. The ZCode-delta e2e spec carries an inline `KNOWN PRE-EXISTING
+BUG` comment with a failing-case block ready to be un-skipped once a
+fix lands (recommended path: wait for upstream Base UI fix or migrate
+the app off `@base-ui/react/select`). Filed as a separate follow-up.
+
 ### Full-surface UI review fixes (2026-09-16)
 
 Playwright sweep of all 24 routes (desktop + mobile viewport) with PM/user
