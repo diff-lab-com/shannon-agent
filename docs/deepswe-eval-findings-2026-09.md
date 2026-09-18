@@ -178,6 +178,31 @@ w4 发车 ~4.5h：11 启动 / 8 判分 / 3 在跑（健康：pier 存活、网�
    聚合：`JOBS_DIR=~/.shannon/eval/deepswe/jobs EVAL_* 同上 scripts/eval/deepswe-wave.sh
    aggregate --job-name deepswe-base-w5`。
 
+### F13（w5 弃用 + w6 停车：minimax Token Plan 配额耗尽，2026-09-18 深夜）
+1. **w5 限流 massacre**：47 个启动 trial 中 44 个 exit=4（限流），仅 1 个非空 patch
+   （kombu 74/76 near-solve，证明不受限流时模型有能力）。3 并发对 minimax 不可行
+   （w5 归因：每分钟窗口 + 配额临近耗尽），`deepswe-base-w5-ratelimit-massacre/` 归档弃用。
+2. **w6 串行发车 → 停车**：串行 n=1 重发后实测仍全面 429——sqlfmt（唯一产出日志的
+   trial）**12 次 429、0 次成功工具调用**；停车后冷却 2 分钟，单发最小探针连续 2 次 429。
+   429 响应体定论：**「已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充
+   用量 (2056)」**——账号级配额耗尽，非限流窗口，等待不恢复。`deepswe-base-w6` 保留
+   （11 个 error trial：8×RuntimeError=registry 瞬断、2×NonZeroAgentExitCodeError=429
+   杀死 agent、1×CancelledError=停车；resume 时按 exception_type 清除重跑）：
+   `EVAL_PROVIDER_MODEL=minimax/MiniMax-M3 EVAL_KEY_FILE=$HOME/.shannon/credentials/minimax.json
+   scripts/eval/deepswe-wave.sh start --include '*' --job-name deepswe-base-w6 --concurrency 1
+   --resume --filter-error-type RuntimeError --filter-error-type NonZeroAgentExitCodeError`
+   （待 key 恢复后执行；`--filter-error-type` 可多次传，匹配 trial 内 result.json 的
+   exception_info.exception_type，命中即 rmtree 重跑；默认只清 CancelledError）。
+3. **运营插曲（已自愈）**：w6 发车初期 docker.io registry 瞬断（`ubuntu:24.04` 拉取
+   `failed commit on ref`），约 10 个 trial 快速死于 egress-proxy 镜像构建；手动 `docker pull`
+   验证已恢复，磁盘/网络/daemon 无恙。教训：crash-loop 期 wave 不自愈（pier 逐题试错），
+   发现「trial 目录 mtime 连续且 agent 目录空」即应停车查因。
+4. **影响与决策点**：minimax 锚（F11）在用户升级 Token Plan / 充值 / 换 key 前不可用。
+   切换机制本身已双向验证（GLM=w4+smoke 系、minimax=mm3+w6 发车链路），
+   `EVAL_PROVIDER_MODEL`/`EVAL_KEY_FILE` 一组环境变量即完成切锚；job 内不混模型
+   （pier lock 指纹 + 方法学要求），切模型 = 新 job。GLM 基线（同二进制、250 轮口径）
+   随时可发，minimax 恢复后补跑即可形成内部 A/B。
+
 ## 二、基线波次记录（P2）
 
 - **wave-1 处置与提速改版（2026-09-18）**：首发的 wave-1 在旧二进制事故（F8）后以
