@@ -96,6 +96,24 @@ deepswe-wave.sh 默认二进制改为**本 worktree 构建**（SCRIPT_DIR 相对
 **教训固化**：评测二进制锚点必须是**发车工具的默认行为**而不是发车人的记忆
 （smoke-3 教训的工程化）；波次发车后第一个 trial 的 agent-info 版本号必须核验。
 
+### F9（基线连翻三次车后的干净重启，2026-09-18）
+w3 波次 40 trial 全部 RuntimeError DNF——根因 **docker 网络地址池耗尽**
+（`all predefined address pools have been fully subnetted`）：被杀波次（w1/w2/gate2）
+残留的死 compose 网络 + 本机其它项目把默认池（~31）耗光；与镜像预拉无关。
+处置与固化：
+1. `docker network prune`（30→19）+ 删残留 egress-proxy 容器；原 pier 进程自愈继续。
+2. 用户指示并发回退 3（本机其它任务共存）→ w2 弃用。
+3. resume 与原进程混跑产生重复 trial → 杀 resume、清确认的孤儿（dynamodb 第三次
+   attempt）。
+4. 原 pier 最终在结算一个 trial 时 FileNotFoundError 崩溃（被杀 resume 的账目残骸）
+   → w3 整体弃用（0 有效判分）。
+5. **干净重启 = `deepswe-base-w4`**（3 并发、worktree 二进制，进程环境/config/容器
+   三重验证），**新增网络守护**：每 10 分钟检查，>24 自动 prune（仅清无主网络，
+   对运行容器安全）。镜像预拉脚本按用户指示停用（避免与本机其它任务争用）。
+**教训**：长时间无人值守波次的三件事——①发车工具默认值即锚点（F8）；②kill 波次
+必须收尾（compose down + network prune），否则网络/容器泄漏会毒化下一波；③resume
+与原进程绝不能共存于同一 job（lock 只防配置漂移，不防双进程）。
+
 ## 二、基线波次记录（P2）
 
 - **wave-1 处置与提速改版（2026-09-18）**：首发的 wave-1 在旧二进制事故（F8）后以

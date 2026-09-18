@@ -73,6 +73,7 @@ except Exception:
 cmd_start() {
   local include="" job_name="" concurrency="$DEFAULT_CONCURRENCY"
   local budget="$DEFAULT_BUDGET_TOKENS" tasks_dir="$TASKS_DIR_DEFAULT" resume=0
+  local filters=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --include) include="$2"; shift 2;;
@@ -81,6 +82,7 @@ cmd_start() {
       --budget-tokens) budget="$2"; shift 2;;
       --tasks-dir) tasks_dir="$2"; shift 2;;
       --resume) resume=1; shift;;
+      --filter-error-type) filters+=(--filter-error-type "$2"); shift 2;;
       *) die "unknown flag: $1";;
     esac
   done
@@ -110,7 +112,7 @@ cmd_start() {
     echo "[wave] resuming job $job_name (completed trials are skipped by pier)"
     env PYTHONPATH="$SCRIPT_DIR/pier-adapter" \
       SHANNON_PIER_BIN="$bin" \
-      pier job resume --job-path "$(jobs_dir_for)/$job_name" 2>&1 | grep -v LiteLLM
+      pier job resume --job-path "$(jobs_dir_for)/$job_name" "${filters[@]}" 2>&1 | grep -v LiteLLM
   else
     echo "[wave] launching job=$job_name include='$include' n=$concurrency budget=${budget}"
     env PYTHONPATH="$SCRIPT_DIR/pier-adapter" \
