@@ -130,6 +130,29 @@ w4 发车 ~4.5h：11 启动 / 8 判分 / 3 在跑（健康：pier 存活、网�
 **当前节奏**：~4.5h 完成 8 题（含前期治愈期），稳态约 3 题/LST~2h → 全量预计
 **3 天上下**；cutoff 风暴题是主要墙钟税。
 
+### F11（锚切换：评测改用 minimax/MiniMax-M3，2026-09-18 用户指示）
+1. **工具链适配（已完成）**：wave 脚本 provider/key 参数化（`EVAL_PROVIDER_MODEL`
+   /`EVAL_KEY_FILE` 环境变量）；adapter 白名单按 provider 映射
+   （minimax→`api.minimax.chat`）+ `SHANNON_ALLOWLIST_DOMAINS` 覆盖。
+   模型 id 为 **`MiniMax-M3`**（大小写敏感，batch-5 RCA：错误 id 48%→4%）。
+2. **A13 阻断 bug（发现于 minimax 冒烟，修复实施中）**：输出 token 截断续写路径把
+   user 续写提示插在 assistant(tool_calls) 与其 tool results 之间 → 非法 wire 序列；
+   minimax 严格校验 → 400 (2013 "tool id not found")。27 次工具调用后死亡。
+   GLM/Anthropic 宽容此序所以此前未暴露。修复方案：根因（截断路径先执行工具再插
+   提示）+ 防御消毒器（OpenAI wire 序列化出口清孤儿 result/补悬空 call）。
+   证据：`deepswe-smoke-mm1/`（events.jsonl 已上传，全文件无该 id 的 tool/call 事件）。
+3. **对标口径重定义**：Datacurve 官方榜（21/28 models）**无 minimax 条目** →
+   「与官方同模型 harness 分差 = scaffolding 损益」的方法不适用。新口径：
+   ①绝对分 vs 榜单全字段（跨模型对比，未来若提交上榜即直接可比）；
+   ②内部同 scaffold 跨模型 A/B（bandit 同题：GLM smoke-6=86/88 vs MiniMax-M3）；
+   ③历史参照：shannon+minimax-m3 旧引擎 SWE50=33/50（batch11，仅方向参考）。
+4. **切换节奏**：w4（GLM 口径）保持运行至 minimax 冒烟通过——同题 A/B 数据 +
+   GLM 部分基线（9/113）都不浪费；A13 修复 → 二进制重建（含 A10/A12/A13）→
+   minimax 冒烟复跑 → 通过则停 w4、发 minimax 基线波次（w5）。
+5. minimax 运营注意（历史 RCA）：per-minute 限流窗口（batch-6 无 pacing 时 76% 拒绝）
+   ——并发 3 下实测暂无限流；think-only 退出高发（A1 即为其建）；输出 token 截断
+   高发（A13 触发源，(1/5) 续写机制已存在）。
+
 ## 二、基线波次记录（P2）
 
 - **wave-1 处置与提速改版（2026-09-18）**：首发的 wave-1 在旧二进制事故（F8）后以
