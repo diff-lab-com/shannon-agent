@@ -468,25 +468,35 @@ mod handler_tests {
     use shannon_remote::target::RemotesFile;
 
     /// Point HOME at a scratch dir so remotes.toml never touches the real
-    /// one. nextest runs each test in its own process, so the env swap is
-    /// process-local and race-free.
-    struct HomeGuard(std::path::PathBuf);
+    /// one. The env swap is process-global under plain `cargo test` (thread
+    /// harness), so the guard holds the shared env lock for its lifetime and
+    /// restores the ORIGINAL home on drop — restoring "/" broke every later
+    /// HOME-reading test scheduled after this one (roadmap E7 follow-up).
+    struct HomeGuard {
+        original: std::path::PathBuf,
+        _guard: (crate::test_env::EnvLock, tempfile::TempDir),
+    }
+
     impl HomeGuard {
         fn new() -> Self {
+            let lock = crate::test_env::env_lock();
+            let original = std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from("/"));
             let dir = tempfile::tempdir().unwrap();
-            // SAFETY: single-threaded test process (nextest isolation); no
-            // other thread reads HOME during this test.
+            // SAFETY: every env-swapping test holds ENV_LOCK; no other thread
+            // mutates HOME while this guard lives.
             unsafe { std::env::set_var("HOME", dir.path()) };
-            Self(dir.path().to_path_buf())
-        }
-        fn path(&self) -> &std::path::Path {
-            &self.0
+            // TempDir stays alive here so the scratch home outlives the swap.
+            Self { original, _guard: (lock, dir) }
         }
     }
     impl Drop for HomeGuard {
         fn drop(&mut self) {
-            // SAFETY: see new()
-            unsafe { std::env::set_var("HOME", "/") };
+            // SAFETY: ENV_LOCK is held for this guard's lifetime. Restore the
+            // ORIGINAL home — the previous "/" broke every later HOME-reading
+            // test scheduled after this one.
+            unsafe { std::env::set_var("HOME", &self.original) };
         }
     }
 

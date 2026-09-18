@@ -2120,19 +2120,32 @@ impl Repl {
         if input.is_empty() {
             return Err("No input provided on stdin.".into());
         }
+        self.run_pipe_with(input)
+    }
 
-        // Process the input as a query (no TUI needed)
-        self.chat.add_message(ChatRole::User, input.clone());
+    /// Pipe-mode body with caller-supplied input — used when the caller had
+    /// to drain stdin earlier (main.rs reads piped input to decide between
+    /// the noninteractive query and this path).
+    pub fn run_pipe_with(&mut self, input: String) -> Result<()> {
+        let input = input.trim().to_string();
+
+        if input.is_empty() {
+            return Err("No input provided on stdin.".into());
+        }
 
         if input.starts_with('/') {
-            // Handle commands in pipe mode
-            commands::submit_input(self, None)?;
+            // Handle commands in pipe mode. `submit_input` reads the TUI
+            // prompt box — empty under a pipe — so the command text must be
+            // routed through submit_input_with_text; otherwise it silently
+            // no-ops and the command leaks to the model as chat input.
+            commands::submit_input_with_text(self, &input, &mut None);
             // Output last system/assistant message
             if let Some(msg) = self.chat.last_message() {
                 println!("{}", msg.content);
             }
         } else {
             // Process as AI query
+            self.chat.add_message(ChatRole::User, input.clone());
             query::handle_query(self, &input, &mut None)?;
             // Output the assistant response
             if let Some(msg) = self.chat.last_message() {

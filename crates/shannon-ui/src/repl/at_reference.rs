@@ -848,7 +848,9 @@ mod tests {
 
     #[test]
     fn test_generate_tree_file_not_dir() {
-        let result = generate_directory_tree("/etc/hostname", None);
+        // /etc/hosts exists on Linux AND macOS; /etc/hostname is Linux-only
+        // and made this test report "not found" instead of "not a directory".
+        let result = generate_directory_tree("/etc/hosts", None);
         assert!(result.is_error);
         assert!(result.status_message.unwrap().contains("not a directory"));
     }
