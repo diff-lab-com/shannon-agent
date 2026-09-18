@@ -62,6 +62,29 @@ C1 修复（`55c980fd`）只修了 events.jsonl 的 turn 字段。影响：轨�
 （字节空闲界，流式无总超时，PERF-2 设计），300s 字节死判定 < 420s 内容死判定，分层合理。
 smoke-2 死因是上游切断（F2），非本地超时。
 
+## 一·B、闸门 2（Go/TS/Rust 三语言并行，1h49m，2026-09-18）
+
+| 任务（语言） | 结果 | 备注 |
+|---|---|---|
+| fd-deterministic-multi-key-sorting（Rust） | F2P 42/43，P2P 109/109，partial 0.993 | 差 1 个隐藏边缘测试（自然排序前导零平局 `file007` vs `file7`） |
+| anko-typed-variable-bindings（Go） | F2P 8/9，P2P 1.0 | 差 1 个隐藏边缘测试（TestTypedBindingsAdditionalRepresentativeFlows） |
+| cliffy-config-file-parsing（TS） | F2P 0/…，P2P 1.0，NonZeroExit | 切断风暴：A8 续推 9+ 次延长 3 倍寿命后预算终耗尽 → 空 patch |
+
+数据：`~/.shannon/eval/deepswe-smoke/jobs/deepswe-gate2/`。
+
+**发现 F6（竞争力杠杆，P3 主议题）：「最后一英里」缺口**。已判分的 4 个任务
+（bandit/anko/fd + smoke-6）中 3 个是**差 1-2 个隐藏边缘测试的近满解**
+（partial 97.7-99.4%），但 DeepSWE 榜为二值口径（reward=1 要求 F2P 全过）→
+binary 全记 0。缺口不在脚手架（长程存活/工具/commit 全部工作），在**模型对
+held-out 边缘语义的覆盖**：held-out 测试对 agent 不可见，无法针对性测试，
+mini-swe 同样受此约束（官方 63% 即在此口径下）。P3 要回答：近满解 → 满解的
+残余缺口里，有多少可由通用改进挽回（如更彻底的指令语义自查、实现后的
+自我边界测试习惯），有多少是纯模型能力上限。
+
+**发现 F7（P2 运营参数）**：切断重任务（cliffy 类）单题可烧 3h 墙钟与大量续推；
+A8 预算按轮生效设计正确（cliffy 跨 9+ 次切断存活）。P2 的 113 题 3 并发下
+此类任务拉长尾部但被 3h 硬顶约束；infra 分离口径需把「续推耗尽死亡」单独标记。
+
 ## 二、基线波次记录（P2，待回填）
 
 - wave-1（113×n=1）：待跑。发车前置：preflight 门禁、`SHANNON_PIER_BIN` 指向
