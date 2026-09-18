@@ -43,10 +43,18 @@ from pier.models.agent.install import AgentInstallSpec, InstallStep
 from pier.models.agent.network import NetworkAllowlist
 
 DEFAULT_SHANNON_BIN = (
-    "/home/ed/workspace/app/work/shannon/shannon-mono/target/debug/shannon"
+    "/home/ed/workspace/app/work/shannon/shannon-deepswe/target/debug/shannon"
 )
 DEFAULT_PROVIDER = "zhipu-coding-plan"
 DEFAULT_MODEL = "glm-5.3-flash"
+# LLM endpoint host per provider (pier per-agent network allowlist). DeepSWE
+# tasks run agent network_mode=no-network — pier pokes only these holes.
+PROVIDER_DOMAINS = {
+    "zhipu-coding-plan": ["open.bigmodel.cn"],
+    "zhipu": ["open.bigmodel.cn"],
+    "minimax": ["api.minimax.chat"],
+    "mm": ["api.minimax.chat"],
+}
 # GLM-5.3 thinking has normal mid-reasoning silences up to ~312s (RCA
 # 2026-09-07); a watchdog below that killed healthy streams and the engine
 # retry re-thought from scratch (rc=3 death spiral). 420s covers observed
@@ -170,13 +178,21 @@ class Shannon(BaseInstalledAgent):
 
     @override
     def network_allowlist(self) -> NetworkAllowlist:
-        # zhipu-coding-plan endpoint host (open.bigmodel.cn/api/coding/paas/v4).
-        # The API-key→JWT signature is computed locally; no other host needed.
-        # DeepSWE tasks run agent network_mode=no-network — pier pokes only
-        # this hole. models.dev catalog merge is optional at runtime (C4 put
-        # glm-5.3-flash in the static catalog); smoke gate verifies startup
-        # without it.
-        return NetworkAllowlist(domains=["open.bigmodel.cn"])
+        # LLM endpoint host for the active provider. API-key→JWT/signing is
+        # local computation; no other host needed. models.dev catalog merge is
+        # optional at runtime (C4 covers static catalogs); smoke gate verifies
+        # startup without it. SHANNON_ALLOWLIST_DOMAINS (comma-separated)
+        # overrides for providers not in PROVIDER_DOMAINS.
+        provider = (self._parsed_model_provider or DEFAULT_PROVIDER).lower()
+        domains = list(PROVIDER_DOMAINS.get(provider, []))
+        extra = os.environ.get("SHANNON_ALLOWLIST_DOMAINS", "")
+        domains.extend(d.strip() for d in extra.split(",") if d.strip())
+        if not domains:
+            raise RuntimeError(
+                f"no network allowlist known for provider '{provider}' — "
+                "set SHANNON_ALLOWLIST_DOMAINS"
+            )
+        return NetworkAllowlist(domains=sorted(set(domains)))
 
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:

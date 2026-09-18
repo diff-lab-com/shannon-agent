@@ -17,15 +17,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TASKS_DIR_DEFAULT="${HOME}/eval-corpora/deep-swe/tasks"
+TASKS_DIR_DEFAULT="$HOME/eval-corpora/deep-swe/tasks"
 JOBS_DIR_DEFAULT="${HOME}/.shannon/eval/deepswe/jobs"
 # Anchor integrity (smoke-3 RCA + wave-1 stale-binary RCA): the evaluated
 # binary MUST be the one built from THIS branch (worktree), never another
 # checkout's target/. Override via SHANNON_PIER_BIN only with a build of the
 # same commit.
 SHANNON_BIN_DEFAULT="$(cd "$SCRIPT_DIR/../.." && pwd)/target/debug/shannon"
-KEY_FILE="${HOME}/.shannon/credentials/zhipu.json"
-PROVIDER_MODEL="zhipu-coding-plan/glm-5.3-flash"
+# Provider anchor (env-overridable). minimax-m3 example:
+#   EVAL_PROVIDER_MODEL=minimax/MiniMax-M3 EVAL_KEY_FILE=$HOME/.shannon/credentials/minimax.json
+# Model id MUST be the provider's real API id (batch-5 RCA: wrong id 48%→4%).
+PROVIDER_MODEL="${EVAL_PROVIDER_MODEL:-zhipu-coding-plan/glm-5.3-flash}"
+KEY_FILE="${EVAL_KEY_FILE:-${HOME}/.shannon/credentials/zhipu.json}"
 DEFAULT_CONCURRENCY=3
 # Full-wave gate: 113 tasks x observed ~1M in-tokens upper bound per task is
 # far above the official $0.24/task cost; 150M in is ~3x the SWE50 batch11
@@ -38,6 +41,8 @@ die() { echo "FATAL: $*" >&2; exit 9; }
 need_pier() { command -v pier >/dev/null || die "pier not installed (uv tool install datacurve-pier)"; }
 need_key() {
   [ -r "$KEY_FILE" ] || die "$KEY_FILE missing"
+  # raw_decode: takes the first JSON value and tolerates trailing garbage
+  # (zhipu.json carries a pasted providers.toml snippet after line 1).
   SHANNON_API_KEY="$(python3 -c "
 import json,sys
 print(json.JSONDecoder().raw_decode(open(sys.argv[1]).read())[0]['value'])
