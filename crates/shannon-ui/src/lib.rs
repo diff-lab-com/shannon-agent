@@ -88,7 +88,9 @@ pub(crate) mod test_env {
 
     /// Held for the duration of any test that mutates process-global
     /// environment (cwd / HOME / other env vars).
-    pub struct EnvLock(#[allow(dead_code)] pub(crate) MutexGuard<'static, ()>);
+    /// KEEP: the guard field stays alive for the lock's lifetime even though
+    /// nothing reads it — dropping early would release ENV_LOCK.
+    pub struct EnvLock(#[allow(dead_code)] pub(crate) MutexGuard<'static, ()>); // KEEP: guard must outlive scope
 
     pub fn env_lock() -> EnvLock {
         EnvLock(ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
@@ -111,7 +113,10 @@ pub(crate) mod test_env {
             let dir = tempfile::tempdir().unwrap();
             // SAFETY: every env-swapping test holds ENV_LOCK.
             unsafe { std::env::set_var("HOME", dir.path()) };
-            Self { original, _guard: (lock, dir) }
+            Self {
+                original,
+                _guard: (lock, dir),
+            }
         }
     }
 

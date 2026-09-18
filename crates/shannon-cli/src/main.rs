@@ -4780,8 +4780,8 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     // dispatches commands locally) instead of silently feeding it to the
     // model as a chat prompt (roadmap E7, found by /browser doctor QA).
     let stdin_content = read_stdin();
-    let repl_pipe_slash_command = stdin_content.starts_with('/')
-        && matches!(cli.command, Some(Commands::Repl { .. }));
+    let repl_pipe_slash_command =
+        stdin_content.starts_with('/') && matches!(cli.command, Some(Commands::Repl { .. }));
     if !stdin_content.is_empty() && !repl_pipe_slash_command {
         let config = build_cli_config(
             cli.model.as_deref(),

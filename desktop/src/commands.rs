@@ -925,6 +925,10 @@ pub async fn send_message(
             std::collections::HashSet::new();
         // /rewind: file paths mutated by this turn's write/edit tool calls.
         let mut turn_files: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        // P1-⑤ telemetry: usage frames arrive per LLM request with no
+        // tool_use_id; approximate per-tool attribution collapses the usage
+        // observed while a tool call is the session's pending one.
+        let mut pending_tool_tokens: Option<(String, u64)> = None;
 
         // Consume the stream using futures::StreamExt
         use futures::StreamExt;
@@ -968,6 +972,7 @@ pub async fn send_message(
                     } => {
                         tool_call_count += 1;
                         tool_names_used.insert(tool_name.clone());
+                        pending_tool_tokens = Some((tool_use_id.clone(), 0));
                         if let Some(path) =
                             crate::commands_rewind::mutated_file_path(&tool_name, &tool_input)
                         {
@@ -990,8 +995,18 @@ pub async fn send_message(
                         tool_name,
                         result,
                         is_error,
+                        meta,
                         ..
                     } => {
+                        // P1-⑤: forward the engine's tool metadata (sandbox
+                        // classification) and collapse the usage frames that
+                        // arrived while this call was pending.
+                        let meta_val = if meta.is_null() { None } else { Some(*meta) };
+                        let tokens_used = pending_tool_tokens
+                            .take()
+                            .filter(|(pending_id, _)| *pending_id == tool_use_id)
+                            .map(|(_, tokens)| tokens)
+                            .filter(|tokens| *tokens > 0);
                         let payload = events::ToolResultPayload {
                             query_id: qid_str.clone(),
                             tool_use_id,
@@ -999,6 +1014,8 @@ pub async fn send_message(
                             result,
                             is_error,
                             session_id: Some(session_id_str.clone()),
+                            meta: meta_val,
+                            tokens_used,
                         };
                         route_event(crate::session_registry::SessionEvent::ToolResult(
                             payload.clone(),
@@ -1044,6 +1061,12 @@ pub async fn send_message(
                         cache_read_tokens,
                         ..
                     } => {
+                        // P1-⑤ telemetry: attribute this usage frame to the
+                        // session's pending tool call, if any (approximate —
+                        // the frame itself carries no tool_use_id).
+                        if let Some((_, tokens)) = pending_tool_tokens.as_mut() {
+                            *tokens += input_tokens + output_tokens;
+                        }
                         // Persist to the local usage ledger. Best-effort:
                         // a log write failure must never break the stream.
                         let cc_now = client_config_arc.read().await;

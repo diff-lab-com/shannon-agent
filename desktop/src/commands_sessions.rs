@@ -142,22 +142,159 @@ pub(crate) async fn auto_title_from_first_message(
 pub async fn list_sessions(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<events::SessionInfo>, String> {
-    let sessions = state.sessions.lock().await;
-    let result: Vec<events::SessionInfo> = sessions
-        .iter()
-        .map(|s| events::SessionInfo {
-            id: s.id.clone(),
-            title: s.title.clone(),
-            created_at: s.created_at,
-            message_count: s.message_count,
-            working_dir: s.working_dir.clone(),
-            parent_id: s.parent_id.clone(),
-            branch_point: s.branch_point,
-        })
-        .collect();
+    // P0 sidebar telemetry: clone the display metas out of the lock, then
+    // join each with the registry's live `querying` flag (an await — must
+    // not happen while holding the std Mutex).
+    let metas: Vec<SessionMeta> = state.sessions.lock().await.clone();
+    let mut result = Vec::with_capacity(metas.len());
+    for s in &metas {
+        result.push(session_wire_info(&state, s).await);
+    }
     Ok(result)
 }
 
+/// P0 sidebar telemetry: build the wire `SessionInfo`, joining the live
+/// `running` flag from the session registry and the session's last activity
+/// time (events.jsonl mtime, epoch ms). Both fields are additive (`None` on
+/// older wire consumers — see `events::SessionInfo`).
+async fn session_wire_info(state: &AppState, s: &SessionMeta) -> events::SessionInfo {
+    let running = match uuid::Uuid::parse_str(&s.id) {
+        Ok(id) => Some(state.registry.is_querying(id).await),
+        Err(_) => None,
+    };
+    events::SessionInfo {
+        id: s.id.clone(),
+        title: s.title.clone(),
+        created_at: s.created_at,
+        message_count: s.message_count,
+        working_dir: s.working_dir.clone(),
+        parent_id: s.parent_id.clone(),
+        branch_point: s.branch_point,
+        running,
+        updated_at: session_log_mtime(state, &s.id),
+    }
+}
+
+/// Last-activity epoch ms for a session, taken from its L0 log's mtime.
+/// `None` when the log doesn't exist yet (brand-new in-memory session) or
+/// the id is not a UUID (legacy rows).
+fn session_log_mtime(state: &AppState, id: &str) -> Option<i64> {
+    let uuid = uuid::Uuid::parse_str(id).ok()?;
+    let path = state
+        .l0_store()
+        .container()
+        .join(uuid.to_string())
+        .join("events.jsonl");
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime = meta.modified().ok()?;
+    mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as i64)
+}
+
+// ---------------------------------------------------------------------------
+// P0 plan dock (ZCode delta ②) — surface the engine's persisted plan doc
+// ---------------------------------------------------------------------------
+
+/// One persisted plan file, parsed into the wire shape the right dock's
+/// 计划 tab renders. Mirrors the on-disk format `PlanManager::
+/// save_plan_to_file` writes (`crates/shannon-tools/src/plan_mode.rs`):
+/// `# Plan: {title}` / `Created: {rfc3339}` / `Status: {approved|pending}` /
+/// blank line / markdown body.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionPlanInfo {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub created_at: String,
+    pub content: String,
+}
+
+/// Read the session working directory's most recent plan from
+/// `<working_dir>/.shannon/plans/*.md` (newest by file mtime). Returns
+/// `Ok(None)` when no plan has been persisted — the dock tab renders its
+/// empty state. Read-only: plan lifecycle stays owned by the engine tools
+/// (`enter_plan_mode` / `exit_plan_mode` / `get_plan_status`).
+#[tauri::command]
+pub async fn get_session_plan(working_dir: String) -> Result<Option<SessionPlanInfo>, String> {
+    if working_dir.trim().is_empty() {
+        return Ok(None);
+    }
+    // Sync file IO on a worker thread — plans are tiny but the scan is
+    // still blocking IO, and this command fires on every plan-tab refresh.
+    let plan = tokio::task::spawn_blocking(move || {
+        let plans_dir = std::path::Path::new(&working_dir)
+            .join(".shannon")
+            .join("plans");
+        let entries = match std::fs::read_dir(&plans_dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("Failed to read plans directory: {e}")),
+        };
+        let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let mtime = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            if newest.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
+                newest = Some((mtime, path));
+            }
+        }
+        let Some((_, path)) = newest else {
+            return Ok(None);
+        };
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(e) => return Err(format!("Failed to read plan file: {e}")),
+        };
+        let id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Parse the 3-line header the engine writes (see save_plan_to_file);
+        // anything after the first blank line is the markdown body.
+        let mut lines = raw.lines();
+        let title = lines
+            .next()
+            .and_then(|l| l.strip_prefix("# Plan: "))
+            .unwrap_or("Untitled plan")
+            .trim()
+            .to_string();
+        let created_at = lines
+            .next()
+            .and_then(|l| l.strip_prefix("Created: "))
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let status = lines
+            .next()
+            .and_then(|l| l.strip_prefix("Status: "))
+            .unwrap_or("pending")
+            .trim()
+            .to_string();
+        let _blank = lines.next();
+        let content = lines.collect::<Vec<_>>().join("\n");
+
+        Ok(Some(SessionPlanInfo {
+            id,
+            title,
+            status,
+            created_at,
+            content,
+        }))
+    })
+    .await
+    .map_err(|e| format!("plan read task failed: {e}"))??;
+    Ok(plan)
+}
 /// Search sessions by title substring or message content.
 ///
 /// Title matches rank first; content matches fill the rest. Only the first
@@ -175,45 +312,46 @@ pub async fn search_sessions(
         return Ok(Vec::new());
     }
 
-    let sessions = state.sessions.lock().await;
-    let mut title_matches: Vec<events::SessionInfo> = Vec::new();
-    let mut content_matches: Vec<events::SessionInfo> = Vec::new();
+    // P0 sidebar telemetry: collect matching metas under the lock (pure
+    // sync work), then build wire infos after dropping it — the `running`
+    // join awaits the registry and must not hold a std Mutex guard.
+    let matched: Vec<SessionMeta> = {
+        let sessions = state.sessions.lock().await;
+        let mut title_matches: Vec<SessionMeta> = Vec::new();
+        let mut content_matches: Vec<SessionMeta> = Vec::new();
 
-    for s in sessions.iter() {
-        let info = || events::SessionInfo {
-            id: s.id.clone(),
-            title: s.title.clone(),
-            created_at: s.created_at,
-            message_count: s.message_count,
-            working_dir: s.working_dir.clone(),
-            parent_id: s.parent_id.clone(),
-            branch_point: s.branch_point,
-        };
+        for s in sessions.iter() {
+            if s.title.to_lowercase().contains(&query_lower) {
+                title_matches.push(s.clone());
+                continue;
+            }
 
-        if s.title.to_lowercase().contains(&query_lower) {
-            title_matches.push(info());
-            continue;
-        }
+            if content_matches.len() + title_matches.len() >= CONTENT_SCAN_LIMIT {
+                continue;
+            }
 
-        if content_matches.len() + title_matches.len() >= CONTENT_SCAN_LIMIT {
-            continue;
-        }
-
-        if let Ok(uuid) = uuid::Uuid::parse_str(&s.id) {
-            // Full-text search on L0 events — the transcript-search successor.
-            let hit = state
-                .l0_store()
-                .search_session(&uuid, &query_lower)
-                .map(|hits| !hits.is_empty())
-                .unwrap_or(false);
-            if hit {
-                content_matches.push(info());
+            if let Ok(uuid) = uuid::Uuid::parse_str(&s.id) {
+                // Full-text search on L0 events — the transcript-search successor.
+                let hit = state
+                    .l0_store()
+                    .search_session(&uuid, &query_lower)
+                    .map(|hits| !hits.is_empty())
+                    .unwrap_or(false);
+                if hit {
+                    content_matches.push(s.clone());
+                }
             }
         }
-    }
 
-    title_matches.extend(content_matches);
-    Ok(title_matches)
+        title_matches.extend(content_matches);
+        title_matches
+    };
+
+    let mut result = Vec::with_capacity(matched.len());
+    for s in &matched {
+        result.push(session_wire_info(&state, s).await);
+    }
+    Ok(result)
 }
 
 /// Load a session by ID.
@@ -776,6 +914,8 @@ pub async fn duplicate_session(
         working_dir: None,
         parent_id: None,
         branch_point: None,
+        running: Some(false),
+        updated_at: None,
     })
 }
 
@@ -861,6 +1001,8 @@ pub(crate) async fn branch_session_internal(
         working_dir: parent_working_dir,
         parent_id: Some(parent_id),
         branch_point: Some(branch_point),
+        running: Some(false),
+        updated_at: None,
     })
 }
 

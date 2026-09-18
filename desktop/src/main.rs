@@ -148,6 +148,7 @@ fn main() {
             commands_sessions::new_session,
             commands_sessions::list_sessions,
             commands_sessions::search_sessions,
+            commands_sessions::get_session_plan,
             commands_sessions::load_session,
             commands_sessions::export_session,
             commands_sessions::switch_session,

@@ -3,6 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import EmptyState from './ui/empty-state';
 import { WELCOME_EXAMPLES } from './welcomeExamples';
 import { cn } from '../lib/utils';
@@ -137,9 +138,15 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
   const dragging = useRef(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const { createSession, sessions, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree } = useSessions();
+  // P2-⑩: split-"New" dropdown (goal / routine entry points).
+  const [newMenuOpen, setNewMenuOpen] = useState(false);
+  const { createSession, sessions, sessionActivity, goalRunsBySession, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree } = useSessions();
   const { status } = useCatalog();
   const intl = useIntl();
+  const newMenuItems: DropdownMenuItem[] = [
+    { id: 'goal', label: intl.formatMessage({ id: 'nav.new.goal' }), icon: 'flag', onSelect: () => { setNewMenuOpen(false); navigate('/tasks') } },
+    { id: 'routine', label: intl.formatMessage({ id: 'nav.new.routine' }), icon: 'event_repeat', onSelect: () => { setNewMenuOpen(false); navigate('/tasks') } },
+  ];
   const { stats: inboxStats, refresh: refreshInboxStats } = useInboxStats();
 
   // P2-6 history: the badge count used to poll every 30s, then moved to the
@@ -273,14 +280,41 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
         </div>
       </div>
 
-      <Button
-        aria-label={intl.formatMessage({ id: 'nav.newChat.aria' })}
-        className="mb-xs w-full py-3 px-4 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
-        onClick={createSession}
-      >
-        <span className="material-symbols-outlined icon-md">add</span>
-        <span>{intl.formatMessage({ id: 'nav.newChat' })}</span>
-      </Button>
+      {/* P2-⑩ (ZCode delta): "New" is a split button — chat stays the
+          primary action, goal/routine creation is one click away instead of
+          a detour through the Tasks page. */}
+      <div className="mb-xs w-full flex gap-1">
+        <Button
+          aria-label={intl.formatMessage({ id: 'nav.newChat.aria' })}
+          className="flex-1 py-3 px-4 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
+          onClick={createSession}
+        >
+          <span className="material-symbols-outlined icon-md">add</span>
+          <span>{intl.formatMessage({ id: 'nav.newChat' })}</span>
+        </Button>
+        <div className="relative shrink-0">
+          <Button
+            variant="outline"
+            aria-label={intl.formatMessage({ id: 'nav.new.more.aria' })}
+            title={intl.formatMessage({ id: 'nav.new.more.aria' })}
+            aria-haspopup="menu"
+            className="h-full px-2 rounded-xl border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:text-primary transition-all"
+            onClick={() => setNewMenuOpen(v => !v)}
+          >
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">unfold_more</span>
+          </Button>
+          {newMenuOpen && (
+            <DropdownMenu
+              open
+              onClose={() => setNewMenuOpen(false)}
+              items={newMenuItems}
+              align="end"
+              className="w-44 min-w-0"
+              ariaLabel={intl.formatMessage({ id: 'nav.new.more.aria' })}
+            />
+          )}
+        </div>
+      </div>
       {mode === 'dev' && (
       <Button
         variant="ghost"
@@ -316,6 +350,8 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
         ) : (
           <SessionsSection
             sessions={sessions}
+            sessionActivity={sessionActivity}
+            goalRunsBySession={goalRunsBySession}
             currentSessionId={currentSessionId}
             switchSession={switchSession}
             renameSession={renameSession}

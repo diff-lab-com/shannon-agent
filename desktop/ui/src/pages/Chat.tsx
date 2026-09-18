@@ -3,9 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
-import { ArtifactPanel } from '@/components/artifact/ArtifactPanel'
 import { LivePreview } from '@/components/artifact/LivePreview'
-import DiffDialog from '@/components/diff/DiffDialog'
 import DiffDialogMulti from '@/components/diff/DiffDialogMulti'
 import { useChat } from '@/context/ChatContext'
 import { useCatalog } from '@/context/CatalogContext'
@@ -26,10 +24,10 @@ import { useWorkspaceLayout } from '@/components/workspace/useWorkspaceLayout'
 import { WorkspaceGrid } from '@/components/workspace/WorkspaceGrid'
 import { WorkspaceToolbar } from '@/components/workspace/WorkspaceToolbar'
 import { SessionDiffPanel } from '@/components/workspace/SessionDiffPanel'
+import RightDock from './chat/RightDock'
 import {
   ApiKeyBanner,
   ComposerPanel,
-  ContextPanel,
   InlinePanelModal,
   MessageArea,
   ComposerContext,
@@ -44,7 +42,7 @@ const EditorPanel = lazy(() => import('@/pages/Editor'))
 export default function Chat() {
   const {
     messages, streamingText, isQuerying, usage, activeToolCalls,
-    sendMessage, contextPanelOpen, compactSession,
+    sendMessage, contextPanelOpen, setContextPanelOpen, compactSession,
   } = useChat()
   const { sessions, currentSessionId, windowSessionId, createSession } = useSessions()
   const { config } = useCatalog()
@@ -348,14 +346,18 @@ export default function Chat() {
             bodyClassName="flex-1 overflow-hidden"
           />
 
-          <ContextPanel
+          <RightDock
             open={contextPanelOpen}
+            onOpen={() => setContextPanelOpen(true)}
+            onClose={() => setContextPanelOpen(false)}
             usage={usage}
             activeToolCalls={activeToolCalls}
+            workingDir={workingDir}
+            planModeActive={config?.approval_mode === 'plan'}
+            diffPath={diffPath}
+            onCloseDiff={() => setDiffPath(null)}
           />
-          <DiffDialog open={diffPath !== null} filePath={diffPath} onClose={() => setDiffPath(null)} />
           <DiffDialogMulti open={diffPaths !== null} filePaths={diffPaths ?? []} onClose={() => setDiffPaths(null)} />
-          <ArtifactPanel />
         </div>
       </ComposerContext.Provider>
     </ArtifactProvider>

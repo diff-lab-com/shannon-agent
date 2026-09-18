@@ -5,9 +5,16 @@
 // inline rename, export/print, and delete-with-confirm. The former Chat-page
 // session sidebar was removed (U1); this list is its replacement.
 //
+// P0 (ZCode delta ②/④): the rail is also a run monitor — every row carries
+// a live running dot + elapsed badge (from SessionActivity), and the list
+// supports two grouping views, 按项目 (Codex/Claude "project" mental model,
+// default) and 按时间 (today/yesterday/this-week/earlier, the ZCode mental
+// model). Grouping preference persists to localStorage.
+//
 // Persisted keys:
-//   shannon-sessions-order  — Record<sessionId, index> written on drag reorder
-//   shannon-sessions-pinned — string[] of pinned session ids
+//   shannon-sessions-order    — Record<sessionId, index> written on drag reorder
+//   shannon-sessions-pinned   — string[] of pinned session ids
+//   shannon-sessions-grouping — 'project' | 'time'
 
 import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -20,12 +27,17 @@ import { useT } from '@/i18n'
 import * as api from '@/lib/tauri-api'
 import { exportSessionAsMarkdown, printSession } from '@/lib/sessionActions'
 import { toastError } from '@/lib/errorToast'
-import type { SessionInfo } from '@/types'
+import type { GoalRunDto, SessionActivity, SessionInfo } from '@/types'
 import DeleteSessionModal from '@/pages/chat/DeleteSessionModal'
 import HighlightText from './HighlightText'
 
 const SESSIONS_ORDER_KEY = 'shannon-sessions-order'
 const SESSIONS_PINNED_KEY = 'shannon-sessions-pinned'
+const SESSIONS_GROUPING_KEY = 'shannon-sessions-grouping'
+
+type GroupingMode = 'project' | 'time'
+
+const DAY_MS = 24 * 60 * 60 * 1000
 
 function readOrderOverride(): Record<string, number> {
   if (typeof window === 'undefined') return {}
@@ -43,12 +55,57 @@ function readPinned(): ReadonlySet<string> {
   } catch { return new Set() }
 }
 
+function readGrouping(): GroupingMode {
+  if (typeof window === 'undefined') return 'project'
+  try {
+    return window.localStorage.getItem(SESSIONS_GROUPING_KEY) === 'time' ? 'time' : 'project'
+  } catch { return 'project' }
+}
+
 function persist(key: string, value: unknown) {
   try { window.localStorage.setItem(key, JSON.stringify(value)) } catch { /* noop */ }
 }
 
+function persistGrouping(mode: GroupingMode) {
+  // Raw string (not JSON-encoded) — readGrouping compares bare values.
+  try { window.localStorage.setItem(SESSIONS_GROUPING_KEY, mode) } catch { /* noop */ }
+}
+
+/** Compact elapsed label for a running session: 42s · 8m · 1h12m. */
+function formatElapsed(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  if (sec < 60) return `${sec}s`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m`
+  return `${Math.floor(min / 60)}h${min % 60}m`
+}
+
+/** DST-safe day difference between a timestamp and today's local midnight. */
+function dayDiffFromToday(ts: number, now: Date): number {
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  return Math.round((startOfDay(now) - startOfDay(new Date(ts))) / DAY_MS)
+}
+
+function projectOf(s: { working_dir?: string | null }): string | null {
+  const dir = s.working_dir?.trim()
+  if (!dir) return null
+  const parts = dir.split('/').filter(Boolean)
+  return parts.length > 0 ? parts[parts.length - 1] : null
+}
+
+interface SessionGroup {
+  key: string
+  icon: string
+  label: string
+  sessions: SessionInfo[]
+}
+
 interface SessionsSectionProps {
   sessions: SessionInfo[]
+  /** P0 sidebar telemetry: live run state per session id. */
+  sessionActivity: Record<string, SessionActivity>
+  /** P2-⑥: goal runs keyed by the session they own (badge + iterations). */
+  goalRunsBySession: Record<string, GoalRunDto>
   currentSessionId: string | null
   switchSession: (id: string) => Promise<void>
   renameSession: (id: string, title: string) => Promise<void>
@@ -56,7 +113,7 @@ interface SessionsSectionProps {
   closeMobile?: () => void
 }
 
-export function SessionsSection({ sessions, currentSessionId, switchSession, renameSession, deleteSession, closeMobile }: SessionsSectionProps) {
+export function SessionsSection({ sessions, sessionActivity, goalRunsBySession = {}, currentSessionId, switchSession, renameSession, deleteSession, closeMobile }: SessionsSectionProps) {
   const t = useT()
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
@@ -68,10 +125,35 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [orderOverride, setOrderOverride] = useState<Record<string, number>>(readOrderOverride)
   const [pinnedIds, setPinnedIds] = useState<ReadonlySet<string>>(readPinned)
+  const [grouping, setGrouping] = useState<GroupingMode>(readGrouping)
+  // Wall-clock tick that drives the elapsed badges while anything runs.
+  const [nowTick, setNowTick] = useState(() => Date.now())
   // U5: touch long-press (500ms) opens the ⋯ menu; the click that follows a
   // completed long-press must not also switch the session.
   const longPressTimer = useRef<number | null>(null)
   const suppressClickRef = useRef(false)
+
+  const anyRunning = useMemo(
+    () => Object.values(sessionActivity).some(a => a.running) || sessions.some(s => s.running === true),
+    [sessionActivity, sessions],
+  )
+
+  // Refresh "now" immediately when activity changes, then keep the elapsed
+  // badges ticking (cheap: only while a run is live).
+  useEffect(() => {
+    setNowTick(Date.now())
+  }, [sessionActivity])
+  useEffect(() => {
+    if (!anyRunning) return
+    const id = window.setInterval(() => setNowTick(Date.now()), 5000)
+    return () => window.clearInterval(id)
+  }, [anyRunning])
+
+  const setGroupingPersisted = useCallback((mode: GroupingMode) => {
+    setGrouping(mode)
+    persistGrouping(mode)
+  }, [])
+
   const clearLongPress = useCallback(() => {
     if (longPressTimer.current !== null) {
       clearTimeout(longPressTimer.current)
@@ -138,6 +220,46 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
     return [...sorted.filter(s => hitIds.has(s.id)), ...backendHits.filter(h => !known.has(h.id))]
   }, [sorted, query, backendHits, sessions])
 
+  // Grouping (P0-④). null = render flat. While searching the list stays
+  // flat (matches hit ranking); project mode stays flat while there is at
+  // most one project (small lists stay uncluttered).
+  const groups = useMemo<SessionGroup[] | null>(() => {
+    if (query.trim()) return null
+    if (grouping === 'project') {
+      const distinct = new Set(filtered.map(projectOf))
+      if (distinct.size <= 1) return null
+      const buckets = new Map<string, SessionInfo[]>()
+      for (const s of filtered) {
+        const key = projectOf(s) ?? ''
+        if (!buckets.has(key)) buckets.set(key, [])
+        buckets.get(key)!.push(s)
+      }
+      return [...buckets.entries()].map(([key, list]) => ({
+        key,
+        icon: 'folder',
+        label: key === '' ? t('sidebar.sessions.project.untitled') : key,
+        sessions: list,
+      }))
+    }
+    const defs: { key: string; label: string }[] = [
+      { key: 'today', label: t('sidebar.sessions.group.today') },
+      { key: 'yesterday', label: t('sidebar.sessions.group.yesterday') },
+      { key: 'thisWeek', label: t('sidebar.sessions.group.thisWeek') },
+      { key: 'earlier', label: t('sidebar.sessions.group.earlier') },
+    ]
+    const now = new Date(nowTick)
+    const buckets = new Map<string, SessionInfo[]>(defs.map(d => [d.key, []]))
+    for (const s of filtered) {
+      const ts = sessionActivity[s.id]?.lastActivity ?? s.updated_at ?? s.created_at
+      const diff = dayDiffFromToday(ts, now)
+      const key = diff <= 0 ? 'today' : diff === 1 ? 'yesterday' : diff <= 6 ? 'thisWeek' : 'earlier'
+      buckets.get(key)!.push(s)
+    }
+    return defs
+      .map(d => ({ key: d.key, icon: 'schedule', label: d.label, sessions: buckets.get(d.key)! }))
+      .filter(g => g.sessions.length > 0)
+  }, [filtered, grouping, query, sessionActivity, nowTick, t])
+
   const persistOrder = useCallback((next: Record<string, number>) => {
     setOrderOverride(next)
     persist(SESSIONS_ORDER_KEY, next)
@@ -161,8 +283,9 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
 
   // U5: keyboard alternative to drag reorder — Alt+↑/↓ on a focused row
   // swaps it with its neighbor and writes through the same order-override
-  // path as handleDrop. Inert mid-search: reordering a filtered subset is
-  // ambiguous (the neighbor may be filtered out).
+  // path as handleDrop. Inert mid-search and in time grouping: reordering a
+  // filtered/bucketed subset is ambiguous (the neighbor may be filtered out
+  // or live in another day bucket).
   const moveRow = useCallback((id: string, dir: -1 | 1) => {
     const ids = sorted.map(s => s.id)
     const fromIdx = ids.indexOf(id)
@@ -178,10 +301,10 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
     if (!e.altKey) return
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault()
-      if (query.trim()) return
+      if (query.trim() || grouping === 'time') return
       moveRow(id, e.key === 'ArrowUp' ? -1 : 1)
     }
-  }, [moveRow, query])
+  }, [moveRow, query, grouping])
 
   const togglePin = useCallback((id: string) => {
     setPinnedIds(prev => {
@@ -226,15 +349,190 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
     ]
   }, [pinnedIds, t, sessions, startRename, togglePin, navigate])
 
+  const renderGroupHeader = (group: SessionGroup) => (
+    <div
+      key={`group-${group.key}`}
+      role="presentation"
+      className="px-3 pt-2 pb-1 font-label-sm text-[10px] font-bold uppercase tracking-wider text-on-surface-variant/80 flex items-center gap-1.5"
+    >
+      <span className="material-symbols-outlined text-[12px]" aria-hidden="true">{group.icon}</span>
+      <span className="truncate">{group.label}</span>
+    </div>
+  )
+
+  const renderRow = (session: SessionInfo) => {
+    const isActive = session.id === currentSessionId
+    const isEditing = editingId === session.id
+    const isMenuOpen = menuFor === session.id
+    const activity = sessionActivity[session.id]
+    const isRunning = activity?.running === true || session.running === true
+    const goalRun = goalRunsBySession[session.id]
+    const elapsed = isRunning && activity?.startedAt != null
+      ? formatElapsed(nowTick - activity.startedAt)
+      : null
+    return (
+      <div
+        key={session.id}
+        role="listitem"
+        draggable={!isEditing && grouping !== 'time'}
+        onDragStart={() => setDraggedId(session.id)}
+        onDragOver={e => e.preventDefault()}
+        onDrop={() => handleDrop(session.id)}
+        onTouchStart={() => startLongPress(session.id)}
+        onTouchEnd={clearLongPress}
+        onTouchMove={clearLongPress}
+        onTouchCancel={clearLongPress}
+        className={cn('group relative flex items-center gap-1', draggedId === session.id && 'opacity-40')}
+      >
+        {isEditing ? (
+          <Input
+            className="w-full text-label-md py-1 px-2 rounded-lg bg-surface-container-lowest border-primary/40"
+            value={editTitle}
+            onChange={e => setEditTitle(e.target.value)}
+            onBlur={() => commitRename(session)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') commitRename(session)
+              else if (e.key === 'Escape') setEditingId(null)
+            }}
+            aria-label={t('chat.session.rename')}
+            autoFocus
+          />
+        ) : (
+          <>
+            <button
+              type="button"
+              aria-current={isActive ? 'page' : undefined}
+              data-testid={`desktop-session-row-${session.id}`}
+              aria-label={t('chat.session.aria', { title: session.title || untitled })}
+              title={session.title || untitled}
+              onClick={() => handleSwitch(session.id)}
+              onKeyDown={e => handleRowKeyDown(e, session.id)}
+              className={cn(
+                'flex-1 min-w-0 text-left px-3 py-2 rounded-lg font-label-md text-label-md transition-all duration-200 flex items-center gap-2 cursor-pointer select-none',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
+                isActive
+                  ? 'bg-primary-container text-on-primary-container font-bold'
+                  : 'text-on-surface-variant hover:bg-surface-container-low hover:text-primary',
+              )}
+            >
+              {/* U5: affordance only — the grip shows on hover/focus
+                  (Alt+↑/↓ or drag does the work), cutting per-row
+                  visual noise. Superseded while the run dot is live. */}
+              <span className="material-symbols-outlined text-[14px] text-outline-variant shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" aria-hidden="true">drag_indicator</span>
+              {isRunning && (
+                <span
+                  role="img"
+                  aria-label={activity?.activeTool
+                    ? t('sidebar.sessions.running.tool', { tool: activity.activeTool })
+                    : t('sidebar.sessions.running.badge')}
+                  title={activity?.activeTool
+                    ? t('sidebar.sessions.running.tool', { tool: activity.activeTool })
+                    : t('sidebar.sessions.running.badge')}
+                  className="w-2 h-2 rounded-full bg-secondary animate-pulse shrink-0"
+                />
+              )}
+              {pinnedIds.has(session.id) && (
+                // U8: filled pin marks the active state; the menu
+                // action stays outlined.
+                <span className="material-symbols-outlined text-[14px] text-primary shrink-0" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">push_pin</span>
+              )}
+              {/* P2-⑥: goal-run badge — a session a goal run owns shows the
+                  run's iteration progress right on the rail. */}
+              {goalRun && (
+                <span
+                  role="img"
+                  aria-label={t('sidebar.sessions.goal.badge.aria', {
+                    title: goalRun.title,
+                    done: goalRun.iterations,
+                    total: goalRun.maxTurns ?? goalRun.iterations,
+                  })}
+                  title={t('sidebar.sessions.goal.badge.aria', {
+                    title: goalRun.title,
+                    done: goalRun.iterations,
+                    total: goalRun.maxTurns ?? goalRun.iterations,
+                  })}
+                  className="flex items-center gap-[2px] shrink-0 text-primary"
+                >
+                  <span className="material-symbols-outlined text-[13px]" style={{ fontVariationSettings: goalRun.status === 'running' ? "'FILL' 1" : undefined }} aria-hidden="true">flag</span>
+                  <span className="font-mono text-[10px] tabular-nums text-on-surface" aria-hidden="true">
+                    {goalRun.iterations}/{goalRun.maxTurns ?? goalRun.iterations}
+                  </span>
+                </span>
+              )}
+              <span className="flex-1 truncate">
+                <HighlightText text={session.title || untitled} query={query.trim()} />
+              </span>
+              {/* P0-②: live elapsed badge — the ZCode-style "run monitor"
+                  signal on the rail itself. */}
+              {elapsed && (
+                <span className="font-mono text-[10px] tabular-nums text-secondary shrink-0" aria-hidden="true">
+                  {elapsed}
+                </span>
+              )}
+            </button>
+            <div className="relative shrink-0">
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t('chat.session.menu.aria', { title: session.title || untitled })}
+                className={cn(
+                  'rounded hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none',
+                  isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                )}
+                onClick={e => { e.stopPropagation(); setMenuFor(isMenuOpen ? null : session.id) }}
+              >
+                <span className="material-symbols-outlined text-[16px]">more_horiz</span>
+              </Button>
+              {isMenuOpen && (
+                <DropdownMenu
+                  open
+                  onClose={() => setMenuFor(null)}
+                  items={menuItems(session)}
+                  align="end"
+                  className="w-40 min-w-0"
+                  ariaLabel={t('chat.session.menu.aria', { title: session.title || untitled })}
+                />
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center justify-between px-2 mb-xs shrink-0">
+      <div className="flex items-center justify-between px-2 mb-xs shrink-0 gap-1">
         <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
           {t('sidebar.sessions.title')}
         </span>
         <span className="font-label-sm text-label-sm text-on-surface-variant">
           {filtered.length}{filtered.length !== sessions.length ? `/${sessions.length}` : ''}
         </span>
+        {/* P0-④ grouping view switch — 按项目 (default) / 按时间. */}
+        <div role="group" aria-label={t('sidebar.sessions.grouping.aria')} className="flex items-center gap-0.5 shrink-0">
+          {([
+            { mode: 'project' as const, icon: 'folder', label: t('sidebar.sessions.grouping.project') },
+            { mode: 'time' as const, icon: 'schedule', label: t('sidebar.sessions.grouping.time') },
+          ]).map(opt => (
+            <button
+              key={opt.mode}
+              type="button"
+              aria-pressed={grouping === opt.mode}
+              aria-label={opt.label}
+              title={opt.label}
+              onClick={() => setGroupingPersisted(opt.mode)}
+              className={cn(
+                'p-0.5 rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer',
+                grouping === opt.mode
+                  ? 'text-primary bg-primary/10'
+                  : 'text-on-surface-variant/70 hover:text-primary hover:bg-surface-container-low',
+              )}
+            >
+              <span className="material-symbols-outlined text-[13px]" aria-hidden="true">{opt.icon}</span>
+            </button>
+          ))}
+        </div>
       </div>
       <input
         type="search"
@@ -249,131 +547,18 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
           <div className="px-2 py-3 text-center font-label-sm text-label-sm text-on-surface-variant">
             {t('sidebar.sessions.noResults')}
           </div>
+        ) : groups === null ? (
+          <div className="space-y-0.5 pr-1" role="list" aria-label={t('sidebar.sessions.list.aria')}>
+            {filtered.map(renderRow)}
+          </div>
         ) : (
           <div className="space-y-0.5 pr-1" role="list" aria-label={t('sidebar.sessions.list.aria')}>
-            {(() => {
-              // Project grouping (UI audit Wave 3): sessions sharing a
-              // working_dir get a project header — the Codex/Claude "project"
-              // mental model. Only when browsing (not searching) and only
-              // when there is more than one distinct project, so small lists
-              // stay flat.
-              const projectOf = (s: { working_dir?: string | null }) => {
-                const dir = s.working_dir?.trim()
-                if (!dir) return null
-                const parts = dir.split('/').filter(Boolean)
-                return parts.length > 0 ? parts[parts.length - 1] : null
-              }
-              const distinct = new Set(filtered.map(projectOf))
-              const showGroups = !query.trim() && distinct.size > 1
-              let lastProject: string | null | undefined = undefined
-              return filtered.map((session) => {
-                const isActive = session.id === currentSessionId
-                const isEditing = editingId === session.id
-                const isMenuOpen = menuFor === session.id
-                const project = projectOf(session)
-                const groupHeader = showGroups && project !== lastProject
-                  ? (
-                    <div
-                      key={`group-${project ?? 'default'}`}
-                      role="presentation"
-                      className="px-3 pt-2 pb-1 font-label-sm text-[10px] font-bold uppercase tracking-wider text-on-surface-variant/80 flex items-center gap-1.5"
-                    >
-                      <span className="material-symbols-outlined text-[12px]" aria-hidden="true">folder</span>
-                      <span className="truncate">{project ?? t('sidebar.sessions.project.untitled')}</span>
-                    </div>
-                  )
-                  : null
-                lastProject = project
-                return (
-                  <Fragment key={session.id}>
-                    {groupHeader}
-                    <div
-                  role="listitem"
-                  draggable={!isEditing}
-                  onDragStart={() => setDraggedId(session.id)}
-                  onDragOver={e => e.preventDefault()}
-                  onDrop={() => handleDrop(session.id)}
-                  onTouchStart={() => startLongPress(session.id)}
-                  onTouchEnd={clearLongPress}
-                  onTouchMove={clearLongPress}
-                  onTouchCancel={clearLongPress}
-                  className={cn('group relative flex items-center gap-1', draggedId === session.id && 'opacity-40')}
-                >
-                  {isEditing ? (
-                    <Input
-                      className="w-full text-label-md py-1 px-2 rounded-lg bg-surface-container-lowest border-primary/40"
-                      value={editTitle}
-                      onChange={e => setEditTitle(e.target.value)}
-                      onBlur={() => commitRename(session)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') commitRename(session)
-                        else if (e.key === 'Escape') setEditingId(null)
-                      }}
-                      aria-label={t('chat.session.rename')}
-                      autoFocus
-                    />
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        aria-current={isActive ? 'page' : undefined}
-                        data-testid={`desktop-session-row-${session.id}`}
-                        aria-label={t('chat.session.aria', { title: session.title || untitled })}
-                        title={session.title || untitled}
-                        onClick={() => handleSwitch(session.id)}
-                        onKeyDown={e => handleRowKeyDown(e, session.id)}
-                        className={cn(
-                          'flex-1 min-w-0 text-left px-3 py-2 rounded-lg font-label-md text-label-md transition-all duration-200 flex items-center gap-2 cursor-pointer select-none',
-                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
-                          isActive
-                            ? 'bg-primary-container text-on-primary-container font-bold'
-                            : 'text-on-surface-variant hover:bg-surface-container-low hover:text-primary',
-                        )}
-                      >
-                        {/* U5: affordance only — the grip shows on hover/focus
-                            (Alt+↑/↓ or drag does the work), cutting per-row
-                            visual noise. */}
-                        <span className="material-symbols-outlined text-[14px] text-outline-variant shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" aria-hidden="true">drag_indicator</span>
-                        {pinnedIds.has(session.id) && (
-                          // U8: filled pin marks the active state; the menu
-                          // action stays outlined.
-                          <span className="material-symbols-outlined text-[14px] text-primary shrink-0" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">push_pin</span>
-                        )}
-                        <span className="flex-1 truncate">
-                          <HighlightText text={session.title || untitled} query={query.trim()} />
-                        </span>
-                      </button>
-                      <div className="relative shrink-0">
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label={t('chat.session.menu.aria', { title: session.title || untitled })}
-                          className={cn(
-                            'rounded hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none',
-                            isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-                          )}
-                          onClick={e => { e.stopPropagation(); setMenuFor(isMenuOpen ? null : session.id) }}
-                        >
-                          <span className="material-symbols-outlined text-[16px]">more_horiz</span>
-                        </Button>
-                        {isMenuOpen && (
-                          <DropdownMenu
-                            open
-                            onClose={() => setMenuFor(null)}
-                            items={menuItems(session)}
-                            align="end"
-                            className="w-40 min-w-0"
-                            ariaLabel={t('chat.session.menu.aria', { title: session.title || untitled })}
-                          />
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
-                </Fragment>
-              )
-            })
-          })()}
+            {groups.map(group => (
+              <Fragment key={group.key}>
+                {renderGroupHeader(group)}
+                {group.sessions.map(renderRow)}
+              </Fragment>
+            ))}
           </div>
         )}
       </ScrollArea>

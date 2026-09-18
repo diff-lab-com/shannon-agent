@@ -39,9 +39,10 @@ interface ChatInputProps {
   onOpenEditor: () => void
 }
 
-// U2: the model Select and the working-directory chip were removed — the
-// global Header owns model switching, and the composer footer (ComposerPanel)
-// is the single working-directory entry point.
+// U2 removed the composer's model Select; the ZCode delta P0-③ brings a
+// model chip back (per-message switching without reaching for the Header)
+// while the global Header selector stays in sync — both write the same
+// engine config keys (`model` holds a model NAME, not the catalog id).
 export default function ChatInput({
   value,
   onChange,
@@ -58,7 +59,10 @@ export default function ChatInput({
 }: ChatInputProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { config, refreshConfig } = useCatalog()
+  const { config, status, models, refreshConfig, refreshStatus } = useCatalog()
+  // Tests (and degraded catalogs) may omit the model list — the chip then
+  // falls back to the placeholder and lists nothing.
+  const modelList = models ?? []
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isDragging, setIsDragging] = useState(false)
 
@@ -106,6 +110,23 @@ export default function ChatInput({
       await refreshConfig()
     } catch (err) {
       toastError(t('chat.input.mode.failed'), err)
+    }
+  }
+
+  // P0-③ (ZCode delta): composer model chip. Mirrors Header.handleModelSwitch
+  // exactly — configure the model NAME plus its provider, then refresh both
+  // config and status so the two selectors stay in sync.
+  const currentModel = modelList.find(m => m.name === status?.model || m.id === status?.model)
+  const handleModelSwitch = async (modelId: string | null) => {
+    const model = modelList.find(m => m.id === modelId)
+    if (!model) return
+    try {
+      await api.configure({ key: 'model', value: model.name })
+      await api.configure({ key: 'provider', value: model.provider })
+      await refreshConfig()
+      await refreshStatus()
+    } catch (err) {
+      toastError(t('chat.input.model.failed'), err)
     }
   }
 
@@ -421,6 +442,32 @@ export default function ChatInput({
                       <span className="material-symbols-outlined icon-sm">{mode.icon}</span>
                       <span>{mode.label}</span>
                     </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select value={currentModel?.id ?? ''} onValueChange={handleModelSwitch}>
+              <SelectTrigger
+                size="sm"
+                aria-label={t('chat.input.model.label')}
+                title={t('chat.input.model.title')}
+                className="max-w-[150px] border border-outline-variant/50 bg-transparent hover:bg-surface-container-low/50 transition-colors"
+              >
+                <span className="material-symbols-outlined icon-sm">smart_toy</span>
+                {/* Render the model NAME (what config `model` stores and what
+                    the Header displays), not the catalog id. */}
+                <SelectValue placeholder={status?.model || t('chat.input.model.label')}>
+                  {(value: unknown) => {
+                    const m = modelList.find(x => x.id === value)
+                    return m ? m.name : (status?.model || t('chat.input.model.label'))
+                  }}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {modelList.map(m => (
+                  <SelectItem key={m.id} value={m.id}>
+                    <span className="font-mono">{m.name}</span>
                   </SelectItem>
                 ))}
               </SelectContent>

@@ -10,6 +10,7 @@ import { useI18n, SUPPORTED_LOCALES, type Locale } from '@/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { readDensity, setDensity, type Density } from '@/lib/density'
 import type { ApprovalMode } from '@/types'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 import MigrationWizard from '@/components/migration/MigrationWizard'
@@ -28,6 +29,12 @@ const APPROVAL_MODE_KEYS: { value: ApprovalModeKey; labelKey: string; descriptio
 
 export default function GeneralSettings() {
   const { config, refreshConfig } = useCatalog()
+  // P2-⑧ display density (local preference, applied at boot in main.tsx).
+  const [density, setDensityState] = useState<Density>(readDensity)
+  const handleDensityChange = (d: Density) => {
+    setDensityState(d)
+    setDensity(d)
+  }
   const intl = useIntl()
   const navigate = useNavigate()
   const t = (id: string) => intl.formatMessage({ id })
@@ -153,6 +160,36 @@ export default function GeneralSettings() {
                 className={cn(
                   'px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
                   locale === opt.id
+                    ? 'bg-primary text-on-primary'
+                    : 'bg-surface-container-low text-on-surface hover:bg-surface-container-high border border-outline-variant/50',
+                )}
+              >
+                {intl.formatMessage({ id: opt.labelKey })}
+              </Button>
+            ))}
+          </div>
+        </section>
+
+        {/* P2-⑧ Display density */}
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm transition-all hover:shadow-md">
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>format_line_spacing</span>
+            <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.density.title' })}</h3>
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.density.help' })}</p>
+          <div className="flex flex-wrap gap-sm">
+            {([
+              { id: 'comfortable' as const, labelKey: 'settings.density.comfortable' },
+              { id: 'compact' as const, labelKey: 'settings.density.compact' },
+            ]).map(opt => (
+              <Button
+                key={opt.id}
+                variant={density === opt.id ? 'default' : 'outline'}
+                onClick={() => handleDensityChange(opt.id)}
+                aria-pressed={density === opt.id}
+                className={cn(
+                  'px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
+                  density === opt.id
                     ? 'bg-primary text-on-primary'
                     : 'bg-surface-container-low text-on-surface hover:bg-surface-container-high border border-outline-variant/50',
                 )}

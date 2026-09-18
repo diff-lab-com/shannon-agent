@@ -21,6 +21,7 @@ vi.mock('react-router-dom', async () => {
 
 // Mock useApp hook
 const mockRefreshConfig = vi.fn()
+const mockRefreshStatus = vi.fn()
 vi.mock('@/context/CatalogContext', () => ({
   useCatalog: () => ({
     config: {
@@ -29,11 +30,13 @@ vi.mock('@/context/CatalogContext', () => ({
       provider: 'anthropic',
       working_dir: '/home/user/projects',
     },
+    status: { model: 'Claude Sonnet 4.6', provider: 'anthropic', querying: false, message_count: 0, working_dir: '/home/user/projects' },
     models: [
       { id: 'anthropic-claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic', context_window: 200000 },
       { id: 'openai-gpt-4o', name: 'GPT-4o', provider: 'openai', context_window: 128000 },
     ],
     refreshConfig: mockRefreshConfig,
+    refreshStatus: mockRefreshStatus,
   }),
 }))
 
@@ -59,14 +62,20 @@ describe('ChatInput', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockRefreshConfig.mockReset()
+    mockRefreshStatus.mockReset()
     vi.mocked(api.configure).mockReset()
   })
 
-  // U2: model switching moved to the global Header and the working-directory
-  // picker to the composer footer — neither control lives in the strip anymore.
-  it('does not render a model selector or working-directory chip (U2)', () => {
+  // P0-③ (ZCode delta): the composer carries a model chip again — synced
+  // with the Header (both write config `model`/`provider`). The
+  // working-directory picker stays in the composer footer (U2).
+  it('renders a model chip showing the active model, but no working-directory chip', () => {
     renderChatInput()
-    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
+    const chip = screen.getByLabelText('Model')
+    expect(chip).toBeInTheDocument()
+    // Selected value mirrors status.model by NAME — config `model` holds a
+    // name, not the catalog id, and the mock catalog matches it.
+    expect(chip).toHaveTextContent('Claude Sonnet 4.6')
     expect(screen.queryByLabelText('Change working directory')).not.toBeInTheDocument()
   })
 

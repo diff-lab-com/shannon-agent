@@ -1207,8 +1207,12 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                         tool_name,
                         result,
                         is_error,
+                        meta,
                         ..
                     } => {
+                        // P1-⑤: forward the engine's tool metadata alongside
+                        // the result (additive, serde-default on the wire).
+                        let meta_val = if meta.is_null() { None } else { Some(*meta) };
                         let _ = self.app.emit(
                             event_names::QUERY_TOOL_RESULT,
                             crate::events::ToolResultPayload {
@@ -1218,6 +1222,8 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                                 result,
                                 is_error,
                                 session_id: Some(self.session_id.to_string()),
+                                meta: meta_val,
+                                tokens_used: None,
                             },
                         );
                     }

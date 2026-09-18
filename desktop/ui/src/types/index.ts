@@ -22,6 +22,12 @@ export interface ToolResultPayload {
   tool_name: string
   result: string
   is_error: boolean
+  /** P1-⑤: engine tool metadata (e.g. sandbox classification). Absent on
+   *  older engines. */
+  meta?: unknown
+  /** P1-⑤ telemetry: approximate per-tool token attribution collapsed by
+   *  the desktop forwarder. */
+  tokens_used?: number
 }
 
 export interface ToolProgressPayload {
@@ -103,6 +109,17 @@ export interface ToolCall {
   progress?: number
   progress_message?: string
   status: 'running' | 'completed' | 'error'
+  /** P1-⑤ telemetry: wall-clock start (epoch ms) captured at tool-start. */
+  started_at?: number
+  /** P1-⑤ telemetry: client-measured duration (ms), set when the result
+   *  arrives. Historical messages get durations from the L0 trace timeline
+   *  instead (see MessageArea's duration lookup). */
+  duration_ms?: number
+  /** P1-⑤: engine tool metadata (e.g. `{ classification: 'sandbox_denied' }`). */
+  meta?: unknown
+  /** P1-⑤ telemetry: approximate per-tool token attribution (collapsed by
+   *  the desktop forwarder). Historical cards don't carry this. */
+  tokens_used?: number
 }
 
 export interface ResearchReport {
@@ -150,6 +167,42 @@ export interface SessionInfo {
   parent_id?: string | null
   /** Message index in parent where this branch diverged */
   branch_point?: number | null
+  /** P0 sidebar telemetry: live-query flag joined from the session registry.
+   *  Absent on older engines — treat as unknown, not false. */
+  running?: boolean
+  /** P0 sidebar telemetry: epoch **ms** of the session's last activity
+   *  (L0 log mtime). Absent on older engines / brand-new sessions. */
+  updated_at?: number
+}
+
+/**
+ * P0 plan dock: one persisted plan file from the session working dir
+ * (`<workingDir>/.shannon/plans/*.md`), parsed by the `get_session_plan`
+ * command. Mirrors the engine `PlanManager::save_plan_to_file` format.
+ */
+export interface SessionPlan {
+  /** Plan file stem (the engine's plan id). */
+  id: string
+  title: string
+  /** `"approved" | "pending"` — raw header value. */
+  status: string
+  /** RFC3339 creation timestamp (raw header value). */
+  created_at: string
+  /** Markdown body (everything after the header block). */
+  content: string
+}
+
+/**
+ * P0 sidebar telemetry: live per-session activity derived from the query:*
+ * event stream (and reconciled with `SessionInfo.running` on refresh).
+ * `startedAt === null` means "running, start unknown" (e.g. a goal-owned run
+ * that began before this window joined the event stream).
+ */
+export interface SessionActivity {
+  running: boolean
+  startedAt: number | null
+  lastActivity: number
+  activeTool: string | null
 }
 
 export interface StatusResponse {

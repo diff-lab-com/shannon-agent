@@ -160,6 +160,8 @@ describe('Chat page', () => {
 
   it('renders usage section when usage data present', () => {
     resetCtx()
+    // The usage cards live in the right dock's Context tab (P1-⑦).
+    ctx.contextPanelOpen = true
     ctx.usage = { input_tokens: 1000, output_tokens: 500, cost_usd: 0.05 }
     renderChat()
     expect(screen.getByText('Usage')).toBeInTheDocument()
@@ -170,6 +172,7 @@ describe('Chat page', () => {
 
   it('renders active tool calls section', () => {
     resetCtx()
+    ctx.contextPanelOpen = true
     ctx.activeToolCalls = [{ tool_use_id: 'tc1', tool_name: 'bash', status: 'running' }]
     renderChat()
     expect(screen.getByText('Active Tools')).toBeInTheDocument()

@@ -367,9 +367,17 @@ impl AgentTool {
                 )
                 .await?;
 
-            // 3. Update agent status in registry (use list to find and update)
-            // The SubAgentRegistry tracks agents internally; the coordinator
-            // tracks teammates. Both are updated by the spawn.
+            // 3. Write the run outcome back to the registry — previously the
+            // entry stayed `Idle` forever (stale-status bug) — and publish
+            // the lifecycle transition to observers (P0-⑥).
+            let ok = result.status != "failed";
+            let result_summary = result
+                .result
+                .clone()
+                .unwrap_or_else(|| result.message.clone());
+            ctx.registry
+                .record_run_outcome(&agent_uid, ok, result_summary)
+                .await;
             tracing::info!(
                 agent_id = %agent_uid,
                 agent_name = %agent_name,

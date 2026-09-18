@@ -183,7 +183,8 @@ const demoPatch = (branch: number) =>
 // one finished; start_goal_run appends new running rows with live feel.
 const goalRuns = [
   {
-    sessionId: '0196aaaa-0000-7000-8000-000000000001',
+    // P2-⑥: bound to a seeded sidebar session so the goal badge shows in demo.
+    sessionId: 'sess-002',
     title: 'Harden the upload pipeline',
     objective: 'Add retry + tests to the upload pipeline so flaky network errors cannot lose files',
     status: 'running',
@@ -255,6 +256,11 @@ export const handlers: Record<string, MockHandler> = {
       demoConfig.sandbox = { mode }
     } else if (args?.key === 'approval_mode') {
       demoConfig.approval_mode = args.value
+    } else if (args?.key === 'model') {
+      // P0-③: model switching (composer chip / header) mirrors the engine.
+      demoConfig.model = args.value
+    } else if (args?.key === 'provider') {
+      demoConfig.provider = args.value
     } else if (args?.key === 'offpeak.model_override') {
       // P2-5: frozen config key — empty value disables the override.
       const trimmed = String(args.value ?? '').trim()
@@ -311,7 +317,17 @@ export const handlers: Record<string, MockHandler> = {
 
   // --- Models & Status ---
   async list_models() { await delay(); return clone(MOCK_MODELS) },
-  async get_status() { await delay(40); return clone(MOCK_STATUS) },
+  // Status mirrors demoConfig so model switching (composer chip / header)
+  // visibly updates both selectors in the demo — they stay in sync the way
+  // the real engine does.
+  async get_status() {
+    await delay(40)
+    return {
+      ...clone(MOCK_STATUS),
+      model: demoConfig.model ?? MOCK_STATUS.model,
+      provider: demoConfig.provider ?? MOCK_STATUS.provider,
+    }
+  },
   async list_tools() { await delay(); return clone(MOCK_TOOLS) },
 
   // --- Sessions ---
@@ -331,6 +347,29 @@ export const handlers: Record<string, MockHandler> = {
       .filter(s => !deletedSessions.has(s.id))
       .map(s => renamedSessions.get(s.id) ?? s)
       .filter(s => s.title.toLowerCase().includes(q))
+  },
+  // P0 plan dock: a demo plan so the dock's 计划 tab has content in mock mode.
+  async get_session_plan(args: { workingDir?: string }) {
+    await delay()
+    if (!args?.workingDir) return null
+    return {
+      id: 'demo-plan',
+      title: 'Q3 roadmap execution plan',
+      status: 'approved',
+      created_at: new Date(Date.now() - 3600_000).toISOString(),
+      content: [
+        '## Steps',
+        '',
+        '1. OAuth scaffolding for the 5 launch partners',
+        '2. Webhook reliability SLA (99.95%) — retries + dead-letter queue',
+        '3. Billing schema v2 dual-write, cutover behind a flag',
+        '4. Onboarding product tour ship + activation instrumentation',
+        '',
+        '- [x] Survey partner API surface',
+        '- [ ] Draft the OAuth gallery spec',
+        '- [ ] Load-test the webhook path',
+      ].join('\n'),
+    }
   },
   async load_session() { await delay(); return clone(MOCK_MESSAGES) },
   async switch_session() { await delay(); return clone(MOCK_MESSAGES) },

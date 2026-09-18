@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react'
 import { useIntl } from 'react-intl'
 import { Markdown } from '@/components/chat/Markdown'
-import { ToolCallDisplay } from '@/components/chat/MessageBubble'
+import { SubagentBlock, ToolCallDisplay } from '@/components/chat/MessageBubble'
 import { Reasoning } from '@/components/ai-elements'
 import { Button } from '@/components/ui/button'
 import type { ToolCall } from '@/types'
@@ -106,7 +106,13 @@ export default function StreamingResponse({
             </Reasoning>
           )}
           {activeToolCalls.map(tc => (
-            <ToolCallDisplay key={tc.tool_use_id} toolCall={tc} onViewDiff={onViewDiff} />
+            tc.tool_name === 'agent_spawn' ? (
+              // P1-⑥: sub-agent spawns render as first-class blocks in the
+              // live stream too.
+              <SubagentBlock key={tc.tool_use_id} toolCall={tc} />
+            ) : (
+              <ToolCallDisplay key={tc.tool_use_id} toolCall={tc} onViewDiff={onViewDiff} />
+            )
           ))}
           {streamingText && (
             <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-sm">

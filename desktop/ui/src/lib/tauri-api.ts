@@ -28,6 +28,7 @@ import type {
   SendMessageResponse,
   HunkAction,
   SessionInfo,
+  SessionPlan,
   TurnTimeline,
   McpServerInfo,
   McpServerConfig,
@@ -512,6 +513,12 @@ export async function newSession(): Promise<string> {
 
 export async function listSessions(): Promise<SessionInfo[]> {
   return invoke('list_sessions')
+}
+
+/** P0 plan dock — the session working dir's most recent persisted plan
+ *  (`<workingDir>/.shannon/plans/*.md`, newest by mtime); null when none. */
+export async function getSessionPlan(workingDir: string): Promise<SessionPlan | null> {
+  return invoke('get_session_plan', { workingDir })
 }
 
 /** Turn Timeline (§4.14) — L0-derived turns/tools/token-cost view of one session. */
