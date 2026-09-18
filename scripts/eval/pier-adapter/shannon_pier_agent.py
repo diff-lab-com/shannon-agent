@@ -290,7 +290,13 @@ class Shannon(BaseInstalledAgent):
             f"{disallowed_flags}"
             f"{extra_flags}"
             f"--prompt=\"$(cat {shlex.quote(prompt_target)})\" "
-            "> /logs/agent/shannon.ndjson 2> /logs/agent/shannon.stderr"
+            "> /logs/agent/shannon.ndjson 2> /logs/agent/shannon.stderr; "
+            # Telemetry (P3): ship the session event log out of the container
+            # before it is deleted with the trial. SHANNON_HOME holds one
+            # events.jsonl per session (A7 retries create several); exit code
+            # is preserved so the harness retry logic is unaffected.
+            "rc=$?; tar -C \"$HOME/.shannon\" -cf - sessions 2>/dev/null | "
+            "tar -C /logs/agent -xf - 2>/dev/null; exit $rc"
         )
         # rc=4 (rate-limit) retries at the harness layer: coding-plan windows
         # are bursty and the engine's in-call retry cannot cover an immediate
