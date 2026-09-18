@@ -111,7 +111,10 @@ pub(crate) mod test_env {
             let dir = tempfile::tempdir().unwrap();
             // SAFETY: every env-swapping test holds ENV_LOCK.
             unsafe { std::env::set_var("HOME", dir.path()) };
-            Self { original, _guard: (lock, dir) }
+            Self {
+                original,
+                _guard: (lock, dir),
+            }
         }
     }
 

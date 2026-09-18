@@ -488,7 +488,10 @@ mod handler_tests {
             // mutates HOME while this guard lives.
             unsafe { std::env::set_var("HOME", dir.path()) };
             // TempDir stays alive here so the scratch home outlives the swap.
-            Self { original, _guard: (lock, dir) }
+            Self {
+                original,
+                _guard: (lock, dir),
+            }
         }
     }
     impl Drop for HomeGuard {
