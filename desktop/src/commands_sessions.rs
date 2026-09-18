@@ -223,7 +223,6 @@ pub async fn get_session_plan(working_dir: String) -> Result<Option<SessionPlanI
     }
     // Sync file IO on a worker thread — plans are tiny but the scan is
     // still blocking IO, and this command fires on every plan-tab refresh.
-    let working_dir = working_dir;
     let plan = tokio::task::spawn_blocking(move || {
         let plans_dir = std::path::Path::new(&working_dir)
             .join(".shannon")
@@ -293,8 +292,8 @@ pub async fn get_session_plan(working_dir: String) -> Result<Option<SessionPlanI
         }))
     })
     .await
-    .map_err(|e| format!("plan read task failed: {e}"))?;
-    Ok(plan?)
+    .map_err(|e| format!("plan read task failed: {e}"))??;
+    Ok(plan)
 }
 /// Search sessions by title substring or message content.
 ///
