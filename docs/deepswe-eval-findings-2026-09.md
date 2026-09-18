@@ -85,11 +85,18 @@ mini-swe 同样受此约束（官方 63% 即在此口径下）。P3 要回答：
 A8 预算按轮生效设计正确（cliffy 跨 9+ 次切断存活）。P2 的 113 题 3 并发下
 此类任务拉长尾部但被 3h 硬顶约束；infra 分离口径需把「续推耗尽死亡」单独标记。
 
-## 二、基线波次记录（P2，待回填）
+## 二、基线波次记录（P2）
 
-- wave-1（113×n=1）：待跑。发车前置：preflight 门禁、`SHANNON_PIER_BIN` 指向
-  worktree 构建（a5baf851+）、`--job-name deepswe-base-w1`。
-- 逐题矩阵 / infra 分离口径：由 `deepswe-wave.sh aggregate` 产出。
+- **wave-1 发车（2026-09-18 08:0x）**：`deepswe-base-w1`，113×n=1，3 并发，anchor =
+  glm-5.3-flash @ zhipu-coding-plan（默认 thinking=max），二进制 = worktree 构建
+  （feat/deepswe-eval @ b512db61+，含 A8/A8b），max-turns 150，SHANNON_TIMEOUT=1800，
+  SHANNON_STREAM_IDLE_SECS=420，SHANNON_TURN_RETRIES=2（默认）。
+  发车前 preflight 4/4。
+  中断恢复：`pier job resume ~/.shannon/eval/deepswe/jobs/deepswe-base-w1`
+  （PYTHONPATH=scripts/eval/pier-adapter SHANNON_PIER_BIN=<worktree 二进制>）。
+  聚合：`JOBS_DIR=~/.shannon/eval/deepswe/jobs scripts/eval/deepswe-wave.sh aggregate
+  --job-name deepswe-base-w1`。
+- 逐题矩阵 / infra 分离口径：聚合产出后回填。
 
 ## 三、改进 backlog（P3 正式化，P4 执行）
 
