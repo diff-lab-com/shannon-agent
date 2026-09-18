@@ -39,14 +39,14 @@ def find_events_files(trial_dir: Path) -> list[Path]:
     """Locate events.jsonl files for a trial.
 
     Preferred: the adapter uploads SHANNON_HOME/sessions into
-    /logs/agent/shannon-sessions (A7 retries yield several session files —
-    all are returned, caller merges). Fallbacks cover local runs and older
-    layouts.
+    /logs/agent/sessions (A7 retries yield several session files — all are
+    returned, caller merges). Fallbacks cover local runs and older layouts.
     """
     out: list[Path] = []
-    sessions = trial_dir / "agent" / "shannon-sessions"
-    if sessions.is_dir():
-        out.extend(sorted(sessions.rglob("events.jsonl")))
+    for dirname in ("sessions", "shannon-sessions"):
+        sessions = trial_dir / "agent" / dirname
+        if sessions.is_dir():
+            out.extend(sorted(sessions.rglob("events.jsonl")))
     for candidate in (
         trial_dir / "agent" / "events.jsonl",
         trial_dir / "events.jsonl",
@@ -81,8 +81,12 @@ def analyze(trial_dir: Path) -> dict:
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                kind = ev.get("type") or ev.get("event") or ""
+                # Live schema: kind/ts_ns/turn/seq (session_event.rs L0 log);
+                # accept type/event/timestamp spellings for older layouts.
+                kind = ev.get("kind") or ev.get("type") or ev.get("event") or ""
                 ts = parse_ts(ev.get("timestamp") or ev.get("ts"))
+                if ts is None and ev.get("ts_ns") is not None:
+                    ts = ev["ts_ns"] / 1e9
                 if ts is not None:
                     first_ts = first_ts or ts
                     last_ts = ts
