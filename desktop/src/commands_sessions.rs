@@ -294,7 +294,7 @@ pub async fn get_session_plan(working_dir: String) -> Result<Option<SessionPlanI
     })
     .await
     .map_err(|e| format!("plan read task failed: {e}"))?;
-    Ok(plan)
+    Ok(plan?)
 }
 /// Search sessions by title substring or message content.
 ///
