@@ -243,6 +243,55 @@ w4 发车 ~4.5h：11 启动 / 8 判分 / 3 在跑（健康：pier 存活、网�
 4. **P3/P4 优先级升位**：长会话上下文管理（超时后收缩/压缩）为第一优先——
    「真实用户受益」判据通过（长会话稳定性是通用痛点，非评测特化）。
 
+### F16（超时死亡 RCA 修正 + A14 流 idle 看门狗自适应耐心，2026-09-19）
+1. **RCA 修正（F15 误归因为「上下文过大」）**：深度取证 csstree 失败 trial
+   （events.jsonl + config_snapshot + ts_ns 指纹）坐实：
+   - `config_snapshot.effective_max_context_tokens=1000000`，**上下文**实际**只**用
+     了 20k tokens（请求体 73KB / 39 条消息）；
+   - 3 次死亡**全部发生在上一次内容事件之后 421 秒**（精确指纹×3）——这正是
+     `SHANNON_STREAM_IDLE_SECS=420`（默认 420s + 1s 浮点）的内容级流看门狗；
+   - adapter 已正确注入 `SHANNON_TIMEOUT=1800`（活体进程 environ 验证），
+     `SHANNON_STREAM_IDLE_SECS=420` 也生效；
+   - read_timeout 是 1800s（不会开火）、gateway 6-min 切断会表现为 EOF
+     （也不会 421s）、A8 每 turn 重试预算默认 2 次 = 同 turn 最多跑 3 次都 420s
+     → 2100s 累计窗口，跑完未压缩上下文；
+   - 真正机制：GLM 在 DeepSWE 难 turn 上**合法思考 >420s**，被内容级看门狗误判为
+     静默切断；A8 重发同 turn → 模型再次合法思考 >420s → 3 次都死 → run-retry 整跑
+     整跑重来 → 再死。
+   - 「上下文压缩」不是主修方（才 20k tokens），**「超时后升级看门狗耐心」**才是。
+2. **A14 实现（流 idle 看门狗自适应耐心）**：commit *<见 git log>*
+   - **streaming.rs**：两个流构造函数 (`sse_stream_from_response` /
+     `sse_stream_from_response_resumable`) 增加 `idle_override: Option<Duration>`
+     参数；构造时 `override.or_else(stream_idle_timeout_from_env)`，override 永远优先。
+   - **client.rs**：`LlmClient` 增加 `stream_idle_override`
+     (`Arc<RwLock<Option<Duration>>>`) 字段、`set_stream_idle_override` setter、
+     `stream_idle_override_handle` reader；四处调用点全部传入 override；Clone 共享
+     RwLock（reconnect 子客户端自动继承）。
+   - **engine.rs**：两处 A8 续推臂后增加 `escalate_stream_idle_override(...)`；
+     流成功路径 `turn_retries_used = 0` 旁增加 `clear_stream_idle_override(&client)`；
+     新增纯函数 `stream_idle_escalated_budget(base, retry_index)`：
+     retry=0 → None（保留原行为），retry=1 → base×2，retry=2 → base×3，
+     硬顶 `STREAM_IDLE_ESCALATION_CAP_SECS=1200`。
+3. **测试 + 编译验证（独立 CARGO_TARGET_DIR=/home/ed/.shannon/dev-target，
+   不污染 w7 的 target/debug/shannon mtime）**：
+   - cargo check: 0 错误；engine lib 1147/1147（+1 新增）、core lib 2944/2944
+     （+1 新增）；clippy 0 警告 0 错误（与 dev 基线逐项一致）。
+   - A14 helper 测试：retry 0/1/2/10/cap × base=420 / base=60 组合共 6 断言全绿。
+   - A14 client handle 测试：round-trip + Clone 共享 + 清除传播全绿。
+   - A14 streaming precedence 测试：`override.or(env)` 三层优先级全绿。
+   - 真端到端 420s 测试**不可行**（测试环境跑 7 分钟慢测试）——会留到 P5 复测波次
+     自然暴露（csstree/expr/superjson 三题现在 100% 必在同档时机触发）。
+4. **通用场景符合性（F15 误判 → F16 修正的关键理由）**：
+   - 「长会话合法思考被短超时误杀」是**通用痛点**——任何 thinking model
+     （GLM-5.3 thinking、o1/o3、未来的 reasoning-everywhere 模型）在 deep work
+     turn 都会触发，与评测集合无关。
+   - 修复走的是「观察连续超时 → 升级耐心」的自适应策略，与已有 A8/A10 同型
+     （都是对失败模式的局部升级），不引入评测特化。
+   - 升级上限 1200s 是合理绝对上限（>20min 无新 token 大概率真死），既覆盖 GLM
+     当前 ~312s 思考 + 余量，又不掩盖真实停滞。
+5. **验证计划**：P5 复测波次（w8，带 A14 二进制）跑同一组失败题 csstree/expr/
+   superjson，按 L1 单变量对照判断 A14 单独贡献（vs w7 同样三题 0 分）。
+
 ## 二、基线波次记录（P2）
 
 - **wave-1 处置与提速改版（2026-09-18）**：首发的 wave-1 在旧二进制事故（F8）后以

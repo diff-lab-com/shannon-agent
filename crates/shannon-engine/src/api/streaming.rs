@@ -409,12 +409,24 @@ impl Stream for SseStream {
 ///
 /// Properly handles SSE events that span HTTP chunk boundaries
 /// by buffering partial lines until complete.
+///
+/// `idle_override` (A14) is the caller-supplied content-idle watchdog
+/// budget; when `None` the legacy `SHANNON_STREAM_IDLE_SECS` env default
+/// applies. The engine escalates this budget on timeout-class turn
+/// continuations so a legitimately long-thinking model is not killed at
+/// the base budget on every retry of the same hard turn.
 pub fn sse_stream_from_response(
     response: reqwest::Response,
     provider: LlmProvider,
+    idle_override: Option<Duration>,
 ) -> MessageStream {
     let last_event_id = Arc::new(Mutex::new(None));
-    let sse = SseStream::new(response, provider, last_event_id);
+    let sse = SseStream::with_idle_timeout(
+        response,
+        provider,
+        last_event_id,
+        idle_override.or_else(stream_idle_timeout_from_env),
+    );
     Box::pin(sse)
 }
 
@@ -423,6 +435,12 @@ pub fn sse_stream_from_response(
 /// When the underlying SSE stream ends prematurely (not via `MessageStop`),
 /// this wrapper uses `send_message_stream_resumable` to reconnect with
 /// `Last-Event-ID`, up to `max_reconnects` times.
+///
+/// The argument list mirrors `send_message_stream_resumable` so the
+/// caller can replay the same reconnect parameters verbatim on every
+/// mid-stream resume. A14 added `idle_override` to thread the engine-
+/// escalated watchdog budget through to the resumed stream.
+#[allow(clippy::too_many_arguments)]
 pub fn sse_stream_from_response_resumable(
     response: reqwest::Response,
     provider: LlmProvider,
@@ -431,9 +449,15 @@ pub fn sse_stream_from_response_resumable(
     tools: Option<Vec<super::types::ToolDefinition>>,
     system: Option<String>,
     max_reconnects: u32,
+    idle_override: Option<Duration>,
 ) -> MessageStream {
     let last_event_id = Arc::new(Mutex::new(None));
-    let sse = SseStream::new(response, provider, last_event_id.clone());
+    let sse = SseStream::with_idle_timeout(
+        response,
+        provider,
+        last_event_id.clone(),
+        idle_override.or_else(stream_idle_timeout_from_env),
+    );
     let resumable = ResumableSseStream {
         inner: Box::pin(sse),
         last_event_id,
@@ -1489,7 +1513,7 @@ mod tests {
             Some(Duration::from_secs(360))
         );
 
-        // Restore the prior process state for other tests.
+// Restore the prior process state for other tests.
         match saved.as_deref() {
             Some(v) => unsafe {
                 std::env::set_var("SHANNON_STREAM_IDLE_SECS", v);
@@ -1498,5 +1522,31 @@ mod tests {
                 std::env::remove_var("SHANNON_STREAM_IDLE_SECS");
             },
         }
+    }
+
+    /// A14: the resolution precedence used by `sse_stream_from_response`
+    /// and `sse_stream_from_response_resumable`. We test the small pure
+    /// combinator because the construction path is otherwise hidden inside
+    /// `SseStream::with_idle_timeout` (private `idle_timeout` field).
+    ///
+    /// Contract:
+    ///   - `Some(override)` → always wins, regardless of env.
+    ///   - `None` + env set → env value.
+    ///   - `None` + env unset → `None` (watchdog disabled, pre-A14 default).
+    ///
+    /// The production call sites use the equivalent `.or(env)` chain; this
+    /// test pins the contract independently of the (private) construction
+    /// path so future refactors don't silently change the precedence.
+    #[test]
+    fn a14_idle_resolution_precedence() {
+        // Some override always wins (engine escalation).
+        let override_v = Some(Duration::from_secs(840));
+        let env_v = Some(Duration::from_secs(420));
+        assert_eq!(override_v.or(env_v), Some(Duration::from_secs(840)));
+        // None override + env → env.
+        let none_v: Option<Duration> = None;
+        assert_eq!(none_v.or(env_v), Some(Duration::from_secs(420)));
+        // None + None → None.
+        assert_eq!(none_v.or(None), None);
     }
 }

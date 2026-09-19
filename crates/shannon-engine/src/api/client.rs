@@ -89,6 +89,15 @@ pub struct LlmClient {
     /// Optional retry observer: fired before every retry sleep / mid-stream
     /// reconnect so consumers can surface the pause (§ retry observability).
     retry_observer: std::sync::Arc<std::sync::RwLock<Option<RetryObserver>>>,
+    /// A14: per-client stream-idle watchdog budget override. `Some(b)` forces
+    /// the SSE streams built from this client to use `b` as their
+    /// content-idle budget instead of the `SHANNON_STREAM_IDLE_SECS` env
+    /// default. The engine escalates it on timeout-class turn continuations:
+    /// a legitimately long-thinking model was killed at the base budget on
+    /// every retry of the same hard turn (w7 csstree/expr/superjson — all
+    /// three runs died at exactly 421s per attempt). Cleared when a stream
+    /// finalizes normally.
+    stream_idle_override: std::sync::Arc<std::sync::RwLock<Option<std::time::Duration>>>,
 }
 
 impl LlmClient {
@@ -145,6 +154,7 @@ impl LlmClient {
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
             request_capture: None,
             retry_observer: Default::default(),
+            stream_idle_override: Default::default(),
         }
     }
 
@@ -161,6 +171,7 @@ impl LlmClient {
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
             request_capture: None,
             retry_observer: Default::default(),
+            stream_idle_override: Default::default(),
         })
     }
 
@@ -194,6 +205,7 @@ impl LlmClient {
             ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
             request_capture: None,
             retry_observer: Default::default(),
+            stream_idle_override: Default::default(),
         }
     }
 
@@ -220,6 +232,26 @@ impl LlmClient {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// A14: set/clear the stream-idle watchdog budget override. `Some(b)`
+    /// makes every SSE stream subsequently built from this client enforce
+    /// `b` as its content-idle budget (instead of `SHANNON_STREAM_IDLE_SECS`);
+    /// `None` restores the env default. The engine escalates the budget on
+    /// timeout-class turn continuations and clears it when a stream
+    /// finalizes normally.
+    pub fn set_stream_idle_override(&self, budget: Option<std::time::Duration>) {
+        *self
+            .stream_idle_override
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = budget;
+    }
+
+    fn stream_idle_override_handle(&self) -> Option<std::time::Duration> {
+        *self
+            .stream_idle_override
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// Fire the retry observer (if attached).
@@ -639,11 +671,13 @@ impl LlmClient {
                 tools_clone,
                 system_clone,
                 max_reconnects,
+                           self.stream_idle_override_handle(),
             ))
         } else {
             Ok(super::streaming::sse_stream_from_response(
                 response,
                 self.config.provider.clone(),
+                           self.stream_idle_override_handle(),
             ))
         }
     }
@@ -753,6 +787,7 @@ impl LlmClient {
         Ok(super::streaming::sse_stream_from_response(
             response,
             self.config.provider.clone(),
+                   self.stream_idle_override_handle(),
         ))
     }
 
@@ -848,6 +883,7 @@ impl LlmClient {
         Ok(super::streaming::sse_stream_from_response(
             response,
             self.config.provider.clone(),
+                   self.stream_idle_override_handle(),
         ))
     }
 
@@ -2084,5 +2120,36 @@ mod tests {
             started.elapsed() >= std::time::Duration::from_millis(900),
             "the reconnect backoff must have run before the typed error"
         );
+    }
+
+    /// A14: `set_stream_idle_override` round-trips through the handle, and
+    /// `Clone` sees the same value (the RwLock is shared, not duplicated).
+    /// Reconnect sub-clients built inside `send_message_stream_internal`
+    /// must inherit the override so a continuation attempt sees the
+    /// escalated budget.
+    #[test]
+    fn stream_idle_override_round_trips_and_clones() {
+        let cfg = test_config();
+        let client = LlmClient::new(cfg);
+
+        // default = None
+        assert_eq!(client.stream_idle_override_handle(), None);
+
+        client.set_stream_idle_override(Some(std::time::Duration::from_secs(840)));
+        assert_eq!(
+            client.stream_idle_override_handle(),
+            Some(std::time::Duration::from_secs(840))
+        );
+
+        // Clone sees the override (RwLock content, not Arc cell).
+        let clone = client.clone();
+        assert_eq!(
+            clone.stream_idle_override_handle(),
+            Some(std::time::Duration::from_secs(840))
+        );
+
+        // Clearing on the original is visible to the clone (shared RwLock).
+        client.set_stream_idle_override(None);
+        assert_eq!(clone.stream_idle_override_handle(), None);
     }
 }

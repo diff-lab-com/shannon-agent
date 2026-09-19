@@ -482,6 +482,19 @@ const TURN_CONTINUATION_NUDGE_PROMPT: &str = "Your previous response stream was 
 /// (`SHANNON_TURN_RETRIES`; "0" legitimately disables).
 const DEFAULT_TURN_RETRIES: u32 = 2;
 
+/// A14: cap for the stream-idle watchdog budget when the engine escalates
+/// it across timeout-class turn continuations. The base budget is read
+/// from `SHANNON_STREAM_IDLE_SECS` (default 420s); each escalation step
+/// scales it by the current retry index but never above this ceiling.
+/// Beyond this, an actively-silent stream is genuinely stalled and should
+/// not be rescued.
+const STREAM_IDLE_ESCALATION_CAP_SECS: u64 = 1200;
+
+/// A14: how much each successive timeout-class continuation within the
+/// same turn multiplies the stream-idle watchdog budget. Index 1 (first
+/// escalation) → ×2 = 840s, index 2 → ×3 = 1260s, then capped.
+const STREAM_IDLE_ESCALATION_FACTOR_BASE: u64 = 1;
+
 // ── Wrap-up protocol before the final turn (A10) ──────────────────────────
 //
 // DeepSWE w4: arcane / dynamodb died at the turn limit with the work done
@@ -517,6 +530,60 @@ fn push_turn_continuation_nudge(messages: &mut Vec<Message>) {
         role: "user".to_string(),
         content: MessageContent::Text(TURN_CONTINUATION_NUDGE_PROMPT.to_string()),
     });
+}
+
+/// A14: compute the escalated stream-idle watchdog budget for the next
+/// continuation attempt. `turn_retries_used` is the 1-indexed count of
+/// escalations already issued on this turn (0 for the original attempt,
+/// 1 after the first timeout-class continuation, etc). The escalation
+/// follows `min(base * (1 + retry + STREAM_IDLE_ESCALATION_FACTOR_BASE),
+/// STREAM_IDLE_ESCALATION_CAP_SECS)`:
+///   - retry 0 (original attempt): no override — the base env budget is
+///     used as-is, identical to pre-A14 behavior.
+///   - retry 1: base × 2 → 420s × 2 = 840s.
+///   - retry 2: base × 3 → 420s × 3 = 1260s (would be capped at 1200s
+///     when the cap equals the natural value).
+///
+/// Returns `None` when no base budget is configured (env unset / 0 / 负数),
+/// preserving the pre-A14 "watchdog disabled" path. The cap is hard so an
+/// actively-silent stream is never rescued past
+/// `STREAM_IDLE_ESCALATION_CAP_SECS`.
+fn stream_idle_escalated_budget(
+    base_secs: Option<u64>,
+    turn_retries_used: u32,
+) -> Option<std::time::Duration> {
+    let base = base_secs?;
+    if turn_retries_used == 0 {
+        return None;
+    }
+    let factor = STREAM_IDLE_ESCALATION_FACTOR_BASE + u64::from(turn_retries_used);
+    let raw = base.saturating_mul(factor);
+    let capped = raw.min(STREAM_IDLE_ESCALATION_CAP_SECS);
+    Some(std::time::Duration::from_secs(capped))
+}
+
+/// A14: apply the escalated stream-idle budget to the client before the
+/// next continuation attempt. No-op when `base_secs` is unset (watchdog
+/// was off before A14; A14 does not turn it on for anyone).
+///
+/// `turn_retries_used` reflects the index of the continuation we are
+/// about to issue — i.e. 1 after the first timeout-class continuation.
+/// The escalation is cleared by [`clear_stream_idle_override`] when the
+/// stream finalizes normally.
+fn escalate_stream_idle_override(
+    client: &shannon_engine::api::client::LlmClient,
+    base_secs: Option<u64>,
+    turn_retries_used: u32,
+) {
+    let budget = stream_idle_escalated_budget(base_secs, turn_retries_used);
+    client.set_stream_idle_override(budget);
+}
+
+/// A14: clear any A14 escalation on the client. Called when a stream
+/// finalizes normally (turn_retries_used reset path) so the next fresh
+/// turn starts again from the base budget.
+fn clear_stream_idle_override(client: &shannon_engine::api::client::LlmClient) {
+    client.set_stream_idle_override(None);
 }
 
 /// Default minimum length (chars) of the visible — i.e. non-reasoning —
@@ -2377,6 +2444,16 @@ impl QueryEngine {
             // (the turn is re-entered, not advanced).
             let mut turn_retries_used: u32 = 0;
             let max_turn_retries = turn_retries_max();
+
+            // A14: base stream-idle budget, read once per query from the
+            // engine-side SHANNON_STREAM_IDLE_SECS env (default 420s, the
+            // same constant the streaming layer reads directly — we duplicate
+            // the lookup here so we can compute escalations without poking
+            // engine internals from the test suite).
+            let stream_idle_base_secs = std::env::var("SHANNON_STREAM_IDLE_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .filter(|v| *v > 0);
 
             'agent_loop: loop {
                 if turn >= config.max_turns {
@@ -4964,7 +5041,13 @@ impl QueryEngine {
                                         );
                                         push_turn_continuation_nudge(&mut conversation.messages);
                                         continue 'agent_loop;
-                                    }
+                                    }                                    // A14: escalate the stream-idle watchdog budget so the
+                                    // continuation attempt is not killed by the same 420s
+                                    // base budget that killed the previous attempt (w7
+                                    // csstree/expr/superjson — three consecutive runs all
+                                    // died at exactly 421s = base + 1s).
+                                    escalate_stream_idle_override(&client, stream_idle_base_secs, turn_retries_used);
+
                                     // Content-first: if partial content was streamed before the error,
                                     // preserve it immediately. Local models (Ollama) often generate
                                     // valid text before hitting a malformed tool-call error, and
@@ -5205,6 +5288,9 @@ impl QueryEngine {
                         // budget is whole again for the next turn (per-turn
                         // budget, not per-query).
                         turn_retries_used = 0;
+                        // A14: clear any watchdog escalation so the next
+                        // fresh turn starts from the base budget again.
+                        clear_stream_idle_override(&client);
 
                         // Parse-error recovery: when the model emitted a malformed
                         // tool_call (no text content, no successfully-parsed tool
@@ -5508,7 +5594,13 @@ impl QueryEngine {
                             );
                             push_turn_continuation_nudge(&mut conversation.messages);
                             continue 'agent_loop;
-                        }
+                        }                        // A14: escalate the stream-idle watchdog budget so the
+                        // continuation attempt is not killed by the same 420s
+                        // base budget that killed the previous attempt (w7
+                        // csstree/expr/superjson — three consecutive runs all
+                        // died at exactly 421s = base + 1s).
+                        escalate_stream_idle_override(&client, stream_idle_base_secs, turn_retries_used);
+
                         // Check if this is a token overflow — attempt auto-compaction and retry once
                         if e.is_token_overflow() {
                             let compact_keep = config.keep_recent_messages;
@@ -8857,6 +8949,45 @@ mod tests {
             Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
             None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
         }
+    }
+
+    /// A14: the helper computes the right Duration for every escalation
+    /// step. Index 0 (the original attempt before any continuation) yields
+    /// `None` — pre-A14 semantics. Index 1 = ×2, index 2 = ×3, both capped
+    /// at `STREAM_IDLE_ESCALATION_CAP_SECS`. A `None` base is also `None`
+    /// (watchdog was disabled → A14 does not turn it on).
+    #[test]
+    fn a14_stream_idle_escalation_math() {
+        // base unset → never escalates.
+        assert_eq!(stream_idle_escalated_budget(None, 0), None);
+        assert_eq!(stream_idle_escalated_budget(None, 1), None);
+
+        // retry 0 = original attempt = no override.
+        assert_eq!(stream_idle_escalated_budget(Some(420), 0), None);
+
+        // retry 1 = base × 2 = 840s.
+        assert_eq!(
+            stream_idle_escalated_budget(Some(420), 1),
+            Some(std::time::Duration::from_secs(840))
+        );
+
+        // retry 2 = base × 3 = 1260s, capped at 1200s.
+        assert_eq!(
+            stream_idle_escalated_budget(Some(420), 2),
+            Some(std::time::Duration::from_secs(1200))
+        );
+
+        // retry 10 would be huge but the cap holds.
+        assert_eq!(
+            stream_idle_escalated_budget(Some(420), 10),
+            Some(std::time::Duration::from_secs(1200))
+        );
+
+        // base below the cap is preserved (no spurious uplift).
+        assert_eq!(
+            stream_idle_escalated_budget(Some(60), 1),
+            Some(std::time::Duration::from_secs(120))
+        );
     }
 
     /// Core A8 behavior: attempt 1 dies with a timeout-class error, the
