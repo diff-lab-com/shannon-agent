@@ -366,14 +366,21 @@ pub struct SubAgentDto {
 /// agent teams — the UI panel renders its empty state and stays quiet.
 #[tauri::command]
 pub async fn list_subagents(state: tauri::State<'_, AppState>) -> Result<Vec<SubAgentDto>, String> {
-    let ctx_guard = state
-        .agent_tool_context
-        .lock()
-        .expect("agent tool context lock poisoned");
-    let Some(ctx) = ctx_guard.as_ref() else {
-        return Ok(Vec::new());
+    // Clone the registry out of the mutex before any `.await` — the
+    // `std::sync::MutexGuard` is not `Send` and would otherwise poison
+    // the async fn's `Send` bound that `tauri::generate_handler!`
+    // requires.
+    let registry = {
+        let ctx_guard = state
+            .agent_tool_context
+            .lock()
+            .expect("agent tool context lock poisoned");
+        match ctx_guard.as_ref() {
+            Some(ctx) => ctx.registry.clone(),
+            None => return Ok(Vec::new()),
+        }
     };
-    let agents = ctx.registry.list_agents().await;
+    let agents = registry.list_agents().await;
     Ok(agents
         .into_iter()
         .map(|a| SubAgentDto {
