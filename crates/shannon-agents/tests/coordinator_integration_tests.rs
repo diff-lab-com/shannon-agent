@@ -60,6 +60,7 @@ async fn add_teammate_to_team() {
             "team-beta",
             "worker-1".to_string(),
             make_teammate_config("worker-1"),
+            None,
         )
         .await
         .unwrap();
@@ -94,6 +95,7 @@ async fn team_manifest_lists_members() {
                 isolation: None,
                 disallowed_tools: None,
             },
+            None,
         )
         .await
         .unwrap();
@@ -103,6 +105,7 @@ async fn team_manifest_lists_members() {
             "team-gamma",
             "helper".to_string(),
             make_teammate_config("helper"),
+            None,
         )
         .await
         .unwrap();
@@ -181,6 +184,7 @@ async fn self_claim_task_workflow() {
             "team-zeta",
             "worker-1".to_string(),
             make_teammate_config("worker-1"),
+            None,
         )
         .await
         .unwrap();
@@ -217,6 +221,7 @@ async fn find_next_claimable_prefers_earliest() {
             "team-eta",
             "worker".to_string(),
             make_teammate_config("worker"),
+            None,
         )
         .await
         .unwrap();
@@ -260,6 +265,7 @@ async fn complete_task_updates_status() {
             "team-theta",
             "worker-1".to_string(),
             make_teammate_config("worker-1"),
+            None,
         )
         .await
         .unwrap();
@@ -302,11 +308,17 @@ async fn send_direct_message() {
             "team-iota",
             "alice".to_string(),
             make_teammate_config("alice"),
+            None,
         )
         .await
         .unwrap();
     coord
-        .add_teammate("team-iota", "bob".to_string(), make_teammate_config("bob"))
+        .add_teammate(
+            "team-iota",
+            "bob".to_string(),
+            make_teammate_config("bob"),
+            None,
+        )
         .await
         .unwrap();
 
@@ -334,11 +346,21 @@ async fn broadcast_to_team() {
         .unwrap();
 
     coord
-        .add_teammate("team-kappa", "m1".to_string(), make_teammate_config("m1"))
+        .add_teammate(
+            "team-kappa",
+            "m1".to_string(),
+            make_teammate_config("m1"),
+            None,
+        )
         .await
         .unwrap();
     coord
-        .add_teammate("team-kappa", "m2".to_string(), make_teammate_config("m2"))
+        .add_teammate(
+            "team-kappa",
+            "m2".to_string(),
+            make_teammate_config("m2"),
+            None,
+        )
         .await
         .unwrap();
 
@@ -376,6 +398,7 @@ async fn notify_idle_returns_available_tasks() {
             "team-mu",
             "idle-worker".to_string(),
             make_teammate_config("idle-worker"),
+            None,
         )
         .await
         .unwrap();

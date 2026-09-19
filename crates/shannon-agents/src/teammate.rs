@@ -224,6 +224,15 @@ impl Teammate {
         }
     }
 
+    /// Get the configured executor, if any.
+    ///
+    /// `None` means the teammate falls back to the placeholder reply path
+    /// in `handle_chat_message` (used by tests + the process-mode child
+    /// subprocess path that has its own LLM loop).
+    pub fn executor(&self) -> Option<Arc<dyn AgentExecutor>> {
+        self.executor.clone()
+    }
+
     /// Get current status
     pub async fn status(&self) -> TeammateStatus {
         *self.status.read().await

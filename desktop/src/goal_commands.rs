@@ -365,6 +365,13 @@ pub(crate) struct GoalRunDeps {
     pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
     /// Session container (`~/.shannon/sessions`) for sidecar persistence.
     pub(crate) sessions_dir: PathBuf,
+    /// B2-2 — handle shared with the chat session's `AgentTool`. When agent
+    /// teams are enabled, the goal runner swaps this into its per-run tool
+    /// registry so `Agent`-tool operations (agent_spawn / send_message /
+    /// shutdown) and `team_task_*` land on the same coordinator the chat
+    /// (and the Tasks page) see. Empty handle = placeholder behaviour,
+    /// identical to pre-B2 runs.
+    pub(crate) agent_tool_context: Arc<std::sync::Mutex<Option<shannon_tools::AgentToolContext>>>,
 }
 
 impl GoalRunDeps {
@@ -376,6 +383,7 @@ impl GoalRunDeps {
             desktop_config: state.desktop_config.clone(),
             memory_store: state.memory_store.clone(),
             sessions_dir: state.state_manager.sessions_dir().to_path_buf(),
+            agent_tool_context: state.agent_tool_context.clone(),
         }
     }
 
@@ -1067,6 +1075,21 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
             sandboxed_providers.as_ref().unwrap_or(&assembly.providers),
         )
         .map_err(|e| format!("goal tool registry init failed: {e}"))?;
+        // B2-2 — share the chat session's team state with this per-run
+        // registry: the fresh `AgentTool` starts with an empty context
+        // handle, so without this swap `agent_spawn` inside a goal run
+        // always hit the placeholder path even when the user had agent
+        // teams enabled. `register_team_tools_when_enabled` then adds the
+        // `team_task_*` trio bound to the SAME coordinator, so tasks created
+        // by the goal run show up on the chat session's board (and the
+        // Tasks page panel reads one consistent registry).
+        let agent_ctx = deps.agent_tool_context.clone();
+        if !shannon_tools::swap_agent_tool_context(&mut tools, agent_ctx.clone()) {
+            tracing::warn!("goal run: Agent tool swap failed — agent_spawn stays placeholder");
+        }
+        if let Err(e) = shannon_tools::register_team_tools_when_enabled(&mut tools, &agent_ctx) {
+            tracing::warn!("goal run: team_task tools registration failed: {e}");
+        }
         shannon_tools::goal::register_goal_tools(
             &mut tools,
             Arc::new(RunnerGoalAccess {
@@ -1798,6 +1821,7 @@ mod tests {
                 shannon_core::MemoryStore::new(dir.join("memories")),
             )),
             sessions_dir: dir.join("sessions"),
+            agent_tool_context: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
