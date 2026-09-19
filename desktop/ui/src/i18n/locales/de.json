@@ -2997,5 +2997,12 @@
   "settings.advanced.agentTeamsToggle": "Echte Subagenten-Ausführung aktivieren",
   "settings.advanced.agentTeamsLive": "Wirkt sofort — kein Neustart nötig.",
   "chat.subagent.registryId": "Registrierung {id}",
-  "chat.subagent.inheritsMode": "Übernimmt den Genehmigungsmodus der übergeordneten Sitzung: {mode}"
+  "chat.subagent.inheritsMode": "Übernimmt den Genehmigungsmodus der übergeordneten Sitzung: {mode}",
+  "subagent.panel.heading": "Subagenten",
+  "subagent.status.running": "Läuft",
+  "subagent.status.completed": "Abgeschlossen",
+  "subagent.status.failed": "Fehlgeschlagen",
+  "subagent.status.idle": "Inaktiv",
+  "subagent.turns": "{used}/{max} Züge",
+  "subagent.refreshFailed": "Subagent-Liste konnte nicht aktualisiert werden"
 }

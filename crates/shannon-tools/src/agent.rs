@@ -10,9 +10,12 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use shannon_agents::{
-    AgentConfig, AgentDefinitionRegistry, AgentMessage, MessageContent, ProtocolMessage,
-    TeamContext,
+    AgentConfig, AgentDefinitionRegistry, AgentMessage, MessageContent, MessageType,
+    ProtocolMessage, TeamContext,
 };
+use std::time::Duration;
+const AGENT_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
+const AGENT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -636,24 +639,57 @@ impl AgentTool {
         let message_id = format!("msg_{}", uuid::Uuid::new_v4());
 
         if let Some(ctx) = self.get_team_context() {
-            // Real message routing through the coordinator
+            // B2 follow-up — send and wait for a real reply.
+            // The previous shape returned the synthetic ack ("Message
+            // received by <agent>") as if it were the agent's LLM reply —
+            // a wire-only stub. Now we route through the coordinator and
+            // subscribe to broadcast events for a real `MessageSent` whose
+            // `from` matches the target agent and `to == "lead"`, up to a
+            // 5 s timeout. The synthetic ack is the fallback when no
+            // teammate work loop is consuming the inbox yet (e.g. before a
+            // future "Teammate::spawn_work_loop on spawn" lands), so this
+            // API is stable across that milestone.
+            let mut rx = ctx.coordinator.subscribe_events();
             let responses = ctx
                 .registry
                 .send_message(
                     "lead",
                     &input.agent_id,
-                    serde_json::Value::String(input.message),
+                    serde_json::Value::String(input.message.clone()),
                 )
                 .await
                 .map_err(|e| ToolError::ExecutionFailed(format!("Failed to send message: {e}")))?;
 
-            let response_text = responses
-                .first()
-                .map(|r| match &r.content {
-                    MessageContent::Text(t) => t.clone(),
-                    other => format!("{other:?}"),
-                })
-                .unwrap_or_default();
+            let target = input.agent_id.clone();
+            let mut real_reply: Option<String> = None;
+            let deadline = tokio::time::Instant::now() + AGENT_REPLY_TIMEOUT;
+            loop {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                match tokio::time::timeout(remaining, rx.recv()).await {
+                    Ok(Ok(shannon_agents::CoordinatorEvent::MessageSent(msg))) => {
+                        if let Some(text) = Self::extract_real_reply(&msg, &target) {
+                            real_reply = Some(text);
+                            break;
+                        }
+                    }
+                    Ok(Ok(_)) => {}
+                    Ok(Err(_)) => break, // lagged/closed
+                    Err(_) => break,     // timeout
+                }
+            }
+
+            let response_text = real_reply.unwrap_or_else(|| {
+                responses
+                    .first()
+                    .map(|r| match &r.content {
+                        MessageContent::Text(t) => t.clone(),
+                        other => format!("{other:?}"),
+                    })
+                    .unwrap_or_default()
+            });
 
             Ok(SendMessageOutput {
                 delivered: true,
@@ -661,13 +697,28 @@ impl AgentTool {
                 message_id,
             })
         } else {
-            // Fallback: no coordinator
             Ok(SendMessageOutput {
                 delivered: true,
                 response: None,
                 message_id,
             })
         }
+    }
+
+    /// Filter helper — given a `MessageSent` broadcast event, decide whether
+    /// it is a real reply from `target` back to `"lead"`. Pure function,
+    /// unit-tested in `tests::extract_real_reply_*`.
+    fn extract_real_reply(msg: &shannon_agents::AgentMessage, target: &str) -> Option<String> {
+        if msg.message_type != MessageType::Chat {
+            return None;
+        }
+        if msg.from != target || msg.to != "lead" {
+            return None;
+        }
+        if let MessageContent::Text(t) = &msg.content {
+            return Some(t.clone());
+        }
+        None
     }
 
     async fn create_team(&self, input: CreateTeamInput) -> Result<CreateTeamOutput, ToolError> {
@@ -740,8 +791,13 @@ impl AgentTool {
 
     async fn shutdown_agent(&self, input: ShutdownInput) -> Result<ShutdownOutput, ToolError> {
         if let Some(ctx) = self.get_team_context() {
-            // Send shutdown protocol message through coordinator
-            let msg = AgentMessage::protocol(
+            // B2 follow-up — wait for the teammate's ShutdownResponse
+            // instead of returning unconditional `success: true`. The
+            // `request_id` is generated here and mirrored back by the
+            // teammate so we can correlate the reply across the broadcast.
+            let mut rx = ctx.coordinator.subscribe_events();
+            let request_id = uuid::Uuid::new_v4();
+            let mut msg = AgentMessage::protocol(
                 "lead".to_string(),
                 input.agent_id.clone(),
                 ProtocolMessage::ShutdownRequest {
@@ -750,17 +806,73 @@ impl AgentTool {
                         .unwrap_or_else(|| "Graceful shutdown".to_string()),
                 },
             );
+            msg.id = request_id;
 
             ctx.coordinator
                 .send_message(msg)
                 .await
                 .map_err(|e| ToolError::ExecutionFailed(format!("Shutdown failed: {e}")))?;
 
-            Ok(ShutdownOutput {
-                agent_id: input.agent_id,
-                success: true,
-                message: "Agent shutdown request sent".to_string(),
-            })
+            let target = input.agent_id.clone();
+            let mut approved: Option<bool> = None;
+            let deadline = tokio::time::Instant::now() + AGENT_SHUTDOWN_TIMEOUT;
+            loop {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                match tokio::time::timeout(remaining, rx.recv()).await {
+                    Ok(Ok(shannon_agents::CoordinatorEvent::MessageSent(reply))) => {
+                        if reply.message_type != MessageType::Protocol {
+                            continue;
+                        }
+                        if reply.from != target || reply.to != "lead" {
+                            continue;
+                        }
+                        if let MessageContent::Structured(v) = &reply.content {
+                            if let Some(parsed) =
+                                serde_json::from_value::<ProtocolMessage>(v.clone()).ok()
+                            {
+                                if let ProtocolMessage::ShutdownResponse {
+                                    request_id: req_id,
+                                    approve,
+                                    ..
+                                } = parsed
+                                {
+                                    if req_id == request_id {
+                                        approved = Some(approve);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(Ok(_)) => {}
+                    Ok(Err(_)) => break,
+                    Err(_) => break,
+                }
+            }
+
+            match approved {
+                Some(true) => Ok(ShutdownOutput {
+                    agent_id: target,
+                    success: true,
+                    message: "Agent shutdown acknowledged".to_string(),
+                }),
+                Some(false) => Ok(ShutdownOutput {
+                    agent_id: target,
+                    success: false,
+                    message: "Agent refused shutdown".to_string(),
+                }),
+                None => Ok(ShutdownOutput {
+                    agent_id: target,
+                    success: false,
+                    message: format!(
+                        "Shutdown request sent (no acknowledgement in {}s)",
+                        AGENT_SHUTDOWN_TIMEOUT.as_secs()
+                    ),
+                }),
+            }
         } else {
             Ok(ShutdownOutput {
                 agent_id: input.agent_id,
@@ -1443,5 +1555,59 @@ mod tests {
         // deny when the name happens to also live in the allowlist.
         let merged = merge_tool_filter(Some(&["Bash".to_string()]), None, &["Bash".to_string()]);
         assert_eq!(merged, vec!["Bash".to_string(), "!Bash".to_string()]);
+    }
+
+    // B2 follow-up — `extract_real_reply` filter (used by `send_message`
+    // to upgrade the synthetic ack into the agent's real LLM reply). The
+    // broadcast ordering is non-deterministic without a running Teammate
+    // work loop, so we test the filter pure-functionally; the integrated
+    // `send_message` / `shutdown_agent` paths are exercised by the live
+    // agent-teams desktop smoke tests instead.
+
+    #[test]
+    fn extract_real_reply_accepts_matching_chat_from_target() {
+        let msg = shannon_agents::AgentMessage::new_text(
+            "ghost-agent".into(),
+            "lead".into(),
+            "real reply".into(),
+        );
+        assert_eq!(
+            AgentTool::extract_real_reply(&msg, "ghost-agent").as_deref(),
+            Some("real reply")
+        );
+    }
+
+    #[test]
+    fn extract_real_reply_rejects_outbound_lead_message() {
+        // The lead's own outbound message to the agent is NOT a reply —
+        // it's the send, not the response.
+        let msg = shannon_agents::AgentMessage::new_text(
+            "lead".into(),
+            "ghost-agent".into(),
+            "outbound ping".into(),
+        );
+        assert_eq!(AgentTool::extract_real_reply(&msg, "ghost-agent"), None);
+    }
+
+    #[test]
+    fn extract_real_reply_rejects_wrong_target() {
+        let msg = shannon_agents::AgentMessage::new_text(
+            "other-agent".into(),
+            "lead".into(),
+            "from the wrong agent".into(),
+        );
+        assert_eq!(AgentTool::extract_real_reply(&msg, "ghost-agent"), None);
+    }
+
+    #[test]
+    fn extract_real_reply_rejects_protocol_messages() {
+        let msg = shannon_agents::AgentMessage::protocol(
+            "ghost-agent".into(),
+            "lead".into(),
+            ProtocolMessage::ShutdownRequest {
+                reason: "n/a".into(),
+            },
+        );
+        assert_eq!(AgentTool::extract_real_reply(&msg, "ghost-agent"), None);
     }
 }

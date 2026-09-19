@@ -2997,5 +2997,12 @@
   "settings.advanced.agentTeamsToggle": "Включить реальное выполнение субагентов",
   "settings.advanced.agentTeamsLive": "Вступает в силу сразу — перезапуск не требуется.",
   "chat.subagent.registryId": "реестр {id}",
-  "chat.subagent.inheritsMode": "Наследует режим подтверждения родительской сессии: {mode}"
+  "chat.subagent.inheritsMode": "Наследует режим подтверждения родительской сессии: {mode}",
+  "subagent.panel.heading": "Субагенты",
+  "subagent.status.running": "Выполняется",
+  "subagent.status.completed": "Завершён",
+  "subagent.status.failed": "Ошибка",
+  "subagent.status.idle": "Простаивает",
+  "subagent.turns": "{used}/{max} ходов",
+  "subagent.refreshFailed": "Не удалось обновить список субагентов"
 }

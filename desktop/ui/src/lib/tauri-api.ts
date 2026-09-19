@@ -77,6 +77,7 @@ import type {
   TaskEvaluation,
   EvaluationResult,
   SkillProposal,
+  SubAgentDto,
 } from '@/types'
 
 export async function readAttachment(path: string): Promise<AttachmentPayload> {
@@ -1364,6 +1365,13 @@ export async function startGoalRun(
 
 export async function listGoalRuns(): Promise<GoalRunDto[]> {
   return invoke('list_goal_runs')
+}
+
+// B2 follow-up — list sub-agents currently registered in the agent-teams
+// context. Returns an empty array when the user has not enabled agent
+// teams; the Tasks-page panel renders its empty state.
+export async function listSubagents(): Promise<SubAgentDto[]> {
+  return invoke('list_subagents')
 }
 
 export async function getGoalRun(sessionId: string): Promise<GoalRunDto | null> {

@@ -52,6 +52,7 @@ import WorktreePanel from '@/components/tasks/WorktreePanel'
 import GoalRunPanel from '@/components/tasks/GoalRunPanel'
 import BatchRunPanel from '@/components/tasks/BatchRunPanel'
 import BatchForm from '@/components/tasks/BatchForm'
+import SubagentPanel from '@/components/tasks/SubagentPanel'
 import WebhookTriggerCard from '@/components/tasks/WebhookTriggerCard'
 import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
 import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
@@ -283,6 +284,10 @@ export default function Tasks() {
 
         {/* P0-2: live goal-run cards sit above the regular task list. */}
         <GoalRunPanel onViewSession={handleViewGoalSession} />
+
+        {/* B2 follow-up: live sub-agent inventory (system-wide). Hidden
+            when the user has not enabled agent teams. */}
+        <SubagentPanel />
 
         {errorMsg && (
           <Banner

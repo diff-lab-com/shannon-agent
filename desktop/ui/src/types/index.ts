@@ -130,6 +130,20 @@ export interface SubAgentLive {
   team: string | null
 }
 
+/** B2 follow-up — desktop backend DTO mirroring
+ *  `desktop/src/commands_agents.rs::SubAgentDto`. Stable wire shape used
+ *  by the Tasks page panel + the `useSubagents` hook. */
+export interface SubAgentDto {
+  id: string
+  name: string
+  team: string | null
+  status: string
+  turnsUsed: number
+  maxTurns: number
+  model: string
+  createdAtMs: number
+}
+
 export interface ResearchReport {
   title: string
   summary: string

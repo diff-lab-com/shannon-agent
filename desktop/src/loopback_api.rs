@@ -265,9 +265,17 @@ fn loopback_sandbox_providers(
 /// (T9) and mobile-dispatch (T14) turns execute through this registry via
 /// the gateway, so the execution-mode switcher must hold on this path too —
 /// not only on the interactive (`AppState::new`) and goal-runner seams.
+///
+/// When `state` carries an injected agent-teams context (B2, see
+/// `crate::agent_teams::enable`), `team_task_*` tools are registered too —
+/// so an IM/mobile turn that calls `team_task_*` participates in the
+/// shared task board. (The agent-teams context itself is reused from the
+/// chat's handle; loopback does not build its own coordinator because
+/// there is no `subagent:*` event bridge on this surface.)
 pub fn build_server(
     client_config: LlmClientConfig,
     desktop_config: &DesktopConfig,
+    state: &crate::commands::AppState,
 ) -> ShannonApiServer {
     let mut tools = ToolRegistry::new();
     let assembly = shannon_remote::assembly::assemble_dynamic();
@@ -286,6 +294,23 @@ pub fn build_server(
         sandboxed_providers.as_ref().unwrap_or(&assembly.providers),
     ) {
         tracing::warn!("loopback engine API server: default tool registration failed: {e}");
+    }
+    // B2 follow-up — if the chat has an injected TeamContext, mirror its
+    // coordinator into the loopback registry so team_task_* calls land on
+    // the same task board. Loopback sessions do not run their own
+    // sub-agent executor (no observer bridge on this surface), so the
+    // agent_spawn path stays placeholder here — that's intentional and
+    // matches the pre-B2 behaviour.
+    let coordinator = state
+        .agent_tool_context
+        .lock()
+        .expect("agent tool context lock poisoned")
+        .as_ref()
+        .map(|ctx| ctx.coordinator.clone());
+    if let Some(coord) = coordinator {
+        if let Err(e) = shannon_tools::register_team_tools(&mut tools, coord) {
+            tracing::warn!("loopback engine API server: team_task tool registration failed: {e}");
+        }
     }
     ShannonApiServer::new(client_config)
         .with_tools(tools)
@@ -310,7 +335,7 @@ pub async fn spawn(state: &AppState, app: tauri::AppHandle) {
         crate::commands_notifications::load_desktop_webhook_config().and_then(|c| c.secret);
     let trigger_enabled = secret.is_some();
     let trigger = trigger_router(TriggerState::from_state(state, app, secret));
-    let server = build_server(client_config, &desktop_config).with_extra_routes(trigger);
+    let server = build_server(client_config, &desktop_config, state).with_extra_routes(trigger);
     tracing::info!(
         "Spawning loopback engine API server on {LOOPBACK_HOST}:{LOOPBACK_PORT} \
          (POST /api/routines/:id/trigger {})",
