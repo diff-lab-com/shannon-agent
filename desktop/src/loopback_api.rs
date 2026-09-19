@@ -267,16 +267,36 @@ fn loopback_sandbox_providers(
 /// not only on the interactive (`AppState::new`) and goal-runner seams.
 ///
 /// When `state` carries an injected agent-teams context (B2, see
-/// `crate::agent_teams::enable`), `team_task_*` tools are registered too —
-/// so an IM/mobile turn that calls `team_task_*` participates in the
-/// shared task board. (The agent-teams context itself is reused from the
-/// chat's handle; loopback does not build its own coordinator because
-/// there is no `subagent:*` event bridge on this surface.)
+/// `crate::agent_teams::enable`), the loopback `AgentTool` is re-pointed at
+/// the chat session's context handle and `team_task_*` tools are registered
+/// — so an IM/mobile turn that calls `agent_spawn` / `team_task_*` lands on
+/// the same coordinator the interactive chat uses.
+///
+/// The handle (not a snapshot of its value) is shared: the `AgentTool`
+/// consults it on every call, so enabling agent teams AFTER the loopback
+/// server has started takes effect on the next loopback turn, same as it
+/// does for chat. Lifecycle events flow too — the `subagent:start|stop`
+/// observer lives on the shared registry, so sub-agents spawned through a
+/// loopback turn surface in the desktop UI with no extra wiring here.
 pub fn build_server(
     client_config: LlmClientConfig,
     desktop_config: &DesktopConfig,
     state: &crate::commands::AppState,
 ) -> ShannonApiServer {
+    let tools = build_loopback_tools(desktop_config, state);
+    ShannonApiServer::new(client_config)
+        .with_tools(tools)
+        .host(LOOPBACK_HOST)
+        .port(LOOPBACK_PORT)
+}
+
+/// Build the loopback tool registry: sandboxed default tools + the B2-4
+/// team-state wiring. Split from [`build_server`] so tests can inspect the
+/// registry (`ShannonApiServer` keeps its tools private).
+fn build_loopback_tools(
+    desktop_config: &DesktopConfig,
+    state: &crate::commands::AppState,
+) -> ToolRegistry {
     let mut tools = ToolRegistry::new();
     let assembly = shannon_remote::assembly::assemble_dynamic();
     let sandboxed_providers = match loopback_sandbox_providers(desktop_config, &assembly.providers)
@@ -295,27 +315,28 @@ pub fn build_server(
     ) {
         tracing::warn!("loopback engine API server: default tool registration failed: {e}");
     }
-    // B2 follow-up — if the chat has an injected TeamContext, mirror its
-    // coordinator into the loopback registry so team_task_* calls land on
-    // the same task board. Loopback sessions do not run their own
-    // sub-agent executor (no observer bridge on this surface), so the
-    // agent_spawn path stays placeholder here — that's intentional and
-    // matches the pre-B2 behaviour.
-    let coordinator = state
-        .agent_tool_context
-        .lock()
-        .expect("agent tool context lock poisoned")
-        .as_ref()
-        .map(|ctx| ctx.coordinator.clone());
-    if let Some(coord) = coordinator {
-        if let Err(e) = shannon_tools::register_team_tools(&mut tools, coord) {
-            tracing::warn!("loopback engine API server: team_task tool registration failed: {e}");
-        }
+    // B2-4 — share the chat session's team state with the loopback
+    // registry: swap the fresh `AgentTool`'s empty context handle for the
+    // AppState handle, then register `team_task_*` bound to the same
+    // coordinator when teams are on. Swapping the handle (vs. snapshotting
+    // the coordinator at build time, the PR #93 shape this replaces) means
+    // a later `agent_teams::enable` is picked up by the NEXT loopback turn's
+    // `agent_spawn` — the tool consults the handle on every call.
+    // Known asymmetry: `team_task_*` registration itself is build-time (the
+    // coordinator value must exist to bind the tools), so toggling teams on
+    // mid-session makes loopback `agent_spawn` live immediately but its
+    // `team_task_*` tools only after an app restart. Documented in the
+    // surfaces audit.
+    let agent_ctx = state.agent_tool_context.clone();
+    if !shannon_tools::swap_agent_tool_context(&mut tools, agent_ctx.clone()) {
+        tracing::warn!(
+            "loopback engine API server: Agent tool swap failed — agent_spawn stays placeholder"
+        );
     }
-    ShannonApiServer::new(client_config)
-        .with_tools(tools)
-        .host(LOOPBACK_HOST)
-        .port(LOOPBACK_PORT)
+    if let Err(e) = shannon_tools::register_team_tools_when_enabled(&mut tools, &agent_ctx) {
+        tracing::warn!("loopback engine API server: team_task tool registration failed: {e}");
+    }
+    tools
 }
 
 /// Spawn the loopback engine API server on a detached background task.
@@ -608,5 +629,85 @@ mod tests {
         assert_eq!(resp.status(), 200);
         let body: serde_json::Value = resp.json().await.expect("health json");
         assert_eq!(body["status"], "ok");
+    }
+
+    /// B2-4 — the loopback registry shares the chat session's team state:
+    /// the `Agent` tool is re-pointed at `state.agent_tool_context` (handle,
+    /// not a snapshot), and `team_task_*` tools are gated on the handle being
+    /// populated at build time.
+    ///
+    /// The later-injection property is asserted end-to-end: a registry built
+    /// while teams were OFF executes `SendMessage` as the placeholder (Ok)
+    /// before the toggle, and as the coordinator-backed path (Err — agent
+    /// not found) after the context is injected into the shared handle. The
+    /// accepted asymmetry — `team_task_*` registration stays build-time — is
+    /// documented in the surfaces audit.
+    #[test]
+    fn loopback_build_wires_chat_team_state_and_later_injection_is_live() {
+        let state = crate::commands::AppState::new();
+
+        // Teams off (default): swap succeeded (Agent present), no team_task.
+        let tools = build_loopback_tools(&DesktopConfig::default(), &state);
+        assert!(
+            tools.get("Agent").is_some(),
+            "Agent tool must be registered"
+        );
+        assert!(
+            tools.get("team_task_create").is_none(),
+            "empty handle must not register team_task tools"
+        );
+
+        // Placeholder path: SendMessage to a nonexistent agent is Ok.
+        let placeholder = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(tools.execute(
+                "Agent",
+                serde_json::json!({
+                    "operation": "SendMessage",
+                    "agent_id": "nobody",
+                    "message": "ping"
+                }),
+            ))
+            .expect("placeholder SendMessage must not error");
+        assert!(!placeholder.is_error);
+        assert!(
+            placeholder.content.contains("delivered"),
+            "{}",
+            placeholder.content
+        );
+
+        // Simulate the user toggling teams ON after the server started:
+        // inject a context into the SAME handle the loopback registry shares.
+        let ctx = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(shannon_agents::TeamContext::new_unchecked(
+                shannon_engine::api::LlmClientConfig::default(),
+            ))
+            .expect("TeamContext::new_unchecked");
+        *state.agent_tool_context.lock().expect("handle poisoned") = Some(ctx);
+
+        // Same registry, same call: now the coordinator-backed path runs and
+        // rejects the unknown agent — later injection is live.
+        let live = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(tools.execute(
+                "Agent",
+                serde_json::json!({
+                    "operation": "SendMessage",
+                    "agent_id": "nobody",
+                    "message": "ping"
+                }),
+            ));
+        let err = live.expect_err("post-injection SendMessage must hit the coordinator path");
+        assert!(
+            err.to_string().contains("Failed to send message"),
+            "unexpected error: {err}"
+        );
+
+        // A registry built AFTER the toggle registers the team_task trio.
+        let tools_after = build_loopback_tools(&DesktopConfig::default(), &state);
+        assert!(tools_after.get("team_task_create").is_some());
+        assert!(tools_after.get("team_task_update").is_some());
+        assert!(tools_after.get("team_task_list").is_some());
     }
 }
