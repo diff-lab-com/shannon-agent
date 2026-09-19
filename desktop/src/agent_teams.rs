@@ -5,14 +5,14 @@
 //! into the handle that `register_default_tools_with_providers` returned at
 //! startup. This module owns that lifecycle:
 //!
-//! - [`enable`] builds the context (bypassing the `SHANNON_AGENT_TEAMS`
+//! - `enable` builds the context (bypassing the `SHANNON_AGENT_TEAMS`
 //!   env gate — the desktop Settings toggle is the gate, and a GUI process
 //!   must not mutate its own environment after threads have spawned),
 //!   wraps it with the shared LLM executor, registers a lifecycle observer
 //!   that forwards `Spawned`/`Completed` transitions to the frontend as
 //!   `subagent:start` / `subagent:stop`, and injects the context into the
 //!   AppState handle the tool consults on every call.
-//! - [`disable`] revokes the context — in-flight sub-agent runs finish
+//! - `disable` revokes the context — in-flight sub-agent runs finish
 //!   (the engine cloned what it needed), new `agent_spawn` calls fall back
 //!   to the placeholder output.
 //!
@@ -86,7 +86,8 @@ pub(crate) fn lifecycle_payload(event: &SubAgentLifecycle) -> SubAgentEventPaylo
 }
 
 /// True when the persisted Settings toggle turns agent teams on.
-pub(crate) async fn config_enabled(state: &crate::commands::AppState) -> bool {
+/// `pub` because the bin crate's `main.rs` startup calls it.
+pub async fn config_enabled(state: &crate::commands::AppState) -> bool {
     state.desktop_config.read().await.agent_teams_enabled
 }
 
@@ -94,7 +95,7 @@ pub(crate) async fn config_enabled(state: &crate::commands::AppState) -> bool {
 /// `AgentTool`. Idempotent: enabling twice keeps the first context (its
 /// registry already carries this session's spawned agents).
 #[cfg(feature = "tauri")]
-pub(crate) async fn enable(
+pub async fn enable(
     state: &crate::commands::AppState,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
