@@ -102,6 +102,12 @@ pub struct AppState {
     qe_config: Arc<RwLock<shannon_core::query_engine::QueryEngineConfig>>,
     /// Desktop config (persisted).
     pub(crate) desktop_config: Arc<RwLock<DesktopConfig>>,
+    /// B2 — handle shared with the engine's `AgentTool`. Empty until the
+    /// user enables agent teams (`crate::agent_teams::enable` injects the
+    /// `TeamContext` here; `disable` revokes it). The tool consults this
+    /// handle on every `agent_spawn` call, so inject/revoke take effect
+    /// immediately without a restart.
+    pub(crate) agent_tool_context: Arc<std::sync::Mutex<Option<shannon_tools::AgentToolContext>>>,
     /// Pending permission requests (request_id -> sender + tool name, so
     /// "always allow" can persist a rule for the tool).
     pub(crate) pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
@@ -371,7 +377,14 @@ impl AppState {
                 None
             }
         };
-        let _agent_context = {
+        // B2 — the handle is kept in `AppState::agent_tool_context` (not
+        // discarded). It stays empty until the user enables agent teams in
+        // Settings (`agent_teams_enabled`, default off); `crate::agent_teams`
+        // then injects a `TeamContext` (TUI injection pattern,
+        // crates/shannon-ui/src/repl/mod.rs ~L828) and bridges the registry
+        // lifecycle to `subagent:start|stop` events. Until then `agent_spawn`
+        // keeps its zero-cost placeholder behavior.
+        let agent_context_handle = {
             let _ = &assembly;
             register_default_tools_with_providers(
                 &mut tool_registry,
@@ -379,17 +392,6 @@ impl AppState {
             )
             .expect("Failed to register default tools")
         };
-        // B2 (subagent lifecycle, PENDING PRODUCT + CI decision): desktop's
-        // `agent_spawn` is a no-op placeholder because no TeamContext is
-        // injected (the handle above is discarded). To enable real sub-agent
-        // execution + the subagent:start/stop event bridge, follow the TUI
-        // injection pattern in crates/shannon-ui/src/repl/mod.rs (~L828):
-        // build `AgentToolContext::new(client_config).await`, inject via the
-        // context handle, then register a
-        // `SubAgentRegistry::register_observer` that emits Tauri
-        // `subagent:start|stop` events (crates-side observer API already
-        // shipped in this branch). Gated: it turns agent_spawn into real
-        // subprocess execution (API cost + subprocess permissions).
 
         // P1-5 C-1 — dev-server preview manager + the desktop-only
         // `preview_screenshot` engine tool bound to it. Registration happens
@@ -407,6 +409,7 @@ impl AppState {
         Self {
             registry: Arc::new(SessionRegistry::new()),
             client_config: Arc::new(RwLock::new(client_config)),
+            agent_tool_context: agent_context_handle,
             provider_store: Arc::new(tokio::sync::Mutex::new(provider_store)),
             tools: Arc::new(tool_registry),
             permissions: Arc::new(RwLock::new(PermissionManager::new())),

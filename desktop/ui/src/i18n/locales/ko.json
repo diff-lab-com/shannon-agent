@@ -1675,8 +1675,8 @@
   "chat.message.retryChain": "연속 {count}회 실패",
   "chat.message.retryChain.view": "타임라인 보기",
   "settings.density.title": "표시 밀도",
-  "settings.density.auto": "\uc790\ub3d9(\ubaa8\ub4dc \ub530\ub984)",
-  "chat.message.retryChain.attempt": "{n}\ubc88\uc9f8 \uc2dc\ub3c4",
+  "settings.density.auto": "자동(모드 따름)",
+  "chat.message.retryChain.attempt": "{n}번째 시도",
   "chat.tool.sandboxDenied": "샌드박스에 의해 차단됨",
   "chat.tool.tokens.title": "이 도구 호출에 근사 귀속된 토큰 수",
   "settings.density.help": "컴팩트는 앱 전체의 글자와 간격을 줄입니다. 기본값은 컴포터블입니다.",
@@ -2991,5 +2991,10 @@
   "settings.connections.mobile.tlsToggle": "LAN 암호화(wss)",
   "settings.connections.mobile.tlsHint": "자체 서명 인증서로 모바일 채널에 TLS를 제공합니다. 휴대폰은 QR 코드에 담긴 인증서 지문을 검증합니다. 게이트웨이 재시작 후 적용됩니다.",
   "settings.connections.mobile.tlsFingerprint": "인증서 지문",
-  "settings.connections.mobile.tlsSaved": "LAN 암호화가 업데이트되었습니다. 게이트웨이를 재시작하면 적용됩니다"
+  "settings.connections.mobile.tlsSaved": "LAN 암호화가 업데이트되었습니다. 게이트웨이를 재시작하면 적용됩니다",
+  "settings.advanced.agentTeamsTitle": "에이전트 팀 (하위 에이전트)",
+  "settings.advanced.agentTeamsDesc": "agent_spawn 도구가 실제 하위 에이전트 작업을 실행하도록 허용합니다. 각 스폰은 독립적인 LLM 실행이며 API 할당량을 소비합니다. 기본값은 꺼짐입니다.",
+  "settings.advanced.agentTeamsToggle": "실제 하위 에이전트 실행 활성화",
+  "settings.advanced.agentTeamsLive": "즉시 적용됩니다. 재시작이 필요 없습니다.",
+  "chat.subagent.registryId": "레지스트리 {id}"
 }

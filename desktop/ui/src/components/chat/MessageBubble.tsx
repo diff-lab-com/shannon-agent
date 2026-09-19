@@ -626,13 +626,14 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
  * P1-⑥ (ZCode delta): first-class collapsible block for `agent_spawn` tool
  * calls — sub-agent runs render as their own timeline section (name, model,
  * team, spawn prompt + result summary) instead of a generic tool card.
- * Engine note: desktop only sees the spawn's tool pair today (no
- * SubagentStart/Stop event bridge yet), so the block tracks the spawn
- * lifecycle, not the sub-agent's internal progress.
+ * Engine note: with agent teams enabled (B2), the registry bridges spawn
+ * lifecycle to `subagent:start` / `subagent:stop` — while the spawn tool is
+ * running, the block surfaces the live registry agent id via `subagentLive`.
  */
 export const SubagentBlock = memo(function SubagentBlock({ toolCall }: { toolCall: ToolCall }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
+  const { subagentLive } = useSessions()
   const [expanded, setExpanded] = useState(false)
   const input = (toolCall.tool_input ?? {}) as Record<string, unknown>
   const name = typeof input.name === 'string' ? input.name : ''
@@ -664,6 +665,12 @@ export const SubagentBlock = memo(function SubagentBlock({ toolCall }: { toolCal
         )}
         {team && (
           <span className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded bg-surface-container shrink-0" aria-hidden="true">{team}</span>
+        )}
+        {toolCall.status === 'running' && subagentLive && (
+          <span className="font-mono text-label-xs px-xs py-[1px] rounded bg-primary/10 text-primary shrink-0 flex items-center gap-1" aria-live="polite">
+            <span className="size-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
+            {t('chat.subagent.registryId', { id: subagentLive.agentId })}
+          </span>
         )}
         {toolCall.status !== 'running' && durationMs != null && (
           <span className="font-mono text-label-xs tabular-nums text-on-surface-variant/80 shrink-0" aria-hidden="true">

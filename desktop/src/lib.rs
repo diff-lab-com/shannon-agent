@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
+pub mod agent_teams;
 pub mod config;
 pub mod events;
 pub mod extensions;

@@ -31,6 +31,8 @@ export const MOCK_CONFIG: DesktopConfig = {
   // P2-5: off-peak model override (frozen key `offpeak.model_override`).
   // Empty = disabled in the demo.
   offpeak: { model_override: '' },
+  // B2: real sub-agent execution — off in the demo (no live bridge).
+  agent_teams_enabled: false,
 }
 
 // Managed-providers roster for the Models P2 UI (mirrors the Rust

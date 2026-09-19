@@ -1675,8 +1675,8 @@
   "chat.message.retryChain": "连续 {count} 次尝试失败",
   "chat.message.retryChain.view": "查看时间线",
   "settings.density.title": "显示密度",
-  "settings.density.auto": "\u81ea\u52a8\uff08\u8ddf\u968f\u6a21\u5f0f\uff09",
-  "chat.message.retryChain.attempt": "\u7b2c {n} \u6b21",
+  "settings.density.auto": "自动（跟随模式）",
+  "chat.message.retryChain.attempt": "第 {n} 次",
   "chat.tool.sandboxDenied": "被沙箱拦截",
   "chat.tool.tokens.title": "近似归因到该工具调用的 token 数",
   "settings.density.help": "紧凑模式会收紧全局字号与间距；默认为舒适模式。",
@@ -3031,5 +3031,10 @@
   "settings.connections.mobile.tlsToggle": "局域网加密（wss）",
   "settings.connections.mobile.tlsHint": "使用自签名证书为移动通道启用 TLS——手机校验二维码中携带的证书指纹。网关重启后生效。",
   "settings.connections.mobile.tlsFingerprint": "证书指纹",
-  "settings.connections.mobile.tlsSaved": "局域网加密已更新——重启网关后生效"
+  "settings.connections.mobile.tlsSaved": "局域网加密已更新——重启网关后生效",
+  "settings.advanced.agentTeamsTitle": "智能体团队（子智能体）",
+  "settings.advanced.agentTeamsDesc": "允许 agent_spawn 工具执行真实的子智能体任务——每次 spawn 都是一次独立的 LLM 调用，会消耗 API 额度。默认关闭；关闭时仅为零成本占位。",
+  "settings.advanced.agentTeamsToggle": "启用真实子智能体执行",
+  "settings.advanced.agentTeamsLive": "立即生效，无需重启。",
+  "chat.subagent.registryId": "注册项 {id}"
 }

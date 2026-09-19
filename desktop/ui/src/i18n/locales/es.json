@@ -1675,7 +1675,7 @@
   "chat.message.retryChain": "{count} intentos fallidos seguidos",
   "chat.message.retryChain.view": "Ver línea de tiempo",
   "settings.density.title": "Densidad de pantalla",
-  "settings.density.auto": "Auto (seg\u00fan modo)",
+  "settings.density.auto": "Auto (según modo)",
   "chat.message.retryChain.attempt": "Intento {n}",
   "chat.tool.sandboxDenied": "Bloqueado por el sandbox",
   "chat.tool.tokens.title": "Tokens aproximados atribuidos a esta llamada",
@@ -2991,5 +2991,10 @@
   "settings.connections.mobile.tlsToggle": "Cifrado de LAN (wss)",
   "settings.connections.mobile.tlsHint": "Sirve el canal móvil sobre TLS con un certificado autofirmado: los teléfonos verifican la huella del certificado incluida en el código QR. Surte efecto tras reiniciar la gateway.",
   "settings.connections.mobile.tlsFingerprint": "Huella del certificado",
-  "settings.connections.mobile.tlsSaved": "Cifrado de LAN actualizado: reinicia la gateway para aplicarlo"
+  "settings.connections.mobile.tlsSaved": "Cifrado de LAN actualizado: reinicia la gateway para aplicarlo",
+  "settings.advanced.agentTeamsTitle": "Equipos de agentes (subagentes)",
+  "settings.advanced.agentTeamsDesc": "Permite que la herramienta agent_spawn ejecute tareas reales de subagentes; cada spawn es una ejecución LLM independiente que consume cuota de API. Desactivado por defecto.",
+  "settings.advanced.agentTeamsToggle": "Activar la ejecución real de subagentes",
+  "settings.advanced.agentTeamsLive": "Tiene efecto inmediato; no hace falta reiniciar.",
+  "chat.subagent.registryId": "registro {id}"
 }

@@ -122,6 +122,14 @@ export interface ToolCall {
   tokens_used?: number
 }
 
+/** B2: live registry state of a running sub-agent, bridged from the
+ *  desktop agent-teams observer via `subagent:start` / `subagent:stop`. */
+export interface SubAgentLive {
+  agentId: string
+  agentName: string
+  team: string | null
+}
+
 export interface ResearchReport {
   title: string
   summary: string
@@ -449,6 +457,9 @@ export interface DesktopConfig {
   skill_loop_min_duration_secs?: number
   skill_loop_min_tool_calls?: number
   skill_detection_enabled?: boolean
+  /** B2: real sub-agent execution (agent teams). Default off — placeholder
+   *  agent_spawn only, until opted in (real LLM spend). */
+  agent_teams_enabled?: boolean
   stt?: SttConfig
   /** P2-5e local-only STT (whisper-rs). Independent of `stt`
    *  so a user can keep a cloud key for fallback while local
@@ -1182,6 +1193,10 @@ export const EVENT_NAMES = {
   BUDGET_WARNING: 'budget:warning',
   /** P0-4: budget cap hit — send rejected pre-turn or turn cancelled. */
   BUDGET_EXCEEDED: 'budget:exceeded',
+  /** B2: the agent-teams registry accepted a new sub-agent (desktop bridge). */
+  SUBAGENT_START: 'subagent:start',
+  /** B2: a sub-agent run finished (ok or failed; desktop bridge). */
+  SUBAGENT_STOP: 'subagent:stop',
   /** P1-5 D: PTY output for the integrated terminal (data is base64). */
   TERMINAL_OUTPUT: 'terminal:output',
 } as const

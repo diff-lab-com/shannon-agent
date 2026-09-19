@@ -448,6 +448,23 @@ fn main() {
                     *slot = Some(engine_mode);
                 }
                 tracing::info!(?engine_mode, "engine discovery complete");
+
+                // B2 — when the persisted Settings toggle is on, inject the
+                // agent-teams context so `agent_spawn` executes real
+                // sub-agents and bridges lifecycle events to the frontend.
+                // Failure is non-fatal: the tool keeps placeholder behavior
+                // and the user can retry from Settings.
+                if shannon_desktop::agent_teams::config_enabled(state_ref.inner()).await {
+                    if let Err(e) = shannon_desktop::agent_teams::enable(
+                        state_ref.inner(),
+                        app_handle_for_block.clone(),
+                    )
+                    .await
+                    {
+                        tracing::warn!("agent teams enable failed: {e}");
+                    }
+                }
+
                 if engine_mode == engine_discovery::EngineMode::Hosted {
                     // P0.1 — spawn the loopback engine API server BEFORE the
                     // gateway so its `engine.wsUrl` (ws://127.0.0.1:33420/api/ws)
