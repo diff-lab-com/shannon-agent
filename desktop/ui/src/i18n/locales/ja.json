@@ -2993,8 +2993,9 @@
   "settings.connections.mobile.tlsFingerprint": "証明書フィンガープリント",
   "settings.connections.mobile.tlsSaved": "LAN 暗号化を更新しました。ゲートウェイの再起動後に適用されます",
   "settings.advanced.agentTeamsTitle": "エージェントチーム（サブエージェント）",
-  "settings.advanced.agentTeamsDesc": "agent_spawn ツールが実際のサブエージェントタスクを実行できるようにします。各スポーンは独立した LLM 実行であり、API クォータを消費します。デフォルトはオフです。",
+  "settings.advanced.agentTeamsDesc": "agent_spawn ツールが実際のサブエージェントタスクを実行できるようにします。各スポーンは独立した LLM 実行であり、API クォータを消費します。サブエージェントは現在の承認モードとツール許可リストを継承します。親セッションが許可モードの場合、サブエージェントも許可モードになります。デフォルトはオフです。",
   "settings.advanced.agentTeamsToggle": "実際のサブエージェント実行を有効化",
   "settings.advanced.agentTeamsLive": "すぐに反映されます。再起動は不要です。",
-  "chat.subagent.registryId": "レジストリ {id}"
+  "chat.subagent.registryId": "レジストリ {id}",
+  "chat.subagent.inheritsMode": "親セッションの承認モードを継承：{mode}"
 }

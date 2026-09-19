@@ -2993,8 +2993,9 @@
   "settings.connections.mobile.tlsFingerprint": "Zertifikats-Fingerabdruck",
   "settings.connections.mobile.tlsSaved": "LAN-Verschlüsselung aktualisiert — Gateway neu starten, um sie anzuwenden",
   "settings.advanced.agentTeamsTitle": "Agententeams (Subagenten)",
-  "settings.advanced.agentTeamsDesc": "Erlaubt dem Tool agent_spawn, echte Subagenten-Aufgaben auszuführen — jeder Spawn ist ein eigenständiger LLM-Lauf und verbraucht API-Kontingent. Standardmäßig aus.",
+  "settings.advanced.agentTeamsDesc": "Erlaubt dem Tool agent_spawn, echte Subagenten-Aufgaben auszuführen — jeder Spawn ist ein eigenständiger LLM-Lauf und verbraucht API-Kontingent. Subagenten erben den aktuellen Genehmigungsmodus und die Tool-Allowlist. Ist der übergeordnete Modus freigebig, gilt dies auch für Subagenten. Standardmäßig aus.",
   "settings.advanced.agentTeamsToggle": "Echte Subagenten-Ausführung aktivieren",
   "settings.advanced.agentTeamsLive": "Wirkt sofort — kein Neustart nötig.",
-  "chat.subagent.registryId": "Registrierung {id}"
+  "chat.subagent.registryId": "Registrierung {id}",
+  "chat.subagent.inheritsMode": "Übernimmt den Genehmigungsmodus der übergeordneten Sitzung: {mode}"
 }

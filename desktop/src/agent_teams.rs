@@ -113,6 +113,27 @@ pub async fn enable(
     let ctx = TeamContext::new_unchecked(client_config)
         .await
         .map_err(|e| format!("Agent teams init failed: {e}"))?;
+
+    // P1 — inherit the lead's approval policy so sub-agents don't silently
+    // escalate to `FullAuto` when the parent is in `Suggest` / `Plan` /
+    // `Readonly`. The previous shape set `permission_mode = "default"`
+    // unconditionally, which the in-process sub-agent path ignored — but
+    // pinning the field here keeps it visible to future consumers (TUI
+    // observers, debug dumps) and is the contract the engine reads from.
+    let parent_permission_mode = state
+        .desktop_config
+        .read()
+        .await
+        .approval_mode
+        .clone()
+        .unwrap_or_else(|| "default".to_string());
+    // Validate the same way the chat lead does — unknown values silently
+    // land on `Suggest`, which is a sane default. We do NOT abort enable()
+    // on an unrecognised value because the user can fix it from Settings
+    // and the worst case is a stricter mode.
+    let _ = crate::commands::parse_approval_mode(&parent_permission_mode);
+    let ctx = ctx.with_permission_mode(parent_permission_mode);
+
     // Mirror the TUI injection: a shared executor lets teammates make real
     // LLM calls through the coordinator.
     let ctx = {

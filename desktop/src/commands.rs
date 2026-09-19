@@ -31,8 +31,10 @@ use crate::events::{self};
 use crate::session_registry::SessionRegistry;
 use tokio_util::sync::CancellationToken;
 
-/// Parse approval mode string into ApprovalMode enum
-fn parse_approval_mode(mode_str: &str) -> ApprovalMode {
+/// Parse approval mode string into ApprovalMode enum. `pub(crate)` so the
+/// agent-teams bridge (`crate::agent_teams::enable`) can reuse the same
+/// case-insensitive mapping for sub-agent permission inheritance.
+pub(crate) fn parse_approval_mode(mode_str: &str) -> ApprovalMode {
     match mode_str.to_lowercase().as_str() {
         "suggest" | "default" => ApprovalMode::Suggest,
         "plan" => ApprovalMode::Plan,

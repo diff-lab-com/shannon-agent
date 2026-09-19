@@ -16,8 +16,39 @@ use shannon_agents::{
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use shannon_engine::permissions::ApprovalMode;
+
 /// Type alias for backward compatibility.
 pub type AgentToolContext = TeamContext;
+
+/// Merge the per-call `allowed_tools`, the per-call `disallowed_tools`, and
+/// the parent's process-level denylist into a single `ToolFilter` list.
+/// Allow entries pass through verbatim; deny entries are emitted as
+/// `!pattern` so `ToolFilter.is_allowed`'s deny precedence beats allow.
+///
+/// `pub(crate)` so unit tests in this crate can assert on the exact
+/// composition without spinning up a `QueryEngine`.
+pub(crate) fn merge_tool_filter(
+    allowed_tools: Option<&[String]>,
+    disallowed_tools: Option<&[String]>,
+    parent_disallowed_tools: &[String],
+) -> Vec<String> {
+    let mut merged: Vec<String> = Vec::new();
+    if let Some(allowed) = allowed_tools {
+        merged.extend(allowed.iter().cloned());
+    }
+    for tool in disallowed_tools.unwrap_or(&[]) {
+        if !merged.iter().any(|p| p == &format!("!{tool}")) {
+            merged.push(format!("!{tool}"));
+        }
+    }
+    for tool in parent_disallowed_tools {
+        if !merged.iter().any(|p| p == &format!("!{tool}")) {
+            merged.push(format!("!{tool}"));
+        }
+    }
+    merged
+}
 
 /// Agent operation types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -364,6 +395,13 @@ impl AgentTool {
                     input,
                     subagent_config,
                     Some(resolved_prompt_for_subagent),
+                    // P1 — inherit parent's approval policy + tool denylist.
+                    // The previous shape hard-coded `FullAuto` and dropped
+                    // both `ctx.permission_mode` and `ctx.parent_disallowed_tools`,
+                    // which silently downgraded the lead's sandbox/permissions
+                    // when sub-agents ran real LLM turns. See `execute_subagent`.
+                    ctx.permission_mode.clone(),
+                    ctx.parent_disallowed_tools.clone(),
                 )
                 .await?;
 
@@ -404,8 +442,20 @@ impl AgentTool {
             match client_config {
                 Some(client_config) => {
                     let prompt = agent_def.as_ref().and_then(|d| d.system_prompt.clone());
-                    self.execute_subagent(agent_id, agent_type, input, client_config, prompt)
-                        .await
+                    // No TeamContext → inherit nothing. Use AutoEdit (engine
+                    // default) and no extra denylist. Same hardening as the
+                    // real path: deny patterns still apply if the caller put
+                    // them in `input.disallowed_tools`.
+                    self.execute_subagent(
+                        agent_id,
+                        agent_type,
+                        input,
+                        client_config,
+                        prompt,
+                        ApprovalMode::AutoEdit.to_string(),
+                        Vec::new(),
+                    )
+                    .await
                 }
                 None => Ok(AgentSpawnOutput {
                     agent_id,
@@ -422,6 +472,12 @@ impl AgentTool {
     }
 
     /// Execute a task in a real sub-agent QueryEngine.
+    ///
+    /// P1 — the sub-agent inherits the lead's approval policy + tool
+    /// denylist (`ctx.permission_mode` and `ctx.parent_disallowed_tools`,
+    /// forwarded here from `spawn_agent`). The previous shape hard-coded
+    /// `FullAuto` and dropped the denylist, which silently downgraded the
+    /// lead's sandbox when sub-agents ran real LLM turns.
     async fn execute_subagent(
         &self,
         agent_id: String,
@@ -429,6 +485,8 @@ impl AgentTool {
         input: AgentSpawnInput,
         client_config: shannon_engine::api::LlmClientConfig,
         resolved_system_prompt: Option<String>,
+        parent_permission_mode: String,
+        parent_disallowed_tools: Vec<String>,
     ) -> Result<AgentSpawnOutput, ToolError> {
         use shannon_core::query_engine::{QueryContext, QueryEvent, QueryMetadata};
         use uuid::Uuid;
@@ -438,18 +496,29 @@ impl AgentTool {
         Self::register_subagent_tools(&mut sub_tools)
             .map_err(|e| ToolError::ExecutionFailed(format!("sub-agent tool setup failed: {e}")))?;
 
-        // Apply tool allowlist if specified
-        if let Some(ref allowed) = input.allowed_tools {
-            if !allowed.is_empty() {
-                sub_tools.set_allowed_tools(Some(allowed.clone()));
-            }
+        // Merge allowlist + denylist into the sub-agent's `ToolFilter`. The
+        // deny entries are emitted as `!pattern` (the same convention the
+        // spawned-subprocess path uses) so `ToolFilter.is_allowed`'s deny
+        // precedence beats allow — i.e. even if a tool name is in
+        // `allowed_tools`, the parent denylist still rejects it.
+        let merged = merge_tool_filter(
+            input.allowed_tools.as_deref(),
+            input.disallowed_tools.as_deref(),
+            &parent_disallowed_tools,
+        );
+        if !merged.is_empty() {
+            sub_tools.set_allowed_tools(Some(merged));
         }
 
-        // Create sub-agent engine with FullAuto permissions
+        // Create sub-agent engine with the inherited approval mode.
+        // `from_str_ci` accepts Shannon + Claude Code aliases; fallback to
+        // `AutoEdit` (the engine default) when the parent didn't set one.
         let model_name = client_config.model.clone();
         let client = shannon_engine::api::LlmClient::new(client_config);
         let mut permissions = shannon_engine::permissions::PermissionManager::new();
-        permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
+        let approval_mode =
+            ApprovalMode::from_str_ci(&parent_permission_mode).unwrap_or(ApprovalMode::AutoEdit);
+        permissions.set_approval_mode(approval_mode);
         let state = shannon_engine::state::StateManager::new();
 
         let engine = shannon_core::query_engine::QueryEngine::with_defaults(
@@ -1319,5 +1388,59 @@ mod tests {
         let tool = AgentTool::new();
         let defs = tool.get_agent_defs();
         assert!(defs.get("nonexistent-agent-type-xyz").is_none());
+    }
+
+    // P1 — sub-agent permission / sandbox inheritance (B2 follow-up).
+
+    #[test]
+    fn test_merge_tool_filter_combines_allow_and_two_denylists() {
+        // Both per-call deny + parent deny land as `!pattern`. Allowlist
+        // entries pass through verbatim. Order: allow first, then
+        // per-call deny, then parent deny — so the deny semantics the
+        // `ToolFilter` consumes are stable across callers.
+        let allowed = vec!["Bash".to_string(), "Read".to_string()];
+        let input_denied = vec!["Write".to_string()];
+        let parent_denied = vec!["Bash".to_string(), "PowerShell".to_string()];
+        let merged = merge_tool_filter(Some(&allowed), Some(&input_denied), &parent_denied);
+        // Allow first, then per-call deny, then parent deny. The deny
+        // precedence lives in `ToolFilter.is_allowed` (not here), so we
+        // emit every deny independently — even if its name already lives
+        // in the allowlist, since `!pattern` correctly overrides it.
+        assert_eq!(
+            merged,
+            vec![
+                "Bash".to_string(),
+                "Read".to_string(),
+                "!Write".to_string(),
+                "!Bash".to_string(),
+                "!PowerShell".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_tool_filter_empty_inputs_yields_empty() {
+        // No filter → registry keeps every tool the sub-agent registered.
+        let merged = merge_tool_filter(None, None, &[]);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn test_merge_tool_filter_deduplicates_deny_pattern() {
+        // Same name in input.denied + parent.denied → one `!pattern` only.
+        // Allow-list overlap is NOT dedup'd (deny semantics vs allow are
+        // resolved by `ToolFilter.is_allowed`, not here).
+        let merged = merge_tool_filter(None, Some(&["Bash".to_string()]), &["Bash".to_string()]);
+        assert_eq!(merged, vec!["!Bash".to_string()]);
+    }
+
+    #[test]
+    fn test_merge_tool_filter_allow_overlap_with_deny_kept() {
+        // Belt-and-suspenders: when `Bash` is in allowlist AND denied by
+        // the parent, we emit BOTH entries. The deny semantics override
+        // allow in `ToolFilter.is_allowed`; we never silently remove the
+        // deny when the name happens to also live in the allowlist.
+        let merged = merge_tool_filter(Some(&["Bash".to_string()]), None, &["Bash".to_string()]);
+        assert_eq!(merged, vec!["Bash".to_string(), "!Bash".to_string()]);
     }
 }
