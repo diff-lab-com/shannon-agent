@@ -259,7 +259,7 @@ w4 发车 ~4.5h：11 启动 / 8 判分 / 3 在跑（健康：pier 存活、网�
      静默切断；A8 重发同 turn → 模型再次合法思考 >420s → 3 次都死 → run-retry 整跑
      整跑重来 → 再死。
    - 「上下文压缩」不是主修方（才 20k tokens），**「超时后升级看门狗耐心」**才是。
-2. **A14 实现（流 idle 看门狗自适应耐心）**：commit *<见 git log>*
+2. **A14 实现（流 idle 看门狗自适应耐心）**：commit `ac5fdcc3`
    - **streaming.rs**：两个流构造函数 (`sse_stream_from_response` /
      `sse_stream_from_response_resumable`) 增加 `idle_override: Option<Duration>`
      参数；构造时 `override.or_else(stream_idle_timeout_from_env)`，override 永远优先。
