@@ -589,8 +589,12 @@ mod tests {
         // enabled). The test only exercises the health endpoint, so a
         // default-constructed state is sufficient.
         let state = crate::commands::AppState::new();
-        let server = build_server(LlmClientConfig::default(), &DesktopConfig::default(), &state)
-            .port(port);
+        let server = build_server(
+            LlmClientConfig::default(),
+            &DesktopConfig::default(),
+            &state,
+        )
+        .port(port);
         tokio::spawn(async move {
             let _ = server.serve().await;
         });
