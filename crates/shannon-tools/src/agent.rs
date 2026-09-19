@@ -239,6 +239,20 @@ impl AgentTool {
         self.context.clone()
     }
 
+    /// Replace the context handle entirely.
+    ///
+    /// Used by surfaces that build their own per-run tool registry (the
+    /// desktop goal runner) but must share the parent's team state: the
+    /// freshly-registered `AgentTool` starts with its own empty handle, and
+    /// swapping in the chat session's handle makes `agent_spawn` /
+    /// `send_message` / `shutdown` land on the same coordinator.
+    ///
+    /// Only call this between registry construction and first engine use —
+    /// it is not synchronised against concurrent tool execution.
+    pub fn set_context_handle(&mut self, handle: Arc<Mutex<Option<AgentToolContext>>>) {
+        self.context = handle;
+    }
+
     /// Inject the team context for real coordinator-backed execution.
     pub fn inject_context(&self, ctx: AgentToolContext) {
         if let Ok(mut guard) = self.context.lock() {

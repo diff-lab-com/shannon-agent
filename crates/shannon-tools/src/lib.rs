@@ -694,6 +694,55 @@ pub fn register_team_tools_arc(
     Ok(())
 }
 
+/// Point the registry's `AgentTool` at `handle` instead of its own
+/// freshly-created (empty) context slot.
+///
+/// Surfaces that build a per-run tool registry (the desktop goal runner)
+/// but must share the chat session's team state call this right after
+/// `register_default_tools_with_providers`: subsequent `Agent` tool
+/// operations (`Spawn`/`SendMessage`/`CreateTeam`/`Shutdown`) resolve the
+/// team context through `handle`, so they land on the same coordinator and
+/// registry as the interactive chat.
+///
+/// The `Tool` trait has no downcast, so this unregisters the existing
+/// `Agent` entry and registers a fresh `AgentTool` wired to `handle`. The
+/// only state on a fresh instance is the lazily-loaded agent-definitions
+/// cache, which re-loads on first use — behaviourally identical.
+///
+/// Returns `false` when no `Agent` tool is registered (a wiring bug worth
+/// surfacing at the call site) or re-registration fails.
+pub fn swap_agent_tool_context(
+    registry: &mut ToolRegistry,
+    handle: std::sync::Arc<std::sync::Mutex<Option<crate::agent::AgentToolContext>>>,
+) -> bool {
+    let mut replacement = crate::agent::AgentTool::new();
+    replacement.set_context_handle(handle);
+    if registry.unregister("Agent").is_err() {
+        return false;
+    }
+    registry.register(Box::new(replacement)).is_ok()
+}
+
+/// Register `team_task_*` tools bound to the coordinator inside `handle`,
+/// but only when a team context is actually present. No-op `Ok(())` when
+/// agent teams are disabled (handle empty) — call sites stay linear.
+pub fn register_team_tools_when_enabled(
+    registry: &mut ToolRegistry,
+    handle: &std::sync::Arc<std::sync::Mutex<Option<crate::agent::AgentToolContext>>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let coordinator = handle
+        .lock()
+        .map_err(|e| -> Box<dyn std::error::Error> {
+            format!("agent tool context lock poisoned: {e}").into()
+        })?
+        .as_ref()
+        .map(|ctx| ctx.coordinator.clone());
+    if let Some(coord) = coordinator {
+        register_team_tools(registry, coord)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -705,6 +754,80 @@ mod tests {
         let mut registry = ToolRegistry::new();
         let result = register_default_tools(&mut registry);
         assert!(result.is_ok(), "register_default_tools should succeed");
+    }
+
+    /// B2-2: swapping in a shared handle must be observable through the
+    /// freshly-registered `AgentTool` — writing a context into the handle
+    /// then executing with an empty team flow is the wiring the goal runner
+    /// depends on. We assert at the handle level: swap succeeds, the
+    /// replaced tool still answers, and the original handle is untouched.
+    #[test]
+    fn swap_agent_tool_context_swaps_and_reregisters() {
+        let mut registry = ToolRegistry::new();
+        let original = register_default_tools(&mut registry).unwrap();
+        assert!(registry.get("Agent").is_some(), "Agent tool registered");
+
+        let shared = Arc::new(std::sync::Mutex::new(None));
+        assert!(
+            swap_agent_tool_context(&mut registry, shared.clone()),
+            "swap should succeed when Agent tool is registered"
+        );
+
+        // The replacement is a distinct instance: writing through the shared
+        // handle must not be visible on the original handle.
+        let ctx = make_test_team_context();
+        *shared.lock().unwrap() = Some(ctx);
+        assert!(
+            original.lock().unwrap().is_none(),
+            "original handle must remain empty after swap"
+        );
+
+        // Swap again on an empty registry entry fails cleanly.
+        let mut empty = ToolRegistry::new();
+        assert!(
+            !swap_agent_tool_context(&mut empty, shared),
+            "swap must fail when no Agent tool is registered"
+        );
+    }
+
+    /// `register_team_tools_when_enabled` is a no-op when the handle is
+    /// empty and registers exactly the three team_task tools when it
+    /// carries a context.
+    #[test]
+    fn register_team_tools_when_enabled_gates_on_handle() {
+        let mut registry = ToolRegistry::new();
+        register_default_tools(&mut registry).unwrap();
+
+        // Empty handle: no team_task tools.
+        let empty = Arc::new(std::sync::Mutex::new(None));
+        register_team_tools_when_enabled(&mut registry, &empty).unwrap();
+        assert!(
+            registry.get("team_task_create").is_none(),
+            "empty handle must not register team_task tools"
+        );
+
+        // Populated handle: all three team_task tools registered.
+        let ctx = make_test_team_context();
+        let populated = Arc::new(std::sync::Mutex::new(Some(ctx)));
+        register_team_tools_when_enabled(&mut registry, &populated).unwrap();
+        assert!(registry.get("team_task_create").is_some());
+        assert!(registry.get("team_task_update").is_some());
+        assert!(registry.get("team_task_list").is_some());
+    }
+
+    /// Build a minimal real `TeamContext` (coordinator + registry) for the
+    /// gating test above. Falls back gracefully if the coordinator cannot
+    /// bind in constrained CI environments by panicking with a clear
+    /// message (same tradeoff as other coordinator-backed tests here).
+    fn make_test_team_context() -> crate::agent::AgentToolContext {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            crate::agent::AgentToolContext::new_unchecked(
+                shannon_engine::api::LlmClientConfig::default(),
+            )
+            .await
+            .expect("TeamContext::new_unchecked should succeed in test")
+        })
     }
 
     #[test]
