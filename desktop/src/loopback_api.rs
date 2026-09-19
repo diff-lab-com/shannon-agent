@@ -583,7 +583,14 @@ mod tests {
         drop(probe);
 
         // Same construction as `build_server`, overridden to the free port.
-        let server = build_server(LlmClientConfig::default(), &DesktopConfig::default()).port(port);
+        // Build a throwaway `AppState` so we can pass the `&state` arg that
+        // `build_server` now takes (B2 follow-up — picks up the chat's
+        // coordinator for `team_task_*` registration when agent teams is
+        // enabled). The test only exercises the health endpoint, so a
+        // default-constructed state is sufficient.
+        let state = crate::commands::AppState::new();
+        let server = build_server(LlmClientConfig::default(), &DesktopConfig::default(), &state)
+            .port(port);
         tokio::spawn(async move {
             let _ = server.serve().await;
         });
