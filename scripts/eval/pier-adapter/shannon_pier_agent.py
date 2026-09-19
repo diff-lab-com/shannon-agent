@@ -219,10 +219,18 @@ class Shannon(BaseInstalledAgent):
                 if kind in ("tool_call", "tool_start"):
                     steps += 1
                 elif kind == "done":
+                    # The CLI emits up to two `done` events: the engine's
+                    # final accounting (with tokens_in/tokens_out/turns_used)
+                    # and a bare {"type":"done","exit_code":N} at process
+                    # exit. Merge with max so the bare exit event cannot
+                    # zero-out the real usage (w7: every trial's agent_result
+                    # tokens came back None because of this overwrite).
                     usage = event.get("usage") or event
-                    tokens_in = int(usage.get("tokens_in") or 0)
-                    tokens_out = int(usage.get("tokens_out") or 0)
-                    exit_code = usage.get("exit_code")
+                    tokens_in = max(tokens_in, int(usage.get("tokens_in") or 0))
+                    tokens_out = max(tokens_out, int(usage.get("tokens_out") or 0))
+                    steps = max(steps, int(usage.get("turns_used") or 0))
+                    if usage.get("exit_code") is not None:
+                        exit_code = usage.get("exit_code")
         context.n_input_tokens = tokens_in or None
         context.n_output_tokens = tokens_out or None
         context.n_agent_steps = steps or None
