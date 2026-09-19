@@ -248,6 +248,8 @@ fn main() {
             commands_agents::list_agent_definitions,
             commands_agents::create_agent_definition,
             commands_agents::delete_agent_definition,
+            // B2 follow-up — live sub-agent registry listing (Tasks page panel).
+            commands_agents::list_subagents,
             // Inter-agent message history (Phase D C3)
             commands_agents::list_agent_messages,
             commands_agents::list_agent_message_teams,

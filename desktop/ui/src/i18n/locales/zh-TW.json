@@ -2997,5 +2997,12 @@
   "settings.advanced.agentTeamsToggle": "啟用真實子代理執行",
   "settings.advanced.agentTeamsLive": "立即生效，無需重新啟動。",
   "chat.subagent.registryId": "註冊項 {id}",
-  "chat.subagent.inheritsMode": "繼承父會話審批模式：{mode}"
+  "chat.subagent.inheritsMode": "繼承父會話審批模式：{mode}",
+  "subagent.panel.heading": "子代理",
+  "subagent.status.running": "執行中",
+  "subagent.status.completed": "已完成",
+  "subagent.status.failed": "失敗",
+  "subagent.status.idle": "閒置",
+  "subagent.turns": "{used}/{max} 輪",
+  "subagent.refreshFailed": "無法重新整理子代理清單"
 }

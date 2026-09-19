@@ -2997,5 +2997,12 @@
   "settings.advanced.agentTeamsToggle": "Activer l'exécution réelle des sous-agents",
   "settings.advanced.agentTeamsLive": "Effet immédiat — pas besoin de redémarrer.",
   "chat.subagent.registryId": "registre {id}",
-  "chat.subagent.inheritsMode": "Hérite du mode d'approbation de la session parente : {mode}"
+  "chat.subagent.inheritsMode": "Hérite du mode d'approbation de la session parente : {mode}",
+  "subagent.panel.heading": "Sous-agents",
+  "subagent.status.running": "En cours",
+  "subagent.status.completed": "Terminé",
+  "subagent.status.failed": "Échec",
+  "subagent.status.idle": "Inactif",
+  "subagent.turns": "{used}/{max} tours",
+  "subagent.refreshFailed": "Impossible d'actualiser la liste des sous-agents"
 }

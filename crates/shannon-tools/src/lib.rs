@@ -657,8 +657,31 @@ pub fn register_default_tools_with_project_dir_ex(
 ///
 /// Call this after `register_default_tools` when a team context is available.
 /// These tools let the LLM manage the shared team TaskBoard for multi-agent coordination.
+///
+/// `register_team_tools` takes `&mut ToolRegistry` for API parity with the
+/// other registration helpers, but the registry uses interior mutability
+/// internally — the helper below ([`register_team_tools_arc`]) is for call
+/// sites that hold the registry behind an `Arc` (the desktop chat state).
 pub fn register_team_tools(
     registry: &mut ToolRegistry,
+    coordinator: Arc<shannon_agents::AgentCoordinator>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    registry.register(Box::new(shannon_agents::TeamTaskCreateTool::new(
+        coordinator.clone(),
+    )))?;
+    registry.register(Box::new(shannon_agents::TeamTaskUpdateTool::new(
+        coordinator.clone(),
+    )))?;
+    registry.register(Box::new(shannon_agents::TeamTaskListTool::new(coordinator)))?;
+    Ok(())
+}
+
+/// Arc-friendly version of [`register_team_tools`] — accepts a shared
+/// reference (the desktop `AppState::tools` is `Arc<ToolRegistry>` and
+/// never has an exclusive handle). Returns the per-tool errors as a flat
+/// `Box<dyn Error>` so the call site can log without unwrapping.
+pub fn register_team_tools_arc(
+    registry: &Arc<ToolRegistry>,
     coordinator: Arc<shannon_agents::AgentCoordinator>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     registry.register(Box::new(shannon_agents::TeamTaskCreateTool::new(

@@ -3037,5 +3037,12 @@
   "settings.advanced.agentTeamsToggle": "启用真实子智能体执行",
   "settings.advanced.agentTeamsLive": "立即生效，无需重启。",
   "chat.subagent.registryId": "注册项 {id}",
-  "chat.subagent.inheritsMode": "继承父会话审批模式：{mode}"
+  "chat.subagent.inheritsMode": "继承父会话审批模式：{mode}",
+  "subagent.panel.heading": "子智能体",
+  "subagent.status.running": "运行中",
+  "subagent.status.completed": "已完成",
+  "subagent.status.failed": "失败",
+  "subagent.status.idle": "空闲",
+  "subagent.turns": "{used}/{max} 轮",
+  "subagent.refreshFailed": "无法刷新子智能体列表"
 }

@@ -151,6 +151,20 @@ pub async fn enable(
             }
         }));
 
+    // Wire team_task_* tools (team_task_create/update/list) into the
+    // shared `AppState::tools` registry so the lead LLM can manage the
+    // shared `TaskBoard`. The registry uses interior mutability, so we
+    // pass `&Arc<ToolRegistry>` directly. Failures are non-fatal — the
+    // user gets agent_spawn without task-board tools, which is still
+    // useful; logging makes the gap visible.
+    let coordinator = ctx.coordinator.clone();
+    let tools_arc = state.tools.clone();
+    if let Err(e) = shannon_tools::register_team_tools_arc(&tools_arc, coordinator) {
+        tracing::warn!("team_task tools registration failed (agent_spawn still works): {e}");
+    } else {
+        tracing::info!("team_task_create/update/list tools registered");
+    }
+
     *state
         .agent_tool_context
         .lock()
