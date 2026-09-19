@@ -319,6 +319,25 @@ w4 发车 ~4.5h：11 启动 / 8 判分 / 3 在跑（健康：pier 存活、网�
    A15 列为候选待 w7 结束后按「真实用户受益」评估（partial-preserve 终止对交互
    用户是合理保守行为，对 headless 长任务是工作丢失——语义可能需要按模式区分）。
 
+### F18（03:00 波次宿杀事故 + 分离式恢复 + error-trial 记账规则，2026-09-20 凌晨）
+1. **事故**：03:00:08 zcode CLI 宿主回收后台任务（w7 wave 与网络 watchdog 的任务
+   注册同时消失）→ 进程树 SIGTERM → pier 优雅关闭：向 3 个在跑 trial 的 main 容器
+   发 SIGTERM，10s 后强杀（journalctl: "Container failed to exit within 10s of
+   signal 15 - using the force"；三容器 StartedAt 不同、FinishedAt 同为
+   19:00:18.4x UTC）→ result.json 冻结于 03:00:08，numba/geo-shape/prometheus 成
+   僵尸（无 result.json）。egress 代理（独立 compose 服务）幸存。
+2. **恢复**：`setsid nohup` 分离重启（脱离 CLI 生命周期，防再发），直写
+   `/tmp/w7-resume.log`（弃管道缓冲）；`--resume --filter-error-type RuntimeError`
+   ——3 僵尸无 result.json 被 resume 自然重排队，4 个 RuntimeError infra 错误清除
+   重跑；preflight 4/4，锚二进制仍为 worktree 000619cb（基线连续性未破坏）。
+3. **w7 error-trial 记账规则（结题报告口径，防分母失真）**：
+   - `NonZeroAgentExitCodeError` ×15 = 真死亡（rc=2/3/4），已有 reward=0 → 按 0 计；
+   - `AgentTimeoutError` ×4 = 撞 3h 官方墙（DeepSWE timeout=10800s 官方预算）→
+     **按 0 分计入分母**（官方语义：超时=未解决），不重跑；
+   - `RuntimeError` ×4 = 基础设施 → 清除重跑（T1 纪律），不进首次口径。
+4. **教训**：多日波次必须与 CLI 会话生命周期解耦（setsid/nohup + 独立日志文件）；
+   管道 `| grep | tail` 会缓冲全部输出，事故时无迹可查。
+
 ## 二、基线波次记录（P2）
 
 - **wave-1 处置与提速改版（2026-09-18）**：首发的 wave-1 在旧二进制事故（F8）后以
