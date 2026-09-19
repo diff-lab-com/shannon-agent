@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import Extensions from '@/pages/Extensions'
@@ -16,16 +16,33 @@ function renderWithRoute(path: string) {
   )
 }
 
-describe('Extensions hub sub-tabs (P1)', () => {
-  it('renders all 7 sub-tabs', () => {
+describe('Extensions hub tabs (2026-09 marketplace simplification)', () => {
+  it('renders the two primary tabs (Featured / Installed) only', () => {
     renderWithRoute('/extensions/featured')
     expect(screen.getByText('Featured')).toBeInTheDocument()
-    expect(screen.getByText('MCP Servers')).toBeInTheDocument()
-    expect(screen.getByText('Skills')).toBeInTheDocument()
-    expect(screen.getByText('Agents')).toBeInTheDocument()
-    expect(screen.getByText('Data Sources')).toBeInTheDocument()
-    expect(screen.getByText('Plugins')).toBeInTheDocument()
     expect(screen.getByText('Installed')).toBeInTheDocument()
+    // The old seven-tab taxonomy row is gone: type-specific pages hide
+    // behind the 管理 menu instead of competing as top-level tabs.
+    expect(screen.queryByText('MCP Servers')).not.toBeInTheDocument()
+    expect(screen.queryByText('Skills')).not.toBeInTheDocument()
+    expect(screen.queryByText('Data Sources')).not.toBeInTheDocument()
+    expect(screen.queryByText('Plugins')).not.toBeInTheDocument()
+  })
+
+  it('lists the five type-specific managers inside the Manage menu', () => {
+    renderWithRoute('/extensions/featured')
+    fireEvent.click(screen.getByRole('button', { name: /Manage/ }))
+    expect(screen.getByRole('menuitem', { name: 'MCP Servers' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Skills' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Agents' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Data Sources' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Plugins' })).toBeInTheDocument()
+  })
+
+  it('renders the marketplace title + subtitle', () => {
+    renderWithRoute('/extensions/featured')
+    expect(screen.getByText('Extensions Marketplace')).toBeInTheDocument()
+    expect(screen.getByText(/Install MCP servers, skills, agents and data sources/)).toBeInTheDocument()
   })
 
   it('still renders default search placeholder on featured route', () => {

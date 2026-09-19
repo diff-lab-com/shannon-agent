@@ -242,17 +242,20 @@ describe('Chat page', () => {
     expect(likeBtn.querySelector('.material-symbols-outlined')).toHaveTextContent('thumb_up')
   })
 
-  // US-CHAT-08: Attach file button — wired to Tauri native dialog.
-  it('has attach file button', () => {
+  // US-CHAT-08: Attach file — wired to Tauri native dialog, behind the
+  // composer "+" menu (2026-09 review).
+  it('has attach entry in the composer "+" menu', () => {
     resetCtx()
     renderChat()
-    expect(screen.getByLabelText('Attach file')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    expect(screen.getByRole('menuitem', { name: 'Attach file' })).toBeInTheDocument()
   })
 
-  it('clicking attach button opens Tauri file dialog', async () => {
+  it('clicking attach menu item opens Tauri file dialog', async () => {
     resetCtx()
     renderChat()
-    fireEvent.click(screen.getByLabelText('Attach file'))
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
     await waitFor(() => {
       expect(dialog.open).toHaveBeenCalledWith(expect.objectContaining({ multiple: true }))
     })
@@ -262,7 +265,8 @@ describe('Chat page', () => {
     resetCtx()
     vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
     renderChat()
-    fireEvent.click(screen.getByLabelText('Attach file'))
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
     await waitFor(() => {
       expect(screen.getByText('report.pdf')).toBeInTheDocument()
     })

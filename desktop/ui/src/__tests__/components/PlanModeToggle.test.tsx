@@ -45,8 +45,6 @@ function renderWithMode(mode: string) {
       disabled={false}
       isQuerying={false}
       onCancelQuery={vi.fn()}
-      currentSessionId="s1"
-      sessionWorkingDir="/home/user/projects/shannon"
       onOpenQuickFix={vi.fn()}
       onOpenEditor={vi.fn()}
     />,
@@ -54,45 +52,27 @@ function renderWithMode(mode: string) {
   )
 }
 
-describe('ChatInput — Plan Mode toggle (D4)', () => {
+/* 2026-09 review: the standalone 计划模式 toggle button was retired — plan
+ * is one option inside the unified permission-mode select, and the
+ * Ctrl/Cmd+Shift+P shortcut toggles it through the SAME configure path.
+ * These tests pin the new model: one mode surface, banner affordances, and
+ * the shortcut funnel. */
+
+describe('ChatInput — unified mode control (was: Plan Mode toggle D4)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(api.configure).mockResolvedValue(undefined)
     mockRefreshConfig.mockReset()
   })
 
-  it('renders the Plan mode toggle button', () => {
+  it('has NO separate plan-mode toggle button', () => {
     renderWithMode('suggest')
-    expect(screen.getByRole('button', { name: 'Toggle plan mode' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Toggle plan mode' })).not.toBeInTheDocument()
   })
 
-  it('shows aria-pressed=false when plan mode is off', () => {
+  it('renders the unified permission-mode select', () => {
     renderWithMode('suggest')
-    const toggle = screen.getByRole('button', { name: 'Toggle plan mode' })
-    expect(toggle).toHaveAttribute('aria-pressed', 'false')
-  })
-
-  it('shows aria-pressed=true and active styling when plan mode is on', () => {
-    renderWithMode('plan')
-    const toggle = screen.getByRole('button', { name: 'Toggle plan mode' })
-    expect(toggle).toHaveAttribute('aria-pressed', 'true')
-    expect(toggle.className).toContain('bg-primary/10')
-  })
-
-  it('enables plan mode when clicked from suggest', async () => {
-    renderWithMode('suggest')
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle plan mode' }))
-    await waitFor(() => {
-      expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'plan' })
-    })
-  })
-
-  it('disables plan mode (reverts to suggest) when clicked while plan active', async () => {
-    renderWithMode('plan')
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle plan mode' }))
-    await waitFor(() => {
-      expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'suggest' })
-    })
+    expect(screen.getByLabelText('Permission mode')).toBeInTheDocument()
   })
 
   it('shows banner when plan mode active', () => {
@@ -104,17 +84,9 @@ describe('ChatInput — Plan Mode toggle (D4)', () => {
     renderWithMode('suggest')
     expect(screen.queryByText(/Plan mode active/)).not.toBeInTheDocument()
   })
-
-  it('calls refreshConfig after toggling', async () => {
-    renderWithMode('suggest')
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle plan mode' }))
-    await waitFor(() => {
-      expect(mockRefreshConfig).toHaveBeenCalledTimes(1)
-    })
-  })
 })
 
-describe('ChatInput — Plan Mode B3 enhancements', () => {
+describe('ChatInput — Plan Mode B3 enhancements (banner + shortcut funnel)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(api.configure).mockResolvedValue(undefined)
@@ -149,6 +121,15 @@ describe('ChatInput — Plan Mode B3 enhancements', () => {
     window.dispatchEvent(evt)
     await waitFor(() => {
       expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'suggest' })
+    })
+  })
+
+  it('calls refreshConfig after toggling via the shortcut', async () => {
+    renderWithMode('suggest')
+    const evt = new KeyboardEvent('keydown', { key: 'P', shiftKey: true, ctrlKey: true, bubbles: true })
+    window.dispatchEvent(evt)
+    await waitFor(() => {
+      expect(mockRefreshConfig).toHaveBeenCalledTimes(1)
     })
   })
 })

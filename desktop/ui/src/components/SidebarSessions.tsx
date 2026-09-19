@@ -34,6 +34,7 @@ import HighlightText from './HighlightText'
 const SESSIONS_ORDER_KEY = 'shannon-sessions-order'
 const SESSIONS_PINNED_KEY = 'shannon-sessions-pinned'
 const SESSIONS_GROUPING_KEY = 'shannon-sessions-grouping'
+const SESSIONS_FOLDED_KEY = 'shannon-sessions-folded'
 
 type GroupingMode = 'project' | 'time'
 
@@ -60,6 +61,14 @@ function readGrouping(): GroupingMode {
   try {
     return window.localStorage.getItem(SESSIONS_GROUPING_KEY) === 'time' ? 'time' : 'project'
   } catch { return 'project' }
+}
+
+function readFolded(): ReadonlySet<string> {
+  if (typeof window === 'undefined') return new Set()
+  try {
+    const raw = window.localStorage.getItem(SESSIONS_FOLDED_KEY)
+    return new Set(raw ? JSON.parse(raw) : [])
+  } catch { return new Set() }
 }
 
 function persist(key: string, value: unknown) {
@@ -98,6 +107,8 @@ interface SessionGroup {
   icon: string
   label: string
   sessions: SessionInfo[]
+  /** Project groups render as collapsible folder rows (ZCode 项目 tree). */
+  isProject?: boolean
 }
 
 interface SessionsSectionProps {
@@ -126,6 +137,9 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   const [orderOverride, setOrderOverride] = useState<Record<string, number>>(readOrderOverride)
   const [pinnedIds, setPinnedIds] = useState<ReadonlySet<string>>(readPinned)
   const [grouping, setGrouping] = useState<GroupingMode>(readGrouping)
+  // ZCode 项目 tree: folded project folders persist; the active session's
+  // project always auto-expands so the current conversation stays visible.
+  const [foldedProjects, setFoldedProjects] = useState<ReadonlySet<string>>(readFolded)
   // Wall-clock tick that drives the elapsed badges while anything runs.
   const [nowTick, setNowTick] = useState(() => Date.now())
   // U5: touch long-press (500ms) opens the ⋯ menu; the click that follows a
@@ -153,6 +167,30 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     setGrouping(mode)
     persistGrouping(mode)
   }, [])
+
+  const toggleFold = useCallback((key: string) => {
+    setFoldedProjects(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      try { window.localStorage.setItem(SESSIONS_FOLDED_KEY, JSON.stringify([...next])) } catch { /* noop */ }
+      return next
+    })
+  }, [])
+
+  // The active session's project folder always stays expanded — switching to
+  // a conversation in a folded project reveals it instead of hiding the row.
+  const activeProject = currentSessionId
+    ? projectOf(sessions.find(s => s.id === currentSessionId) ?? {})
+    : null
+  useEffect(() => {
+    if (!activeProject) return
+    setFoldedProjects(prev => {
+      if (!prev.has(activeProject)) return prev
+      const next = new Set(prev)
+      next.delete(activeProject)
+      return next
+    })
+  }, [activeProject])
 
   const clearLongPress = useCallback(() => {
     if (longPressTimer.current !== null) {
@@ -239,6 +277,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         icon: 'folder',
         label: key === '' ? t('sidebar.sessions.project.untitled') : key,
         sessions: list,
+        isProject: true,
       }))
     }
     const defs: { key: string; label: string }[] = [
@@ -349,16 +388,45 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     ]
   }, [pinnedIds, t, sessions, startRename, togglePin, navigate])
 
-  const renderGroupHeader = (group: SessionGroup) => (
-    <div
-      key={`group-${group.key}`}
-      role="presentation"
-      className="px-3 pt-2 pb-1 font-label-sm text-[10px] font-bold uppercase tracking-wider text-on-surface-variant/80 flex items-center gap-1.5"
-    >
-      <span className="material-symbols-outlined text-[12px]" aria-hidden="true">{group.icon}</span>
-      <span className="truncate">{group.label}</span>
-    </div>
-  )
+  const renderGroupHeader = (group: SessionGroup) => {
+    if (group.isProject) {
+      // ZCode 项目 tree row: a folder button (chevron + name + count) that
+      // folds/unfolds its conversations. The active session's project is
+      // force-expanded by the effect above.
+      const isFolded = foldedProjects.has(group.key)
+      return (
+        <button
+          type="button"
+          role="presentation"
+          aria-expanded={!isFolded}
+          title={group.label}
+          onClick={() => toggleFold(group.key)}
+          className="w-full flex items-center gap-1.5 px-3 pt-2 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 hover:text-primary transition-colors min-w-0 cursor-pointer"
+        >
+          <span
+            className="material-symbols-outlined text-[14px] shrink-0 transition-transform duration-150"
+            style={{ transform: isFolded ? 'rotate(-90deg)' : 'rotate(0deg)' }}
+            aria-hidden="true"
+          >
+            expand_more
+          </span>
+          <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">{group.icon}</span>
+          <span className="truncate flex-1 min-w-0 text-left">{group.label}</span>
+          <span className="font-mono text-[10px] tabular-nums text-on-surface-variant/70 shrink-0">{group.sessions.length}</span>
+        </button>
+      )
+    }
+    return (
+      <div
+        key={`group-${group.key}`}
+        role="presentation"
+        className="px-3 pt-2 pb-1 font-label-sm text-[10px] font-bold uppercase tracking-wider text-on-surface-variant/80 flex items-center gap-1.5 min-w-0"
+      >
+        <span className="material-symbols-outlined text-[12px] shrink-0" aria-hidden="true">{group.icon}</span>
+        <span className="truncate min-w-0">{group.label}</span>
+      </div>
+    )
+  }
 
   const renderRow = (session: SessionInfo) => {
     const isActive = session.id === currentSessionId
@@ -408,7 +476,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               onClick={() => handleSwitch(session.id)}
               onKeyDown={e => handleRowKeyDown(e, session.id)}
               className={cn(
-                'flex-1 min-w-0 text-left px-3 py-2 rounded-lg font-label-md text-label-md transition-all duration-200 flex items-center gap-2 cursor-pointer select-none',
+                'flex-1 min-w-0 text-left px-3 py-2 rounded-lg font-label-md text-label-md transition-all duration-200 flex items-center gap-2 cursor-pointer select-none whitespace-nowrap',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
                 isActive
                   ? 'bg-primary-container text-on-primary-container font-bold'
@@ -513,15 +581,16 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center justify-between px-2 mb-xs shrink-0 gap-1">
-        <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+      <div className="flex items-center justify-between px-2 mb-xs shrink-0 gap-1 min-w-0">
+        <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider truncate">
           {t('sidebar.sessions.title')}
         </span>
-        <span className="font-label-sm text-label-sm text-on-surface-variant">
+        <span className="font-label-sm text-label-sm text-on-surface-variant shrink-0">
           {filtered.length}{filtered.length !== sessions.length ? `/${sessions.length}` : ''}
         </span>
-        {/* P0-④ grouping view switch — 按项目 (default) / 按时间. */}
-        <div role="group" aria-label={t('sidebar.sessions.grouping.aria')} className="flex items-center gap-0.5 shrink-0">
+        {/* P0-④ grouping view switch — ZCode 分组|项目 style labeled
+            segmented control (对话按时间分组 vs 按项目文件夹). */}
+        <div role="group" aria-label={t('sidebar.sessions.grouping.aria')} className="flex items-center rounded-md bg-surface-container-low p-0.5 shrink-0">
           {([
             { mode: 'project' as const, icon: 'folder', label: t('sidebar.sessions.grouping.project') },
             { mode: 'time' as const, icon: 'schedule', label: t('sidebar.sessions.grouping.time') },
@@ -534,13 +603,14 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               title={opt.label}
               onClick={() => setGroupingPersisted(opt.mode)}
               className={cn(
-                'p-0.5 rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer',
+                'flex items-center gap-0.5 px-1.5 py-0.5 rounded font-label-xs transition-colors cursor-pointer whitespace-nowrap',
                 grouping === opt.mode
-                  ? 'text-primary bg-primary/10'
-                  : 'text-on-surface-variant/70 hover:text-primary hover:bg-surface-container-low',
+                  ? 'bg-surface-container-lowest text-primary shadow-sm'
+                  : 'text-on-surface-variant/70 hover:text-primary',
               )}
             >
-              <span className="material-symbols-outlined text-[13px]" aria-hidden="true">{opt.icon}</span>
+              <span className="material-symbols-outlined text-[12px]" aria-hidden="true">{opt.icon}</span>
+              <span className="hidden xl:inline">{opt.label}</span>
             </button>
           ))}
         </div>
@@ -551,7 +621,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         onChange={e => setQuery(e.target.value)}
         placeholder={t('sidebar.sessions.search.placeholder')}
         aria-label={t('sidebar.sessions.search.aria')}
-        className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-on-surface-variant/70 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0"
+        className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-on-surface-variant/70 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0 min-w-0"
       />
       <ScrollArea className="flex-1 min-h-0">
         {filtered.length === 0 ? (
@@ -567,7 +637,13 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
             {groups.map(group => (
               <Fragment key={group.key}>
                 {renderGroupHeader(group)}
-                {group.sessions.map(renderRow)}
+                {/* Project conversations nest under their folder (ZCode
+                    项目 tree); folded projects collapse their rows. */}
+                {!(group.isProject && foldedProjects.has(group.key)) && (
+                  <div className={group.isProject ? 'pl-4' : undefined}>
+                    {group.sessions.map(renderRow)}
+                  </div>
+                )}
               </Fragment>
             ))}
           </div>

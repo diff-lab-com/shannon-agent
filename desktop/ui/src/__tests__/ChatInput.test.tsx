@@ -79,10 +79,12 @@ describe('ChatInput', () => {
     expect(screen.queryByLabelText('Change working directory')).not.toBeInTheDocument()
   })
 
-  it('renders the plan-mode and permission-mode controls', () => {
+  it('renders the unified permission-mode control and no separate plan toggle', () => {
     renderChatInput()
-    expect(screen.getByRole('button', { name: 'Toggle plan mode' })).toBeInTheDocument()
+    // 2026-09 review: the standalone 计划模式 toggle was folded into the
+    // permission-mode select (one surface owns `approval_mode`).
     expect(screen.getByLabelText('Permission mode')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Toggle plan mode' })).not.toBeInTheDocument()
   })
 
   it('calls handleSend when Send button is clicked', async () => {
@@ -194,22 +196,23 @@ describe('ChatInput', () => {
     expect(counter?.className).toMatch(/text-error/)
   })
 
-  it('calls onOpenQuickFix when Quick Fix button is clicked', () => {
+  it('calls onOpenQuickFix from the "+" menu', () => {
     const onOpenQuickFix = vi.fn()
     renderChatInput({ onOpenQuickFix })
 
-    const quickFixButton = screen.getByTitle('Quick Fix')
-    fireEvent.click(quickFixButton)
+    // 2026-09 review: QuickFix/Editor/attach live behind one "+" menu button.
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Quick Fix' }))
 
     expect(onOpenQuickFix).toHaveBeenCalledTimes(1)
   })
 
-  it('calls onOpenEditor when Editor button is clicked', () => {
+  it('calls onOpenEditor from the "+" menu', () => {
     const onOpenEditor = vi.fn()
     renderChatInput({ onOpenEditor })
 
-    const editorButton = screen.getByTitle('Editor')
-    fireEvent.click(editorButton)
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Editor' }))
 
     expect(onOpenEditor).toHaveBeenCalledTimes(1)
   })
@@ -323,7 +326,10 @@ describe('ChatInput', () => {
     vi.mocked(api.configure).mockRejectedValueOnce(new Error('engine down'))
     renderChatInput()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle plan mode' }))
+    // The Ctrl/Cmd+Shift+P shortcut routes through the same unified toggle
+    // as the mode select — a failure must still surface as a toast.
+    const evt = new KeyboardEvent('keydown', { key: 'P', shiftKey: true, ctrlKey: true, bubbles: true })
+    window.dispatchEvent(evt)
 
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith(
