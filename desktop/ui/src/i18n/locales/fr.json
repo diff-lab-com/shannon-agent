@@ -2993,8 +2993,9 @@
   "settings.connections.mobile.tlsFingerprint": "Empreinte du certificat",
   "settings.connections.mobile.tlsSaved": "Chiffrement LAN mis à jour — redémarrez la gateway pour l'appliquer",
   "settings.advanced.agentTeamsTitle": "Équipes d'agents (sous-agents)",
-  "settings.advanced.agentTeamsDesc": "Permet à l'outil agent_spawn d'exécuter de vraies tâches de sous-agents — chaque spawn est une exécution LLM indépendante qui consomme du quota API. Désactivé par défaut.",
+  "settings.advanced.agentTeamsDesc": "Permet à l'outil agent_spawn d'exécuter de vraies tâches de sous-agents — chaque spawn est une exécution LLM indépendante qui consomme du quota API. Les sous-agents héritent du mode d'approbation et de la liste d'outils autorisée ; un mode permissif les rendra permissifs. Désactivé par défaut.",
   "settings.advanced.agentTeamsToggle": "Activer l'exécution réelle des sous-agents",
   "settings.advanced.agentTeamsLive": "Effet immédiat — pas besoin de redémarrer.",
-  "chat.subagent.registryId": "registre {id}"
+  "chat.subagent.registryId": "registre {id}",
+  "chat.subagent.inheritsMode": "Hérite du mode d'approbation de la session parente : {mode}"
 }

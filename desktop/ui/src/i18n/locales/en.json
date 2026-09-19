@@ -3033,8 +3033,9 @@
   "settings.connections.mobile.tlsFingerprint": "Certificate fingerprint",
   "settings.connections.mobile.tlsSaved": "LAN encryption updated — restart the gateway to apply",
   "settings.advanced.agentTeamsTitle": "Agent teams (subagents)",
-  "settings.advanced.agentTeamsDesc": "Let the agent_spawn tool run real sub-agent tasks — each spawn is an independent LLM run that consumes API quota. Off by default; off keeps it a zero-cost placeholder.",
+  "settings.advanced.agentTeamsDesc": "Let the agent_spawn tool run real sub-agent tasks — each spawn is an independent LLM run that consumes API quota. Sub-agents inherit the current approval mode and tool allowlist; with a permissive mode they will also be permissive. Off by default; off keeps it a zero-cost placeholder.",
   "settings.advanced.agentTeamsToggle": "Enable real sub-agent execution",
   "settings.advanced.agentTeamsLive": "Takes effect immediately — no restart needed.",
-  "chat.subagent.registryId": "registry {id}"
+  "chat.subagent.registryId": "registry {id}",
+  "chat.subagent.inheritsMode": "Inherits parent approval mode: {mode}"
 }

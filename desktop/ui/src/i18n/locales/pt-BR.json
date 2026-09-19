@@ -2993,8 +2993,9 @@
   "settings.connections.mobile.tlsFingerprint": "Impressão digital do certificado",
   "settings.connections.mobile.tlsSaved": "Criptografia de LAN atualizada — reinicie o gateway para aplicar",
   "settings.advanced.agentTeamsTitle": "Equipes de agentes (subagentes)",
-  "settings.advanced.agentTeamsDesc": "Permite que a ferramenta agent_spawn execute tarefas reais de subagentes — cada spawn é uma execução LLM independente que consome cota de API. Desativado por padrão.",
+  "settings.advanced.agentTeamsDesc": "Permite que a ferramenta agent_spawn execute tarefas reais de subagentes — cada spawn é uma execução LLM independente que consome cota de API. Os subagentes herdam o modo de aprovação e a lista de ferramentas permitidas; com um modo permissivo eles também serão permissivos. Desativado por padrão.",
   "settings.advanced.agentTeamsToggle": "Ativar a execução real de subagentes",
   "settings.advanced.agentTeamsLive": "Tem efeito imediato — não é necessário reiniciar.",
-  "chat.subagent.registryId": "registro {id}"
+  "chat.subagent.registryId": "registro {id}",
+  "chat.subagent.inheritsMode": "Herdado do modo de aprovação da sessão principal: {mode}"
 }

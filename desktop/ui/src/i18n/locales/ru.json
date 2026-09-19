@@ -2993,8 +2993,9 @@
   "settings.connections.mobile.tlsFingerprint": "Отпечаток сертификата",
   "settings.connections.mobile.tlsSaved": "Шифрование LAN обновлено — перезапустите шлюз, чтобы применить",
   "settings.advanced.agentTeamsTitle": "Команды агентов (субагенты)",
-  "settings.advanced.agentTeamsDesc": "Разрешает инструменту agent_spawn выполнять реальные задачи субагентов — каждый запуск является независимым вызовом LLM и расходует квоту API. По умолчанию выключено.",
+  "settings.advanced.agentTeamsDesc": "Разрешает инструменту agent_spawn выполнять реальные задачи субагентов — каждый запуск является независимым вызовом LLM и расходует квоту API. Субагенты наследуют режим подтверждения и список разрешённых инструментов; при разрешительном режиме родительской сессии субагенты тоже будут разрешительными. По умолчанию выключено.",
   "settings.advanced.agentTeamsToggle": "Включить реальное выполнение субагентов",
   "settings.advanced.agentTeamsLive": "Вступает в силу сразу — перезапуск не требуется.",
-  "chat.subagent.registryId": "реестр {id}"
+  "chat.subagent.registryId": "реестр {id}",
+  "chat.subagent.inheritsMode": "Наследует режим подтверждения родительской сессии: {mode}"
 }

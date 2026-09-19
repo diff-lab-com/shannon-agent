@@ -2993,8 +2993,9 @@
   "settings.connections.mobile.tlsFingerprint": "인증서 지문",
   "settings.connections.mobile.tlsSaved": "LAN 암호화가 업데이트되었습니다. 게이트웨이를 재시작하면 적용됩니다",
   "settings.advanced.agentTeamsTitle": "에이전트 팀 (하위 에이전트)",
-  "settings.advanced.agentTeamsDesc": "agent_spawn 도구가 실제 하위 에이전트 작업을 실행하도록 허용합니다. 각 스폰은 독립적인 LLM 실행이며 API 할당량을 소비합니다. 기본값은 꺼짐입니다.",
+  "settings.advanced.agentTeamsDesc": "agent_spawn 도구가 실제 하위 에이전트 작업을 실행하도록 허용합니다. 각 스폰은 독립적인 LLM 실행이며 API 할당량을 소비합니다. 하위 에이전트는 현재 승인 모드와 도구 허용 목록을 상속합니다. 부모 세션이 허용 모드인 경우 하위 에이전트도 허용 모드가 됩니다. 기본값은 꺼짐입니다.",
   "settings.advanced.agentTeamsToggle": "실제 하위 에이전트 실행 활성화",
   "settings.advanced.agentTeamsLive": "즉시 적용됩니다. 재시작이 필요 없습니다.",
-  "chat.subagent.registryId": "레지스트리 {id}"
+  "chat.subagent.registryId": "레지스트리 {id}",
+  "chat.subagent.inheritsMode": "부모 세션 승인 모드 상속: {mode}"
 }

@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
 import { useChat } from '@/context/ChatContext'
 import { useSessions } from '@/context/SessionContext'
+import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { Markdown } from '@/components/chat/Markdown'
 import { FootnoteMarkdown } from '@/components/chat/FootnoteMarkdown'
@@ -634,6 +635,7 @@ export const SubagentBlock = memo(function SubagentBlock({ toolCall }: { toolCal
   const intl = useIntl()
   const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
   const { subagentLive } = useSessions()
+  const { config } = useCatalog()
   const [expanded, setExpanded] = useState(false)
   const input = (toolCall.tool_input ?? {}) as Record<string, unknown>
   const name = typeof input.name === 'string' ? input.name : ''
@@ -684,6 +686,13 @@ export const SubagentBlock = memo(function SubagentBlock({ toolCall }: { toolCal
         <div className="px-sm pb-sm space-y-sm">
           {maxTurns != null && (
             <p className="font-label-sm text-on-surface-variant">{t('chat.subagent.maxTurns', { count: maxTurns })}</p>
+          )}
+          {/* B2 follow-up — surface the parent's approval policy so the
+              user can see what sandbox/permissions the sub-agent runs under. */}
+          {config?.approval_mode && (
+            <p className="font-label-sm text-on-surface-variant" data-testid="subagent-inherit-mode">
+              {t('chat.subagent.inheritsMode', { mode: config.approval_mode })}
+            </p>
           )}
           {systemPrompt && (
             <pre className="text-body-sm text-on-surface-variant bg-surface-container p-sm rounded-lg overflow-x-auto max-h-[160px] whitespace-pre-wrap">{systemPrompt}</pre>

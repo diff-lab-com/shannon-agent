@@ -2993,8 +2993,9 @@
   "settings.connections.mobile.tlsFingerprint": "憑證指紋",
   "settings.connections.mobile.tlsSaved": "區域網路加密已更新——重啟閘道後生效",
   "settings.advanced.agentTeamsTitle": "智慧代理團隊（子代理）",
-  "settings.advanced.agentTeamsDesc": "允許 agent_spawn 工具執行真實的子代理任務——每次 spawn 都是一次獨立的 LLM 呼叫，會消耗 API 額度。預設關閉；關閉時僅為零成本佔位。",
+  "settings.advanced.agentTeamsDesc": "允許 agent_spawn 工具執行真實的子代理任務——每次 spawn 都是一次獨立的 LLM 呼叫，會消耗 API 額度。子代理繼承當前會話的審批模式與工具名單；若父會話為放行策略，子代理也會放行。預設關閉；關閉時僅為零成本佔位。",
   "settings.advanced.agentTeamsToggle": "啟用真實子代理執行",
   "settings.advanced.agentTeamsLive": "立即生效，無需重新啟動。",
-  "chat.subagent.registryId": "註冊項 {id}"
+  "chat.subagent.registryId": "註冊項 {id}",
+  "chat.subagent.inheritsMode": "繼承父會話審批模式：{mode}"
 }

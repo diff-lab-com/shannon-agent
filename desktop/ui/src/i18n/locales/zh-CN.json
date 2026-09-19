@@ -3033,8 +3033,9 @@
   "settings.connections.mobile.tlsFingerprint": "证书指纹",
   "settings.connections.mobile.tlsSaved": "局域网加密已更新——重启网关后生效",
   "settings.advanced.agentTeamsTitle": "智能体团队（子智能体）",
-  "settings.advanced.agentTeamsDesc": "允许 agent_spawn 工具执行真实的子智能体任务——每次 spawn 都是一次独立的 LLM 调用，会消耗 API 额度。默认关闭；关闭时仅为零成本占位。",
+  "settings.advanced.agentTeamsDesc": "允许 agent_spawn 工具执行真实的子智能体任务——每次 spawn 都是一次独立的 LLM 调用，会消耗 API 额度。子智能体继承当前会话的审批模式与工具名单；若父会话为放行策略，子智能体也会放行。默认关闭；关闭时仅为零成本占位。",
   "settings.advanced.agentTeamsToggle": "启用真实子智能体执行",
   "settings.advanced.agentTeamsLive": "立即生效，无需重启。",
-  "chat.subagent.registryId": "注册项 {id}"
+  "chat.subagent.registryId": "注册项 {id}",
+  "chat.subagent.inheritsMode": "继承父会话审批模式：{mode}"
 }
