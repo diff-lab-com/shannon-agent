@@ -4,6 +4,7 @@ use crate::{
     TaskBoard,
     custom_agent::{CustomAgentDef, CustomAgentError, CustomAgentLoader},
     error::{AgentError, CoordinationError},
+    executor::AgentExecutor,
     message::{AgentMessage, MessageContent, MessageType, ProtocolMessage},
     message_history::ContentKind,
     persistence::{FilePersistence, InboxMessage, TeamConfigFile},
@@ -499,11 +500,18 @@ impl AgentCoordinator {
     }
 
     /// Add a teammate to a team
+    ///
+    /// `executor`: when `Some`, the teammate is constructed with this
+    /// executor and `handle_chat_message` runs the LLM via it; when `None`,
+    /// the teammate falls back to the placeholder reply (used by the
+    /// process-mode child subprocess path that runs its own LLM loop, and
+    /// by tests that don't care about LLM behaviour).
     pub async fn add_teammate(
         &self,
         team_name: &str,
         agent_name: String,
         config: TeammateConfig,
+        executor: Option<Arc<dyn AgentExecutor>>,
     ) -> Result<(), AgentError> {
         let mut teams = self.teams.write().await;
 
@@ -558,7 +566,10 @@ impl AgentCoordinator {
         let config_disallowed_tools = config.disallowed_tools.clone();
         let config_isolation = config.isolation.clone();
 
-        let teammate = Teammate::new(agent_name.clone(), config);
+        let teammate = match executor {
+            Some(exec) => Teammate::with_executor(agent_name.clone(), config, exec),
+            None => Teammate::new(agent_name.clone(), config),
+        };
         teammate.set_team_name(team_name.to_string());
         team.members.insert(agent_name.clone(), teammate);
 
@@ -924,6 +935,26 @@ impl AgentCoordinator {
         })?;
 
         Ok(team.members.keys().cloned().collect())
+    }
+
+    /// Whether the named teammate carries an LLM executor. Public
+    /// for tests + B2-1 wiring assertions — embedders should not need
+    /// to peek inside `Teammate` to know if `send_message` will return a
+    /// real reply vs the synthetic ack.
+    pub async fn teammate_has_executor(
+        &self,
+        team_name: &str,
+        agent_name: &str,
+    ) -> Result<bool, AgentError> {
+        let teams = self.teams.read().await;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
+        Ok(team
+            .members
+            .get(agent_name)
+            .and_then(|t| t.executor())
+            .is_some())
     }
 
     /// Get agent by name
@@ -2263,7 +2294,8 @@ impl AgentCoordinator {
         def: &CustomAgentDef,
     ) -> Result<(), AgentError> {
         let config = def.to_teammate_config();
-        self.add_teammate(team_name, def.name.clone(), config).await
+        self.add_teammate(team_name, def.name.clone(), config, None)
+            .await
     }
 
     /// Discover and cache agent definitions from `.claude/agents/` directories.
@@ -2640,7 +2672,7 @@ impl AgentCoordinator {
                             ..Default::default()
                         };
                         match self
-                            .add_teammate(team_name, new_agent_name.to_string(), config)
+                            .add_teammate(team_name, new_agent_name.to_string(), config, None)
                             .await
                         {
                             Ok(()) => serde_json::json!({"status": "added"}),
@@ -3331,5 +3363,59 @@ mod tests {
         );
         assert_eq!(list[0].priority, "high");
         assert!(list[0].content_preview.contains("key"));
+    }
+
+    /// B2-1: `add_teammate` with `Some(executor)` constructs the teammate
+    /// via `Teammate::with_executor`, so the executor is reachable on the
+    /// stored teammate. `None` keeps the placeholder path (the default
+    /// for tests + the process-mode subprocess path).
+    #[tokio::test]
+    async fn test_add_teammate_with_executor_propagates_to_teammate() {
+        use crate::executor::MockAgentExecutor;
+
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
+        coordinator
+            .create_team("exec-team".into(), "exec".into())
+            .await
+            .unwrap();
+
+        coordinator
+            .add_teammate(
+                "exec-team",
+                "with-exec".into(),
+                TeammateConfig::default(),
+                Some(Arc::new(MockAgentExecutor::new("mock"))),
+            )
+            .await
+            .unwrap();
+        coordinator
+            .add_teammate(
+                "exec-team",
+                "without-exec".into(),
+                TeammateConfig::default(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let teams = coordinator.teams.read().await;
+        let team = teams.get("exec-team").expect("team exists");
+
+        assert!(
+            team.members
+                .get("with-exec")
+                .and_then(|t| t.executor())
+                .is_some(),
+            "Teammate built with executor must expose it"
+        );
+        assert!(
+            team.members
+                .get("without-exec")
+                .and_then(|t| t.executor())
+                .is_none(),
+            "Teammate built without executor must expose None"
+        );
     }
 }

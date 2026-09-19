@@ -642,7 +642,15 @@ jobs:
       # `running`/`updated_at` to SessionInfo and `meta`/`tokens_used` to
       # ToolResultPayload (shannon-types) — same intentional minor-cycle
       # break class. New TAG NAME so the baseline-rustdoc cache invalidates.
-      SEMVER_BASELINE: semver-baseline-2026-09-5
+      # Sixth move (2026-09-19, PR #94 B2-1): Teammate 真回复 — added a new
+      # trailing `executor: Option<Arc<dyn AgentExecutor>>` parameter to
+      # `shannon_agents::AgentCoordinator::add_teammate` (3 → 4 args). This
+      # is a method-parameter-count bump on a publicly-visible method on the
+      # public coordinator type — semver-major by definition, but additive
+      # in practice: every external caller can pass `None` and recover the
+      # exact pre-PR behaviour. New TAG NAME so the baseline-rustdoc cache
+      # invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-6
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
