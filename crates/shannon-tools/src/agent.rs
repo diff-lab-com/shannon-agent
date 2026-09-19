@@ -478,6 +478,7 @@ impl AgentTool {
     /// forwarded here from `spawn_agent`). The previous shape hard-coded
     /// `FullAuto` and dropped the denylist, which silently downgraded the
     /// lead's sandbox when sub-agents ran real LLM turns.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_subagent(
         &self,
         agent_id: String,
