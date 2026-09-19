@@ -1022,6 +1022,7 @@ pub(crate) fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
                     team_name,
                     agent_name.to_string(),
                     config,
+                    None,
                 )) {
                     Ok(()) => {
                         let worktree_msg = match create_agent_worktree(repl, agent_name) {
