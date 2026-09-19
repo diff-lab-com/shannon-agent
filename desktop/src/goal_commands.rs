@@ -365,16 +365,6 @@ pub(crate) struct GoalRunDeps {
     pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
     /// Session container (`~/.shannon/sessions`) for sidecar persistence.
     pub(crate) sessions_dir: PathBuf,
-    /// Agent-tool context handle shared with the main `AppState`. Goal runs
-    /// build their own per-run `ToolRegistry`, but reusing the same
-    /// `TeamContext` lets the lead-in-goal-run execute `agent_spawn` for
-    /// real (otherwise it falls back to the zero-cost placeholder). Read-
-    /// only clone — goal runs do not mutate the handle.
-    pub(crate) agent_tool_context: Arc<std::sync::Mutex<Option<shannon_tools::AgentToolContext>>>,
-    /// Shared `ToolRegistry` Arc — only used here to register `team_task_*`
-    /// tools when a coordinator is available. The lead's actual tool calls
-    /// still go through the per-run registry; this is a wiring-only field.
-    pub(crate) tools: Arc<shannon_core::tools::ToolRegistry>,
 }
 
 impl GoalRunDeps {
@@ -386,8 +376,6 @@ impl GoalRunDeps {
             desktop_config: state.desktop_config.clone(),
             memory_store: state.memory_store.clone(),
             sessions_dir: state.state_manager.sessions_dir().to_path_buf(),
-            agent_tool_context: state.agent_tool_context.clone(),
-            tools: state.tools.clone(),
         }
     }
 
