@@ -2991,5 +2991,10 @@
   "settings.connections.mobile.tlsToggle": "Chiffrement LAN (wss)",
   "settings.connections.mobile.tlsHint": "Sert le canal mobile en TLS avec un certificat auto-signé — les téléphones vérifient l'empreinte du certificat transportée dans le QR. Prend effet après le redémarrage de la gateway.",
   "settings.connections.mobile.tlsFingerprint": "Empreinte du certificat",
-  "settings.connections.mobile.tlsSaved": "Chiffrement LAN mis à jour — redémarrez la gateway pour l'appliquer"
+  "settings.connections.mobile.tlsSaved": "Chiffrement LAN mis à jour — redémarrez la gateway pour l'appliquer",
+  "settings.advanced.agentTeamsTitle": "Équipes d'agents (sous-agents)",
+  "settings.advanced.agentTeamsDesc": "Permet à l'outil agent_spawn d'exécuter de vraies tâches de sous-agents — chaque spawn est une exécution LLM indépendante qui consomme du quota API. Désactivé par défaut.",
+  "settings.advanced.agentTeamsToggle": "Activer l'exécution réelle des sous-agents",
+  "settings.advanced.agentTeamsLive": "Effet immédiat — pas besoin de redémarrer.",
+  "chat.subagent.registryId": "registre {id}"
 }

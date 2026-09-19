@@ -2991,5 +2991,10 @@
   "settings.connections.mobile.tlsToggle": "LAN-Verschlüsselung (wss)",
   "settings.connections.mobile.tlsHint": "Stellt den mobilen Kanal über TLS mit einem selbstsignierten Zertifikat bereit — Telefone prüfen den im QR-Code übermittelten Zertifikats-Fingerabdruck. Wird nach dem Neustart des Gateways wirksam.",
   "settings.connections.mobile.tlsFingerprint": "Zertifikats-Fingerabdruck",
-  "settings.connections.mobile.tlsSaved": "LAN-Verschlüsselung aktualisiert — Gateway neu starten, um sie anzuwenden"
+  "settings.connections.mobile.tlsSaved": "LAN-Verschlüsselung aktualisiert — Gateway neu starten, um sie anzuwenden",
+  "settings.advanced.agentTeamsTitle": "Agententeams (Subagenten)",
+  "settings.advanced.agentTeamsDesc": "Erlaubt dem Tool agent_spawn, echte Subagenten-Aufgaben auszuführen — jeder Spawn ist ein eigenständiger LLM-Lauf und verbraucht API-Kontingent. Standardmäßig aus.",
+  "settings.advanced.agentTeamsToggle": "Echte Subagenten-Ausführung aktivieren",
+  "settings.advanced.agentTeamsLive": "Wirkt sofort — kein Neustart nötig.",
+  "chat.subagent.registryId": "Registrierung {id}"
 }

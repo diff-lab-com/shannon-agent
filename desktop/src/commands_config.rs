@@ -591,6 +591,44 @@ pub async fn configure(
 
             Ok(())
         }
+        "agent_teams_enabled" => {
+            // B2: real sub-agent execution toggle. Unlike `sandbox.mode`
+            // this takes effect immediately — the tool consults the shared
+            // handle on every call, so enable injects a fresh TeamContext
+            // (with a lifecycle observer bridging to `subagent:start|stop`)
+            // and disable revokes it. In-flight sub-agent runs finish.
+            let enabled = match update.value.to_ascii_lowercase().as_str() {
+                "true" => true,
+                "false" => false,
+                _ => {
+                    return Err(format!(
+                        "Invalid boolean for {}: {}",
+                        update.key, update.value
+                    ));
+                }
+            };
+            {
+                let mut desktop_cfg = state.desktop_config.write().await;
+                desktop_cfg.agent_teams_enabled = enabled;
+            }
+            config::save_config(&state.desktop_config.read().await.clone())?;
+
+            if enabled {
+                crate::agent_teams::enable(&state, app_handle.clone()).await?;
+            } else {
+                crate::agent_teams::disable(&state);
+            }
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: update.key.clone(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
         "memory_enabled" | "telemetry" | "encryption" | "debug_console" => {
             let enabled = match update.value.to_ascii_lowercase().as_str() {
                 "true" => true,

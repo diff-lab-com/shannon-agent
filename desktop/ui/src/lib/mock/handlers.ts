@@ -273,6 +273,10 @@ export const handlers: Record<string, MockHandler> = {
       // P2-5: frozen config key — empty value disables the override.
       const trimmed = String(value ?? '').trim()
       demoConfig.offpeak = { model_override: trimmed ? trimmed : null }
+    } else if (key === 'agent_teams_enabled') {
+      // B2: real sub-agent execution toggle (demo persists the flag; there
+      // is no live registry behind it).
+      demoConfig.agent_teams_enabled = String(value) === 'true'
     }
   },
 

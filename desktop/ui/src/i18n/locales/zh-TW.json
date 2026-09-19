@@ -1675,8 +1675,8 @@
   "chat.message.retryChain": "連續 {count} 次嘗試失敗",
   "chat.message.retryChain.view": "檢視時間線",
   "settings.density.title": "顯示密度",
-  "settings.density.auto": "\u81ea\u52d5\uff08\u8ddf\u96a8\u6a21\u5f0f\uff09",
-  "chat.message.retryChain.attempt": "\u7b2c {n} \u6b21",
+  "settings.density.auto": "自動（跟隨模式）",
+  "chat.message.retryChain.attempt": "第 {n} 次",
   "chat.tool.sandboxDenied": "被沙箱攔截",
   "chat.tool.tokens.title": "近似歸因到該工具呼叫的 token 數",
   "settings.density.help": "緊湊模式會收緊全域字號與間距；預設為舒適模式。",
@@ -2991,5 +2991,10 @@
   "settings.connections.mobile.tlsToggle": "區域網路加密（wss）",
   "settings.connections.mobile.tlsHint": "使用自簽憑證為行動通道啟用 TLS——手機校驗 QR 碼中攜帶的憑證指紋。閘道重啟後生效。",
   "settings.connections.mobile.tlsFingerprint": "憑證指紋",
-  "settings.connections.mobile.tlsSaved": "區域網路加密已更新——重啟閘道後生效"
+  "settings.connections.mobile.tlsSaved": "區域網路加密已更新——重啟閘道後生效",
+  "settings.advanced.agentTeamsTitle": "智慧代理團隊（子代理）",
+  "settings.advanced.agentTeamsDesc": "允許 agent_spawn 工具執行真實的子代理任務——每次 spawn 都是一次獨立的 LLM 呼叫，會消耗 API 額度。預設關閉；關閉時僅為零成本佔位。",
+  "settings.advanced.agentTeamsToggle": "啟用真實子代理執行",
+  "settings.advanced.agentTeamsLive": "立即生效，無需重新啟動。",
+  "chat.subagent.registryId": "註冊項 {id}"
 }

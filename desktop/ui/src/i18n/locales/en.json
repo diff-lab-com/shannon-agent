@@ -3031,5 +3031,10 @@
   "settings.connections.mobile.tlsToggle": "LAN encryption (wss)",
   "settings.connections.mobile.tlsHint": "Serve the mobile channel over TLS with a self-signed certificate — phones verify the certificate fingerprint carried in the QR. Takes effect after the gateway restarts.",
   "settings.connections.mobile.tlsFingerprint": "Certificate fingerprint",
-  "settings.connections.mobile.tlsSaved": "LAN encryption updated — restart the gateway to apply"
+  "settings.connections.mobile.tlsSaved": "LAN encryption updated — restart the gateway to apply",
+  "settings.advanced.agentTeamsTitle": "Agent teams (subagents)",
+  "settings.advanced.agentTeamsDesc": "Let the agent_spawn tool run real sub-agent tasks — each spawn is an independent LLM run that consumes API quota. Off by default; off keeps it a zero-cost placeholder.",
+  "settings.advanced.agentTeamsToggle": "Enable real sub-agent execution",
+  "settings.advanced.agentTeamsLive": "Takes effect immediately — no restart needed.",
+  "chat.subagent.registryId": "registry {id}"
 }

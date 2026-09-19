@@ -86,7 +86,19 @@ impl TeamContext {
                 "Agent teams disabled. Set {TEAMS_ENV_VAR}=1 to enable."
             )));
         }
+        Self::new_unchecked(client_config).await
+    }
 
+    /// Create a TeamContext without the `SHANNON_AGENT_TEAMS` env gate.
+    ///
+    /// For embedders that gate agent teams through their own persisted
+    /// settings instead of a process env var — the desktop shell toggles
+    /// teams from its Settings UI, and a GUI process must not mutate its
+    /// own environment after threads have spawned. TUI/CLI entry points
+    /// keep using [`Self::new`], which enforces the gate.
+    pub async fn new_unchecked(
+        client_config: LlmClientConfig,
+    ) -> Result<Self, crate::error::AgentError> {
         let coordinator_config = CoordinatorConfig::default();
         let mut coordinator = Arc::new(AgentCoordinator::new(coordinator_config).await?);
 

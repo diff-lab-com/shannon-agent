@@ -32,6 +32,7 @@ import {
   type AgentInfo,
   type UsagePayload,
   type McpServerInfo,
+  type SubAgentLive,
 } from '@/types'
 import { ChatProvider, useChat, type ChatContextValue } from './ChatContext'
 import { SessionContext, useSessions, type SessionContextValue } from './SessionContext'
@@ -67,6 +68,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isQuerying, setIsQuerying] = useState(false)
   const [activeToolCalls, setActiveToolCalls] = useState<ToolCall[]>([])
   const [usage, setUsage] = useState<UsagePayload | null>(null)
+  // B2: live registry state of the currently running sub-agent, from the
+  // subagent:start / subagent:stop bridge. Single slot — one live spawn per
+  // session is the engine's practical pattern (agent_spawn blocks until the
+  // run completes). Cleared on stop and on query end (crash safety).
+  const [subagentLive, setSubagentLive] = useState<SubAgentLive | null>(null)
   // U2: ContextPanel visibility — owned here (not in the /chat page) so the
   // global Header can host the toggle while Chat renders the panel.
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
@@ -482,6 +488,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
               : tc
           ))
         }),
+        listen(EVENT_NAMES.SUBAGENT_START, (e) => {
+          const p = e.payload as SubAgentLive
+          setSubagentLive({ agentId: p.agentId, agentName: p.agentName, team: p.team ?? null })
+        }),
+        listen(EVENT_NAMES.SUBAGENT_STOP, (e) => {
+          const p = e.payload as { agentId: string }
+          setSubagentLive(prev => (prev && prev.agentId === p.agentId ? null : prev))
+        }),
         listen(EVENT_NAMES.QUERY_THINKING, (e) => {
           const p = e.payload as { content: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
@@ -498,6 +512,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (!isEventForCurrentWindow((e.payload as { session_id?: string }).session_id, windowSessionId)) return
           noteSessionActivity((e.payload as { session_id?: string }).session_id, 'end')
           setIsQuerying(false)
+          setSubagentLive(null)
           // Commit the streamed text as a finished assistant message. Read
           // via the ref (kept in sync on every render) instead of nesting
           // setMessages inside the setStreamingText updater.
@@ -606,9 +621,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel, openContextPanel, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 
   const sessionValue = useMemo<SessionContextValue>(() => ({
-    sessions, sessionActivity, goalRunsBySession, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,
+    sessions, sessionActivity, goalRunsBySession, subagentLive, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,
     deleteSession: deleteSessionAction, renameSession: renameSessionAction, refreshSessions,
-  }), [sessions, sessionActivity, goalRunsBySession, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchToSession,
+  }), [sessions, sessionActivity, goalRunsBySession, subagentLive, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchToSession,
     deleteSessionAction, renameSessionAction, refreshSessions])
 
   const catalogValue = useMemo<CatalogContextValue>(() => ({

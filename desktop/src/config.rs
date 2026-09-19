@@ -138,6 +138,14 @@ pub struct DesktopConfig {
     /// keeps older `config.json` files loadable.
     #[serde(default)]
     pub offpeak: OffpeakConfig,
+    /// B2: master switch for real sub-agent execution. When true,
+    /// `agent_spawn` runs a real in-process sub-agent QueryEngine (real LLM
+    /// spend) and the registry lifecycle is bridged to the frontend as
+    /// `subagent:start` / `subagent:stop`. Default: false — the tool keeps
+    /// its zero-cost placeholder behavior until opted in. The frozen config
+    /// key is `agent_teams_enabled`; see `crate::agent_teams`.
+    #[serde(default)]
+    pub agent_teams_enabled: bool,
 }
 
 /// P2-5: payload of the desktop `offpeak.model_override` config key.
@@ -556,6 +564,7 @@ impl Default for DesktopConfig {
             active_permission_profile: None,
             sandbox: None,
             offpeak: OffpeakConfig::default(),
+            agent_teams_enabled: false,
         }
     }
 }
