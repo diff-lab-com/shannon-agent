@@ -830,19 +830,15 @@ impl AgentTool {
                             continue;
                         }
                         if let MessageContent::Structured(v) = &reply.content {
-                            if let Some(parsed) =
-                                serde_json::from_value::<ProtocolMessage>(v.clone()).ok()
+                            if let Ok(ProtocolMessage::ShutdownResponse {
+                                request_id: req_id,
+                                approve,
+                                ..
+                            }) = serde_json::from_value::<ProtocolMessage>(v.clone())
                             {
-                                if let ProtocolMessage::ShutdownResponse {
-                                    request_id: req_id,
-                                    approve,
-                                    ..
-                                } = parsed
-                                {
-                                    if req_id == request_id {
-                                        approved = Some(approve);
-                                        break;
-                                    }
+                                if req_id == request_id {
+                                    approved = Some(approve);
+                                    break;
                                 }
                             }
                         }
