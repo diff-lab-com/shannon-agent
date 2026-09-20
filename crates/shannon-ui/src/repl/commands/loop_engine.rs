@@ -1145,6 +1145,7 @@ Agent definitions are loaded from:
                         max_concurrent_tasks: 3,
                         plan_mode_required: false,
                         temperature: None,
+                        max_turns: None,
                     };
 
                     Some((toml_def, system_prompt))

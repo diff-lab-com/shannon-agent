@@ -2026,6 +2026,20 @@ impl QueryEngine {
             dynamic_blocks.push(goal_system_block(goal));
         }
 
+        // Plan-mode awareness: previously the only signal was the per-tool
+        // write-block error, so the model burned turns probing what was
+        // allowed instead of producing the requested plan.
+        if self.is_plan_mode_active() {
+            dynamic_blocks.push(SystemContentBlock::text(
+                "## Plan Mode Active\n\
+                 You are in plan mode: file writes and state-mutating tools are disabled.\n\
+                 Research the codebase (read-only tools are available), then present a\n\
+                 clear, step-by-step implementation plan for the user to review and\n\
+                 approve before any code is changed."
+                    .to_string(),
+            ));
+        }
+
         // Assemble: stable zone with at most two cache breakpoints (first +
         // last block), then the dynamic zone (never cached).
         let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
@@ -2063,24 +2077,54 @@ impl QueryEngine {
             Some(LOCAL_MODEL_SYSTEM_PROMPT.to_string())
         };
 
-        // Inject the working directory so the model knows where to write files.
+        // Inject the environment block (cwd, date/time, platform, git context,
+        // sandbox self-description). Deliberately LAST and non-cached: it is
+        // per-turn mutable state, and keeping it after all cache breakpoints
+        // means it never invalidates the cached prompt prefix. Git context
+        // previously lived inside the cached instructions payload, busting
+        // the cache on every edit the agent made.
         if let Ok(cwd) = std::env::current_dir() {
-            let mut cwd_text =
+            let mut env_text =
                 format!("\n\n## Environment\n\nWorking directory: {}", cwd.display());
+            // Date/time + platform: ground "today"-relative reasoning and
+            // platform-specific commands without any cache cost (this block
+            // sits after every breakpoint).
+            {
+                let now = chrono::Local::now();
+                env_text.push_str(&format!(
+                    "\nToday's date: {} ({})",
+                    now.format("%Y-%m-%d"),
+                    now.format("%A")
+                ));
+                env_text.push_str(&format!(
+                    "\nPlatform: {} ({})",
+                    std::env::consts::OS,
+                    std::env::consts::ARCH
+                ));
+            }
+            // Git context (branch, recent commits, dirty state) — per-turn
+            // mutable, so it lives here with the rest of the env block.
+            if let Some(git_ctx) = crate::project_instructions::git_context(&cwd) {
+                let trimmed = git_ctx.trim_start();
+                if !trimmed.is_empty() {
+                    env_text.push_str("\n\n");
+                    env_text.push_str(trimmed);
+                }
+            }
             // Sandbox self-description (§ sandbox self-description): the
             // model cannot otherwise know the sandbox's path remapping or
             // that host toolchains may be absent — eval runs showed it
             // burning turns probing the filesystem / running apt-get.
             if let Some(sandbox_text) = crate::sandbox::sandbox_self_description(&cwd) {
-                cwd_text.push_str("\n\n");
-                cwd_text.push_str(&sandbox_text);
+                env_text.push_str("\n\n");
+                env_text.push_str(&sandbox_text);
             }
             if let Some(ref mut prompt) = system_prompt {
-                prompt.push_str(&cwd_text);
+                prompt.push_str(&env_text);
             }
             if let Some(ref mut blocks) = system_blocks_opt {
                 blocks.push(shannon_engine::api::types::SystemContentBlock::text(
-                    cwd_text,
+                    env_text,
                 ));
             }
         }
@@ -7029,9 +7073,10 @@ mod tests {
 
         let injector = engine.context_injector().unwrap();
         let blocks = injector.build_system_blocks(true);
-        assert!(!blocks.is_empty());
-        // Should have cache_control set
-        assert!(blocks[0].cache_control.is_some());
+        // Instructions are injected by the engine (stable cache zone), so
+        // build_system_blocks only carries MEMORY.md / rules / prefs — all
+        // absent in this fixture.
+        assert!(blocks.is_empty(), "blocks: {blocks:?}");
 
         // Cleanup
         let _ = std::fs::remove_dir_all(project_dir);

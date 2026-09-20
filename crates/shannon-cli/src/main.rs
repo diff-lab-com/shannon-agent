@@ -1699,10 +1699,8 @@ fn run_noninteractive_query(
             base_engine.with_memory(mem_store)
         };
 
-        // Auto-load project instructions (CLAUDE.md, AGENTS.md, GEMINI.md)
-        if let Some(instructions) = shannon_core::project_instructions::load_from_cwd() {
-            engine.append_system_prompt(&instructions.content);
-        }
+        // Project instructions are auto-injected by the engine via
+        // `load_full_context` in its stable cache zone (deduped).
 
         // Inject the session goal (--goal) — injection only in headless mode
         if let Some(objective) = goal {
@@ -2093,10 +2091,8 @@ fn run_headless_query(
             engine = engine.with_memory(mem_store);
         }
 
-        // Auto-load project instructions
-        if let Some(instructions) = shannon_core::project_instructions::load_from_cwd() {
-            engine.append_system_prompt(&instructions.content);
-        }
+        // Project instructions are auto-injected by the engine via
+        // `load_full_context` in its stable cache zone (deduped).
 
         // Append structured output schema instructions
         if let Some(schema) = schema_config {
@@ -3142,10 +3138,8 @@ fn run_team_agent_mode(
             base_engine.with_memory(mem_store)
         };
 
-        // System prompt: project instructions + agent-specific prompt
-        if let Some(instructions) = shannon_core::project_instructions::load_from_cwd() {
-            engine.append_system_prompt(&instructions.content);
-        }
+        // System prompt: agent-specific prompt. Project instructions are
+        // auto-injected by the engine via `load_full_context` (deduped).
         if let Some(prompt) = system_prompt {
             if !prompt.is_empty() {
                 engine.append_system_prompt(prompt);

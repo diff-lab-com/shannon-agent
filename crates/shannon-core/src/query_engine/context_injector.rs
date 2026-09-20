@@ -112,51 +112,35 @@ impl ContextInjector {
         parts.join("\n\n")
     }
 
-    /// Build system content blocks for the full context injection.
+    /// Build system content blocks for supplementary context injection.
+    ///
+    /// Emits only content the engine does NOT already inject: MEMORY.md index,
+    /// `.claude/rules/*.md`, and preference memory. Project instructions are
+    /// intentionally excluded — the engine injects them via
+    /// `load_full_context` in its stable cacheable zone; emitting them here
+    /// too duplicated CLAUDE.md 2–3× in a single request.
     ///
     /// Returns a list of [`SystemContentBlock`]s suitable for passing to the LLM
-    /// API. Uses cache breakpoints for Anthropic-compatible providers when
-    /// `use_cache` is true.
+    /// API. `use_cache` marks the LAST block with a cache breakpoint — the
+    /// engine's assembly marks the final stable block itself, so these come
+    /// through uncached and are covered by that trailing breakpoint.
     pub fn build_system_blocks(&self, use_cache: bool) -> Vec<SystemContentBlock> {
+        let _ = use_cache; // breakpoints are owned by the engine assembly now
         let mut blocks = Vec::new();
-
-        if let Some(instructions) = self.project_instructions_text() {
-            let block = if use_cache {
-                SystemContentBlock::cached(instructions)
-            } else {
-                SystemContentBlock::text(instructions)
-            };
-            blocks.push(block);
-        }
 
         // MEMORY.md index
         if let Some(memory_idx) = crate::project_memory::load_memory_index(&self.project_dir) {
-            let block = if use_cache {
-                SystemContentBlock::cached(memory_idx)
-            } else {
-                SystemContentBlock::text(memory_idx)
-            };
-            blocks.push(block);
+            blocks.push(SystemContentBlock::text(memory_idx));
         }
 
         // .claude/rules/*.md
         if let Some(rules) = crate::project_memory::load_rules(&self.project_dir) {
-            let block = if use_cache {
-                SystemContentBlock::cached(rules)
-            } else {
-                SystemContentBlock::text(rules)
-            };
-            blocks.push(block);
+            blocks.push(SystemContentBlock::text(rules));
         }
 
         let prefs = self.preference_memory_text();
         if !prefs.is_empty() {
-            let block = if use_cache {
-                SystemContentBlock::cached(prefs)
-            } else {
-                SystemContentBlock::text(prefs)
-            };
-            blocks.push(block);
+            blocks.push(SystemContentBlock::text(prefs));
         }
 
         blocks
@@ -206,15 +190,14 @@ mod tests {
         // InstructionWatcher discovers global ~/.claude/CLAUDE.md files.
         // We only verify the injector doesn't panic and returns consistent results.
 
-        // Reinjection context and system blocks are consistent with instructions_text
+        // Reinjection context keeps instructions (compaction boundary);
+        // system blocks no longer carry them (the engine injects those).
         let has_instructions = injector.project_instructions_text().is_some();
         if !has_instructions {
             assert!(injector.reinjection_context().is_empty());
-            assert!(injector.build_system_blocks(true).is_empty());
-        } else {
-            // If global instructions were found, blocks should be non-empty
-            assert!(!injector.build_system_blocks(true).is_empty());
         }
+        // Blocks only contain MEMORY.md / rules / prefs — none exist here.
+        assert!(injector.build_system_blocks(true).is_empty());
 
         // Cleanup
         let _ = fs::remove_dir_all(project_dir);
@@ -245,9 +228,10 @@ mod tests {
         let reinjection = injector.reinjection_context();
         assert!(reinjection.contains("Test Instructions"));
 
-        // System blocks should have one block
+        // System blocks exclude instructions (deduped with the engine's
+        // load_full_context injection); no MEMORY.md/rules/prefs exist here.
         let blocks = injector.build_system_blocks(true);
-        assert_eq!(blocks.len(), 1);
+        assert!(blocks.is_empty(), "blocks: {blocks:?}");
 
         // Cleanup
         let _ = fs::remove_dir_all(project_dir);
@@ -294,7 +278,7 @@ mod tests {
         let injector = ContextInjector::new(project_dir.clone(), storage_dir.clone());
 
         let blocks = injector.build_system_blocks(false);
-        assert_eq!(blocks.len(), 1);
+        assert!(blocks.is_empty(), "blocks: {blocks:?}");
 
         // Cleanup
         let _ = fs::remove_dir_all(project_dir);
@@ -311,9 +295,7 @@ mod tests {
         let injector = ContextInjector::new(project_dir.clone(), storage_dir.clone());
 
         let blocks = injector.build_system_blocks(true);
-        assert_eq!(blocks.len(), 1);
-        // The cached block should have cache_control set
-        assert!(blocks[0].cache_control.is_some());
+        assert!(blocks.is_empty(), "blocks: {blocks:?}");
 
         // Cleanup
         let _ = fs::remove_dir_all(project_dir);

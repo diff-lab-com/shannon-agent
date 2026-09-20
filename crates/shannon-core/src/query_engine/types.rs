@@ -777,7 +777,7 @@ impl Default for QueryEngineConfig {
                      - Use Read/Grep/Glob to understand code before editing.\n\
                      - Prefer Edit over Write for existing files.\n\
                      - Use Bash for system commands, builds, and tests.\n\
-                     - Invoke tools ONLY through the native tool-calling API of this endpoint. NEVER emit a tool invocation as a markdown code block (```bash) or as plain text — the runtime cannot execute or approve it, and the turn will stall.\n\
+                     - Invoke tools through the native tool-calling API of this endpoint. Markdown code blocks are a last-resort fallback (may be executed or ignored depending on configuration); always prefer native tool calls so inputs are validated and permissions are enforced.\n\
                      - After writing code, run tests or builds only if a toolchain is available: probe first (e.g. `command -v cargo`); when it is missing, verify by re-reading your changes instead of hunting for missing tools.\n\
                      - Before giving your final answer, verify your work against the original request: every required artifact must exist and work. If something could not be verified, say so explicitly instead of claiming success.\n\
                      - Completing the environment (installing a package, provisioning a tool) is NOT task completion. Never stop while a required deliverable is still missing.\n\

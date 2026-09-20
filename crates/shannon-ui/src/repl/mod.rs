@@ -1029,43 +1029,24 @@ impl Repl {
             base_engine.with_memory(mem_store)
         };
 
-        // Auto-load project instructions (Claude Code compatible hierarchy)
+        // Auto-load project instructions (Claude Code compatible hierarchy).
+        //
+        // Instruction/context injection is owned by the ENGINE (stable cache
+        // zone): `load_full_context` covers CLAUDE.md/AGENTS.md/SHANNON.md +
+        // cross-tool files, and the ContextInjector blocks cover MEMORY.md,
+        // .claude/rules and preferences. Appending them here as well injected
+        // CLAUDE.md 2–3× per request and put mutable git context inside the
+        // cached base prefix. The REPL only adds what the engine cannot:
+        // the skills list.
         {
             let cwd = std::env::current_dir().unwrap_or_default();
 
-            // 1. Load full CLAUDE.md hierarchy (global -> project -> parents)
-            let mem_manager = shannon_core::project_memory::ProjectMemoryManager::new(cwd.clone());
-            if let Ok(merged) = mem_manager.load_merged() {
-                if !merged.instructions.is_empty() {
-                    let resolved =
-                        shannon_core::project_memory::resolve_imports(&merged.instructions, &cwd);
-                    query_engine
-                        .append_system_prompt(&format!("# Project Instructions\n\n{resolved}"));
-                }
-                tracing::info!("Loaded {} project memory source(s)", merged.sources.len());
-            }
-
-            // 2. Load MEMORY.md index (first 200 lines)
-            if let Some(memory_content) = shannon_core::project_memory::load_memory_index(&cwd) {
-                query_engine.append_system_prompt(&memory_content);
-            }
-
-            // 3. Load .claude/rules/*.md
-            if let Some(rules) = shannon_core::project_memory::load_rules(&cwd) {
-                query_engine.append_system_prompt(&rules);
-            }
-
-            // 4. Load git context (branch, recent commits, status)
-            if let Some(git_ctx) = shannon_core::project_instructions::git_context(&cwd) {
-                query_engine.append_system_prompt(&git_ctx);
-            }
-
-            // 5. Inject available skills list so the LLM knows what slash commands exist
+            // Inject available skills list so the LLM knows what slash commands exist
             if !skills_for_llm.is_empty() {
                 query_engine.append_system_prompt(&skills_for_llm);
             }
 
-            // 6. Attach ContextInjector for hot-reload + compaction reinjection
+            // Attach ContextInjector for hot-reload + compaction reinjection
             let storage_dir = dirs::home_dir()
                 .map(|h| h.join(".shannon"))
                 .unwrap_or_else(|| cwd.clone());
