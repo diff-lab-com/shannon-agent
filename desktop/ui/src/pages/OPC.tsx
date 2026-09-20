@@ -15,6 +15,7 @@
 //   - OPCKanbanBoard: 5-column kanban with bucketFor() status mapping.
 
 import { useMemo, useState } from 'react'
+import { useIntl } from 'react-intl'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import { useCatalog } from '@/context/CatalogContext'
 import OpcAnalyticsDashboard from '@/components/opc/OpcAnalyticsDashboard'
@@ -23,6 +24,7 @@ import OPCAgentSwarm from '@/components/opc/OPCAgentSwarm'
 import OPCKanbanBoard from '@/components/opc/OPCKanbanBoard'
 
 export default function OPC() {
+  const intl = useIntl()
   const { agents, tasks, config, loading, refreshTasks } = useCatalog()
   // 2026-09 review: teams / projects appear in real multi-team deployments
   // but the Kanban used to be a single flat tasks array. Surface a team
@@ -55,15 +57,21 @@ export default function OPC() {
           <>
             <OpcAnalyticsDashboard />
             {teamNames.length > 1 && (
-              <div className="flex items-center gap-sm flex-wrap mb-md" role="group" aria-label="Team filter">
-                <span className="font-label-sm text-on-surface-variant uppercase tracking-wider mr-xs">Team</span>
+              <div
+                className="flex items-center gap-sm flex-wrap mb-md"
+                role="group"
+                aria-label={intl.formatMessage({ id: 'opc.teamFilter.aria' })}
+              >
+                <span className="font-label-sm text-on-surface-variant uppercase tracking-wider mr-xs">
+                  {intl.formatMessage({ id: 'opc.teamFilter.label' })}
+                </span>
                 <button
                   type="button"
                   aria-pressed={teamFilter === 'all'}
                   onClick={() => setTeamFilter('all')}
                   className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${teamFilter === 'all' ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
                 >
-                  All ({tasks.length})
+                  {intl.formatMessage({ id: 'opc.teamFilter.all' })} ({tasks.length})
                 </button>
                 {teamNames.map(name => {
                   const count = tasks.filter(t => (t as { team?: string | null }).team === name || t.assignee === name).length

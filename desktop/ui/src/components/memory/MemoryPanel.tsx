@@ -296,9 +296,15 @@ export default function MemoryPanel({
           </Button>
         </div>
 
-        <div className="text-label-sm text-on-surface-variant mb-md">
-          {intl.formatMessage({ id: 'memory.listCount' }, { count: filteredCount })}
-        </div>
+        {/* Audit §P2-2 (round 6): suppress the count line during a reload so
+            "暂无记忆" + "正在加载记忆…" never appear at the same time. The
+            loading block (below) is the single source of truth while
+            loading is true. */}
+        {!loading && (
+          <div className="text-label-sm text-on-surface-variant mb-md">
+            {intl.formatMessage({ id: 'memory.listCount' }, { count: filteredCount })}
+          </div>
+        )}
 
         {view === 'graph' ? (
           <MemoryGraphView

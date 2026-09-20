@@ -223,13 +223,16 @@ function findTask(id: string) {
 }
 
 // Mutable notification prefs so DND/quiet-hours toggling feels live in demo mode.
+// Audit §P2-3 (round 6): start with events off so the new empty-state
+// guidance card is visible on first visit — instead of the page looking
+// "already configured" by default.
 let notificationPrefs = {
   master_enabled: true,
   dnd_enabled: false,
   dnd_start: null as string | null,
   dnd_end: null as string | null,
-  on_completed: true,
-  on_failed: true,
+  on_completed: false,
+  on_failed: false,
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -63,7 +63,7 @@ function presetFromTemplate(template: string | undefined): WebhookPreset {
   return PRESET_IDS.includes(template as WebhookPreset) ? (template as WebhookPreset) : 'custom'
 }
 
-function WebhookSection() {
+function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
   const t = useT()
 
   const [loading, setLoading] = useState(true)
@@ -141,6 +141,7 @@ function WebhookSection() {
         include_body: includeBody,
       })
       toast.success(t('settings.notifications.saved'))
+      onSaved?.()
     } catch (e) {
       toastError(t('settings.notifications.error.saveFailed'), e)
     }
@@ -159,6 +160,7 @@ function WebhookSection() {
       setTimeoutMs(5000)
       setIncludeBody(false)
       toast.success(t('settings.notifications.cleared'))
+      onSaved?.()
     } catch (e) {
       toastError(t('settings.notifications.error.clearFailed'), e)
     }
@@ -281,7 +283,7 @@ function WebhookSection() {
 
 /** Desktop-notification master switch + Do-Not-Disturb quiet-hours window.
  * Desktop-local: webhooks still deliver while DND suppresses OS popups. */
-function DndSection() {
+function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
   const t = useT()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -325,6 +327,7 @@ function DndSection() {
         on_failed: onFailed,
       })
       toast.success(t('settings.notifications.dnd.saved'))
+      onSaved?.()
     } catch (e) {
       toastError(t('settings.notifications.dnd.saveFailed'), e)
     } finally {
@@ -457,6 +460,32 @@ function DndSection() {
 
 export default function NotificationsSettings() {
   const t = useT()
+  // Audit §P2-3 (round 6): a first-time visitor used to see two blank
+  // forms with no on-ramp guidance. We now peek at the persisted config
+  // and render a setup card while no webhook and no DND events exist.
+  const [hasWebhook, setHasWebhook] = useState<boolean | null>(null)
+  const [hasDndEvents, setHasDndEvents] = useState<boolean | null>(null)
+  // Bump after every save in the child sections so the empty-state check
+  // re-runs against the freshly-persisted config.
+  const [refreshTick, setRefreshTick] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      api.getWebhookConfig().catch(() => null),
+      api.getNotificationPrefs().catch(() => null),
+    ]).then(([webhook, prefs]) => {
+      if (cancelled) return
+      setHasWebhook(Boolean(webhook?.url?.trim()))
+      setHasDndEvents(Boolean(prefs?.on_completed || prefs?.on_failed))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [refreshTick])
+
+  const showEmptyGuidance =
+    hasWebhook === false && hasDndEvents === false
 
   return (
     <div className="pb-xl">
@@ -464,12 +493,38 @@ export default function NotificationsSettings() {
         {t('settings.notifications.subtitle')}
       </p>
 
+      {showEmptyGuidance && (
+        <div
+          role="region"
+          aria-label={t('settings.notifications.empty.aria')}
+          className="mb-xl p-lg rounded-2xl border border-outline-variant/30 bg-surface-container-low flex flex-col sm:flex-row items-start gap-md"
+        >
+          <div className="w-12 h-12 rounded-xl bg-primary-container/30 flex items-center justify-center shrink-0">
+            <span className="material-symbols-outlined text-[28px] text-primary" aria-hidden="true">
+              notifications_active
+            </span>
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="font-headline-sm text-on-surface mb-xs">
+              {t('settings.notifications.empty.title')}
+            </h3>
+            <p className="text-on-surface-variant font-body-sm mb-md max-w-prose">
+              {t('settings.notifications.empty.desc')}
+            </p>
+            <ul className="text-on-surface-variant font-body-sm space-y-xs list-disc pl-lg">
+              <li>{t('settings.notifications.empty.bullet.webhook')}</li>
+              <li>{t('settings.notifications.empty.bullet.dnd')}</li>
+            </ul>
+          </div>
+        </div>
+      )}
+
       <section className="mt-xl">
         <div className="mb-lg">
           <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.dnd.sectionTitle')}</h3>
           <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.dnd.sectionDesc')}</p>
         </div>
-        <DndSection />
+        <DndSection onSaved={() => setRefreshTick((n) => n + 1)} />
       </section>
 
       <section className="mt-xl">
@@ -477,7 +532,7 @@ export default function NotificationsSettings() {
           <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.webhook.title')}</h3>
           <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.webhook.subtitle')}</p>
         </div>
-        <WebhookSection />
+        <WebhookSection onSaved={() => setRefreshTick((n) => n + 1)} />
       </section>
     </div>
   )

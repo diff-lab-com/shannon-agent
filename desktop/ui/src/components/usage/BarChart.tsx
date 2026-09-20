@@ -41,12 +41,14 @@ export function BarChart({ data, series, height = 220, formatValue }: BarChartPr
   const { max, totals } = useMemo(() => {
     let m = 0
     const t: number[] = []
+    // Audit §P1-1 (round 6): scale Y by stacked total, not the largest single
+    // segment — otherwise input+output bars overshoot the chart frame.
     for (const p of data) {
       let sum = 0
       for (const s of p.series) {
         sum += s.value
-        m = Math.max(m, s.value)
       }
+      m = Math.max(m, sum)
       t.push(sum)
     }
     return { max: m || 1, totals: t }

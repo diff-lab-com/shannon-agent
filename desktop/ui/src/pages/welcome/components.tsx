@@ -6,13 +6,13 @@
 // card variants.
 import { useIntl } from 'react-intl'
 import { cn } from '@/lib/utils'
-import { STEP_LABEL_KEYS } from './constants'
 
-export function Stepper({ step, labels }: { step: number; labels?: string[] }) {
+export function Stepper({ step, labels }: { step: number; labels: string[] }) {
   const intl = useIntl()
-  // Two-step onboarding (UI audit §3.1): callers pass the trimmed label list;
-  // the four-step legacy flow keeps working via the constants default.
-  const labelKeys = labels ?? STEP_LABEL_KEYS
+  // Two-step onboarding (UI audit §3.1): callers pass the trimmed label list.
+  // Round 6 §P3-1: removed the unused 4-key STEP_LABEL_KEYS default — every
+  // Welcome step entrypoint now supplies its own label list.
+  const labelKeys = labels
   const stepLabel = intl.formatMessage({ id: labelKeys[step] })
   // Dots on top, labels always visible underneath — an inline label after
   // the current dot (the old layout) shifted the whole row's geometry on

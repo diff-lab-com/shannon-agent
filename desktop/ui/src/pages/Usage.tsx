@@ -28,8 +28,19 @@ const RANGES = [7, 30, 90] as const
 type DisplayMode = 'overview' | 'audit'
 
 function fmtTokens(locale: string, n: number): string {
+  // Audit §P2-6 (round 6): explicit compactThreshold prevents zh-CN edge
+  // cases where values just below the 万 boundary get rendered with a
+  // confusing decimal point (e.g. 4250 → "43.5" under some Intl builds).
+  // Force the abbreviated form only for ≥10k and fall back to plain
+  // thousands grouping otherwise.
+  if (Math.abs(n) >= 10_000) {
+    return new Intl.NumberFormat(locale, {
+      notation: 'compact',
+      compactDisplay: 'short',
+      maximumFractionDigits: 1,
+    }).format(n)
+  }
   return new Intl.NumberFormat(locale, {
-    notation: 'compact',
     maximumFractionDigits: 1,
   }).format(n)
 }
@@ -57,17 +68,27 @@ function StatCard({
   hint?: string
 }) {
   return (
-    <div className="bg-surface-container-low rounded-2xl p-lg border border-outline-variant/30">
-      <div className="flex items-center gap-xs text-on-surface-variant mb-sm">
-        <span className="material-symbols-outlined icon-sm">{icon}</span>
-        <span className="font-label-sm text-label-sm uppercase tracking-wider">{label}</span>
+    // Audit §P2-4 (round 6): align label and hint on a single horizontal row
+    // so cards with a hint line are the same height as cards without one.
+    // This keeps the 2-col grid tidy on narrow viewports.
+    <div className="bg-surface-container-low rounded-2xl p-lg border border-outline-variant/30 flex flex-col h-full">
+      <div className="flex items-center justify-between gap-sm text-on-surface-variant mb-sm min-h-[20px]">
+        <span className="flex items-center gap-xs min-w-0">
+          <span className="material-symbols-outlined icon-sm">{icon}</span>
+          <span className="font-label-sm text-label-sm uppercase tracking-wider truncate">{label}</span>
+        </span>
+        {hint && (
+          <span
+            className="font-label-xs text-label-xs text-on-surface-variant/70 truncate max-w-[60%] text-right"
+            title={hint}
+          >
+            {hint}
+          </span>
+        )}
       </div>
       <div className="font-mono font-headline-md text-[26px] font-bold text-on-surface leading-tight tabular-nums">
         {value}
       </div>
-      {hint && (
-        <div className="font-label-sm text-label-sm text-on-surface-variant mt-xs">{hint}</div>
-      )}
     </div>
   )
 }
