@@ -3077,5 +3077,18 @@
   "chat.scrollToLatest.aria": "滚到最新消息",
   "chat.dock.hint": "提示：按 Ctrl+\\ 切换此面板",
   "memory.empty.title": "暂无记忆",
-  "memory.empty.desc": "记下重要的事——偏好、决策、反复出现的上下文——Shannon 会在后续会话中自动召回。"
+  "memory.empty.desc": "记下重要的事——偏好、决策、反复出现的上下文——Shannon 会在后续会话中自动召回。",
+  "usage.chart.byDay.title": "每日 token",
+  "usage.chart.byDay.subtitle": "每日 token 用量——柱状堆叠输入（底部）和输出（顶部）。",
+  "usage.chart.byModel.title": "按模型的 token",
+  "usage.chart.byProvider.title": "按服务商的 token",
+  "usage.chart.legend.input": "输入",
+  "usage.chart.legend.output": "输出",
+  "usage.chart.legend.cache": "缓存",
+  "usage.chart.legend.cost": "成本",
+  "usage.chart.empty": "数据不足，无法绘制图表。",
+  "usage.view.audit": "审计（表格）",
+  "usage.view.audit.aria": "显示审计表格（精确数字）",
+  "sidebar.sessions.grouping.session": "按会话",
+  "sidebar.sessions.grouping.session.desc": "单一扁平列表，按最近活跃排序"
 }

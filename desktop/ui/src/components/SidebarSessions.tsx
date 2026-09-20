@@ -36,9 +36,12 @@ const SESSIONS_PINNED_KEY = 'shannon-sessions-pinned'
 const SESSIONS_GROUPING_KEY = 'shannon-sessions-grouping'
 const SESSIONS_FOLDED_KEY = 'shannon-sessions-folded'
 
-type GroupingMode = 'project' | 'time'
-
-const DAY_MS = 24 * 60 * 60 * 1000
+// IA (2026-09 review): two grouping modes — by project (folders nest
+// their conversations, the ZCode mental model) and by session (one flat
+// list sorted by recency). The session mode is what users want when
+// they're hunting for "the chat I had an hour ago"; project mode wins
+// once they have more than ~10 conversations.
+type GroupingMode = 'project' | 'session'
 
 function readOrderOverride(): Record<string, number> {
   if (typeof window === 'undefined') return {}
@@ -59,7 +62,7 @@ function readPinned(): ReadonlySet<string> {
 function readGrouping(): GroupingMode {
   if (typeof window === 'undefined') return 'project'
   try {
-    return window.localStorage.getItem(SESSIONS_GROUPING_KEY) === 'time' ? 'time' : 'project'
+    return window.localStorage.getItem(SESSIONS_GROUPING_KEY) === 'session' ? 'session' : 'project'
   } catch { return 'project' }
 }
 
@@ -87,12 +90,6 @@ function formatElapsed(ms: number): string {
   const min = Math.floor(sec / 60)
   if (min < 60) return `${min}m`
   return `${Math.floor(min / 60)}h${min % 60}m`
-}
-
-/** DST-safe day difference between a timestamp and today's local midnight. */
-function dayDiffFromToday(ts: number, now: Date): number {
-  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
-  return Math.round((startOfDay(now) - startOfDay(new Date(ts))) / DAY_MS)
 }
 
 function projectOf(s: { working_dir?: string | null }): string | null {
@@ -261,6 +258,12 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   // Grouping (P0-④). null = render flat. While searching the list stays
   // flat (matches hit ranking); project mode stays flat while there is at
   // most one project (small lists stay uncluttered).
+  //
+  // Session mode (2026-09): a single flat list sorted by recency — no
+  // today/yesterday/this-week/earlier buckets. The buckets read as
+  // redundant once the user knows the list is "all my sessions, newest
+  // first"; pinning the active session to the top of an un-bucketed list
+  // is the ZCode-style mental model.
   const groups = useMemo<SessionGroup[] | null>(() => {
     if (query.trim()) return null
     if (grouping === 'project') {
@@ -280,24 +283,9 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         isProject: true,
       }))
     }
-    const defs: { key: string; label: string }[] = [
-      { key: 'today', label: t('sidebar.sessions.group.today') },
-      { key: 'yesterday', label: t('sidebar.sessions.group.yesterday') },
-      { key: 'thisWeek', label: t('sidebar.sessions.group.thisWeek') },
-      { key: 'earlier', label: t('sidebar.sessions.group.earlier') },
-    ]
-    const now = new Date(nowTick)
-    const buckets = new Map<string, SessionInfo[]>(defs.map(d => [d.key, []]))
-    for (const s of filtered) {
-      const ts = sessionActivity[s.id]?.lastActivity ?? s.updated_at ?? s.created_at
-      const diff = dayDiffFromToday(ts, now)
-      const key = diff <= 0 ? 'today' : diff === 1 ? 'yesterday' : diff <= 6 ? 'thisWeek' : 'earlier'
-      buckets.get(key)!.push(s)
-    }
-    return defs
-      .map(d => ({ key: d.key, icon: 'schedule', label: d.label, sessions: buckets.get(d.key)! }))
-      .filter(g => g.sessions.length > 0)
-  }, [filtered, grouping, query, sessionActivity, nowTick, t])
+    // Session mode — flat, no headers. The list itself is the order.
+    return null
+  }, [filtered, grouping, query, t])
 
   const persistOrder = useCallback((next: Record<string, number>) => {
     setOrderOverride(next)
@@ -340,7 +328,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     if (!e.altKey) return
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault()
-      if (query.trim() || grouping === 'time') return
+      if (query.trim() || grouping === 'session') return
       moveRow(id, e.key === 'ArrowUp' ? -1 : 1)
     }
   }, [moveRow, query, grouping])
@@ -442,7 +430,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
       <div
         key={session.id}
         role="listitem"
-        draggable={!isEditing && grouping !== 'time'}
+        draggable={!isEditing && grouping !== 'session'}
         onDragStart={() => setDraggedId(session.id)}
         onDragOver={e => e.preventDefault()}
         onDrop={() => handleDrop(session.id)}
@@ -588,12 +576,15 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         <span className="font-label-sm text-label-sm text-on-surface-variant shrink-0">
           {filtered.length}{filtered.length !== sessions.length ? `/${sessions.length}` : ''}
         </span>
-        {/* P0-④ grouping view switch — ZCode 分组|项目 style labeled
-            segmented control (对话按时间分组 vs 按项目文件夹). */}
+        {/* P0-④ grouping view switch — ZCode 项目|时间 style labeled
+            segmented control (按项目文件夹 vs 按会话顺序). Renamed
+            "time → session" in 2026-09: the second mode is just a flat
+            session list sorted by recency — labelling it "session" reads
+            more honestly to the user than abstract "time". */}
         <div role="group" aria-label={t('sidebar.sessions.grouping.aria')} className="flex items-center rounded-md bg-surface-container-low p-0.5 shrink-0">
           {([
             { mode: 'project' as const, icon: 'folder', label: t('sidebar.sessions.grouping.project') },
-            { mode: 'time' as const, icon: 'schedule', label: t('sidebar.sessions.grouping.time') },
+            { mode: 'session' as const, icon: 'view_list', label: t('sidebar.sessions.grouping.session') },
           ]).map(opt => (
             <button
               key={opt.mode}

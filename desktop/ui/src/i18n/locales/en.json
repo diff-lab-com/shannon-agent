@@ -3077,5 +3077,18 @@
   "chat.scrollToLatest.aria": "Scroll to latest message",
   "chat.dock.hint": "Tip: press Ctrl+\\ to toggle this panel.",
   "memory.empty.title": "Your memory is empty",
-  "memory.empty.desc": "Save what matters — preferences, decisions, recurring context — and Shannon will recall it across future sessions."
+  "memory.empty.desc": "Save what matters — preferences, decisions, recurring context — and Shannon will recall it across future sessions.",
+  "usage.chart.byDay.title": "Daily tokens",
+  "usage.chart.byDay.subtitle": "Tokens used per day — bars stack input (bottom) and output (top).",
+  "usage.chart.byModel.title": "Tokens by model",
+  "usage.chart.byProvider.title": "Tokens by provider",
+  "usage.chart.legend.input": "Input",
+  "usage.chart.legend.output": "Output",
+  "usage.chart.legend.cache": "Cache",
+  "usage.chart.legend.cost": "Cost",
+  "usage.chart.empty": "Not enough data to draw yet.",
+  "usage.view.audit": "Audit (table)",
+  "usage.view.audit.aria": "Show audit tables with precise numbers",
+  "sidebar.sessions.grouping.session": "Flat by session",
+  "sidebar.sessions.grouping.session.desc": "One flat list sorted by recency"
 }
