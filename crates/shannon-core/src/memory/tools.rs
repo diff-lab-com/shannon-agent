@@ -293,10 +293,7 @@ mod tests {
             .unwrap()
             .to_string();
         let forget = MemoryForgetTool::new(dir.clone());
-        let out3 = forget
-            .execute(json!({ "id": id }))
-            .await
-            .unwrap();
+        let out3 = forget.execute(json!({ "id": id })).await.unwrap();
         assert!(!out3.is_error, "{}", out3.content);
         assert!(out3.content.starts_with("Deleted memory"));
 
@@ -328,10 +325,11 @@ mod tests {
         let save = MemorySaveTool::new(dir.clone());
         assert!(save.execute(json!({})).await.is_err());
         assert!(save.execute(json!({ "content": "" })).await.is_err());
-        assert!(save
-            .execute(json!({ "content": "x".repeat(3000) }))
-            .await
-            .is_err());
+        assert!(
+            save.execute(json!({ "content": "x".repeat(3000) }))
+                .await
+                .is_err()
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

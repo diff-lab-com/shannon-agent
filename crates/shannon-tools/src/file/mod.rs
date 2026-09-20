@@ -136,7 +136,8 @@ use `offset`/`limit` to page through them. Output includes no line numbers:\n\
 cite locations as file_path plus nearby unique text. Images (png/jpg/gif/webp)\n\
 are returned as attachments the model can view. You MUST read a file before\n\
 editing it — Edit requires that old_string matches the file exactly, which\n\
-you can only know from a fresh Read.".to_string(),
+you can only know from a fresh Read."
+                .to_string(),
             sandbox: PathSandbox::new(),
             fs: crate::defaults::fs(),
         }
@@ -152,7 +153,8 @@ use `offset`/`limit` to page through them. Output includes no line numbers:\n\
 cite locations as file_path plus nearby unique text. Images (png/jpg/gif/webp)\n\
 are returned as attachments the model can view. You MUST read a file before\n\
 editing it — Edit requires that old_string matches the file exactly, which\n\
-you can only know from a fresh Read.".to_string(),
+you can only know from a fresh Read."
+                .to_string(),
             sandbox,
             fs: crate::defaults::fs(),
         }

@@ -40,25 +40,19 @@ pub fn scan_for_injection(content: &str) -> Vec<InjectionFinding> {
             "disregard previous instructions",
             "explicit instruction-override directive",
         ),
+        ("you are now", "persona-override attempt ('you are now …')"),
         (
-            "you are now",
-            "persona-override attempt ('you are now …')",
+            "new system prompt",
+            "attempts to redefine the system prompt",
         ),
-        ("new system prompt", "attempts to redefine the system prompt"),
         ("system prompt:", "attempts to redefine the system prompt"),
-        (
-            "</system>",
-            "fake system-boundary close tag",
-        ),
+        ("</system>", "fake system-boundary close tag"),
         ("<system>", "fake system-boundary open tag"),
         (
             "you must not tell the user",
             "secrecy directive toward the user",
         ),
-        (
-            "do not reveal",
-            "secrecy directive toward the user",
-        ),
+        ("do not reveal", "secrecy directive toward the user"),
         ("keep this hidden", "secrecy directive toward the user"),
     ];
     for (needle, detail) in OVERRIDE_PATTERNS {
@@ -108,7 +102,11 @@ pub fn scan_for_injection(content: &str) -> Vec<InjectionFinding> {
     // Pipe-to-shell: a download piped into a shell anywhere in the body
     // (`curl -fsSL https://… | sh`), not just the literal compact form.
     let has_fetch = lower.contains("curl") || lower.contains("wget");
-    if has_fetch && (lower.contains("| sh") || lower.contains("|bash") || lower.contains("| bash") || lower.contains("|sh"))
+    if has_fetch
+        && (lower.contains("| sh")
+            || lower.contains("|bash")
+            || lower.contains("| bash")
+            || lower.contains("|sh"))
     {
         findings.push(InjectionFinding {
             rule: "pipe-to-shell",
@@ -119,7 +117,12 @@ pub fn scan_for_injection(content: &str) -> Vec<InjectionFinding> {
     // Base64 blobs (>= 512 chars) are a common payload-obfuscation channel.
     let b64_len = content
         .split_whitespace()
-        .filter(|tok| tok.len() >= 512 && tok.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='))
+        .filter(|tok| {
+            tok.len() >= 512
+                && tok
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+        })
         .map(|tok| tok.len())
         .max()
         .unwrap_or(0);

@@ -646,14 +646,13 @@ fn persist_log_truncation(repl: &Repl, keep_turns: usize) {
     let Some(ref engine) = repl.query_engine else {
         return;
     };
-    if let Err(e) =
-        repl.l0_store()
-            .truncate_to_turn(&engine.session_id(), keep_turns)
+    if let Err(e) = repl
+        .l0_store()
+        .truncate_to_turn(&engine.session_id(), keep_turns)
     {
         tracing::warn!("rewind: failed to truncate session log: {e}");
     }
 }
-
 
 /// Core code-rewind logic, factored out so it is unit-testable without env or
 /// a live `Repl`.
@@ -749,7 +748,11 @@ fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, Str
     let outcome = apply_code_rewind(&checkpoints, index, &mut manager, &cwd)?;
 
     let mut summary = format!("Reverted code to turn {}.", outcome.target_turn);
-    if outcome.restored.is_empty() && outcome.deleted.is_empty() && outcome.failed.is_empty() {
+    if outcome.restored.is_empty()
+        && outcome.deleted.is_empty()
+        && outcome.failed.is_empty()
+        && outcome.skipped_no_baseline.is_empty()
+    {
         summary.push_str(" No files needed reverting (no recorded changes after this turn).");
     } else {
         if !outcome.restored.is_empty() {
@@ -759,6 +762,12 @@ fn run_code_rewind(repl: &Repl, index: usize) -> std::result::Result<String, Str
             summary.push_str(&format!(
                 "\nDeleted (created after this turn): {}",
                 outcome.deleted.join(", ")
+            ));
+        }
+        if !outcome.skipped_no_baseline.is_empty() {
+            summary.push_str(&format!(
+                "\nLeft untouched (existed before this session — delete manually if unwanted): {}",
+                outcome.skipped_no_baseline.join(", ")
             ));
         }
         if !outcome.failed.is_empty() {
@@ -845,7 +854,6 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
                     .add_message(ChatRole::System, format!("Code revert failed: {e}"));
             }
         },
-
 
         RewindIntent::Both(index) => {
             // Revert code via content snapshots first; conversation rewind is independent.
@@ -979,7 +987,8 @@ pub(crate) fn handle_handoff(repl: &mut Repl, args: &str) -> Result<()> {
             ChatRole::System,
             "/handoff — distill this session into a prompt for a fresh one.\n\
              Output: .shannon/handoff-<timestamp>.md plus an echo here. Review it,\n\
-             start a new session, and paste it as your first message.".to_string(),
+             start a new session, and paste it as your first message."
+                .to_string(),
         );
         return Ok(());
     }
@@ -1014,9 +1023,7 @@ pub(crate) fn handle_handoff(repl: &mut Repl, args: &str) -> Result<()> {
         }
     };
 
-    let handoff = format!(
-        "{HANDOFF_PREAMBLE}\n\n---\n\n{summary}\n\n---\n\n{HANDOFF_EPILOGUE}",
-    );
+    let handoff = format!("{HANDOFF_PREAMBLE}\n\n---\n\n{summary}\n\n---\n\n{HANDOFF_EPILOGUE}",);
 
     // Persist for review.
     let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
@@ -1042,7 +1049,8 @@ pub(crate) fn handle_handoff(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 const HANDOFF_PREAMBLE: &str = "You are continuing a task from a previous session. Below is a distilled handoff. Treat it as the authoritative context; ask nothing that it already answers.";
-const HANDOFF_EPILOGUE: &str = "Begin by verifying the current state (files/tests) before continuing work.";
+const HANDOFF_EPILOGUE: &str =
+    "Begin by verifying the current state (files/tests) before continuing work.";
 
 pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
     use shannon_engine::compact::{CompactEngine, CompactStrategy};

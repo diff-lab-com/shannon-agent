@@ -901,14 +901,16 @@ mod tests {
     #[test]
     fn test_format_fetch_content_includes_page_text() {
         let content = format_fetch_content("https://example.com/a", 42, "hello page", false, None);
-        assert!(content.contains("hello page"), "page text must be in content: {content}");
+        assert!(
+            content.contains("hello page"),
+            "page text must be in content: {content}"
+        );
         assert!(content.contains("https://example.com/a"));
     }
 
     #[test]
     fn test_format_fetch_content_pagination_hint() {
-        let content =
-            format_fetch_content("https://e.com", 10, "abc", true, Some(5000));
+        let content = format_fetch_content("https://e.com", 10, "abc", true, Some(5000));
         assert!(content.contains("start_index: 5000"));
     }
 

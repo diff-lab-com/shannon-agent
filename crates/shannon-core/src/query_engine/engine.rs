@@ -48,21 +48,22 @@ use crate::query_engine::repo_map_injector::RepoMapInjector;
 // path is preserved as the LLM-backed summarizer; the facade's token-based
 // strategy is what fires when no summarizer is available or when the
 // selector chooses the cheap path.
-use crate::compact as p2_compact;
-#[allow(unused_imports)] // DEFAULT_MAX_TOOL_RESULT_CHARS/env_num_override: test-only in this module
-use super::env_config::{
-    cap_tool_result, env_num_override, think_only_min_answer_chars, think_only_nudge_max,
-    token_budget_limit, token_budget_nudge_for, DEFAULT_MAX_TOOL_RESULT_CHARS,
-    MICRO_PRUNE_THRESHOLD, THINK_ONLY_NUDGE_PROMPT, TRUNCATION_CONTINUATION_PROMPT,
-};
 #[allow(unused_imports)]
 use super::env_config::DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS;
+#[allow(unused_imports)]
+// DEFAULT_MAX_TOOL_RESULT_CHARS/env_num_override: test-only in this module
+use super::env_config::{
+    DEFAULT_MAX_TOOL_RESULT_CHARS, MICRO_PRUNE_THRESHOLD, THINK_ONLY_NUDGE_PROMPT,
+    TRUNCATION_CONTINUATION_PROMPT, cap_tool_result, env_num_override, think_only_min_answer_chars,
+    think_only_nudge_max, token_budget_limit, token_budget_nudge_for,
+};
 #[allow(unused_imports)] // split_think_content: used by tests in this module
 use super::parsers::{
-    is_think_only_response, is_truncation_stop, markdown_bash_command, parse_text_tool_calls,
-    split_think_content, ThinkStreamSplitter,
+    ThinkStreamSplitter, is_think_only_response, is_truncation_stop, markdown_bash_command,
+    parse_text_tool_calls, split_think_content,
 };
-use super::routing::{classify_query_complexity, QueryComplexity};
+use super::routing::{QueryComplexity, classify_query_complexity};
+use crate::compact as p2_compact;
 use crate::query_engine::streaming::ConversationState;
 use crate::query_engine::types::{
     ConversationStats, CostTracker, GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER, GoalSpec,
@@ -1672,8 +1673,8 @@ impl QueryEngine {
         // Extraction cursor (P0-10 incremental extraction): index into the
         // conversation up to which facts have already been extracted.
         let memory_extract_cursor_cell = self.memory_extract_cursor.clone();
-        let memory_extract_cursor_cursor = memory_extract_cursor_cell
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let memory_extract_cursor_cursor =
+            memory_extract_cursor_cell.load(std::sync::atomic::Ordering::Relaxed);
 
         // Engine-config snapshot embedded in every `request/header` (§4.2),
         // so each logged request is a pure function of the log.
@@ -2216,14 +2217,15 @@ impl QueryEngine {
                         shannon_engine::compact::CompactEngine::prune_stale_tool_results(
                             &mut messages[..head],
                         );
-                        estimated_tokens = shannon_engine::compact::helpers::estimate_tokens(&messages)
-                            + config
-                                .system_prompt
-                                .as_ref()
-                                .map(|sp| {
-                                    shannon_engine::compact::helpers::estimate_text_tokens(sp)
-                                })
-                                .unwrap_or(0);
+                        estimated_tokens =
+                            shannon_engine::compact::helpers::estimate_tokens(&messages)
+                                + config
+                                    .system_prompt
+                                    .as_ref()
+                                    .map(|sp| {
+                                        shannon_engine::compact::helpers::estimate_text_tokens(sp)
+                                    })
+                                    .unwrap_or(0);
                         usage_ratio = estimated_tokens as f32 / max_context as f32;
                         send_event!(
                             tx,
@@ -2427,10 +2429,11 @@ impl QueryEngine {
                                             );
                                             let keep = 20;
                                             if messages.len() > keep {
-                                                let split = shannon_engine::compact::safe_split_point(
-                                                    &messages,
-                                                    messages.len() - keep,
-                                                );
+                                                let split =
+                                                    shannon_engine::compact::safe_split_point(
+                                                        &messages,
+                                                        messages.len() - keep,
+                                                    );
                                                 messages = messages.split_off(split);
                                             }
                                         }
@@ -2718,14 +2721,11 @@ impl QueryEngine {
                         // `Err(ApiError::Timeout)` so the existing recovery
                         // ladder applies — partial content is preserved, and a
                         // dead stream can no longer hang the query forever.
-                        while let Some(event_result) = match
-                            tokio::time::timeout(
-                                std::time::Duration::from_secs(
-                                    config.timeout_seconds.max(30) as u64
-                                ),
-                                stream.next(),
-                            )
-                            .await
+                        while let Some(event_result) = match tokio::time::timeout(
+                            std::time::Duration::from_secs(config.timeout_seconds.max(30)),
+                            stream.next(),
+                        )
+                        .await
                         {
                             Ok(item) => item,
                             Err(_elapsed) => {
@@ -3306,9 +3306,13 @@ impl QueryEngine {
                                                             None => crate::tool_execution::is_file_modifying_tool(&tool_name),
                                                         };
                                                         if tool_is_mutating
-                                                            && !PLAN_ALLOWED_STATELESS
-                                                                .iter()
-                                                                .any(|n| n.eq_ignore_ascii_case(&tool_name))
+                                                            && !PLAN_ALLOWED_STATELESS.iter().any(
+                                                                |n| {
+                                                                    n.eq_ignore_ascii_case(
+                                                                        &tool_name,
+                                                                    )
+                                                                },
+                                                            )
                                                         {
                                                             let error_msg = format!(
                                                                 "Plan mode: write operations blocked. \
@@ -3725,7 +3729,8 @@ impl QueryEngine {
 
                                                                 for (saved_tool_id, handle) in
                                                                     exec_handles
-                                                                {                                                                    match handle.await {
+                                                                {
+                                                                    match handle.await {
                                                                         Ok((
                                                                             tool_id,
                                                                             tool_name,
@@ -3980,10 +3985,22 @@ impl QueryEngine {
                                                                             is_error: is_err,
                                                                             meta: Box::new(crate::tools::sandbox_meta_from(&output.metadata)),
                                                                             });
-                                                                        let (capped, truncated) = cap_tool_result(output.content.clone());
-                                                                        let mut meta = output.metadata.clone();
+                                                                        let (capped, truncated) =
+                                                                            cap_tool_result(
+                                                                                output
+                                                                                    .content
+                                                                                    .clone(),
+                                                                            );
+                                                                        let mut meta =
+                                                                            output.metadata.clone();
                                                                         if truncated {
-                                                                            meta.insert("truncated".to_string(), serde_json::json!(true));
+                                                                            meta.insert(
+                                                                                "truncated"
+                                                                                    .to_string(),
+                                                                                serde_json::json!(
+                                                                                    true
+                                                                                ),
+                                                                            );
                                                                         }
                                                                         tool_results.push(
                                                                             ToolResultEntry {
@@ -5367,8 +5384,7 @@ impl QueryEngine {
                         let _ = dream.maybe_compact(&project, &SessionMemoryConfig::default());
                     }
                 });
-                memory_extract_cursor_cell
-                    .store(total, std::sync::atomic::Ordering::Relaxed);
+                memory_extract_cursor_cell.store(total, std::sync::atomic::Ordering::Relaxed);
             }
         });
 
@@ -5541,17 +5557,20 @@ mod tests {
         let cjk = "漢字".repeat(DEFAULT_MAX_TOOL_RESULT_CHARS);
         let (capped, truncated) = cap_tool_result(cjk);
         assert!(truncated);
-        assert!(capped.is_char_boundary(
-            capped.find("[shannon: output truncated").unwrap_or(capped.len())
-        ));
+        assert!(
+            capped.is_char_boundary(
+                capped
+                    .find("[shannon: output truncated")
+                    .unwrap_or(capped.len())
+            )
+        );
     }
 
     #[test]
     fn cap_tool_result_zero_disables_cap() {
         // env::set_var is process-wide and unsafe under edition 2024 —
         // serialize against other env tests and wrap each call.
-        static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
-            std::sync::OnceLock::new();
+        static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
         let _guard = ENV_LOCK
             .get_or_init(|| std::sync::Mutex::new(()))
             .lock()

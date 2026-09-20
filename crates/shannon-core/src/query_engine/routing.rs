@@ -66,4 +66,3 @@ pub(super) fn classify_query_complexity(query: &str) -> QueryComplexity {
 
     QueryComplexity::Standard
 }
-

@@ -3,14 +3,12 @@
 //!
 //! Split out of `engine.rs` (Wave 2 architecture step).
 
-
 /// `stop_reason` values meaning "output was cut off by the output token
 /// limit before the model finished": OpenAI-compatible `length`,
 /// Anthropic/Gemini `max_tokens`.
 pub(super) fn is_truncation_stop(reason: Option<&str>) -> bool {
     matches!(reason, Some("length" | "max_tokens"))
 }
-
 
 /// Split inline `<think>...</think>` reasoning out of assistant text.
 ///
@@ -284,7 +282,11 @@ pub(super) fn parse_text_tool_calls(text: &str) -> Option<Vec<(String, serde_jso
 /// terse) answer and never nudged: nudging every short "Done." would wreck
 /// normal sessions for no eval benefit — the measured failure mode is always
 /// reasoning-dominated.
-pub(super) fn is_think_only_response(text: &str, tool_use_count: usize, min_answer_chars: usize) -> bool {
+pub(super) fn is_think_only_response(
+    text: &str,
+    tool_use_count: usize,
+    min_answer_chars: usize,
+) -> bool {
     if tool_use_count > 0 {
         return false;
     }
@@ -300,4 +302,3 @@ pub(super) fn is_think_only_response(text: &str, tool_use_count: usize, min_answ
     // blank" (0 < 0 would never fire — see DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS).
     visible.trim().chars().count() < min_answer_chars.max(1)
 }
-

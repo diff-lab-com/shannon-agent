@@ -611,14 +611,14 @@ impl MemoryStore {
                     if stem.len() != 16 || !stem.chars().all(|c| c.is_ascii_hexdigit()) {
                         continue;
                     }
-                    let Some(project) =
-                        parse_jsonl_file(&path).into_iter().next().map(|f| f.project)
+                    let Some(project) = parse_jsonl_file(&path)
+                        .into_iter()
+                        .next()
+                        .map(|f| f.project)
                     else {
                         continue;
                     };
-                    if project_hash_legacy(&project) == stem
-                        && project_hash(&project) != stem
-                    {
+                    if project_hash_legacy(&project) == stem && project_hash(&project) != stem {
                         let target = self
                             .storage_path
                             .join(format!("{}.jsonl", project_hash(&project)));

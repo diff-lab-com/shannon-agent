@@ -354,7 +354,11 @@ impl CompactPrompt {
                 MessageContent::Blocks(blocks)
                     if blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }))
             );
-            let cap = if has_tool_result { TOOL_RESULT_CAP } else { PLAIN_CAP };
+            let cap = if has_tool_result {
+                TOOL_RESULT_CAP
+            } else {
+                PLAIN_CAP
+            };
             let preview = if content_text.len() > cap {
                 let mut end = cap.saturating_sub(3);
                 while !content_text.is_char_boundary(end) {
