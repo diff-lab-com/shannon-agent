@@ -378,10 +378,12 @@ impl AgentTool {
                     .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()))
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(|| std::path::PathBuf::from(".")),
-                max_turns: agent_def
-                    .as_ref()
-                    .map(|d| d.max_concurrent_tasks as u32)
-                    .unwrap_or(50),
+                // P0-7: use the agent definition's own `max_turns` budget.
+                // The previous code repurposed `max_concurrent_tasks` (a
+                // concurrency knob) as a turn budget, silently giving e.g.
+                // the builtin `explorer` (max_concurrent_tasks = 1) a
+                // single-turn loop.
+                max_turns: agent_def.as_ref().and_then(|d| d.max_turns).unwrap_or(50),
                 team,
                 disallowed_tools: input.disallowed_tools.clone().unwrap_or_default(),
             };
@@ -474,16 +476,17 @@ impl AgentTool {
                     )
                     .await
                 }
-                None => Ok(AgentSpawnOutput {
-                    agent_id,
-                    agent_type,
-                    status: "initialized".to_string(),
-                    message: format!(
-                        "Agent spawned (no execution context). Task: {}",
-                        &input.task[..input.task.len().min(100)]
-                    ),
-                    result: None,
-                }),
+                None => {
+                    // A-2: report failure honestly. The previous fallback
+                    // returned status "initialized" without running anything,
+                    // telling the model an agent existed when none did.
+                    let _ = agent_id;
+                    Err(ToolError::ExecutionFailed(format!(
+                        "Agent tool has no execution context attached in this session \
+                         (team coordinator unavailable). Cannot spawn '{agent_type}'. \
+                         Run the task directly instead."
+                    )))
+                }
             }
         }
     }
@@ -1302,19 +1305,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_without_context() {
+        // A-2: a spawn without an execution context must fail loudly, not
+        // report a fake "initialized" agent that never ran.
         let tool = AgentTool::new();
-        let output = tool
+        let result = tool
             .execute(json!({
                 "operation": "Spawn",
                 "agent_type": "researcher",
                 "task": "Investigate something"
             }))
-            .await
-            .unwrap();
-        assert!(!output.is_error);
-        assert!(output.metadata.contains_key("agent_id"));
-        assert!(output.metadata.contains_key("agent_type"));
-        assert!(output.metadata.contains_key("status"));
+            .await;
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no execution context"),
+            "error should explain the missing context: {err}"
+        );
     }
 
     #[tokio::test]
