@@ -59,14 +59,15 @@ import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
 import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
 
 // IA (2026-09): tabs map to user jobs, not implementation panels —
-// active work / recurring routines / execution pipelines / history / worktrees.
-// In Simple mode only the universal two — active + history — are surfaced; the
-// developer-only surfaces (routines / pipelines / worktrees) move behind the
-// Dev-mode toggle so casual users don't have to learn the agent-ops taxonomy
-// before they can find their tasks.
-type Tab = 'active' | 'routines' | 'pipelines' | 'history' | 'worktrees'
+// active work / history / routines / pipelines / worktrees. Active + history
+// lead because users check live status and recent results far more often than
+// they configure scheduled pipelines. In Simple mode only the universal two
+// (active / history) are surfaced; the developer-only surfaces (routines /
+// pipelines / worktrees) move behind the Dev-mode toggle so casual users
+// don't have to learn the task-ops taxonomy before they can find their tasks.
+type Tab = 'active' | 'history' | 'routines' | 'pipelines' | 'worktrees'
 const SIMPLE_TABS: readonly Tab[] = ['active', 'history']
-const DEV_TABS: readonly Tab[] = ['active', 'routines', 'pipelines', 'history', 'worktrees']
+const DEV_TABS: readonly Tab[] = ['active', 'history', 'routines', 'pipelines', 'worktrees']
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useCatalog()

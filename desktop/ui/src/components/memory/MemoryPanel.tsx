@@ -56,11 +56,20 @@ export default function MemoryPanel({
 
   const [projectFilter, setProjectFilter] = useState<string>('all')
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all')
+  // 2026-09 review: typing used to fire an IPC round-trip on every
+  // keystroke. We split the live query (instant UI feedback) from the
+  // backend-bound query (debounced 250 ms).
   const [query, setQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
 
   const [editing, setEditing] = useState<MemoryEntry | null>(null)
   const [creating, setCreating] = useState(false)
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedQuery(query), 250)
+    return () => window.clearTimeout(id)
+  }, [query])
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
@@ -70,7 +79,7 @@ export default function MemoryPanel({
         listMemories({
           project: projectFilter === 'all' ? null : projectFilter,
           category: categoryFilter === 'all' ? null : categoryFilter,
-          query: query.trim() || null,
+          query: debouncedQuery.trim() || null,
         }),
         listMemoryProjects(),
         getMemoryStats(),
@@ -83,7 +92,7 @@ export default function MemoryPanel({
     } finally {
       setLoading(false)
     }
-  }, [projectFilter, categoryFilter, query])
+  }, [projectFilter, categoryFilter, debouncedQuery])
 
   useEffect(() => {
     void fetchAll()
