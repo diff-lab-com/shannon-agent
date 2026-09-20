@@ -641,10 +641,12 @@ mod tests {
                 .is_timeout_class()
         );
         // "error sending request" — reqwest Kind::Request (P1-3 class).
-        assert!(ApiError::InvalidResponse(
-            "client error (SendRequest): error sending request for url (http://x)".to_string()
-        )
-        .is_timeout_class());
+        assert!(
+            ApiError::InvalidResponse(
+                "client error (SendRequest): error sending request for url (http://x)".to_string()
+            )
+            .is_timeout_class()
+        );
     }
 
     /// Non-timeout classes must not be continuable: A8 must never swallow

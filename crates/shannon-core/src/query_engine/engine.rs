@@ -48,6 +48,21 @@ use crate::query_engine::repo_map_injector::RepoMapInjector;
 // path is preserved as the LLM-backed summarizer; the facade's token-based
 // strategy is what fires when no summarizer is available or when the
 // selector chooses the cheap path.
+#[allow(unused_imports)]
+use super::env_config::DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS;
+#[allow(unused_imports)]
+// DEFAULT_MAX_TOOL_RESULT_CHARS/env_num_override: test-only in this module
+use super::env_config::{
+    DEFAULT_MAX_TOOL_RESULT_CHARS, MICRO_PRUNE_THRESHOLD, THINK_ONLY_NUDGE_PROMPT,
+    TRUNCATION_CONTINUATION_PROMPT, cap_tool_result, env_num_override, think_only_min_answer_chars,
+    think_only_nudge_max, token_budget_limit, token_budget_nudge_for,
+};
+#[allow(unused_imports)] // split_think_content: used by tests in this module
+use super::parsers::{
+    ThinkStreamSplitter, is_think_only_response, is_truncation_stop, markdown_bash_command,
+    parse_text_tool_calls, split_think_content,
+};
+use super::routing::{QueryComplexity, classify_query_complexity};
 use crate::compact as p2_compact;
 use crate::query_engine::streaming::ConversationState;
 use crate::query_engine::types::{
@@ -420,40 +435,6 @@ enum StreamingPhase {
     Finalized,
 }
 
-/// `stop_reason` values meaning "output was cut off by the output token
-/// limit before the model finished": OpenAI-compatible `length`,
-/// Anthropic/Gemini `max_tokens`.
-fn is_truncation_stop(reason: Option<&str>) -> bool {
-    matches!(reason, Some("length" | "max_tokens"))
-}
-
-/// Re-prompt sent when a response is truncated by the output token limit:
-/// the model must resume mid-task rather than restart or restate itself.
-const TRUNCATION_CONTINUATION_PROMPT: &str = "Your previous response was cut off by the \
-     output token limit before you finished. Continue exactly where you left off and \
-     complete the task. Do not repeat what you already wrote.";
-
-// ── Think-only continuation nudge (A1) ───────────────────────────────
-//
-// eval-findings-2026-09-glm.md A1: models occasionally return a
-// "think-only" response — reasoning content only, no tool_use, no
-// user-facing answer. The engine treated that as a normal completion,
-// ended the session headless, and produced an empty patch (minimax b11
-// lost 3/50 SWE tasks — 4-8pp — to exactly this pattern). When the final
-// response carries no tool call and no substantive answer, the engine now
-// synthesizes a user-side re-prompt instead of completing.
-
-/// Re-prompt sent when a response has no tool calls and no usable final
-/// answer (see [`is_think_only_response`]).
-const THINK_ONLY_NUDGE_PROMPT: &str = "Your previous response contained no tool calls \
-     and no final answer. Either invoke the appropriate tool to continue the task, or \
-     reply with your final answer to the user.";
-
-/// Default cap on consecutive think-only nudges per query. Override with
-/// `SHANNON_THINK_ONLY_NUDGE_MAX`. When exhausted the query ends exactly as
-/// it did before this feature existed.
-const DEFAULT_THINK_ONLY_NUDGE_MAX: u32 = 2;
-
 // ── Turn-level stream-death continuation (A8) ─────────────────────────────
 //
 // DeepSWE smoke RCA (smoke-2 turn 8 / smoke-4 turn 14, three attempts all
@@ -597,34 +578,6 @@ fn clear_stream_idle_override(client: &shannon_engine::api::client::LlmClient) {
 /// reasoning models into a self-doubt loop (7k–21k tokens for one Q&A, field-
 /// observed on MiniMax M3). An unhelpfully-short-but-present answer is the
 /// model's call; blank-only replies still get one chance to recover.
-const DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS: usize = 0;
-
-/// Read a non-negative integer env override, falling back to `default` when
-/// unset, empty, or unparseable (same conventions as
-/// [`QueryEngine::apply_env_overrides`]: only non-empty values are
-/// intentional overrides; garbage is silently ignored).
-fn env_num_override(name: &str, default: u32) -> u32 {
-    match std::env::var(name) {
-        Ok(v) if !v.trim().is_empty() => v.trim().parse::<u32>().unwrap_or_else(|_| {
-            tracing::warn!("Invalid {name}={v:?} — using default {default}");
-            default
-        }),
-        _ => default,
-    }
-}
-
-/// Max consecutive think-only nudges for this query
-/// (`SHANNON_THINK_ONLY_NUDGE_MAX`, default
-/// [`DEFAULT_THINK_ONLY_NUDGE_MAX`]).
-fn think_only_nudge_max() -> u32 {
-    env_num_override("SHANNON_THINK_ONLY_NUDGE_MAX", DEFAULT_THINK_ONLY_NUDGE_MAX)
-}
-
-/// Max per-turn continuation retries after a timeout-class stream death
-/// (A8; `SHANNON_TURN_RETRIES`, default [`DEFAULT_TURN_RETRIES`], `0`
-/// disables). Same parse contract as the run-level `SHANNON_RUN_RETRIES`
-/// (`shannon-cli` `parse_run_retries`): unset/empty/unparseable → default,
-/// so a typo'd env var cannot silently change behavior.
 fn turn_retries_max() -> u32 {
     env_num_override("SHANNON_TURN_RETRIES", DEFAULT_TURN_RETRIES)
 }
@@ -632,408 +585,6 @@ fn turn_retries_max() -> u32 {
 /// Visible-answer threshold in chars for the think-only classifier
 /// (`SHANNON_THINK_ONLY_MIN_ANSWER_CHARS`, default
 /// [`DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS`]).
-fn think_only_min_answer_chars() -> usize {
-    env_num_override(
-        "SHANNON_THINK_ONLY_MIN_ANSWER_CHARS",
-        DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS as u32,
-    ) as usize
-}
-
-// ── B.6 ────────────────────────────────────────────────────────────────────
-// SHANNON_TOKEN_BUDGET: a hard cap on cumulative input tokens. When the cap
-// is exceeded the engine synthesizes a user-side message that pushes the
-// model away from full-file reads (the eval failure mode measured in
-// eval-findings-2026-09-glm.md F2 — single-shot `cat` of multi-MB files
-// burned the remaining turn budget). Disabling the cap = SHANNON_TOKEN_BUDGET=0.
-
-/// Default value for the B.6 token-budget watchdog (`SHANNON_TOKEN_BUDGET`).
-/// Zero disables it entirely so non-eval users are unaffected.
-const DEFAULT_TOKEN_BUDGET: u64 = 0;
-
-/// Recommended eval setting for SWE-bench / TB2.1 runs (120k tokens ≈
-/// the cap after which the model starts losing recent context in
-/// `estimate_tokens`).
-#[allow(dead_code)] // KEEP: documentation anchor; eval reads the env directly.
-pub const RECOMMENDED_TOKEN_BUDGET: u64 = 120_000;
-
-/// Resolve the configured B.6 budget. `0` (default) disables the watchdog.
-/// Honors the same parse contract as [`env_num_override`]: unset, empty,
-/// or unparseable → `DEFAULT_TOKEN_BUDGET`.
-fn token_budget_limit() -> u64 {
-    env_num_override("SHANNON_TOKEN_BUDGET", DEFAULT_TOKEN_BUDGET as u32) as u64
-}
-
-/// Build the targeted-read nudge the model receives when the B.6 budget is
-/// exceeded. Pure: depends only on `(used, budget)` so the call site can
-/// pass live counts and unit tests can pin both arguments.
-///
-/// Returns `None` when `budget == 0` (disabled) or `used <= budget`. The
-/// text is the exact phrase required by the plan — verbatim so the unit
-/// test's `contains("Context is large")` assertion matches.
-fn token_budget_nudge_for(used: u64, budget: u64) -> Option<String> {
-    if budget == 0 || used <= budget {
-        return None;
-    }
-    Some(format!(
-        "Context is large ({used}/{budget} tokens). Prefer targeted reads \
-         (`Grep`, `head -c`, `Read` with offset+limit) over full-file reads \
-         or `cat`. Re-read only what you need; commit fixes promptly."
-    ))
-}
-
-/// Split inline `<think>...</think>` reasoning out of assistant text.
-///
-/// Returns `(saw_reasoning, visible_text)` where `visible_text` is the text
-/// outside reasoning blocks (reasoning-family providers — MiniMax M-series,
-/// GLM — stream `<think>` inline in the content deltas). An unclosed
-/// `<think>` swallows the rest of the text: a response cut mid-reasoning
-/// has no visible answer by definition.
-fn split_think_content(text: &str) -> (bool, String) {
-    const OPEN: &str = "<think>";
-    const CLOSE: &str = "</think>";
-    let mut visible = String::with_capacity(text.len());
-    let mut rest = text;
-    let mut saw_think = false;
-    loop {
-        match rest.find(OPEN) {
-            Some(start) => {
-                saw_think = true;
-                visible.push_str(&rest[..start]);
-                let after_open = &rest[start + OPEN.len()..];
-                match after_open.find(CLOSE) {
-                    Some(close) => rest = &after_open[close + CLOSE.len()..],
-                    // Unclosed reasoning block — nothing visible after it.
-                    None => return (true, visible),
-                }
-            }
-            None => {
-                visible.push_str(rest);
-                return (saw_think, visible);
-            }
-        }
-    }
-}
-
-/// Streaming splitter for inline `<think>...</think>` reasoning blocks
-/// (WP-15 P0-2). Reasoning-family providers on the OpenAI wire (MiniMax
-/// M-series, GLM) stream `<think>` inline in the content deltas instead of
-/// using a thinking channel, so the raw delta stream has to be re-split:
-/// reasoning goes out as [`QueryEvent::Thinking`], the answer stays a plain
-/// `Text` event. Tag-aware across chunk boundaries — `<think>` / `</think>`
-/// may split across deltas, so a tail that could be a tag prefix is held
-/// back (up to 7 chars of display lag; flushed by `finish`).
-#[derive(Default)]
-struct ThinkStreamSplitter {
-    /// Bytes held back because they may be a partial `<think>`/`</think>` tag.
-    pending: String,
-    /// True while inside a `<think>` block.
-    in_think: bool,
-}
-
-impl ThinkStreamSplitter {
-    const OPEN: &'static str = "<think>";
-    const CLOSE: &'static str = "</think>";
-
-    /// Consume one content delta. Returns `(thinking, visible)` — either
-    /// side may be empty for a given chunk.
-    fn feed(&mut self, chunk: &str) -> (String, String) {
-        let mut thinking = String::new();
-        let mut visible = String::new();
-        let mut buf = std::mem::take(&mut self.pending);
-        buf.push_str(chunk);
-        loop {
-            let (tag, is_open) = if self.in_think {
-                (Self::CLOSE, false)
-            } else {
-                (Self::OPEN, true)
-            };
-            match buf.find(tag) {
-                Some(pos) => {
-                    let head = &buf[..pos];
-                    if self.in_think {
-                        thinking.push_str(head);
-                    } else {
-                        visible.push_str(head);
-                    }
-                    buf = buf[pos + tag.len()..].to_string();
-                    self.in_think = is_open;
-                }
-                None => {
-                    // Hold back a tail that could be a tag prefix split across
-                    // the next chunk boundary. The tag is ASCII, so a real
-                    // prefix always starts on a char boundary — walk back only
-                    // along boundaries (a raw `buf[len-n..]` panics on
-                    // multi-byte text, e.g. Chinese replies).
-                    let max_keep = tag.len().saturating_sub(1).min(buf.len());
-                    let mut keep = 0;
-                    for n in 1..=max_keep {
-                        if !buf.is_char_boundary(buf.len() - n) {
-                            continue;
-                        }
-                        if tag.starts_with(&buf[buf.len() - n..]) {
-                            keep = n;
-                            break;
-                        }
-                    }
-                    let split_at = buf.len() - keep;
-                    if self.in_think {
-                        thinking.push_str(&buf[..split_at]);
-                    } else {
-                        visible.push_str(&buf[..split_at]);
-                    }
-                    self.pending = buf[split_at..].to_string();
-                    return (thinking, visible);
-                }
-            }
-        }
-    }
-
-    /// Flush at stream end. A dangling partial tag is literal text; an
-    /// unclosed `<think>` swallows the tail (a response cut mid-reasoning
-    /// has no visible answer by definition). Idempotent.
-    fn finish(&mut self) -> (String, String) {
-        let pending = std::mem::take(&mut self.pending);
-        if self.in_think {
-            self.in_think = false;
-            (pending, String::new())
-        } else {
-            (String::new(), pending)
-        }
-    }
-}
-
-/// WP-15 P0-1 fallback: extract a Bash tool command from an assistant reply
-/// that tried to call the tool as a markdown code block instead of through
-/// the native tool-calling API (observed in the field with MiniMax M-series).
-///
-/// Deliberately conservative — false positives mean executing example code
-/// from an ordinary answer, so the fallback only fires when the *whole*
-/// visible reply is one bare shell block (prose outside the fence ≤
-/// `MAX_PROSE_CHARS`, one block, shell-ish or missing language tag):
-///
-/// - "```\nrm -rf build/\n```" → Some("rm -rf build/")
-/// - "Creating the file:\n```bash\ncat > a.txt <<EOF\nhi\nEOF\n```" → Some(...)
-/// - a long explanation that merely *contains* an example block → None
-fn markdown_bash_command(text: &str) -> Option<String> {
-    const MAX_PROSE_CHARS: usize = 200;
-    const SHELL_LANGS: &[&str] = &["bash", "sh", "shell", "zsh", "console"];
-
-    let mut blocks: Vec<(bool, String)> = Vec::new(); // (shell_candidate, content)
-    let mut prose_len = 0usize;
-    let mut in_fence = false;
-    let mut fence_shell = false;
-    let mut fence_content = String::new();
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("```") {
-            if in_fence {
-                blocks.push((fence_shell, std::mem::take(&mut fence_content)));
-                in_fence = false;
-            } else {
-                in_fence = true;
-                let lang = rest.trim().to_ascii_lowercase();
-                fence_shell = lang.is_empty() || SHELL_LANGS.contains(&lang.as_str());
-            }
-            continue;
-        }
-        if in_fence {
-            fence_content.push_str(line);
-            fence_content.push('\n');
-        } else {
-            prose_len += trimmed.chars().count();
-        }
-    }
-    // Unclosed fence still counts (stream cut after the opening).
-    if in_fence {
-        blocks.push((fence_shell, std::mem::take(&mut fence_content)));
-    }
-
-    if blocks.len() != 1 || prose_len > MAX_PROSE_CHARS {
-        return None;
-    }
-    let (shell, content) = blocks.into_iter().next()?;
-    if !shell {
-        return None;
-    }
-    let command = content.trim().to_string();
-    if command.is_empty() {
-        return None;
-    }
-    Some(command)
-}
-
-/// WP-15 P0-1 (upgraded): parse GLM/MiniMax-style *textual* tool calls out of
-/// an assistant reply. When these models bypass the native tool-calling API,
-/// they don't always fall back to a bare shell block — MiniMax M3 was observed
-/// emitting its vendor-token-wrapped XML form as plain text:
-///
-/// ```text
-/// ]<]minimax[>[<tool_call>
-/// <invoke name="Write">
-/// <parameter name="file_path">/tmp/demo.txt</parameter>
-/// <parameter name="content">hello</parameter>
-/// </invoke>
-/// </tool_call>
-/// ```
-///
-/// (The `] < ]minimax[ > [` prefix is the model's vendor special token leaking
-/// into the text stream — the scan anchors on `<tool_call>` and ignores
-/// anything before it.) Returns one `(name, input)` per `<invoke>`, or `None`
-/// when the text contains no complete invoke. Parameter values that parse as
-/// JSON keep their type; everything else becomes a string. Unclosed blocks are
-/// skipped — a stream cut mid-call is a truncation case, not a tool call.
-fn parse_text_tool_calls(text: &str) -> Option<Vec<(String, serde_json::Value)>> {
-    const CALL_OPEN: &str = "<tool_call>";
-    const CALL_CLOSE: &str = "</tool_call>";
-    const INVOKE_OPEN: &str = "<invoke name=\"";
-    const INVOKE_CLOSE: &str = "</invoke>";
-    const PARAM_OPEN: &str = "<parameter name=\"";
-    const PARAM_CLOSE: &str = "</parameter>";
-
-    let mut calls: Vec<(String, serde_json::Value)> = Vec::new();
-    let mut rest = text;
-    while let Some(pos) = rest.find(CALL_OPEN) {
-        let after = &rest[pos + CALL_OPEN.len()..];
-        let Some(call_end) = after.find(CALL_CLOSE) else {
-            break; // unclosed block — truncation, not a call
-        };
-        let block = &after[..call_end];
-        rest = &after[call_end + CALL_CLOSE.len()..];
-
-        let mut brest = block;
-        while let Some(ipos) = brest.find(INVOKE_OPEN) {
-            let iafter = &brest[ipos + INVOKE_OPEN.len()..];
-            let Some(name_end) = iafter.find("\">") else {
-                break;
-            };
-            let name = iafter[..name_end].trim().to_string();
-            let Some(invoke_end) = iafter.find(INVOKE_CLOSE) else {
-                break;
-            };
-            let body = &iafter[name_end + 2..invoke_end];
-            brest = &iafter[invoke_end + INVOKE_CLOSE.len()..];
-            if name.is_empty() {
-                continue;
-            }
-
-            let mut input = serde_json::Map::new();
-            let mut prest = body;
-            while let Some(ppos) = prest.find(PARAM_OPEN) {
-                let pafter = &prest[ppos + PARAM_OPEN.len()..];
-                let Some(key_end) = pafter.find("\">") else {
-                    break;
-                };
-                let key = pafter[..key_end].trim().to_string();
-                let Some(param_end) = pafter.find(PARAM_CLOSE) else {
-                    break;
-                };
-                let raw = pafter[key_end + 2..param_end].trim();
-                prest = &pafter[param_end + PARAM_CLOSE.len()..];
-                if key.is_empty() {
-                    continue;
-                }
-                let value = serde_json::from_str(raw)
-                    .unwrap_or_else(|_| serde_json::Value::String(raw.to_string()));
-                input.insert(key, value);
-            }
-            calls.push((name, serde_json::Value::Object(input)));
-        }
-    }
-    if calls.is_empty() { None } else { Some(calls) }
-}
-
-/// True when the response carries no tool calls and no substantive
-/// user-facing answer:
-///
-/// - empty text (covers reasoning that arrived only via thinking deltas), or
-/// - reasoning markup present and the visible residue is shorter than
-///   `min_answer_chars` — a think-only response.
-///
-/// Text *without* any reasoning markup is treated as a deliberate (possibly
-/// terse) answer and never nudged: nudging every short "Done." would wreck
-/// normal sessions for no eval benefit — the measured failure mode is always
-/// reasoning-dominated.
-fn is_think_only_response(text: &str, tool_use_count: usize, min_answer_chars: usize) -> bool {
-    if tool_use_count > 0 {
-        return false;
-    }
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-    let (saw_think, visible) = split_think_content(trimmed);
-    if !saw_think {
-        return false;
-    }
-    // `.max(1)` makes threshold 0 mean "nudge only when the visible answer is
-    // blank" (0 < 0 would never fire — see DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS).
-    visible.trim().chars().count() < min_answer_chars.max(1)
-}
-
-// ── Query complexity classification ──────────────────────────────────
-
-/// Query complexity level for model routing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QueryComplexity {
-    /// Simple lookup, short question — route to fast_model
-    Simple,
-    /// Planning, architecture, design — route to plan_model
-    Planning,
-    /// Standard coding task — use primary model
-    Standard,
-}
-
-/// Keywords that signal planning/architecture queries.
-const PLANNING_KEYWORDS: &[&str] = &[
-    "architect",
-    "architecture",
-    "design",
-    "plan",
-    "planning",
-    "refactor",
-    "migrate",
-    "strategy",
-    "blueprint",
-    "roadmap",
-    "system design",
-    "evaluate",
-    "analyze",
-    "review",
-];
-
-/// Keywords that signal complex implementation queries.
-const COMPLEX_KEYWORDS: &[&str] = &[
-    "implement",
-    "build",
-    "create",
-    "develop",
-    "integrate",
-    "debug",
-    "fix",
-    "solve",
-    "troubleshoot",
-];
-
-/// Classify a user query by complexity for model routing.
-fn classify_query_complexity(query: &str) -> QueryComplexity {
-    let lower = query.to_lowercase();
-
-    // Short queries with no complex keywords → Simple
-    if query.len() < 200
-        && !PLANNING_KEYWORDS.iter().any(|k| lower.contains(k))
-        && !COMPLEX_KEYWORDS.iter().any(|k| lower.contains(k))
-    {
-        return QueryComplexity::Simple;
-    }
-
-    // Planning/architecture keywords → Planning
-    if PLANNING_KEYWORDS.iter().any(|k| lower.contains(k)) {
-        return QueryComplexity::Planning;
-    }
-
-    QueryComplexity::Standard
-}
-
 /// Verdict for a single provider returned by [`QueryEngine::probe_all_health`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderHealthStatus {
@@ -1090,6 +641,9 @@ pub struct QueryEngine {
     pub(crate) plan_mode_active: Arc<RwLock<bool>>,
     /// Effective maximum context tokens — resolved from user config > Ollama num_ctx > model registry.
     pub(crate) effective_max_context_tokens: usize,
+    /// Index into the conversation up to which AutoDream memory extraction has
+    /// run (P0-10: extraction is incremental, not a full rescan per query).
+    pub(crate) memory_extract_cursor: Arc<std::sync::atomic::AtomicUsize>,
     /// Custom permission profiles loaded from `.shannon/profiles/*.toml` and `.claude/profiles/*.toml`.
     pub(crate) custom_profiles:
         Arc<tokio::sync::RwLock<shannon_engine::custom_profiles::CustomProfileRegistry>>,
@@ -1251,6 +805,7 @@ impl QueryEngine {
             repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
             effective_max_context_tokens,
+            memory_extract_cursor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
@@ -1307,6 +862,7 @@ impl QueryEngine {
             repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
             effective_max_context_tokens,
+            memory_extract_cursor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
@@ -1396,6 +952,7 @@ impl QueryEngine {
             repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
             effective_max_context_tokens,
+            memory_extract_cursor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
@@ -2000,8 +1557,16 @@ impl QueryEngine {
         };
 
         // Build structured system prompt with cache breakpoints.
-        // Layout: [base prompt] → [memory (cached)] → [smart context (cached)] → [project instructions (cached)]
-        let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
+        //
+        // Cache policy: Anthropic allows at most 4 `cache_control` breakpoints
+        // per request, and the adapter adds two more (last tool definition +
+        // last user message). Marking every block cached could emit up to 11
+        // system breakpoints and overflow that budget. Mark exactly two system
+        // breakpoints instead: the base prompt (never changes) and the LAST
+        // stable block (covers the whole stable prefix). Query-dependent and
+        // per-turn blocks (smart context, setup hints, focus, goal,
+        // environment) are emitted AFTER the last breakpoint so they never
+        // bust the cached prefix.
         let use_cache = matches!(
             client_provider,
             shannon_engine::api::LlmProvider::Anthropic
@@ -2009,45 +1574,18 @@ impl QueryEngine {
                 | shannon_engine::api::LlmProvider::Custom
         );
 
-        // Base system prompt — always cache the system prompt prefix for Anthropic,
-        // as it's identical across all turns and the largest cache savings come from here.
+        // ── Stable zone (cacheable prefix; order matters) ──
+        let mut stable_blocks: Vec<String> = Vec::new();
+
+        // Base system prompt — the anchor breakpoint: identical across all
+        // turns and the largest cache savings come from here.
         if let Some(ref base) = config.system_prompt {
-            let block = if use_cache {
-                SystemContentBlock::cached(base.clone())
-            } else {
-                SystemContentBlock::text(base.clone())
-            };
-            system_blocks.push(block);
+            stable_blocks.push(base.clone());
         }
 
         // Memory entries — scoped injection, grouped by category (ADR-0010 D2).
-        if let Some(mem_text) = memory_injection {
-            let block = if use_cache {
-                SystemContentBlock::cached(mem_text)
-            } else {
-                SystemContentBlock::text(mem_text)
-            };
-            system_blocks.push(block);
-        }
-
-        // Smart context: auto-include relevant files based on query.
-        // Gated by `auto_context_enabled` — the scan reads ambient
-        // filesystem state, so hosts that need byte-deterministic requests
-        // (payload-verifying tests, context-injecting shells) turn it off.
-        if config.auto_context_enabled {
-            let smart_context = {
-                let working_dir =
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                crate::smart_context::find_relevant_context(&user_message, &working_dir)
-            };
-            if let Some(ctx) = crate::smart_context::format_context_for_prompt(&smart_context) {
-                let block = if use_cache {
-                    SystemContentBlock::cached(ctx)
-                } else {
-                    SystemContentBlock::text(ctx)
-                };
-                system_blocks.push(block);
-            }
+        if let Some(mem_text) = memory_injection.clone() {
+            stable_blocks.push(mem_text);
         }
 
         // Inject CLAUDE.md / AGENTS.md / GEMINI.md project instructions —
@@ -2056,35 +1594,26 @@ impl QueryEngine {
             let working_dir =
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             if let Some(ctx) = crate::project_instructions::load_full_context(&working_dir) {
-                let block = if use_cache {
-                    SystemContentBlock::cached(ctx.content)
-                } else {
-                    SystemContentBlock::text(ctx.content)
-                };
-                system_blocks.push(block);
+                stable_blocks.push(ctx.content);
             }
         }
 
         // Inject context from ContextInjector (preference memory + hot-reloaded instructions)
         if let Some(ref injector) = self.context_injector {
-            let extra_blocks = injector.build_system_blocks(use_cache);
-            system_blocks.extend(extra_blocks);
+            let extra_blocks = injector.build_system_blocks(false);
+            for block in extra_blocks {
+                stable_blocks.push(block.text);
+            }
         }
 
         // Inject the project repo map (P1-4) — a per-project, budget-trimmed
         // symbol overview rendered as markdown. Best-effort: a None return
-        // (parse / walk failure) means we skip silently. We use `cached`
-        // because the repo map is stable across turns within a session —
-        // changing only when source files change, which we invalidate via
-        // `notify_file_changed`.
+        // (parse / walk failure) means we skip silently. Stable across turns
+        // within a session — changing only when source files change, which we
+        // invalidate via `notify_file_changed`.
         if config.repo_map_enabled {
             if let Some(repo_map_md) = self.repo_map_injector.build() {
-                let block = if use_cache {
-                    SystemContentBlock::cached(repo_map_md)
-                } else {
-                    SystemContentBlock::text(repo_map_md)
-                };
-                system_blocks.push(block);
+                stable_blocks.push(repo_map_md);
             }
         }
 
@@ -2092,12 +1621,37 @@ impl QueryEngine {
         {
             let tool_names = tools.list();
             if let Some(browser_text) = crate::query_engine::browser_control_prompt(&tool_names) {
-                let block = if use_cache {
-                    SystemContentBlock::cached(browser_text)
-                } else {
-                    SystemContentBlock::text(browser_text)
-                };
-                system_blocks.push(block);
+                stable_blocks.push(browser_text);
+            }
+        }
+
+        // Inject team coordination instructions when team tools are present
+        {
+            let tool_names = tools.list();
+            if let Some(team_text) =
+                crate::query_engine::team_prompt::team_coordination_prompt(&tool_names)
+            {
+                stable_blocks.push(team_text);
+            }
+        }
+
+        // ── Dynamic zone (after the last breakpoint — never cache-busting) ──
+        let mut dynamic_blocks: Vec<SystemContentBlock> = Vec::new();
+
+        // Smart context: auto-include relevant files based on query.
+        // Query-dependent content must NOT sit inside the cached prefix —
+        // every new query would invalidate the breakpoints. Gated by
+        // `auto_context_enabled` — the scan reads ambient filesystem state,
+        // so hosts that need byte-deterministic requests (payload-verifying
+        // tests, context-injecting shells) turn it off.
+        if config.auto_context_enabled {
+            let smart_context = {
+                let working_dir =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                crate::smart_context::find_relevant_context(&user_message, &working_dir)
+            };
+            if let Some(ctx) = crate::smart_context::format_context_for_prompt(&smart_context) {
+                dynamic_blocks.push(SystemContentBlock::text(ctx));
             }
         }
 
@@ -2108,22 +1662,7 @@ impl QueryEngine {
             let tool_names = tools.list();
             if let Some(hint) = crate::query_engine::browser_setup_hint(&tool_names, &user_message)
             {
-                system_blocks.push(SystemContentBlock::text(hint));
-            }
-        }
-
-        // Inject team coordination instructions when team tools are present
-        {
-            let tool_names = tools.list();
-            if let Some(team_text) =
-                crate::query_engine::team_prompt::team_coordination_prompt(&tool_names)
-            {
-                let block = if use_cache {
-                    SystemContentBlock::cached(team_text)
-                } else {
-                    SystemContentBlock::text(team_text)
-                };
-                system_blocks.push(block);
+                dynamic_blocks.push(SystemContentBlock::text(hint));
             }
         }
 
@@ -2135,15 +1674,49 @@ impl QueryEngine {
                  Prioritize this area in your responses. Give extra attention to \
                  aspects related to {focus} when analyzing, coding, or reviewing."
             );
-            system_blocks.push(SystemContentBlock::text(focus_text));
+            dynamic_blocks.push(SystemContentBlock::text(focus_text));
         }
 
         // Inject session goal from /goal command into system prompt.
         // Non-cached block so goal edits don't bust the cached prompt prefix;
         // rebuilt on every query so the goal survives compaction.
         if let Some(ref goal) = config.goal {
-            system_blocks.push(goal_system_block(goal));
+            dynamic_blocks.push(goal_system_block(goal));
         }
+
+        // Plan-mode awareness: previously the only signal was the per-tool
+        // write-block error, so the model burned turns probing what was
+        // allowed instead of producing the requested plan.
+        if self.is_plan_mode_active() {
+            dynamic_blocks.push(SystemContentBlock::text(
+                "## Plan Mode Active\n\
+                 You are in plan mode: file writes and state-mutating tools are disabled.\n\
+                 Research the codebase (read-only tools are available), then present a\n\
+                 clear, step-by-step implementation plan for the user to review and\n\
+                 approve before any code is changed."
+                    .to_string(),
+            ));
+        }
+
+        // Assemble: stable zone with at most two cache breakpoints (first +
+        // last block), then the dynamic zone (never cached).
+        let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
+        if use_cache {
+            let last_stable = stable_blocks.len().saturating_sub(1);
+            for (i, text) in stable_blocks.into_iter().enumerate() {
+                let block = if i == 0 || i == last_stable {
+                    SystemContentBlock::cached(text)
+                } else {
+                    SystemContentBlock::text(text)
+                };
+                system_blocks.push(block);
+            }
+        } else {
+            for text in stable_blocks {
+                system_blocks.push(SystemContentBlock::text(text));
+            }
+        }
+        system_blocks.extend(dynamic_blocks);
 
         // Decide whether to use structured blocks or fallback to plain string.
         // Use structured blocks only when we have content (avoids empty system arrays).
@@ -2162,24 +1735,54 @@ impl QueryEngine {
             Some(LOCAL_MODEL_SYSTEM_PROMPT.to_string())
         };
 
-        // Inject the working directory so the model knows where to write files.
+        // Inject the environment block (cwd, date/time, platform, git context,
+        // sandbox self-description). Deliberately LAST and non-cached: it is
+        // per-turn mutable state, and keeping it after all cache breakpoints
+        // means it never invalidates the cached prompt prefix. Git context
+        // previously lived inside the cached instructions payload, busting
+        // the cache on every edit the agent made.
         if let Ok(cwd) = std::env::current_dir() {
-            let mut cwd_text =
+            let mut env_text =
                 format!("\n\n## Environment\n\nWorking directory: {}", cwd.display());
+            // Date/time + platform: ground "today"-relative reasoning and
+            // platform-specific commands without any cache cost (this block
+            // sits after every breakpoint).
+            {
+                let now = chrono::Local::now();
+                env_text.push_str(&format!(
+                    "\nToday's date: {} ({})",
+                    now.format("%Y-%m-%d"),
+                    now.format("%A")
+                ));
+                env_text.push_str(&format!(
+                    "\nPlatform: {} ({})",
+                    std::env::consts::OS,
+                    std::env::consts::ARCH
+                ));
+            }
+            // Git context (branch, recent commits, dirty state) — per-turn
+            // mutable, so it lives here with the rest of the env block.
+            if let Some(git_ctx) = crate::project_instructions::git_context(&cwd) {
+                let trimmed = git_ctx.trim_start();
+                if !trimmed.is_empty() {
+                    env_text.push_str("\n\n");
+                    env_text.push_str(trimmed);
+                }
+            }
             // Sandbox self-description (§ sandbox self-description): the
             // model cannot otherwise know the sandbox's path remapping or
             // that host toolchains may be absent — eval runs showed it
             // burning turns probing the filesystem / running apt-get.
             if let Some(sandbox_text) = crate::sandbox::sandbox_self_description(&cwd) {
-                cwd_text.push_str("\n\n");
-                cwd_text.push_str(&sandbox_text);
+                env_text.push_str("\n\n");
+                env_text.push_str(&sandbox_text);
             }
             if let Some(ref mut prompt) = system_prompt {
-                prompt.push_str(&cwd_text);
+                prompt.push_str(&env_text);
             }
             if let Some(ref mut blocks) = system_blocks_opt {
                 blocks.push(shannon_engine::api::types::SystemContentBlock::text(
-                    cwd_text,
+                    env_text,
                 ));
             }
         }
@@ -2216,6 +1819,11 @@ impl QueryEngine {
 
         // Clone memory store for post-query extraction (fire-and-forget)
         let memory_for_extraction = self.memory.clone();
+        // Extraction cursor (P0-10 incremental extraction): index into the
+        // conversation up to which facts have already been extracted.
+        let memory_extract_cursor_cell = self.memory_extract_cursor.clone();
+        let memory_extract_cursor_cursor =
+            memory_extract_cursor_cell.load(std::sync::atomic::Ordering::Relaxed);
 
         // Engine-config snapshot embedded in every `request/header` (§4.2),
         // so each logged request is a pure function of the log.
@@ -2374,6 +1982,11 @@ impl QueryEngine {
 
             let mut turn = 0;
             let mut tool_results: Vec<ToolResultEntry> = Vec::new();
+            // Runtime notices (permission soft-limit warnings, auto-test
+            // results) that travel as plain user text — never as tool_result
+            // blocks, whose synthetic ids would reference no assistant
+            // ToolUse and draw a provider 400 ("unexpected tool_use_id").
+            let mut user_notices: Vec<String> = Vec::new();
             let mut total_input_tokens: u64 = 0;
             let mut total_output_tokens: u64 = 0;
             let mut file_edits_made = false;
@@ -2392,6 +2005,8 @@ impl QueryEngine {
             let mut token_warning_60_fired = false;
             let mut token_warning_80_fired = false;
             let mut compaction_failures: u32 = 0;
+            // Micro-compaction (tool-result clearing) fires once per query.
+            let mut micro_pruned_fired = false;
             const MAX_COMPACTION_FAILURES: u32 = 2;
 
             // Denial circuit breaker: track consecutive permission denials.
@@ -2514,6 +2129,21 @@ impl QueryEngine {
                     };
                     messages.push(tool_msg.clone());
                     conversation.messages.push(tool_msg);
+                }
+
+                // Drain runtime notices as a plain user text message. They must
+                // land AFTER the tool_result drain (same pairing constraint as
+                // the turn-N checkpoint below): a synthetic user message before
+                // `user(tool_result)` violates the assistant(tool_use) →
+                // user(tool_result) API contract.
+                if !user_notices.is_empty() {
+                    let notice_msg = Message {
+                        role: "user".to_string(),
+                        content: MessageContent::Text(user_notices.join("\n\n")),
+                    };
+                    messages.push(notice_msg.clone());
+                    conversation.messages.push(notice_msg);
+                    user_notices.clear();
                 }
 
                 // ── P-B: turn-N checkpoint ─────────────────────────────────
@@ -2674,7 +2304,8 @@ impl QueryEngine {
                                 })
                                 .unwrap_or(0);
                     let max_context = effective_max_context.max(1); // Guard against division by zero
-                    let usage_ratio = estimated_tokens as f32 / max_context as f32;
+                    let mut estimated_tokens = estimated_tokens;
+                    let mut usage_ratio = estimated_tokens as f32 / max_context as f32;
 
                     // Pre-compaction warning at 60% — gives users visibility before compression fires.
                     // P-M: also inject a SYNTHETIC USER MESSAGE at 60% so the model itself
@@ -2784,12 +2415,57 @@ impl QueryEngine {
                         }
                     }
 
+                    // Micro-compaction (tool-result clearing): once per query,
+                    // above MICRO_PRUNE_THRESHOLD but BEFORE lossy full
+                    // compaction, shrink stale tool results in older turns to
+                    // 200-char previews (error results kept in full). This is
+                    // the cheapest context win and often avoids summarization
+                    // entirely. Pruning edits content in place — no messages
+                    // are removed, so tool_use/tool_result pairing is safe;
+                    // the unconditional sync below persists it.
+                    if !micro_pruned_fired && usage_ratio > MICRO_PRUNE_THRESHOLD {
+                        micro_pruned_fired = true;
+                        let keep = config.keep_recent_messages.min(messages.len());
+                        let head = messages.len() - keep;
+                        let before = estimated_tokens;
+                        shannon_engine::compact::CompactEngine::prune_stale_tool_results(
+                            &mut messages[..head],
+                        );
+                        estimated_tokens =
+                            shannon_engine::compact::helpers::estimate_tokens(&messages)
+                                + config
+                                    .system_prompt
+                                    .as_ref()
+                                    .map(|sp| {
+                                        shannon_engine::compact::helpers::estimate_text_tokens(sp)
+                                    })
+                                    .unwrap_or(0);
+                        usage_ratio = estimated_tokens as f32 / max_context as f32;
+                        send_event!(
+                            tx,
+                            QueryEvent::Progress {
+                                query_id,
+                                message: format!(
+                                    "Cleared stale tool results from older turns: ~{before} → ~{estimated_tokens} tokens (context now {:.0}% full)",
+                                    usage_ratio * 100.0,
+                                ),
+                            }
+                        );
+                    }
+
                     if usage_ratio > config.compression_threshold {
                         // Circuit breaker: if compaction has failed repeatedly, skip it and just truncate
                         if compaction_failures >= MAX_COMPACTION_FAILURES {
                             let keep = config.keep_recent_messages;
                             if messages.len() > keep {
-                                messages = messages.split_off(messages.len() - keep);
+                                // Pair-aware: never split a tool_use/tool_result pair
+                                // when cutting history (an orphaned half is rejected by
+                                // providers with a 400).
+                                let split = shannon_engine::compact::safe_split_point(
+                                    &messages,
+                                    messages.len() - keep,
+                                );
+                                messages = messages.split_off(split);
                             }
                             send_event!(tx, QueryEvent::Progress {
                                 query_id,
@@ -2843,10 +2519,22 @@ impl QueryEngine {
                                     );
                                     // Re-inject critical context after compaction
                                     // so the model retains project instructions.
-                                    let reinjection = context_injector
+                                    let mut reinjection = context_injector
                                         .as_ref()
                                         .map(|ci| ci.reinjection_context())
                                         .unwrap_or_default();
+                                    // Curated project memories must survive the
+                                    // compaction boundary too — system blocks are
+                                    // rebuilt next query, but the compacted
+                                    // history loses them until then.
+                                    if let Some(mem) = memory_injection.as_ref() {
+                                        if !mem.is_empty() {
+                                            if !reinjection.is_empty() {
+                                                reinjection.push_str("\n\n");
+                                            }
+                                            reinjection.push_str(mem);
+                                        }
+                                    }
                                     if !reinjection.is_empty() && !messages.is_empty() {
                                         let ctx_msg = shannon_engine::api::Message {
                                             role: "system".to_string(),
@@ -2865,7 +2553,12 @@ impl QueryEngine {
                                     // as failure so the circuit breaker engages.
                                     compaction_failures += 1;
                                 }
-                                continue;
+                                // No `continue` here: fall through to the
+                                // conversation sync below so the compaction result
+                                // is not discarded by the top-of-loop re-clone
+                                // (which previously caused a compaction livelock:
+                                // the threshold check re-fired every turn with the
+                                // compaction silently dropped).
                             }
 
                             match shannon_engine::compact::CompactEngine::with_llm_summarizer(
@@ -2878,10 +2571,20 @@ impl QueryEngine {
                                     // Build re-injection context from ContextInjector if available,
                                     // otherwise fall back to the system prompt (truncated).
                                     // Build re-injection context from ContextInjector if available
-                                    let reinjection = context_injector
+                                    let mut reinjection = context_injector
                                         .as_ref()
                                         .map(|ci| ci.reinjection_context())
                                         .unwrap_or_default();
+                                    // Curated project memories survive the
+                                    // compaction boundary too.
+                                    if let Some(mem) = memory_injection.as_ref() {
+                                        if !mem.is_empty() {
+                                            if !reinjection.is_empty() {
+                                                reinjection.push_str("\n\n");
+                                            }
+                                            reinjection.push_str(mem);
+                                        }
+                                    }
 
                                     match compact_engine.compact(&mut messages) {
                                         Ok(result) => {
@@ -2940,8 +2643,12 @@ impl QueryEngine {
                                             );
                                             let keep = 20;
                                             if messages.len() > keep {
-                                                messages =
-                                                    messages.split_off(messages.len() - keep);
+                                                let split =
+                                                    shannon_engine::compact::safe_split_point(
+                                                        &messages,
+                                                        messages.len() - keep,
+                                                    );
+                                                messages = messages.split_off(split);
                                             }
                                         }
                                     }
@@ -2954,7 +2661,11 @@ impl QueryEngine {
                                     );
                                     let keep = 20;
                                     if messages.len() > keep {
-                                        messages = messages.split_off(messages.len() - keep);
+                                        let split = shannon_engine::compact::safe_split_point(
+                                            &messages,
+                                            messages.len() - keep,
+                                        );
+                                        messages = messages.split_off(split);
                                     }
                                 }
                             }
@@ -3090,6 +2801,16 @@ impl QueryEngine {
                                     break;
                                 }
                             }
+                            // Front-removal can orphan the first kept message: if it
+                            // holds a ToolResult whose assistant ToolUse partner was
+                            // dropped with the prefix, providers reject the request.
+                            // Drop leading tool_result-only messages as well.
+                            while messages.len() > 2
+                                && shannon_engine::compact::has_tool_result(&messages[0])
+                                && !shannon_engine::compact::has_tool_use(&messages[0])
+                            {
+                                messages.remove(0);
+                            }
                             let new_estimate =
                                 shannon_engine::compact::helpers::estimate_tokens(&messages);
                             tracing::info!(
@@ -3208,8 +2929,39 @@ impl QueryEngine {
                         let mut request_input_tokens: u64 = 0;
                         let mut request_output_tokens: u64 = 0;
 
-                        // Process streaming events
-                        while let Some(event_result) = stream.next().await {
+                        // Process streaming events.
+                        // C-2: a stalled stream (no events within the stall
+                        // budget) is fed into the loop as a synthetic
+                        // `Err(ApiError::Timeout)` so the existing recovery
+                        // ladder applies — partial content is preserved, and a
+                        // dead stream can no longer hang the query forever.
+                        //
+                        // Composition with A8 (turn-level stream-death
+                        // continuation): A8 escalates the client idle budget
+                        // up to `STREAM_IDLE_ESCALATION_CAP_SECS` and retries
+                        // timeout-class deaths in place. This loop-level
+                        // timeout is therefore a LAST-RESORT backstop that
+                        // must never fire before A8's escalation ceiling —
+                        // floor it above the cap.
+                        let stall_budget = config
+                            .timeout_seconds
+                            .max(30)
+                            .max(STREAM_IDLE_ESCALATION_CAP_SECS + 60);
+                        while let Some(event_result) = match tokio::time::timeout(
+                            std::time::Duration::from_secs(stall_budget),
+                            stream.next(),
+                        )
+                        .await
+                        {
+                            Ok(item) => item,
+                            Err(_elapsed) => {
+                                tracing::warn!(
+                                    timeout_secs = stall_budget,
+                                    "LLM stream stalled — no events within stall budget"
+                                );
+                                Some(Err(shannon_engine::api::ApiError::Timeout))
+                            }
+                        } {
                             match event_result {
                                 Ok(stream_event) => {
                                     match stream_event {
@@ -3773,13 +3525,44 @@ impl QueryEngine {
                                                     );
 
                                                     // Plan mode gate: block write tools when plan mode is active.
+                                                    // Derives mutability from the tool's own trait
+                                                    // metadata instead of a name list, so newly
+                                                    // registered mutators (NotebookEdit, git
+                                                    // mutators, Worktree, Cron, …) are covered.
+                                                    // Pure bookkeeping tools stay allowed.
                                                     let is_plan_active = plan_mode_active
                                                         .read()
                                                         .map(|g| *g)
                                                         .unwrap_or(false);
                                                     if is_plan_active {
-                                                        let is_write_tool = crate::tool_execution::is_file_modifying_tool(&tool_name);
-                                                        if is_write_tool {
+                                                        const PLAN_ALLOWED_STATELESS: &[&str] = &[
+                                                            "TodoWrite",
+                                                            "TaskCreate",
+                                                            "TaskList",
+                                                            "TaskUpdate",
+                                                            "TaskGet",
+                                                            "TaskTool",
+                                                            "AskUserQuestion",
+                                                            "EnterPlanMode",
+                                                            "ExitPlanMode",
+                                                            "GetPlanStatus",
+                                                            "Brief",
+                                                            "StructuredOutput",
+                                                            "Sleep",
+                                                        ];
+                                                        let tool_is_mutating = match tools.get(&tool_name) {
+                                                            Some(t) => !t.is_read_only(),
+                                                            None => crate::tool_execution::is_file_modifying_tool(&tool_name),
+                                                        };
+                                                        if tool_is_mutating
+                                                            && !PLAN_ALLOWED_STATELESS.iter().any(
+                                                                |n| {
+                                                                    n.eq_ignore_ascii_case(
+                                                                        &tool_name,
+                                                                    )
+                                                                },
+                                                            )
+                                                        {
                                                             let error_msg = format!(
                                                                 "Plan mode: write operations blocked. \
                                                                  Use exit_plan_mode to resume editing. \
@@ -4193,7 +3976,6 @@ impl QueryEngine {
                                                                     ));
                                                                 }
 
-                                                                let mut batch_had_denial = false;
                                                                 for (saved_tool_id, handle) in
                                                                     exec_handles
                                                                 {
@@ -4268,9 +4050,6 @@ impl QueryEngine {
                                                                             match result {
                                                                                 Ok(output) => {
                                                                                     let is_err = output.is_error;
-                                                                                    if is_err {
-                                                                                        batch_had_denial = true;
-                                                                                    }
                                                                                     send_event!(tx, QueryEvent::ToolUseResult {
                                                                                         query_id,
                                                                                         tool_use_id: tool_id.clone(),
@@ -4279,12 +4058,17 @@ impl QueryEngine {
                                                                                         is_error: is_err,
                                                                                         meta: Box::new(crate::tools::sandbox_meta_from(&output.metadata)),
                                                                                         });
+                                                                                    let (capped, truncated) = cap_tool_result(output.content.clone());
+                                                                                    let mut meta = output.metadata.clone();
+                                                                                    if truncated {
+                                                                                        meta.insert("truncated".to_string(), serde_json::json!(true));
+                                                                                    }
                                                                                     tool_results
                                                                                         .push(ToolResultEntry {
                                                                                         tool_use_id: tool_id,
-                                                                                        content: output.content.clone(),
+                                                                                        content: capped,
                                                                                         is_error: is_err,
-                                                                                        metadata: Default::default(),
+                                                                                        metadata: meta,
                                                                                     });
                                                                                 }
                                                                                 Err(e) => {
@@ -4332,9 +4116,12 @@ impl QueryEngine {
                                                                         }
                                                                     }
                                                                 }
-                                                                if !batch_had_denial {
-                                                                    consecutive_denials = 0;
-                                                                }
+                                                                // Every call in a parallel batch
+                                                                // already passed the permission gate,
+                                                                // so the denial counter resets here
+                                                                // unconditionally (runtime errors are
+                                                                // not denials).
+                                                                consecutive_denials = 0;
                                                             }
                                                             crate::tools::ToolBatch::Serial((
                                                                 tool_id,
@@ -4447,17 +4234,30 @@ impl QueryEngine {
                                                                             is_error: is_err,
                                                                             meta: Box::new(crate::tools::sandbox_meta_from(&output.metadata)),
                                                                             });
+                                                                        let (capped, truncated) =
+                                                                            cap_tool_result(
+                                                                                output
+                                                                                    .content
+                                                                                    .clone(),
+                                                                            );
+                                                                        let mut meta =
+                                                                            output.metadata.clone();
+                                                                        if truncated {
+                                                                            meta.insert(
+                                                                                "truncated"
+                                                                                    .to_string(),
+                                                                                serde_json::json!(
+                                                                                    true
+                                                                                ),
+                                                                            );
+                                                                        }
                                                                         tool_results.push(
                                                                             ToolResultEntry {
                                                                                 tool_use_id:
                                                                                     tool_id,
-                                                                                content: output
-                                                                                    .content
-                                                                                    .clone(),
+                                                                                content: capped,
                                                                                 is_error: is_err,
-                                                                                metadata: output
-                                                                                    .metadata
-                                                                                    .clone(),
+                                                                                metadata: meta,
                                                                             },
                                                                         );
                                                                         if matches!(
@@ -4474,6 +4274,9 @@ impl QueryEngine {
                                                                         let error_msg = format!(
                                                                             "Tool error: {e}"
                                                                         );
+                                                                        // Gate-approved call: a runtime
+                                                                        // error is not a denial.
+                                                                        consecutive_denials = 0;
                                                                         send_event!(tx, QueryEvent::ToolUseResult {
                                                                             query_id,
                                                                             tool_use_id: tool_id.clone(),
@@ -4509,7 +4312,7 @@ impl QueryEngine {
                                                         maybe_run_auto_test(
                                                             &auto_cfg,
                                                             &mut auto_test_state,
-                                                            &mut tool_results,
+                                                            &mut user_notices,
                                                             &tx,
                                                             query_id,
                                                         )
@@ -4521,17 +4324,15 @@ impl QueryEngine {
                                                 if (DENIAL_SOFT_LIMIT..DENIAL_HARD_LIMIT)
                                                     .contains(&consecutive_denials)
                                                 {
-                                                    let warning = format!(
+                                                    // Delivered as a plain user notice, NOT a
+                                                    // tool_result: the synthetic
+                                                    // "denial-warning" id references no assistant
+                                                    // ToolUse and providers reject the request.
+                                                    user_notices.push(format!(
                                                         "The user has denied {consecutive_denials} consecutive tool calls. \
                                                          Stop retrying the same or similar operations. \
                                                          Ask the user for clarification or try a completely different approach."
-                                                    );
-                                                    tool_results.push(ToolResultEntry {
-                                                        tool_use_id: "denial-warning".to_string(),
-                                                        content: warning,
-                                                        is_error: false,
-                                                        metadata: Default::default(),
-                                                    });
+                                                    ));
                                                 }
 
                                                 turn += 1;
@@ -4848,9 +4649,7 @@ impl QueryEngine {
                                                         blocks.append(&mut assistant_tool_uses);
                                                         conversation.messages.push(Message {
                                                             role: "assistant".to_string(),
-                                                            content: MessageContent::Blocks(
-                                                                blocks,
-                                                            ),
+                                                            content: MessageContent::Blocks(blocks),
                                                         });
                                                     }
                                                     // A13: flush the results already executed
@@ -4870,16 +4669,13 @@ impl QueryEngine {
                                                             entry.to_tool_result_content();
                                                         conversation.messages.push(Message {
                                                             role: "user".to_string(),
-                                                            content: MessageContent::Blocks(
-                                                                vec![ContentBlock::ToolResult {
-                                                                    tool_use_id: entry
-                                                                        .tool_use_id,
+                                                            content: MessageContent::Blocks(vec![
+                                                                ContentBlock::ToolResult {
+                                                                    tool_use_id: entry.tool_use_id,
                                                                     content,
-                                                                    is_error: Some(
-                                                                        entry.is_error,
-                                                                    ),
-                                                                }],
-                                                            ),
+                                                                    is_error: Some(entry.is_error),
+                                                                },
+                                                            ]),
                                                         });
                                                     }
                                                     conversation.messages.push(Message {
@@ -5041,12 +4837,16 @@ impl QueryEngine {
                                         );
                                         push_turn_continuation_nudge(&mut conversation.messages);
                                         continue 'agent_loop;
-                                    }                                    // A14: escalate the stream-idle watchdog budget so the
+                                    } // A14: escalate the stream-idle watchdog budget so the
                                     // continuation attempt is not killed by the same 420s
                                     // base budget that killed the previous attempt (w7
                                     // csstree/expr/superjson — three consecutive runs all
                                     // died at exactly 421s = base + 1s).
-                                    escalate_stream_idle_override(&client, stream_idle_base_secs, turn_retries_used);
+                                    escalate_stream_idle_override(
+                                        &client,
+                                        stream_idle_base_secs,
+                                        turn_retries_used,
+                                    );
 
                                     // Content-first: if partial content was streamed before the error,
                                     // preserve it immediately. Local models (Ollama) often generate
@@ -5594,12 +5394,16 @@ impl QueryEngine {
                             );
                             push_turn_continuation_nudge(&mut conversation.messages);
                             continue 'agent_loop;
-                        }                        // A14: escalate the stream-idle watchdog budget so the
+                        } // A14: escalate the stream-idle watchdog budget so the
                         // continuation attempt is not killed by the same 420s
                         // base budget that killed the previous attempt (w7
                         // csstree/expr/superjson — three consecutive runs all
                         // died at exactly 421s = base + 1s).
-                        escalate_stream_idle_override(&client, stream_idle_base_secs, turn_retries_used);
+                        escalate_stream_idle_override(
+                            &client,
+                            stream_idle_base_secs,
+                            turn_retries_used,
+                        );
 
                         // Check if this is a token overflow — attempt auto-compaction and retry once
                         if e.is_token_overflow() {
@@ -5608,7 +5412,11 @@ impl QueryEngine {
                                 tracing::warn!(
                                     "Token overflow detected, auto-compacting and retrying"
                                 );
-                                messages = messages.split_off(messages.len() - compact_keep);
+                                let split = shannon_engine::compact::safe_split_point(
+                                    &messages,
+                                    messages.len() - compact_keep,
+                                );
+                                messages = messages.split_off(split);
                                 // Re-inject system prompt at front
                                 if let Some(ref sp) = system_prompt {
                                     if !sp.is_empty() {
@@ -5948,28 +5756,39 @@ impl QueryEngine {
                 }
             }
 
-            // Post-query: fire-and-forget memory extraction via AutoDreamService
+            // Post-query: fire-and-forget memory extraction via AutoDreamService.
+            // INCREMENTAL (P0-10): only the post-cursor delta is extracted.
+            // The previous full-conversation rescan on every query re-matched
+            // old facts each turn, refreshing `accessed_at` on noise and
+            // spawning paraphrase siblings at a rate the 0.8 Jaccard dedup
+            // could not absorb.
             if let Some(ref mem_store) = memory_for_extraction {
                 let store_arc = mem_store.clone();
-                let msgs = conversation.messages.clone();
+                let total = conversation.messages.len();
+                let cursor = memory_extract_cursor_cursor.min(total);
+                let delta: Vec<Message> = conversation.messages[cursor..].to_vec();
                 // P2-4 provenance: stamp extracted entries with the session
                 // that produced them so the Memory page can jump back.
                 let session_for_extraction = self_session_id.clone();
                 tokio::spawn(async move {
-                    let dream = AutoDreamService::new(store_arc);
-                    let project = std::env::current_dir()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|_| "default".to_string());
-                    let _ = dream.process_conversation_with_session(
-                        &msgs,
-                        &project,
-                        Some(&session_for_extraction),
-                    );
-                    // Periodic compaction (ADR-0010 C5'): dedupe + prune + size
-                    // control, gated by a persisted sidecar schedule. Each query
-                    // is one session; compaction fires at ~24 h or ≥ 5 sessions.
-                    let _ = dream.maybe_compact(&project, &SessionMemoryConfig::default());
+                    if !delta.is_empty() {
+                        let dream = AutoDreamService::new(store_arc);
+                        let project = std::env::current_dir()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|_| "default".to_string());
+                        let _ = dream.process_conversation_with_session(
+                            &delta,
+                            &project,
+                            Some(&session_for_extraction),
+                        );
+                        // Periodic compaction (ADR-0010 C5'): dedupe + prune +
+                        // size control, gated by a persisted sidecar schedule.
+                        // Each query is one session; compaction fires at ~24 h
+                        // or ≥ 5 sessions.
+                        let _ = dream.maybe_compact(&project, &SessionMemoryConfig::default());
+                    }
                 });
+                memory_extract_cursor_cell.store(total, std::sync::atomic::Ordering::Relaxed);
             }
         });
 
@@ -6034,13 +5853,13 @@ impl QueryEngine {
 
 /// Run one auto-test iteration if appropriate.
 ///
-/// Called after each successful file-modifying tool. Pushes a
-/// [`ToolResultEntry`] into `tool_results` describing what happened so the
-/// next API call sees it. Returns `()`; loop-state lives in `auto_test_state`.
+/// Called after each successful file-modifying tool. Pushes a user notice
+/// into `user_notices` describing what happened so the next API call sees
+/// it. Returns `()`; loop-state lives in `auto_test_state`.
 async fn maybe_run_auto_test(
     cfg: &crate::auto_test::AutoTestConfig,
     state: &mut crate::auto_test::AntiLoopState,
-    tool_results: &mut Vec<ToolResultEntry>,
+    user_notices: &mut Vec<String>,
     tx: &EventTx,
     query_id: Uuid,
 ) {
@@ -6068,18 +5887,12 @@ async fn maybe_run_auto_test(
 
     let decision = state.record(cfg, &outcome);
 
-    // Build a synthetic tool-result so the next API call sees it. We use a
-    // synthetic tool_use_id — these entries don't correspond to a real tool
-    // invocation but `user(tool_result)` is the only way to push text into
-    // the model's context mid-loop.
+    // Delivered as a plain user notice so the next API call sees it. A
+    // synthetic `user(tool_result)` would reference a tool_use_id that never
+    // appeared in any assistant message, which providers reject with
+    // 400 "unexpected tool_use_id".
     let description = outcome.describe();
-    let entry = ToolResultEntry {
-        tool_use_id: format!("auto_test_iter_{}", state.iterations),
-        content: description,
-        is_error: !outcome.is_passed(),
-        metadata: Default::default(),
-    };
-    tool_results.push(entry);
+    user_notices.push(description);
 
     // Emit a structured progress event with the outcome so the UI can show
     // pass/fail badges without parsing the description string.
@@ -6128,6 +5941,55 @@ mod tests {
         assert!(!is_truncation_stop(Some("stop")));
         assert!(!is_truncation_stop(Some("tool_use")));
         assert!(!is_truncation_stop(None));
+    }
+
+    #[test]
+    fn cap_tool_result_passthrough_under_cap() {
+        let (capped, truncated) = cap_tool_result("short output".to_string());
+        assert_eq!(capped, "short output");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn cap_tool_result_truncates_on_char_boundary_and_notifies() {
+        let big = "x".repeat(DEFAULT_MAX_TOOL_RESULT_CHARS + 1000);
+        let (capped, truncated) = cap_tool_result(big);
+        assert!(truncated);
+        assert!(capped.contains("[shannon: output truncated"));
+        assert!(capped.len() < DEFAULT_MAX_TOOL_RESULT_CHARS + 200);
+        // CJK content must be cut on a char boundary, never mid-codepoint.
+        let cjk = "漢字".repeat(DEFAULT_MAX_TOOL_RESULT_CHARS);
+        let (capped, truncated) = cap_tool_result(cjk);
+        assert!(truncated);
+        assert!(
+            capped.is_char_boundary(
+                capped
+                    .find("[shannon: output truncated")
+                    .unwrap_or(capped.len())
+            )
+        );
+    }
+
+    #[test]
+    fn cap_tool_result_zero_disables_cap() {
+        // env::set_var is process-wide and unsafe under edition 2024 —
+        // serialize against other env tests and wrap each call.
+        static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .expect("env-var test mutex poisoned");
+        let key = "SHANNON_MAX_TOOL_OUTPUT_CHARS";
+        let saved = std::env::var(key).ok();
+        unsafe { std::env::set_var(key, "0") };
+        let big = "y".repeat(DEFAULT_MAX_TOOL_RESULT_CHARS * 2);
+        let (capped, truncated) = cap_tool_result(big.clone());
+        assert!(!truncated);
+        assert_eq!(capped, big);
+        match saved {
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
+        }
     }
 
     #[test]
@@ -7221,9 +7083,10 @@ mod tests {
 
         let injector = engine.context_injector().unwrap();
         let blocks = injector.build_system_blocks(true);
-        assert!(!blocks.is_empty());
-        // Should have cache_control set
-        assert!(blocks[0].cache_control.is_some());
+        // Instructions are injected by the engine (stable cache zone), so
+        // build_system_blocks only carries MEMORY.md / rules / prefs — all
+        // absent in this fixture.
+        assert!(blocks.is_empty(), "blocks: {blocks:?}");
 
         // Cleanup
         let _ = std::fs::remove_dir_all(project_dir);
@@ -7292,6 +7155,50 @@ mod tests {
         assert!(!crate::tool_execution::is_file_modifying_tool("Glob"));
         assert!(!crate::tool_execution::is_file_modifying_tool("Grep"));
         assert!(!crate::tool_execution::is_file_modifying_tool("LSP"));
+    }
+
+    #[test]
+    fn test_cache_breakpoint_budget_respected() {
+        // P0-6 regression: the system block assembly must emit at most 2
+        // cache breakpoints. Anthropic caps a request at 4 and the adapter
+        // adds two more (last tool def + last user message), so any more
+        // than 2 system breakpoints overflows the budget.
+        //
+        // Simulate the assembly policy: N stable blocks + 3 dynamic blocks.
+        let stable_texts: Vec<String> = (0..9).map(|i| format!("stable {i}")).collect();
+        let use_cache = true;
+
+        let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
+        if use_cache {
+            let last_stable = stable_texts.len().saturating_sub(1);
+            for (i, text) in stable_texts.into_iter().enumerate() {
+                let block = if i == 0 || i == last_stable {
+                    SystemContentBlock::cached(text)
+                } else {
+                    SystemContentBlock::text(text)
+                };
+                system_blocks.push(block);
+            }
+        }
+        for i in 0..3 {
+            system_blocks.push(SystemContentBlock::text(format!("dynamic {i}")));
+        }
+
+        let cached_count = system_blocks
+            .iter()
+            .filter(|b| b.cache_control.is_some())
+            .count();
+        assert!(
+            cached_count <= 2,
+            "system blocks must carry at most 2 cache breakpoints, got {cached_count}"
+        );
+        // First (base) and last stable block are the cached ones.
+        assert!(system_blocks[0].cache_control.is_some());
+        assert!(system_blocks[8].cache_control.is_some());
+        // Dynamic zone stays uncached.
+        for block in &system_blocks[9..] {
+            assert!(block.cache_control.is_none());
+        }
     }
 
     // ── Context resolution tests ──────────────────────────────────
@@ -8807,9 +8714,7 @@ mod tests {
 
     /// Full Anthropic SSE stream with a plain text answer and `end_turn`.
     fn a8_text_sse(text: &str) -> String {
-        let payload = format!(
-            r#"{{"type":"text_delta","text":"{text}"}}"#
-        );
+        let payload = format!(r#"{{"type":"text_delta","text":"{text}"}}"#);
         let sse = [
             r#"event: message_start"#,
             r#"data: {"type":"message_start","message":{"id":"msg_a8_text","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
@@ -8834,13 +8739,7 @@ mod tests {
     #[allow(clippy::type_complexity)]
     async fn a8_run_query(
         server: &TurnRetryMockServer,
-    ) -> (
-        bool,
-        String,
-        Vec<String>,
-        Vec<String>,
-        Vec<Message>,
-    ) {
+    ) -> (bool, String, Vec<String>, Vec<String>, Vec<Message>) {
         a8_run_query_with(server, 20).await
     }
 
@@ -8849,13 +8748,7 @@ mod tests {
     async fn a8_run_query_with(
         server: &TurnRetryMockServer,
         max_turns: usize,
-    ) -> (
-        bool,
-        String,
-        Vec<String>,
-        Vec<String>,
-        Vec<Message>,
-    ) {
+    ) -> (bool, String, Vec<String>, Vec<String>, Vec<Message>) {
         use futures::StreamExt as _;
         let config = LlmClientConfig {
             api_key: "test-key".to_string(),
@@ -8929,7 +8822,9 @@ mod tests {
     /// run-level `SHANNON_RUN_RETRIES` in the CLI).
     #[test]
     fn a8_turn_retries_env_parse_contract() {
-        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SHANNON_TURN_RETRIES").ok();
 
         unsafe { env::remove_var("SHANNON_TURN_RETRIES") };
@@ -8997,7 +8892,9 @@ mod tests {
     /// retry requests.
     #[tokio::test]
     async fn a8_turn_retry_continues_after_timeout_class_stream_death() {
-        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SHANNON_TURN_RETRIES").ok();
         unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
 
@@ -9045,9 +8942,10 @@ mod tests {
 
         // Progress visibility, formatted like the existing API-retry surfacing.
         assert!(
-            progress.iter().any(|m| m.contains(
-                "Turn LLM call interrupted (upstream cutoff); continuing turn 1/2"
-            )),
+            progress
+                .iter()
+                .any(|m| m
+                    .contains("Turn LLM call interrupted (upstream cutoff); continuing turn 1/2")),
             "expected an A8 continuation Progress event; got: {progress:?}"
         );
 
@@ -9067,7 +8965,10 @@ mod tests {
                     if blocks.iter().any(|b| matches!(b, shannon_engine::api::ContentBlock::ToolResult { .. }))
             )
         });
-        assert!(has_tool_result, "tool round-trip must be preserved: {history:?}");
+        assert!(
+            has_tool_result,
+            "tool round-trip must be preserved: {history:?}"
+        );
         let last = history.last().expect("non-empty history");
         assert_eq!(last.role, "assistant", "final message must be the answer");
         let last_text = match &last.content {
@@ -9091,7 +8992,9 @@ mod tests {
     /// classifier still sees "timeout").
     #[tokio::test]
     async fn a8_turn_retry_budget_exhaustion_falls_through_to_failed() {
-        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SHANNON_TURN_RETRIES").ok();
         unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
 
@@ -9120,13 +9023,24 @@ mod tests {
         );
         let nudge = TURN_CONTINUATION_NUDGE_PROMPT;
         assert!(!bodies[0].contains(nudge), "first attempt is nudge-free");
-        assert_eq!(bodies[1].matches(nudge).count(), 1, "retry 1 carries one nudge");
-        assert_eq!(bodies[2].matches(nudge).count(), 1, "retry 2 carries one nudge — never accumulated");
+        assert_eq!(
+            bodies[1].matches(nudge).count(),
+            1,
+            "retry 1 carries one nudge"
+        );
+        assert_eq!(
+            bodies[2].matches(nudge).count(),
+            1,
+            "retry 2 carries one nudge — never accumulated"
+        );
         let continuations = progress
             .iter()
             .filter(|m| m.contains("Turn LLM call interrupted (upstream cutoff)"))
             .count();
-        assert_eq!(continuations, 2, "one Progress per continuation; got {progress:?}");
+        assert_eq!(
+            continuations, 2,
+            "one Progress per continuation; got {progress:?}"
+        );
     }
 
     /// Mid-stream death (the production shape of the GLM ~6min hard cut):
@@ -9138,7 +9052,9 @@ mod tests {
     /// retried to a clean completion.
     #[tokio::test]
     async fn a8_turn_retry_covers_mid_stream_death_and_discards_partial() {
-        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SHANNON_TURN_RETRIES").ok();
         unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
 
@@ -9185,9 +9101,10 @@ mod tests {
         assert!(!bodies[0].contains(nudge), "first attempt is nudge-free");
         assert_eq!(bodies[1].matches(nudge).count(), 1);
         assert!(
-            progress.iter().any(|m| m.contains(
-                "Turn LLM call interrupted (upstream cutoff); continuing turn 1/2"
-            )),
+            progress
+                .iter()
+                .any(|m| m
+                    .contains("Turn LLM call interrupted (upstream cutoff); continuing turn 1/2")),
             "expected A8 Progress; got {progress:?}"
         );
         let history_text: String = history
@@ -9240,7 +9157,9 @@ mod tests {
     /// dead response and the retry is immediate.
     #[tokio::test]
     async fn a8_stream_interrupted_triggers_continuation_and_discards_partial() {
-        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SHANNON_TURN_RETRIES").ok();
         unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
 
@@ -9280,9 +9199,10 @@ mod tests {
             "the A8 continuation request must carry the nudge exactly once"
         );
         assert!(
-            progress.iter().any(|m| m.contains(
-                "Turn LLM call interrupted (upstream cutoff); continuing turn 1/2"
-            )),
+            progress
+                .iter()
+                .any(|m| m
+                    .contains("Turn LLM call interrupted (upstream cutoff); continuing turn 1/2")),
             "expected A8 Progress for the interrupted stream; got {progress:?}"
         );
         assert!(
@@ -9318,7 +9238,9 @@ mod tests {
     /// pre-A8b when SHANNON_TURN_RETRIES=0.
     #[tokio::test]
     async fn a8_stream_interrupted_budget_exhausted_falls_back_to_partial_preserve() {
-        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SHANNON_TURN_RETRIES").ok();
         unsafe { env::set_var("SHANNON_TURN_RETRIES", "0") };
 
@@ -9613,7 +9535,10 @@ mod tests {
 
         let (completed, failed, _progress, _warnings, history) = a8_run_query(&server).await;
 
-        assert!(completed, "text-only truncation must complete; failed: {failed}");
+        assert!(
+            completed,
+            "text-only truncation must complete; failed: {failed}"
+        );
         let bodies = server.bodies();
         assert_eq!(bodies.len(), 2);
         let body = &bodies[1];
@@ -9641,7 +9566,9 @@ mod tests {
     /// request with no reconnects and no A8 continuation.
     #[tokio::test]
     async fn a8_clean_end_without_message_stop_is_not_continued() {
-        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SHANNON_TURN_RETRIES").ok();
         unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
 
@@ -9707,7 +9634,9 @@ mod tests {
             "the answer must land in history exactly once: {history_text:?}"
         );
         assert_eq!(
-            history_text.matches("clean end without message_stop").count(),
+            history_text
+                .matches("clean end without message_stop")
+                .count(),
             1,
             "content must not be duplicated by reconnect replays"
         );
@@ -9732,8 +9661,7 @@ mod tests {
             std::sync::Arc::new(|_i: usize| a8_tool_call_sse());
         let server = TurnRetryMockServer::start(responder);
 
-        let (completed, failed, progress, warnings, _history) =
-            a8_run_query_with(&server, 3).await;
+        let (completed, failed, progress, warnings, _history) = a8_run_query_with(&server, 3).await;
 
         assert!(
             completed,
@@ -9807,7 +9735,9 @@ mod tests {
     /// re-injected on the retry request, and the A8 nudge rides after it.
     #[tokio::test]
     async fn a10_wrap_up_and_a8_stacking_no_double_injection() {
-        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SHANNON_TURN_RETRIES").ok();
         unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
 
@@ -9821,8 +9751,7 @@ mod tests {
             });
         let server = TurnRetryMockServer::start(responder);
 
-        let (completed, failed, progress, warnings, _history) =
-            a8_run_query_with(&server, 2).await;
+        let (completed, failed, progress, warnings, _history) = a8_run_query_with(&server, 2).await;
 
         match saved {
             Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
@@ -9877,7 +9806,9 @@ mod tests {
     /// immediate failure through the existing path.
     #[tokio::test]
     async fn a8_turn_retry_zero_disables_continuation() {
-        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SHANNON_TURN_RETRIES").ok();
         unsafe { env::set_var("SHANNON_TURN_RETRIES", "0") };
 
@@ -9914,7 +9845,9 @@ mod tests {
     /// swallow deterministic failures.
     #[tokio::test]
     async fn a8_non_timeout_errors_do_not_continue_turn() {
-        let _guard = TURN_RETRIES_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let saved = env::var("SHANNON_TURN_RETRIES").ok();
         unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
 

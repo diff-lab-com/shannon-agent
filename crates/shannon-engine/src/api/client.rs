@@ -671,13 +671,13 @@ impl LlmClient {
                 tools_clone,
                 system_clone,
                 max_reconnects,
-                           self.stream_idle_override_handle(),
+                self.stream_idle_override_handle(),
             ))
         } else {
             Ok(super::streaming::sse_stream_from_response(
                 response,
                 self.config.provider.clone(),
-                           self.stream_idle_override_handle(),
+                self.stream_idle_override_handle(),
             ))
         }
     }
@@ -787,7 +787,7 @@ impl LlmClient {
         Ok(super::streaming::sse_stream_from_response(
             response,
             self.config.provider.clone(),
-                   self.stream_idle_override_handle(),
+            self.stream_idle_override_handle(),
         ))
     }
 
@@ -883,7 +883,7 @@ impl LlmClient {
         Ok(super::streaming::sse_stream_from_response(
             response,
             self.config.provider.clone(),
-                   self.stream_idle_override_handle(),
+            self.stream_idle_override_handle(),
         ))
     }
 

@@ -25,8 +25,12 @@ pub enum PermissionError {
 /// Returns true if the tool name corresponds to a read-only operation (no side effects).
 /// Used by both `Readonly` mode enforcement and `Suggest` mode auto-approval.
 fn is_read_only_tool_name(tool_name: &str) -> bool {
+    // Case-insensitive: the model-facing registry uses capitalized display
+    // names ("Read", "Grep", "WebFetch") while this list was lowercase-only,
+    // which silently broke Suggest/Readonly/PlanReadonly fast paths.
+    let lower = tool_name.to_ascii_lowercase();
     matches!(
-        tool_name,
+        lower.as_str(),
         "read"
             | "read_file"
             | "search"
@@ -246,10 +250,13 @@ impl ApprovalMode {
             }
             Self::Plan => false,
             Self::AutoEdit => {
-                // Auto-approve file operations; ask for everything else
+                // Auto-approve file operations; ask for everything else.
+                // Case-insensitive for the same reason as
+                // `is_read_only_tool_name` above.
+                let lower = tool_name.to_ascii_lowercase();
                 let is_file_tool = matches!(
-                    tool_name,
-                    "edit" | "write" | "create_file" | "replace" | "file_edit"
+                    lower.as_str(),
+                    "edit" | "write" | "create_file" | "replace" | "file_edit" | "multiedit"
                 );
                 is_file_tool && risk_level <= RiskLevel::Medium
             }
@@ -1586,8 +1593,16 @@ impl PermissionManager {
             ))),
             PermissionChoice::AllowOnce | PermissionChoice::AlwaysAllow => {
                 // Remember the choice
+                let is_always = choice == PermissionChoice::AlwaysAllow;
                 self.memory
                     .remember_choice(session_id, prompt.tool_name.clone(), choice);
+                if is_always {
+                    // S-2: persist the grant so it survives process restarts
+                    // (the in-memory PermissionMemory dies with the process,
+                    // which forced users to re-approve the same operation in
+                    // every session). Project-scoped: `.shannon/settings.local.json`.
+                    Self::persist_allow_rule(&prompt.tool_name, &prompt.tool_input);
+                }
                 Ok(())
             }
             PermissionChoice::EditAndRun => {
@@ -1596,6 +1611,75 @@ impl PermissionManager {
                     .remember_choice(session_id, prompt.tool_name.clone(), choice);
                 Ok(())
             }
+        }
+    }
+
+    /// Persist an always-allow grant as a permission rule in the project's
+    /// `.shannon/settings.local.json` (`permissions.allow` array), matching
+    /// the rule-checker's `Tool(pattern)` syntax. Best-effort: failures are
+    /// logged, never surfaced — the in-memory grant still applies.
+    fn persist_allow_rule(tool_name: &str, tool_input: &serde_json::Value) {
+        let pattern = if tool_name.eq_ignore_ascii_case("bash") {
+            // Scope Bash grants to the exact approved command prefix rather
+            // than the whole tool.
+            let cmd = tool_input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if cmd.is_empty() {
+                tool_name.to_string()
+            } else {
+                let head: String = cmd.split_whitespace().take(3).collect::<Vec<_>>().join(" ");
+                format!("{tool_name}({head}:*)")
+            }
+        } else {
+            tool_name.to_string()
+        };
+
+        let cwd = match std::env::current_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::debug!("cannot resolve cwd to persist permission: {e}");
+                return;
+            }
+        };
+        let dir = cwd.join(".shannon");
+        let path = dir.join("settings.local.json");
+
+        let mut doc: serde_json::Value = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        let Some(obj) = doc.as_object_mut() else {
+            return;
+        };
+        let perms = obj
+            .entry("permissions".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let Some(perms_obj) = perms.as_object_mut() else {
+            return;
+        };
+        let list = perms_obj
+            .entry("allow".to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        if let Some(arr) = list.as_array_mut() {
+            if !arr.iter().any(|v| v.as_str() == Some(pattern.as_str())) {
+                arr.push(serde_json::Value::String(pattern));
+            }
+        }
+
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        match serde_json::to_string_pretty(&doc) {
+            Ok(body) => {
+                let tmp = path.with_extension("json.tmp");
+                if std::fs::write(&tmp, body).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
+                    tracing::info!("Persisted always-allow rule to {}", path.display());
+                }
+            }
+            Err(e) => tracing::debug!("failed to serialize permission grant: {e}"),
         }
     }
 

@@ -5,9 +5,12 @@
 mod browser_control_prompt;
 mod context_injector;
 mod engine;
+mod env_config;
 pub mod guard_nodes;
 pub mod litellm;
+mod parsers;
 mod repo_map_injector;
+mod routing;
 mod streaming;
 mod team_prompt;
 mod types;

@@ -247,11 +247,20 @@ impl Tool for WebFetchTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to fetch URL: {e}")))?;
 
+        // The fetched page text IS the tool result: the engine forwards
+        // `content` to the model, so the payload must live there (metadata is
+        // only consulted for image payloads). Keep the summary line as a
+        // short header followed by the page content.
+        let content = format_fetch_content(
+            &output.url,
+            output.content_length,
+            &output.content,
+            output.has_more,
+            output.next_start_index,
+        );
+
         Ok(ToolOutput {
-            content: format!(
-                "Successfully fetched {} bytes from {}",
-                output.content_length, output.url
-            ),
+            content,
             is_error: false,
             metadata: {
                 let mut map = HashMap::new();
@@ -625,11 +634,12 @@ impl Tool for WebSearchTool {
             })
             .collect();
 
+        // The results themselves are the tool result: the engine forwards
+        // `content` to the model, so render them as readable text there.
+        let content = format_search_content(&output.query, &output.results);
+
         Ok(ToolOutput {
-            content: format!(
-                "Found {} search results for: {}",
-                output.count, output.query
-            ),
+            content,
             is_error: false,
             metadata: {
                 let mut map = HashMap::new();
@@ -683,6 +693,46 @@ impl Tool for WebSearchTool {
     fn is_read_only(&self) -> bool {
         true
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tool-result rendering
+// ---------------------------------------------------------------------------
+
+/// Render a fetch result as the model-facing tool content. The page text must
+/// be part of `content` — the engine forwards only `content` (plus image
+/// metadata) to the model, so a summary-only content would hide the payload.
+pub(crate) fn format_fetch_content(
+    url: &str,
+    content_length: usize,
+    page: &str,
+    has_more: bool,
+    next_start_index: Option<usize>,
+) -> String {
+    let mut content = format!("Content from {url} ({content_length} bytes):\n\n{page}");
+    if has_more {
+        if let Some(next) = next_start_index {
+            content.push_str(&format!(
+                "\n\n[truncated at max_length — call again with start_index: {next} for more]"
+            ));
+        }
+    }
+    content
+}
+
+/// Render search results as the model-facing tool content.
+pub(crate) fn format_search_content(query: &str, results: &[SearchResult]) -> String {
+    let mut content = format!("Web search results for \"{query}\":\n");
+    if results.is_empty() {
+        content.push_str("(no results found)\n");
+    }
+    for (i, r) in results.iter().enumerate() {
+        content.push_str(&format!("\n{}. {}\n   {}\n", i + 1, r.title, r.url));
+        if !r.snippet.is_empty() {
+            content.push_str(&format!("   {}\n", r.snippet));
+        }
+    }
+    content
 }
 
 // ---------------------------------------------------------------------------
@@ -842,6 +892,58 @@ mod tests {
     #[test]
     fn test_validate_allows_https() {
         assert!(validate_fetch_url("https://example.com/page").is_ok());
+    }
+
+    // ---- Tool-result rendering tests (P0-2 regression) -------------------
+    // The engine forwards only `content` to the model, so the fetched page /
+    // search results must appear there — not just in metadata.
+
+    #[test]
+    fn test_format_fetch_content_includes_page_text() {
+        let content = format_fetch_content("https://example.com/a", 42, "hello page", false, None);
+        assert!(
+            content.contains("hello page"),
+            "page text must be in content: {content}"
+        );
+        assert!(content.contains("https://example.com/a"));
+    }
+
+    #[test]
+    fn test_format_fetch_content_pagination_hint() {
+        let content = format_fetch_content("https://e.com", 10, "abc", true, Some(5000));
+        assert!(content.contains("start_index: 5000"));
+    }
+
+    #[test]
+    fn test_format_search_content_lists_results() {
+        let results = vec![
+            SearchResult {
+                title: "Rust book".to_string(),
+                url: "https://doc.rust-lang.org".to_string(),
+                snippet: "Learn Rust".to_string(),
+                score: Some(0.9),
+                published_date: None,
+            },
+            SearchResult {
+                title: "Empty snippet".to_string(),
+                url: "https://example.com".to_string(),
+                snippet: String::new(),
+                score: Some(0.5),
+                published_date: None,
+            },
+        ];
+        let content = format_search_content("rust lang", &results);
+        assert!(content.contains("1. Rust book"));
+        assert!(content.contains("https://doc.rust-lang.org"));
+        assert!(content.contains("Learn Rust"));
+        assert!(content.contains("2. Empty snippet"));
+        assert!(content.contains("rust lang"));
+    }
+
+    #[test]
+    fn test_format_search_content_empty_results() {
+        let content = format_search_content("nothing", &[]);
+        assert!(content.contains("(no results found)"));
     }
 
     #[test]

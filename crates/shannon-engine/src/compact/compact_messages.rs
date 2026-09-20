@@ -13,7 +13,7 @@ use super::types::Summarizer;
 use crate::api::ContentBlock;
 
 /// Check whether a message contains any ToolUse blocks.
-fn has_tool_use(msg: &crate::api::Message) -> bool {
+pub fn has_tool_use(msg: &crate::api::Message) -> bool {
     matches!(
         &msg.content,
         crate::api::MessageContent::Blocks(blocks) if blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }))
@@ -21,7 +21,7 @@ fn has_tool_use(msg: &crate::api::Message) -> bool {
 }
 
 /// Check whether a message contains any ToolResult blocks.
-fn has_tool_result(msg: &crate::api::Message) -> bool {
+pub fn has_tool_result(msg: &crate::api::Message) -> bool {
     matches!(
         &msg.content,
         crate::api::MessageContent::Blocks(blocks) if blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }))
@@ -37,7 +37,7 @@ fn has_tool_result(msg: &crate::api::Message) -> bool {
 /// If the split would land between a ToolUse message and its matching ToolResult,
 /// we move the split point backward to include both (or forward to exclude both).
 /// This prevents orphaned tool calls or results that would cause API errors.
-fn safe_split_point(messages: &[crate::api::Message], proposed: usize) -> usize {
+pub fn safe_split_point(messages: &[crate::api::Message], proposed: usize) -> usize {
     if proposed == 0 || proposed >= messages.len() {
         return proposed;
     }

@@ -8,6 +8,7 @@ use tracing::debug;
 const INSTRUCTION_FILES: &[&str] = &[
     "CLAUDE.md",
     "AGENTS.md",
+    "SHANNON.md",
     "GEMINI.md",
     ".cursorrules",
     ".windsurfrules",
@@ -695,11 +696,10 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
         }
     }
 
-    // 5. Load git context
-    if let Some(git) = git_context(dir) {
-        all_content.push_str(&git);
-        all_files.push("git context".to_string());
-    }
+    // NOTE: git context is intentionally NOT part of this payload. It is
+    // per-turn mutable state; embedding it here churned the prompt cache on
+    // every edit. The engine renders it in the non-cached trailing
+    // environment block instead (see query_engine/engine.rs).
 
     if all_content.is_empty() {
         None
@@ -1149,7 +1149,10 @@ mod tests {
 
     #[test]
     fn test_load_full_context_with_git() {
-        // Running in shannon-code repo: both instructions and git context should load
+        // Running in the Shannon repo: instructions should load. Git context
+        // is no longer embedded in the merged payload (it is per-turn mutable
+        // state and lived inside the cached prefix; the engine now renders it
+        // in the non-cached environment block).
         let cwd = std::env::current_dir().unwrap();
         let result = load_full_context(&cwd);
         assert!(
@@ -1157,12 +1160,30 @@ mod tests {
             "Should load full context in shannon-code repo"
         );
         let instr = result.unwrap();
-        // Should have either CLAUDE.md or git context (or both)
         assert!(
-            instr.loaded_files.contains(&"CLAUDE.md".to_string())
-                || instr.loaded_files.contains(&"git context".to_string()),
-            "Should load at least one source"
+            instr.loaded_files.iter().any(|f| f.contains("CLAUDE.md")),
+            "Should load CLAUDE.md in the repo, got {:?}",
+            instr.loaded_files
         );
+        assert!(
+            !instr.loaded_files.contains(&"git context".to_string()),
+            "git context must not be part of the instruction payload"
+        );
+        assert!(
+            !instr.content.contains("## Git Context"),
+            "git context must not leak into instruction content"
+        );
+    }
+
+    #[test]
+    fn test_git_context_still_available_for_env_block() {
+        // The engine's environment block consumes git_context directly.
+        let cwd = std::env::current_dir().unwrap();
+        // In a git repo this returns Some; only assert it does not panic and,
+        // when present, mentions git information.
+        if let Some(git) = git_context(&cwd) {
+            assert!(!git.is_empty());
+        }
     }
 
     #[test]

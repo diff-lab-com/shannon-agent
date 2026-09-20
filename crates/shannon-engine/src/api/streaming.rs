@@ -1513,7 +1513,7 @@ mod tests {
             Some(Duration::from_secs(360))
         );
 
-// Restore the prior process state for other tests.
+        // Restore the prior process state for other tests.
         match saved.as_deref() {
             Some(v) => unsafe {
                 std::env::set_var("SHANNON_STREAM_IDLE_SECS", v);

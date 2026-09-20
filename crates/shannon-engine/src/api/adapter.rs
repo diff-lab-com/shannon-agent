@@ -105,7 +105,10 @@ pub(crate) fn sanitize_tool_sequence(messages: &[Message]) -> Vec<Message> {
             (MessageContent::Blocks(blocks), "assistant") => {
                 // A new declaration round begins: settle any leftovers from
                 // the previous round so results cannot interleave.
-                if blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })) {
+                if blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+                {
                     synthesize_interrupted_results(&mut out, &mut pending);
                 }
                 let mut kept: Vec<ContentBlock> = Vec::with_capacity(blocks.len());
@@ -1901,19 +1904,17 @@ mod tests {
                     content: crate::api::types::MessageContent::Blocks(vec![
                         ContentBlock::ToolResult {
                             tool_use_id: "batch_1".to_string(),
-                            content: Some(crate::api::types::ToolResultContent::Multiple(
-                                vec![
-                                    ContentBlock::Text {
-                                        text: "## /tmp/a.png".to_string(),
-                                    },
-                                    ContentBlock::Image {
-                                        source: crate::api::types::ImageSource::base64(
-                                            "image/png",
-                                            "AAAA",
-                                        ),
-                                    },
-                                ],
-                            )),
+                            content: Some(crate::api::types::ToolResultContent::Multiple(vec![
+                                ContentBlock::Text {
+                                    text: "## /tmp/a.png".to_string(),
+                                },
+                                ContentBlock::Image {
+                                    source: crate::api::types::ImageSource::base64(
+                                        "image/png",
+                                        "AAAA",
+                                    ),
+                                },
+                            ])),
                             is_error: Some(false),
                         },
                     ]),
@@ -4318,9 +4319,16 @@ mod tests {
             .iter()
             .map(|m| serde_json::to_string(m).unwrap())
             .collect();
-        assert_eq!(rendered.len(), 4, "one placeholder settles the dangling call: {rendered:?}");
+        assert_eq!(
+            rendered.len(),
+            4,
+            "one placeholder settles the dangling call: {rendered:?}"
+        );
         assert!(rendered[2].contains("(interrupted)"), "{rendered:?}");
-        assert_eq!(rendered[3], serde_json::to_string(&text_msg("continuation prompt")).unwrap());
+        assert_eq!(
+            rendered[3],
+            serde_json::to_string(&text_msg("continuation prompt")).unwrap()
+        );
     }
 
     /// A13-c: minimax's backend parses `tool_calls[].function.arguments`
@@ -4395,7 +4403,6 @@ mod tests {
             "arguments must never be the null literal: {wire}"
         );
     }
-
 
     #[test]
     fn serialize_openai_request_sanitizes_orphans() {

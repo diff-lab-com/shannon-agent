@@ -1,6 +1,5 @@
 ---
 source: crates/shannon-tools/tests/tool_schema_snapshots.rs
-assertion_line: 38
 expression: output
 ---
 ## Agent
@@ -393,15 +392,15 @@ expression: output
 {
   "properties": {
     "file_path": {
-      "description": "Absolute path to the file",
+      "description": "Path to the file — absolute, or relative to the working directory",
       "type": "string"
     },
     "new_string": {
-      "description": "Replacement text",
+      "description": "Replacement text (same length as needed — empty string deletes)",
       "type": "string"
     },
     "old_string": {
-      "description": "Text to replace",
+      "description": "Exact text to replace — must match the file content byte-for-byte (including whitespace/indentation) and be UNIQUE in the file unless replace_all is true; include surrounding lines for context when the snippet is short. Read the file first.",
       "type": "string"
     },
     "replace_all": {
@@ -1371,11 +1370,11 @@ expression: output
 {
   "properties": {
     "content": {
-      "description": "Content to write",
+      "description": "Full new content for the file (overwrites the existing file entirely; prefer Edit for targeted changes)",
       "type": "string"
     },
     "file_path": {
-      "description": "Absolute path to the file",
+      "description": "Path to the file — absolute, or relative to the working directory",
       "type": "string"
     }
   },

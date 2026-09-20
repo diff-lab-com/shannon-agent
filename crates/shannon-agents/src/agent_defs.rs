@@ -71,6 +71,12 @@ pub struct AgentDefinition {
     /// Temperature for AI responses (0.0 - 1.0)
     #[serde(default)]
     pub temperature: Option<f32>,
+    /// Maximum tool-loop turns for this agent (P0-7: previously the
+    /// `max_concurrent_tasks` field was repurposed as a turn budget, giving
+    /// e.g. the builtin `explorer` (`max_concurrent_tasks = 1`) a single-turn
+    /// agent loop). `None` = engine default (50).
+    #[serde(default)]
+    pub max_turns: Option<u32>,
 }
 
 fn default_max_concurrent() -> usize {
@@ -83,6 +89,7 @@ struct FrontMatter {
     temperature: Option<f32>,
     description: Option<String>,
     capabilities: Option<Vec<String>>,
+    max_turns: Option<u32>,
 }
 
 /// Parse optional YAML front matter from markdown content.
@@ -99,6 +106,7 @@ fn parse_front_matter(content: &str) -> (FrontMatter, String) {
                 temperature: None,
                 description: None,
                 capabilities: None,
+                max_turns: None,
             },
             content.to_string(),
         );
@@ -115,6 +123,7 @@ fn parse_front_matter(content: &str) -> (FrontMatter, String) {
             temperature: None,
             description: None,
             capabilities: None,
+            max_turns: None,
         };
 
         for line in yaml.lines() {
@@ -129,6 +138,7 @@ fn parse_front_matter(content: &str) -> (FrontMatter, String) {
                     "model" => fm.model = Some(value.to_string()),
                     "temperature" => fm.temperature = value.parse().ok(),
                     "description" => fm.description = Some(value.to_string()),
+                    "max_turns" => fm.max_turns = value.parse().ok(),
                     "capabilities" => {
                         // Parse comma-separated or bracket-enclosed list
                         let cleaned = value.trim_start_matches('[').trim_end_matches(']');
@@ -156,6 +166,7 @@ fn parse_front_matter(content: &str) -> (FrontMatter, String) {
             temperature: None,
             description: None,
             capabilities: None,
+            max_turns: None,
         },
         content.to_string(),
     )
@@ -247,6 +258,7 @@ impl AgentDefinition {
             max_concurrent_tasks: 3,
             plan_mode_required: false,
             temperature: front_matter.temperature,
+            max_turns: front_matter.max_turns,
         };
 
         // Parse capabilities from front matter if present
@@ -470,6 +482,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 1,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         },
         // Planning agent — produces step-by-step implementation plans
         AgentDefinition {
@@ -490,6 +503,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 1,
             plan_mode_required: false,
             temperature: Some(0.3),
+            max_turns: None,
         },
         // Code reviewer — static analysis and review
         AgentDefinition {
@@ -512,6 +526,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 2,
             plan_mode_required: false,
             temperature: Some(0.2),
+            max_turns: None,
         },
         // Security reviewer — OWASP-aligned security audit
         AgentDefinition {
@@ -534,6 +549,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 1,
             plan_mode_required: false,
             temperature: Some(0.1),
+            max_turns: None,
         },
         // Backend architect — server-side design and implementation
         AgentDefinition {
@@ -556,6 +572,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 2,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         },
         // Frontend architect — UI/UX design and implementation
         AgentDefinition {
@@ -577,6 +594,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 2,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         },
         // Test engineer — testing strategy and test writing
         AgentDefinition {
@@ -598,6 +616,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 2,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         },
         // Performance engineer — optimization and profiling
         AgentDefinition {
@@ -620,6 +639,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 1,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         },
         // Technical writer — documentation
         AgentDefinition {
@@ -640,6 +660,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 2,
             plan_mode_required: false,
             temperature: Some(0.5),
+            max_turns: None,
         },
         // DevOps — deployment and infrastructure
         AgentDefinition {
@@ -661,6 +682,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             max_concurrent_tasks: 1,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         },
     ]
 }
@@ -726,6 +748,7 @@ temperature = 0.7
             max_concurrent_tasks: 2,
             plan_mode_required: false,
             temperature: Some(0.3),
+            max_turns: None,
         };
 
         let config = def.to_teammate_config();
@@ -838,6 +861,7 @@ capabilities = ["test"]
                 max_concurrent_tasks: 3,
                 plan_mode_required: false,
                 temperature: None,
+                max_turns: None,
             },
         );
 
@@ -981,6 +1005,7 @@ capabilities = ["test"]
             max_concurrent_tasks: 1,
             plan_mode_required: false,
             temperature: None,
+            max_turns: None,
         };
         registry.definitions.insert("explorer".into(), custom);
 

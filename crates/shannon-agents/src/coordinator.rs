@@ -565,6 +565,7 @@ impl AgentCoordinator {
         };
         let config_disallowed_tools = config.disallowed_tools.clone();
         let config_isolation = config.isolation.clone();
+        let config_permission_mode = config.permission_mode.clone();
 
         let teammate = match executor {
             Some(exec) => Teammate::with_executor(agent_name.clone(), config, exec),
@@ -660,7 +661,14 @@ impl AgentCoordinator {
                     model: config_model,
                     system_prompt: config_system_prompt,
                     agent_name: agent_name.clone(),
-                    permission_mode: Some("bypassPermissions".to_string()),
+                    // Honor the teammate's configured permission mode. The
+                    // previous hard-coded "bypassPermissions" granted
+                    // process-mode agents MORE authority than the lead
+                    // session, silently defeating permission inheritance.
+                    // Fall back to "auto" (auto-edit), never to bypass.
+                    permission_mode: Some(
+                        config_permission_mode.unwrap_or_else(|| "auto".to_string()),
+                    ),
                     allowed_tools: config_allowed_tools,
                     disallowed_tools: config_disallowed_tools,
                     startup_timeout_secs: 60,
