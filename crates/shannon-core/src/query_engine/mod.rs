@@ -5,6 +5,9 @@
 mod browser_control_prompt;
 mod context_injector;
 mod engine;
+mod env_config;
+mod parsers;
+mod routing;
 pub mod guard_nodes;
 pub mod litellm;
 mod repo_map_injector;
