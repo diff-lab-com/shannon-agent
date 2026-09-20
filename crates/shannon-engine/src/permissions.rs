@@ -1627,7 +1627,7 @@ impl PermissionManager {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
             if cmd.is_empty() {
-                format!("{tool_name}")
+                tool_name.to_string()
             } else {
                 let head: String = cmd.split_whitespace().take(3).collect::<Vec<_>>().join(" ");
                 format!("{tool_name}({head}:*)")
