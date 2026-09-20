@@ -69,27 +69,32 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       { id: 'p-theme', label: t('palette.page.themeSettings'), icon: 'palette', category: t('palette.category.settings'), action: () => navigate('/settings/theme') },
       { id: 'p-models', label: t('palette.page.modelSettings'), icon: 'neurology', category: t('palette.category.settings'), action: () => navigate('/settings/models') },
     ]
-    const taskItems: PaletteItem[] = tasks.slice(0, 8).map(task => ({
+    // 2026-09 review: remove the hard 5/8/10 slice caps so the palette
+    // surfaces every task / agent / session / model (cmdk filters the
+    // visible set by the user's query anyway). We surface a "+N more"
+    // counter on each group heading so the user knows the list is
+    // unfiltered vs. query-narrowed.
+    const taskItems: PaletteItem[] = tasks.map(task => ({
       id: `t-${task.id}`,
       label: task.title,
       icon: task.status === 'completed' ? 'task_alt' : task.status === 'in_progress' ? 'pending' : 'radio_button_unchecked',
       category: t('palette.category.tasks'),
       action: () => navigate('/tasks'),
     }))
-    const agentItems: PaletteItem[] = agents.slice(0, 5).map(a => ({
+    const agentItems: PaletteItem[] = agents.map(a => ({
       id: `ag-${a.id}`,
       label: a.name,
       icon: 'smart_toy',
       category: t('palette.category.agents'),
       action: () => navigate('/extensions/agents'),
     }))
-    const sessionItems: PaletteItem[] = sessions.slice(0, 10).map(s => ({
+    const sessionItems: PaletteItem[] = sessions.map(s => ({
       id: `s-${s.id}`, label: s.title || t('palette.untitled'), icon: 'history', category: t('palette.category.recentChats'), action: () => {
         switchSession(s.id)
         navigate('/chat')
       },
     }))
-    const modelItems: PaletteItem[] = models.slice(0, 5).map(m => ({
+    const modelItems: PaletteItem[] = models.map(m => ({
       id: `m-${m.id}`, label: m.name, icon: 'neurology', category: t('palette.category.switchModel'), action: () => {
         api.configure({ key: 'model', value: m.id })
           .then(async () => {
@@ -132,7 +137,21 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
         <CommandEmpty>{t('palette.noResults')}</CommandEmpty>
         {Object.entries(grouped).map(([category, items]) =>
           items.length === 0 ? null : (
-            <CommandGroup key={category} heading={category}>
+            <CommandGroup
+              key={category}
+              heading={
+                // Show a "+N more" pill on each group so users see the
+                // total count without scrolling past cmdk's viewport.
+                // Counts include all items in the group, not just the
+                // query-filtered ones, so it reads as "5 tasks available".
+                <>
+                  {category}
+                  <span className="ml-2 px-xs py-[1px] rounded-full bg-surface-container-high text-on-surface-variant font-label-xs tabular-nums">
+                    {items.length}
+                  </span>
+                </>
+              }
+            >
               {items.map(item => (
                 <CommandItem
                   key={item.id}
