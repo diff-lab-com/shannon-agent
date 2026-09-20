@@ -129,7 +129,14 @@ impl Default for ReadTool {
 impl ReadTool {
     pub fn new() -> Self {
         Self {
-            description: "Read file contents from the local filesystem".to_string(),
+            description: "Read file contents from the local filesystem.\n\
+\n\
+Returns up to 2000 lines per call; large files are truncated with a notice —\n\
+use `offset`/`limit` to page through them. Output includes no line numbers:\n\
+cite locations as file_path plus nearby unique text. Images (png/jpg/gif/webp)\n\
+are returned as attachments the model can view. You MUST read a file before\n\
+editing it — Edit requires that old_string matches the file exactly, which\n\
+you can only know from a fresh Read.".to_string(),
             sandbox: PathSandbox::new(),
             fs: crate::defaults::fs(),
         }
@@ -138,7 +145,14 @@ impl ReadTool {
     /// Create a ReadTool with a custom sandbox configuration.
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
         Self {
-            description: "Read file contents from the local filesystem".to_string(),
+            description: "Read file contents from the local filesystem.\n\
+\n\
+Returns up to 2000 lines per call; large files are truncated with a notice —\n\
+use `offset`/`limit` to page through them. Output includes no line numbers:\n\
+cite locations as file_path plus nearby unique text. Images (png/jpg/gif/webp)\n\
+are returned as attachments the model can view. You MUST read a file before\n\
+editing it — Edit requires that old_string matches the file exactly, which\n\
+you can only know from a fresh Read.".to_string(),
             sandbox,
             fs: crate::defaults::fs(),
         }
@@ -288,11 +302,11 @@ impl Tool for WriteTool {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Absolute path to the file"
+                    "description": "Path to the file — absolute, or relative to the working directory"
                 },
                 "content": {
                     "type": "string",
-                    "description": "Content to write"
+                    "description": "Full new content for the file (overwrites the existing file entirely; prefer Edit for targeted changes)"
                 }
             },
             "required": ["file_path", "content"]
@@ -400,15 +414,15 @@ impl Tool for EditTool {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Absolute path to the file"
+                    "description": "Path to the file — absolute, or relative to the working directory"
                 },
                 "old_string": {
                     "type": "string",
-                    "description": "Text to replace"
+                    "description": "Exact text to replace — must match the file content byte-for-byte (including whitespace/indentation) and be UNIQUE in the file unless replace_all is true; include surrounding lines for context when the snippet is short. Read the file first."
                 },
                 "new_string": {
                     "type": "string",
-                    "description": "Replacement text"
+                    "description": "Replacement text (same length as needed — empty string deletes)"
                 },
                 "replace_all": {
                     "type": "boolean",

@@ -1,12 +1,19 @@
 ---
 source: crates/shannon-tools/tests/tool_schema_snapshots.rs
-assertion_line: 60
 expression: output
 ---
 Agent: Spawn and manage AI agent teammates for collaborative problem-solving
 AnalyzeImage: Analyze an image file or URL. The image is sent to the LLM for visual analysis based on your prompt. Supports PNG, JPEG, GIF, WebP, BMP, ICO, and TIFF formats.
 AnalyzeImages: Analyze multiple image files in ONE call (batch). Each image is sent to the LLM as part of a single vision request, with results organized under a '## <path>' heading per image. Accepts up to 20 paths; use this instead of calling AnalyzeImage repeatedly. Supports PNG, JPEG, GIF, WebP, BMP, ICO, and TIFF formats.
-Bash: Executes bash commands and returns output
+Bash: Executes a bash command and returns stdout/stderr.
+
+Each call runs in a fresh shell in the working directory (no state
+carries over; use `&&` to combine steps). Output is capped by the
+harness — avoid commands that dump large files; use head/tail/grep
+to scope output. A per-call `timeout` (ms) is supported. Long-running
+or server processes should use RunBackground and be polled with
+WaitForLog. When a sandbox is active the command runs with restricted
+filesystem/network access — the tool result reports denials.
 Brief: Generate a concise task summary from conversation history or content
 Config: Manage runtime configuration with get, set, list, delete, and reset operations
 Cron: Schedule recurring or one-shot prompts for time-based task execution
@@ -27,7 +34,14 @@ MultiEdit: Apply multiple file edits atomically — all edits succeed or none ar
 NotebookEdit: Edit Jupyter notebook (.ipynb) cells - replace, insert, or delete cells
 PowerShell: Executes PowerShell commands and returns output
 REPL: Execute a REPL command that wraps primitive tool calls for batch operations
-Read: Read file contents from the local filesystem
+Read: Read file contents from the local filesystem.
+
+Returns up to 2000 lines per call; large files are truncated with a notice —
+use `offset`/`limit` to page through them. Output includes no line numbers:
+cite locations as file_path plus nearby unique text. Images (png/jpg/gif/webp)
+are returned as attachments the model can view. You MUST read a file before
+editing it — Edit requires that old_string matches the file exactly, which
+you can only know from a fresh Read.
 RunBackground: Spawn a long-running bash command and stream stdout/stderr into a line-bounded ring buffer keyed by `name`. Re-calling with the same `name` kills the previous child first. Pair with `WaitForLog` to block until a regex/substring appears, and `KillBackground` to shut down.
 ScheduleWakeup: Schedule a prompt to be enqueued after a delay (for /loop dynamic pacing). Call with delaySeconds and prompt to schedule; omit or call without arguments to end the loop. Cache optimization: delays <= 270s keep the prompt cache warm; 270-300s risks cache expiry; > 300s pays cold read cost. Prefer 270s for active work, 600s+ for idle waits.
 SendMessage: Send messages to agent teammates for collaborative problem-solving

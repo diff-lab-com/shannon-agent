@@ -951,9 +951,25 @@ fn sandbox_failure_note(sandboxed: bool, output: &CommandOutput) -> Option<Strin
 }
 
 impl BashTool {
+    /// Description advertised to the model. Shared by the plain and
+    /// sandboxed constructors (runtime behavior differs; the contract is
+    /// the same — the sandbox self-description in the system prompt
+    /// explains the active restrictions).
+    fn default_description() -> &'static str {
+        "Executes a bash command and returns stdout/stderr.\n\
+         \n\
+         Each call runs in a fresh shell in the working directory (no state\n\
+         carries over; use `&&` to combine steps). Output is capped by the\n\
+         harness — avoid commands that dump large files; use head/tail/grep\n\
+         to scope output. A per-call `timeout` (ms) is supported. Long-running\n\
+         or server processes should use RunBackground and be polled with\n\
+         WaitForLog. When a sandbox is active the command runs with restricted\n\
+         filesystem/network access — the tool result reports denials."
+    }
+
     pub fn new() -> Self {
         Self {
-            description: "Executes bash commands and returns output".to_string(),
+            description: Self::default_description().to_string(),
             sandbox: None,
             direct_process: crate::defaults::process(),
             process_sandbox: None,
@@ -1021,7 +1037,7 @@ impl BashTool {
                      instead of installing packages."
                 )
             } else {
-                "Executes bash commands and returns output".to_string()
+                Self::default_description().to_string()
             },
             sandbox: None,
             direct_process: crate::defaults::process(),
