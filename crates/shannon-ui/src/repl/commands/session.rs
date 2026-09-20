@@ -636,6 +636,24 @@ struct CodeRewindOutcome {
     /// Files whose restore/delete I/O failed (permissions, disk full, …).
     failed: Vec<String>,
 }
+/// E-1: persist a conversation rewind to the authoritative L0 log.
+///
+/// The previous REPL rewind mutated only in-memory state, so resuming the
+/// session replayed exactly the turns the user had removed. The desktop path
+/// already called `SessionStore::truncate_to_turn`; the REPL now does the
+/// same (best-effort: failures are logged and do not abort the rewind).
+fn persist_log_truncation(repl: &Repl, keep_turns: usize) {
+    let Some(ref engine) = repl.query_engine else {
+        return;
+    };
+    if let Err(e) =
+        repl.l0_store()
+            .truncate_to_turn(&engine.session_id(), keep_turns)
+    {
+        tracing::warn!("rewind: failed to truncate session log: {e}");
+    }
+}
+
 
 /// Core code-rewind logic, factored out so it is unit-testable without env or
 /// a live `Repl`.
@@ -828,6 +846,7 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
             }
         },
 
+
         RewindIntent::Both(index) => {
             // Revert code via content snapshots first; conversation rewind is independent.
             let code_result = run_code_rewind(repl, index);
@@ -842,7 +861,8 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
             if turns_to_rewind > 0 {
                 repl.chat.rewind(turns_to_rewind);
                 if let Some(ref mut engine) = repl.query_engine {
-                    engine.rewind_conversation(turns_to_rewind);
+                    let remaining = engine.rewind_conversation(turns_to_rewind);
+                    persist_log_truncation(repl, remaining);
                 }
             }
 
@@ -875,7 +895,8 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
             let after_count = repl.chat.len();
 
             if let Some(ref mut engine) = repl.query_engine {
-                engine.rewind_conversation(turns);
+                let remaining = engine.rewind_conversation(turns);
+                persist_log_truncation(repl, remaining);
             }
 
             if removed > 0 {
