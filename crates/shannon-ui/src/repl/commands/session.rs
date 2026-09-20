@@ -630,6 +630,9 @@ struct CodeRewindOutcome {
     target_turn: usize,
     restored: Vec<String>,
     deleted: Vec<String>,
+    /// Files left untouched because no pre-session baseline proves they were
+    /// created by this session (E-2) — surfaced to the user.
+    skipped_no_baseline: Vec<String>,
     /// Files whose restore/delete I/O failed (permissions, disk full, …).
     failed: Vec<String>,
 }
@@ -668,6 +671,7 @@ fn apply_code_rewind(
     }
 
     let mut restored: Vec<String> = Vec::new();
+    let mut skipped_no_baseline: Vec<String> = Vec::new();
     let mut deleted: Vec<String> = Vec::new();
     let mut failed: Vec<String> = Vec::new();
 
@@ -696,6 +700,12 @@ fn apply_code_rewind(
                     failed.push(file.clone());
                 }
             },
+            RewindAction::SkipNoBaseline => {
+                // E-2: the file's earliest snapshot is a pre-modify capture, so
+                // it existed before this session — leave it on disk and tell
+                // the user instead of destroying possibly pre-existing work.
+                skipped_no_baseline.push(file.clone());
+            }
             RewindAction::NoChange => {}
         }
     }
@@ -703,6 +713,7 @@ fn apply_code_rewind(
     Ok(CodeRewindOutcome {
         target_turn,
         restored,
+        skipped_no_baseline,
         deleted,
         failed,
     })
