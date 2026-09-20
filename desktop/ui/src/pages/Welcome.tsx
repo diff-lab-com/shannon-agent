@@ -185,25 +185,39 @@ export default function Welcome() {
 
   return (
     <div className="min-h-screen bg-background text-on-surface flex flex-col">
-      <header className="flex items-center justify-between px-xl py-lg">
-        <div className="flex items-center gap-sm">
-          <span className="material-symbols-outlined text-primary">auto_awesome</span>
-          <GradientText
-            text={intl.formatMessage({ id: 'app.name' })}
-            className="font-headline-md"
-          />
+      {/* 2026-09 review: the hero used to be only the brand mark + skip
+          button — looked like an empty header. A two-line tagline + intro
+          paragraph gives first-run users a reason to slow down and pick
+          a meaningful starting point (not just "Skip →"). */}
+      <header className="flex flex-col gap-lg px-xl pt-xl pb-md max-w-3xl mx-auto w-full">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-sm">
+            <span className="material-symbols-outlined text-primary text-[28px]">auto_awesome</span>
+            <GradientText
+              text={intl.formatMessage({ id: 'app.name' })}
+              className="font-headline-md text-[24px]"
+            />
+          </div>
+          <Button
+            variant="ghost"
+            onClick={finish}
+            className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded px-xs"
+            aria-label={intl.formatMessage({ id: 'welcome.skipAria' })}
+          >
+            {intl.formatMessage({ id: 'welcome.skip' })}
+          </Button>
         </div>
-        <Button
-          variant="ghost"
-          onClick={finish}
-          className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded px-xs"
-          aria-label={intl.formatMessage({ id: 'welcome.skipAria' })}
-        >
-          {intl.formatMessage({ id: 'welcome.skip' })}
-        </Button>
+        <div className="text-center max-w-2xl mx-auto">
+          <h1 className="font-headline-md text-on-surface text-[28px] leading-tight mb-sm">
+            {intl.formatMessage({ id: 'welcome.hero.tagline' })}
+          </h1>
+          <p className="text-on-surface-variant font-body-md leading-relaxed">
+            {intl.formatMessage({ id: 'welcome.hero.subtitle' })}
+          </p>
+        </div>
       </header>
 
-      <main className="flex-1 flex items-center justify-center px-xl py-xl">
+      <main className="flex-1 flex items-start justify-center px-xl py-md">
         <div className="w-full max-w-xl">
           <Stepper step={step} labels={WELCOME_STEP_LABELS} />
 

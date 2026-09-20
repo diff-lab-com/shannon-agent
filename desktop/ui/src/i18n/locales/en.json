@@ -3093,5 +3093,7 @@
   "sidebar.sessions.grouping.session.desc": "One flat list sorted by recency",
   "settings.advanced.devSection.title": "Developer options",
   "settings.advanced.devSection.hint": "Off-peak, voice, CLI, updates, reset",
-  "inbox.groupBySource": "Group by source"
+  "inbox.groupBySource": "Group by source",
+  "welcome.hero.tagline": "Your AI workspace, ready in 2 minutes",
+  "welcome.hero.subtitle": "Pick a starting point and connect a model. Shannon learns your style and builds tools around your work — without sending your code anywhere unless you ask."
 }

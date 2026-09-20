@@ -3093,5 +3093,7 @@
   "sidebar.sessions.grouping.session.desc": "单一扁平列表，按最近活跃排序",
   "settings.advanced.devSection.title": "开发者选项",
   "settings.advanced.devSection.hint": "低峰、语音、CLI、更新、重置",
-  "inbox.groupBySource": "按来源分组"
+  "inbox.groupBySource": "按来源分组",
+  "welcome.hero.tagline": "你的 AI 工作空间，2 分钟就绪",
+  "welcome.hero.subtitle": "选择一个起点并连接一个模型。Shannon 会学习你的工作方式并围绕你的工作构建工具——除非你要求，否则不会把你的代码发到任何地方。"
 }
